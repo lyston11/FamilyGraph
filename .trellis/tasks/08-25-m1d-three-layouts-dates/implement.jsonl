@@ -1,0 +1,6 @@
+{"file": ".trellis/HANDOFF.md", "reason": "权威决策、验收标准与非目标"}
+{"file": ".trellis/spec/architecture.md", "reason": "全局架构契约: 身份模型/FSM/授权矩阵/删除级联"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useLayout 三布局封装"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "成员卡组件规范"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "graph store 与位置持久化"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "node_positions/lunar 存储"}

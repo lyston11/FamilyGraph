@@ -1,0 +1,126 @@
+# FamilyGraph 全局架构设计 v1
+
+> 状态：审计修订产物（2026-08-25）。本文档解决审计记录第三节的 10 个架构问题。
+> 决策来源分两层：**锁定决策**（用户确认，见 HANDOFF.md §三）与**审计默认假设**（本文标注 `[AD-n]`，实现前可推翻但需记录）。所有 M0–M4 子任务的 design.md 必须引用并遵守本文。
+
+---
+
+## 1. 身份模型：PersonProfile / Account / Claim 分离 `[AD-1]`
+
+锁定决策 A3 的用户体验不变（添加关系 ≈ 创建账号 + 一次性 PIN），但内部概念分离：
+
+```
+users（PersonProfile 家谱人员档案）
+  id, name, gender, birth, death, bio, avatar_path,
+  privacy_mode(perpetual|handover), created_by→users.id,
+  claim_status(managed|claimed), deleted_at(NULL=存活)
+accounts（登录凭据，与档案 1:0..1）
+  user_id UNIQUE FK CASCADE, pin_hash, pin_must_change(BOOL),
+  token_version(INT), failed_attempts(INT), locked_until(DATETIME NULL)
+```
+
+- **每个 PersonProfile 建档即配发 Account**（A3 锁定），但 Account 只是"待认领凭据"：
+  - `claim_status=managed`：从未登录。代管人 = created_by（handover 模式）或永久编辑者（perpetual 模式）。
+  - `claim_status=claimed`：本人完成首次登录且改过初始 PIN。
+- **首登强制改 PIN**：`pin_must_change=true` 时除 `PUT /me/pin` 外所有 API 返回 `403 PIN_CHANGE_REQUIRED`；改毕置 false 且 `claim_status=claimed`、token_version+1。
+- 已故/未成年人：自然停留在 managed 态，无需特殊逻辑。冒用风险缓解：PIN 一次性展示 + 审计留痕 + 首登强制换 PIN（拿到旧 PIN 的创建者在本人认领后自动失权）。
+- 认领不可逆：claimed 后不能退回 managed（v1 非目标：注销/移交）。
+
+## 2. 认证安全合同 `[AD-2]`
+
+| 项 | 规则 |
+|---|---|
+| 登录限流 | 按 (name, IP) 失败计数，连续 5 次失败锁定该 name 15 分钟（accounts.locked_until），错误文案统一 `用户名或 PIN 码错误` |
+| JWT | access 2h + refresh 30d 轮换；refresh 存 hash 可撤销 |
+| 注销/失效 | 登出 = 撤销 refresh；access 短期自愈。**改 PIN / 重置 PIN / 删除档案 → token_version+1**，校验时比对，旧 access 全部失效 |
+| 同名同 PIN 消歧 | 两步：①`POST /auth/login{name,pin}` 多命中 → `409 {challenge_token, candidates[{id,name,created_by_name}]}`（challenge 绑 IP、5 分钟有效、单次使用）②`POST /auth/login/select{challenge_token,user_id}` → JWT |
+| 审计 | audit_log(actor_id, action, target_id, ip, detail_json, created_at)；记录 login_failed≥3、pin_reset、全部 admin 操作、档案删除。保留 ≥180 天，仅 admin 可读 |
+
+## 3. 新用户的家庭空间生成规则 `[AD-3]`
+
+「以我为中心的家庭空间」（默认首页）是**派生聚合视图**，不是新实体：
+
+1. 登录后首页 = 我拥有 active 成员资格的所有空间的卡片**去重并集**，按全局图布局渲染（U1 第一人称）。
+2. 空间切换器可查看单个空间。
+3. **默认进入空间优先级**：最近活跃的空间 > 我 own 的第一个 > 被拉入的第一个 active 空间。
+4. 若我无任何空间成员资格（如被建档时未勾选加入任何空间）：首登引导创建「我的家庭」默认空间（owner=我，初始成员仅自己），随后基于 active 关系给出"一键邀请家人"建议列表——邀请走 D4 正常确认流，**绝不静默拉人入空间**（可见性升级必须经对方同意）。
+
+## 4. 连接与空间成员状态机 `[AD-4]`
+
+### Relation FSM
+```
+pending ──accept──> active        pending ──reject──> rejected(终态)
+pending ──cancel──> cancelled(终态, 发起方)
+active  ──revoke──> revoked(终态, 任一方; 断连轨 D8)
+约束: 同一对用户最多一条非终态边 (partial unique index);
+      自环禁止 (CHECK from_user != to_user); elder 边成环检测拒绝
+反向显示: 不存反向行; 展示时结构类反译 elder↔younger / peer,spouse 对称,
+      称谓标签始终显示创建者视角原文 [D3]
+```
+
+### SpaceMember FSM
+```
+pending ──accept──> active    pending ──reject/withdraw/expiry(30d)──> 终态
+active  ──remove──> removed(终态, owner 或本人)
+幂等: UNIQUE(space_id, user_id) 仅一行, 重复申请返回既有 pending
+```
+
+### 合并请求（回答"一次申请还是两次申请"）
+- **connection_request（M1/M2 主流程）**：一份请求同时携带 `relation{dir_class,label}` + 可选 `space_membership(space_id)`。对方一次接受 → 两者同时 active；拒绝 → 同时取消。消除"关系 active 但空间 pending"的中间权限态。
+- **join_request（M2 家族视图摘要卡）**：仅携带 space_membership，无新关系边。目标空间 owner 审批。
+
+### 权限授予判定（服务端实时计算，无缓存）
+完整数据访问 ⇔ **同一空间的双方均为 active 成员 ∨ 存在任一方向 active 关系**。pending 期间：发起方可看接收方摘要（通知需要），反之亦然。断连/移出即时降级。
+
+## 5. 数据库契约
+
+- PRAGMA：`foreign_keys=ON, journal_mode=WAL, busy_timeout=5000, synchronous=NORMAL`（api 启动时统一设置）。
+- FK/CASCADE：accounts.user_id、relations.from/to、space_members.user_id/space_id、node_positions、attachments.user_id 均 `ON DELETE CASCADE`。
+- 约束：dir_class CHECK 枚举；UNIQUE(accounts.user_id)、UNIQUE(space_members.space_id,user_id)；partial unique index 保证单一非终态关系。
+- 布局确定性规则（树状视图）：
+  - 多根：各 elder 根并列顶层；
+  - 子女归属：由子女自身的 elder/younger 边直接决定（父、母各有独立边），不通过配偶推导；
+  - 多配偶：按关系创建序并列同行展示；
+  - 冲突/异常数据：布局失败回退画布自由模式并提示（M1 验收项）。
+
+## 6. 授权矩阵（visibility.py 单点实现）
+
+| 资源 \ 主体 | 本人 | 同空间 active / active 关系 | clan 连通可达 | 其余 |
+|---|---|---|---|---|
+| 档案详情字段 | full | full | summary(name/称谓/世代) | invisible |
+| 图节点+关系边 | full | full | 仅摘要节点 | 不返回 |
+| 头像原图 | full | full | 占位图 | 占位图 |
+| 附件元数据/下载 | full | full | invisible | invisible |
+| 搜索命中 | — | — | 允许(摘要) | 不可命中 |
+| 统计聚合 | — | — | 计入范围 | 不计入 |
+| join_request | 目标空间 owner 可见审批 | — | — | — |
+| 管理 API | is_admin only + audit | | | |
+
+- IDOR 集成测试逐行覆盖矩阵（普通 JWT 直打 API 断言遮罩/invisible）。
+- 文件下载走授权端点流式返回（禁止 nginx 直链 uploads 目录），响应头 `Content-Disposition` + `X-Content-Type-Options: nosniff`。
+
+## 7. 删除语义（实现在 M1，非 M4）`[AD-5]`
+
+- API：`DELETE /users/{id}`。权限：本人 ∨ 代管创建者（perpetual 模式或 handover 未 claimed）∨ admin。二次确认（前端输入名字确认）。
+- 单事务级联：关系边删、space_members 删、node_positions 删、attachments 记录删、涉及该用户的 pending 请求删；audit_log **保留**（target 引用改为快照文本）；token_version+1 使其会话即刻失效。
+- 物理文件删除在事务提交后异步执行，失败记清扫日志（孤儿文件由 m3a 的清扫任务兜底）。
+- v1 采用硬删除，无回收站（HANDOFF 非目标）；备份文件中的残留数据随备份轮转淘汰。
+
+## 8. 备份恢复（修正 WAL 直接复制缺陷）`[AD-6]`
+
+- 备份命令：`python -m app.backup`（容器内执行），使用 **SQLite online backup API**（`Connection.backup`）产出一致性快照至 `/data/backups/familygraph-YYYYmmdd-HHMMSS.db`，随后与 `/data/uploads` 一同 tar 归档。
+- 恢复演练是 M4 出口条件：restore 后 `PRAGMA integrity_check` 通过 + 用户数/关系数与源库一致。
+- README 写明：**禁止**运行期直接 cp 主库文件。
+
+## 9. 附件安全边界
+
+- 上传校验链：扩展名白名单(jpg/jpeg/png/webp) → Content-Length ≤10MB → magic bytes 校验 → Pillow `verify()` 真实解码 → 最大像素 8000×8000（防解压炸弹）→ 重编码输出（strip EXIF/脚本元数据）。SVG 一律拒绝。
+- 外链附件：URL scheme 白名单 http/https；**服务端不抓取外链**（无 SSRF 面），前端 `<a target=_blank rel=noopener>` 外跳。
+- 删除一致性：先事务删记录，后异步删文件 + 定期孤儿清扫脚本。
+- 依赖新增：Pillow（m3a 引入）。
+
+## 10. 数据权利与威胁模型边界（v1 明确不做部分见 HANDOFF 非目标）
+
+- 未成年人分级隐私：**v2 待定**。v1 依赖 U5 基线 + 家庭信任模型，写入 HANDOFF 默认假设。
+- 敏感缓存清理：logout 清空 Pinia state + localStorage(JWT) + 内存中的图数据；路由守卫兜底。
+- 数据导出/更正：v1 提供管理员协助通道（admin 数据修正后台），自助导出列 v2。

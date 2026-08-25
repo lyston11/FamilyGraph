@@ -1,39 +1,14 @@
-# Frontend Development Guidelines
+# 前端开发规范
 
-> Best practices for frontend development in this project.
-
----
-
-## Overview
-
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
-
----
-
-## Guidelines Index
+> 技术栈：Vue 3 + Vite + TypeScript + Element Plus + Pinia + Vue Flow + d3-hierarchy。全局架构契约见 [../architecture.md](../architecture.md)。
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| [Directory Structure](./directory-structure.md) | 目录布局与分层规则 | Initial draft |
+| [Component Guidelines](./component-guidelines.md) | 组件约定/MaskedField/可访问性基线 | Initial draft |
+| [Composables Guidelines](./hook-guidelines.md) | useLayout/useVisibility/useChallenge | Initial draft |
+| [State Management](./state-management.md) | Pinia store 划分/缓存失效/敏感清理红线 | Initial draft |
+| [Type Safety](./type-safety.md) | strict TS/运行时校验/遮罩类型判别 | Initial draft |
+| [Quality Guidelines](./quality-guidelines.md) | 门禁命令/禁止模式/移动端与性能基线 | Initial draft |
 
----
-
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
-
----
-
-**Language**: All documentation should be written in **English**.
+> 状态说明：Initial draft = 基于锁定技术栈与架构决策制定的初始规范。M0 完成后必须用真实代码实例校正并补充示例。

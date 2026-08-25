@@ -18,7 +18,11 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-25-m4a-mobile-a11y",
+    "08-25-m4b-admin-console-audit",
+    "08-25-m4c-release-backup-regression"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",

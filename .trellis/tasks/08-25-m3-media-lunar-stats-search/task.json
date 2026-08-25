@@ -18,7 +18,12 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-25-m3a-safe-attachments",
+    "08-25-m3b-lunar-refinement",
+    "08-25-m3c-statistics",
+    "08-25-m3d-search"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",

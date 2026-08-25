@@ -1,54 +1,18 @@
-# Directory Structure
-
-> How frontend code is organized in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's frontend directory structure here.
-
-Questions to answer:
-- Where do components live?
-- How are features/modules organized?
-- Where are shared utilities?
-- How are assets organized?
--->
-
-(To be filled by the team)
-
----
-
-## Directory Layout
+# 前端目录结构（初始规范 v0，M0 完成后以真实代码校正）
 
 ```
-<!-- Replace with your actual structure -->
-src/
-├── ...
-└── ...
+frontend/src/
+├── main.ts / App.vue
+├── router/            # 路由 + 登录守卫(含 PIN_CHANGE_REQUIRED 强制跳转)
+├── api/               # axios 封装: 拦截器统一错误结构解包、409 challenge 流程、token 刷新
+├── stores/            # Pinia: auth, spaces, graph, ui
+├── views/             # 页面级: Login, Onboarding, FamilySpace, ClanView, Profile, Settings, Stats, Admin
+├── components/
+│   ├── member/        # 成员卡片/档案抽屉/建档向导
+│   ├── canvas/        # Vue Flow 画布、三布局切换器、节点定位
+│   └── common/
+├── composables/       # useVisibility(遮罩渲染), useLayout(tree/canvas/list), useChallenge
+└── types/             # API 响应类型 + 运行时校验
 ```
 
----
-
-## Module Organization
-
-<!-- How should new features be organized? -->
-
-(To be filled by the team)
-
----
-
-## Naming Conventions
-
-<!-- File and folder naming rules -->
-
-(To be filled by the team)
-
----
-
-## Examples
-
-<!-- Link to well-organized modules as examples -->
-
-(To be filled by the team)
+规则：views 不直接调 axios，一律经 api/ 层；画布相关组件禁止引入业务请求逻辑（数据由 store 注入）。

@@ -18,7 +18,10 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-25-m0a-engineering-scaffold",
+    "08-25-m0b-auth-bootstrap-security"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",

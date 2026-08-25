@@ -1,0 +1,5 @@
+{"file": ".trellis/HANDOFF.md", "reason": "权威决策、验收标准与非目标"}
+{"file": ".trellis/spec/architecture.md", "reason": "全局架构契约: 身份模型/FSM/授权矩阵/删除级联"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "partial unique index/CHECK"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "409 FSM 非法转换/422 成环"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "dir_class 枚举对齐"}

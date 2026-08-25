@@ -18,7 +18,12 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-25-m1a-profile-account-claim",
+    "08-25-m1b-relations-fsm",
+    "08-25-m1c-family-space-membership",
+    "08-25-m1d-three-layouts-dates"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
