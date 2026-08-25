@@ -111,9 +111,12 @@ def my_graph(
     )
     nodes_out = []
     for u in users:
-        if levels.get(u.id) == "summary":
+        level = levels.get(u.id, "full")
+        if level == "summary":
             # summary 节点仅基线字段；性别不外泄
-            nodes_out.append(GraphNodeOut(id=u.id, name=u.name, gender="unknown"))
+            nodes_out.append(
+                GraphNodeOut(id=u.id, name=u.name, gender="unknown", visibility="summary")
+            )
         else:
             nodes_out.append(GraphNodeOut(id=u.id, name=u.name, gender=u.gender))
     edges_out = []

@@ -14,6 +14,7 @@ import {
   resolveConnection,
   revokeRelation,
 } from '@/api/graph'
+import { joinByUser } from '@/api/spaces'
 
 /** 图数据与连接请求状态（m1b）。可见性过滤后端强制，store 只做缓存。 */
 export const useGraphStore = defineStore('graph', {
@@ -62,6 +63,10 @@ export const useGraphStore = defineStore('graph', {
     async revoke(edgeId: number) {
       await revokeRelation(edgeId)
       await this.loadGraph()
+    },
+    /** 家族视图摘要卡：申请进入对方家庭空间（m2c 端点） */
+    async requestJoin(targetUserId: number) {
+      await joinByUser(targetUserId)
     },
     clear() {
       this.nodes = []

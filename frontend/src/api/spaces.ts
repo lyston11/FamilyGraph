@@ -40,3 +40,8 @@ export async function resolveMembership(
 export async function removeOrWithdrawMembership(memberId: number): Promise<void> {
   await apiClient.delete(`/space-memberships/${memberId}`)
 }
+
+/** 家族视图摘要卡：申请进入对方家庭空间（m2c；幂等） */
+export async function joinByUser(targetUserId: number): Promise<void> {
+  await apiClient.post('/spaces/join-by-user', { target_user_id: targetUserId })
+}

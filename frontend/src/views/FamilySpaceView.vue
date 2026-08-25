@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -31,6 +32,7 @@ const router = useRouter()
 
 type Mode = LayoutMode
 const mode = ref<Mode>((localStorage.getItem('fg.layout') as Mode) || 'canvas')
+const viewScope = ref<'family' | 'clan'>('family')
 const treeFailed = ref(false)
 const drawerMemberId = ref<number | null>(null)
 const savedPositions = ref(new Map<number, { x: number; y: number }>())
@@ -43,7 +45,7 @@ onMounted(async () => {
     spaces.load().catch(() => undefined),
   ])
   await loadPositions()
-  await graph.loadGraph('family', 5).catch(() => undefined)
+  await graph.loadGraph(viewScope.value, 5).catch(() => undefined)
 })
 
 watch(
@@ -51,10 +53,22 @@ watch(
   async (id) => {
     if (id !== null) {
       await loadPositions()
-      await graph.loadGraph('family', 5).catch(() => undefined)
+      await graph.loadGraph(viewScope.value, 5).catch(() => undefined)
     }
   },
 )
+watch(viewScope, async (scope) => {
+  await graph.loadGraph(scope, 5).catch(() => undefined)
+})
+
+async function requestJoin(userId: number) {
+  try {
+    await graph.requestJoin(userId)
+    ElMessage.success('加入申请已发送，等待对方确认')
+  } catch {
+    ElMessage.error('申请发送失败，请稍后重试')
+  }
+}
 
 async function loadPositions() {
   const space = spaces.currentSpace
@@ -127,6 +141,7 @@ const memberById = computed(() => {
 
 const flowNodes = computed<FlowNode[]>(() =>
   layoutPositions.value.map((p) => {
+    const gnode = graph.nodes.find((n) => n.id === p.id)
     const member = members.members.find((m) => m.id === p.id)
     const edge = graph.edges.find(
       (e) => (e.from_user === p.id || e.to_user === p.id) && e.view.label !== null,
@@ -136,7 +151,11 @@ const flowNodes = computed<FlowNode[]>(() =>
       id: `n-${p.id}`,
       type: 'member',
       position: { x: p.x, y: p.y },
-      data: { member, viewLabel: edge?.view.label ?? null },
+      data: {
+        member,
+        viewLabel: edge?.view.label ?? null,
+        summary: gnode?.visibility === 'summary',
+      },
     }
   }),
 )
@@ -198,6 +217,14 @@ void router
       </div>
     </section>
 
+    <!-- 视图范围切换（U3 家庭⇄家族） -->
+    <div class="scope-switch" data-test="scope-switch">
+      <el-radio-group :model-value="viewScope" @update:model-value="(v: 'family' | 'clan') => (viewScope = v)">
+        <el-radio-button value="family">👨‍👩‍👧 家庭空间</el-radio-button>
+        <el-radio-button value="clan">🌲 家族空间</el-radio-button>
+      </el-radio-group>
+    </div>
+
     <!-- 布局切换器 -->
     <div class="layout-switch" data-test="layout-switch">
       <el-radio-group :model-value="mode" @update:model-value="setMode">
@@ -221,6 +248,7 @@ void router
             :id="nodeProps.id"
             :data="nodeProps.data"
             @open="openProfile"
+            @join="requestJoin"
           />
         </template>
       </VueFlow>

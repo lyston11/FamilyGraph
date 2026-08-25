@@ -162,6 +162,7 @@ export interface GraphNode {
   id: number
   name: string
   gender: GenderType
+  visibility: 'full' | 'summary'
 }
 
 export interface GraphData {

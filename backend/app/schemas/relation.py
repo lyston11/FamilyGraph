@@ -53,6 +53,7 @@ class GraphNodeOut(BaseModel):
     id: int
     name: str
     gender: str
+    visibility: Literal["full", "summary"] = "full"
 
 
 class GraphOut(BaseModel):
