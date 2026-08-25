@@ -226,6 +226,7 @@ void router
       <GlobalSearch />
       <div class="actions">
         <el-button type="primary" data-test="go-home" @click="router.push('/home')">添加家人</el-button>
+        <el-button v-if="auth.user?.is_admin" data-test="go-admin" @click="router.push('/admin')">管理</el-button>
         <el-button data-test="go-stats" @click="router.push('/stats')">统计</el-button>
         <el-button data-test="go-settings" @click="router.push('/settings')">设置</el-button>
       </div>
