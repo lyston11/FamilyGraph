@@ -1,38 +1,13 @@
-# Backend Development Guidelines
+# 后端开发规范
 
-> Best practices for backend development in this project.
-
----
-
-## Overview
-
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
-
----
-
-## Guidelines Index
+> 技术栈：FastAPI + SQLAlchemy + SQLite(WAL) + lunar-python + JWT。全局架构契约见 [../architecture.md](../architecture.md)（身份模型/状态机/授权矩阵/删除级联的权威定义）。
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Directory Structure](./directory-structure.md) | 分层结构与单向依赖规则 | Initial draft |
+| [Database Guidelines](./database-guidelines.md) | PRAGMA/迁移/事务/约束/备份 | Initial draft |
+| [Error Handling](./error-handling.md) | 统一错误结构/错误码/防枚举 | Initial draft |
+| [Quality Guidelines](./quality-guidelines.md) | 质量门禁命令/禁止模式/测试门槛 | Initial draft |
+| [Logging Guidelines](./logging-guidelines.md) | 结构化日志/PII 脱敏红线/audit_log | Initial draft |
 
----
-
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
-
----
-
-**Language**: All documentation should be written in **English**.
+> 状态说明：Initial draft = 基于锁定技术栈与架构决策制定的初始规范。M0 完成后必须用真实代码实例校正并补充示例。

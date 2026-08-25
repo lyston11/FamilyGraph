@@ -1,0 +1,6 @@
+{"file": ".trellis/HANDOFF.md", "reason": "权威决策、验收标准与非目标"}
+{"file": ".trellis/spec/architecture.md", "reason": "全局架构契约: 身份模型/FSM/授权矩阵/删除级联"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "users 档案列增量迁移"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "403 代管权语义"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "建档/删除审计"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "向导组件规范"}

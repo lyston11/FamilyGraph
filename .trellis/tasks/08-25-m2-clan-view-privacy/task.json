@@ -18,7 +18,11 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-25-m2a-authz-matrix-visibility",
+    "08-25-m2b-clan-connected-view",
+    "08-25-m2c-request-disconnect-flows"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
