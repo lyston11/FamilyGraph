@@ -317,12 +317,10 @@ def put_positions(
     actor, _account = identity
     _require_active_member(session, space_id, actor.id)
     from app.models.node_position import NodePosition
-    from app.utils.timeutil import utcnow
 
     allowed_ids = {
         m.user_id for m in session.query(SpaceMember).filter(SpaceMember.space_id == space_id).all()
     }
-    now = utcnow()
     for item in payload.items:
         if item.user_id not in allowed_ids:
             raise_api_error(422, "VALIDATION_ERROR", f"user {item.user_id} 不在该空间")

@@ -26,7 +26,7 @@ def test_enrich_and_garbage():
 
 def test_positions_requires_active_membership(db_session, client: TestClient):
     owner = create_user_with_pin(db_session, "主", "101010")
-    outsider = create_user_with_pin(db_session, "外人", "909090")
+    create_user_with_pin(db_session, "外人", "909090")
     db_session.commit()
 
     token = login(client, "主", "101010").json()
