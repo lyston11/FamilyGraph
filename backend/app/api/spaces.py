@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_authenticated_user
@@ -210,6 +211,63 @@ def invite_to_space(
 def _require_active_member_space(session: Session, space_id: int, user_id: int) -> FamilySpace:
     _member = _require_active_member(session, space_id, user_id)
     return _space_or_404(session, space_id)
+
+
+@router.post("/spaces/join-by-user", status_code=201, response_model=SpaceMemberOut)
+def join_by_user(
+    payload: JoinByUserPayload,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SpaceMemberOut:
+    """家族视图摘要卡「申请进入 TA 的家庭空间」（AD-4 join_request 语义）。
+
+    可见性门禁：viewer 必须对 target 至少 clan 可达（classify != invisible）。
+    目标空间 = target 的主空间（第一个 owned，否则第一个 active 成员资格）。
+    幂等：已有 pending/active 行原样返回。
+    """
+    from app.services import visibility
+
+    actor, _account = identity
+    target = session.get(User, payload.target_user_id)
+    if target is None or visibility.classify(session, actor, target) == visibility.INVISIBLE:
+        raise_api_error(404, USER_NOT_FOUND, "对方不存在或不可见")
+
+    memberships = session.query(SpaceMember).filter(SpaceMember.user_id == target.id).all()
+    active_ids = [m.space_id for m in memberships if space_fsm.effective_status(m) == "active"]
+    primary_space_id: int | None = None
+    owned = (
+        session.query(FamilySpace)
+        .filter(FamilySpace.owner_id == target.id, FamilySpace.id.in_(active_ids))
+        .first()
+        if active_ids
+        else None
+    )
+    if owned is not None:
+        primary_space_id = owned.id
+    elif active_ids:
+        primary_space_id = active_ids[0]
+    if primary_space_id is None:
+        raise_api_error(409, "SPACE_JOIN_NO_TARGET_SPACE", "对方尚未建立家庭空间")
+
+    space = _space_or_404(session, primary_space_id)
+    member, created = space_fsm.invite(session, space=space, user_id=actor.id, added_by=actor.id)
+    if created:
+        audit.write_audit(
+            session,
+            action="space_join_requested",
+            actor_id=actor.id,
+            target_id=target.id,
+            ip=_client_ip(request),
+            detail={"space_id": space.id},
+        )
+        session.commit()
+    session.refresh(member)
+    return _member_out_with_name(session, member)
+
+
+class JoinByUserPayload(BaseModel):
+    target_user_id: int = Field(gt=0)
 
 
 @router.post("/space-memberships/{member_id}/accept", response_model=SpaceMemberOut)
