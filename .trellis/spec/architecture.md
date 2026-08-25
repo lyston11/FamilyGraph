@@ -1,13 +1,13 @@
-# FamilyGraph 全局架构设计 v1
+# FamilyGraph 全局架构设计 v1.2
 
-> 状态：审计修订产物（2026-08-25）。本文档解决审计记录第三节的 10 个架构问题。
+> 状态：审计复审后修订（2026-08-25 第二轮“有条件通过”整改）。本文档解决审计记录第三节的 10 个架构问题及复审指出的跨文档合同不一致。
 > 决策来源分两层：**锁定决策**（用户确认，见 HANDOFF.md §三）与**审计默认假设**（本文标注 `[AD-n]`，实现前可推翻但需记录）。所有 M0–M4 子任务的 design.md 必须引用并遵守本文。
 
 ---
 
-## 1. 身份模型：PersonProfile / Account / Claim 分离 `[AD-1]`
+## 1. 身份模型：PersonProfile / Account / ClaimState 分离 `[AD-1]`
 
-锁定决策 A3 的用户体验不变（添加关系 ≈ 创建账号 + 一次性 PIN），但内部概念分离：
+锁定决策 A3 的用户体验不变（添加关系 ≈ 创建账号 + 一次性 PIN），但内部概念分离（前两者是实体，Claim 是 users 表上的状态字段而非独立领域对象）：
 
 ```
 users（PersonProfile 家谱人员档案）
@@ -22,8 +22,8 @@ accounts（登录凭据，与档案 1:0..1）
 - **每个 PersonProfile 建档即配发 Account**（A3 锁定），但 Account 只是"待认领凭据"：
   - `claim_status=managed`：从未登录。代管人 = created_by（handover 模式）或永久编辑者（perpetual 模式）。
   - `claim_status=claimed`：本人完成首次登录且改过初始 PIN。
-- **首登强制改 PIN**：`pin_must_change=true` 时除 `PUT /me/pin` 外所有 API 返回 `403 PIN_CHANGE_REQUIRED`；改毕置 false 且 `claim_status=claimed`、token_version+1。
-- 已故/未成年人：自然停留在 managed 态，无需特殊逻辑。冒用风险缓解：PIN 一次性展示 + 审计留痕 + 首登强制换 PIN（拿到旧 PIN 的创建者在本人认领后自动失权）。
+- **首登强制改 PIN**：`pin_must_change=true` 时仅放行 `PUT /me/pin`、`POST /auth/logout`、`POST /auth/refresh`（会话延续所需最小集合），其余 API 一律 `403 PIN_CHANGE_REQUIRED`；改毕置 false 且 `claim_status=claimed`、token_version+1。（`GET /api/health` 为公开端点，不经此依赖管辖。）
+- 已故/未成年人：自然停留在 managed 态，无需特殊逻辑。冒用风险缓解：PIN 一次性展示 + 审计留痕 + 首登强制换 PIN——本人认领改 PIN 后，**旧初始 PIN 即失效**（持旧凭据的创建者无法再登录冒用）；perpetual 归属模式下创建者的档案编辑权不受认领影响（D5 明确保留的权利，失权的只是旧凭据）。
 - 认领不可逆：claimed 后不能退回 managed（v1 非目标：注销/移交）。
 
 ## 2. 认证安全合同 `[AD-2]`
@@ -31,9 +31,10 @@ accounts（登录凭据，与档案 1:0..1）
 | 项 | 规则 |
 |---|---|
 | 登录限流 | 按 (name, IP) 失败计数，连续 5 次失败锁定该 name 15 分钟（accounts.locked_until），错误文案统一 `用户名或 PIN 码错误` |
-| JWT | access 2h + refresh 30d 轮换；refresh 存 hash 可撤销 |
-| 注销/失效 | 登出 = 撤销 refresh；access 短期自愈。**改 PIN / 重置 PIN / 删除档案 → token_version+1**，校验时比对，旧 access 全部失效 |
-| 同名同 PIN 消歧 | 两步：①`POST /auth/login{name,pin}` 多命中 → `409 {challenge_token, candidates[{id,name,created_by_name}]}`（challenge 绑 IP、5 分钟有效、单次使用）②`POST /auth/login/select{challenge_token,user_id}` → JWT |
+| JWT | access 2h + refresh 30d 轮换；refresh 凭据持久化于 `refresh_sessions` 表（user_id FK、token_hash、rotated_from、expires_at、revoked_at） |
+| Refresh 轮换与重用检测 | 每次 refresh 将旧行置 revoked_at 并签发新行（rotated_from 链）；提交已 revoked 的 token 视为重用攻击 → 撤销该用户全部活跃会话 + 审计告警 |
+| 注销/失效 | 登出 = revoke 对应 refresh_session 行；access 短期自愈。**改 PIN / 重置 PIN / 删除档案 → token_version+1**，校验时比对，旧 access 全部失效 |
+| 同名同 PIN 消歧 | 两步：①`POST /auth/login{name,pin}` 多命中 → 写入 `auth_challenges` 表（id/jti、candidate_ids_json、ip、expires_at=5min、used_at NULL）并返回 `409 {challenge_id, candidates[{id,name,created_by_name}]}` ②`POST /auth/login/select{challenge_id,user_id}` → 服务端在单事务内校验未过期且 used_at IS NULL 后原子置 used_at（数据库保证单次使用、防重放）→ JWT；过期/已用一律拒绝并审计 |
 | 审计 | audit_log(actor_id, action, target_id, ip, detail_json, created_at)；记录 login_failed≥3、pin_reset、全部 admin 操作、档案删除。保留 ≥180 天，仅 admin 可读 |
 
 ## 3. 新用户的家庭空间生成规则 `[AD-3]`
@@ -67,10 +68,13 @@ active  ──remove──> removed(终态, owner 或本人)
 
 ### 合并请求（回答"一次申请还是两次申请"）
 - **connection_request（M1/M2 主流程）**：一份请求同时携带 `relation{dir_class,label}` + 可选 `space_membership(space_id)`。对方一次接受 → 两者同时 active；拒绝 → 同时取消。消除"关系 active 但空间 pending"的中间权限态。
+- **新建账号例外（复审澄清）**：由代管人创建 **managed 新档**时，relation 与可选的 space_membership **直接 active**，不走确认流——创建者即代管人，D4 锁定语义本就如此；只有目标为**已存在或已 claimed 的账号**才进入 pending 合并确认流。
 - **join_request（M2 家族视图摘要卡）**：仅携带 space_membership，无新关系边。目标空间 owner 审批。
 
 ### 权限授予判定（服务端实时计算，无缓存）
-完整数据访问 ⇔ **同一空间的双方均为 active 成员 ∨ 存在任一方向 active 关系**。pending 期间：发起方可看接收方摘要（通知需要），反之亦然。断连/移出即时降级。
+> 【待裁定 QU1】本节按锁定 U5 的严格解释书写：完整数据 ⇔ 同一 active 空间成员；active 关系仅授予连通可达 + 摘要。若裁定采纳修订版（直系结构边升级完整数据），改写本节与 §6 矩阵第二列并在 HANDOFF 登记修订。
+
+严格 U5 版：完整数据访问 ⇔ **双方在同一空间且均为 active 成员**。存在任一方向 active 关系 ⇒ 对方至少 clan 连通可达（摘要）。pending 期间：发起方可看接收方摘要（通知需要），反之亦然。断连/移出即时降级。
 
 ## 5. 数据库契约
 
@@ -85,9 +89,9 @@ active  ──remove──> removed(终态, owner 或本人)
 
 ## 6. 授权矩阵（visibility.py 单点实现）
 
-| 资源 \ 主体 | 本人 | 同空间 active / active 关系 | clan 连通可达 | 其余 |
+| 资源 \ 主体 | 本人 | 同空间 active 成员 | clan 连通可达（含 active 关系对端） | 其余 |
 |---|---|---|---|---|
-| 档案详情字段 | full | full | summary(name/称谓/世代) | invisible |
+| 档案详情字段 | full | full | summary(name/称谓/世代)【待裁定 QU1】 | invisible |
 | 图节点+关系边 | full | full | 仅摘要节点 | 不返回 |
 | 头像原图 | full | full | 占位图 | 占位图 |
 | 附件元数据/下载 | full | full | invisible | invisible |
@@ -112,14 +116,14 @@ active  ──remove──> removed(终态, owner 或本人)
 - 恢复演练是 M4 出口条件：restore 后 `PRAGMA integrity_check` 通过 + 用户数/关系数与源库一致。
 - README 写明：**禁止**运行期直接 cp 主库文件。
 
-## 9. 附件安全边界
+## 9. 附件安全边界 `[AD-7]`
 
 - 上传校验链：扩展名白名单(jpg/jpeg/png/webp) → Content-Length ≤10MB → magic bytes 校验 → Pillow `verify()` 真实解码 → 最大像素 8000×8000（防解压炸弹）→ 重编码输出（strip EXIF/脚本元数据）。SVG 一律拒绝。
 - 外链附件：URL scheme 白名单 http/https；**服务端不抓取外链**（无 SSRF 面），前端 `<a target=_blank rel=noopener>` 外跳。
 - 删除一致性：先事务删记录，后异步删文件 + 定期孤儿清扫脚本。
 - 依赖新增：Pillow（m3a 引入）。
 
-## 10. 数据权利与威胁模型边界（v1 明确不做部分见 HANDOFF 非目标）
+## 10. 数据权利与威胁模型边界 `[AD-8]`（v1 明确不做部分见 HANDOFF 非目标）
 
 - 未成年人分级隐私：**v2 待定**。v1 依赖 U5 基线 + 家庭信任模型，写入 HANDOFF 默认假设。
 - 敏感缓存清理：logout 清空 Pinia state + localStorage(JWT) + 内存中的图数据；路由守卫兜底。
