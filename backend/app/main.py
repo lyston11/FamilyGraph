@@ -17,8 +17,8 @@ from app.api.bootstrap import router as bootstrap_router
 from app.api.connections import router as connections_router
 from app.api.deps import close_request_db, require_pin_changed
 from app.api.graph import router as graph_router
-from app.api.misc import router as misc_router
 from app.api.health import router as health_router
+from app.api.misc import router as misc_router
 from app.api.spaces import router as spaces_router
 from app.api.users import members_router
 from app.api.users import router as users_router

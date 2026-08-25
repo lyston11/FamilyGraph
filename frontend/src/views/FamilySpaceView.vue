@@ -7,6 +7,7 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { VueFlow, useVueFlow, type Edge as FlowEdge, type Node as FlowNode } from '@vue-flow/core'
 
+import GlobalSearch from '@/components/common/GlobalSearch.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import { computeCanvasLayout, computeTreeLayout, type PositionedNode } from '@/composables/useLayout'
@@ -104,9 +105,11 @@ const visibleMembers = computed<LayoutNodeInput[]>(() =>
 )
 
 const layoutPositions = ref<PositionedNode[]>([])
+/** 空间内快速筛选（m3d）：纯前端过滤，清空即恢复完整画布 */
+const canvasFilter = ref('')
 
 watch(
-  [visibleMembers, mode],
+  [visibleMembers, mode, canvasFilter],
   () => {
     if (mode.value === 'tree') {
       const result = computeTreeLayout(visibleMembers.value, graph.edges)
@@ -119,6 +122,22 @@ watch(
       layoutPositions.value = result.ok ? result.positions : []
     } else {
       layoutPositions.value = computeCanvasLayout(visibleMembers.value, savedPositions.value)
+    }
+    if (canvasFilter.value.trim()) {
+      const q = canvasFilter.value.trim().toLowerCase()
+      const keepIds = new Set(
+        graph.nodes
+          .filter((n) => n.name.toLowerCase().includes(q))
+          .map((n) => n.id),
+      )
+      // 命中节点的直接邻居保留（保持上下文），其余隐藏
+      for (const e of graph.edges) {
+        if (e.from_user !== e.to_user) {
+          if (keepIds.has(e.from_user)) keepIds.add(e.to_user)
+          if (keepIds.has(e.to_user)) keepIds.add(e.from_user)
+        }
+      }
+      layoutPositions.value = layoutPositions.value.filter((p) => keepIds.has(p.id))
     }
     setTimeout(() => void fitView(), 30)
   },
@@ -204,6 +223,7 @@ void router
   <main class="space-view">
     <header class="topbar">
       <h1 class="title">你好，{{ auth.user?.name }}</h1>
+      <GlobalSearch />
       <div class="actions">
         <el-button type="primary" data-test="go-home" @click="router.push('/home')">添加家人</el-button>
         <el-button data-test="go-stats" @click="router.push('/stats')">统计</el-button>
@@ -232,6 +252,16 @@ void router
         <el-button size="small" data-test="reject-invite" @click="spaces.resolve(inv.id, 'reject')">拒绝</el-button>
       </div>
     </section>
+
+    <div class="filter-row">
+      <input
+        v-model="canvasFilter"
+        class="filter-input"
+        placeholder="空间内筛选…"
+        aria-label="空间内筛选"
+        data-test="canvas-filter-input"
+      />
+    </div>
 
     <!-- 视图范围切换（U3 家庭⇄家族） -->
     <div class="scope-switch" data-test="scope-switch">
@@ -361,6 +391,17 @@ void router
 
 .layout-switch {
   display: flex;
+}
+
+.filter-row {
+  display: flex;
+}
+
+.filter-input {
+  padding: 6px 10px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  width: 220px;
 }
 
 .canvas-wrap {

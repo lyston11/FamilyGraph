@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
-
+from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
-from conftest import auth_header, create_user_with_pin, login
 from app.models.relation import Relation
 from app.utils.timeutil import utcnow
 
@@ -20,15 +19,25 @@ def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:
 @pytest.fixture()
 def three_families(db_session):
     a = create_user_with_pin(
-        db_session, "甲", "111111", claim_status="claimed",
+        db_session,
+        "甲",
+        "111111",
+        claim_status="claimed",
         birth={"cal_type": "solar", "date": "1960-06-15"},
         gender="m",
     )
     b = create_user_with_pin(
-        db_session, "乙", "222222", claim_status="claimed", gender="f",
+        db_session,
+        "乙",
+        "222222",
+        claim_status="claimed",
+        gender="f",
     )
     c = create_user_with_pin(
-        db_session, "丙", "333333", claim_status="claimed",
+        db_session,
+        "丙",
+        "333333",
+        claim_status="claimed",
         birth={"cal_type": "lunar", "date": "1955:3:8"},
     )
     d = create_user_with_pin(db_session, "丁", "444444", claim_status="claimed")
@@ -36,17 +45,21 @@ def three_families(db_session):
     def edge(f, t, cls):
         now = utcnow()
         db_session.add(
-            Relation(from_user=f.id, to_user=t.id, dir_class=cls,
-                     created_by=f.id, status="active",
-                     created_at=now, updated_at=now)
+            Relation(
+                from_user=f.id,
+                to_user=t.id,
+                dir_class=cls,
+                created_by=f.id,
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
         )
 
     edge(a, b, "elder")
     edge(b, c, "peer")
     db_session.commit()
     return {"A": a, "B": b, "C": c, "D": d}
-
-
 
 
 # ---- m3b lunar mirror ----
@@ -56,7 +69,9 @@ def test_lunar_mirror_endpoint(client: TestClient, three_families):
     h = _login(client, "甲", "111111")
     r = client.get("/api/lunar/mirror?cal_type=solar&date=2023-04-05", headers=h)
     assert r.status_code == 200 and r.json()["mirror"] == "2023:-2:15"
-    r2 = client.get(f"/api/lunar/mirror?cal_type=lunar&date=2023:-2:15".replace("--2", "-2"), headers=h)
+    r2 = client.get(
+        "/api/lunar/mirror?cal_type=lunar&date=2023:-2:15".replace("--2", "-2"), headers=h
+    )
     assert r2.status_code == 200
 
 
@@ -101,9 +116,14 @@ def test_search_hits_within_reach_only(db_session, client: TestClient, three_fam
     if e is None:
         now = utcnow()
         e = R(
-            from_user=three_families["B"].id, to_user=three_families["A"].id,
-            dir_class="younger", label="儿子", created_by=three_families["B"].id,
-            status="active", created_at=now, updated_at=now,
+            from_user=three_families["B"].id,
+            to_user=three_families["A"].id,
+            dir_class="younger",
+            label="儿子",
+            created_by=three_families["B"].id,
+            status="active",
+            created_at=now,
+            updated_at=now,
         )
         db_session.add(e)
         db_session.commit()
