@@ -8,7 +8,8 @@
 
 ## Requirements
 
-- users 表补全档案字段（gender/birth/death/bio/avatar_path/privacy_mode/created_by/claim_status/deleted_at 占位）。
+- users 表补全档案字段（gender/birth/death/bio/avatar_path/privacy_mode/created_by/claim_status/deleted_at 占位）+ `clan_disclosure_json`（AD-9 披露开关：avatar/photos/dates/bio/attachments 五类布尔，默认全 false）。
+- 披露开关 API：`PUT /users/{id}/disclosure`，权限 = 该档案 D5 编辑权主体；家族视图消费方在 m2a/m2b。
 - 建档向导（前端四步）：资料（名字允许重名/性别/生卒/简介）→ 归属模式 D5 二选一 → 是否加入我的空间（默认当前空间）→ 提交。
 - 提交行为：创建 user+account，随机 PIN **一次性弹窗展示**（大字号+复制+"请截图保存"提醒），此后任何接口不可再查原始 PIN；audit 记录 created_by。
 - 代管权判定服务：perpetual=创建者永久编辑；handover=未 claimed 创建者可编辑、claimed 后创建者只读（403）。
@@ -21,6 +22,7 @@
 - [ ] handover 档案在被创建人 claimed 后，创建者写接口 403；perpetual 不受限。
 - [ ] 非本人且非代管者调用删除 API 403；删除后关系边/成员行/pending 请求消失，audit 保留快照。
 - [ ] 重名两人可并存，ID 独立。
+- [ ] disclosure 默认全 false；本人/代管者可修改，无权者 403。
 
 ## Non-goals
 
