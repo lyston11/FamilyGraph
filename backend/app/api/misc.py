@@ -1,0 +1,122 @@
+"""杂项端点（m3b/m3c/m3d）：lunar 镜像、统计、搜索。"""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db, require_authenticated_user
+from app.models.account import Account
+from app.models.relation import Relation
+from app.models.user import User
+from app.services.lunar import lunar_to_solar, solar_to_lunar
+from app.services.visibility import reachable_ids
+
+router = APIRouter(tags=["misc"])
+
+
+@router.get("/lunar/mirror")
+def lunar_mirror(
+    cal_type: str = Query(pattern="^(solar|lunar)$"),
+    date: str = Query(min_length=8, max_length=10),
+    _identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> dict[str, str | None]:
+    """公农历互转预览（m3b 前端历别切换自动互填）。"""
+    mirror = solar_to_lunar(date) if cal_type == "solar" else lunar_to_solar(date)
+    return {"mirror": mirror}
+
+
+# ---- m3c 统计 ----
+
+
+@router.get("/stats")
+def stats(
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """可见范围内家族统计（矩阵：clan 可达计入，其余不计入）。"""
+    actor, _account = identity
+    reach = reachable_ids(session, actor.id)
+    users = session.query(User).filter(User.id.in_(reach)).all() if reach else []
+
+    total = len(users)
+    by_gender: dict[str, int] = {"m": 0, "f": 0, "unknown": 0}
+    generation: dict[int, int] = {}
+    this_month = __import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow().month
+    birthdays: list[dict[str, Any]] = []
+    for u in users:
+        by_gender[u.gender] = by_gender.get(u.gender, 0) + 1
+        birth = u.birth if isinstance(u.birth, dict) else {}
+        date_str = birth.get("date") or birth.get("mirror_date")
+        if date_str:
+            try:
+                month = int(str(date_str).split("-")[1].lstrip("0") or 0)
+                gen_year = int(str(date_str).split("-")[0])
+                gen = __import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow().year - gen_year
+                bucket = min(gen // 20 * 20, 120) if gen > 0 else 0
+                generation[bucket] = generation.get(bucket, 0) + 1
+                if month == this_month:
+                    birthdays.append({"id": u.id, "name": u.name, "date": date_str})
+            except (ValueError, IndexError):
+                continue
+    return {
+        "total": total,
+        "by_gender": by_gender,
+        "generation_histogram": [{"bucket": k, "count": v} for k, v in sorted(generation.items())],
+        "birthdays_this_month": birthdays,
+    }
+
+
+# ---- m3d 搜索 ----
+
+
+@router.get("/search")
+def search(
+    q: str = Query(min_length=1, max_length=64),
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    """名字/称谓标签前缀匹配；范围=clan 连通分量（invisible 永不返回）。"""
+    actor, _account = identity
+    reach = reachable_ids(session, actor.id)
+    if not reach:
+        return []
+    users = (
+        session.query(User)
+        .filter(User.id.in_(reach), or_(User.name.like(f"{q}%"), User.name.like(f"%{q}%")))
+        .order_by(User.name)
+        .limit(20)
+        .all()
+    )
+    # 称谓标签匹配：relation.label 前缀命中 → 返回对端用户
+    label_edges = (
+        session.query(Relation)
+        .filter(Relation.status == "active", Relation.label.like(f"{q}%"))
+        .all()
+    )
+    extra_ids = {
+        e.to_user if e.from_user == actor.id else e.from_user
+        for e in label_edges
+        if actor.id in (e.from_user, e.to_user)
+    } - {u.id for u in users}
+    if extra_ids:
+        users.extend(session.query(User).filter(User.id.in_(extra_ids)).all())
+
+    out: list[dict[str, Any]] = []
+    for u in users:
+        level = "full" if u.id == actor.id else None
+        if level is None:
+            from app.services.visibility import classify
+
+            lv = classify(session, actor, u)
+            if lv == "invisible":
+                continue
+            level = lv
+        out.append({"id": u.id, "name": u.name, "level": level})
+    return out
+
+
+void_cast = cast

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
+import { apiClient } from '@/api/client'
 import { ApiError } from '@/api/errors'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
@@ -43,12 +44,56 @@ const form = reactive({
   gender: 'unknown' as GenderType,
   birthCalType: 'solar' as StructuredDate['cal_type'],
   birthDate: '',
+  birthMirror: '' as string | null,
   deathEnabled: false,
   deathCalType: 'solar' as StructuredDate['cal_type'],
   deathDate: '',
   bio: '',
   privacyMode: 'handover' as PrivacyMode,
 })
+
+/** m3b：历别切换自动换算互填（后端 lunar-python 单一实现，避免前端双写） */
+type SolarOrLunar = 'solar' | 'lunar'
+
+async function fetchMirror(calType: SolarOrLunar, date: string): Promise<string | null> {
+  try {
+    const { data } = await apiClient.get<{ mirror: string | null }>('/lunar/mirror', {
+      params: { cal_type: calType, date },
+    })
+    return data.mirror
+  } catch {
+    return null
+  }
+}
+
+let prevBirthCal: SolarOrLunar | 'none' = 'solar'
+watch(
+  () => form.birthCalType,
+  async (newType) => {
+    const typed = newType as StructuredDate['cal_type']
+    const oldType = prevBirthCal
+    prevBirthCal = typed
+    void onBirthCalChange(typed, oldType)
+  },
+)
+
+async function onBirthCalChange(newType: StructuredDate['cal_type'], oldType?: StructuredDate['cal_type']) {
+  if (newType === oldType) return
+  if ((oldType === 'solar' || oldType === 'lunar') && (newType === 'solar' || newType === 'lunar')) {
+    // 双历间切换：用旧历日期的镜像作为新历预填（可撤销——再次切回即还原）
+    const dateStr = String(form.birthDate || '')
+    if (!dateStr) return
+    const mirror = await fetchMirror(oldType, dateStr)
+    if (mirror) {
+      const [y, rest] = [mirror.split(':')[0], mirror.split(':').slice(1).join('-')]
+      const normalized = rest.startsWith('-')
+        ? `${y}-${String(Math.abs(Number(rest.split('-')[0]))).padStart(2, '0')}-${rest.split('-')[1]}`
+        : `${y}-${rest}`
+      form.birthDate = normalized
+      form.birthMirror = mirror
+    }
+  }
+}
 
 const canNextFromInfo = computed(() => form.name.trim().length > 0)
 
