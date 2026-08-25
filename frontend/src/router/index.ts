@@ -7,6 +7,11 @@ const router = createRouter({
   routes: [
     {
       path: '/',
+      name: 'family-space',
+      component: () => import('@/views/FamilySpaceView.vue'),
+    },
+    {
+      path: '/home',
       name: 'home',
       component: () => import('@/views/HomeView.vue'),
     },
