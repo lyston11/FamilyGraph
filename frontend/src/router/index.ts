@@ -38,6 +38,12 @@ const router = createRouter({
       component: () => import('@/views/StatsView.vue'),
     },
     {
+      path: '/admin',
+      name: 'admin',
+      component: () => import('@/views/AdminView.vue'),
+      meta: { adminOnly: true },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
@@ -54,6 +60,12 @@ const router = createRouter({
  */
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
+
+  // 管理员路由双重校验（后端 API 另有 403）
+  if (to.meta.adminOnly && auth.user?.is_admin !== true) {
+    return { name: 'family-space' }
+  }
+
 
   // 首启探测：仅首次会话请求一次
   await auth.checkBootstrap()
