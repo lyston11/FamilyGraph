@@ -19,6 +19,16 @@ DATABASE_URL: str = f"sqlite:///{DB_PATH}"
 ACCESS_TOKEN_TTL_SECONDS: int = 2 * 60 * 60
 REFRESH_TOKEN_TTL_SECONDS: int = 30 * 24 * 60 * 60
 
+# ---- m0b 认证限流参数（design.md 回滚形态：集中在 config，可经 env 热调）----
+AUTH_MAX_FAILED_ATTEMPTS: int = int(os.environ.get("AUTH_MAX_FAILED_ATTEMPTS", "5"))
+AUTH_LOCK_MINUTES: int = int(os.environ.get("AUTH_LOCK_MINUTES", "15"))
+AUTH_CHALLENGE_TTL_MINUTES: int = int(os.environ.get("AUTH_CHALLENGE_TTL_MINUTES", "5"))
+# 关闭锁定仅允许开发态使用；生产误配时启动日志给 WARNING 二次确认线索
+AUTH_LOCKOUT_DISABLED: bool = os.environ.get("AUTH_LOCKOUT_DISABLED", "").lower() in ("1", "true")
+
+# bcrypt cost：生产 12；测试经 env 降到 4 保证套件速度
+BCRYPT_ROUNDS: int = int(os.environ.get("BCRYPT_ROUNDS", "12"))
+
 # 会话签名密钥：只从环境变量读取，禁止代码内默认值
 SECRET_KEY: str = os.environ.get("SECRET_KEY", "")
 

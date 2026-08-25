@@ -6,6 +6,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app import config as app_config
+from app.models import Base  # noqa: E402
 
 alembic_config = context.config
 
@@ -14,8 +15,8 @@ if alembic_config.config_file_name is not None:
 
 alembic_config.set_main_option("sqlalchemy.url", app_config.DATABASE_URL)
 
-# ORM metadata 尚无模型；各业务子任务自带迁移时在此挂载 target_metadata
-target_metadata = None
+# ORM metadata：m0b 起挂载，后续 autogenerate 以此为基准
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
