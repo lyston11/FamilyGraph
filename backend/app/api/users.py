@@ -153,8 +153,14 @@ def create_member(
     name = payload.name.strip()
     pin = security.generate_pin()
     # exclude_none：JSON 列不落显式 null 键（original_text 空即省略）
-    birth = payload.birth.model_dump(exclude_none=True) if payload.birth else None
-    death = payload.death.model_dump(exclude_none=True) if payload.death else None
+    from app.services.lunar import enrich_structured_date
+
+    birth = enrich_structured_date(
+        payload.birth.model_dump(exclude_none=True) if payload.birth else None
+    )
+    death = enrich_structured_date(
+        payload.death.model_dump(exclude_none=True) if payload.death else None
+    )
 
     member = User(
         name=name,
@@ -251,9 +257,14 @@ def update_member(
     fields = sorted(changes)
     if "name" in changes and changes["name"] is not None:
         target.name = str(changes["name"]).strip()
+    from app.services.lunar import enrich_structured_date
+
     for field in ("gender", "birth", "death", "bio"):
         if field in changes:
-            setattr(target, field, changes[field])
+            value = changes[field]
+            if field in ("birth", "death") and isinstance(value, dict):
+                value = enrich_structured_date(value)
+            setattr(target, field, value)
     audit.write_audit(
         session,
         action="profile_updated",

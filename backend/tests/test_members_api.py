@@ -14,7 +14,7 @@ def _create_member(client, headers, **overrides):
     payload = {
         "name": "母亲",
         "gender": "f",
-        "birth": {"cal_type": "solar", "date": "1960-05-01"},
+        "birth": {"cal_type": "solar", "date": "1960-05-01", "mirror_date": "1960:4:6"},
         "privacy_mode": "handover",
         **overrides,
     }
@@ -36,7 +36,11 @@ def test_create_member_issues_one_time_pin_and_audit(client, db_session) -> None
     assert user_payload["claim_status"] == "managed"
     assert user_payload["privacy_mode"] == "handover"
     assert user_payload["created_by"] == creator.id
-    assert user_payload["birth"] == {"cal_type": "solar", "date": "1960-05-01"}
+    assert user_payload["birth"] == {
+        "cal_type": "solar",
+        "date": "1960-05-01",
+        "mirror_date": "1960:4:6",
+    }
     # AD-9 默认披露开关全 false
     assert set(user_payload["clan_disclosure"].values()) == {False}
     assert user_payload["permissions"] == {"edit": True, "delete": True}

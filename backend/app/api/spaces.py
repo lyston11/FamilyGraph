@@ -14,6 +14,7 @@ from app.models.account import Account
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
 from app.schemas.space import (
+    PositionsPayload,
     SpaceCreate,
     SpaceInviteCreate,
     SpaceMemberOut,
@@ -289,3 +290,51 @@ def _get_pending_membership_for_requestee(
 
 
 # ---- graph 空间过滤 ----
+
+
+@router.get("/spaces/{space_id}/positions")
+def get_positions(
+    space_id: int,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[dict[str, float | int]]:
+    """画布位置记忆：仅 active 成员可读。"""
+    _require_active_member(session, space_id, identity[0].id)
+    from app.models.node_position import NodePosition
+
+    rows = session.query(NodePosition).filter(NodePosition.space_id == space_id).all()
+    return [{"user_id": r.user_id, "x": r.x, "y": r.y} for r in rows]
+
+
+@router.put("/spaces/{space_id}/positions")
+def put_positions(
+    space_id: int,
+    payload: PositionsPayload,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[dict[str, float | int]]:
+    """批量 upsert 位置（active 成员可写；仅允许保存自己所在空间的成员坐标）。"""
+    actor, _account = identity
+    _require_active_member(session, space_id, actor.id)
+    from app.models.node_position import NodePosition
+    from app.utils.timeutil import utcnow
+
+    allowed_ids = {
+        m.user_id for m in session.query(SpaceMember).filter(SpaceMember.space_id == space_id).all()
+    }
+    now = utcnow()
+    for item in payload.items:
+        if item.user_id not in allowed_ids:
+            raise_api_error(422, "VALIDATION_ERROR", f"user {item.user_id} 不在该空间")
+        row = (
+            session.query(NodePosition)
+            .filter(NodePosition.space_id == space_id, NodePosition.user_id == item.user_id)
+            .first()
+        )
+        if row is None:
+            session.add(NodePosition(space_id=space_id, user_id=item.user_id, x=item.x, y=item.y))
+        else:
+            row.x, row.y = item.x, item.y
+    session.commit()
+    rows = session.query(NodePosition).filter(NodePosition.space_id == space_id).all()
+    return [{"user_id": r.user_id, "x": r.x, "y": r.y} for r in rows]
