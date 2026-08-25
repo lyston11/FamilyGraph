@@ -15,6 +15,7 @@ from app.api.auth import router as auth_router
 from app.api.bootstrap import router as bootstrap_router
 from app.api.deps import close_request_db, require_pin_changed
 from app.api.health import router as health_router
+from app.api.users import members_router
 from app.api.users import router as users_router
 from app.errors import INTERNAL_ERROR, VALIDATION_ERROR, extract_api_error
 
@@ -107,4 +108,5 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
+app.include_router(members_router, prefix="/api")
 app.include_router(bootstrap_router, prefix="/api")

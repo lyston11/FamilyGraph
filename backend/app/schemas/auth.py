@@ -24,6 +24,8 @@ class LoginRequest(BaseModel):
 class ChallengeCandidate(BaseModel):
     id: int
     name: str
+    # m1a 兼容补齐：候选档案的代管创建者名（managed 档案提示"由谁代管"）
+    created_by_name: str | None = None
 
 
 class ChallengeResponse(BaseModel):

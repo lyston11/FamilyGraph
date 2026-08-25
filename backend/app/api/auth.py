@@ -103,12 +103,24 @@ def login(
             session, [user.id for user, _account in verified], ip
         )
         session.commit()
+
+        # 候选提示补代管创建者名（m1a design 兼容项）：一次查询取全 created_by 名字
+        creator_ids = {user.created_by for user, _account in verified if user.created_by}
+        creator_names: dict[int, str] = {}
+        if creator_ids:
+            creators = session.query(User).filter(User.id.in_(creator_ids)).all()
+            creator_names = {creator.id: creator.name for creator in creators}
         # 同名同 PIN 消歧：HTTP 409 + {challenge_id, candidates}（architecture.md §2）
         response.status_code = 409
         return ChallengeResponse(
             challenge_id=challenge.jti,
             candidates=[
-                ChallengeCandidate(id=user.id, name=user.name) for user, _account in verified
+                ChallengeCandidate(
+                    id=user.id,
+                    name=user.name,
+                    created_by_name=creator_names.get(user.created_by) if user.created_by else None,
+                )
+                for user, _account in verified
             ],
         )
 
