@@ -24,7 +24,7 @@ from app.schemas.user import (
     MemberUpdateRequest,
     member_payload,
 )
-from app.services import audit, custody
+from app.services import audit, custody, space_fsm
 from app.services import refresh_session as refresh_session_service
 from app.utils import security, timeutil
 
@@ -177,6 +177,34 @@ def create_member(
     )
     session.add(member)
     session.flush()  # 取得 id 供审计与响应投影
+
+    # AD-4 新建例外：managed 新档由代管人创建 → 空间成员直接 active（同事务原子）
+    if payload.space_membership is not None:
+        from app.models.space import FamilySpace, SpaceMember
+
+        space = session.get(FamilySpace, payload.space_membership.space_id)
+        actor_membership = (
+            space_fsm.find_membership(session, space.id, actor.id) if space is not None else None
+        )
+        if (
+            space is None
+            or actor_membership is None
+            or space_fsm.effective_status(actor_membership) != "active"
+        ):
+            raise_api_error(404, "SPACE_NOT_FOUND", "目标家庭空间不存在或无权操作")
+        now = timeutil.utcnow()
+        session.add(
+            SpaceMember(
+                space_id=space.id,
+                user_id=member.id,
+                added_by=actor.id,
+                role="member",
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
     audit.write_audit(
         session,
         action="profile_created",

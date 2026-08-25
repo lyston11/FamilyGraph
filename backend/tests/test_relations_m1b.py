@@ -205,19 +205,103 @@ def test_accept_idempotent_and_actor_rules(db_session, client: TestClient, two_u
     assert second.json()["error"]["code"] == "CONNECTION_ALREADY_RESOLVED"
 
 
-# ---- space_membership 延迟（m1c）----
+# ---- AD-4 合并语义：relation + space_member 同事务 ----
 
 
-def test_space_membership_deferred(db_session, client: TestClient, two_users):
+def test_connection_request_with_space_merged_semantics(db_session, client, two_users):
+    from app.models.space import SpaceMember
+
+    a, b = two_users
+    ha = _login_header(client, "张甲", "111111")
+    hb = _login_header(client, "张乙", "222222")
+
+    # A 建空间（owner 即 active 成员）
+    s = client.post("/api/spaces", json={"name": "甲家"}, headers=ha)
+    assert s.status_code == 201, s.text
+    space_id = s.json()["id"]
+
+    # 发起带空间意图的合并请求：relation pending + space_members pending 同事务
+    r1 = client.post(
+        "/api/connection-requests",
+        json={
+            "target_id": b.id,
+            "dir_class": "elder",
+            "space_membership": {"space_id": space_id},
+        },
+        headers=ha,
+    )
+    assert r1.status_code == 201, r1.text
+    edge_id = r1.json()["id"]
+    assert r1.json()["pending_space_id"] == space_id
+
+    pm = (
+        db_session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space_id, SpaceMember.user_id == b.id)
+        .one()
+    )
+    assert pm.status == "pending"
+
+    # B 接受：关系与空间成员同时 active（跨表原子）
+    acc = client.post(f"/api/connection-requests/{edge_id}/accept", headers=hb)
+    assert acc.status_code == 200
+    db_session.expire_all()
+    assert (
+        db_session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space_id, SpaceMember.user_id == b.id)
+        .one()
+        .status
+        == "active"
+    )
+
+    # 幂等：重复 accept → 409 ALREADY_RESOLVED
+    again = client.post(f"/api/connection-requests/{edge_id}/accept", headers=hb)
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "CONNECTION_ALREADY_RESOLVED"
+
+
+def test_connection_reject_withdraws_pending_space_member(db_session, client, two_users):
+    from app.models.space import SpaceMember
+
+    a, b = two_users
+    ha = _login_header(client, "张甲", "111111")
+    hb = _login_header(client, "张乙", "222222")
+    space_id = client.post("/api/spaces", json={"name": "甲家"}, headers=ha).json()["id"]
+    r = client.post(
+        "/api/connection-requests",
+        json={
+            "target_id": b.id,
+            "dir_class": "peer",
+            "space_membership": {"space_id": space_id},
+        },
+        headers=ha,
+    )
+    edge_id = r.json()["id"]
+    rej = client.post(f"/api/connection-requests/{edge_id}/reject", headers=hb)
+    assert rej.status_code == 200
+    assert rej.json()["status"] == "rejected"
+    assert (
+        db_session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space_id, SpaceMember.user_id == b.id)
+        .one()
+        .status
+        == "withdrawn"
+    )
+
+
+def test_connection_space_intent_requires_active_membership(db_session, client, two_users):
+    """发起人对目标空间不是 active 成员 → 404 防枚举。"""
     a, b = two_users
     ha = _login_header(client, "张甲", "111111")
     r = client.post(
         "/api/connection-requests",
-        json={"target_id": b.id, "dir_class": "peer", "space_membership": {"space_id": 1}},
+        json={
+            "target_id": b.id,
+            "dir_class": "peer",
+            "space_membership": {"space_id": 99999},
+        },
         headers=ha,
     )
-    assert r.status_code == 422
-    assert r.json()["error"]["code"] == "SPACE_MEMBERSHIP_DEFERRED_M1C"
+    assert r.status_code == 404
 
 
 # ---- kinship 反译 ----

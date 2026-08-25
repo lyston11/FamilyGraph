@@ -50,6 +50,12 @@ class DisclosurePayload(BaseModel):
     attachments: bool
 
 
+class SpaceMembershipInline(BaseModel):
+    """建档时可同时加入某个家庭空间（AD-4 新建 managed 直连例外）。"""
+
+    space_id: int = Field(gt=0)
+
+
 class MemberCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     gender: GenderType = "unknown"
@@ -57,6 +63,7 @@ class MemberCreateRequest(BaseModel):
     death: StructuredDate | None = None
     bio: str | None = Field(default=None, max_length=2000)
     privacy_mode: PrivacyMode = "handover"
+    space_membership: SpaceMembershipInline | None = None
 
 
 class MemberUpdateRequest(BaseModel):

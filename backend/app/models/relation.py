@@ -55,6 +55,10 @@ class Relation(Base):
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 视角归属人（=from_user，冗余留审计与查询）
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # 合并请求（AD-4）：pending 时携带的可选空间成员意图；accept 同事务激活
+    pending_space_id: Mapped[int | None] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

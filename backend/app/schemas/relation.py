@@ -10,16 +10,21 @@ DirClass = Literal["elder", "younger", "peer", "spouse"]
 RelationStatus = Literal["pending", "active", "rejected", "cancelled", "revoked"]
 
 
+class SpaceMembershipIntent(BaseModel):
+    """合并请求携带的空间成员意图（AD-4）。"""
+
+    space_id: int = Field(gt=0)
+
+
 class ConnectionRequestCreate(BaseModel):
-    """合并请求创建体：relation 必填，space_membership 待 m1c 放开。"""
+    """合并请求创建体：relation 必填，可选空间成员意图。"""
 
     model_config = ConfigDict(extra="forbid")
 
     target_id: int = Field(gt=0)
     dir_class: DirClass
     label: str | None = Field(default=None, max_length=64)
-    # AD-4 合并语义的空间部分；m1c 落地前显式 422 SPACE_MEMBERSHIP_DEFERRED_M1C
-    space_membership: dict[str, int] | None = None
+    space_membership: SpaceMembershipIntent | None = None
 
 
 class RelationViewOut(BaseModel):
@@ -40,6 +45,7 @@ class RelationOut(BaseModel):
     label: str | None
     status: RelationStatus
     created_by: int
+    pending_space_id: int | None = None
     view: RelationViewOut
 
 

@@ -14,19 +14,19 @@ from app.api.deps import get_db, require_authenticated_user
 from app.errors import (
     CONNECTION_ALREADY_RESOLVED,
     RELATION_NOT_FOUND,
-    SPACE_MEMBERSHIP_DEFERRED_M1C,
     USER_NOT_FOUND,
     raise_api_error,
 )
 from app.models.account import Account
 from app.models.relation import Relation
+from app.models.space import FamilySpace
 from app.models.user import User
 from app.schemas.relation import (
     ConnectionRequestCreate,
     RelationOut,
     RelationViewOut,
 )
-from app.services import audit, relation_fsm
+from app.services import audit, relation_fsm, space_fsm
 from app.services.kinship import display_relation
 
 router = APIRouter(tags=["connections"])
@@ -47,6 +47,7 @@ def _relation_out(edge: Relation, viewer_id: int) -> RelationOut:
         label=edge.label,
         status=edge.status,  # type: ignore[arg-type]
         created_by=edge.created_by,
+        pending_space_id=edge.pending_space_id,
         view=view,
     )
 
@@ -68,15 +69,24 @@ def create_connection_request(
 ) -> RelationOut:
     """向已有账号发起合并请求：relation pending（+可选空间成员，m1c）。"""
     actor, _account = identity
-    if payload.space_membership is not None:  # TODO(m1c)：合并 space_members 行同事务
-        raise_api_error(
-            422,
-            SPACE_MEMBERSHIP_DEFERRED_M1C,
-            "空间成员邀请将在家庭空间功能上线后可用",
-        )
     target = session.get(User, payload.target_id)
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
+
+    # AD-4 合并语义：校验发起人对目标空间是 active 成员（否则无法代发邀请）
+    pending_space_id: int | None = None
+    if payload.space_membership is not None:
+        space = session.get(FamilySpace, payload.space_membership.space_id)
+        membership = (
+            space_fsm.find_membership(session, space.id, actor.id) if space is not None else None
+        )
+        if (
+            space is None
+            or membership is None
+            or space_fsm.effective_status(membership) != "active"
+        ):
+            raise_api_error(404, "SPACE_NOT_FOUND", "目标家庭空间不存在或无权操作")
+        pending_space_id = space.id
 
     edge = relation_fsm.create_relation(
         session,
@@ -86,6 +96,15 @@ def create_connection_request(
         label=payload.label,
         status="pending",
     )
+    if pending_space_id is not None:
+        member, _created = space_fsm.invite(
+            session,
+            space=session.get(FamilySpace, pending_space_id),  # type: ignore[arg-type]
+            user_id=payload.target_id,
+            added_by=actor.id,
+        )
+        edge.pending_space_id = pending_space_id
+        void = member  # noqa: F841 - invite 已 flush
     audit.write_audit(
         session,
         action="connection_requested",
@@ -113,6 +132,13 @@ def accept_connection(
             409, CONNECTION_ALREADY_RESOLVED, "该请求已处理", detail={"status": edge.status}
         )
     relation_fsm.transition(edge, "accept", actor.id, session)
+    # AD-4 合并语义：accept 时可选空间成员同事务激活
+    if edge.pending_space_id is not None:
+        m = space_fsm.find_membership(session, edge.pending_space_id, edge.to_user)
+        if m is not None and m.status == "pending":
+            m.status = "active"
+            m.updated_at = __import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow()
+        edge.pending_space_id = None
     audit.write_audit(
         session,
         action="connection_accepted",
@@ -140,6 +166,12 @@ def reject_connection(
             409, CONNECTION_ALREADY_RESOLVED, "该请求已处理", detail={"status": edge.status}
         )
     relation_fsm.transition(edge, "reject", actor.id, session)
+    if edge.pending_space_id is not None:
+        m = space_fsm.find_membership(session, edge.pending_space_id, edge.to_user)
+        if m is not None and m.status == "pending":
+            m.status = "withdrawn"
+            m.updated_at = __import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow()
+        edge.pending_space_id = None
     audit.write_audit(
         session,
         action="connection_rejected",
