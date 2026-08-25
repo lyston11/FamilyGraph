@@ -1,0 +1,72 @@
+/* 全局样式（m4a）：响应式断点与 a11y 基线 */
+
+html,
+body {
+  margin: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 键盘导航可见焦点（WCAG 2.4.7） */
+:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
+/* 移动端断点：顶栏/卡片/画布自适应 */
+@media (max-width: 768px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .topbar .title {
+    width: 100%;
+    font-size: 16px;
+  }
+
+  .topbar .actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .cards {
+    grid-template-columns: 1fr !important;
+  }
+
+  .space-view {
+    padding: 12px !important;
+  }
+
+  .canvas-wrap {
+    min-height: 320px !important;
+  }
+
+  .filter-input,
+  .global-search {
+    width: 100% !important;
+  }
+}
+
+/* scope 切换过渡动画（U3 基础版） */
+.scope-switch,
+.layout-switch {
+  transition:
+    transform 0.3s ease,
+    opacity 0.3s ease;
+}
+
+.scope-switch:active,
+.layout-switch:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
