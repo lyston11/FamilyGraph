@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "familygraph-backend"
+version = "0.1.0"
+description = "FamilyGraph API 后端（FastAPI + SQLAlchemy + SQLite/WAL）"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "SQLAlchemy==2.0.36",
+    "alembic==1.14.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "httpx==0.28.1",
+    "ruff==0.8.6",
+    "mypy==1.14.1",
+]
+
+[tool.setuptools]
+packages = [
+    "app",
+    "app.api",
+    "app.models",
+    "app.schemas",
+    "app.services",
+    "app.utils",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
