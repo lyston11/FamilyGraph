@@ -21,6 +21,7 @@ from app.schemas.user import (
     MemberCreateRequest,
     MemberCreateResponse,
     MemberOut,
+    MemberPermissions,
     MemberUpdateRequest,
     member_payload,
 )
@@ -229,14 +230,59 @@ def get_member(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberOut:
-    """按 resolve_relation.view 返回；none → 404（防枚举）。"""
+    """可见性基线（m2a）：full=完整 / summary=基线+披露 / invisible→404（防枚举）。"""
+    from app.services import visibility
+
     actor, _account = identity
     target = session.query(User).filter(User.id == user_id).first()
-    target = custody.require_visible_target(target)
-    access = custody.resolve_relation(actor, target)
-    if access.view == custody.VIEW_NONE:
+    if target is None:
         raise_api_error(404, *_MEMBER_NOT_FOUND)
-    return _member_out(target, actor)
+    payload = visibility.user_payload_for(session, actor, target)
+    if payload is None:
+        raise_api_error(404, *_MEMBER_NOT_FOUND)
+    access = custody.resolve_relation(actor, target)
+
+    def _keep(value: object) -> object:
+        """MASKED 哨兵替换为遮罩结构；其余原样（结构化日期本身也是 dict）。"""
+        if isinstance(value, dict) and value.get("__masked__"):
+            return dict(visibility.MASKED)
+        return value
+
+    out = MemberOut(
+        id=payload["id"],
+        name=payload["name"],
+        is_admin=target.is_admin,
+        gender=_keep(payload["gender"]),
+        birth=_keep(payload["birth"]),
+        death=_keep(payload["death"]),
+        bio=_keep(payload["bio"]),
+        avatar_path=_keep(payload["avatar_path"]),
+        privacy_mode=payload.get("privacy_mode") or "handover",
+        claim_status=payload.get("claim_status") or "managed",
+        created_by=payload.get("created_by"),
+        created_at=target.created_at,
+        clan_disclosure=_safe_disclosure(target),
+        permissions=MemberPermissions(edit=bool(access.edit), delete=bool(access.delete)),
+    )
+    return out
+
+
+def _safe_disclosure(target: User) -> dict[str, bool]:
+    import json as _json
+    from typing import Any as _Any
+
+    raw_any: _Any = target.clan_disclosure_json
+    if isinstance(raw_any, str):
+        try:
+            raw = _json.loads(raw_any)
+        except Exception:  # noqa: BLE001
+            raw = {}
+    else:
+        raw = raw_any or {}
+    return {
+        k: bool(raw.get(k, False))
+        for k in __import__("app.models.user", fromlist=["DISCLOSURE_KEYS"]).DISCLOSURE_KEYS
+    }
 
 
 @members_router.patch("/{user_id}", response_model=MemberOut)

@@ -16,6 +16,10 @@ PrivacyMode = Literal["perpetual", "handover"]
 ClaimStatus = Literal["managed", "claimed"]
 
 
+# 遮罩哨兵 {__masked__: true} 由 visibility.MASKED 常量给出；MemberOut 对应
+# 字段以 Any 透传（Pydantic 下划线字段不参与序列化，故不用模型承载）。
+
+
 class StructuredDate(BaseModel):
     """生卒结构化值（D7）：cal_type + YYYY-MM-DD + 原文备注。"""
 
@@ -89,11 +93,12 @@ class MemberOut(BaseModel):
     id: int
     name: str
     is_admin: bool = False
-    gender: GenderType
-    birth: dict[str, Any] | None = None
-    death: dict[str, Any] | None = None
-    bio: str | None = None
-    avatar_path: str | None = None
+    # summary 级可见性下可为 {__masked__: true} 哨兵（Any 直传保证形状）
+    gender: Any = "unknown"
+    birth: Any = None
+    death: Any = None
+    bio: Any = None
+    avatar_path: Any = None
     privacy_mode: PrivacyMode
     claim_status: ClaimStatus
     created_by: int | None = None
