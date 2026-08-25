@@ -1,18 +1,78 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import { useAuthStore } from '@/stores/auth'
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+      path: '/',
+      name: 'home',
+      component: () => import('@/views/HomeView.vue'),
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
+      meta: { public: true },
     },
+    {
+      path: '/onboarding',
+      name: 'onboarding',
+      component: () => import('@/views/OnboardingView.vue'),
+      meta: { public: true },
+    },
+    {
+      path: '/force-change-pin',
+      name: 'force-change-pin',
+      component: () => import('@/views/ChangePinView.vue'),
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/SettingsView.vue'),
+    },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 
-// 登录守卫占位：m0b 接入认证态后在此重定向未登录访问，
-// 并处理 PIN_CHANGE_REQUIRED 强制跳转（architecture.md §1）
-router.beforeEach(() => true)
+/**
+ * 认证守卫（architecture.md §1 + state-management.md 红线）：
+ * 1. 首启未初始化 → 一律进引导页（公开页除外）
+ * 2. 未登录 → /login；已登录访问 /login → /
+ * 3. pin_must_change=true → 白名单外强制跳改 PIN 页
+ */
+router.beforeEach(async (to) => {
+  const auth = useAuthStore()
+
+  // 首启探测：仅首次会话请求一次
+  await auth.checkBootstrap()
+  if (!auth.systemInitialized) {
+    return to.name === 'onboarding' ? true : { name: 'onboarding' }
+  }
+
+  // 恢复会话：内存无 access 但 localStorage 有 refresh（硬刷新场景）
+  if (!auth.isLoggedIn && auth.refreshToken) {
+    await auth.resume()
+  }
+
+  if (to.meta.public) {
+    if (auth.isLoggedIn && to.name === 'login') {
+      return { name: 'home' }
+    }
+    return true
+  }
+
+  if (!auth.isLoggedIn) {
+    return { name: 'login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : undefined }
+  }
+
+  // 首登强制改 PIN：仅放行改 PIN 页自身
+  if (auth.mustChangePin && to.name !== 'force-change-pin') {
+    return { name: 'force-change-pin' }
+  }
+
+  return true
+})
 
 export default router

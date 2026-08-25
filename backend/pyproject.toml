@@ -12,6 +12,8 @@ dependencies = [
     "uvicorn[standard]==0.34.0",
     "SQLAlchemy==2.0.36",
     "alembic==1.14.1",
+    "bcrypt==4.2.1",
+    "PyJWT==2.10.1",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +43,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 惯用写法：Depends() 出现在参数默认值
+extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.mypy]
 python_version = "3.12"
