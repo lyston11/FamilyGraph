@@ -291,6 +291,7 @@ function formatDate(value: StructuredDate | null): string {
         </template>
       </el-dialog>
     </template>
+  <AttachmentsSection :user-id="memberId" :can-edit="member?.permissions?.edit === true" />
   </el-drawer>
 </template>
 

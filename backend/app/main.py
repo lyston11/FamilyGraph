@@ -11,6 +11,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app import config, logctx
+from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
 from app.api.bootstrap import router as bootstrap_router
 from app.api.connections import router as connections_router
@@ -115,4 +116,5 @@ app.include_router(members_router, prefix="/api")
 app.include_router(bootstrap_router, prefix="/api")
 app.include_router(connections_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
+app.include_router(attachments_router, prefix="/api")
 app.include_router(spaces_router, prefix="/api")

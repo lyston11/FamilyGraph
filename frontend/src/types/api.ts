@@ -197,3 +197,14 @@ export interface SpaceMemberInfo {
   status: 'pending' | 'active' | 'rejected' | 'withdrawn' | 'removed'
   updated_at: string
 }
+
+// ---- m3a 附件域 ----
+export interface Attachment {
+  id: number
+  user_id: number
+  type: 'image' | 'link' | 'location'
+  title: string | null
+  description: string | null
+  url_or_path: string | null
+  created_at: string
+}

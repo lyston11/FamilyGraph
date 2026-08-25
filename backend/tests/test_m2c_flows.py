@@ -28,7 +28,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     hb = _login(client, "阿乙", "222222")
 
     # 乙建空间（owner 即 active）
-    space_id = client.post("/api/spaces", json={"name": "乙家"}, headers=hb).json()["id"]
+    client.post("/api/spaces", json={"name": "乙家"}, headers=hb)
 
     # 甲（clan 可达性：无关系边时 invisible → 404 防枚举；先建立 peer 边使其可达）
     from app.models.relation import Relation
@@ -68,7 +68,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
 def test_join_invisible_target_404(db_session, client: TestClient):
     """跨家族不可见目标 → 404（invisible ≠ 拒绝）。"""
     create_user_with_pin(db_session, "隐士", "777777", claim_status="claimed")
-    seeker = create_user_with_pin(db_session, "求加", "888888", claim_status="claimed")
+    create_user_with_pin(db_session, "求加", "888888", claim_status="claimed")
     db_session.commit()
     hs = _login(client, "求加", "888888")
     target_id = db_session.execute(
