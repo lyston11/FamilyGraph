@@ -206,6 +206,7 @@ void router
       <h1 class="title">你好，{{ auth.user?.name }}</h1>
       <div class="actions">
         <el-button type="primary" data-test="go-home" @click="router.push('/home')">添加家人</el-button>
+        <el-button data-test="go-stats" @click="router.push('/stats')">统计</el-button>
         <el-button data-test="go-settings" @click="router.push('/settings')">设置</el-button>
       </div>
     </header>
