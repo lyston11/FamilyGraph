@@ -118,23 +118,22 @@ def _member_out(target: User, actor: User) -> MemberOut:
 
 @members_router.get("", response_model=list[MemberOut])
 def list_related_members(
+    q: str = "",
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[MemberOut]:
     """与我相关的档案列表：自己 + 我创建的；admin 可见全部（m1a design）。
 
+    q 为名字前缀过滤（m1b「添加关系」搜人用），可见范围不变；
     M1 无关系边/空间成员资格，范围即此；m1d 后该列表被画布取代。
     """
     actor, _account = identity
     query = session.query(User)
-    if actor.is_admin:
-        members = query.order_by(User.id).all()
-    else:
-        members = (
-            query.filter((User.id == actor.id) | (User.created_by == actor.id))
-            .order_by(User.id)
-            .all()
-        )
+    if not actor.is_admin:
+        query = query.filter((User.id == actor.id) | (User.created_by == actor.id))
+    if q:
+        query = query.filter(User.name.like(f"{q}%"))
+    members = query.order_by(User.id).all()
     return [_member_out(member, actor) for member in members]
 
 
