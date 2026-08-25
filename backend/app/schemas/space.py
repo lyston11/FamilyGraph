@@ -42,3 +42,13 @@ class SpaceMemberOut(BaseModel):
 
 class SpaceInviteCreate(BaseModel):
     user_id: int = Field(gt=0)
+
+
+class PositionItem(BaseModel):
+    user_id: int = Field(gt=0)
+    x: float
+    y: float
+
+
+class PositionsPayload(BaseModel):
+    items: list[PositionItem]
