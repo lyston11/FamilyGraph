@@ -71,3 +71,34 @@ SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件
 
 - `SECRET_KEY` 必须经环境变量提供，缺失时后端拒绝启动；compose 默认值仅供本地开发。
 - nginx 不直接托管 uploads 目录；附件下载一律走后端授权端点（architecture.md §6/§9）。
+
+---
+
+## 备份与恢复（重要）
+
+**备份（一条命令）**：
+
+```bash
+docker compose exec api python -m app.backup
+# 产物：/data/backups/familygraph-YYYYmmdd-HHMMSS.tar.gz（含数据库快照 + uploads）
+# 宿主机直接取：docker cp <api容器>:/data/backups ./
+```
+
+⚠️ **禁止运行期直接 `cp` 主库文件**——SQLite 运行在 WAL 模式，直接复制会得到不一致的快照。一律使用上面的 online backup 命令。
+
+**恢复演练**：解包 tar 取出 `.db` 文件 → 替换数据卷中的 `db/app.db`（先停 api 服务）→ 重启后自动通过完整性校验。验证命令：
+
+```bash
+sqlite3 app.db "PRAGMA integrity_check"   # 应输出 ok
+```
+
+## 迁移到云服务器（迁云清单）
+
+1. 云服务器安装 Docker + Docker Compose。
+2. `git clone` 本仓库 → 配置 `.env`：`SECRET_KEY=<openssl rand -hex 32>`、`DATA_DIR=/data`。
+3. `docker compose up --build -d` → 首启页面初始化管理员（一次性 PIN，立即截图保存）。
+4. 数据迁移：本机执行备份 → 把 tar 包传服务器 → 按上文恢复流程导入数据卷 → 重启。
+5. 域名：DNS A 记录指向服务器 IP；HTTPS 二选一：
+   - 方案 A（推荐）：Caddy 反代 80/443，自动签发 Let's Encrypt；
+   - 方案 B：certbot + nginx 手动配置证书。
+6. 定期备份建议：crontab 每日执行备份命令，并把 `/data/backups` 同步到对象存储。
