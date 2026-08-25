@@ -29,10 +29,18 @@ def ensure_not_initialized(session: Session) -> None:
 
 
 def initialize_admin(session: Session, name: str, ip: str | None) -> tuple[User, str]:
-    """创建管理员账号，返回 (user, 明文 PIN)；PIN 仅此一次。"""
+    """创建管理员账号，返回 (user, 明文 PIN)；PIN 仅此一次。
+
+    创建者即本人，直接置 claimed（m1a design：bootstrap 管理员不走代管态）。
+    """
     ensure_not_initialized(session)
     pin = security.generate_pin()
-    user = User(name=name.strip(), is_admin=True, created_at=timeutil.utcnow())
+    user = User(
+        name=name.strip(),
+        is_admin=True,
+        created_at=timeutil.utcnow(),
+        claim_status="claimed",
+    )
     account = Account(
         pin_hash=security.hash_pin(pin),
         pin_must_change=True,

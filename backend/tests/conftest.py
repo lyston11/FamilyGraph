@@ -68,13 +68,27 @@ def create_user_with_pin(
     *,
     is_admin: bool = False,
     pin_must_change: bool = False,
+    claim_status: str | None = None,
+    privacy_mode: str = "handover",
+    created_by: int | None = None,
+    gender: str = "unknown",
 ):
-    """直接造数：绕过 API 创建账号。"""
+    """直接造数：绕过 API 创建账号。claim_status 缺省与首登态联动推断。"""
     from app.models.account import Account
     from app.models.user import User
     from app.utils import security, timeutil
 
-    user = User(name=name, is_admin=is_admin, created_at=timeutil.utcnow())
+    if claim_status is None:
+        claim_status = "claimed" if not pin_must_change else "managed"
+    user = User(
+        name=name,
+        is_admin=is_admin,
+        created_at=timeutil.utcnow(),
+        gender=gender,
+        privacy_mode=privacy_mode,
+        created_by=created_by,
+        claim_status=claim_status,
+    )
     user.account = Account(
         pin_hash=security.hash_pin(pin),
         pin_must_change=pin_must_change,

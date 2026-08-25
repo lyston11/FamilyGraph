@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import * as authApi from '@/api/auth'
+import { useMembersStore } from '@/stores/members'
 import {
   registerRefreshExecutor,
   registerSessionExpiredHandler,
@@ -34,6 +35,8 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken.value = null
     user.value = null
     localStorage.removeItem(REFRESH_TOKEN_KEY)
+    // 敏感缓存清理红线（state-management.md）：同步清空业务 store 的 PII
+    useMembersStore().clear()
   }
 
   function applyTokenPair(pair: TokenPairResponse): void {

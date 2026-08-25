@@ -1,0 +1,168 @@
+import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import ElementPlus from 'element-plus'
+
+import * as membersApi from '@/api/members'
+import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
+import { useMembersStore } from '@/stores/members'
+import type { Member } from '@/types/api'
+
+vi.mock('@/api/members', () => ({
+  fetchMembers: vi.fn(),
+  fetchMember: vi.fn(),
+  createMember: vi.fn(),
+  updateMember: vi.fn(),
+  updateDisclosure: vi.fn(),
+  removeMember: vi.fn(),
+}))
+
+const mockedRemove = vi.mocked(membersApi.removeMember)
+const mockedDisclosure = vi.mocked(membersApi.updateDisclosure)
+
+function makeMember(overrides: Partial<Member> = {}): Member {
+  return {
+    id: 2,
+    name: '母亲',
+    is_admin: false,
+    gender: 'f',
+    birth: null,
+    death: null,
+    bio: null,
+    avatar_path: null,
+    privacy_mode: 'handover',
+    claim_status: 'managed',
+    created_by: 1,
+    created_at: '2026-08-25T00:00:00',
+    clan_disclosure: {
+      avatar: false,
+      photos: false,
+      dates: false,
+      bio: false,
+      attachments: false,
+    },
+    permissions: { edit: true, delete: true },
+    ...overrides,
+  }
+}
+
+// el-drawer/el-dialog 默认 teleport 到 body，断言与点击走 document 查询
+function click(selector: string): void {
+  const target = document.querySelector(selector)
+  expect(target, selector).not.toBeNull()
+  target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+const text = (selector: string): string | undefined =>
+  document.querySelector(selector)?.textContent ?? undefined
+
+async function mountWithMember(member: Member) {
+  const pinia = createPinia()
+  const store = useMembersStore(pinia)
+  store.members.push(member)
+  store.openDrawer(member.id)
+  const wrapper = mount(ProfileDrawer, {
+    props: { memberId: member.id },
+    global: { plugins: [pinia, ElementPlus] },
+    attachTo: document.body,
+  })
+  await new Promise((resolve) => setTimeout(resolve))
+  return { wrapper, store }
+}
+
+describe('ProfileDrawer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('无权编辑态：仅可查看，隐藏编辑/披露/删除入口', async () => {
+    const { wrapper } = await mountWithMember(
+      makeMember({ permissions: { edit: false, delete: false } }),
+    )
+    expect(document.querySelector('[data-test="profile-view"]')).not.toBeNull()
+    expect(document.querySelector('[data-test="start-edit"]')).toBeNull()
+    expect(document.querySelector('[data-test="disclosure-group"]')).toBeNull()
+    expect(document.querySelector('[data-test="delete-btn"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('有编辑权：披露开关组可切换并保存（五键整体替换）', async () => {
+    const member = makeMember()
+    const { wrapper } = await mountWithMember(member)
+    mockedDisclosure.mockResolvedValue(member)
+
+    expect(document.querySelector('[data-test="disclosure-group"]')).not.toBeNull()
+    click('[data-test="disclosure-avatar"] .el-switch__core')
+    await new Promise((resolve) => setTimeout(resolve))
+    click('[data-test="disclosure-save"]')
+
+    await vi.waitFor(() =>
+      expect(mockedDisclosure).toHaveBeenCalledWith(member.id, {
+        avatar: true,
+        photos: false,
+        dates: false,
+        bio: false,
+        attachments: false,
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('删除确认流：名字不符按钮禁用，相符调用删除并关闭抽屉', async () => {
+    const member = makeMember()
+    const { wrapper, store } = await mountWithMember(member)
+    mockedRemove.mockResolvedValue(undefined)
+
+    click('[data-test="delete-btn"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="delete-confirm-dialog"]')).not.toBeNull(),
+    )
+
+    const submit = (): HTMLButtonElement =>
+      document.querySelector<HTMLButtonElement>('[data-test="delete-submit"]')!
+    expect(submit().disabled).toBe(true)
+
+    const input = document.querySelector<HTMLInputElement>('[data-test="delete-confirm-input"]')!
+    input.value = '错误名字'
+    input.dispatchEvent(new Event('input'))
+    await new Promise((resolve) => setTimeout(resolve))
+    expect(submit().disabled).toBe(true)
+
+    input.value = '母亲'
+    input.dispatchEvent(new Event('input'))
+    await new Promise((resolve) => setTimeout(resolve))
+    submit().click()
+
+    await vi.waitFor(() => expect(mockedRemove).toHaveBeenCalledWith(member.id, '母亲'))
+    await vi.waitFor(() => expect(store.drawerTargetId).toBeNull())
+    await vi.waitFor(() => expect(wrapper.emitted('close')).toHaveLength(1))
+    wrapper.unmount()
+  })
+
+  it('删除被后端拒绝（409 名字不符）：确认弹窗内展示错误且不关闭', async () => {
+    const { ApiError } = await import('@/api/errors')
+    const member = makeMember()
+    const { wrapper } = await mountWithMember(member)
+    mockedRemove.mockRejectedValue(
+      new ApiError(409, 'CONFIRM_NAME_MISMATCH', '输入的名字与档案名字不一致'),
+    )
+
+    click('[data-test="delete-btn"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="delete-confirm-dialog"]')).not.toBeNull(),
+    )
+    const input = document.querySelector<HTMLInputElement>('[data-test="delete-confirm-input"]')!
+    input.value = '母亲'
+    input.dispatchEvent(new Event('input'))
+    await new Promise((resolve) => setTimeout(resolve))
+    document
+      .querySelector<HTMLButtonElement>('[data-test="delete-submit"]')!
+      .click()
+
+    await vi.waitFor(() => expect(text('[data-test="delete-error"]')).toContain('名字不一致'))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+})
