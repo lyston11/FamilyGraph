@@ -61,8 +61,8 @@ async function doLogout(): Promise<void> {
       <section class="section">
         <h2 class="section-title">修改名字</h2>
         <el-form inline @submit.prevent="saveName">
-          <el-form-item>
-            <el-input v-model="nameForm.name" data-test="name-input" />
+          <el-form-item label="新名字">
+            <el-input v-model="nameForm.name" data-test="name-input" aria-label="新名字" />
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="savingName" data-test="name-save" @click="saveName">

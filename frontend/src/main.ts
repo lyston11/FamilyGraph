@@ -7,6 +7,7 @@ import App from './App.vue'
 import router from './router'
 import { wireAuthInterceptors } from '@/stores/auth'
 
+import './styles/global.css'
 import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/el-message.css'
 import 'element-plus/theme-chalk/el-dialog.css'
