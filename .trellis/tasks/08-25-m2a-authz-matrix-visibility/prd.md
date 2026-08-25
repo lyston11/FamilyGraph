@@ -8,7 +8,7 @@
 
 ## Requirements
 
-- 授权判定公式（AD-4）：完整数据 ⇔ 同空间双方 active ∨ 任一方向 active 关系；clan 连通可达 → summary；其余 invisible。
+- 授权判定公式（严格锁定 U5 版，待裁定 QU1）：完整数据 ⇔ **双方在同一空间且均为 active 成员**；active 关系仅授予 clan 连通可达 + 摘要；其余 invisible。若 QU1 裁定为修订版（直系结构边升级），本行与矩阵第二列同步改写并在 HANDOFF 登记。
 - 矩阵逐行实现（档案详情/图节点+边/头像原图/附件元数据与下载/搜索命中/统计聚合/join_request 可见/管理 API）。
 - 遮罩返回结构：被遮罩字段统一 `{__masked__: true}` 而非省略，前端 MaskedField 据此渲染锁样式。
 - 图查询接入：clan scope 下不可达节点不返回；可达但非同空间节点仅摘要字段。

@@ -14,7 +14,7 @@
 
 ## 二、任务结构（v1.1 按审计重构为父子结构）
 
-里程碑 = 父任务（章程 + 子任务依赖编排），交付物 = 子任务（独立可验证）：
+结构口径：**5 个父任务（里程碑章程）+ 16 个子任务 + Bootstrap = 22 个任务**；其中 21 个业务任务的 implement/check jsonl 已填充真实条目（Bootstrap 为流程任务，无 jsonl 属正常）。
 
 ```
 00-bootstrap-guidelines          初始规范与质量门禁（in_progress）
@@ -41,7 +41,7 @@
    └─ m4c 发布、备份恢复与全量回归
 ```
 
-启动门槛：每个子任务激活前需具备 design.md + implement.md（复杂子任务）；父任务 implement.md 编排验证命令与回滚点。
+启动门槛：每个子任务激活前需具备自己的 design.md + implement.md（复杂子任务）；父级章程设计不可替代子任务执行设计——目前仅 m0a/m0b 已具备，**其余 14 个子任务激活前必须补齐**。父任务 implement.md 编排验证命令与回滚点。
 
 ## 三、锁定决策（用户确认，不得重议）
 
@@ -90,8 +90,8 @@
 
 | # | 默认假设 |
 |---|---|
-| AD-1 | PersonProfile/Account/Claim 三概念分离；建档即配发待认领 Account；首登强制改 PIN 后 claimed |
-| AD-2 | 登录限流(5次/15分钟)、JWT 双 token + token_version 失效机制、同名同 PIN challenge_token 两步消歧、audit_log |
+| AD-1 | PersonProfile/Account 实体 + ClaimState 状态字段；建档即配发待认领 Account；首登强制改 PIN 后 claimed；认领后旧初始 PIN 失效，perpetual 创建者编辑权不变 |
+| AD-2 | 登录限流(5次/15分钟)、JWT 双 token + token_version、refresh_sessions 持久化(轮换+重用检测)、auth_challenges 表保证 challenge 单次使用防重放、audit_log |
 | AD-3 | 首页 = 我所属空间的派生聚合视图；默认空间优先级规则；无资格时引导建「我的家庭」并走正常邀请流 |
 | AD-4 | connection_request 合并关系+空间成员为一次确认；join_request 独立；完整数据授权判定公式；FSM 终态不可复活 |
 | AD-5 | 删除档案 API 归属 **M1/m1a**；硬删除 + 单事务级联 + audit 快照保留；文件异步清理 |
@@ -134,6 +134,7 @@
 | Q5 | 家族视图默认展开深度（默认 2 层，可配置） | m2b 设计时定 |
 | Q6 | 云部署域名/HTTPS 细节 | 迁云时定 |
 | Q7 | v2 agent 推荐交互形态 | v2 再议 |
+| **QU1** | **U5 解释裁定（阻塞 m2a/m2b/m2c 实现）**：active 关系对端可见度——严格版=仅摘要(当前默认)；修订版=直系结构边(elder/younger/spouse)升级完整数据。待用户裁定后在 architecture.md §4/§6 与本表登记 | 用户裁定后同步 m2a/m2b/m2c PRD |
 
 ## 八、风险（v1.1 更新）
 
@@ -153,3 +154,4 @@
 
 - v1.0 (2026-08-25)：三轮需求访谈后的初版规划。
 - v1.1 (2026-08-25)：按《familygraph Trellis 项目设计与规划审计记录》重构——父子任务拆分、全局架构设计（AD-1~8）、规范填充、删除语义归属修正（M4→M1）、备份方案修正、认证安全合同补充；状态由"规划完成"更正为"产品规划初稿完成"。
+- v1.2 (2026-08-25)：第二轮审计复审整改（有条件通过 → 整改中）：auth_challenges 落库防重放、refresh_sessions 持久化+轮换+重用检测、PIN 白名单三文档统一、新建 managed 档案直连例外澄清、Claim→ClaimState 更名、perpetual 失权措辞修正、AD-7/AD-8 标签补齐、任务口径更正（5父+16子）、QU1 待裁定项登记。

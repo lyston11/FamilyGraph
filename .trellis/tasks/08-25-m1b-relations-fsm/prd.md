@@ -10,7 +10,7 @@
 
 - relations 表 + 约束：dir_class CHECK 枚举(elder|younger|peer|spouse)、自环 CHECK、partial unique index（每对用户仅一条非终态边）、双向索引。
 - FSM：pending→active(reject/cancel)；active→revoked（任一方，D8 断连轨）；终态不可复活，重连=新边。非法转换 409。
-- connection_request 合并请求：`POST /connection-requests` 携带 relation{dir_class,label}+可选 space_membership(space_id)（AD-4）；对新建账号直接 active（D4），对已有账号 pending。
+- connection_request 合并请求：`POST /connection-requests` 携带 relation{dir_class,label}+可选 space_membership(space_id)。**新建 managed 档案由代管人创建 → 直接 active**（D4 锁定语义，创建者即代管人）；目标为已有/claimed 账号 → pending 合并确认流（与 architecture.md §4 例外条款一致）。
 - elder 边写入环检测（DFS/并查集），拒绝时 422 RELATION_CYCLE_FORBIDDEN；spouse 边不参与层级。
 - 反向显示：动态推导不存储——结构类反译 elder↔younger、peer/spouse 对称；称谓标签始终创建者视角原文（D3）。
 - 图查询端点 `GET /graph/me?scope=family|clan&depth=n`：返回节点+边（可见性过滤在 m2a 接入前先按"本人关系图"实现）。
