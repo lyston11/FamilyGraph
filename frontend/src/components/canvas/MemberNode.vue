@@ -10,12 +10,20 @@ import type { Member } from '@/types/api'
  */
 interface Props {
   id: string
-  data: { member: Member; viewLabel: string | null; generation?: number }
+  data: {
+    member: Member
+    viewLabel: string | null
+    generation?: number
+    summary?: boolean
+  }
 }
 
 const props = defineProps<Props>()
 
-const emit = defineEmits<{ (e: 'open', memberId: number): void }>()
+const emit = defineEmits<{
+  (e: 'open', memberId: number): void
+  (e: 'join', memberId: number): void
+}>()
 
 const genderText = computed(() =>
   props.data.member.gender === 'f' ? '女' : props.data.member.gender === 'm' ? '男' : '不详',
@@ -23,7 +31,7 @@ const genderText = computed(() =>
 </script>
 
 <template>
-  <div class="member-node" data-test="canvas-member-card" @click="emit('open', data.member.id)">
+  <div class="member-node" :class="{ 'summary-card': data.summary }" data-test="canvas-member-card" @click="emit('open', data.member.id)">
     <Handle type="target" :position="Position.Top" class="handle" />
     <div class="card-head">
       <span class="avatar">{{ data.member.name.slice(0, 1) }}</span>
@@ -36,6 +44,16 @@ const genderText = computed(() =>
       </el-tag>
       <span class="gender">{{ genderText }}</span>
     </div>
+    <el-button
+      v-if="data.summary"
+      size="small"
+      type="primary"
+      class="join-btn"
+      data-test="join-request-btn"
+      @click.stop="emit('join', data.member.id)"
+    >
+      申请进入 TA 的家庭空间
+    </el-button>
     <Handle type="source" :position="Position.Bottom" class="handle" />
   </div>
 </template>
@@ -87,5 +105,14 @@ const genderText = computed(() =>
 .gender {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.join-btn {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.member-node.summary-card {
+  border-style: dashed;
 }
 </style>
