@@ -11,11 +11,11 @@ import GlobalSearch from '@/components/common/GlobalSearch.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import { computeCanvasLayout, computeTreeLayout, type PositionedNode } from '@/composables/useLayout'
-import { apiClient } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useGraphStore } from '@/stores/graph'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
+import { getSpacePositions, putSpacePositions } from '@/api/spaces'
 import type { Relation } from '@/types/api'
 import type { LayoutNodeInput } from '@/composables/useLayout'
 import type { LayoutMode } from '@/types/layout'
@@ -90,10 +90,8 @@ async function loadPositions() {
   const space = spaces.currentSpace
   if (!space) return
   try {
-    const { data } = await apiClient.get<{ user_id: number; x: number; y: number }[]>(
-      `/spaces/${space.id}/positions`,
-    )
-    savedPositions.value = new Map(data.map((p) => [p.user_id, { x: p.x, y: p.y }]))
+    const rows = await getSpacePositions(space.id)
+    savedPositions.value = new Map(rows.map((p) => [p.user_id, { x: p.x, y: p.y }]))
   } catch {
     savedPositions.value = new Map()
   }
@@ -163,7 +161,7 @@ function handleNodeDragStop(event: DragStopEvent) {
       user_id: uid,
       ...position,
     }))
-    void apiClient.put(`/spaces/${space.id}/positions`, { items }).catch(() => undefined)
+    void putSpacePositions(space.id, items).catch(() => undefined)
   }, 600)
 }
 

@@ -2,33 +2,19 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { apiClient } from '@/api/client'
+import {
+  adminResetPin,
+  fetchAdminUsers,
+  fetchAuditLogs,
+  type AdminUserRow,
+  type AuditRow,
+} from '@/api/admin'
 
 /**
  * 管理员后台（m4b，A4 三职责）：用户列表+重置 PIN / 数据兜底修正 / 审计时间线。
  * 路由守卫已保证仅 admin 可达；API 层 403 双重兜底。
  */
-interface AdminUserRow {
-  id: number
-  name: string
-  is_admin: boolean
-  gender: string
-  privacy_mode: string
-  claim_status: string
-  created_by: number | null
-  locked_until: string | null
-  created_at: string
-}
 
-interface AuditRow {
-  id: number
-  actor_id: number | null
-  action: string
-  target_id: number | null
-  ip: string | null
-  detail_json: string | null
-  created_at: string | null
-}
 
 const users = ref<AdminUserRow[]>([])
 const logs = ref<AuditRow[]>([])
@@ -37,13 +23,11 @@ const oneTimePin = ref('')
 const oneTimeFor = ref('')
 
 async function loadUsers() {
-  const { data } = await apiClient.get<AdminUserRow[]>('/admin/users')
-  users.value = data
+  users.value = await fetchAdminUsers()
 }
 
 async function loadLogs() {
-  const { data } = await apiClient.get<AuditRow[]>('/admin/audit-logs')
-  logs.value = data
+  logs.value = await fetchAuditLogs()
 }
 
 onMounted(async () => {
@@ -60,11 +44,8 @@ onMounted(async () => {
 async function resetPin(row: AdminUserRow) {
   try {
     await ElMessageBoxConfirmName(String(row.id), row.name)
-    const { data } = await apiClient.post<{ pin: string }>(
-      `/admin/users/${row.id}/reset-pin`,
-      { confirm: true },
-    )
-    oneTimePin.value = data.pin
+    const { pin } = await adminResetPin(row.id)
+    oneTimePin.value = pin
     oneTimeFor.value = row.name
     await loadLogs()
   } catch {

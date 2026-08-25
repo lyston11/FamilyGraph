@@ -30,7 +30,7 @@ accounts（登录凭据，与档案 1:0..1）
 
 | 项 | 规则 |
 |---|---|
-| 登录限流 | 按 (name, IP) 失败计数，连续 5 次失败锁定该 name 15 分钟（accounts.locked_until），错误文案统一 `用户名或 PIN 码错误` |
+| 登录限流 | 按 name 失败计数（实现取账号名级、比 name×IP 更保守；同名多账号联动锁定），连续 5 次失败锁定该 name 15 分钟（accounts.locked_until，锁定窗口过期自动归还预算），错误文案统一 `用户名或 PIN 码错误` |
 | JWT | access 2h + refresh 30d 轮换；refresh 凭据持久化于 `refresh_sessions` 表（user_id FK、token_hash、rotated_from、expires_at、revoked_at） |
 | Refresh 轮换与重用检测 | 每次 refresh 将旧行置 revoked_at 并签发新行（rotated_from 链）；提交已 revoked 的 token 视为重用攻击 → 撤销该用户全部活跃会话 + 审计告警 |
 | 注销/失效 | 登出 = revoke 对应 refresh_session 行；access 短期自愈。**改 PIN / 重置 PIN / 删除档案 → token_version+1**，校验时比对，旧 access 全部失效 |

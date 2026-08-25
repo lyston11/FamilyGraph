@@ -3,12 +3,12 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { apiClient } from '@/api/client'
 import OneTimePinDialog from '@/components/member/OneTimePinDialog.vue'
 import MemberCreateWizard from '@/components/member/MemberCreateWizard.vue'
 import AddRelationDialog from '@/components/member/AddRelationDialog.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
+import { fetchMembersByPrefix } from '@/api/members'
 import { useMembersStore } from '@/stores/members'
 import { useGraphStore } from '@/stores/graph'
 import { useSpacesStore } from '@/stores/spaces'
@@ -63,9 +63,7 @@ function openInviteDialog() {
 async function doInviteSearch() {
   if (!inviteKeyword.value.trim()) return
   try {
-    const { data } = await apiClient.get<Member[]>('/users', {
-      params: { q: inviteKeyword.value.trim() },
-    })
+    const data = await fetchMembersByPrefix(inviteKeyword.value.trim())
     const currentIds = new Set(spacesStore.activeMembers.map((m) => m.user_id))
     inviteCandidates.value = data.filter((m) => !currentIds.has(m.id))
   } catch {

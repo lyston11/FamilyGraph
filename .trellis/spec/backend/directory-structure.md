@@ -10,12 +10,14 @@ backend/
 │   ├── db.py                # SQLAlchemy engine/session, WAL/FK/busy_timeout PRAGMA
 │   ├── models/              # SQLAlchemy ORM, 一表一文件(user/account/audit_log/auth_challenge/refresh_session)
 │   ├── schemas/             # Pydantic 请求/响应模型, 一域一文件(auth)
-│   ├── api/                 # 路由层: auth.py users.py bootstrap.py health.py deps.py(认证依赖/PIN 门禁)
-│   ├── services/            # 业务逻辑(路由层禁止直接写业务): auth_guard 限流锁定,
-│   │                        #   challenge 同名消歧(单次使用防重放), refresh_session 轮换+重用检测,
-│   │                        #   audit 唯一审计入口, bootstrap 首启初始化; visibility.py 于 M2 落位
+│   ├── api/                 # 路由层: auth users members connections graph spaces attachments
+│   │                        #   bootstrap health misc(lunar/stats/search) admin deps(PIN门禁)
+│   ├── services/            # 业务逻辑: auth_guard challenge refresh_session audit bootstrap
+│   │                        #   custody(代管权) relation_fsm(世代一致性) kinship space_fsm
+│   │                        #   visibility(授权单点,M2) attachments(m3a校验链) lunar
 │   └── utils/               # security.py(pin secrets 生成/bcrypt/JWT), timeutil.py
-├── migrations/              # Alembic(env.py 从 app.config 注入 URL)
+├── backup.py cleanup.py     # 运维: python -m app.backup / python -m app.cleanup
+├── migrations/              # Alembic(env.py 注入 URL; 迁移链 0001→0007)
 ├── tests/                   # pytest; test_authz_matrix.py 为 IDOR 矩阵测试家(M2); conftest 每次迁移往返
 └── pyproject.toml           # 锁版本
 ```
