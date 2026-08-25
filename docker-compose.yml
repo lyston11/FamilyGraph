@@ -1,0 +1,47 @@
+# FamilyGraph 开发/部署底座（m0a）
+#
+# 用法：
+#   全新克隆：docker compose up --build -d
+#   前端:     http://localhost:8080 （/api 经 nginx 反代到 api）
+#   API 健康: http://localhost:8000/api/health
+#
+# 安全提示：下方 SECRET_KEY 默认值仅供本地试用；部署前务必用 .env 或环境变量覆盖。
+
+services:
+  api:
+    build: ./backend
+    image: familygraph-api:0.1.0
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATA_DIR: /data
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+    volumes:
+      # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷
+      - app_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build: ./frontend
+    image: familygraph-web:0.1.0
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    # 注意：web 不挂载数据卷——nginx 禁止直挂 uploads，附件下载走后端授权端点
+
+volumes:
+  app_data:

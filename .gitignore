@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地数据与构建产物
+backend/data/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# 环境变量
+.env
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
