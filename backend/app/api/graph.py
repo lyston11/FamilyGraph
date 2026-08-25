@@ -16,6 +16,7 @@ from app.api.deps import get_db, require_authenticated_user
 from app.errors import VALIDATION_ERROR, raise_api_error
 from app.models.account import Account
 from app.models.relation import Relation
+from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
 from app.schemas.relation import DirClass, GraphNodeOut, GraphOut, RelationOut, RelationViewOut
 from app.services.kinship import display_relation
@@ -54,6 +55,7 @@ def _collect_active_edges(
 def my_graph(
     scope: str = Query(default="family", pattern="^(family|clan)$"),
     depth: int = Query(default=1, ge=1, le=10),
+    space_id: int | None = Query(default=None, gt=0),
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> GraphOut:
@@ -62,6 +64,30 @@ def my_graph(
         raise_api_error(422, VALIDATION_ERROR, "depth 参数非法")
 
     node_ids, edges = _collect_active_edges(session, actor.id, scope, depth)
+
+    # m1c：指定空间时，限定为该空间 active 成员的子图（家庭空间页数据源）
+    if space_id is not None:
+        space = session.get(FamilySpace, space_id)
+        me = (
+            session.query(SpaceMember)
+            .filter(
+                SpaceMember.space_id == space_id,
+                SpaceMember.user_id == actor.id,
+            )
+            .first()
+            if space is not None
+            else None
+        )
+        if space is None or me is None or me.status != "active":
+            raise_api_error(404, "SPACE_NOT_FOUND", "家庭空间不存在")
+        member_rows = (
+            session.query(SpaceMember)
+            .filter(SpaceMember.space_id == space_id, SpaceMember.status == "active")
+            .all()
+        )
+        allowed = {m.user_id for m in member_rows}
+        node_ids &= allowed
+        edges = [e for e in edges if e.from_user in allowed and e.to_user in allowed]
 
     users = (
         session.query(User).filter(User.id.in_(node_ids)).order_by(User.id).all()

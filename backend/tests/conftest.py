@@ -41,7 +41,17 @@ def db_session():
     session.close()
 
 
-_TABLES = ("audit_log", "auth_challenges", "refresh_sessions", "accounts", "users")
+# 未来表（attachments/node_positions 等）落地时同步追加
+_TABLES = (
+    "space_members",
+    "relations",
+    "family_spaces",
+    "audit_log",
+    "auth_challenges",
+    "refresh_sessions",
+    "accounts",
+    "users",
+)
 
 
 @pytest.fixture(autouse=True)

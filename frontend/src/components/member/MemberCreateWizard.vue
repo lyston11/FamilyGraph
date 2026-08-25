@@ -1,25 +1,42 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import { ApiError } from '@/api/errors'
 import { useMembersStore } from '@/stores/members'
+import { useSpacesStore } from '@/stores/spaces'
 import type { GenderType, PrivacyMode, StructuredDate } from '@/types/api'
 
 /**
- * 建档向导（m1a design）：三步 + 结果弹窗。
- * 步骤：资料 → 归属模式 D5 二选一 → 提交。
- * 第四步「是否加入我的空间」为 m1c 空间接入预留插槽（steps 预留，暂不渲染）。
+ * 建档向导（m1a design）：资料 → 归属模式 D5 二选一 → [加入空间(m1c，有空间时)] → 提交。
  */
 const emit = defineEmits<{ close: []; created: [{ name: string; pin: string }] }>()
 
 const members = useMembersStore()
+const spacesStore = useSpacesStore()
 
 const step = ref(0)
 const submitting = ref(false)
 const errorMessage = ref('')
+const joinSpaceEnabled = ref(true)
+const joinSpaceId = ref<number | null>(null)
 
-/** m1c 将把空间勾选作为第四步插入；当前仅三步 */
-const STEP_TITLES = ['资料', '归属模式', '确认提交'] as const
+onMounted(async () => {
+  try {
+    await spacesStore.load()
+    joinSpaceId.value = spacesStore.spaces[0]?.id ?? null
+  } catch {
+    /* 空间加载失败不阻塞建档 */
+  }
+})
+
+/** 有空间时插入「加入我的空间」步骤（m1c） */
+const hasSpaces = computed(() => spacesStore.spaces.length > 0)
+const stepTitles = computed(() =>
+  hasSpaces.value
+    ? (['资料', '归属模式', '加入空间', '确认提交'] as const)
+    : (['资料', '归属模式', '确认提交'] as const),
+)
+const confirmStep = computed(() => (hasSpaces.value ? 3 : 2))
 
 const form = reactive({
   name: '',
@@ -53,7 +70,7 @@ function goMode(): void {
 }
 
 function goConfirm(): void {
-  step.value = 2
+  step.value = confirmStep.value
 }
 
 async function submit(): Promise<void> {
@@ -69,6 +86,10 @@ async function submit(): Promise<void> {
         : null,
       bio: form.bio.trim() || null,
       privacy_mode: form.privacyMode,
+      space_membership:
+        hasSpaces.value && joinSpaceEnabled.value && joinSpaceId.value !== null
+          ? { space_id: joinSpaceId.value }
+          : null,
     })
     emit('created', { name: result.user.name, pin: result.pin })
   } catch (error) {
@@ -90,6 +111,7 @@ function reset(): void {
   form.deathDate = ''
   form.bio = ''
   form.privacyMode = 'handover'
+  joinSpaceEnabled.value = true
 }
 
 function handleClose(): void {
@@ -109,8 +131,7 @@ function handleClose(): void {
     @update:model-value="handleClose()"
   >
     <el-steps :active="step" align-center finish-status="success" class="steps">
-      <!-- m1c 空间接入时在此追加第四步「加入我的空间」 -->
-      <el-step v-for="(title, index) in STEP_TITLES" :key="index" :title="title" />
+      <el-step v-for="(title, index) in stepTitles" :key="index" :title="title" />
     </el-steps>
 
     <!-- 第一步：资料 -->
@@ -196,7 +217,32 @@ function handleClose(): void {
       </el-form-item>
     </el-form>
 
-    <!-- 第三步：确认提交 -->
+    <!-- 第三步（有空间时）：加入我的空间（AD-4 新建例外：直接 active） -->
+    <el-form v-else-if="hasSpaces && step === 2" label-position="top" data-test="wizard-step-space">
+      <el-form-item>
+        <el-checkbox v-model="joinSpaceEnabled" data-test="wizard-space-enable">
+          同时加入我的家庭空间
+        </el-checkbox>
+      </el-form-item>
+      <el-form-item v-if="joinSpaceEnabled">
+        <el-select
+          v-model="joinSpaceId"
+          placeholder="选择空间"
+          data-test="wizard-space-select"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="space in spacesStore.spaces"
+            :key="space.id"
+            :label="space.name"
+            :value="space.id"
+          />
+        </el-select>
+        <div class="confirm-hint">新建档案将直接进入该空间（你是代管人）。</div>
+      </el-form-item>
+    </el-form>
+
+    <!-- 确认提交 -->
     <div v-else data-test="wizard-step-confirm">
       <el-descriptions :column="1" border>
         <el-descriptions-item label="名字">{{ form.name }}</el-descriptions-item>
@@ -205,6 +251,9 @@ function handleClose(): void {
         </el-descriptions-item>
         <el-descriptions-item label="归属模式">
           {{ form.privacyMode === 'handover' ? '移交本人' : '永久管理' }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="hasSpaces && joinSpaceEnabled && joinSpaceId" label="加入空间">
+          {{ spacesStore.spaces.find((s) => s.id === joinSpaceId)?.name }}
         </el-descriptions-item>
       </el-descriptions>
       <p class="confirm-hint">提交后系统将生成一次性 PIN 码，请转交给这位家人。</p>
@@ -223,11 +272,16 @@ function handleClose(): void {
       >
         下一步
       </el-button>
-      <el-button v-if="step === 1" type="primary" data-test="wizard-to-confirm" @click="goConfirm">
+      <el-button
+        v-if="step === 1 || (hasSpaces && step === 2)"
+        type="primary"
+        data-test="wizard-to-confirm"
+        @click="goConfirm"
+      >
         下一步
       </el-button>
       <el-button
-        v-if="step === 2"
+        v-else-if="step === confirmStep"
         type="primary"
         :loading="submitting"
         data-test="wizard-submit"

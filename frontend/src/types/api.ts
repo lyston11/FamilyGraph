@@ -116,6 +116,8 @@ export interface MemberCreatePayload {
   death?: StructuredDate | null
   bio?: string | null
   privacy_mode?: PrivacyMode
+  /** AD-4 新建例外：managed 新档由代管人创建 → 空间成员直接 active */
+  space_membership?: { space_id: number } | null
 }
 
 export interface MemberUpdatePayload {
@@ -172,4 +174,25 @@ export interface ConnectionRequestPayload {
   target_id: number
   dir_class: DirClass
   label?: string | null
+}
+
+// ---- m1c 家庭空间域（与后端 schemas/space.py 一一对应） ----
+
+export interface FamilySpace {
+  id: number
+  name: string
+  owner_id: number
+  created_at: string
+  pending_count: number
+  member_count: number
+}
+
+export interface SpaceMemberInfo {
+  id: number
+  space_id: number
+  user_id: number
+  added_by: number | null
+  role: 'owner' | 'member'
+  status: 'pending' | 'active' | 'rejected' | 'withdrawn' | 'removed'
+  updated_at: string
 }
