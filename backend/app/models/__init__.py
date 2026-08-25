@@ -7,6 +7,7 @@ from app.models.base import Base
 from app.models.node_position import NodePosition
 from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
+from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
 
 __all__ = [
@@ -15,6 +16,8 @@ __all__ = [
     "AuthChallenge",
     "Base",
     "NodePosition",
+    "FamilySpace",
+    "SpaceMember",
     "RefreshSession",
     "Relation",
     "User",

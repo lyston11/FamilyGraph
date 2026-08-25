@@ -82,6 +82,8 @@ def create_user_with_pin(
     privacy_mode: str = "handover",
     created_by: int | None = None,
     gender: str = "unknown",
+    birth: dict | None = None,
+    bio: str | None = None,
 ):
     """直接造数：绕过 API 创建账号。claim_status 缺省与首登态联动推断。"""
     from app.models.account import Account
@@ -98,6 +100,8 @@ def create_user_with_pin(
         privacy_mode=privacy_mode,
         created_by=created_by,
         claim_status=claim_status,
+        birth=birth,
+        bio=bio,
     )
     user.account = Account(
         pin_hash=security.hash_pin(pin),

@@ -65,6 +65,19 @@ def my_graph(
 
     node_ids, edges = _collect_active_edges(session, actor.id, scope, depth)
 
+    # m2a 可见性过滤：invisible 剔除；summary 节点裁剪为基线字段
+    from app.services import visibility as vis
+
+    levels: dict[int, str] = {}
+    for eid in node_ids:
+        if eid == actor.id:
+            levels[eid] = vis.FULL
+            continue
+        u = session.get(User, eid)
+        levels[eid] = vis.classify(session, actor, u) if u is not None else vis.INVISIBLE
+    filtered_edges = [e for e in edges if e.from_user in levels and e.to_user in levels]
+    node_ids = {eid for eid, lv in levels.items() if lv != vis.INVISIBLE}
+
     # m1c：指定空间时，限定为该空间 active 成员的子图（家庭空间页数据源）
     if space_id is not None:
         space = session.get(FamilySpace, space_id)
@@ -87,14 +100,22 @@ def my_graph(
         )
         allowed = {m.user_id for m in member_rows}
         node_ids &= allowed
-        edges = [e for e in edges if e.from_user in allowed and e.to_user in allowed]
+        edges = [e for e in filtered_edges if e.from_user in allowed and e.to_user in allowed]
+    else:
+        edges = filtered_edges
 
     users = (
         session.query(User).filter(User.id.in_(node_ids)).order_by(User.id).all()
         if node_ids
         else []
     )
-    nodes_out = [GraphNodeOut(id=u.id, name=u.name, gender=u.gender) for u in users]
+    nodes_out = []
+    for u in users:
+        if levels.get(u.id) == "summary":
+            # summary 节点仅基线字段；性别不外泄
+            nodes_out.append(GraphNodeOut(id=u.id, name=u.name, gender="unknown"))
+        else:
+            nodes_out.append(GraphNodeOut(id=u.id, name=u.name, gender=u.gender))
     edges_out = []
     for edge in edges:
         dir_class, label, from_creator = display_relation(edge, actor.id)
