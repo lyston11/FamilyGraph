@@ -15,6 +15,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useGraphStore } from '@/stores/graph'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
+import type { Relation } from '@/types/api'
 import type { LayoutNodeInput } from '@/composables/useLayout'
 import type { LayoutMode } from '@/types/layout'
 
@@ -60,6 +61,20 @@ watch(
 watch(viewScope, async (scope) => {
   await graph.loadGraph(scope, 5).catch(() => undefined)
 })
+
+function memberName(id: number): string {
+  return graph.nodeById.get(id)?.name ?? `#${id}`
+}
+
+function otherSide(e: Relation): number {
+  return e.from_user === (auth.user?.id ?? -1) ? e.to_user : e.from_user
+}
+
+const myEdges = computed(() =>
+  graph.edges.filter(
+    (e) => e.status === 'active' && (e.from_user === auth.user?.id || e.to_user === auth.user?.id),
+  ),
+)
 
 async function requestJoin(userId: number) {
   try {
@@ -224,6 +239,34 @@ void router
         <el-radio-button value="clan">🌲 家族空间</el-radio-button>
       </el-radio-group>
     </div>
+
+    <!-- 待处理：空间邀请 / 连接请求（m2c） -->
+    <section v-if="spaces.pendingForMe.length || graph.incoming.length" class="pending-section" data-test="pending-section">
+        <div v-for="inv in spaces.pendingForMe" :key="`s-${inv.id}`" class="invite-row">
+          <span>「{{ spaces.spaces.find((s) => s.id === inv.space_id)?.name }}」邀请你加入</span>
+          <el-button size="small" type="primary" data-test="accept-invite" @click="spaces.resolve(inv.id, 'accept')">接受</el-button>
+          <el-button size="small" data-test="reject-invite" @click="spaces.resolve(inv.id, 'reject')">拒绝</el-button>
+        </div>
+        <div v-for="rel in graph.incoming" :key="`r-${rel.id}`" class="invite-row" data-test="connection-request">
+          <span>{{ memberName(rel.from_user) }} 想与你建立「{{ rel.view.dir_class }}」关系{{ rel.view.label ? `（${rel.view.label}）` : '' }}</span>
+          <el-button size="small" type="primary" data-test="accept-relation" @click="graph.resolve(rel.id, 'accept')">接受</el-button>
+          <el-button size="small" data-test="reject-relation" @click="graph.resolve(rel.id, 'reject')">拒绝</el-button>
+        </div>
+      </section>
+
+    <!-- 我的连接（断连入口，D8） -->
+    <section v-if="mode !== 'list' && graph.edges.length" class="relations-strip" data-test="relations-strip">
+      <span class="strip-label">我的连接：</span>
+      <el-tag
+        v-for="e in myEdges"
+        :key="e.id"
+        closable
+        :type="e.status === 'pending' ? 'warning' : 'info'"
+        @close="graph.revoke(e.id)"
+      >
+        {{ memberName(otherSide(e)) }}·{{ e.view.label ?? e.view.dir_class }}
+      </el-tag>
+    </section>
 
     <!-- 布局切换器 -->
     <div class="layout-switch" data-test="layout-switch">
