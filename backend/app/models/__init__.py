@@ -5,6 +5,7 @@ from app.models.audit_log import AuditLog
 from app.models.auth_challenge import AuthChallenge
 from app.models.base import Base
 from app.models.refresh_session import RefreshSession
+from app.models.relation import Relation
 from app.models.user import User
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "AuthChallenge",
     "Base",
     "RefreshSession",
+    "Relation",
     "User",
 ]

@@ -5,9 +5,11 @@ import { ElMessage } from 'element-plus'
 
 import OneTimePinDialog from '@/components/member/OneTimePinDialog.vue'
 import MemberCreateWizard from '@/components/member/MemberCreateWizard.vue'
+import AddRelationDialog from '@/components/member/AddRelationDialog.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useMembersStore } from '@/stores/members'
+import { useGraphStore } from '@/stores/graph'
 import type { GenderType, StructuredDate } from '@/types/api'
 
 /**
@@ -25,7 +27,16 @@ const issuedName = ref('')
 
 onMounted(() => {
   members.load().catch(() => ElMessage.error('档案列表加载失败，请稍后重试'))
+  // 收到的连接请求（审批 UI 归 m2c，这里仅红点提示）
+  graphStore.loadIncoming().catch(() => undefined)
 })
+
+const relationDialogOpen = ref(false)
+const graphStore = useGraphStore()
+
+function openRelationDialog() {
+  relationDialogOpen.value = true
+}
 
 function openWizard(): void {
   wizardOpen.value = true
@@ -72,6 +83,13 @@ function goSettings(): void {
       <h1 class="title">你好，{{ auth.user?.name }}</h1>
       <div class="actions">
         <el-button type="primary" data-test="open-wizard" @click="openWizard">添加家人</el-button>
+        <el-button data-test="open-relation-dialog" @click="openRelationDialog">
+          添加关系<el-badge
+            v-if="graphStore.pendingIncomingCount > 0"
+            :value="graphStore.pendingIncomingCount"
+            class="relation-badge"
+          />
+        </el-button>
         <el-button data-test="go-settings" @click="goSettings">设置</el-button>
       </div>
     </header>
@@ -115,6 +133,7 @@ function goSettings(): void {
     </section>
 
     <MemberCreateWizard v-if="wizardOpen" @close="closeWizard" @created="onCreated" />
+    <AddRelationDialog v-model:visible="relationDialogOpen" />
 
     <OneTimePinDialog
       v-if="issuedPin !== ''"

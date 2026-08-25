@@ -131,3 +131,45 @@ export interface MemberCreateResponse {
   user: Member
   pin: string
 }
+
+// ---- m1b 关系域（与后端 schemas/relation.py 一一对应） ----
+
+export type DirClass = 'elder' | 'younger' | 'peer' | 'spouse'
+export type RelationStatus = 'pending' | 'active' | 'rejected' | 'cancelled' | 'revoked'
+
+export interface RelationView {
+  /** viewer 视角的结构类：from_user 原样，to_user 反译 elder<->younger（D3） */
+  dir_class: DirClass
+  /** 恒为创建者视角原文 */
+  label: string | null
+  label_from_creator: boolean
+}
+
+export interface Relation {
+  id: number
+  from_user: number
+  to_user: number
+  dir_class: DirClass
+  label: string | null
+  status: RelationStatus
+  created_by: number
+  view: RelationView
+}
+
+export interface GraphNode {
+  id: number
+  name: string
+  gender: GenderType
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  edges: Relation[]
+  scope: 'family' | 'clan'
+}
+
+export interface ConnectionRequestPayload {
+  target_id: number
+  dir_class: DirClass
+  label?: string | null
+}

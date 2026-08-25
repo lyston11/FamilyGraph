@@ -1,0 +1,92 @@
+"""图查询（m1b 骨架）：family scope ±depth / clan scope BFS 连通分量。
+
+可见性过滤参数位预留（m2a 接入 visibility.py）；本任务按"本人关系图"语义
+返回 active 边与节点。pending/rejected/cancelled/revoked 边不进图。
+"""
+
+from __future__ import annotations
+
+from typing import Literal, cast
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db, require_authenticated_user
+from app.errors import VALIDATION_ERROR, raise_api_error
+from app.models.account import Account
+from app.models.relation import Relation
+from app.models.user import User
+from app.schemas.relation import DirClass, GraphNodeOut, GraphOut, RelationOut, RelationViewOut
+from app.services.kinship import display_relation
+
+router = APIRouter(tags=["graph"])
+
+
+def _collect_active_edges(
+    session: Session, user_id: int, scope: str, depth: int
+) -> tuple[set[int], list[Relation]]:
+    """family：BFS ±depth；clan：全连通分量。返回 (节点集, 边集)。"""
+    edges: list[Relation] = []
+    nodes: set[int] = {user_id}
+    frontier = {user_id}
+    visited_edges: set[int] = set()
+    current_depth = 0
+    while frontier and (scope == "clan" or current_depth < depth):
+        neighbors: set[int] = set()
+        stmt = select(Relation).where(
+            Relation.status == "active",
+            or_(Relation.from_user.in_(frontier), Relation.to_user.in_(frontier)),
+        )
+        for edge in session.scalars(stmt):
+            if edge.id not in visited_edges:
+                visited_edges.add(edge.id)
+                edges.append(edge)
+                neighbors.add(edge.from_user)
+                neighbors.add(edge.to_user)
+        frontier = neighbors - nodes
+        nodes |= neighbors
+        current_depth += 1
+    return nodes, edges
+
+
+@router.get("/graph/me", response_model=GraphOut)
+def my_graph(
+    scope: str = Query(default="family", pattern="^(family|clan)$"),
+    depth: int = Query(default=1, ge=1, le=10),
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> GraphOut:
+    actor, _account = identity
+    if scope == "family" and depth < 1:  # pragma: no cover - Query 已约束
+        raise_api_error(422, VALIDATION_ERROR, "depth 参数非法")
+
+    node_ids, edges = _collect_active_edges(session, actor.id, scope, depth)
+
+    users = (
+        session.query(User).filter(User.id.in_(node_ids)).order_by(User.id).all()
+        if node_ids
+        else []
+    )
+    nodes_out = [GraphNodeOut(id=u.id, name=u.name, gender=u.gender) for u in users]
+    edges_out = []
+    for edge in edges:
+        dir_class, label, from_creator = display_relation(edge, actor.id)
+        view = RelationViewOut(
+            dir_class=cast(DirClass, dir_class),
+            label=label,
+            label_from_creator=from_creator,
+        )
+        edges_out.append(
+            RelationOut(
+                id=edge.id,
+                from_user=edge.from_user,
+                to_user=edge.to_user,
+                dir_class=edge.dir_class,  # type: ignore[arg-type]
+                label=edge.label,
+                status=edge.status,  # type: ignore[arg-type]
+                created_by=edge.created_by,
+                view=view,
+            )
+        )
+    return GraphOut(nodes=nodes_out, edges=edges_out, scope=cast(Literal["family", "clan"], scope))
