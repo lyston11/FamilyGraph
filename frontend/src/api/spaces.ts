@@ -45,3 +45,20 @@ export async function removeOrWithdrawMembership(memberId: number): Promise<void
 export async function joinByUser(targetUserId: number): Promise<void> {
   await apiClient.post('/spaces/join-by-user', { target_user_id: targetUserId })
 }
+
+/** 画布位置记忆：读取 / 批量保存（m1d；仅 active 成员） */
+export async function getSpacePositions(
+  spaceId: number,
+): Promise<{ user_id: number; x: number; y: number }[]> {
+  const { data } = await apiClient.get<{ user_id: number; x: number; y: number }[]>(
+    `/spaces/${spaceId}/positions`,
+  )
+  return data
+}
+
+export async function putSpacePositions(
+  spaceId: number,
+  items: { user_id: number; x: number; y: number }[],
+): Promise<void> {
+  await apiClient.put(`/spaces/${spaceId}/positions`, { items })
+}

@@ -43,3 +43,9 @@ export async function updateDisclosure(
 export async function removeMember(id: number, confirmName: string): Promise<void> {
   await apiClient.delete(`/users/${id}`, { params: { confirm_name: confirmName } })
 }
+
+/** 名字前缀搜索（可见范围内，m1b 添加关系 / m1c 邀请用） */
+export async function fetchMembersByPrefix(q: string): Promise<Member[]> {
+  const { data } = await apiClient.get<Member[]>('/users', { params: { q } })
+  return data
+}

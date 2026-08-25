@@ -3,7 +3,7 @@ import { ref } from 'vue'
 
 import type { DirClass, Member } from '@/types/api'
 
-import { apiClient } from '@/api/client'
+import { fetchMembersByPrefix } from '@/api/members'
 import { useAuthStore } from '@/stores/auth'
 import { useGraphStore } from '@/stores/graph'
 
@@ -31,7 +31,7 @@ const submitted = ref(false)
 
 async function search() {
   if (!keyword.value.trim()) return
-  const { data } = await apiClient.get<Member[]>('/users', { params: { q: keyword.value.trim() } })
+  const data = await fetchMembersByPrefix(keyword.value.trim())
   results.value = data.filter((m) => m.id !== auth.user?.id)
 }
 

@@ -18,3 +18,5 @@ frontend/src/
 规则：views 不直接调 axios，一律经 api/ 层；画布相关组件禁止引入业务请求逻辑（数据由 store 注入）。
 
 > M0 校正：views 采用 `XxxView.vue` 多词命名（LoginView/OnboardingView/SettingsView/ChangePinView/HomeView），路由 name 用单词小写（login 等）；api 层实际文件为 client.ts（拦截器）/auth.ts/errors.ts（ApiError）。
+
+> M4 校正：api 层实际含 admin/attachments/graph/lunar/members/spaces/stats；视图与组件已全部经 api 层调用 axios（全项目复审修复，2026-08-25）。

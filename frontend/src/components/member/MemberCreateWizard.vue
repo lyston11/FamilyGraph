@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 
-import { apiClient } from '@/api/client'
+import { fetchLunarMirror } from '@/api/lunar'
 import { ApiError } from '@/api/errors'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
@@ -56,14 +56,7 @@ const form = reactive({
 type SolarOrLunar = 'solar' | 'lunar'
 
 async function fetchMirror(calType: SolarOrLunar, date: string): Promise<string | null> {
-  try {
-    const { data } = await apiClient.get<{ mirror: string | null }>('/lunar/mirror', {
-      params: { cal_type: calType, date },
-    })
-    return data.mirror
-  } catch {
-    return null
-  }
+  return await fetchLunarMirror(calType, date).catch(() => null)
 }
 
 let prevBirthCal: SolarOrLunar | 'none' = 'solar'

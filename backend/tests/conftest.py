@@ -44,6 +44,7 @@ def db_session():
 # 未来表（attachments/node_positions 等）落地时同步追加
 _TABLES = (
     "node_positions",
+    "attachments",
     "space_members",
     "relations",
     "family_spaces",

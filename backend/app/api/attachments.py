@@ -62,21 +62,24 @@ def _is_custodian(viewer: User, target: User) -> bool:
 
 
 @router.post("/users/{user_id}/attachments/image", status_code=201)
-async def upload_image(
+def upload_image(
     user_id: int,
     request: Request,
-    file: UploadFile = File(...),  # noqa: B008,
+    file: UploadFile = File(...),  # noqa: B008
     title: str = "",
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> dict[str, Any]:
+    """同步路由：PIL 重编码为 CPU 密集操作，由 FastAPI 线程池执行（spec 禁止阻塞 async 路由）。"""
+
     actor, _account = identity
     target = session.get(User, user_id)
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
     custody.assert_can_edit(actor, target)
 
-    data = await file.read()
+    file.file.seek(0)
+    data = file.file.read()
     att_service.validate_image_upload(file.filename or "", data)
     clean, _ext = att_service.reencode_strip_metadata(data)
     path = att_service.save_image(user_id, clean)
