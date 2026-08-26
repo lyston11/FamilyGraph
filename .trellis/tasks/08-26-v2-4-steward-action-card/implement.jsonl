@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "空间授权关系 FSM 与推荐遗留边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Job Event ActionCard 幂等事务"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "卡片过期冲突重校验合同"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "会话与空间 Inbox 同源状态"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "Agent 事件与受控执行研究"}

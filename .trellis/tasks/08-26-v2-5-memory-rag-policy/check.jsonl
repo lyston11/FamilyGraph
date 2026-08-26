@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "RAG 隔离删除传播测试"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Memory scope citation payload 类型"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Memory 确认与隐私 UI 检查"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "真源投影上下文跨层复审"}

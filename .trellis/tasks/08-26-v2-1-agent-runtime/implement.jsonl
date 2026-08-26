@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "Agent 必须继承的全局授权与数据边界"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "FastAPI Agent 模块落位规则"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Session Run Event Job 持久化与事务"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "Pi SDK 事件工具与 LearnGraph SSE 证据"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/current-code-baseline.md", "reason": "Compose 后端与工具接入基线"}

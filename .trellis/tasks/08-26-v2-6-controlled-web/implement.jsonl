@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "附件外链数据权利与部署基线"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Egress 配额 Provider 错误合同"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Web query URL secret 审计红线"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "Provider Egress SSE 与 Policy 研究"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/current-code-baseline.md", "reason": "Compose nginx backup 当前基线"}

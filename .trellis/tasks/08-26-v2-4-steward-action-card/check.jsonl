@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Steward 卡片推荐测试门禁"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "领域事件与推荐审计脱敏"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "ActionCard 双入口交互检查"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "事件卡片命令跨层一致性"}

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "Assistant 可见性与身份基线"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Run Tool SSE 用户错误合同"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "全局抽屉移动全屏与可访问性"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "单空间 Session 与缓存清理"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/current-code-baseline.md", "reason": "App 挂载点 Store SSE 现状"}

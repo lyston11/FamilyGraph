@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "只读工具与 IDOR 检查"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "消息事件工具 payload 类型检查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "UI 响应式可访问性测试"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SSE 与空间切换跨层复审"}
