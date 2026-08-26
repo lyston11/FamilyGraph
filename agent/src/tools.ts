@@ -15,10 +15,17 @@
  *    never sees masked raw values;
  *  - steward_ping: declared so steward runs can build a session (fixes the
  *    V2.1 latent mismatch); its execution still goes through the execute
- *    endpoint, where min_kind rejects it in assistant runs.
+ *    endpoint, where min_kind rejects it in assistant runs;
+ *  - V2.3 relationship-intelligence kinship tools (shared contract with the
+ *    backend registry): resolve_free_text_relation and get_term_alternatives
+ *    are read-only; record_term_usage appends a single term-usage event and is
+ *    strictly consent-gated — its description requires explicit user consent
+ *    in the conversation, and the backend still re-validates scope/state on
+ *    every call.
  *
- * No business write tool may be registered here until the server-side
- * side-effect dedupe table exists (V2.4).
+ * Structural mutations (source facts, relations, profiles) must never be
+ * registered here: those stay behind FastAPI domain commands, and server-side
+ * side-effect dedupe remains a backend concern (V2.4).
  */
 
 import { Type, type Static } from "typebox";
@@ -34,6 +41,9 @@ export const TOOL_VERSIONS = {
   "familygraph.search_space": 1,
   "familygraph.get_relationship_path": 1,
   "familygraph.explain_structural_path": 1,
+  "familygraph.resolve_free_text_relation": 1,
+  "familygraph.get_term_alternatives": 1,
+  "familygraph.record_term_usage": 1,
 } as const;
 
 export type DomainToolName = keyof typeof TOOL_VERSIONS;
@@ -90,6 +100,38 @@ const RelationshipPathSchema = Type.Object({
   from_user_id: Type.Optional(
     Type.Integer({ description: "可选的起点用户 ID；省略时以当前用户为起点。" }),
   ),
+});
+
+const ResolveFreeTextRelationSchema = Type.Object({
+  text: Type.String({
+    minLength: 1,
+    maxLength: 80,
+    description: "用户原话中的称谓自由文本，例如「妈妈」「舅爷爷」。",
+  }),
+});
+
+const GetTermAlternativesSchema = Type.Object({
+  concept_code: Type.String({
+    minLength: 1,
+    maxLength: 128,
+    description: "标准亲属概念码（来自路径解析结果或既有对话上下文）。",
+  }),
+  limit: Type.Optional(
+    Type.Integer({ minimum: 1, maximum: 10, description: "可选的备选称谓数量上限。" }),
+  ),
+});
+
+const RecordTermUsageSchema = Type.Object({
+  concept_code: Type.String({
+    minLength: 1,
+    maxLength: 128,
+    description: "标准亲属概念码。",
+  }),
+  term: Type.String({
+    minLength: 1,
+    maxLength: 64,
+    description: "用户希望使用的称谓原文。",
+  }),
 });
 
 function textResult(text: string): { content: Array<{ type: "text"; text: string }>; details: unknown } {
@@ -246,6 +288,41 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       queryViaExecutor(executor, "familygraph.explain_structural_path", toolCallId, compactInput({ ...params })),
   };
 
+  const resolveFreeTextRelation: ToolDefinition<typeof ResolveFreeTextRelationSchema> = {
+    name: "familygraph.resolve_free_text_relation",
+    label: "Resolve free-text relation",
+    description:
+      "把用户的称谓自由文本（如「妈妈」「舅爷爷」）对照当前空间已确认的关系图做确定性解析：返回解析等级 determined/supported/ambiguous/conflicting、候选概念与依据词素；歧义或冲突时给出一句通俗的澄清问题，应原样转问用户。只读工具，不写入任何数据。",
+    parameters: ResolveFreeTextRelationSchema,
+    execute: async (toolCallId, params: Static<typeof ResolveFreeTextRelationSchema>) =>
+      queryViaExecutor(executor, "familygraph.resolve_free_text_relation", toolCallId, {
+        text: params.text,
+      }),
+  };
+
+  const getTermAlternatives: ToolDefinition<typeof GetTermAlternativesSchema> = {
+    name: "familygraph.get_term_alternatives",
+    label: "Get term alternatives",
+    description:
+      "查询某个标准亲属概念的可用叫法：本人偏好、当前空间推荐叫法与地区语言包/系统标准备选，均附来源层级；用于回答「还有其他叫法吗」。只读工具。",
+    parameters: GetTermAlternativesSchema,
+    execute: async (toolCallId, params: Static<typeof GetTermAlternativesSchema>) =>
+      queryViaExecutor(executor, "familygraph.get_term_alternatives", toolCallId, compactInput({ ...params })),
+  };
+
+  const recordTermUsage: ToolDefinition<typeof RecordTermUsageSchema> = {
+    name: "familygraph.record_term_usage",
+    label: "Record term usage",
+    description:
+      "记录一次用户对某概念的称谓用词，用于积累当前空间的习惯叫法。调用前必须在对话中获得用户对该记录行为的明确同意；未经同意一律不得调用。本工具不创建、不修改任何结构关系事实。",
+    parameters: RecordTermUsageSchema,
+    execute: async (toolCallId, params: Static<typeof RecordTermUsageSchema>) =>
+      queryViaExecutor(executor, "familygraph.record_term_usage", toolCallId, {
+        concept_code: params.concept_code,
+        term: params.term,
+      }),
+  };
+
   return [
     echo,
     probeScope,
@@ -256,5 +333,8 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
     searchSpace,
     getRelationshipPath,
     explainStructuralPath,
+    resolveFreeTextRelation,
+    getTermAlternatives,
+    recordTermUsage,
   ] as unknown as ToolDefinition[];
 }

@@ -19,9 +19,10 @@ from typing import Any, NoReturn
 
 from sqlalchemy.orm import Session
 
-from app.errors import raise_api_error
+from app import config
+from app.errors import KINSHIP_FLAG_DISABLED, raise_api_error
 from app.models.agent import AgentRun, AgentSession
-from app.services import agent_query, audit
+from app.services import agent_query, audit, intake_extractor, terms
 
 # JSON schema 子集校验支持的标量类型
 _SUPPORTED_TYPES = {"string", "integer", "boolean"}
@@ -55,20 +56,46 @@ class ToolSpec:
     output_schema: dict[str, Any]
     error_codes: tuple[str, ...] = field(default=())
     min_kind: str | None = None  # None = assistant/steward 均可用
+    # 兼容旧调用方仍可请求的版本集合；None = 仅当前 version。
+    # V2.3：两个关系工具升 @2（Relationship Intelligence 解析），保留 @1 声明，
+    # sidecar 未跟进升级前继续以 @1 调用（E4 才切换）。
+    supported_versions: tuple[int, ...] | None = None
 
 
 TOOL_ECHO = "familygraph.echo"
 TOOL_PROBE_SCOPE = "familygraph.probe_scope"
 TOOL_STEWARD_PING = "familygraph.steward_ping"
 
+# V2.3 Block E4a：Relationship Intelligence 内部工具（min_kind=assistant，@1）。
+# RELATIONSHIP_INTELLIGENCE_ENABLED 关闭时一律拒绝（与浏览器面 503 同一口径）。
+TOOL_RESOLVE_FREE_TEXT_RELATION = "familygraph.resolve_free_text_relation"
+TOOL_GET_TERM_ALTERNATIVES = "familygraph.get_term_alternatives"
+TOOL_RECORD_TERM_USAGE = "familygraph.record_term_usage"
+_KINSHIP_INTAKE_TOOLS = frozenset(
+    {TOOL_RESOLVE_FREE_TEXT_RELATION, TOOL_GET_TERM_ALTERNATIVES, TOOL_RECORD_TERM_USAGE}
+)
+
 # V2.2 只读 Assistant 领域工具（合同与 schema 权威在 services/agent_query.py）
+# V2.3：两个关系工具升 @2 —— flag 开启时输出 additive 扩展字段
+# （concept_code/path_class 新词表/alt_paths/evidence_fact_ids/algorithm_version），
+# input schema 不变；@1 继续受理（sidecar E4 才跟进），flag 关闭时行为与 @1 相同。
 _QUERY_TOOL_DESCRIPTIONS = {
     agent_query.TOOL_GET_SELF_CONTEXT: "当前空间/本人摘要（scope 横幅数据源，只读）",
     agent_query.TOOL_LIST_VISIBLE_PEOPLE: "列出当前空间可见人物（offset 分页，只读）",
     agent_query.TOOL_GET_PROFILE_SUMMARY: "读取可见档案投影（VisibilityPolicy 投影，只读）",
     agent_query.TOOL_SEARCH_SPACE: "在当前空间 scope 内搜索人物（只读）",
-    agent_query.TOOL_GET_RELATIONSHIP_PATH: "取得两人可见关系路径（BFS ≤6 跳，只读）",
-    agent_query.TOOL_EXPLAIN_STRUCTURAL_PATH: "解释已确定结构路径并给出依据（只读）",
+    agent_query.TOOL_GET_RELATIONSHIP_PATH: (
+        "取得两人可见关系路径（@2 起 Relationship Intelligence 确定性解析，只读）"
+    ),
+    agent_query.TOOL_EXPLAIN_STRUCTURAL_PATH: (
+        "解释两人结构关系并给出依据与替代路径（@2 起新解析器，只读）"
+    ),
+}
+
+# 升 @2 并保留 @1 兼容声明的工具（V2.3 Relationship Intelligence）
+_KINSHIP_TOOL_VERSIONS: dict[str, tuple[int, ...]] = {
+    agent_query.TOOL_GET_RELATIONSHIP_PATH: (1, 2),
+    agent_query.TOOL_EXPLAIN_STRUCTURAL_PATH: (1, 2),
 }
 
 
@@ -76,14 +103,16 @@ def _query_tool_specs() -> tuple[ToolSpec, ...]:
     """六个版本化只读领域工具的注册表条目（min_kind=assistant）。"""
     specs = []
     for name in sorted(agent_query.QUERY_TOOL_NAMES):
+        versions = _KINSHIP_TOOL_VERSIONS.get(name)
         specs.append(
             ToolSpec(
                 name=name,
-                version=1,
+                version=max(versions) if versions else 1,
                 description=_QUERY_TOOL_DESCRIPTIONS[name],
                 input_schema=agent_query.QUERY_TOOL_SPECS_INPUT_SCHEMAS[name],
                 output_schema={"type": "object"},
                 min_kind="assistant",
+                supported_versions=versions,
             )
         )
     return tuple(specs)
@@ -130,21 +159,73 @@ REGISTRY: dict[str, ToolSpec] = {
             output_schema={"type": "object", "properties": {}},
             min_kind="steward",
         ),
+        ToolSpec(
+            name=TOOL_RESOLVE_FREE_TEXT_RELATION,
+            version=1,
+            description=(
+                "确定性解析自由文本亲属称谓（如『奶奶的兄弟』），"
+                "返回四级 resolution 结果；space 取会话空间，只读不写事实"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {"text": {"type": "string", "maxLength": 80}},
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            min_kind="assistant",
+        ),
+        ToolSpec(
+            name=TOOL_GET_TERM_ALTERNATIVES,
+            version=1,
+            description=("列出某概念码的可用叫法（个人偏好单列 + 空间/语言包/系统替代项），只读"),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "concept_code": {"type": "string", "maxLength": 128},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["concept_code"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            min_kind="assistant",
+        ),
+        ToolSpec(
+            name=TOOL_RECORD_TERM_USAGE,
+            version=1,
+            description=(
+                "记录当前用户在某空间使用某叫法（source_event=assistant_query），"
+                "返回两人晋升规则重算结果；同账号重复只计一次"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "concept_code": {"type": "string", "maxLength": 128},
+                    "term": {"type": "string", "maxLength": 64},
+                },
+                "required": ["concept_code", "term"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            min_kind="assistant",
+        ),
     )
 }
 
 
 def resolve_tool(name: str, version: int) -> ToolSpec:
-    """未知工具/版本一律拒绝（RT-3：版本化发现合同）。"""
+    """未知工具/版本一律拒绝（RT-3：版本化发现合同；兼容集见 ToolSpec）。"""
     spec = REGISTRY.get(name)
     if spec is None:
         raise ToolProtocolError(404, "AGENT_TOOL_UNKNOWN", "未知工具", {"tool": name})
-    if spec.version != version:
+    supported = spec.supported_versions or (spec.version,)
+    if version not in supported:
         raise ToolProtocolError(
             400,
             "AGENT_TOOL_VERSION_UNSUPPORTED",
             "工具版本不受支持",
-            {"tool": name, "supported_version": spec.version},
+            {"tool": name, "supported_versions": list(supported)},
         )
     return spec
 
@@ -305,7 +386,57 @@ def _dispatch(
     领域服务的 QueryToolError 在此转译为 ToolProtocolError，使范围/形状拒绝
     复用 execute() 的统一安全审计路径；正常业务结果错误（如档案不可见）不
     属协议违规，由服务层直接抛统一 API 错误。
+    V2.3 E4a：Relationship Intelligence 工具在 flag 关闭时一律拒绝（503，
+    与浏览器面同一口径），拒绝走统一安全审计。
     """
+    if spec.name in _KINSHIP_INTAKE_TOOLS and not config.RELATIONSHIP_INTELLIGENCE_ENABLED:
+        raise ToolProtocolError(503, KINSHIP_FLAG_DISABLED, "关系智能能力未启用")
+    if spec.name == TOOL_RESOLVE_FREE_TEXT_RELATION:
+        actor, space = agent_query._resolve_scope(db, agent_session)
+        return intake_extractor.parse_free_text_relation(
+            db,
+            account_id=actor.account.id,
+            user_id=actor.id,
+            space_id=space.id,
+            text=input_payload["text"],
+            surface=intake_extractor.SURFACE_ASSISTANT,
+        )
+    if spec.name == TOOL_GET_TERM_ALTERNATIVES:
+        actor, space = agent_query._resolve_scope(db, agent_session)
+        limit = input_payload.get("limit")
+        if limit is not None and (isinstance(limit, bool) or not 1 <= limit <= 10):
+            raise ToolProtocolError(
+                422,
+                "AGENT_TOOL_SCHEMA_INVALID",
+                "字段超出允许范围",
+                {"path": "$.limit", "allowed": "1..10"},
+            )
+        return terms.list_term_alternatives(
+            db,
+            account_id=actor.account.id,
+            space_id=space.id,
+            concept_code=input_payload["concept_code"],
+            limit=5 if limit is None else int(limit),
+        )
+    if spec.name == TOOL_RECORD_TERM_USAGE:
+        actor, space = agent_query._resolve_scope(db, agent_session)
+        _usage, created, summary = terms.record_usage_and_promote(
+            db,
+            space_id=space.id,
+            concept_code=input_payload["concept_code"],
+            term=input_payload["term"],
+            account_id=actor.account.id,
+            profile_id=actor.id,
+            source_event="assistant_query",
+        )
+        return {
+            "recorded": created,
+            "promotion": {
+                "promoted": bool(summary["promoted"]),
+                "demoted": bool(summary["demoted"]),
+                "eligible_accounts": int(summary["eligible_accounts"]),
+            },
+        }
     if spec.name in agent_query.QUERY_TOOL_NAMES:
         try:
             return agent_query.execute_query_tool(

@@ -6,10 +6,13 @@ from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.audit_log import AuditLog
 from app.models.auth_challenge import AuthChallenge
 from app.models.base import Base
+from app.models.derived_fact import DerivedFact
 from app.models.node_position import NodePosition
 from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
+from app.models.relationship_facts import RawRelationInput, SocialRelation, SourceFact
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
+from app.models.term_registry import TermEntry, TermUsage
 from app.models.user import User
 from app.models.v2_foundation import (
     ClaimDispute,
@@ -36,6 +39,7 @@ __all__ = [
     "Base",
     "ClaimDispute",
     "DataRightRequest",
+    "DerivedFact",
     "DisclosurePreference",
     "DomainEvent",
     "NodePosition",
@@ -44,9 +48,14 @@ __all__ = [
     "FamilySpace",
     "PlatformRoleAssignment",
     "ProfileFactReview",
+    "RawRelationInput",
     "RefreshSession",
     "Relation",
+    "SocialRelation",
+    "SourceFact",
     "SpaceMember",
     "SpaceProfileRef",
+    "TermEntry",
+    "TermUsage",
     "User",
 ]

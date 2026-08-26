@@ -36,6 +36,23 @@ const SHARED_CONTRACT: Record<string, { properties: string[]; required: string[]
 
 const V2_2_TOOL_NAMES = Object.keys(SHARED_CONTRACT);
 
+/**
+ * V2.3 relationship-intelligence kinship tools (Block E4b): same convergence
+ * rules as the V2.2 contract, plus the declared length/bounds constraints.
+ * record_term_usage is the only consent-gated (non-read-only) declaration.
+ */
+const KINSHIP_CONTRACT: Record<string, { properties: string[]; required: string[] }> = {
+  "familygraph.resolve_free_text_relation": { properties: ["text"], required: ["text"] },
+  "familygraph.get_term_alternatives": {
+    properties: ["concept_code", "limit"],
+    required: ["concept_code"],
+  },
+  "familygraph.record_term_usage": {
+    properties: ["concept_code", "term"],
+    required: ["concept_code", "term"],
+  },
+};
+
 const stubExecutor: DomainToolExecutor = async () => ({ ok: true, result: {} });
 
 function schemaOf(toolName: string): {
@@ -82,6 +99,98 @@ describe("V2.2 domain tool declarations", () => {
       expect(tool.description.length).toBeGreaterThan(10);
       expect(tool.description).toContain("只读");
     }
+  });
+});
+
+describe("V2.3 kinship tool declarations", () => {
+  function propertiesOf(toolName: string): Record<string, Record<string, unknown>> {
+    const tool = createDomainTools(stubExecutor).find((t) => t.name === toolName);
+    if (!tool) throw new Error(`tool ${toolName} not declared`);
+    const parameters = tool.parameters as {
+      properties?: Record<string, Record<string, unknown>>;
+    };
+    return parameters.properties ?? {};
+  }
+
+  it("registers the three kinship tools at version 1", () => {
+    for (const name of Object.keys(KINSHIP_CONTRACT)) {
+      expect(TOOL_VERSIONS[name as keyof typeof TOOL_VERSIONS]).toBe(1);
+    }
+    expect(defaultToolNames()).toEqual(expect.arrayContaining(Object.keys(KINSHIP_CONTRACT)));
+  });
+
+  it("declares inputs exactly per the backend contract (no missing, no extra fields)", () => {
+    const declared = new Set(createDomainTools(stubExecutor).map((t) => t.name));
+    for (const [name, expected] of Object.entries(KINSHIP_CONTRACT)) {
+      expect(declared.has(name)).toBe(true);
+      const { properties, required } = schemaOf(name);
+      expect(Object.keys(properties).sort(), `${name} properties`).toEqual(expected.properties);
+      expect([...required].sort(), `${name} required`).toEqual(expected.required);
+    }
+  });
+
+  it("constrains field lengths and bounds exactly per the shared contract", () => {
+    expect(propertiesOf("familygraph.resolve_free_text_relation").text).toMatchObject({
+      minLength: 1,
+      maxLength: 80,
+    });
+    const alternatives = propertiesOf("familygraph.get_term_alternatives");
+    expect(alternatives.concept_code).toMatchObject({ minLength: 1, maxLength: 128 });
+    expect(alternatives.limit).toMatchObject({ minimum: 1, maximum: 10 });
+    const usage = propertiesOf("familygraph.record_term_usage");
+    expect(usage.concept_code).toMatchObject({ minLength: 1, maxLength: 128 });
+    expect(usage.term).toMatchObject({ minLength: 1, maxLength: 64 });
+  });
+
+  it("gates record_term_usage behind explicit consent while keeping the others read-only", () => {
+    const tools = createDomainTools(stubExecutor);
+    const record = tools.find((t) => t.name === "familygraph.record_term_usage")!;
+    expect(record.description).toContain("同意");
+    expect(record.description).not.toContain("只读");
+    for (const name of [
+      "familygraph.resolve_free_text_relation",
+      "familygraph.get_term_alternatives",
+    ]) {
+      expect(tools.find((t) => t.name === name)!.description).toContain("只读");
+    }
+  });
+
+  it("forwards kinship calls verbatim through the execute endpoint", async () => {
+    const seen: Array<{ tool: string; call: Record<string, unknown> }> = [];
+    const executor: DomainToolExecutor = async (toolName, call) => {
+      seen.push({ tool: toolName, call: { ...call } });
+      return { ok: true, result: {} };
+    };
+    const byName = new Map(createDomainTools(executor).map((t) => [t.name, t]));
+
+    await byName
+      .get("familygraph.resolve_free_text_relation")!
+      .execute!("tc_k1", { text: "舅爷爷" }, undefined, undefined, undefined as never);
+    await byName.get("familygraph.get_term_alternatives")!.execute!(
+      "tc_k2",
+      { concept_code: "kin.grandparent.paternal" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    await byName.get("familygraph.record_term_usage")!.execute!(
+      "tc_k3",
+      { concept_code: "kin.parent.mother", term: "老妈" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+
+    expect(seen.map((s) => s.tool)).toEqual([
+      "familygraph.resolve_free_text_relation",
+      "familygraph.get_term_alternatives",
+      "familygraph.record_term_usage",
+    ]);
+    expect(seen.every((s) => s.call.version === 1 && s.call.tool_call_id !== "")).toBe(true);
+    expect(seen[0]!.call.input).toEqual({ text: "舅爷爷" });
+    // Optional limit left unset must not be sent.
+    expect(seen[1]!.call.input).toEqual({ concept_code: "kin.grandparent.paternal" });
+    expect(seen[2]!.call.input).toEqual({ concept_code: "kin.parent.mother", term: "老妈" });
   });
 });
 

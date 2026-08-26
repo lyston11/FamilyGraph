@@ -55,6 +55,15 @@ _TABLES = (
     "agent_sessions",
     "agent_space_provider_settings",
     "agent_providers",
+    # v2.3 事实层：source_facts 引用 raw_relation_inputs，须先删子表；
+    # derived_facts 只引用 users/family_spaces，置于其前即可；
+    # term_usages 引用 term_entries，须先删
+    "source_facts",
+    "social_relations",
+    "raw_relation_inputs",
+    "derived_facts",
+    "term_usages",
+    "term_entries",
     "node_positions",
     "attachments",
     "space_profile_refs",
@@ -237,3 +246,68 @@ def create_space_member(
     session.add(row)
     session.commit()
     return row
+
+
+# ---- V2.3 SourceFact 造数辅助（Block E1；不回填生产数据，仅测试映射）----
+
+
+def create_v1_relation(
+    session,
+    *,
+    from_user_id: int,
+    to_user_id: int,
+    dir_class: str,
+    status: str = "active",
+):
+    """直建 v1 结构边（elder/younger/spouse/peer），供映射工厂与对照测试使用。"""
+    from app.models.relation import Relation
+    from app.utils import timeutil
+
+    now = timeutil.utcnow()
+    row = Relation(
+        from_user=from_user_id,
+        to_user=to_user_id,
+        dir_class=dir_class,
+        label=None,
+        created_by=from_user_id,
+        status=status,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+def seed_structural_edge_to_fact(session, edge, *, space_id=None):
+    """把一条 v1 active elder/spouse 边映射为 confirmed SourceFact（仅测试用）。
+
+    方向映射（v1：to_user 是 from_user 的 dir_class）：
+    - elder f→t：t 是长辈 → biological_parent subject=t object=f
+    - younger f→t：f 是长辈 → biological_parent subject=f object=t
+    - spouse：对称 → spouse subject=f object=t
+    peer 边与非 active 状态不可映射，直接抛错。
+    """
+    from app.services import source_facts as sf_service
+
+    if edge.status != "active":
+        raise ValueError(f"仅映射 active 边，得到 {edge.status}")
+    if edge.dir_class == "elder":
+        fact_type, subject_id, object_id = "biological_parent", edge.to_user, edge.from_user
+    elif edge.dir_class == "younger":
+        fact_type, subject_id, object_id = "biological_parent", edge.from_user, edge.to_user
+    elif edge.dir_class == "spouse":
+        fact_type, subject_id, object_id = "spouse", edge.from_user, edge.to_user
+    else:
+        raise ValueError(f"不可映射的 dir_class: {edge.dir_class}")
+    fact = sf_service.create_source_fact(
+        session,
+        fact_type=fact_type,
+        subject_user_id=subject_id,
+        object_user_id=object_id,
+        space_id=space_id,
+        provenance="connection_accept",
+        state=sf_service.FACT_CONFIRMED,
+    )
+    session.commit()
+    return fact

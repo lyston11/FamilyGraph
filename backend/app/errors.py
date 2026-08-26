@@ -52,6 +52,18 @@ INTERNAL_ERROR = "INTERNAL_ERROR"
 # ---- V2.2 只读 Assistant 领域工具 ----
 FG_PROFILE_NOT_AVAILABLE = "FG_PROFILE_NOT_AVAILABLE"  # 档案不可见/不存在统一拒绝（防枚举）
 
+# ---- V2.3 TermRegistry 称谓体系（Block E3）----
+KINSHIP_FLAG_DISABLED = "KINSHIP_FLAG_DISABLED"  # feature flag 关闭：浏览器面 503
+TERM_INVALID = "TERM_INVALID"  # 称谓文本非法（空/超长/纯空白）
+CONCEPT_CODE_INVALID = "CONCEPT_CODE_INVALID"  # 概念码格式非法（未知编码）
+TERM_USAGE_NOT_FOUND = "TERM_USAGE_NOT_FOUND"  # 使用证据不存在或非本人（防枚举）
+
+# ---- V2.3 SourceFact 事实层（Block E1）----
+SOURCE_FACT_INVALID_TRANSITION = "SOURCE_FACT_INVALID_TRANSITION"  # FSM 非法转换/终态再转换
+SOURCE_FACT_CYCLE_FORBIDDEN = "SOURCE_FACT_CYCLE_FORBIDDEN"  # parent 类事实成环
+SOURCE_FACT_DUPLICATE = "SOURCE_FACT_DUPLICATE"  # 同(subject,object,type,space)已有非 revoked 行
+SOURCE_FACT_SELF_FORBIDDEN = "SOURCE_FACT_SELF_FORBIDDEN"  # 自环事实
+
 # ---- V2.1 Agent Runtime（内部协议 fail-closed 错误码）----
 AGENT_DISABLED = "AGENT_DISABLED"  # feature flag 关闭（RT-6 默认关）
 AGENT_TOKEN_INVALID = "AGENT_TOKEN_INVALID"  # service/run token 缺失/签名/过期/类型错
