@@ -145,7 +145,13 @@ describe('agent store（V2.2 Block C3）', () => {
     streamCallbacks?.onEvent(
       makeEvent(3, 'tool.execution.completed', { tool_call_id: 't1', tool_name: 'fg_list_visible_people', is_error: true }),
     )
-    streamCallbacks?.onEvent(makeEvent(4, 'message.assistant_added', { role: 'assistant', text: '资料不足' }))
+    streamCallbacks?.onEvent(
+      makeEvent(4, 'message.assistant_added', {
+        role: 'assistant',
+        text: '资料不足',
+        card_ids: [3, 3, -1],
+      }),
+    )
     streamCallbacks?.onEvent(makeEvent(5, 'run.settled'))
 
     const p1 = store.partitions.get(1)
@@ -155,7 +161,7 @@ describe('agent store（V2.2 Block C3）', () => {
     expect(p1?.run).toEqual({ id: 100, status: 'succeeded', terminal: true })
     // 终态后恢复游标已删除；已持久化消息保留（取消只取消 Run）
     expect(sessionStorage.getItem('fg.agent.run.11')).toBeNull()
-    expect(p1?.messages.some((m) => m.text === '资料不足')).toBe(true)
+    expect(p1?.messages.find((m) => m.text === '资料不足')?.cardIds).toEqual([3])
   })
 
   it('刷新恢复：selectSession 重订阅非终态 Run 并对历史去重合流（AC-AS6）', async () => {

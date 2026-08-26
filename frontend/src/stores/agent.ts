@@ -42,6 +42,8 @@ export interface AgentMessageView {
   text: string
   createdAt: string | null
   status: 'sent' | 'pending' | 'failed'
+  /** Assistant 结构化回复中引用的 ActionCard id；只保留整数 id。 */
+  cardIds?: number[]
   /** 由 SSE 回放合并产生的消息（刷新恢复去重标记） */
   fromReplay?: boolean
 }
@@ -134,6 +136,17 @@ function payloadString(payload: AgentEventPayload, key: string, fallback = ''): 
   return typeof value === 'string' ? value : fallback
 }
 
+function payloadCardIds(payload: AgentEventPayload): number[] | undefined {
+  const refs = payload.card_ids ?? payload.card_refs
+  const values = Array.isArray(refs)
+    ? refs
+    : typeof payload.card_id === 'number' && Number.isInteger(payload.card_id)
+      ? [payload.card_id]
+      : []
+  const ids = values.filter((value): value is number => Number.isInteger(value) && value > 0)
+  return ids.length > 0 ? [...new Set(ids)] : undefined
+}
+
 function toMessageView(message: AgentMessageOut): AgentMessageView {
   return {
     id: message.id,
@@ -141,6 +154,7 @@ function toMessageView(message: AgentMessageOut): AgentMessageView {
     text: payloadText(message.content_json),
     createdAt: message.created_at,
     status: 'sent',
+    cardIds: payloadCardIds(message.content_json),
   }
 }
 
@@ -176,11 +190,17 @@ export const useAgentStore = defineStore('agent', () => {
    * 回放/实时消息合流：优先消费既有历史中未标记的匹配项（role+text 相同），
    * 找不到才追加——避免刷新恢复时「历史接口 + 事件回放」双份渲染。
    */
-  function mergeReplayedMessage(partition: SessionPartition, role: 'user' | 'assistant', text: string): void {
+  function mergeReplayedMessage(
+    partition: SessionPartition,
+    role: 'user' | 'assistant',
+    text: string,
+    cardIds?: number[],
+  ): void {
     for (let i = Math.min(partition.replayCursor, partition.messages.length); i < partition.messages.length; i += 1) {
       const existing = partition.messages[i]
       if (existing && !existing.fromReplay && existing.role === role && existing.text === text) {
         existing.fromReplay = true
+        if (cardIds !== undefined) existing.cardIds = cardIds
         partition.replayCursor = i + 1
         return
       }
@@ -191,6 +211,7 @@ export const useAgentStore = defineStore('agent', () => {
       text,
       createdAt: null,
       status: 'sent',
+      cardIds,
       fromReplay: true,
     })
   }
@@ -233,7 +254,7 @@ export const useAgentStore = defineStore('agent', () => {
         break
       }
       case 'message.assistant_added':
-        mergeReplayedMessage(partition, 'assistant', payloadText(event.payload))
+        mergeReplayedMessage(partition, 'assistant', payloadText(event.payload), payloadCardIds(event.payload))
         break
       case 'turn.completed':
         break

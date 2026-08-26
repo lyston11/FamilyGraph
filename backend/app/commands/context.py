@@ -51,14 +51,17 @@ def load_actor(session: Session, ctx: ActorContext) -> User:
 
 
 @contextmanager
-def command_transaction(session: Session) -> Iterator[Session]:
+def command_transaction(session: Session, *, commit: bool = True) -> Iterator[Session]:
     """单条命令 = 一个短事务：成功提交，任何异常整体回滚后原样抛出。
 
-    路由不再自行 commit；错误路径不留脏会话（database-guidelines 写事务红线）。
+    ``commit=False`` 供一个领域命令组合进更大的应用命令事务；外层仍须
+    使用本上下文管理器完成最终 commit。路由不再自行 commit；错误路径不留
+    脏会话（database-guidelines 写事务红线）。
     """
     try:
         yield session
-        session.commit()
+        if commit:
+            session.commit()
     except Exception:
         session.rollback()
         raise

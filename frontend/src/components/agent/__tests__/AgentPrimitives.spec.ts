@@ -1,17 +1,24 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import ElementPlus from 'element-plus'
 
+import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
 import ErrorNotice from '@/components/agent/ErrorNotice.vue'
 import MessageList from '@/components/agent/MessageList.vue'
 import ScopeBanner from '@/components/agent/ScopeBanner.vue'
 import SessionList from '@/components/agent/SessionList.vue'
+import { useActionCardsStore } from '@/stores/actionCards'
 import type { AgentSession } from '@/types/agent'
 
 /** 消息流原语组件：气泡、工具 chip、进行中指示、错误文案映射、scope 徽标 */
 
 describe('MessageList', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
   it('渲染文本气泡与角色方向', () => {
     const wrapper = mount(MessageList, {
       props: {
@@ -31,6 +38,55 @@ describe('MessageList', () => {
     // 不渲染任何内部字段
     expect(wrapper.text()).not.toContain('idempotency')
     expect(wrapper.text()).not.toContain('policy_version')
+  })
+
+  it('助手消息中的 card_ids 与空间 Inbox 共用 ActionCardItem', () => {
+    const pinia = createPinia()
+    const actionCards = useActionCardsStore(pinia)
+    actionCards.partitions.set(7, {
+      cards: [
+        {
+          id: 3,
+          kind: 'lineage_request',
+          space_id: 7,
+          subject_user: { id: 10, name: '张三' },
+          object_user: { id: 11, name: '李四' },
+          reason_text: '已确认亲属关系',
+          evidence: { fact_ids: [9], path_summary: '张三 → 李四', evidence_version: 1 },
+          proposed_action: { type: 'request_lineage', params: { space_id: 7 } },
+          privacy_effect: '仅共享族谱摘要',
+          state: 'pending',
+          expires_at: null,
+          created_at: '2026-08-26T00:00:00',
+          revision: 1,
+        },
+      ],
+      loaded: true,
+      loading: false,
+      hidden: false,
+      error: null,
+    })
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          {
+            id: 2,
+            role: 'assistant',
+            text: '我找到一条建议。',
+            createdAt: null,
+            status: 'sent',
+            cardIds: [3],
+          },
+        ],
+        toolSummaries: [],
+        run: null,
+        spaceId: 7,
+      },
+      global: { plugins: [pinia, ElementPlus] },
+    })
+    expect(wrapper.find('[data-test="message-cards"]').exists()).toBe(true)
+    expect(wrapper.findComponent(ActionCardItem).exists()).toBe(true)
+    expect(wrapper.find('[data-test="card-title"]').text()).toContain('加入族谱空间建议')
   })
 
   it('工具摘要 chip：图标 + tool_name + 成功/失败，不含原始 payload', () => {

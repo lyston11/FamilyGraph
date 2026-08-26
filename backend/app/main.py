@@ -11,6 +11,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app import config, logctx
+from app.api.action_cards import router as action_cards_router
 from app.api.admin import router as admin_router
 from app.api.admin_agent import router as admin_agent_router
 from app.api.agent import router as agent_router
@@ -132,6 +133,8 @@ app.include_router(governance_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 # V2.3 关系智能（TermRegistry/resolve；RELATIONSHIP_INTELLIGENCE_ENABLED 默认关，503）
 app.include_router(kinship_router, prefix="/api")
+# V2.4 ActionCard 生命周期（浏览器面；STEWARD_ENABLED 默认关，503）
+app.include_router(action_cards_router, prefix="/api")
 # Agent Provider 治理：platform_operator 专属（同样受 feature flag 门禁）
 app.include_router(admin_agent_router, prefix="/api/admin/agent")
 # Internal Agent 协议：仅内部网络可达（sidecar → FastAPI），不走 /api 前缀，

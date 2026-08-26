@@ -64,6 +64,21 @@ SOURCE_FACT_CYCLE_FORBIDDEN = "SOURCE_FACT_CYCLE_FORBIDDEN"  # parent 类事实�
 SOURCE_FACT_DUPLICATE = "SOURCE_FACT_DUPLICATE"  # 同(subject,object,type,space)已有非 revoked 行
 SOURCE_FACT_SELF_FORBIDDEN = "SOURCE_FACT_SELF_FORBIDDEN"  # 自环事实
 
+# ---- V2.4 Steward 与 ActionCard（Block S1）----
+STEWARD_DISABLED = "STEWARD_DISABLED"  # feature flag 关闭
+STEWARD_CAUSE_INVALID = "STEWARD_CAUSE_INVALID"  # 未知触发原因 taxonomy
+STEWARD_JOB_NOT_FOUND = "STEWARD_JOB_NOT_FOUND"  # 作业不存在
+STEWARD_JOB_NOT_ACTIVE = "STEWARD_JOB_NOT_ACTIVE"  # 作业不在活跃状态（终态不可重跑）
+STEWARD_JOB_SPACE_BUSY = "STEWARD_JOB_SPACE_BUSY"  # 每空间至多一个活跃 steward job
+CARD_NOT_FOUND = "CARD_NOT_FOUND"  # 卡片不存在或不可见（防枚举）
+CARD_INVALID_TRANSITION = "CARD_INVALID_TRANSITION"  # FSM 非法转换/终态再转换/已过期
+CARD_REVISION_CONFLICT = "CARD_REVISION_CONFLICT"  # compare-and-set revision 不一致
+# ---- V2.4 ActionCard 生命周期 API（Block S2）----
+CARD_STATE_CONFLICT = "CARD_STATE_CONFLICT"  # 浏览器面并发转换冲突（revision 冲突同一语义）
+CARD_EXPIRED = "CARD_EXPIRED"  # 卡片已过期/终态失效（410）
+CARD_EXECUTE_REJECTED = "CARD_EXECUTE_REJECTED"  # execute 重校验失败（409，保持 accepted 可重试）
+ACTION_CARD_FLAG_DISABLED = "ACTION_CARD_FLAG_DISABLED"  # ActionCard feature flag 关闭：503
+
 # ---- V2.1 Agent Runtime（内部协议 fail-closed 错误码）----
 AGENT_DISABLED = "AGENT_DISABLED"  # feature flag 关闭（RT-6 默认关）
 AGENT_TOKEN_INVALID = "AGENT_TOKEN_INVALID"  # service/run token 缺失/签名/过期/类型错

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { useAgentStore } from '@/stores/agent'
+import { useActionCardsStore } from '@/stores/actionCards'
 import { useSpacesStore } from '@/stores/spaces'
 
 import AgentComposer from './AgentComposer.vue'
@@ -20,6 +21,7 @@ const emit = defineEmits<{ escape: [] }>()
 
 const spaces = useSpacesStore()
 const agent = useAgentStore()
+const actionCards = useActionCardsStore()
 
 const space = computed(() => spaces.currentSpace)
 const partition = computed(() =>
@@ -45,6 +47,14 @@ watch(
     if (open) focusRoot()
   },
   { flush: 'post' },
+)
+
+watch(
+  [() => props.open, () => space.value?.id ?? null],
+  ([open, spaceId]) => {
+    if (open && typeof spaceId === 'number') void actionCards.ensureLoaded(spaceId)
+  },
+  { immediate: true },
 )
 
 // ---- 焦点圈闭（a11y 基线：Tab 循环限制在面板内） ----
@@ -150,6 +160,7 @@ function onDraftUpdate(value: string): void {
         :messages="partition.messages"
         :tool-summaries="partition.toolSummaries"
         :run="partition.run"
+        :space-id="space?.id ?? null"
       />
       <ErrorNotice :error="partition.error" @retry="onRetry" />
       <AgentComposer

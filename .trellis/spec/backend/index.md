@@ -11,5 +11,6 @@
 | [Logging Guidelines](./logging-guidelines.md) | 结构化日志/PII 脱敏红线/audit_log | Initial draft |
 | [Agent Runtime](./agent-runtime.md) | Pi sidecar 六端点合同/token/事件/Provider 治理 | V2.1 |
 | [Relationship Intelligence](./relationship-intelligence.md) | SourceFact/DerivedFact/概念码/TermRegistry 四级/Extractor/API 隐私红线 | V2.3 |
+| [Steward and ActionCard](./steward-action-card.md) | space-scoped Steward jobs、DomainEvent/BehaviorProjection、ActionCard FSM、推荐资格矩阵与执行重校验 | V2.4 |
 
 > 状态说明：Initial draft = 基于锁定技术栈与架构决策制定的初始规范。M0 完成后必须用真实代码实例校正并补充示例。

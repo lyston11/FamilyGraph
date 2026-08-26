@@ -74,6 +74,16 @@ AGENT_MESSAGE_MAX_LENGTH: int = int(os.environ.get("AGENT_MESSAGE_MAX_LENGTH", "
 AGENT_SSE_POLL_SECONDS: float = float(os.environ.get("AGENT_SSE_POLL_SECONDS", "0.5"))
 AGENT_SSE_KEEPALIVE_SECONDS: float = float(os.environ.get("AGENT_SSE_KEEPALIVE_SECONDS", "15"))
 
+# ---- V2.4 Steward 与 ActionCard（Block S1：feature flag 默认关闭）----
+# 关闭时 enqueue/run 入口一律 503 STEWARD_DISABLED（回滚形态：scheduler 独立开关）
+STEWARD_ENABLED: bool = os.environ.get("STEWARD_ENABLED", "").lower() in ("1", "true")
+# lease 时长与重试上限（reaper 按 lease_expires_at 回队/判死）
+STEWARD_LEASE_TTL_SECONDS: int = int(os.environ.get("STEWARD_LEASE_TTL_SECONDS", "300"))
+STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))
+# 卡片有效期与 dismissed 后同 kind 冷却天数（ST-4 有效期 / ST-3 不重复骚扰）
+STEWARD_CARD_TTL_DAYS: int = int(os.environ.get("STEWARD_CARD_TTL_DAYS", "14"))
+STEWARD_COOLDOWN_DAYS: int = int(os.environ.get("STEWARD_COOLDOWN_DAYS", "7"))
+
 
 def ensure_data_dirs() -> None:
     """确保数据卷目录存在（db/uploads/backups），幂等。"""

@@ -34,7 +34,7 @@ const mockedResolveDispute = vi.mocked(adminApi.resolveClaimDispute)
 function makeInvitation(overrides: Partial<OwnerInvitation> = {}): OwnerInvitation {
   return {
     id: 1,
-    expires_at: '2026-08-27T00:00:00',
+    expires_at: '2099-08-27T00:00:00Z',
     used_at: null,
     revoked_at: null,
     created_at: '2026-08-26T00:00:00',
