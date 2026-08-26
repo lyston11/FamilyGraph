@@ -42,6 +42,12 @@ DATA_EXPORT_TTL_HOURS: int = int(os.environ.get("DATA_EXPORT_TTL_HOURS", "24"))
 # 可见性策略版本：数据权利请求快照所用口径（异步结果继承 VisibilityPolicy）
 POLICY_VERSION: str = "v2-foundation-1"
 
+# ---- V2.3 Relationship Intelligence（Block E1 起：feature flag 默认关闭）----
+# E4 用它门禁关系智能新端点/Agent 工具；本块只加配置。关闭时不影响既有 v1 结构边读写。
+RELATIONSHIP_INTELLIGENCE_ENABLED: bool = os.environ.get(
+    "RELATIONSHIP_INTELLIGENCE_ENABLED", ""
+).lower() in ("1", "true")
+
 # ---- V2.1 Agent Runtime（RT-6：feature flag 总开关，默认整体关闭）----
 # 关闭时 /internal/agent/* 一律 503；开启仍要求 AGENT_SERVICE_SECRET 配置，否则 fail-closed
 AGENT_RUNTIME_ENABLED: bool = os.environ.get("AGENT_RUNTIME_ENABLED", "").lower() in ("1", "true")

@@ -9,12 +9,14 @@ import { VueFlow, useVueFlow, type Edge as FlowEdge, type Node as FlowNode } fro
 
 import GlobalSearch from '@/components/common/GlobalSearch.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
+import RelationLookup from '@/components/kinship/RelationLookup.vue'
 import PendingProfileRefs from '@/components/member/PendingProfileRefs.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import SpaceGovernanceDialog from '@/components/member/SpaceGovernanceDialog.vue'
 import { computeCanvasLayout, computeTreeLayout, type PositionedNode } from '@/composables/useLayout'
 import { useAuthStore } from '@/stores/auth'
 import { useGraphStore } from '@/stores/graph'
+import { useKinshipStore } from '@/stores/kinship'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
 import { getSpacePositions, putSpacePositions } from '@/api/spaces'
@@ -32,6 +34,7 @@ const auth = useAuthStore()
 const members = useMembersStore()
 const spaces = useSpacesStore()
 const graph = useGraphStore()
+const kinship = useKinshipStore()
 const router = useRouter()
 
 type Mode = LayoutMode
@@ -55,7 +58,11 @@ onMounted(async () => {
 
 watch(
   () => spaces.currentSpaceId,
-  async (id) => {
+  async (id, previousId) => {
+    // V2.3：切换空间即清空旧空间的称谓缓存与解析态（state-management.md 失效边界）
+    if (typeof previousId === 'number' && typeof id === 'number' && previousId !== id) {
+      kinship.resetForSpace(previousId)
+    }
     if (id !== null) {
       await loadPositions()
       await graph.loadGraph(viewScope.value, 5).catch(() => undefined)
@@ -283,6 +290,9 @@ void router
         <PendingProfileRefs :refs="spaces.profileRefs" />
       </template>
     </section>
+
+    <!-- 关系查询（V2.3 KI-3）：自由文本解析；flag 关闭时组件自隐藏 -->
+    <RelationLookup />
 
     <div class="filter-row">
       <input

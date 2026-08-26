@@ -29,12 +29,14 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app import config
 from app.errors import FG_PROFILE_NOT_AVAILABLE, raise_api_error
 from app.models.account import Account
 from app.models.relation import Relation
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.models.user import User
 from app.services import visibility
+from app.services.derived_facts import KINSHIP_ALGO_VERSION, describe_result, get_or_compute
 from app.services.kinship import display_relation
 from app.services.visibility import (
     CONTENT_FIELDS,
@@ -561,14 +563,49 @@ def search_space(
     return {"hits": hits[:limit]}
 
 
+def _explain_structural_path_v23(
+    db: Session, space_id: int, from_user_id: int, to_user_id: int
+) -> dict[str, Any]:
+    """Flag ON 的 explain_structural_path：新解析器的确定性结构描述。"""
+    result = get_or_compute(
+        db, viewer_user_id=from_user_id, target_user_id=to_user_id, space_id=space_id
+    )
+    if not result.found:
+        return {
+            "explanation": "在当前空间的可见范围内，没有找到两人之间可验证的关系路径。",
+            "path_class": result.path_class,
+            "caveats": ["资料不足：未经验证的推测不会作为确认事实回答。"],
+            "concept_code": None,
+            "alt_paths": [],
+            "algorithm_version": KINSHIP_ALGO_VERSION,
+        }
+    explanation, alt_descriptions = describe_result(db, result)
+    return {
+        "explanation": explanation[:EXPLANATION_MAX_CHARS],
+        "path_class": result.path_class,
+        "caveats": [],
+        "concept_code": result.concept_code,
+        "alt_paths": alt_descriptions,
+        "algorithm_version": result.algorithm_version,
+    }
+
+
 def get_relationship_path(
     db: Session, *, actor: User, space_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """两人可见关系路径：结构边 BFS（≤6 跳），跨空间不可达一律 found=false。"""
+    """两人可见关系路径：结构边 BFS（≤6 跳），跨空间不可达一律 found=false。
+
+    RELATIONSHIP_INTELLIGENCE_ENABLED 开启时切换到确定性 SourceFact 解析器
+    （V2.3）：path 携带规范化 step 序列，新增 concept_code/path_class 新词表/
+    alt_paths/evidence_fact_ids/algorithm_version 扩展字段；关闭时保持 V2.2
+    行为逐字节不变。
+    """
     to_user_id = _require_int_range("to_user_id", payload.get("to_user_id"), low=1, high=10**9)
     from_user_id = _require_int_range(
         "from_user_id", payload.get("from_user_id"), low=1, high=10**9, default=actor.id
     )
+    if config.RELATIONSHIP_INTELLIGENCE_ENABLED:
+        return _relationship_path_v23(db, space_id, from_user_id, to_user_id)
     found, path_class, hops, evidence = _find_visible_path(
         db, actor, space_id, from_user_id, to_user_id
     )
@@ -580,6 +617,53 @@ def get_relationship_path(
     }
 
 
+def _relationship_path_v23(
+    db: Session, space_id: int, from_user_id: int, to_user_id: int
+) -> dict[str, Any]:
+    """Flag ON 的 get_relationship_path：DerivedFact 缓存口径的新解析器输出。"""
+    result = get_or_compute(
+        db, viewer_user_id=from_user_id, target_user_id=to_user_id, space_id=space_id
+    )
+    if not result.found:
+        return {
+            "found": False,
+            "path_class": result.path_class,
+            "concept_code": None,
+            "path": [],
+            "evidence_fact_ids": [],
+            "alt_paths": [],
+            "algorithm_version": KINSHIP_ALGO_VERSION,
+        }
+    hop_ids = [int(step["to"]) for step in result.main_path_json]
+    names = _user_names(db, [int(result.main_path_json[0]["from"]), *hop_ids])
+    hops = [
+        {
+            "user_id": int(step["to"]),
+            "name": names.get(int(step["to"]), ""),
+            "edge_type": step["edge_type"],
+            "subtype": step.get("subtype"),
+            "direction": step["direction"],
+            "fact_id": step["fact_id"],
+        }
+        for step in result.main_path_json
+    ]
+    _main_description, alt_descriptions = describe_result(db, result)
+    return {
+        "found": True,
+        "path_class": result.path_class,
+        "concept_code": result.concept_code,
+        "path": hops,
+        "evidence_fact_ids": result.evidence_fact_ids,
+        "alt_paths": alt_descriptions,
+        "algorithm_version": result.algorithm_version,
+    }
+
+
+def _user_names(db: Session, user_ids: list[int]) -> dict[int, str]:
+    rows = db.query(User).filter(User.id.in_(set(user_ids))).all()
+    return {user.id: user.name for user in rows}
+
+
 def explain_structural_path(
     db: Session, *, actor: User, space_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -587,11 +671,16 @@ def explain_structural_path(
 
     V2.3 前只解释确定结构路径（elder/younger/spouse）；peer 跳与未确档参与者
     一律写入 caveats 提示，不据此生成称谓结论。
+    RELATIONSHIP_INTELLIGENCE_ENABLED 开启时切换到确定性 SourceFact 解析器：
+    explanation 为层级式结构描述，新增 concept_code/alt_paths/algorithm_version；
+    关闭时保持现行为逐字节不变。
     """
     to_user_id = _require_int_range("to_user_id", payload.get("to_user_id"), low=1, high=10**9)
     from_user_id = _require_int_range(
         "from_user_id", payload.get("from_user_id"), low=1, high=10**9, default=actor.id
     )
+    if config.RELATIONSHIP_INTELLIGENCE_ENABLED:
+        return _explain_structural_path_v23(db, space_id, from_user_id, to_user_id)
     found, path_class, hops, evidence = _find_visible_path(
         db, actor, space_id, from_user_id, to_user_id
     )

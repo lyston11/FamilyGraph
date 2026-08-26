@@ -20,6 +20,8 @@ services:
       # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
+      # V2.3 Relationship Intelligence
+      RELATIONSHIP_INTELLIGENCE_ENABLED: ${RELATIONSHIP_INTELLIGENCE_ENABLED:-0}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷
       - app_data:/data
@@ -64,6 +66,10 @@ services:
       AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       HEALTH_PORT: "8080"
+      # 本地联调 stub Provider（生产由部署环境覆盖/留空）
+      AGENT_PROVIDER_CLOUD_BASE_URL: ${AGENT_PROVIDER_CLOUD_BASE_URL:-}
+      AGENT_PROVIDER_CLOUD_MODEL: ${AGENT_PROVIDER_CLOUD_MODEL:-}
+      AGENT_PROVIDER_CLOUD_API_KEY: ${AGENT_PROVIDER_CLOUD_API_KEY:-}
       # Provider 密钥占位：正式密钥由 platform_operator 经管理后台注册
       # （secretbox 加密落库，sidecar 经 context 的 secret_ref 对账），此处仅留示例位。
       # PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}

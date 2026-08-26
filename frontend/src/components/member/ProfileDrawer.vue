@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { ApiError } from '@/api/errors'
+import KinshipTermPanel from '@/components/kinship/KinshipTermPanel.vue'
 import { useMembersStore } from '@/stores/members'
 import type { ClanDisclosure, GenderType, StructuredDate } from '@/types/api'
 
@@ -175,6 +176,9 @@ function formatDate(value: StructuredDate | null): string {
           {{ member.privacy_mode === 'handover' ? '移交本人' : '永久管理' }}
         </el-tag>
       </div>
+
+      <!-- 称谓（V2.3 KI-5）：resolve 结果 + 个人纠正；flag 关闭时自动隐藏 -->
+      <KinshipTermPanel :member-id="memberId" />
 
       <!-- 查看态 -->
       <el-descriptions v-if="!editing" :column="1" border class="section" data-test="profile-view">
