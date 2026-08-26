@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Foundation 后端完整门禁"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "PII 与 break-glass 审计检查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Foundation 前端门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "身份空间权限跨层一致性"}

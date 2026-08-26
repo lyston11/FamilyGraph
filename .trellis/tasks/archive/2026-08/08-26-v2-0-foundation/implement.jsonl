@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "v1 身份空间可见性和数据权利基线"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移约束事务与 SQLite 规则"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "确档角色数据权利错误合同"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "身份空间与敏感缓存状态边界"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/current-code-baseline.md", "reason": "现有领域服务与需抽取的组合事务"}
