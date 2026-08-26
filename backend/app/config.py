@@ -42,6 +42,32 @@ DATA_EXPORT_TTL_HOURS: int = int(os.environ.get("DATA_EXPORT_TTL_HOURS", "24"))
 # 可见性策略版本：数据权利请求快照所用口径（异步结果继承 VisibilityPolicy）
 POLICY_VERSION: str = "v2-foundation-1"
 
+# ---- V2.1 Agent Runtime（RT-6：feature flag 总开关，默认整体关闭）----
+# 关闭时 /internal/agent/* 一律 503；开启仍要求 AGENT_SERVICE_SECRET 配置，否则 fail-closed
+AGENT_RUNTIME_ENABLED: bool = os.environ.get("AGENT_RUNTIME_ENABLED", "").lower() in ("1", "true")
+# sidecar 与 FastAPI 共享的 HMAC 签名密钥（service/run token）；未配置时内部协议全部拒绝
+AGENT_SERVICE_SECRET: str = os.environ.get("AGENT_SERVICE_SECRET", "")
+# service token 仅用于 lease（notes.md 两级认证）；run token 绑定 run/scope，exp 上限 600s
+AGENT_SERVICE_TOKEN_TTL_SECONDS: int = int(os.environ.get("AGENT_SERVICE_TOKEN_TTL_SECONDS", "120"))
+AGENT_RUN_TOKEN_TTL_SECONDS_MAX: int = 600
+AGENT_RUN_TOKEN_TTL_SECONDS: int = int(os.environ.get("AGENT_RUN_TOKEN_TTL_SECONDS", "600"))
+# lease 时长与重试上限（reaper 按 lease_expires_at 回队/判死）
+AGENT_LEASE_TTL_SECONDS: int = int(os.environ.get("AGENT_LEASE_TTL_SECONDS", "300"))
+AGENT_MAX_ATTEMPTS: int = int(os.environ.get("AGENT_MAX_ATTEMPTS", "3"))
+# RT-2：每账户最多两个并发 Assistant Run
+AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT: int = int(
+    os.environ.get("AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT", "2")
+)
+# context 端点返回的最近消息投影条数上限
+AGENT_CONTEXT_MESSAGE_LIMIT: int = int(os.environ.get("AGENT_CONTEXT_MESSAGE_LIMIT", "50"))
+# 浏览器创建 Assistant Run 的默认策略版本与消息正文上限（RT-4 content 校验）
+AGENT_POLICY_VERSION: str = os.environ.get("AGENT_POLICY_VERSION", "v2-agent-runtime-1")
+AGENT_MESSAGE_MAX_LENGTH: int = int(os.environ.get("AGENT_MESSAGE_MAX_LENGTH", "8000"))
+# SSE 实时通知的兜底轮询间隔与心跳间隔（跨进程 append 不在本进程注册表内，靠轮询兜底；
+# 重连回放始终以 DB 为准保证不漏序）
+AGENT_SSE_POLL_SECONDS: float = float(os.environ.get("AGENT_SSE_POLL_SECONDS", "0.5"))
+AGENT_SSE_KEEPALIVE_SECONDS: float = float(os.environ.get("AGENT_SSE_KEEPALIVE_SECONDS", "15"))
+
 
 def ensure_data_dirs() -> None:
     """确保数据卷目录存在（db/uploads/backups），幂等。"""

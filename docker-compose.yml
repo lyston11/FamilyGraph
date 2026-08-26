@@ -1,4 +1,4 @@
-# FamilyGraph 开发/部署底座（m0a）
+# FamilyGraph 开发/部署底座（m0a；V2.1 新增 agent sidecar）
 #
 # 用法：
 #   全新克隆：docker compose up --build -d
@@ -17,9 +17,15 @@ services:
     environment:
       DATA_DIR: /data
       SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
+      AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
+      AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷
       - app_data:/data
+    networks:
+      - frontend
+      - backend
     healthcheck:
       test:
         [
@@ -41,7 +47,44 @@ services:
       - "8080:80"
     depends_on:
       - api
+    networks:
+      - frontend
     # 注意：web 不挂载数据卷——nginx 禁止直挂 uploads，附件下载走后端授权端点
+
+  # V2.1 Agent sidecar（B2）：无业务 DB、无 uploads 卷、不暴露端口；
+  # 仅在 backend 内部网络可达（FastAPI + 获准 Provider egress）。
+  agent:
+    build: ./agent
+    image: familygraph-agent:0.1.0
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      FG_API_BASE_URL: http://api:8000
+      AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
+      AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
+      HEALTH_PORT: "8080"
+      # Provider 密钥占位：正式密钥由 platform_operator 经管理后台注册
+      # （secretbox 加密落库，sidecar 经 context 的 secret_ref 对账），此处仅留示例位。
+      # PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+    networks:
+      - backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   app_data:
+
+networks:
+  frontend:
+  backend:
