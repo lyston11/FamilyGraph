@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Runtime 后端质量门禁"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Run Provider 工具日志脱敏"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "内部协议与 SSE 错误合同"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "复核 Pi hook subscribe 与 sidecar 设计"}

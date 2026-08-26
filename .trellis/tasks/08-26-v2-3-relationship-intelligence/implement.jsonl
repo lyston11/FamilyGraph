@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "v1 关系图和称谓合同基线"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SourceFact DerivedFact TermRegistry 约束"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "称谓纠正与缓存失效边界"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "Pi 自然语言编排边界"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/current-code-baseline.md", "reason": "现有 relation_fsm kinship 接入点"}

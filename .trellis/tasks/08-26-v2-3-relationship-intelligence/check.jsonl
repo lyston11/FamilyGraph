@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "关系算法不变量与测试门禁"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "事实状态路径称谓类型检查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "关系解释与纠正 UI 检查"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "事实到显示称谓全链路"}

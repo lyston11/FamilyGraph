@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "SSRF Provider 部署全量门禁"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "引用联网状态与响应式检查"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Web 到 Context 答案全链路"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "核验受控联网未引入 LearnGraph 重型旁路"}

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "v1 架构基线与 v2 需要显式取代的合同"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引与前置门禁"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范索引与前置门禁"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/pi-and-learngraph.md", "reason": "Pi 与 LearnGraph 的运行时和安全研究"}
+{"file": ".trellis/tasks/08-26-v2-agent-system/research/current-code-baseline.md", "reason": "v1 实际代码接入点与缺口"}
