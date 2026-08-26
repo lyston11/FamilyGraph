@@ -65,3 +65,24 @@ IDOR 矩阵 5 用例 + 申请流 3 用例 + 附件链 5 用例 + 端到端旅程
 ### Next Steps
 
 - v1 已可发布使用；待办：手机视口人工走查、迁云按 README 清单执行；v2 计划见 HANDOFF（agent 推荐/互反称谓/Q8 等）
+
+---
+
+## 2026-08-26 · V2.1 Agent Runtime（Pi Sidecar 与安全工具协议）
+
+### 交付
+- B1 后端核心：agent 五表+Provider 配置（迁移 0009）、durable queue、两级 token、工具协议注册表、internal 六端点
+- B2 agent/ sidecar：Pi SDK 0.84.3 集成（noTools:"all"+allowlist 测试工具）、policy guard、worker 循环、health、Dockerfile
+- B3 浏览器面：Session/Message(Idempotency)/Run/SSE(Last-Event-ID)、feature flag 默认关、Provider 治理端点+策略矩阵
+- B4 合同对齐：compose 真实联调抓出三处漂移（lease 形状/token typ/settle 字段）并修复
+
+### 终态门禁
+backend pytest **271 passed** + ruff/mypy strict 绿；agent type-check/lint/vitest(32)/build 全绿；
+docker compose config + 全栈 up 三服务 healthy；E2E：入队→租约→context→PROVIDER_UNRESOLVED 可解释失败→SSE 重放与 Last-Event-ID 续传→幂等重放同 Run。
+trellis-check PASS（7 非阻塞项，#1/#2 当场修复，其余移交 V2.2/V2.4，见任务 notes）。
+
+### 教训（已入 spec/backend/agent-runtime.md §6）
+双侧各自 mock 自测不能证明合同；internal 协议任务验收必须含 compose 实联。共享字面量一侧定义常量、另一侧逐字断言。
+
+### Next Steps
+归档 V2.1 → 启动 V2.2 只读 Assistant（问答/关系解释/悬浮 UI），为其注册 Foundation 只读 scoped tools。
