@@ -1,4 +1,4 @@
-"""杂项端点（m3b/m3c/m3d）：lunar 镜像、统计、搜索。"""
+"""杂项端点：lunar 镜像、统计、搜索（可见性口径统一走 visibility.py v2）。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.models.account import Account
 from app.models.relation import Relation
 from app.models.user import User
 from app.services.lunar import lunar_to_solar, solar_to_lunar
-from app.services.visibility import reachable_ids
+from app.services.visibility import PURPOSE_SEARCH, evaluate, visible_user_ids
 
 router = APIRouter(tags=["misc"])
 
@@ -37,10 +37,10 @@ def stats(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> dict[str, Any]:
-    """可见范围内家族统计（矩阵：clan 可达计入，其余不计入）。"""
+    """可见范围内家族统计（矩阵：可见者计入，其余不计入）。"""
     actor, _account = identity
-    reach = reachable_ids(session, actor.id)
-    users = session.query(User).filter(User.id.in_(reach)).all() if reach else []
+    visible = visible_user_ids(session, actor)
+    users = session.query(User).filter(User.id.in_(visible)).all() if visible else []
 
     total = len(users)
     by_gender: dict[str, int] = {"m": 0, "f": 0, "unknown": 0}
@@ -79,14 +79,14 @@ def search(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[dict[str, Any]]:
-    """名字/称谓标签前缀匹配；范围=clan 连通分量（invisible 永不返回）。"""
+    """名字/称谓标签前缀匹配；范围=可见性策略命中集合（none 永不返回）。"""
     actor, _account = identity
-    reach = reachable_ids(session, actor.id)
-    if not reach:
+    visible = visible_user_ids(session, actor)
+    if not visible:
         return []
     users = (
         session.query(User)
-        .filter(User.id.in_(reach), or_(User.name.like(f"{q}%"), User.name.like(f"%{q}%")))
+        .filter(User.id.in_(visible), or_(User.name.like(f"{q}%"), User.name.like(f"%{q}%")))
         .order_by(User.name)
         .limit(20)
         .all()
@@ -107,15 +107,10 @@ def search(
 
     out: list[dict[str, Any]] = []
     for u in users:
-        level = "full" if u.id == actor.id else None
-        if level is None:
-            from app.services.visibility import classify
-
-            lv = classify(session, actor, u)
-            if lv == "invisible":
-                continue
-            level = lv
-        out.append({"id": u.id, "name": u.name, "level": level})
+        decision = evaluate(session, actor, u, purpose=PURPOSE_SEARCH)
+        if not decision.visible:
+            continue
+        out.append({"id": u.id, "name": u.name, "level": decision.level})
     return out
 
 

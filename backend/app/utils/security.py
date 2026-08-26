@@ -65,15 +65,16 @@ def _encode(payload: dict[str, Any], ttl_seconds: int) -> str:
     return jwt.encode(claims, config.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
-def create_access_token(user_id: int, token_version: int, is_admin: bool) -> str:
-    """access JWT（2h）：payload 含 {sub, ver, adm, typ}（design.md 兼容性）。
+def create_access_token(user_id: int, token_version: int, is_platform_operator: bool) -> str:
+    """access JWT（2h）：payload 含 {sub, ver, adm, typ}。
 
+    v2：adm 声明 = platform_operator 角色派生（仅管理后台用，不携带家庭数据权）。
     sub 按 RFC 7519/PyJWT 2.10 要求为字符串。"""
     return _encode(
         {
             "sub": str(user_id),
             "ver": token_version,
-            "adm": is_admin,
+            "adm": is_platform_operator,
             "typ": ACCESS_TOKEN_TYPE,
             "jti": secrets.token_hex(16),
         },

@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from app.models.audit_log import AuditLog
+from app.models.v2_foundation import DomainEvent
 
 
 def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:
@@ -73,10 +77,61 @@ def test_admin_update_user_transfer_custody(db_session, client: TestClient, admi
 
     r = client.patch(
         f"/api/admin/users/{user.id}",
-        json={"name": "改名群众", "transfer_custody_to": guardian.id},
+        json={
+            "name": "改名群众",
+            "privacy_mode": "perpetual",
+            "transfer_custody_to": guardian.id,
+            "note": "工单#42 数据兑底更正",
+        },
         headers=ha,
     )
     assert r.status_code == 200, r.text
+    # 响应形状保持兼容：id + 变更字段键
+    assert r.json() == {
+        "id": user.id,
+        "name": "改名群众",
+        "privacy_mode": "perpetual",
+        "transferred_to": guardian.id,
+    }
     db_session.expire_all()
-    refreshed = client.get(f"/api/users/{user.id}", headers=_login(client, "管长", "000000")).json()
-    assert refreshed["name"] == "改名群众"
+    # v2：operator 无家庭数据读取权 → 成员 API 404；改名结果经 admin API 核实
+    member_view = client.get(f"/api/users/{user.id}", headers=_login(client, "管长", "000000"))
+    assert member_view.status_code == 404
+    admin_rows = client.get("/api/admin/users", headers=ha).json()
+    row = next(r for r in admin_rows if r["id"] == user.id)
+    assert row["name"] == "改名群众"
+
+    # break-glass 审计：理由入库且完整（changes + operator 账号）
+    audit_row = db_session.query(AuditLog).filter(AuditLog.action == "admin_user_updated").one()
+    assert audit_row.target_id == user.id
+    assert audit_row.detail["note"] == "工单#42 数据兑底更正"
+    assert audit_row.detail["break_glass"] is True
+    assert audit_row.detail["operator_account"] == _admin.account.id
+
+    # 领域事件同事务落库：档案更新 + custody 主体变更（F-5）
+    events = {e.type: e for e in db_session.scalars(select(DomainEvent)).all()}
+    assert {"profile.updated", "profile.custody.transferred"} <= set(events)
+    updated_payload = events["profile.updated"].payload
+    assert sorted(updated_payload["fields"]) == ["name", "privacy_mode"]
+    custody_payload = events["profile.custody.transferred"].payload
+    assert custody_payload["to_user"] == guardian.id
+    assert custody_payload["by_operator_account"] == _admin.account.id
+
+
+def test_admin_update_user_requires_break_glass_note(client: TestClient, admin_and_user):
+    """缺 note → schema 422；纯空白 note → 命令层 BREAK_GLASS_NOTE_REQUIRED 422。"""
+    _admin, user = admin_and_user
+    ha = _login(client, "管长", "000000")
+    url = f"/api/admin/users/{user.id}"
+
+    missing = client.patch(url, json={"name": "改名"}, headers=ha)
+    assert missing.status_code == 422
+
+    blank = client.patch(url, json={"name": "改名", "note": "   "}, headers=ha)
+    assert blank.status_code == 422
+    assert blank.json()["error"]["code"] == "BREAK_GLASS_NOTE_REQUIRED"
+
+    # 失败路径不落任何修改
+    rows = client.get("/api/admin/users", headers=ha).json()
+    row = next(r for r in rows if r["id"] == user.id)
+    assert row["name"] != "改名"

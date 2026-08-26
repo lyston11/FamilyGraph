@@ -1,22 +1,32 @@
-"""用户路由：/me（当前账号）与 /users（成员档案，m1a）。
+"""用户路由：/me（当前账号）与 /users（成员档案）。
 
-PUT /me/pin 在 pin_must_change 白名单内（deps.PIN_GATE_WHITELIST），
-改毕 token_version+1 使旧 access/refresh 全部即刻失效；
-pin_must_change 由 true 翻转时同事务置 claim_status='claimed'
-——managed→claimed 的唯一转换点（architecture.md §1 [AD-1]）。
+写路径全部走应用命令层（app.commands，AC-F7）：路由只做 schema 解析 +
+认证上下文构造 + 命令调用 + 序列化，不再直接 commit。PUT /me/pin 在
+pin_must_change 白名单内（deps.PIN_GATE_WHITELIST），改毕 token_version+1
+使旧 access/refresh 全部即刻失效；首登强制改 PIN 完成时经 identity_fsm.claim_account
+完成 managed→claimed 唯一转换点（v2 §0.3，Account 状态机权威在 accounts.status）；
+「这是我」合并确认见 POST /me/identity/confirm（commands.identity）。
 
-/users 成员端点权限判定单点在 services/custody.py（m1a design 权限矩阵）：
-view none 一律 404 防枚举；删除为单事务级联 + audit 快照（§7 [AD-5]）。
+/users 成员端点可见性单点在 services/visibility.py（四级合同）；
+edit/delete 判定在 services/custody.py 与命令层。platform_operator 无任何
+家庭数据读取/编辑权（visibility 不消费平台角色）。删除空间所有者被义务预检
+拦截并引导移交（§0.5，RESTRICT 兑底）。
 """
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_authenticated_user
-from app.errors import CONFIRM_NAME_MISMATCH, UNIFIED_CREDENTIAL_MESSAGE, raise_api_error
+from app.commands import members as member_commands
+from app.commands.context import ActorContext
+from app.errors import (
+    raise_api_error,
+)
 from app.models import Account, User
+from app.models.user import BASIC_DISCLOSURE_KEYS
 from app.schemas.auth import ChangeNameRequest, ChangePinRequest, UserOut, public_user_payload
 from app.schemas.user import (
+    DisclosureMatrixOut,
     DisclosurePayload,
     MemberCreateRequest,
     MemberCreateResponse,
@@ -25,9 +35,8 @@ from app.schemas.user import (
     MemberUpdateRequest,
     member_payload,
 )
-from app.services import audit, custody, space_fsm
-from app.services import refresh_session as refresh_session_service
-from app.utils import security, timeutil
+from app.services import custody, platform_roles
+from app.services import disclosure as disclosure_service
 
 router = APIRouter(tags=["me"])
 members_router = APIRouter(prefix="/users", tags=["members"])
@@ -38,10 +47,11 @@ members_router = APIRouter(prefix="/users", tags=["members"])
 
 @router.get("/me", response_model=UserOut)
 def get_me(
+    session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> UserOut:
     user, _account = identity
-    return UserOut(**public_user_payload(user))
+    return UserOut(**public_user_payload(session, user))
 
 
 @router.put("/me/name", response_model=UserOut)
@@ -51,20 +61,11 @@ def change_name(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> UserOut:
-    """改名（锁定决策 A1：随时可改；Q2 待定默认不限频）。不改名不失效会话。"""
-    user, _account = identity
-    old_name = user.name
-    user.name = payload.name.strip()
-    audit.write_audit(
-        session,
-        action="name_changed",
-        actor_id=user.id,
-        target_id=user.id,
-        ip=request.client.host if request.client else None,
-        detail={"old_name": old_name},
-    )
-    session.commit()
-    return UserOut(**public_user_payload(user))
+    """改名（命令：commands.members.rename_own_profile；A1：随时可改）。"""
+    user, account = identity
+    ctx = ActorContext.from_identity(user, account, ip=_client_ip(request))
+    user = member_commands.rename_own_profile(session, ctx, name=payload.name)
+    return UserOut(**public_user_payload(session, user))
 
 
 @router.put("/me/pin", response_model=UserOut)
@@ -74,36 +75,17 @@ def change_pin(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> UserOut:
-    """改 PIN：验旧 PIN → 新哈希 → pin_must_change=false（首登认领）→ 版本+1。"""
+    """改 PIN（命令：commands.members.change_own_pin）：验旧 PIN → 新哈希 →
+    pin_must_change=false（首登认领）→ 版本+1。"""
     user, account = identity
-    was_forced = bool(account.pin_must_change)
-    if not security.verify_pin(payload.old_pin, account.pin_hash):
-        # 旧 PIN 错误同样走防枚举统一文案
-        raise_api_error(401, "AUTH_INVALID_CREDENTIALS", UNIFIED_CREDENTIAL_MESSAGE)
-
-    account.pin_hash = security.hash_pin(payload.new_pin)
-    account.pin_must_change = False
-    account.token_version += 1
-    account.failed_attempts = 0
-    account.locked_until = None
-    if was_forced and user.claim_status != "claimed":
-        # 首登强制改 PIN 完成 = 认领完成（AD-1 唯一 managed→claimed 转换点）
-        user.claim_status = "claimed"
-    # 全部旧 refresh 会话一并作废（PRD：refresh 无法再换新）
-    refresh_session_service.revoke_all_active(session, user.id, ip=None, reason="pin_change")
-    audit.write_audit(
-        session,
-        action="pin_changed",
-        actor_id=user.id,
-        target_id=user.id,
-        ip=request.client.host if request.client else None,
-        detail={"claim_completed": was_forced},
+    ctx = ActorContext.from_identity(user, account, ip=_client_ip(request))
+    user, _was_forced = member_commands.change_own_pin(
+        session, ctx, old_pin=payload.old_pin, new_pin=payload.new_pin
     )
-    session.commit()
-    return UserOut(**public_user_payload(user))
+    return UserOut(**public_user_payload(session, user))
 
 
-# ---- 成员档案（m1a）----
+# ---- 成员档案 ----
 
 _MEMBER_NOT_FOUND = ("USER_NOT_FOUND", "资源不存在")
 
@@ -112,9 +94,9 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def _member_out(target: User, actor: User) -> MemberOut:
-    """可见性已在路由入口判定为 full，此处仅做投影。"""
-    return MemberOut(**member_payload(target, actor))
+def _member_out(session: Session, target: User, actor: User) -> MemberOut:
+    """可见性已在路由入口判定，此处仅做投影。"""
+    return MemberOut(**member_payload(session, target, actor))
 
 
 @members_router.get("", response_model=list[MemberOut])
@@ -123,19 +105,17 @@ def list_related_members(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[MemberOut]:
-    """与我相关的档案列表：自己 + 我创建的；admin 可见全部（m1a design）。
+    """与我相关的档案列表：自己 + 我创建的（v2：operator 无全量家庭数据权）。
 
-    q 为名字前缀过滤（m1b「添加关系」搜人用），可见范围不变；
-    M1 无关系边/空间成员资格，范围即此；m1d 后该列表被画布取代。
+    q 为名字前缀过滤（「添加关系」搜人用），可见范围不变。
     """
     actor, _account = identity
     query = session.query(User)
-    if not actor.is_admin:
-        query = query.filter((User.id == actor.id) | (User.created_by == actor.id))
+    query = query.filter((User.id == actor.id) | (User.created_by == actor.id))
     if q:
         query = query.filter(User.name.like(f"{q}%"))
     members = query.order_by(User.id).all()
-    return [_member_out(member, actor) for member in members]
+    return [_member_out(session, member, actor) for member in members]
 
 
 @members_router.post("", status_code=201, response_model=MemberCreateResponse)
@@ -145,83 +125,34 @@ def create_member(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberCreateResponse:
-    """建档：创建 user+account 并配发一次性 PIN（A3/AD-1）。
+    """建档（命令：commands.members.create_member）：创建 user+account 并配发
+    一次性 PIN（一次性展示，日志/审计不落值）。v2 F-3：创建他人为 provisional 档案；
+    选择空间时仅建 space_profile_refs 最小节点引用 —— provisional 人物不是
+    SpaceMember、不进推荐资格查询。重名允许（A2），ID 区分。
 
-    PIN 明文仅出现在本次响应；日志/审计只记事实不记值（logging-guidelines 红线）。
-    重名允许（锁定决策 A2），ID 区分。
+    注（F-1「名字和关系必填」）：MemberCreateRequest 刻意不含关系字段 —— 必填关系
+    语义由建档向导提交后的 POST /connection-requests 承担（AD-4 合并请求语义：
+    关系与可选空间邀请一次发出，对方确认后同时生效）。前端 MemberCreateWizard
+    以 canNextFromInfo 强制名字与关系双必填后才可进入下一步。
     """
     actor, _account = identity
-    name = payload.name.strip()
-    pin = security.generate_pin()
-    # exclude_none：JSON 列不落显式 null 键（original_text 空即省略）
-    from app.services.lunar import enrich_structured_date
-
-    birth = enrich_structured_date(
-        payload.birth.model_dump(exclude_none=True) if payload.birth else None
-    )
-    death = enrich_structured_date(
-        payload.death.model_dump(exclude_none=True) if payload.death else None
-    )
-
-    member = User(
-        name=name,
-        is_admin=False,
-        created_at=timeutil.utcnow(),
+    ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
+    birth = payload.birth.model_dump(exclude_none=True) if payload.birth else None
+    death = payload.death.model_dump(exclude_none=True) if payload.death else None
+    member, pin = member_commands.create_member(
+        session,
+        ctx,
+        name=payload.name,
         gender=payload.gender,
         birth=birth,
         death=death,
         bio=payload.bio,
         privacy_mode=payload.privacy_mode,
-        created_by=actor.id,
-        claim_status="managed",
+        space_membership_space_id=(
+            payload.space_membership.space_id if payload.space_membership else None
+        ),
     )
-    member.account = Account(
-        pin_hash=security.hash_pin(pin),
-        pin_must_change=True,
-        token_version=0,
-        failed_attempts=0,
-        locked_until=None,
-    )
-    session.add(member)
-    session.flush()  # 取得 id 供审计与响应投影
-
-    # AD-4 新建例外：managed 新档由代管人创建 → 空间成员直接 active（同事务原子）
-    if payload.space_membership is not None:
-        from app.models.space import FamilySpace, SpaceMember
-
-        space = session.get(FamilySpace, payload.space_membership.space_id)
-        actor_membership = (
-            space_fsm.find_membership(session, space.id, actor.id) if space is not None else None
-        )
-        if (
-            space is None
-            or actor_membership is None
-            or space_fsm.effective_status(actor_membership) != "active"
-        ):
-            raise_api_error(404, "SPACE_NOT_FOUND", "目标家庭空间不存在或无权操作")
-        now = timeutil.utcnow()
-        session.add(
-            SpaceMember(
-                space_id=space.id,
-                user_id=member.id,
-                added_by=actor.id,
-                role="member",
-                status="active",
-                created_at=now,
-                updated_at=now,
-            )
-        )
-
-    audit.write_audit(
-        session,
-        action="profile_created",
-        actor_id=actor.id,
-        target_id=member.id,
-        ip=_client_ip(request),
-        detail={"name": name, "privacy_mode": payload.privacy_mode},
-    )
-    session.commit()
-    return MemberCreateResponse(user=_member_out(member, actor), pin=pin)
+    return MemberCreateResponse(user=_member_out(session, member, actor), pin=pin)
 
 
 @members_router.get("/{user_id}", response_model=MemberOut)
@@ -230,7 +161,8 @@ def get_member(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberOut:
-    """可见性基线（m2a）：full=完整 / summary=基线+披露 / invisible→404（防枚举）。"""
+    """可见性基线（v2 四级）：household_detail=完整 / lineage_summary=基线+披露 /
+    none→404（防枚举）。"""
     from app.services import visibility
 
     actor, _account = identity
@@ -251,7 +183,7 @@ def get_member(
     out = MemberOut(
         id=payload["id"],
         name=payload["name"],
-        is_admin=target.is_admin,
+        is_admin=platform_roles.is_platform_operator(session, target.account),
         gender=_keep(payload["gender"]),
         birth=_keep(payload["birth"]),
         death=_keep(payload["death"]),
@@ -261,28 +193,15 @@ def get_member(
         claim_status=payload.get("claim_status") or "managed",
         created_by=payload.get("created_by"),
         created_at=target.created_at,
-        clan_disclosure=_safe_disclosure(target),
+        clan_disclosure=_safe_disclosure(session, target),
         permissions=MemberPermissions(edit=bool(access.edit), delete=bool(access.delete)),
     )
     return out
 
 
-def _safe_disclosure(target: User) -> dict[str, bool]:
-    import json as _json
-    from typing import Any as _Any
-
-    raw_any: _Any = target.clan_disclosure_json
-    if isinstance(raw_any, str):
-        try:
-            raw = _json.loads(raw_any)
-        except Exception:  # noqa: BLE001
-            raw = {}
-    else:
-        raw = raw_any or {}
-    return {
-        k: bool(raw.get(k, False))
-        for k in __import__("app.models.user", fromlist=["DISCLOSURE_KEYS"]).DISCLOSURE_KEYS
-    }
+def _safe_disclosure(session: Session, target: User) -> dict[str, bool]:
+    """基础五类披露开关视图（权威源：disclosure_preferences 全局行）。"""
+    return disclosure_service.basic_disclosure_flags(session, target)
 
 
 @members_router.patch("/{user_id}", response_model=MemberOut)
@@ -293,34 +212,31 @@ def update_member(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberOut:
-    """档案字段编辑（assert_can_edit 统一入口；admin 编辑同样强制审计留痕）。"""
+    """档案字段编辑（命令：commands.members.update_member_profile；admin 编辑同样
+    强制审计留痕）。"""
+    actor, _account = identity
+    ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
+    changes = payload.model_dump(exclude_unset=True, exclude_none=False)
+    target = member_commands.update_member_profile(session, ctx, user_id, changes)
+    return _member_out(session, target, actor)
+
+
+@members_router.get("/{user_id}/disclosure", response_model=DisclosureMatrixOut)
+def get_disclosure_matrix(
+    user_id: int,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> DisclosureMatrixOut:
+    """披露偏好合并矩阵（全局 + 逐空间覆盖）；读者域与 PUT 一致（编辑权主体）。"""
     actor, _account = identity
     target = session.query(User).filter(User.id == user_id).first()
-    target = custody.require_visible_target(target)
-    custody.assert_can_edit(actor, target)
-
-    changes = payload.model_dump(exclude_unset=True, exclude_none=False)
-    fields = sorted(changes)
-    if "name" in changes and changes["name"] is not None:
-        target.name = str(changes["name"]).strip()
-    from app.services.lunar import enrich_structured_date
-
-    for field in ("gender", "birth", "death", "bio"):
-        if field in changes:
-            value = changes[field]
-            if field in ("birth", "death") and isinstance(value, dict):
-                value = enrich_structured_date(value)
-            setattr(target, field, value)
-    audit.write_audit(
-        session,
-        action="profile_updated",
-        actor_id=actor.id,
-        target_id=target.id,
-        ip=_client_ip(request),
-        detail={"fields": fields, "admin_action": actor.is_admin and actor.id != target.id},
-    )
-    session.commit()
-    return _member_out(target, actor)
+    if target is None:
+        raise_api_error(404, *_MEMBER_NOT_FOUND)
+    if not custody.resolve_relation(actor, target).edit:
+        # 披露偏好属本人/代管人管理数据：无编辑权与不存在同一 404（防枚举）
+        raise_api_error(404, *_MEMBER_NOT_FOUND)
+    matrix = disclosure_service.disclosure_matrix(session, target)
+    return DisclosureMatrixOut.model_validate(matrix)
 
 
 @members_router.put("/{user_id}/disclosure", response_model=MemberOut)
@@ -331,23 +247,15 @@ def update_disclosure(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberOut:
-    """AD-9 披露开关整体替换；修改权 = 该档案编辑权主体（键集合由 schema 恰好校验）。"""
+    """基础五类披露开关整体替换（命令：commands.members.update_disclosure）；
+    全局修改权 = 该档案编辑权主体；携带 space_id 时为逐空间覆盖且仅本人可改。"""
     actor, _account = identity
-    target = session.query(User).filter(User.id == user_id).first()
-    target = custody.require_visible_target(target)
-    custody.assert_can_edit(actor, target)
-
-    target.clan_disclosure_json = payload.model_dump()
-    audit.write_audit(
-        session,
-        action="disclosure_updated",
-        actor_id=actor.id,
-        target_id=target.id,
-        ip=_client_ip(request),
-        detail={"disclosure": payload.model_dump()},
+    ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
+    flags = payload.model_dump(include=set(BASIC_DISCLOSURE_KEYS))
+    target = member_commands.update_disclosure(
+        session, ctx, user_id, flags, space_id=payload.space_id
     )
-    session.commit()
-    return _member_out(target, actor)
+    return _member_out(session, target, actor)
 
 
 @members_router.delete("/{user_id}", status_code=204)
@@ -358,41 +266,22 @@ def delete_member(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> Response:
-    """删除档案（architecture.md §7 [AD-5]）：本人 ∨ 代管创建者 ∨ admin。
+    """删除档案（命令：commands.members.delete_member）：本人 ∨ 代管创建者。
 
     二次确认在前端输入名字，后端以 confirm_name == target.name 作第二道校验；
-    单事务级联（accounts/refresh_sessions 等随 FK CASCADE 自然生效，目标会话
-    随账号行删除自然失效）；audit_log 保留并以快照文本记录被删档案；
-    物理文件异步清理随 m3a 上传功能一并落地（当前 avatar_path 尚无文件产物）。
-    """
+    空间所有者被义务预检拦截为 409 OWNER_TRANSFER_REQUIRED 引导移交；audit_log
+    保留并以快照文本记录被删档案；tombstone 失效事件随同一事务发布；物理文件
+    在提交后清理。"""
     actor, _account = identity
-    target = session.query(User).filter(User.id == user_id).first()
-    target = custody.require_visible_target(target)
-    custody.assert_can_delete(actor, target)
+    ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
+    result = member_commands.delete_member(session, ctx, user_id, confirm_name=confirm_name)
 
-    if confirm_name.strip() != target.name.strip():
-        raise_api_error(409, CONFIRM_NAME_MISMATCH, "输入的名字与档案名字不一致")
+    # 事务已提交：物理文件清理（外部 I/O 不进事务）
+    from app.services.attachments import delete_file_quiet
 
-    snapshot = {
-        "id": target.id,
-        "name": target.name,
-        "gender": target.gender,
-        "birth": target.birth,
-        "death": target.death,
-        "bio": target.bio,
-        "privacy_mode": target.privacy_mode,
-        "claim_status": target.claim_status,
-        "created_by": target.created_by,
-    }
-    session.delete(target)  # flush 时级联删除账号等子行，audit 行保留（无 FK）
-    session.flush()
-    audit.write_audit(
-        session,
-        action="profile_deleted",
-        actor_id=actor.id,
-        target_id=user_id,
-        ip=_client_ip(request),
-        detail={"snapshot": snapshot, "admin_action": actor.is_admin and actor.id != user_id},
-    )
-    session.commit()
+    for path_name in result.purge_image_paths:
+        if not delete_file_quiet(path_name):
+            import logging
+
+            logging.getLogger(__name__).warning("orphan file cleanup deferred: %s", path_name)
     return Response(status_code=204)

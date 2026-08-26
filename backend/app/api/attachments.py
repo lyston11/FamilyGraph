@@ -12,13 +12,20 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import Session as OrmSession
 
 from app.api.deps import get_db, require_authenticated_user
+from app.commands import attachments as att_commands
+from app.commands.context import ActorContext
 from app.errors import ATTACHMENT_NOT_FOUND, USER_NOT_FOUND, raise_api_error
 from app.models.account import Account
 from app.models.attachment import Attachment
 from app.models.user import User
 from app.services import attachments as att_service
-from app.services import audit, custody
-from app.services.visibility import SUMMARY, classify
+from app.services.disclosure import disclosed_categories
+from app.services.visibility import (
+    LEVEL_HOUSEHOLD_DETAIL,
+    LEVEL_LINEAGE_SUMMARY,
+    LEVEL_SELF_PRIVATE,
+    evaluate,
+)
 
 router = APIRouter(tags=["attachments"])
 
@@ -40,25 +47,12 @@ def _attachment_out(row: Attachment) -> dict[str, Any]:
 
 
 def _require_view(session: Session, viewer: User, owner_id: int) -> tuple[str, User]:
+    """目标可见性门禁：none → 404（防枚举）。custodian 由 evaluate 内部覆盖。"""
     target = session.get(User, owner_id)
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    level = visibility_level(session, viewer, target)
-    if level == "invisible" and viewer.id != owner_id:
-        # 管理员/本人由 classify 内部处理；此处仅拦不可见者
-        if not (viewer.is_admin or _is_custodian(viewer, target)):
-            raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    return level, target
-
-
-def visibility_level(session: Session, viewer: User, target: User) -> str:
-    from app.services import visibility
-
-    return visibility.classify(session, viewer, target)
-
-
-def _is_custodian(viewer: User, target: User) -> bool:
-    return target.created_by == viewer.id
+    decision = evaluate(session, viewer, target)
+    return decision.level, target
 
 
 @router.post("/users/{user_id}/attachments/image", status_code=201)
@@ -72,36 +66,18 @@ def upload_image(
 ) -> dict[str, Any]:
     """同步路由：PIL 重编码为 CPU 密集操作，由 FastAPI 线程池执行（spec 禁止阻塞 async 路由）。"""
 
-    actor, _account = identity
-    target = session.get(User, user_id)
-    if target is None:
-        raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    custody.assert_can_edit(actor, target)
-
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
     file.file.seek(0)
     data = file.file.read()
-    att_service.validate_image_upload(file.filename or "", data)
-    clean, _ext = att_service.reencode_strip_metadata(data)
-    path = att_service.save_image(user_id, clean)
-
-    row = Attachment(
-        user_id=user_id,
-        type="image",
-        url_or_path=path.name,
-        title=title or None,
-        uploaded_by=actor.id,
-        created_at=__import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow(),
-    )
-    session.add(row)
-    audit.write_audit(
+    row = att_commands.add_image_attachment(
         session,
-        action="attachment_uploaded",
-        actor_id=actor.id,
-        target_id=user_id,
-        ip=_client_ip(request),
-        detail={"id": None},
+        ctx,
+        user_id=user_id,
+        filename=file.filename or "",
+        data=data,
+        title=title,
     )
-    session.commit()
     session.refresh(row)
     return _attachment_out(row)
 
@@ -120,25 +96,16 @@ def add_link(
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> dict[str, Any]:
-    actor, _account = identity
-    target = session.get(User, user_id)
-    if target is None:
-        raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    custody.assert_can_edit(actor, target)
-
-    att_service.validate_link_url(payload.url)
-
-    row = Attachment(
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = att_commands.add_link_attachment(
+        session,
+        ctx,
         user_id=user_id,
-        type="link",
-        url_or_path=payload.url.strip(),
+        url=payload.url,
         title=payload.title,
         description=payload.description,
-        uploaded_by=actor.id,
-        created_at=__import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow(),
     )
-    session.add(row)
-    session.commit()
     session.refresh(row)
     return _attachment_out(row)
 
@@ -149,19 +116,18 @@ def list_attachments(
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[dict[str, Any]]:
-    """可见性：full 或 summary+attachments 披露 → 元数据；否则 404 语义空。"""
+    """可见性：household_detail 及以上 → 元数据；lineage_summary 需归属者开放
+    attachments 披露；否则 404 语义空。"""
     actor, _account = identity
     target = session.get(User, user_id)
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    level = classify(session, actor, target)
-    if level == "invisible":
+    decision = evaluate(session, actor, target)
+    allowed = decision.level in (LEVEL_HOUSEHOLD_DETAIL, LEVEL_SELF_PRIVATE)
+    if not allowed and decision.level == LEVEL_LINEAGE_SUMMARY:
+        allowed = "attachments" in disclosed_categories(session, target)
+    if not allowed:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    if level == SUMMARY:
-        from app.services.visibility import _disclosure_flags
-
-        if not _disclosure_flags(target).get("attachments"):
-            raise_api_error(404, USER_NOT_FOUND, "档案不存在")
 
     rows = session.scalars(select(Attachment).where(Attachment.user_id == user_id)).all()
     return [_attachment_out(r) for r in rows]
@@ -173,7 +139,8 @@ def download_attachment(
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> FileResponse:
-    """授权流式下载：full 可下；summary 仅当归属者开放 attachments 披露。"""
+    """授权流式下载：household_detail/self 可下；lineage_summary 仅当归属者开放
+    attachments 披露。"""
     actor, _account = identity
     row = session.get(Attachment, attachment_id)
     if row is None:
@@ -182,12 +149,10 @@ def download_attachment(
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
 
-    level = classify(session, actor, target)
-    allowed = level == "full"
-    if level == SUMMARY:
-        from app.services.visibility import _disclosure_flags
-
-        allowed = _disclosure_flags(target).get("attachments", False)
+    decision = evaluate(session, actor, target)
+    allowed = decision.level in (LEVEL_HOUSEHOLD_DETAIL, LEVEL_SELF_PRIVATE)
+    if not allowed and decision.level == LEVEL_LINEAGE_SUMMARY:
+        allowed = "attachments" in disclosed_categories(session, target)
     if not allowed:
         raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
 
@@ -219,27 +184,11 @@ def delete_attachment(
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> Response:
-    """删除（D5 编辑权主体）：先事务删记录，后异步删物理文件。"""
-    actor, _account = identity
-    row = session.get(Attachment, attachment_id)
-    if row is None:
-        raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
-    target = session.get(User, row.user_id)
-    if target is None:
-        raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    custody.assert_can_edit(actor, target)
-
-    path_name = row.url_or_path if row.type == "image" else None
-    session.delete(row)
-    audit.write_audit(
-        session,
-        action="attachment_deleted",
-        actor_id=actor.id,
-        target_id=row.user_id,
-        ip=_client_ip(request),
-        detail={"path": path_name},
-    )
-    session.commit()
+    """删除（命令：commands.attachments.delete_attachment）：先事务删记录 + 失效事件，
+    后异步删物理文件。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    path_name = att_commands.delete_attachment(session, ctx, attachment_id)
 
     if path_name:
         deleted = att_service.delete_file_quiet(path_name)

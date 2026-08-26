@@ -165,4 +165,30 @@ describe('ProfileDrawer', () => {
     expect(wrapper.emitted('close')).toBeUndefined()
     wrapper.unmount()
   })
+
+  it('owner 删除被义务预检拦截（OWNER_TRANSFER_REQUIRED）：展示移交引导而非裸报错', async () => {
+    const { ApiError } = await import('@/api/errors')
+    const member = makeMember()
+    const { wrapper } = await mountWithMember(member)
+    mockedRemove.mockRejectedValue(
+      new ApiError(409, 'OWNER_TRANSFER_REQUIRED', '该档案是家庭空间所有者，请先完成 owner 移交后再删除', {
+        spaces_requiring_handover: [5],
+      }),
+    )
+
+    click('[data-test="delete-btn"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="delete-confirm-dialog"]')).not.toBeNull(),
+    )
+    const input = document.querySelector<HTMLInputElement>('[data-test="delete-confirm-input"]')!
+    input.value = '母亲'
+    input.dispatchEvent(new Event('input'))
+    await new Promise((resolve) => setTimeout(resolve))
+    document.querySelector<HTMLButtonElement>('[data-test="delete-submit"]')!.click()
+
+    // AC-F5：引导到移交流程（提及移交），不展示原始错误码文案
+    await vi.waitFor(() => expect(text('[data-test="delete-error"]')).toContain('移交'))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
 })

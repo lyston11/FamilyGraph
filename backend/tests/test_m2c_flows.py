@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from app.models.space import SpaceMember
 
+MASKED = {"__masked__": True}
+
 
 def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:
     resp = login(client, name, pin)
@@ -30,7 +32,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     # 乙建空间（owner 即 active）
     client.post("/api/spaces", json={"name": "乙家"}, headers=hb)
 
-    # 甲（clan 可达性：无关系边时 invisible → 404 防枚举；先建立 peer 边使其可达）
+    # 甲（v2 可见性门禁：无可见性时 404 防枚举；先建立直系 elder 边使乙对甲可见）
     from app.models.relation import Relation
     from app.utils.timeutil import utcnow
 
@@ -38,7 +40,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
         Relation(
             from_user=b.id,
             to_user=a.id,
-            dir_class="peer",
+            dir_class="elder",
             created_by=b.id,
             status="active",
             created_at=utcnow(),
@@ -115,7 +117,8 @@ def test_revoke_downgrades_visibility_immediately(db_session, client: TestClient
     hc = _login(client, "子", "343434")
     ok = client.get(f"/api/users/{a.id}", headers=hc)
     assert ok.status_code == 200
-    assert isinstance(ok.json()["birth"], dict) and "__masked__" not in ok.json()["birth"]
+    # v2：直系跨空间 = lineage_summary，敏感字段遮蔽但可见（通知/摘要需要）
+    assert ok.json()["birth"] == MASKED
 
     # 父 revoke 断连
     hp = _login(client, "父", "121212")

@@ -89,7 +89,47 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("relations", "pending_space_id")
+    # SQLite ≥3.35 拒绝对参与 FK 定义的列执行 DROP COLUMN，
+    # 故以整表重建方式移除 pending_space_id（开发库回滚用途）。
+    op.execute(
+        "CREATE TABLE relations_new ("
+        " id INTEGER PRIMARY KEY,"
+        " from_user INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,"
+        " to_user INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,"
+        " dir_class VARCHAR(16) NOT NULL CONSTRAINT ck_relations_dir_class CHECK"
+        " (dir_class IN ('elder','younger','peer','spouse')),"
+        " label VARCHAR(64),"
+        " created_by INTEGER NOT NULL REFERENCES users (id),"
+        " status VARCHAR(16) NOT NULL DEFAULT 'pending'"
+        " CONSTRAINT ck_relations_status CHECK"
+        " (status IN ('pending','active','rejected','cancelled','revoked')),"
+        " created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,"
+        " CONSTRAINT ck_relations_no_self_loop CHECK (from_user != to_user))"
+    )
+    op.execute(
+        "INSERT INTO relations_new (id, from_user, to_user, dir_class, label,"
+        " created_by, status, created_at, updated_at)"
+        " SELECT id, from_user, to_user, dir_class, label, created_by, status,"
+        " created_at, updated_at FROM relations"
+    )
+    op.execute("DROP TABLE relations")
+    op.execute("ALTER TABLE relations_new RENAME TO relations")
+    op.create_index("ix_relations_from", "relations", ["from_user"])
+    op.create_index("ix_relations_to", "relations", ["to_user"])
+    op.create_index(
+        "uq_relations_pair_fwd",
+        "relations",
+        ["from_user", "to_user"],
+        unique=True,
+        sqlite_where=sa.text("status IN ('pending','active')"),
+    )
+    op.create_index(
+        "uq_relations_pair_rev",
+        "relations",
+        ["to_user", "from_user"],
+        unique=True,
+        sqlite_where=sa.text("status IN ('pending','active')"),
+    )
     op.drop_index("ix_space_members_user", table_name="space_members")
     op.drop_index("ix_space_members_space", table_name="space_members")
     op.drop_table("space_members")

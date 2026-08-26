@@ -41,10 +41,19 @@ def db_session():
     session.close()
 
 
-# 未来表（attachments/node_positions 等）落地时同步追加
+# 清表顺序：子表→父表（满足 FK，无需关外键）。v2 合同表追加于尾部。
 _TABLES = (
     "node_positions",
     "attachments",
+    "space_profile_refs",
+    "profile_fact_reviews",
+    "domain_events",
+    "data_right_requests",
+    "claim_disputes",
+    "ownership_transfers",
+    "owner_invitations",
+    "disclosure_preferences",
+    "platform_role_assignments",
     "space_members",
     "relations",
     "family_spaces",
@@ -86,24 +95,34 @@ def create_user_with_pin(
     gender: str = "unknown",
     birth: dict | None = None,
     bio: str | None = None,
+    profile_status: str = "identity_confirmed",
 ):
-    """直接造数：绕过 API 创建账号。claim_status 缺省与首登态联动推断。"""
+    """直接造数：绕过 API 创建账号。
+
+    v2 语义：
+    - claim_status → accounts.status（managed|claimed）；缺省与首登态联动推断
+    - profile_status：档案确档状态（fixture 默认 identity_confirmed，模拟既有建档）
+    - is_admin=True 创建 platform_operator 角色分配（无家庭数据读取权）
+    """
     from app.models.account import Account
     from app.models.user import User
+    from app.models.v2_foundation import PlatformRoleAssignment
+    from app.services.platform_roles import ROLE_PLATFORM_OPERATOR
     from app.utils import security, timeutil
 
     if claim_status is None:
         claim_status = "claimed" if not pin_must_change else "managed"
+    now = timeutil.utcnow()
     user = User(
         name=name,
-        is_admin=is_admin,
-        created_at=timeutil.utcnow(),
+        created_at=now,
         gender=gender,
         privacy_mode=privacy_mode,
         created_by=created_by,
-        claim_status=claim_status,
         birth=birth,
         bio=bio,
+        profile_status=profile_status,
+        profile_confirmed_at=(now if profile_status == "identity_confirmed" else None),
     )
     user.account = Account(
         pin_hash=security.hash_pin(pin),
@@ -111,8 +130,20 @@ def create_user_with_pin(
         token_version=0,
         failed_attempts=0,
         locked_until=None,
+        status=claim_status,
+        claimed_at=(now if claim_status == "claimed" else None),
     )
     session.add(user)
+    session.flush()  # 取得 account.id 供角色分配引用
+    if is_admin:
+        session.add(
+            PlatformRoleAssignment(
+                account_id=user.account.id,
+                role=ROLE_PLATFORM_OPERATOR,
+                created_by=None,
+                created_at=now,
+            )
+        )
     session.commit()
     return user
 

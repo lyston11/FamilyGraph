@@ -113,6 +113,12 @@ def find_membership(session: Session, space_id: int, user_id: int) -> SpaceMembe
     )
 
 
+def is_active_member(session: Session, space_id: int, user_id: int) -> bool:
+    """是否 active 成员（含过期惰性判定）。"""
+    member = find_membership(session, space_id, user_id)
+    return member is not None and effective_status(member) == "active"
+
+
 def invite(
     session: Session, *, space: FamilySpace, user_id: int, added_by: int
 ) -> tuple[SpaceMember, bool]:

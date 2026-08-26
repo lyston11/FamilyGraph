@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 
 import { fetchLunarMirror } from '@/api/lunar'
 import { ApiError } from '@/api/errors'
+import { createConnectionRequest } from '@/api/graph'
+import { createSpace } from '@/api/spaces'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
-import type { GenderType, PrivacyMode, StructuredDate } from '@/types/api'
+import type { DirClass, GenderType, PrivacyMode, StructuredDate } from '@/types/api'
 
 /**
- * 建档向导（m1a design）：资料 → 归属模式 D5 二选一 → [加入空间(m1c，有空间时)] → 提交。
+ * 建档向导（v2 F-1/F-3）：资料（名字+关系必填）→ 归属模式 D5 → [选择空间
+ * no-space/household/lineage] → 提交。
+ * 对方确档前仅为 provisional 档案：选空间只建 space_profile_refs 最小节点引用，
+ * 不是正式 SpaceMember；与创建者的关系以待确认合并请求发出，本人确档后可确认。
  */
 const emit = defineEmits<{ close: []; created: [{ name: string; pin: string }] }>()
 
@@ -18,26 +24,54 @@ const spacesStore = useSpacesStore()
 const step = ref(0)
 const submitting = ref(false)
 const errorMessage = ref('')
-const joinSpaceEnabled = ref(true)
-const joinSpaceId = ref<number | null>(null)
+
+// ---- 关系（F-1 必填）：TA 是我的 ___；以合并请求发出，对方确档后可确认 ----
+const RELATION_OPTIONS: { value: DirClass; text: string }[] = [
+  { value: 'elder', text: '长辈' },
+  { value: 'younger', text: '晚辈' },
+  { value: 'peer', text: '平辈' },
+  { value: 'spouse', text: '配偶' },
+]
+const relationDir = ref<DirClass | ''>('')
+const relationLabel = ref('')
+
+// ---- 空间选择（F-3）：no-space / household / lineage ----
+type SpaceChoice = 'none' | 'household' | 'lineage'
+const spaceChoice = ref<SpaceChoice>('none')
+const joinHouseholdSpaceId = ref<number | null>(null)
+const joinLineageSpaceId = ref<number | null>(null)
+const newLineageName = ref('')
+const creatingLineage = ref(false)
 
 onMounted(async () => {
   try {
     await spacesStore.load()
-    joinSpaceId.value = spacesStore.spaces[0]?.id ?? null
   } catch {
     /* 空间加载失败不阻塞建档 */
   }
 })
 
-/** 有空间时插入「加入我的空间」步骤（m1c） */
+/** 有任一空间时插入「选择空间」步骤（F-3） */
 const hasSpaces = computed(() => spacesStore.spaces.length > 0)
+const householdSpaces = computed(() => spacesStore.spaces.filter((s) => s.kind === 'household'))
+const lineageSpaces = computed(() => spacesStore.spaces.filter((s) => s.kind === 'lineage'))
 const stepTitles = computed(() =>
   hasSpaces.value
-    ? (['资料', '归属模式', '加入空间', '确认提交'] as const)
+    ? (['资料', '归属模式', '选择空间', '确认提交'] as const)
     : (['资料', '归属模式', '确认提交'] as const),
 )
 const confirmStep = computed(() => (hasSpaces.value ? 3 : 2))
+
+/** 最终选定的空间引用（null = 不加入任何空间） */
+const chosenSpaceId = computed<number | null>(() => {
+  if (!hasSpaces.value || spaceChoice.value === 'none') return null
+  return spaceChoice.value === 'household' ? joinHouseholdSpaceId.value : joinLineageSpaceId.value
+})
+
+/** 选择空间步骤的合法性：选中类别必须有具体空间 */
+const spaceSelectionValid = computed(
+  () => !hasSpaces.value || spaceChoice.value === 'none' || chosenSpaceId.value !== null,
+)
 
 const form = reactive({
   name: '',
@@ -88,7 +122,7 @@ async function onBirthCalChange(newType: StructuredDate['cal_type'], oldType?: S
   }
 }
 
-const canNextFromInfo = computed(() => form.name.trim().length > 0)
+const canNextFromInfo = computed(() => form.name.trim().length > 0 && relationDir.value !== '')
 
 function buildStructuredDate(calType: StructuredDate['cal_type'], raw: string): StructuredDate | null {
   if (calType === 'none') {
@@ -108,7 +142,35 @@ function goMode(): void {
 }
 
 function goConfirm(): void {
+  if (!canNextFromInfo.value) return
+  // 有空间时先经过「选择空间」步骤（F-3），再进入确认
+  if (hasSpaces.value && step.value === 1) {
+    errorMessage.value = ''
+    step.value = 2
+    return
+  }
+  if (hasSpaces.value && step.value === 2 && !spaceSelectionValid.value) {
+    errorMessage.value = '请先选择一个具体空间，或选择不加入'
+    return
+  }
+  errorMessage.value = ''
   step.value = confirmStep.value
+}
+
+async function createLineageSpace(): Promise<void> {
+  const name = newLineageName.value.trim()
+  if (!name) return
+  creatingLineage.value = true
+  try {
+    const space = await createSpace(name, 'lineage')
+    spacesStore.spaces.unshift(space)
+    joinLineageSpaceId.value = space.id
+    newLineageName.value = ''
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '创建族谱空间失败')
+  } finally {
+    creatingLineage.value = false
+  }
 }
 
 async function submit(): Promise<void> {
@@ -125,10 +187,18 @@ async function submit(): Promise<void> {
       bio: form.bio.trim() || null,
       privacy_mode: form.privacyMode,
       space_membership:
-        hasSpaces.value && joinSpaceEnabled.value && joinSpaceId.value !== null
-          ? { space_id: joinSpaceId.value }
-          : null,
+        chosenSpaceId.value !== null ? { space_id: chosenSpaceId.value } : null,
     })
+    // 关系以合并请求发出（pending）：对方确档后自行确认，符合显式同意语义
+    try {
+      await createConnectionRequest({
+        target_id: result.user.id,
+        dir_class: relationDir.value as DirClass,
+        label: relationLabel.value.trim() || null,
+      })
+    } catch {
+      ElMessage.warning('档案已创建，但关系请求发送失败，可稍后在「添加关系」中补发')
+    }
     emit('created', { name: result.user.name, pin: result.pin })
   } catch (error) {
     errorMessage.value = error instanceof ApiError ? error.message : '建档失败，请稍后重试'
@@ -149,7 +219,12 @@ function reset(): void {
   form.deathDate = ''
   form.bio = ''
   form.privacyMode = 'handover'
-  joinSpaceEnabled.value = true
+  relationDir.value = ''
+  relationLabel.value = ''
+  spaceChoice.value = 'none'
+  joinHouseholdSpaceId.value = null
+  joinLineageSpaceId.value = null
+  newLineageName.value = ''
 }
 
 function handleClose(): void {
@@ -172,7 +247,7 @@ function handleClose(): void {
       <el-step v-for="(title, index) in stepTitles" :key="index" :title="title" />
     </el-steps>
 
-    <!-- 第一步：资料 -->
+    <!-- 第一步：资料（F-1：名字与关系必填） -->
     <el-form v-if="step === 0" label-position="top" data-test="wizard-step-info">
       <el-form-item label="名字（允许重名）" required>
         <el-input
@@ -181,6 +256,25 @@ function handleClose(): void {
           placeholder="例如：王秀英"
           data-test="wizard-name"
         />
+      </el-form-item>
+      <el-form-item label="与你的关系" required>
+        <div class="relation-block">
+          <el-radio-group v-model="relationDir" data-test="wizard-relation-dir">
+            <el-radio v-for="opt in RELATION_OPTIONS" :key="opt.value" :value="opt.value">
+              {{ opt.text }}
+            </el-radio>
+          </el-radio-group>
+          <el-input
+            v-model="relationLabel"
+            class="relation-label-input"
+            maxlength="64"
+            placeholder="称谓选填，如：三叔公"
+            data-test="wizard-relation-label"
+          />
+          <div class="confirm-hint">
+            关系将以待确认请求发出，对方确档并确认后正式生效。
+          </div>
+        </div>
       </el-form-item>
       <el-form-item label="性别">
         <el-radio-group v-model="form.gender" data-test="wizard-gender">
@@ -255,43 +349,87 @@ function handleClose(): void {
       </el-form-item>
     </el-form>
 
-    <!-- 第三步（有空间时）：加入我的空间（AD-4 新建例外：直接 active） -->
+    <!-- 第三步（有空间时）：选择空间（F-3：no-space / household / lineage） -->
     <el-form v-else-if="hasSpaces && step === 2" label-position="top" data-test="wizard-step-space">
-      <el-form-item>
-        <el-checkbox v-model="joinSpaceEnabled" data-test="wizard-space-enable">
-          同时加入我的家庭空间
-        </el-checkbox>
+      <el-form-item label="加入哪个空间？">
+        <el-radio-group v-model="spaceChoice" data-test="wizard-space-choice">
+          <el-radio value="none">不加入空间</el-radio>
+          <el-radio value="household" :disabled="householdSpaces.length === 0">家庭空间</el-radio>
+          <el-radio value="lineage">族谱空间</el-radio>
+        </el-radio-group>
       </el-form-item>
-      <el-form-item v-if="joinSpaceEnabled">
-        <el-select
-          v-model="joinSpaceId"
-          placeholder="选择空间"
-          data-test="wizard-space-select"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="space in spacesStore.spaces"
-            :key="space.id"
-            :label="space.name"
-            :value="space.id"
-          />
-        </el-select>
-        <div class="confirm-hint">新建档案将直接进入该空间（你是代管人）。</div>
-      </el-form-item>
+      <template v-if="spaceChoice === 'household'">
+        <el-form-item>
+          <el-select
+            v-model="joinHouseholdSpaceId"
+            placeholder="选择家庭空间"
+            data-test="wizard-household-select"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="space in householdSpaces"
+              :key="space.id"
+              :label="space.name"
+              :value="space.id"
+            />
+          </el-select>
+        </el-form-item>
+      </template>
+      <template v-if="spaceChoice === 'lineage'">
+        <el-form-item>
+          <el-select
+            v-model="joinLineageSpaceId"
+            placeholder="选择族谱空间"
+            data-test="wizard-lineage-select"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="space in lineageSpaces"
+              :key="space.id"
+              :label="space.name"
+              :value="space.id"
+            />
+          </el-select>
+          <div class="lineage-create">
+            <el-input
+              v-model="newLineageName"
+              placeholder="或新建族谱空间名"
+              maxlength="64"
+              data-test="wizard-lineage-name"
+            />
+            <el-button
+              size="small"
+              :loading="creatingLineage"
+              :disabled="!newLineageName.trim()"
+              data-test="wizard-lineage-create"
+              @click="createLineageSpace"
+            >
+              新建
+            </el-button>
+          </div>
+        </el-form-item>
+      </template>
+      <p class="confirm-hint">
+        对方完成确档前，仅以最小节点引用出现在所选空间，不是正式空间成员。
+      </p>
     </el-form>
 
     <!-- 确认提交 -->
     <div v-else data-test="wizard-step-confirm">
       <el-descriptions :column="1" border>
         <el-descriptions-item label="名字">{{ form.name }}</el-descriptions-item>
+        <el-descriptions-item label="与你的关系">
+          {{ RELATION_OPTIONS.find((o) => o.value === relationDir)?.text ?? '—' }}
+          {{ relationLabel.trim() ? `（${relationLabel.trim()}）` : '' }}
+        </el-descriptions-item>
         <el-descriptions-item label="性别">
           {{ form.gender === 'f' ? '女' : form.gender === 'm' ? '男' : '不详' }}
         </el-descriptions-item>
         <el-descriptions-item label="归属模式">
           {{ form.privacyMode === 'handover' ? '移交本人' : '永久管理' }}
         </el-descriptions-item>
-        <el-descriptions-item v-if="hasSpaces && joinSpaceEnabled && joinSpaceId" label="加入空间">
-          {{ spacesStore.spaces.find((s) => s.id === joinSpaceId)?.name }}
+        <el-descriptions-item v-if="chosenSpaceId" label="加入空间">
+          {{ spacesStore.spaces.find((s) => s.id === chosenSpaceId)?.name }}
         </el-descriptions-item>
       </el-descriptions>
       <p class="confirm-hint">提交后系统将生成一次性 PIN 码，请转交给这位家人。</p>
@@ -340,6 +478,21 @@ function handleClose(): void {
   display: flex;
   gap: 8px;
   align-items: center;
+  width: 100%;
+}
+
+.relation-block {
+  width: 100%;
+}
+
+.relation-label-input {
+  margin-top: 8px;
+}
+
+.lineage-create {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
   width: 100%;
 }
 

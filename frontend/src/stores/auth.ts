@@ -37,6 +37,8 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(REFRESH_TOKEN_KEY)
     // 敏感缓存清理红线（state-management.md）：同步清空业务 store 的 PII
     useMembersStore().clear()
+    // v2 治理缓存（确档/数据权利/争议）随会话清空，避免身份切换后残留
+    void import('@/stores/governance').then((m) => m.useGovernanceStore().clear())
     // 延迟导入避免循环依赖：graph/spaces 依赖 auth 时经由函数内解析
     void import('@/stores/graph').then((m) => m.useGraphStore().clear())
     void import('@/stores/spaces').then((m) => m.useSpacesStore().clear())

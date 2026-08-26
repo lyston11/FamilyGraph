@@ -1,12 +1,12 @@
-"""custody 权限矩阵全分支单测（m1a design 矩阵逐行；implement.md #4）。
+"""custody 权限矩阵全分支单测（D5 归属模式逐行；v2 Foundation 语义）。
 
-矩阵（M1 无可见性模块）：
+矩阵：
 | 主体                          | view | edit | delete |
 | 本人（claimed）               | full | ✔    | ✔      |
 | 代管创建者·handover 未 claimed | full | ✔    | ✔      |
 | 代管创建者·handover 已 claimed | full | ✘403 | ✘      |
 | 创建者·perpetual              | full | ✔    | ✔      |
-| admin                         | full | ✔    | ✔      |
+| platform_operator             | none | ✘404 | ✘404   |
 | 其他已登录用户                 | none | ✘    | ✘      |
 """
 
@@ -67,11 +67,18 @@ def test_creator_perpetual_keeps_rights_after_claim(db_session) -> None:
     custody.assert_can_delete(creator, target)
 
 
-def test_admin_full_access_on_foreign_profile(db_session) -> None:
-    admin = create_user_with_pin(db_session, "管理员", "999999", is_admin=True)
+def test_platform_operator_no_custody_on_foreign_profile(db_session) -> None:
+    """v2 §0.2：platform_operator 无任何家庭数据编辑/删除权（none→404）。"""
+    operator = create_user_with_pin(db_session, "运营者", "999999", is_admin=True)
     stranger = create_user_with_pin(db_session, "路人", "888888")
-    access = custody.resolve_relation(admin, stranger)
-    assert access == custody.RelationAccess(custody.VIEW_FULL, True, True)
+    access = custody.resolve_relation(operator, stranger)
+    assert access == custody.RelationAccess(custody.VIEW_NONE, False, False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        custody.assert_can_edit(operator, stranger)
+    error = extract_api_error(exc_info.value.detail)
+    assert exc_info.value.status_code == 404
+    assert error is not None and error["code"] == "USER_NOT_FOUND"
 
 
 def test_unrelated_user_none_semantics(db_session) -> None:

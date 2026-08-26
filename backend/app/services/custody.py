@@ -1,8 +1,8 @@
-"""代管权判定单点（m1a design 权限矩阵；architecture.md §1/D5）。
+"""档案编辑/删除权判定单点（D5 归属模式；architecture.md §0.1）。
 
-M1 阶段无可见性模块：非相关者一律 none（API 层 404 语义，防枚举）；
-M2 由 visibility.py 接管 summary 层，本模块届时仅保留 edit/delete 判定。
-admin 编辑/删除走同一入口，审计由各路由强制记录（矩阵"audit 记录"要求）。
+v2：可见性判定已全部移交 visibility.py（四级合同）；本模块仅裁定
+edit/delete。platform_operator 无任何家庭数据编辑/删除权 —— admin 兜底
+分支已删除，数据修正走未来 break-glass 审计接口。
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,6 @@ from app.errors import CUSTODY_HANDOVER_DONE, USER_NOT_FOUND, raise_api_error
 from app.models.user import User
 
 VIEW_FULL = "full"
-VIEW_SUMMARY = "summary"  # M2 起由 visibility.py 接管，M1 不产生
 VIEW_NONE = "none"
 
 
@@ -25,7 +24,7 @@ class RelationAccess:
 
 
 def resolve_relation(actor: User, target: User) -> RelationAccess:
-    """按权限矩阵逐行判定（self > 创建者 > admin > 其他）。"""
+    """按归属模式逐行判定（self > 创建者）。"""
     if actor.id == target.id:
         return RelationAccess(VIEW_FULL, True, True)
 
@@ -33,14 +32,11 @@ def resolve_relation(actor: User, target: User) -> RelationAccess:
         if target.privacy_mode == "perpetual":
             # D5：创建者永久编辑权，认领不失权
             return RelationAccess(VIEW_FULL, True, True)
-        if target.claim_status == "managed":
+        if target.account.status == "managed":
             # handover 未 claimed：创建者代管
             return RelationAccess(VIEW_FULL, True, True)
         # handover 已 claimed：编辑权移交本人，创建者退只读
         return RelationAccess(VIEW_FULL, False, False)
-
-    if actor.is_admin:
-        return RelationAccess(VIEW_FULL, True, True)
 
     return RelationAccess(VIEW_NONE, False, False)
 
@@ -50,7 +46,7 @@ _NOT_FOUND_MESSAGE = "资源不存在"
 
 
 def assert_can_edit(actor: User, target: User) -> RelationAccess:
-    """编辑权统一入口（PATCH 档案/disclosure/将来附件共用）。
+    """编辑权统一入口（PATCH 档案/disclosure/附件共用）。
 
     - view none → 404 USER_NOT_FOUND（防枚举）
     - view full 但失权 → 403 CUSTODY_HANDOVER_DONE
@@ -64,7 +60,7 @@ def assert_can_edit(actor: User, target: User) -> RelationAccess:
 
 
 def assert_can_delete(actor: User, target: User) -> None:
-    """删除权入口：本人 ∨ 代管创建者（perpetual 或 handover 未 claimed）∨ admin。"""
+    """删除权入口：本人 ∨ 代管创建者（perpetual 或 handover 未 managed→claimed 前）。"""
     access = resolve_relation(actor, target)
     if access.view == VIEW_NONE:
         raise_api_error(404, USER_NOT_FOUND, _NOT_FOUND_MESSAGE)
@@ -83,7 +79,6 @@ __all__ = [
     "RelationAccess",
     "VIEW_FULL",
     "VIEW_NONE",
-    "VIEW_SUMMARY",
     "assert_can_delete",
     "assert_can_edit",
     "require_visible_target",

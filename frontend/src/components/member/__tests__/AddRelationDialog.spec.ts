@@ -55,7 +55,14 @@ async function mountDialog() {
     global: { plugins: [pinia, ElementPlus] },
   })
   const auth = useAuthStore(pinia)
-  auth.user = { id: 1, name: '我', is_admin: false, pin_must_change: false }
+  auth.user = {
+    id: 1,
+    name: '我',
+    is_admin: false,
+    pin_must_change: false,
+    claim_status: 'claimed',
+    profile_status: 'identity_confirmed',
+  }
   await wrapper.vm.$nextTick()
   return wrapper
 }

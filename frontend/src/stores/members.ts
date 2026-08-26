@@ -50,8 +50,16 @@ export const useMembersStore = defineStore('members', () => {
     return updated
   }
 
-  async function setDisclosure(id: number, disclosure: ClanDisclosure): Promise<Member> {
-    const updated = await membersApi.updateDisclosure(id, disclosure)
+  async function setDisclosure(
+    id: number,
+    disclosure: ClanDisclosure,
+    spaceId?: number,
+  ): Promise<Member> {
+    // 全局与逐空间共用端点；scopeId 仅在提供时透传，保持全局调用形状不变
+    const updated =
+      spaceId === undefined
+        ? await membersApi.updateDisclosure(id, disclosure)
+        : await membersApi.updateDisclosure(id, disclosure, spaceId)
     replaceOne(updated)
     return updated
   }

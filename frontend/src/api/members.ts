@@ -1,5 +1,6 @@
 import type {
   ClanDisclosure,
+  DisclosureMatrix,
   Member,
   MemberCreatePayload,
   MemberCreateResponse,
@@ -30,12 +31,20 @@ export async function updateMember(id: number, patch: MemberUpdatePayload): Prom
   return data
 }
 
-/** AD-9 披露开关整体替换（五键恰好） */
+/** AD-9 披露开关整体替换（基础五类）；携带 spaceId 时为逐空间覆盖（仅本人） */
 export async function updateDisclosure(
   id: number,
   disclosure: ClanDisclosure,
+  spaceId?: number,
 ): Promise<Member> {
-  const { data } = await apiClient.put<Member>(`/users/${id}/disclosure`, disclosure)
+  const body = spaceId === undefined ? disclosure : { ...disclosure, space_id: spaceId }
+  const { data } = await apiClient.put<Member>(`/users/${id}/disclosure`, body)
+  return data
+}
+
+/** 披露偏好合并矩阵：全局 + 逐空间覆盖（v2 Gap3；读者域与写入一致） */
+export async function fetchDisclosureMatrix(id: number): Promise<DisclosureMatrix> {
+  const { data } = await apiClient.get<DisclosureMatrix>(`/users/${id}/disclosure`)
   return data
 }
 

@@ -3,6 +3,7 @@ disclosure 校验 / 删除级联与审计快照（implement.md #5）。
 """
 
 from conftest import auth_header, create_user_with_pin, login
+from fastapi.testclient import TestClient
 
 from app.models.account import Account
 from app.models.audit_log import AuditLog
@@ -65,21 +66,22 @@ def test_duplicate_names_coexist_with_independent_ids(client, db_session) -> Non
     assert first.json()["user"]["id"] != second.json()["user"]["id"]
 
 
-def test_related_list_scope_self_created_and_admin(client, db_session) -> None:
+def test_related_list_scope_self_created_and_operator(db_session, client: TestClient) -> None:
     actor = create_user_with_pin(db_session, "张三", "123456")
     other = create_user_with_pin(db_session, "李四", "234567")
-    foreign_member = create_user_with_pin(db_session, "外人档", "345678", created_by=other.id)
+    create_user_with_pin(db_session, "外人档", "345678", created_by=other.id)
     own_member = create_user_with_pin(db_session, "父亲", "456789", created_by=actor.id)
     tokens = login(client, "张三", "123456").json()
     ids = {m["id"] for m in client.get("/api/users", headers=auth_header(tokens)).json()}
     assert ids == {actor.id, own_member.id}  # 不含他人创建的档案
 
-    admin = create_user_with_pin(db_session, "管理员", "999999", is_admin=True)
-    admin_tokens = login(client, "管理员", "999999").json()
-    admin_ids = {
-        m["id"] for m in client.get("/api/users", headers=auth_header(admin_tokens)).json()
+    # v2：platform_operator 无全量家庭数据权，仅见自己
+    operator = create_user_with_pin(db_session, "运营者", "999999", is_admin=True)
+    operator_tokens = login(client, "运营者", "999999").json()
+    operator_ids = {
+        m["id"] for m in client.get("/api/users", headers=auth_header(operator_tokens)).json()
     }
-    assert admin_ids == {actor.id, other.id, foreign_member.id, own_member.id, admin.id}
+    assert operator_ids == {operator.id}
 
 
 def test_get_member_404_for_unrelated_user(client, db_session) -> None:
@@ -131,7 +133,7 @@ def test_claim_flips_status_and_demotes_handover_creator(client, db_session) -> 
     member_tokens = _claim_member(client, "母亲", initial_pin, "654321")
     db_session.expire_all()
     member = db_session.query(User).filter(User.id == member_id).one()
-    assert member.claim_status == "claimed"  # 唯一转换点已触发
+    assert member.account.status == "claimed"  # v2：唯一转换点在 accounts.status
 
     # 认领后：创建者写接口 403 CUSTODY_HANDOVER_DONE；读仍 full
     demoted = client.patch(
@@ -284,27 +286,29 @@ def test_deleted_member_sessions_invalidated_end_to_end(client, db_session) -> N
     assert client.get("/api/me", headers=auth_header(member_tokens)).status_code == 401
 
 
-def test_admin_can_edit_and_delete_foreign_profiles_with_audit(client, db_session) -> None:
+def test_operator_cannot_edit_or_delete_foreign_profiles(db_session, client: TestClient) -> None:
+    """v2 §0.2：platform_operator 无家庭数据编辑/删除权（404 防枚举）。"""
     create_user_with_pin(db_session, "张三", "123456")
     tokens = login(client, "张三", "123456").json()
     member_id = _create_member(client, auth_header(tokens)).json()["user"]["id"]
 
-    create_user_with_pin(db_session, "管理员", "888888", is_admin=True)
-    admin_tokens = login(client, "管理员", "888888").json()
+    create_user_with_pin(db_session, "运营者", "888888", is_admin=True)
+    operator_tokens = login(client, "运营者", "888888").json()
     patched = client.patch(
         f"/api/users/{member_id}",
-        headers=auth_header(admin_tokens),
-        json={"bio": "管理员修正"},
+        headers=auth_header(operator_tokens),
+        json={"bio": "越权修正"},
     )
-    assert patched.status_code == 200
+    assert patched.status_code == 404
     removed = client.delete(
         f"/api/users/{member_id}",
-        headers=auth_header(admin_tokens),
+        headers=auth_header(operator_tokens),
         params={"confirm_name": "母亲"},
     )
-    assert removed.status_code == 204
-    audit_rows = db_session.query(AuditLog).filter(AuditLog.action == "profile_deleted").all()
-    assert audit_rows[0].detail["admin_action"] is True
+    assert removed.status_code == 404
+    # 目标档案未被删除，且无 profile_deleted 审计产生
+    assert db_session.query(User).filter(User.id == member_id).count() == 1
+    assert db_session.query(AuditLog).filter(AuditLog.action == "profile_deleted").count() == 0
 
 
 def test_challenge_candidates_include_created_by_name(client, db_session) -> None:

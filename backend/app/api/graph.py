@@ -65,18 +65,24 @@ def my_graph(
 
     node_ids, edges = _collect_active_edges(session, actor.id, scope, depth)
 
-    # m2a 可见性过滤：invisible 剔除；summary 节点裁剪为基线字段
+    # v2 可见性过滤：none 剔除；lineage_summary 节点裁剪为基线字段
     from app.services import visibility as vis
 
     levels: dict[int, str] = {}
     for eid in node_ids:
         if eid == actor.id:
-            levels[eid] = vis.FULL
+            levels[eid] = vis.LEVEL_SELF_PRIVATE
             continue
         u = session.get(User, eid)
-        levels[eid] = vis.classify(session, actor, u) if u is not None else vis.INVISIBLE
+        decision = (
+            vis.evaluate(session, actor, u, purpose=vis.PURPOSE_GRAPH) if u is not None else None
+        )
+        if decision is not None and decision.visible:
+            levels[eid] = decision.level
+        else:
+            levels[eid] = vis.LEVEL_NONE
     filtered_edges = [e for e in edges if e.from_user in levels and e.to_user in levels]
-    node_ids = {eid for eid, lv in levels.items() if lv != vis.INVISIBLE}
+    node_ids = {eid for eid, lv in levels.items() if lv != vis.LEVEL_NONE}
 
     # m1c：指定空间时，限定为该空间 active 成员的子图（家庭空间页数据源）
     if space_id is not None:
@@ -111,14 +117,28 @@ def my_graph(
     )
     nodes_out = []
     for u in users:
-        level = levels.get(u.id, "full")
-        if level == "summary":
-            # summary 节点仅基线字段；性别不外泄
+        level = levels.get(u.id, vis.LEVEL_SELF_PRIVATE)
+        if level == vis.LEVEL_LINEAGE_SUMMARY:
+            # lineage_summary 节点仅基线字段；性别不外泄
             nodes_out.append(
-                GraphNodeOut(id=u.id, name=u.name, gender="unknown", visibility="summary")
+                GraphNodeOut(
+                    id=u.id,
+                    name=u.name,
+                    gender="unknown",
+                    visibility="lineage_summary",
+                )
             )
         else:
-            nodes_out.append(GraphNodeOut(id=u.id, name=u.name, gender=u.gender))
+            nodes_out.append(
+                GraphNodeOut(
+                    id=u.id,
+                    name=u.name,
+                    gender=u.gender,
+                    visibility=(
+                        "self_private" if level == vis.LEVEL_SELF_PRIVATE else "household_detail"
+                    ),
+                )
+            )
     edges_out = []
     for edge in edges:
         dir_class, label, from_creator = display_relation(edge, actor.id)

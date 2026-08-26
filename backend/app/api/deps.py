@@ -23,6 +23,8 @@ PIN_GATE_WHITELIST: set[tuple[str, str]] = {
     ("PUT", "/api/me/pin"),
     ("POST", "/api/auth/logout"),
     ("POST", "/api/auth/refresh"),
+    # 「这是我」合并确认：首登门禁内即可调用（F-1 先确认身份，再改 PIN/审清单）
+    ("POST", "/api/me/identity/confirm"),
 }
 # 公开端点：无凭据也放行（health 不经认证依赖管辖，architecture.md §1）
 PIN_GATE_PUBLIC: set[tuple[str, str]] = {

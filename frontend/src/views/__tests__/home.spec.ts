@@ -101,7 +101,13 @@ describe('HomeView', () => {
     await wrapper.find('[data-test="open-wizard"]').trigger('click')
     await new Promise((resolve) => setTimeout(resolve))
     expect(wrapper.find('[data-test="wizard-name"]').exists()).toBe(true)
+    // v2 F-1：名字与关系必填
     await wrapper.find('[data-test="wizard-name"]').setValue('母亲')
+    const relationRadios = wrapper
+      .find('[data-test="wizard-relation-dir"]')
+      .findAll('.el-radio')
+    relationRadios[0].find('.el-radio__original').setValue(true)
+    await new Promise((resolve) => setTimeout(resolve))
     await wrapper.find('[data-test="wizard-next"]').trigger('click')
     await new Promise((resolve) => setTimeout(resolve))
     await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click')

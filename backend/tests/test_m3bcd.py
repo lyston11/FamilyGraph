@@ -81,10 +81,9 @@ def test_lunar_mirror_endpoint(client: TestClient, three_families):
 def test_stats_scope_excludes_invisible(db_session, client: TestClient, three_families):
     ha = _login(client, "甲", "111111")
     s = client.get("/api/stats", headers=ha).json()
-    # 可达 = 甲乙丙（3 人），丁不计入
-    assert s["total"] == 3
+    # v2：甲可见 = 自己 + 直系对端乙（lineage_summary）；peer 对端丙不再计入
+    assert s["total"] == 2
     assert s["by_gender"]["m"] >= 1
-    assert any(b["name"] in ("甲", "乙", "丙") for b in s["birthdays_this_month"]) or True
 
     hd = _login(client, "丁", "444444")
     sd = client.get("/api/stats", headers=hd).json()
@@ -94,17 +93,20 @@ def test_stats_scope_excludes_invisible(db_session, client: TestClient, three_fa
 # ---- m3d 搜索 ----
 
 
-def test_search_hits_within_reach_only(db_session, client: TestClient, three_families):
+def test_search_hits_within_visibility_only(db_session, client: TestClient, three_families):
     ha = _login(client, "甲", "111111")
-    r = client.get("/api/search?q=丙", headers=ha).json()
+    # v2：直系对端乙可命中；peer 对端丙与无关丁不可命中
+    r = client.get("/api/search?q=乙", headers=ha).json()
     ids = [x["id"] for x in r]
-    assert three_families["C"].id in ids
+    assert three_families["B"].id in ids
 
-    # D 家族不可命中
+    r_c = client.get("/api/search?q=丙", headers=ha).json()
+    assert all(x["id"] != three_families["C"].id for x in r_c)
+
     r_d = client.get("/api/search?q=丁", headers=ha).json()
     assert all(x["id"] != three_families["D"].id for x in r_d)
 
-    # 称谓标签命中
+    # 称谓标签命中（对端为直系可达者）
     hb = _login(client, "乙", "222222")
     from app.models.relation import Relation as R
 
@@ -131,9 +133,11 @@ def test_search_hits_within_reach_only(db_session, client: TestClient, three_fam
     assert any(x["id"] == three_families["A"].id for x in r_label)
 
 
-def test_search_summary_level_for_peer(db_session, client: TestClient, three_families):
-    """peer 对端搜索结果为 summary 级。"""
+def test_search_level_lineage_summary_for_direct_edge(
+    db_session, client: TestClient, three_families
+):
+    """v2：直系跨空间搜索结果为 lineage_summary 级。"""
     ha = _login(client, "甲", "111111")
-    r = client.get("/api/search?q=丙", headers=ha).json()
-    entry = next(x for x in r if x["id"] == three_families["C"].id)
-    assert entry["level"] == "summary"
+    r = client.get("/api/search?q=乙", headers=ha).json()
+    entry = next(x for x in r if x["id"] == three_families["B"].id)
+    assert entry["level"] == "lineage_summary"

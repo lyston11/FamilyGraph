@@ -43,12 +43,18 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _token_pair_response(user: User, account: Account, refresh_raw: str) -> TokenPairResponse:
-    access = security.create_access_token(user.id, account.token_version, bool(user.is_admin))
+def _token_pair_response(
+    session: Session, user: User, account: Account, refresh_raw: str
+) -> TokenPairResponse:
+    from app.services.platform_roles import is_platform_operator
+
+    access = security.create_access_token(
+        user.id, account.token_version, is_platform_operator(session, account)
+    )
     return TokenPairResponse(
         access_token=access,
         refresh_token=refresh_raw,
-        user=UserOut(**public_user_payload(user)),
+        user=UserOut(**public_user_payload(session, user)),
     )
 
 
@@ -128,7 +134,7 @@ def login(
     auth_guard.register_success(account)
     refresh_raw = refresh_session_service.issue_refresh_session(session, account, rotated_from=None)
     session.commit()
-    return _token_pair_response(user, account, refresh_raw)
+    return _token_pair_response(session, user, account, refresh_raw)
 
 
 @router.post("/login/select", response_model=TokenPairResponse)
@@ -165,7 +171,7 @@ def select_candidate(
     auth_guard.register_success(account)
     refresh_raw = refresh_session_service.issue_refresh_session(session, account, rotated_from=None)
     session.commit()
-    return _token_pair_response(user, account, refresh_raw)
+    return _token_pair_response(session, user, account, refresh_raw)
 
 
 @router.post("/refresh", response_model=TokenPairResponse)
@@ -185,7 +191,7 @@ def refresh_tokens(
         session.commit()
         raise_api_error(401, INVALID_REFRESH_TOKEN, "登录状态已失效，请重新登录")
     user = session.query(User).filter(User.id == account.user_id).one()
-    response = _token_pair_response(user, account, new_refresh_raw)
+    response = _token_pair_response(session, user, account, new_refresh_raw)
     session.commit()
     return response
 
