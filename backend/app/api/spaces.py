@@ -1,4 +1,8 @@
-"""家庭空间路由（m1c）：CRUD / 成员管理 / 邀请处理。"""
+"""家庭空间路由（m1c）：CRUD / 成员管理 / 邀请处理。
+
+v2 D2：写路径全部走应用命令层（app.commands.spaces，AC-F7），路由只做
+schema 解析 + 认证 + 命令调用 + 序列化；读路径保持原状。
+"""
 
 from __future__ import annotations
 
@@ -7,10 +11,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_authenticated_user
-from app.errors import (
-    USER_NOT_FOUND,
-    raise_api_error,
-)
+from app.commands import spaces as space_commands
+from app.commands.context import ActorContext
 from app.models.account import Account
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
@@ -20,10 +22,10 @@ from app.schemas.space import (
     SpaceInviteCreate,
     SpaceMemberOut,
     SpaceOut,
+    SpaceProfileRefOut,
     SpaceUpdate,
 )
-from app.services import audit, space_fsm
-from app.utils.timeutil import utcnow
+from app.services import space_fsm
 
 router = APIRouter(tags=["spaces"])
 
@@ -32,25 +34,14 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def _space_or_404(session: Session, space_id: int) -> FamilySpace:
-    space = session.get(FamilySpace, space_id)
-    if space is None:
-        raise_api_error(404, "SPACE_NOT_FOUND", "家庭空间不存在")
-    return space
-
-
 def _require_active_member(session: Session, space_id: int, user_id: int) -> SpaceMember:
+    """读路径守卫：非 active 成员与不存在同一 404（防枚举）。"""
+    from app.errors import raise_api_error
+
     member = space_fsm.find_membership(session, space_id, user_id)
     if member is None or space_fsm.effective_status(member) != "active":
         raise_api_error(404, "SPACE_NOT_FOUND", "家庭空间不存在")
     return member
-
-
-def _require_owner(session: Session, space_id: int, user_id: int) -> FamilySpace:
-    space = _space_or_404(session, space_id)
-    if space.owner_id != user_id:
-        raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅空间所有者可执行该操作")
-    return space
 
 
 @router.post("/spaces", status_code=201, response_model=SpaceOut)
@@ -60,33 +51,10 @@ def create_space(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceOut:
-    """创建空间：owner 即 active 成员（自建即同意，AD-4 新建例外语义）。"""
-    actor, _account = identity
-    now = utcnow()
-    space = FamilySpace(name=payload.name.strip(), owner_id=actor.id, created_at=now)
-    session.add(space)
-    session.flush()
-    session.add(
-        SpaceMember(
-            space_id=space.id,
-            user_id=actor.id,
-            added_by=actor.id,
-            role="owner",
-            status="active",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    audit.write_audit(
-        session,
-        action="space_created",
-        actor_id=actor.id,
-        target_id=space.id,
-        ip=_client_ip(request),
-        detail={"name": space.name},
-    )
-    session.commit()
-    session.refresh(space)
+    """创建空间：owner 即 active 成员（自建即同意）；kind 默认 household。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    space = space_commands.create_space(session, ctx, name=payload.name, kind=payload.kind)
     out = SpaceOut.model_validate(space)
     out.member_count = 1
     return out
@@ -128,11 +96,9 @@ def rename_space(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceOut:
-    actor, _account = identity
-    space = _require_owner(session, space_id, actor.id)
-    space.name = payload.name.strip()
-    session.commit()
-    session.refresh(space)
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account)
+    space = space_commands.rename_space(session, ctx, space_id, name=payload.name)
     return SpaceOut.model_validate(space)
 
 
@@ -160,6 +126,35 @@ def _member_out_with_name(session: Session, m: SpaceMember) -> SpaceMemberOut:
     return out
 
 
+@router.get("/spaces/{space_id}/profile-refs", response_model=list[SpaceProfileRefOut])
+def list_space_profile_refs(
+    space_id: int,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[SpaceProfileRefOut]:
+    """待确档最小节点引用（AC-F2 可观测性）：仅 {profile_id, name, added_at}。
+
+    provisional 人物不是 SpaceMember，只以 space_profile_refs 最小引用存在；
+    本端点让空间成员能看到这些“待确档”条目。授权：该空间 active 成员（含 guest）；
+    其余与不存在同一 404（防枚举）。字段投影恒为最小集，不随可见性放宽。
+    """
+    actor, _account = identity
+    _require_active_member(session, space_id, actor.id)
+    from app.models.space import SpaceProfileRef
+
+    rows = (
+        session.query(SpaceProfileRef, User)
+        .join(User, User.id == SpaceProfileRef.user_id)
+        .filter(SpaceProfileRef.space_id == space_id, SpaceProfileRef.status == "active")
+        .order_by(SpaceProfileRef.id)
+        .all()
+    )
+    return [
+        SpaceProfileRefOut(profile_id=ref.user_id, name=user.name, added_at=ref.created_at)
+        for ref, user in rows
+    ]
+
+
 @router.get("/spaces/invitations", response_model=list[SpaceMemberOut])
 def list_my_invitations(
     session: Session = Depends(get_db),
@@ -185,32 +180,11 @@ def invite_to_space(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceMemberOut:
     """邀请已有账号进空间 → pending（幂等）；managed 直连例外走建档向导组合，不经此端点。"""
-    actor, _account = identity
-    space = _require_active_member_space(session, space_id, actor.id)
-    target = session.get(User, payload.user_id)
-    if target is None:
-        raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
-
-    member, created = space_fsm.invite(
-        session, space=space, user_id=payload.user_id, added_by=actor.id
-    )
-    if created:
-        audit.write_audit(
-            session,
-            action="space_invite_sent",
-            actor_id=actor.id,
-            target_id=payload.user_id,
-            ip=_client_ip(request),
-            detail={"space_id": space.id},
-        )
-        session.commit()
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    member, _created = space_commands.invite_member(session, ctx, space_id, user_id=payload.user_id)
     session.refresh(member)
     return SpaceMemberOut.model_validate(member)
-
-
-def _require_active_member_space(session: Session, space_id: int, user_id: int) -> FamilySpace:
-    _member = _require_active_member(session, space_id, user_id)
-    return _space_or_404(session, space_id)
 
 
 @router.post("/spaces/join-by-user", status_code=201, response_model=SpaceMemberOut)
@@ -220,48 +194,12 @@ def join_by_user(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceMemberOut:
-    """家族视图摘要卡「申请进入 TA 的家庭空间」（AD-4 join_request 语义）。
-
-    可见性门禁：viewer 必须对 target 至少 clan 可达（classify != invisible）。
-    目标空间 = target 的主空间（第一个 owned，否则第一个 active 成员资格）。
-    幂等：已有 pending/active 行原样返回。
-    """
-    from app.services import visibility
-
-    actor, _account = identity
-    target = session.get(User, payload.target_user_id)
-    if target is None or visibility.classify(session, actor, target) == visibility.INVISIBLE:
-        raise_api_error(404, USER_NOT_FOUND, "对方不存在或不可见")
-
-    memberships = session.query(SpaceMember).filter(SpaceMember.user_id == target.id).all()
-    active_ids = [m.space_id for m in memberships if space_fsm.effective_status(m) == "active"]
-    primary_space_id: int | None = None
-    owned = (
-        session.query(FamilySpace)
-        .filter(FamilySpace.owner_id == target.id, FamilySpace.id.in_(active_ids))
-        .first()
-        if active_ids
-        else None
+    """家族视图摘要卡「申请进入 TA 的家庭空间」（join_request 语义，命令化）。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    member = space_commands.request_join_by_user(
+        session, ctx, target_user_id=payload.target_user_id
     )
-    if owned is not None:
-        primary_space_id = owned.id
-    elif active_ids:
-        primary_space_id = active_ids[0]
-    if primary_space_id is None:
-        raise_api_error(409, "SPACE_JOIN_NO_TARGET_SPACE", "对方尚未建立家庭空间")
-
-    space = _space_or_404(session, primary_space_id)
-    member, created = space_fsm.invite(session, space=space, user_id=actor.id, added_by=actor.id)
-    if created:
-        audit.write_audit(
-            session,
-            action="space_join_requested",
-            actor_id=actor.id,
-            target_id=target.id,
-            ip=_client_ip(request),
-            detail={"space_id": space.id},
-        )
-        session.commit()
     session.refresh(member)
     return _member_out_with_name(session, member)
 
@@ -277,18 +215,9 @@ def accept_membership(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceMemberOut:
-    actor, _account = identity
-    member = _get_pending_membership_for_requestee(session, member_id, actor.id)
-    space_fsm.transition(member, "accept", actor.id, session)
-    audit.write_audit(
-        session,
-        action="space_invite_accepted",
-        actor_id=actor.id,
-        target_id=member.user_id,
-        ip=_client_ip(request),
-        detail={"space_id": member.space_id},
-    )
-    session.commit()
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    member = space_commands.respond_invitation(session, ctx, member_id, accept=True)
     session.refresh(member)
     return _member_out_with_name(session, member)
 
@@ -299,10 +228,9 @@ def reject_membership(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceMemberOut:
-    actor, _account = identity
-    member = _get_pending_membership_for_requestee(session, member_id, actor.id)
-    space_fsm.transition(member, "reject", actor.id, session)
-    session.commit()
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account)
+    member = space_commands.respond_invitation(session, ctx, member_id, accept=False)
     session.refresh(member)
     return _member_out_with_name(session, member)
 
@@ -310,41 +238,15 @@ def reject_membership(
 @router.delete("/space-memberships/{member_id}", status_code=204)
 def remove_or_withdraw_membership(
     member_id: int,
+    request: Request,
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> Response:
     """D8 断连轨：owner 移除活跃成员 或 本人退出；pending 时发起方可撤回、本人可拒。"""
-    actor, _account = identity
-    member = session.get(SpaceMember, member_id)
-    if member is None:
-        raise_api_error(404, "SPACE_NOT_FOUND", "成员记录不存在")
-    _space_or_404(session, member.space_id)
-    action = "withdraw" if member.status == "pending" and member.added_by == actor.id else "remove"
-    space_fsm.transition(member, action, actor.id, session)
-    audit.write_audit(
-        session,
-        action="space_member_left",
-        actor_id=actor.id,
-        target_id=member.user_id,
-        ip=None,
-        detail={"space_id": member.space_id, "action": action},
-    )
-    session.commit()
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    space_commands.leave_or_remove_membership(session, ctx, member_id)
     return Response(status_code=204)
-
-
-def _get_pending_membership_for_requestee(
-    session: Session, member_id: int, actor_id: int
-) -> SpaceMember:
-    member = session.get(SpaceMember, member_id)
-    if member is None or member.user_id != actor_id:
-        # 无关者 404 防枚举；owner 审批 join_request 属 M2
-        raise_api_error(404, "SPACE_NOT_FOUND", "邀请不存在或已处理")
-    if member.status != "pending":
-        raise_api_error(
-            409, "CONNECTION_ALREADY_RESOLVED", "邀请已处理", detail={"status": member.status}
-        )
-    return member
 
 
 # ---- graph 空间过滤 ----
@@ -357,11 +259,9 @@ def get_positions(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[dict[str, float | int]]:
     """画布位置记忆：仅 active 成员可读。"""
-    _require_active_member(session, space_id, identity[0].id)
-    from app.models.node_position import NodePosition
-
-    rows = session.query(NodePosition).filter(NodePosition.space_id == space_id).all()
-    return [{"user_id": r.user_id, "x": r.x, "y": r.y} for r in rows]
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account)
+    return space_commands.positions_of(session, ctx, space_id)
 
 
 @router.put("/spaces/{space_id}/positions")
@@ -371,26 +271,7 @@ def put_positions(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[dict[str, float | int]]:
-    """批量 upsert 位置（active 成员可写；仅允许保存自己所在空间的成员坐标）。"""
-    actor, _account = identity
-    _require_active_member(session, space_id, actor.id)
-    from app.models.node_position import NodePosition
-
-    allowed_ids = {
-        m.user_id for m in session.query(SpaceMember).filter(SpaceMember.space_id == space_id).all()
-    }
-    for item in payload.items:
-        if item.user_id not in allowed_ids:
-            raise_api_error(422, "VALIDATION_ERROR", f"user {item.user_id} 不在该空间")
-        row = (
-            session.query(NodePosition)
-            .filter(NodePosition.space_id == space_id, NodePosition.user_id == item.user_id)
-            .first()
-        )
-        if row is None:
-            session.add(NodePosition(space_id=space_id, user_id=item.user_id, x=item.x, y=item.y))
-        else:
-            row.x, row.y = item.x, item.y
-    session.commit()
-    rows = session.query(NodePosition).filter(NodePosition.space_id == space_id).all()
-    return [{"user_id": r.user_id, "x": r.x, "y": r.y} for r in rows]
+    """批量 upsert 位置（命令：commands.spaces.save_positions）。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account)
+    return space_commands.save_positions(session, ctx, space_id, payload.items)

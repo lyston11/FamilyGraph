@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as authApi from '@/api/auth'
-import type { TokenPairResponse } from '@/types/api'
+import type { FactReview, TokenPairResponse } from '@/types/api'
 
 vi.mock('@/api/auth', () => ({
   login: vi.fn(),
@@ -16,10 +16,27 @@ vi.mock('@/api/auth', () => ({
   initializeAdmin: vi.fn(),
 }))
 
+vi.mock('@/api/governance', () => ({
+  confirmIdentity: vi.fn(),
+  fetchFactReviews: vi.fn().mockResolvedValue([]),
+  decideFactReview: vi.fn(),
+  fetchDataRights: vi.fn().mockResolvedValue([]),
+  requestExport: vi.fn(),
+  requestCorrection: vi.fn(),
+  requestDeletion: vi.fn(),
+  executeDelete: vi.fn(),
+  downloadExport: vi.fn(),
+  raiseClaimDispute: vi.fn(),
+  fetchMyClaimDisputes: vi.fn().mockResolvedValue([]),
+  withdrawClaimDispute: vi.fn(),
+}))
+
 const mockedStatus = vi.mocked(authApi.fetchBootstrapStatus)
 const mockedLogin = vi.mocked(authApi.login)
 const mockedRefresh = vi.mocked(authApi.refreshTokens)
 const mockedFetchMe = vi.mocked(authApi.fetchMe)
+const governanceApi = await import('@/api/governance')
+const mockedFactReviews = vi.mocked(governanceApi.fetchFactReviews)
 
 // 动态引入真实路由（守卫逻辑是被测对象）；路由为模块单例，跨测试需重置位置
 const { default: router } = await import('@/router')
@@ -30,7 +47,15 @@ function makePair(overrides: Partial<TokenPairResponse['user']> = {}): TokenPair
     access_token: 'access-abc',
     refresh_token: 'refresh-xyz',
     token_type: 'bearer',
-    user: { id: 1, name: '张三', is_admin: false, pin_must_change: false, ...overrides },
+    user: {
+      id: 1,
+      name: '张三',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+      ...overrides,
+    },
   }
 }
 
@@ -122,6 +147,55 @@ describe('router guards', () => {
     await resetToOnboarding()
     expect(await navigate('/settings')).toBe('login')
     expect(localStorage.getItem('fg.refresh_token')).toBeNull()
+  })
+})
+
+describe('router guards: v2 identity setup（F-1，判定源 = /me profile_status）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setActivePinia(createPinia())
+    mockedStatus.mockResolvedValue({ initialized: true })
+    mockedFactReviews.mockResolvedValue([])
+  })
+
+  function makeReview(status: FactReview['status']) {
+    return {
+      id: 1,
+      item_type: 'name',
+      item_ref_json: { field: 'name', value: '张三' },
+      status,
+      decided_at: null,
+      created_at: '2026-08-26T00:00:00',
+    }
+  }
+
+  it('profile_status=provisional：登录后访问主界面被引导到确档向导', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ profile_status: 'provisional', claim_status: 'claimed' }))
+    await auth.login('张三', '123456')
+
+    expect(await navigate('/settings')).toBe('identity-setup')
+    // 向导自身可停留
+    expect(await navigate('/identity-setup')).toBe('identity-setup')
+  })
+
+  it('profile_status=provisional 且清单拉取失败：仍拦截（不再 fail-open）', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ profile_status: 'provisional' }))
+    await auth.login('张三', '123456')
+    mockedFactReviews.mockRejectedValue(new Error('network down'))
+
+    expect(await navigate('/settings')).toBe('identity-setup')
+  })
+
+  it('profile_status=identity_confirmed：即使清单仍有 pending 项也不拦截（守卫只看身份状态）', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ profile_status: 'identity_confirmed' }))
+    await auth.login('张三', '123456')
+    mockedFactReviews.mockResolvedValue([makeReview('proposed')])
+
+    expect(await navigate('/settings')).toBe('settings')
   })
 })
 

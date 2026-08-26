@@ -5,10 +5,13 @@ import { ElMessage } from 'element-plus'
 
 import { ApiError } from '@/api/errors'
 import ChangePinForm from '@/components/common/ChangePinForm.vue'
+import DataRightsPanel from '@/components/member/DataRightsPanel.vue'
+import DisclosureMatrix from '@/components/member/DisclosureMatrix.vue'
 import { useAuthStore } from '@/stores/auth'
 
 /**
- * 设置页：改名 / 改 PIN / 登出（PRD m0b 前端范围）。
+ * 设置页（v2）：改名 / 改 PIN / 登出 + 披露偏好矩阵（§0.1）+
+ * 我的数据（F-5：导出/更正/删除/争议）。
  */
 const auth = useAuthStore()
 const router = useRouter()
@@ -54,7 +57,7 @@ async function doLogout(): Promise<void> {
       <section class="section">
         <h2 class="section-title">当前账号</h2>
         <p class="meta" data-test="current-user">
-          {{ auth.user?.name }}<template v-if="auth.user?.is_admin">（管理员）</template>
+          {{ auth.user?.name }}<template v-if="auth.user?.is_admin">（平台运营者）</template>
         </p>
       </section>
 
@@ -77,6 +80,16 @@ async function doLogout(): Promise<void> {
         <h2 class="section-title">修改 PIN 码</h2>
         <ChangePinForm />
       </section>
+
+      <section class="section" data-test="disclosure-section">
+        <h2 class="section-title">披露偏好</h2>
+        <DisclosureMatrix />
+      </section>
+
+      <section class="section" data-test="data-rights-section">
+        <h2 class="section-title">我的数据</h2>
+        <DataRightsPanel />
+      </section>
     </el-card>
   </main>
 </template>
@@ -90,7 +103,7 @@ async function doLogout(): Promise<void> {
 }
 
 .card {
-  width: 480px;
+  width: 640px;
 }
 
 .header {

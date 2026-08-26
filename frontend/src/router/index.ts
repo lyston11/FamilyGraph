@@ -33,6 +33,11 @@ const router = createRouter({
       component: () => import('@/views/ChangePinView.vue'),
     },
     {
+      path: '/identity-setup',
+      name: 'identity-setup',
+      component: () => import('@/views/IdentitySetupView.vue'),
+    },
+    {
       path: '/stats',
       name: 'stats',
       component: () => import('@/views/StatsView.vue'),
@@ -92,6 +97,14 @@ router.beforeEach(async (to) => {
   // 首登强制改 PIN：仅放行改 PIN 页自身
   if (auth.mustChangePin && to.name !== 'force-change-pin') {
     return { name: 'force-change-pin' }
+  }
+
+  // v2 确档向导（F-1，Gap2）：/me 直出 profile_status，本人档案 provisional →
+  // 引导完成「这是我」+清单。判定源是登录/刷新响应自带的身份状态（同步、无额外
+  // 请求），不再由 fact-reviews 推断，也无 fail-open 兑底；清单内容仍由
+  // IdentitySetupView 自行拉取。
+  if (auth.user?.profile_status === 'provisional' && to.name !== 'identity-setup') {
+    return { name: 'identity-setup' }
   }
 
   return true

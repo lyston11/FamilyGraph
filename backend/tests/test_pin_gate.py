@@ -60,7 +60,7 @@ def test_whitelisted_me_pin_completes_claim(client, db_session) -> None:
     from app.models.user import User
 
     managed = db_session.query(User).filter(User.name == "新人").one()
-    assert managed.claim_status == "managed"
+    assert managed.account.status == "managed"
 
     changed = client.put(
         "/api/me/pin",
@@ -72,7 +72,7 @@ def test_whitelisted_me_pin_completes_claim(client, db_session) -> None:
 
     # 首登改 PIN 完成 = 认领完成（AD-1 唯一 managed→claimed 转换点）
     db_session.expire_all()
-    assert managed.claim_status == "claimed"
+    assert managed.account.status == "claimed"
 
     # 改 PIN 后旧 access 即刻失效；旧 refresh 也无法再换新；用新 PIN 登录畅通无阻
     assert client.get("/api/me", headers=auth_header(tokens)).status_code == 401

@@ -1,4 +1,4 @@
-import type { FamilySpace, SpaceMemberInfo } from '@/types/api'
+import type { FamilySpace, OwnershipTransfer, SpaceMemberInfo, SpaceProfileRefInfo } from '@/types/api'
 
 import { apiClient } from './client'
 
@@ -7,13 +7,20 @@ export async function fetchSpaces(): Promise<FamilySpace[]> {
   return data
 }
 
-export async function createSpace(name: string): Promise<FamilySpace> {
-  const { data } = await apiClient.post<FamilySpace>('/spaces', { name })
+/** 创建空间：owner 即 active 成员；kind 默认 household（v2 §0.4） */
+export async function createSpace(name: string, kind?: 'household' | 'lineage'): Promise<FamilySpace> {
+  const { data } = await apiClient.post<FamilySpace>('/spaces', { name, kind })
   return data
 }
 
 export async function fetchSpaceMembers(spaceId: number): Promise<SpaceMemberInfo[]> {
   const { data } = await apiClient.get<SpaceMemberInfo[]>(`/spaces/${spaceId}/members`)
+  return data
+}
+
+/** 待确档最小引用（AC-F2）：仅名字投影；非 active 成员 404 */
+export async function fetchSpaceProfileRefs(spaceId: number): Promise<SpaceProfileRefInfo[]> {
+  const { data } = await apiClient.get<SpaceProfileRefInfo[]>(`/spaces/${spaceId}/profile-refs`)
   return data
 }
 
@@ -44,6 +51,37 @@ export async function removeOrWithdrawMembership(memberId: number): Promise<void
 /** 家族视图摘要卡：申请进入对方家庭空间（m2c；幂等） */
 export async function joinByUser(targetUserId: number): Promise<void> {
   await apiClient.post('/spaces/join-by-user', { target_user_id: targetUserId })
+}
+
+// ---- owner 移交（AC-F5）----
+
+export async function createOwnershipTransfer(
+  spaceId: number,
+  toUserId: number,
+): Promise<OwnershipTransfer> {
+  const { data } = await apiClient.post<OwnershipTransfer>(
+    `/spaces/${spaceId}/ownership-transfers`,
+    { to_user_id: toUserId },
+  )
+  return data
+}
+
+export async function fetchOwnershipTransfers(spaceId: number): Promise<OwnershipTransfer[]> {
+  const { data } = await apiClient.get<OwnershipTransfer[]>(
+    `/spaces/${spaceId}/ownership-transfers`,
+  )
+  return data
+}
+
+/** 仅受让人可接受；发起人或受让人可取消 pending（commands.ownership FSM） */
+export async function respondOwnershipTransfer(
+  transferId: number,
+  action: 'accept' | 'cancel',
+): Promise<OwnershipTransfer> {
+  const { data } = await apiClient.post<OwnershipTransfer>(
+    `/ownership-transfers/${transferId}/${action}`,
+  )
+  return data
 }
 
 /** 画布位置记忆：读取 / 批量保存（m1d；仅 active 成员） */

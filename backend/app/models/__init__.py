@@ -7,18 +7,37 @@ from app.models.base import Base
 from app.models.node_position import NodePosition
 from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
-from app.models.space import FamilySpace, SpaceMember
+from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.models.user import User
+from app.models.v2_foundation import (
+    ClaimDispute,
+    DataRightRequest,
+    DisclosurePreference,
+    DomainEvent,
+    OwnerInvitation,
+    OwnershipTransfer,
+    PlatformRoleAssignment,
+    ProfileFactReview,
+)
 
 __all__ = [
     "Account",
     "AuditLog",
     "AuthChallenge",
     "Base",
+    "ClaimDispute",
+    "DataRightRequest",
+    "DisclosurePreference",
+    "DomainEvent",
     "NodePosition",
+    "OwnershipTransfer",
+    "OwnerInvitation",
     "FamilySpace",
-    "SpaceMember",
+    "PlatformRoleAssignment",
+    "ProfileFactReview",
     "RefreshSession",
     "Relation",
+    "SpaceMember",
+    "SpaceProfileRef",
     "User",
 ]

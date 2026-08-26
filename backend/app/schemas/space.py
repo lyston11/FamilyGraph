@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class SpaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    kind: Literal["household", "lineage"] = "household"
 
 
 class SpaceUpdate(BaseModel):
@@ -22,6 +23,7 @@ class SpaceOut(BaseModel):
     id: int
     name: str
     owner_id: int
+    kind: str = "household"
     created_at: datetime
     pending_count: int = 0
     member_count: int = 0
@@ -35,9 +37,17 @@ class SpaceMemberOut(BaseModel):
     user_id: int
     user_name: str | None = None
     added_by: int | None
-    role: Literal["owner", "member"]
+    role: Literal["owner", "space_admin", "member", "guest"]
     status: Literal["pending", "active", "rejected", "withdrawn", "removed"]
     updated_at: datetime
+
+
+class SpaceProfileRefOut(BaseModel):
+    """待确档最小节点引用（AC-F2 可观测性）：仅名字，无日期/简介/头像等字段。"""
+
+    profile_id: int
+    name: str
+    added_at: datetime
 
 
 class SpaceInviteCreate(BaseModel):

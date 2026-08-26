@@ -38,6 +38,6 @@ def initialize(
     )
     session.commit()
     return InitializeResponse(
-        user=UserOut(**public_user_payload(user)),
+        user=UserOut(**public_user_payload(session, user)),
         one_time_pin=pin,
     )

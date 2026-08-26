@@ -30,7 +30,15 @@ function makePair(overrides: Partial<TokenPairResponse['user']> = {}): TokenPair
     access_token: 'access-abc',
     refresh_token: 'refresh-xyz',
     token_type: 'bearer',
-    user: { id: 1, name: '张三', is_admin: false, pin_must_change: false, ...overrides },
+    user: {
+      id: 1,
+      name: '张三',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+      ...overrides,
+    },
   }
 }
 

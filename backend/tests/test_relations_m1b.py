@@ -368,7 +368,7 @@ def test_graph_family_vs_clan_scope(db_session, client: TestClient):
 
     clan = client.get("/api/graph/me?scope=clan", headers=h).json()
     clan_ids = {n["id"] for n in clan["nodes"]}
-    assert clan_ids == {a.id, b.id, c.id}  # 含 C 不含 D
+    assert clan_ids == {a.id, b.id}  # v2：peer-only 的 C 不再可见，D 不含
 
     hd = _login_header(client, "丁", "404040")
     lone = client.get("/api/graph/me?scope=clan", headers=hd).json()

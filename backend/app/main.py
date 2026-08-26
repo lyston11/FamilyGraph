@@ -17,6 +17,7 @@ from app.api.auth import router as auth_router
 from app.api.bootstrap import router as bootstrap_router
 from app.api.connections import router as connections_router
 from app.api.deps import close_request_db, require_pin_changed
+from app.api.governance import router as governance_router
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
 from app.api.misc import router as misc_router
@@ -122,3 +123,4 @@ app.include_router(graph_router, prefix="/api")
 app.include_router(misc_router, prefix="/api")
 app.include_router(attachments_router, prefix="/api")
 app.include_router(spaces_router, prefix="/api")
+app.include_router(governance_router, prefix="/api")

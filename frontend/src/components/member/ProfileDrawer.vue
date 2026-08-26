@@ -129,8 +129,13 @@ async function doDelete(): Promise<void> {
     deleteDialogVisible.value = false
     emit('close')
   } catch (error) {
-    deleteError.value =
-      error instanceof ApiError ? error.message : '删除失败，请稍后重试'
+    if (error instanceof ApiError && error.code === 'OWNER_TRANSFER_REQUIRED') {
+      // AC-F5：owner 删除被义务预检拦截 → 引导移交而非裸报错
+      deleteError.value =
+        '该档案名下还有家庭空间。请先登录该空间，在「空间管理」中把所有权移交给其他成员，再回来删除。'
+    } else {
+      deleteError.value = error instanceof ApiError ? error.message : '删除失败，请稍后重试'
+    }
   } finally {
     deleting.value = false
   }

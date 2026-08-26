@@ -53,7 +53,8 @@ class GraphNodeOut(BaseModel):
     id: int
     name: str
     gender: str
-    visibility: Literal["full", "summary"] = "full"
+    # v2 四级可见性（self_private/household_detail/lineage_summary；none 节点不返回）
+    visibility: Literal["self_private", "household_detail", "lineage_summary"] = "self_private"
 
 
 class GraphOut(BaseModel):

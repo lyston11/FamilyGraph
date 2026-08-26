@@ -32,7 +32,7 @@ def test_no_plaintext_or_reversible_pin_in_hash() -> None:
 
 
 def test_access_token_roundtrip_claims() -> None:
-    token = security.create_access_token(user_id=7, token_version=3, is_admin=True)
+    token = security.create_access_token(user_id=7, token_version=3, is_platform_operator=True)
     payload = security.decode_token(token, security.ACCESS_TOKEN_TYPE)
     assert payload["sub"] == "7"
     assert payload["ver"] == 3
@@ -51,13 +51,13 @@ def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     from app import config
 
     monkeypatch.setattr(config, "ACCESS_TOKEN_TTL_SECONDS", -10)
-    token = security.create_access_token(user_id=1, token_version=0, is_admin=False)
+    token = security.create_access_token(user_id=1, token_version=0, is_platform_operator=False)
     with pytest.raises(security.TokenDecodeError):
         security.decode_token(token, security.ACCESS_TOKEN_TYPE)
 
 
 def test_tampered_signature_rejected() -> None:
-    token = security.create_access_token(user_id=1, token_version=0, is_admin=False)
+    token = security.create_access_token(user_id=1, token_version=0, is_platform_operator=False)
     header, body, sig = token.split(".")
     tampered = f"{header}.{body}.AAAA{sig[4:]}"
     with pytest.raises(security.TokenDecodeError):
@@ -66,7 +66,7 @@ def test_tampered_signature_rejected() -> None:
 
 def test_type_confusion_rejected() -> None:
     """access token 不得当 refresh 用，反之亦然。"""
-    access = security.create_access_token(user_id=1, token_version=0, is_admin=False)
+    access = security.create_access_token(user_id=1, token_version=0, is_platform_operator=False)
     refresh = security.create_refresh_token(user_id=1, token_version=0, jti="x")
     with pytest.raises(security.TokenDecodeError):
         security.decode_token(access, security.REFRESH_TOKEN_TYPE)

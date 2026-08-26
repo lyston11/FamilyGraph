@@ -9,7 +9,9 @@ import { VueFlow, useVueFlow, type Edge as FlowEdge, type Node as FlowNode } fro
 
 import GlobalSearch from '@/components/common/GlobalSearch.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
+import PendingProfileRefs from '@/components/member/PendingProfileRefs.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
+import SpaceGovernanceDialog from '@/components/member/SpaceGovernanceDialog.vue'
 import { computeCanvasLayout, computeTreeLayout, type PositionedNode } from '@/composables/useLayout'
 import { useAuthStore } from '@/stores/auth'
 import { useGraphStore } from '@/stores/graph'
@@ -38,6 +40,7 @@ const viewScope = ref<'family' | 'clan'>('family')
 const treeFailed = ref(false)
 const drawerMemberId = ref<number | null>(null)
 const savedPositions = ref(new Map<number, { x: number; y: number }>())
+const governanceOpen = ref(false)
 
 const { fitView } = useVueFlow()
 
@@ -66,6 +69,19 @@ watch(viewScope, async (scope) => {
 function memberName(id: number): string {
   return graph.nodeById.get(id)?.name ?? `#${id}`
 }
+
+/** 我的空间角色（v2 §0.2 四角色）；非 active 成员为 null */
+const myRole = computed(() => {
+  const mine = spaces.members.find(
+    (m) => m.user_id === auth.user?.id && m.status === 'active',
+  )
+  return mine?.role ?? null
+})
+
+/** 发给我的 pending owner 移交（受让人视角，AC-F5） */
+const incomingTransfer = computed(() =>
+  spaces.transfers.find((t) => t.status === 'pending' && t.to_user === auth.user?.id) ?? null,
+)
 
 function otherSide(e: Relation): number {
   return e.from_user === (auth.user?.id ?? -1) ? e.to_user : e.from_user
@@ -178,7 +194,7 @@ const flowNodes = computed<FlowNode[]>(() =>
     const edge = graph.edges.find(
       (e) => (e.from_user === p.id || e.to_user === p.id) && e.view.label !== null,
     )
-    void memberById
+    void memberById.value
     return {
       id: `n-${p.id}`,
       type: 'member',
@@ -186,7 +202,7 @@ const flowNodes = computed<FlowNode[]>(() =>
       data: {
         member,
         viewLabel: edge?.view.label ?? null,
-        summary: gnode?.visibility === 'summary',
+        summary: gnode?.visibility === 'lineage_summary',
       },
     }
   }),
@@ -250,6 +266,22 @@ void router
         <el-button size="small" type="primary" data-test="accept-invite" @click="spaces.resolve(inv.id, 'accept')">接受</el-button>
         <el-button size="small" data-test="reject-invite" @click="spaces.resolve(inv.id, 'reject')">拒绝</el-button>
       </div>
+
+      <!-- 空间 kind 徽标 + 治理入口（v2 §0.2/§0.5） -->
+      <template v-if="spaces.currentSpace">
+        <el-tag
+          size="small"
+          :type="spaces.currentSpace.kind === 'lineage' ? 'success' : 'primary'"
+          data-test="space-kind-badge"
+        >
+          {{ spaces.currentSpace.kind === 'lineage' ? '族谱空间' : '家庭空间' }}
+        </el-tag>
+        <el-tag v-if="myRole === 'guest'" size="small" type="warning" data-test="guest-badge">访客</el-tag>
+        <el-button size="small" data-test="open-governance" @click="governanceOpen = true">空间管理</el-button>
+
+        <!-- 待确档最小引用（AC-F2）：provisional 人物非正式成员，仅名字 -->
+        <PendingProfileRefs :refs="spaces.profileRefs" />
+      </template>
     </section>
 
     <div class="filter-row">
@@ -269,6 +301,17 @@ void router
         <el-radio-button value="clan">🌲 家族空间</el-radio-button>
       </el-radio-group>
     </div>
+
+    <!-- 收到 owner 移交请求横幅（AC-F5） -->
+    <el-alert
+      v-if="incomingTransfer"
+      type="warning"
+      :closable="false"
+      data-test="transfer-banner"
+    >
+      「{{ spaces.spaces.find((s) => s.id === incomingTransfer?.space_id)?.name }}」的所有者请求把空间移交给你，请在「空间管理」中处理。
+      <el-button size="small" type="warning" plain @click="governanceOpen = true">去处理</el-button>
+    </el-alert>
 
     <!-- 待处理：空间邀请 / 连接请求（m2c） -->
     <section v-if="spaces.pendingForMe.length || graph.incoming.length" class="pending-section" data-test="pending-section">
@@ -348,6 +391,8 @@ void router
       :member-id="drawerMemberId"
       @close="drawerMemberId = null"
     />
+
+    <SpaceGovernanceDialog v-model:visible="governanceOpen" />
   </main>
 </template>
 

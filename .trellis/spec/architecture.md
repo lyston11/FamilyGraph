@@ -5,7 +5,59 @@
 
 ---
 
+## 0. v2 权威合同（2026-08-26 起生效，取代下列 v1 条款）
+
+> V2.0 Foundation 任务（`.trellis/tasks/08-26-v2-0-foundation`）确立以下合同。标注 **[v2 取代]** 的 v1 小节自本文档日期起作废，仅存档供追溯。后续所有任务（含 Pi Runtime / Agent 工具）必须以本节为准，不得继承被取代的 v1 语义。
+
+### 0.1 统一可见性四级 + 字段级 disclosure **[v2 取代 §4 QU1=B、§6 矩阵与 AD-9 第 4 列规则]**
+
+- 可见性层级统一为 `self_private | household_detail | lineage_summary | none`，由 `visibility.evaluate(actor, target, space_context, purpose)` 单点输出 level 与字段级 mask；调用方不得自行拼装可见性规则。
+- **v1「直系结构边自动 full」（QU1=B）与 full/summary/invisible 三级作废**。直系结构边（elder/younger/spouse active）在无共同空间时最多授予 `lineage_summary`；peer 边本身不再授予任何可见性。
+- Household active member（非 guest）可见家庭详情，但凭据、私人会话/记忆、未公开关系、健康、住址等高敏感字段一律排除。
+- Lineage 只见必要字段与本人公开类别：显式 `disclosure_preferences`（全局偏好可被逐空间覆盖，默认不公开）只扩展字段投影，不单独授予可见性。
+- pending 成员/请求两端点、guest、provisional 人物只见对应最小化信息（baseline 字段）。
+- 未成年人默认最小披露 overlay：精确生日、住址、学校、联系方式、私人描述等对任何非本人主体遮蔽，不因 household、lineage、Agent 或 operator 身份自动开放。
+- purpose（profile/graph/search/statistics/export/agent/rag）只能收紧不得放宽：agent/rag/search/statistics 投影不得超过 profile API 口径。
+- 代管创建者（created_by）保有查看权，映射为 `household_detail` 层级；编辑权仍由 custody 判定。
+- `platform_operator` 不进入可见性优先链（等同无关用户 none→404）；break-glass 是未来独立审计接口，不属于常规判定路径。
+
+### 0.2 平台角色与空间角色分离 **[v2 取代 users.is_admin 全局数据权]**
+
+- `platform_operator` 存于 `platform_role_assignments`，仅管理系统代码、Provider、工具白名单和安全策略；**默认且默认之外也无家庭数据读取权**，普通管理后台数据兜底操作走 break-glass 审计（后续任务）。users.is_admin 列已删除。
+- 空间角色为 `space_owner(space_members.role='owner')`、`space_admin`、`member`；household 空间可另有 `guest`，guest 不获得 household_detail。
+
+### 0.3 三条独立单向状态机 **[v2 扩展 §1 ClaimState]**
+
+- Account：`managed → claimed`（accounts.status，转换点=首登改 PIN，记 claimed_at）。
+- Profile：`provisional → identity_confirmed`（users.profile_status）；Account claimed 不自动确认 Profile。
+- 外部事实：`proposed → confirmed | disputed`（profile_fact_reviews 清单模型）；三条状态机各自独立完成、单向且审计。
+- 未完成 identity_confirmed 的人物不具备推荐资格。
+- 建档表单名字和关系必填，其余可空；自由描述保留作者/原文/时间/scope，不自动成为正式事实。
+
+### 0.4 空间 kind 与 provisional 引用 **[v2 扩展 §3/§4]**
+
+- `family_spaces.kind = household | lineage`；PersonalFamilyView 为派生投影而非实体。
+- 创建他人时选择 no-space/household/lineage；选空间只创建 `space_profile_refs` 最小节点引用，**provisional 人物不是 SpaceMember**。
+- 关系、配偶、管理员关联都不自动合并空间；桥边与共同 HouseholdSpace 均为显式对象/流程。
+
+### 0.5 owner 保护与移交 **[v2 取代 §5 中 family_spaces.owner_id ON DELETE CASCADE]**
+
+- owner 删除/退出/注销前必须移交（ownership_transfers FSM）；无合格继任者时走显式终止流程。owner_id FK 为 RESTRICT，**禁止 FK 级联静默删空间**。
+- owner 移交、profile custody 移交、Account claim 是三个不同流程，不得混用。
+- owner onboarding link（platform_operator 签发）：短期、单次、可撤销、只存 hash；兑换后创建独立 LineageSpace 并授予 owner，不授予 platform_operator，也不连接其他管理员的空间。
+
+### 0.6 数据权利与领域命令边界
+
+- 本人可申请结构化导出、资料更正、删除/注销（data_right_requests FSM）；异步结果继承 VisibilityPolicy，有过期下载与审计。
+- 删除/撤权/争议传播经 `domain_events`（append-only）驱动缓存、附件、DerivedFact、RAG/搜索索引和 Agent 会话投影失效（投影本体在相应任务实现）。
+- 认领争议保留 evidence、状态、双方最小披露与平台人工兜底；平台人工处理需 break-glass 原因与完整审计，不因此获得日常浏览权。
+- 建档、档案修改、空间变更、关系请求、附件等 API 组合事务抽成 application/domain command，HTTP 与未来 Agent 工具共用同一授权/FSM/写入/事件/audit 短事务；外部网络调用不进入事务。
+
+---
+
 ## 1. 身份模型：PersonProfile / Account / ClaimState 分离 `[AD-1]`
+
+> **[v2 取代]** 本节的 users.claim_status 已迁移至 accounts.status（managed|claimed + claimed_at）；is_admin 列已删除（见 §0.2/§0.3）。其余 PersonProfile/Account 分离概念不变。
 
 锁定决策 A3 的用户体验不变（添加关系 ≈ 创建账号 + 一次性 PIN），但内部概念分离（前两者是实体，Claim 是 users 表上的状态字段而非独立领域对象）：
 
@@ -72,7 +124,9 @@ active  ──remove──> removed(终态, owner 或本人)
 - **join_request（M2 家族视图摘要卡）**：仅携带 space_membership，无新关系边。目标空间 owner 审批。
 
 ### 权限授予判定（服务端实时计算，无缓存）
-**QU1 已裁定为修订版 U5（2026-08-25，用户确认）**：
+> **[v2 取代]** 以下 QU1=B「直系边完整互见」规则已被 §0.1 四级可见性取代：直系结构边跨空间最多 lineage_summary，不再自动 full。
+
+**QU1 已裁定为修订版 U5（2026-08-25，用户确认；v2 已取代）**：
 
 完整数据访问 ⇔ **双方在同一空间且均为 active 成员 ∨ 两端点之间存在至少一条 dir_class ∈ {elder, younger, spouse} 的 active 关系边**。
 
@@ -81,6 +135,8 @@ active  ──remove──> removed(终态, owner 或本人)
 - pending 期间：发起方可看接收方摘要（通知需要），反之亦然。断连/移出即时降级。
 
 ## 5. 数据库契约
+
+> **[v2 取代]** family_spaces.owner_id 由 ON DELETE CASCADE 改为 RESTRICT（owner 删除必须先移交，禁止级联静默删空间）；新增 v2 基础表（platform_role_assignments、space_profile_refs、owner_invitations、disclosure_preferences、ownership_transfers、claim_disputes、data_right_requests、domain_events、profile_fact_reviews）见迁移 0008_v2_foundation。
 
 - PRAGMA：`foreign_keys=ON, journal_mode=WAL, busy_timeout=5000, synchronous=NORMAL`（api 启动时统一设置）。
 - FK/CASCADE：accounts.user_id、relations.from/to、space_members.user_id/space_id、node_positions、attachments.user_id 均 `ON DELETE CASCADE`。
@@ -92,6 +148,8 @@ active  ──remove──> removed(终态, owner 或本人)
   - 冲突/异常数据：布局失败回退画布自由模式并提示（M1 验收项）。
 
 ## 6. 授权矩阵（visibility.py 单点实现）
+
+> **[v2 取代]** 下表 full/summary/invisible 三级口径及第 3 列「直系自动 full」已被 §0.1 四级合同取代；AD-9 家族空间外披露开关的存储已迁至 disclosure_preferences（全局+逐空间 scope），开关类别扩至高敏感类。
 
 | 资源 \ 主体 | 本人 | 同空间 active 成员 | 直系结构边对端（elder/younger/spouse active） | peer 对端 / clan 连通可达 | 其余 |
 |---|---|---|---|---|---|

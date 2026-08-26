@@ -17,7 +17,37 @@ def test_login_success_returns_token_pair(client, db_session) -> None:
         "name": "张三",
         "is_admin": False,
         "pin_must_change": False,
+        "claim_status": "claimed",
+        "profile_status": "identity_confirmed",
     }
+
+
+def test_me_carries_identity_status(client, db_session) -> None:
+    """v2 Gap2：/me 直出两条独立状态机（accounts.status + users.profile_status），
+    前端路由守卫据此判定确档向导，不再由 fact-reviews 推断。"""
+    # 组合一：managed + provisional（未认领；pin_must_change=False 以通过 PIN 门禁）
+    create_user_with_pin(
+        db_session,
+        "新人",
+        "123456",
+        claim_status="managed",
+        profile_status="provisional",
+    )
+    tokens = login(client, "新人", "123456").json()
+    assert tokens["user"]["claim_status"] == "managed"
+    assert tokens["user"]["profile_status"] == "provisional"
+
+    me = client.get("/api/me", headers=auth_header(tokens))
+    assert me.status_code == 200
+    body = me.json()
+    assert body["claim_status"] == "managed"
+    assert body["profile_status"] == "provisional"
+
+    # 组合二：claimed + identity_confirmed（既有建档默认态），两状态分别直出
+    create_user_with_pin(db_session, "老人", "654321")
+    old_tokens = login(client, "老人", "654321").json()
+    assert old_tokens["user"]["claim_status"] == "claimed"
+    assert old_tokens["user"]["profile_status"] == "identity_confirmed"
 
 
 def test_wrong_pin_unified_message_401(client, db_session) -> None:

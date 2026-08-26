@@ -7,8 +7,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.user import DISCLOSURE_KEYS
+from app.models.user import BASIC_DISCLOSURE_KEYS
 from app.services.custody import RelationAccess, resolve_relation
+from app.services.disclosure import basic_disclosure_flags
 
 GenderType = Literal["m", "f", "unknown"]
 CalType = Literal["solar", "lunar", "none"]
@@ -43,7 +44,14 @@ class StructuredDate(BaseModel):
 
 
 class DisclosurePayload(BaseModel):
-    """AD-9 披露开关：五类布尔，键集合必须恰好（缺键/多键均 422）。"""
+    """披露开关载荷（v2 §0.1）。
+
+    - 基础五类必填（整体替换语义，缺键/多键均 422）；
+    - space_id 选填：提供时写入该空间的逐空间覆盖行，且仅档案本人可调
+      （commands.members.update_disclosure 强制 self）；
+    - 高敏感类别类型恒为 Literal[False] | None：传 true 直接产生 literal_error
+      → 422 —— 键存在是为了让未来任务无法静默放宽合同，false 为不可变更默认。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -52,6 +60,13 @@ class DisclosurePayload(BaseModel):
     dates: bool
     bio: bool
     attachments: bool
+    space_id: int | None = Field(default=None, gt=0)
+    # 高敏感类别：合同上只能为 false（Literal[False] 使 true 在校验层即被拒）
+    health: Literal[False] | None = None
+    address: Literal[False] | None = None
+    school: Literal[False] | None = None
+    contact: Literal[False] | None = None
+    private_notes: Literal[False] | None = None
 
 
 class SpaceMembershipInline(BaseModel):
@@ -80,6 +95,25 @@ class MemberUpdateRequest(BaseModel):
     birth: StructuredDate | None = None
     death: StructuredDate | None = None
     bio: str | None = Field(default=None, max_length=2000)
+
+
+class SpaceDisclosureOut(BaseModel):
+    """单一空间的逐空间披露覆盖视图（缺省类别为 False）。"""
+
+    space_id: int
+    allowed: dict[str, bool]
+
+
+class DisclosureMatrixOut(BaseModel):
+    """GET /users/{id}/disclosure 合并矩阵：全局偏好 + 逐空间覆盖。
+
+    键名 "global" 为 Python 关键字，字段用 global_flags + 别名双向映射。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    global_flags: dict[str, bool] = Field(validation_alias="global", serialization_alias="global")
+    spaces: list[SpaceDisclosureOut]
 
 
 class MemberPermissions(BaseModel):
@@ -121,38 +155,45 @@ def structured_date_payload(value: Any) -> dict[str, Any] | None:
     return dict(value)
 
 
-def member_payload(target: Any, actor: Any) -> dict[str, Any]:
-    """构造对外成员视图：档案字段 + AD-9 披露开关 + 当前主体权限投影。
+def member_payload(session: Any, target: Any, actor: Any) -> dict[str, Any]:
+    """构造对外成员视图：档案字段 + 披露开关 + 当前主体权限投影。
 
-    M1 仅在 resolve_relation.view == full 时调用（none 已被路由 404 拦截）。
+    v2：is_admin 键保留以兼容前端，语义为 platform_operator 角色派生；
+    claim_status 权威源为 accounts.status。仅在可见性判定通过后调用。
     """
+    from app.services.platform_roles import is_platform_operator
+
     access: RelationAccess = resolve_relation(actor, target)
     return {
         "id": target.id,
         "name": target.name,
-        "is_admin": bool(target.is_admin),
+        "is_admin": is_platform_operator(session, target.account),
         "gender": target.gender,
         "birth": structured_date_payload(target.birth),
         "death": structured_date_payload(target.death),
         "bio": target.bio,
         "avatar_path": target.avatar_path,
         "privacy_mode": target.privacy_mode,
-        "claim_status": target.claim_status,
+        "claim_status": target.account.status,
         "created_by": target.created_by,
         "created_at": target.created_at,
-        "clan_disclosure": {key: bool(value) for key, value in target.clan_disclosure.items()},
+        "clan_disclosure": {
+            key: bool(value) for key, value in basic_disclosure_flags(session, target).items()
+        },
         "permissions": {"edit": access.edit, "delete": access.delete},
     }
 
 
 __all__ = [
-    "DISCLOSURE_KEYS",
+    "BASIC_DISCLOSURE_KEYS",
+    "DisclosureMatrixOut",
     "DisclosurePayload",
     "MemberCreateRequest",
     "MemberCreateResponse",
     "MemberOut",
     "MemberPermissions",
     "MemberUpdateRequest",
+    "SpaceDisclosureOut",
     "StructuredDate",
     "member_payload",
 ]

@@ -1,112 +1,141 @@
-"""可见性单点（m2a）：授权矩阵的唯一实现（architecture.md §6，QU1=B + AD-9）。
+"""可见性单点 v2（spec/architecture.md §0.1）：四级层级 + 字段级 mask。
 
-所有跨用户档案数据的 view 层级判定必须经过本模块；custody.py 只管 edit/delete。
+所有跨用户档案数据的投影判定必须经过本模块；custody.py 只管 edit/delete。
 
-层级：
-    full     本人 / 同一 active 空间成员 / 直系结构边对端 / 代管创建者 / 管理员
-    summary  clan 连通可达——基线字段 + 归属者披露开关已开放类别（AD-9）；
-             另含 pending 请求两端点互见（不传递）
-    invisible 其余（路由层转 404，防枚举）
+层级（优先序自高到低）：
+    self_private       本人
+    household_detail   同 household 空间双方 active 且均非 guest；代管创建者映射此层
+    lineage_summary    同 lineage 空间 active / space_profile_refs 最小引用 /
+                       直系结构边（跨 household 不再自动 full）/ pending 最小互见
+    none               其余（路由层转 404，防枚举）
+
+规则：
+- purpose 只能收紧不得放宽：agent/rag/search/statistics 投影不超过 profile 口径。
+- 披露偏好只扩展字段投影，不单独授予可见性；逐空间覆盖全局，默认不公开。
+- 未成年人 overlay 最后收紧：精确生卒/简介等对任何非本人主体遮蔽。
+- platform_operator 不进入优先链（等同无关用户）；break-glass 属未来独立审计接口。
 """
 
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.relation import Relation
-from app.models.space import SpaceMember
-from app.models.user import DISCLOSURE_KEYS
+from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
+from app.models.user import User
+from app.services.disclosure import disclosed_categories
 
-if TYPE_CHECKING:
-    from app.models.user import User
+# ---- 层级 ----
+LEVEL_SELF_PRIVATE = "self_private"
+LEVEL_HOUSEHOLD_DETAIL = "household_detail"
+LEVEL_LINEAGE_SUMMARY = "lineage_summary"
+LEVEL_NONE = "none"
 
-FULL = "full"
-SUMMARY = "summary"
-INVISIBLE = "invisible"
-
-MASKED: dict[str, bool] = {"__masked__": True}
-
-_BASELINE_FIELDS = ("id", "name")
-_DISCLOSURE_FIELD_MAP: dict[str, tuple[str, ...]] = {
-    "avatar": ("avatar_path",),
-    "dates": ("birth", "death"),
-    "bio": ("bio",),
-    "photos": (),  # m3a 相册消费
-    "attachments": (),  # m3a 链接附件消费
+_LEVEL_ORDER = {
+    LEVEL_NONE: 0,
+    LEVEL_LINEAGE_SUMMARY: 1,
+    LEVEL_HOUSEHOLD_DETAIL: 2,
+    LEVEL_SELF_PRIVATE: 3,
 }
-_FULL_FIELDS = (
-    "id",
-    "name",
-    "gender",
-    "birth",
-    "death",
-    "bio",
-    "avatar_path",
-    "privacy_mode",
-    "claim_status",
-    "created_by",
-    "created_at",
+
+# ---- 用途 ----
+PURPOSE_PROFILE = "profile"
+PURPOSE_GRAPH = "graph"
+PURPOSE_SEARCH = "search"
+PURPOSE_STATISTICS = "statistics"
+PURPOSE_EXPORT = "export"
+PURPOSE_AGENT = "agent"
+PURPOSE_RAG = "rag"
+ALL_PURPOSES = (
+    PURPOSE_PROFILE,
+    PURPOSE_GRAPH,
+    PURPOSE_SEARCH,
+    PURPOSE_STATISTICS,
+    PURPOSE_EXPORT,
+    PURPOSE_AGENT,
+    PURPOSE_RAG,
 )
 
+# purpose 级别上限：agent/rag/search/statistics 不得超过 profile API 的家庭口径（§0.1）
+_PURPOSE_LEVEL_CAP = {
+    PURPOSE_PROFILE: LEVEL_HOUSEHOLD_DETAIL,
+    PURPOSE_GRAPH: LEVEL_HOUSEHOLD_DETAIL,
+    PURPOSE_EXPORT: LEVEL_HOUSEHOLD_DETAIL,
+    PURPOSE_SEARCH: LEVEL_LINEAGE_SUMMARY,
+    PURPOSE_STATISTICS: LEVEL_LINEAGE_SUMMARY,
+    PURPOSE_AGENT: LEVEL_LINEAGE_SUMMARY,
+    PURPOSE_RAG: LEVEL_LINEAGE_SUMMARY,
+}
 
-def _active_edges_between(session: Session, a: int, b: int) -> list[Relation]:
-    return list(
-        session.scalars(
-            select(Relation).where(
-                Relation.status == "active",
-                or_(
-                    (Relation.from_user == a) & (Relation.to_user == b),
-                    (Relation.from_user == b) & (Relation.to_user == a),
-                ),
-            )
-        )
-    )
+# ---- 字段级 mask ----
+FIELD_CLEAR = "clear"
+FIELD_MASKED = "masked"
+
+MASKED: dict[str, bool] = {"__masked__": True}  # 载荷遮罩哨兵（v1 兼容形状）
+
+BASELINE_FIELDS = ("id", "name")
+# 受层级/披露控制的内容字段
+CONTENT_FIELDS = ("gender", "birth", "death", "bio", "avatar_path")
+# 运维元数据：任何非 none 层级恒明文（非敏感）
+META_FIELDS = ("privacy_mode", "claim_status", "created_by", "created_at")
+PROFILE_FIELDS = BASELINE_FIELDS + CONTENT_FIELDS + META_FIELDS
+
+# 披露类别 → 内容字段映射（高敏感类对应未来档案列，当前为空占位）
+CATEGORY_FIELD_MAP: dict[str, tuple[str, ...]] = {
+    "avatar": ("avatar_path",),
+    "photos": (),
+    "dates": ("birth", "death"),
+    "bio": ("bio",),
+    "attachments": (),
+    "health": (),
+    "address": (),
+    "school": (),
+    "contact": (),
+    "private_notes": (),
+}
+
+# 高敏感类别：不因 lineage/household/Agent/operator 身份自动开放（§0.1）
+HIGH_RISK_CATEGORIES = ("health", "address", "school", "contact", "private_notes")
+
+# 未成年人 overlay：默认最小披露，对任何非本人主体遮蔽
+MINOR_OVERLAY_FIELDS = ("birth", "death", "bio")
+
+_MINOR_YEAR_THRESHOLD = 18
+
+
+@dataclass(frozen=True)
+class VisibilityDecision:
+    """evaluate 输出：层级 + 字段级 mask + 用途。"""
+
+    level: str
+    fields: dict[str, str]
+    purpose: str
+
+    @property
+    def visible(self) -> bool:
+        return self.level != LEVEL_NONE
 
 
 def direct_structural_edge(session: Session, a: int, b: int) -> Relation | None:
     """直系结构边：elder/younger/spouse 任方向 active；peer 不算直系。"""
-    for edge in _active_edges_between(session, a, b):
-        if edge.dir_class in ("elder", "younger", "spouse"):
-            return edge
-    return None
-
-
-def shared_active_space(session: Session, a: int, b: int) -> bool:
-    counts: dict[int, int] = {}
-    for space_id in session.scalars(
-        select(SpaceMember.space_id).where(
-            SpaceMember.user_id.in_((a, b)),
-            SpaceMember.status == "active",
+    return session.scalar(
+        select(Relation).where(
+            Relation.status == "active",
+            Relation.dir_class.in_(("elder", "younger", "spouse")),
+            or_(
+                (Relation.from_user == a) & (Relation.to_user == b),
+                (Relation.from_user == b) & (Relation.to_user == a),
+            ),
         )
-    ):
-        counts[space_id] = counts.get(space_id, 0) + 1
-    return any(v >= 2 for v in counts.values())
-
-
-def reachable_ids(session: Session, viewer_id: int) -> set[int]:
-    """viewer 沿活动边无向 BFS 的连通分量（含 viewer）。pending 边不传递。"""
-    edges = session.scalars(select(Relation).where(Relation.status == "active")).all()
-    adj: dict[int, set[int]] = {}
-    for e in edges:
-        adj.setdefault(e.from_user, set()).add(e.to_user)
-        adj.setdefault(e.to_user, set()).add(e.from_user)
-    seen = {viewer_id}
-    stack = [viewer_id]
-    while stack:
-        cur = stack.pop()
-        for nb in adj.get(cur, ()):  # noqa: B007
-            if nb not in seen:
-                seen.add(nb)
-                stack.append(nb)
-    return seen
+    )
 
 
 def _pending_pair_edge(session: Session, a: int, b: int) -> Relation | None:
-    """pending 边：仅授予两端点互见摘要（AD-4 通知需要），不做传递可达。"""
+    """pending 关系边：仅授予两端点最小互见，不做传递可达。"""
     return session.scalar(
         select(Relation).where(
             Relation.status == "pending",
@@ -118,91 +147,274 @@ def _pending_pair_edge(session: Session, a: int, b: int) -> Relation | None:
     )
 
 
-def classify(session: Session, viewer: User, target: User) -> str:
-    """层级判定（QU1=B + AD-9）。
+def _active_memberships(
+    session: Session, user_id: int, space_context: int | None
+) -> dict[int, SpaceMember]:
+    stmt = select(SpaceMember).where(SpaceMember.user_id == user_id, SpaceMember.status == "active")
+    if space_context is not None:
+        stmt = stmt.where(SpaceMember.space_id == space_context)
+    return {m.space_id: m for m in session.scalars(stmt).all()}
 
-    除矩阵三来源外含两条 D5/A4 派生规则：
-      - 代管创建者（target.created_by == viewer）：完整视图（编辑权仍由 custody 裁定）
-      - 管理员：数据兜底修正需要完整视图（操作走 audit）
+
+def _shared_space_kinds(
+    session: Session,
+    actor_id: int,
+    target_id: int,
+    space_context: int | None,
+) -> tuple[bool, bool]:
+    """返回 (可给 household_detail, 可给 lineage_summary)。
+
+    共同空间双方 active 为前提；household 且双方均非 guest → household_detail；
+    lineage 空间，或 household 中涉及 guest（guest 不获得 household_detail）
+    → 仅 lineage_summary 最小互见。
     """
-    if viewer.id == target.id or viewer.is_admin:
-        return FULL
-    if target.created_by == viewer.id:
-        return FULL  # 代管创建者保有查看权；handover 已认领后编辑权由 custody 收走
-    if shared_active_space(session, viewer.id, target.id):
-        return FULL
-    if direct_structural_edge(session, viewer.id, target.id) is not None:
-        return FULL
-    if target.id in reachable_ids(session, viewer.id):
-        return SUMMARY
-    if _pending_pair_edge(session, viewer.id, target.id) is not None:
-        return SUMMARY
-    return INVISIBLE
+    mine = _active_memberships(session, actor_id, space_context)
+    theirs = _active_memberships(session, target_id, space_context)
+    shared = set(mine) & set(theirs)
+    household = lineage = False
+    for space_id in shared:
+        kinds = session.scalar(select(FamilySpace.kind).where(FamilySpace.id == space_id))
+        guest_involved = "guest" in (mine[space_id].role, theirs[space_id].role)
+        if kinds == "household" and not guest_involved:
+            household = True
+        else:
+            lineage = True
+    return household, lineage
 
 
-def _disclosure_flags(target: User) -> dict[str, bool]:
-    raw: Any
-    if isinstance(target.clan_disclosure_json, str):
-        try:
-            raw = json.loads(target.clan_disclosure_json)
-        except Exception:  # noqa: BLE001
-            raw = {}
+def _ref_link(session: Session, actor_id: int, target_id: int, space_context: int | None) -> bool:
+    """target 以 active space_profile_ref 出现在 actor 为 active 成员的空间中。"""
+    actor_space_ids = list(_active_memberships(session, actor_id, space_context))
+    if not actor_space_ids:
+        return False
+    stmt = select(SpaceProfileRef).where(
+        SpaceProfileRef.user_id == target_id,
+        SpaceProfileRef.status == "active",
+        SpaceProfileRef.space_id.in_(actor_space_ids),
+    )
+    return session.scalar(stmt.limit(1)) is not None
+
+
+def _pending_membership_link(
+    session: Session, actor_id: int, target_id: int, space_context: int | None
+) -> bool:
+    """同一空间中一方 pending 一方 active → 双方最小互见（不传递）。"""
+    stmt = select(SpaceMember.space_id, SpaceMember.user_id, SpaceMember.status).where(
+        SpaceMember.user_id.in_((actor_id, target_id)),
+        SpaceMember.status.in_(("pending", "active")),
+    )
+    if space_context is not None:
+        stmt = stmt.where(SpaceMember.space_id == space_context)
+    per_space: dict[int, set[tuple[int, str]]] = {}
+    for space_id, user_id, status in session.execute(stmt):
+        per_space.setdefault(space_id, set()).add((user_id, status))
+    for entries in per_space.values():
+        users = {uid for uid, _ in entries}
+        statuses = {status for _, status in entries}
+        if users == {actor_id, target_id} and statuses == {"pending", "active"}:
+            return True
+    return False
+
+
+def _base_level(
+    session: Session, actor: User, target: User, space_context: int | None
+) -> tuple[str, str]:
+    """原始层级判定（不含 purpose 收紧）。返回 (level, source)。"""
+    if actor.id == target.id:
+        return LEVEL_SELF_PRIVATE, "self"
+    # 代管创建者保有查看权，映射 household_detail（编辑权仍由 custody 判定）
+    if space_context is None and target.created_by == actor.id:
+        return LEVEL_HOUSEHOLD_DETAIL, "custodian"
+    household, lineage = _shared_space_kinds(session, actor.id, target.id, space_context)
+    if household:
+        return LEVEL_HOUSEHOLD_DETAIL, "household"
+    if lineage:
+        return LEVEL_LINEAGE_SUMMARY, "lineage_member"
+    if _ref_link(session, actor.id, target.id, space_context):
+        return LEVEL_LINEAGE_SUMMARY, "ref"
+    if direct_structural_edge(session, actor.id, target.id) is not None:
+        # v2 取消「直系自动 full」：跨 household 直系 ≤ lineage_summary
+        return LEVEL_LINEAGE_SUMMARY, "direct_edge"
+    if _pending_pair_edge(session, actor.id, target.id) is not None or _pending_membership_link(
+        session, actor.id, target.id, space_context
+    ):
+        return LEVEL_LINEAGE_SUMMARY, "pending"
+    return LEVEL_NONE, "none"
+
+
+def is_minor(target: User) -> bool:
+    """由结构化出生日期推导未成年（无法解析时按成年处理）。"""
+    birth = target.birth if isinstance(target.birth, dict) else {}
+    date_str = birth.get("date") if birth.get("cal_type") in ("solar", "lunar") else None
+    if not date_str or len(date_str) < 10:
+        return False
+    try:
+        from datetime import date as date_cls
+
+        born = date_cls.fromisoformat(str(date_str)[:10])
+    except ValueError:
+        return False
+    from app.utils.timeutil import utcnow
+
+    today = utcnow().date()
+    age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    return 0 <= age < _MINOR_YEAR_THRESHOLD
+
+
+def evaluate(
+    session: Session,
+    actor: User,
+    target: User,
+    *,
+    space_context: int | None = None,
+    purpose: str = PURPOSE_PROFILE,
+) -> VisibilityDecision:
+    """统一可见性判定入口。space_context 将判定限定在单一空间内。
+
+    purpose 只能收紧：agent/rag/search/statistics 的层级与投影不得超过 profile。
+    """
+    if purpose not in ALL_PURPOSES:  # pragma: no cover - 编程错误
+        raise ValueError(f"unknown purpose: {purpose}")
+
+    base_level, source = _base_level(session, actor, target, space_context)
+
+    # purpose 上限收紧（self 不受限）
+    cap = _PURPOSE_LEVEL_CAP[purpose]
+    level = base_level
+    if level != LEVEL_SELF_PRIVATE and _LEVEL_ORDER[level] > _LEVEL_ORDER[cap]:
+        level = cap
+
+    fields = {field: FIELD_CLEAR for field in PROFILE_FIELDS}
+    if level == LEVEL_NONE:
+        return VisibilityDecision(LEVEL_NONE, fields, purpose)
+
+    if level == LEVEL_LINEAGE_SUMMARY and source != "pending":
+        # 显式披露只扩展字段投影；pending 最小互见不享受披露扩展
+        disclosed = disclosed_categories(session, target, space_context)
+        cleared: set[str] = set()
+        for category in disclosed:
+            cleared.update(CATEGORY_FIELD_MAP.get(category, ()))
+    elif level == LEVEL_LINEAGE_SUMMARY:
+        cleared = set()
     else:
-        raw = target.clan_disclosure_json or {}
-    return {k: bool(raw.get(k, False)) for k in DISCLOSURE_KEYS}
+        cleared = set(CONTENT_FIELDS)
+
+    # 未成年人 overlay：最后收紧，任何来源/披露不可越过（本人除外）
+    if level != LEVEL_SELF_PRIVATE and is_minor(target):
+        cleared.difference_update(MINOR_OVERLAY_FIELDS)
+
+    for field in CONTENT_FIELDS:
+        if field not in cleared:
+            fields[field] = FIELD_MASKED
+    return VisibilityDecision(level, fields, purpose)
 
 
-def user_payload_for(session: Session, viewer: User, target: User) -> dict[str, Any] | None:
-    """按矩阵生成对外用户载荷；invisible → None。
-
-    summary 级：基线 {id,name} + 已披露类别真实值 + 未披露敏感类别 MASKED；
-    操作元数据（privacy_mode/claim_status/created_by/created_at）原样透出。
-    """
-    level = classify(session, viewer, target)
-    if level == INVISIBLE:
-        return None
-
-    full_data: dict[str, Any] = {field: getattr(target, field) for field in _FULL_FIELDS}
-    if level == FULL:
-        return full_data
-
-    flags = _disclosure_flags(target)
-    sensitive = {"avatar_path", "birth", "death", "bio"}
-    disclosed_fields: set[str] = set()
-    for category, fields in _DISCLOSURE_FIELD_MAP.items():
-        if flags.get(category):
-            disclosed_fields.update(fields)
-
+def payload_from_decision(decision: VisibilityDecision, target: User) -> dict[str, Any]:
+    """按 decision 构造对外载荷；masked 字段以 MASKED 哨兵替换（v1 兼容形状）。"""
+    claim_status = target.account.status if getattr(target, "account", None) else "managed"
+    values: dict[str, Any] = {
+        "id": target.id,
+        "name": target.name,
+        "gender": target.gender,
+        "birth": target.birth,
+        "death": target.death,
+        "bio": target.bio,
+        "avatar_path": target.avatar_path,
+        "privacy_mode": target.privacy_mode,
+        "claim_status": claim_status,
+        "created_by": target.created_by,
+        "created_at": target.created_at,
+    }
     out: dict[str, Any] = {}
-    for field in _FULL_FIELDS:
-        if field in sensitive and field not in disclosed_fields:
+    for field in PROFILE_FIELDS:
+        if decision.fields.get(field) == FIELD_MASKED:
             out[field] = dict(MASKED)
         else:
-            out[field] = full_data[field]
+            out[field] = values[field]
     return out
 
 
-def visible_member_rows(
-    session: Session, viewer: User, candidate_users: list[User]
-) -> list[tuple[User, str]]:
-    """批量分级（图查询用）：[(user, level)]，invisible 已剔除。"""
-    reach = reachable_ids(session, viewer.id)
-    out: list[tuple[User, str]] = []
-    for user in candidate_users:
-        if user.id == viewer.id or user.id in reach:
-            out.append((user, classify(session, viewer, user)))
-    return out
+def user_payload_for(
+    session: Session,
+    viewer: User,
+    target: User,
+    *,
+    purpose: str = PURPOSE_PROFILE,
+) -> dict[str, Any] | None:
+    """对外用户载荷；invisible → None（路由层转 404 防枚举）。"""
+    decision = evaluate(session, viewer, target, purpose=purpose)
+    if not decision.visible:
+        return None
+    return payload_from_decision(decision, target)
+
+
+def visible_user_ids(session: Session, actor: User) -> set[int]:
+    """actor 可见（level != none）的全部档案 id 集合（搜索/统计/图候选）。"""
+    candidates = {actor.id}
+    my_active_spaces = list(_active_memberships(session, actor.id, None))
+    if my_active_spaces:
+        space_ids = list(my_active_spaces)
+        member_ids = set(
+            session.scalars(
+                select(SpaceMember.user_id).where(
+                    SpaceMember.space_id.in_(space_ids), SpaceMember.status == "active"
+                )
+            ).all()
+        )
+        ref_ids = set(
+            session.scalars(
+                select(SpaceProfileRef.user_id).where(
+                    SpaceProfileRef.space_id.in_(space_ids), SpaceProfileRef.status == "active"
+                )
+            ).all()
+        )
+        candidates |= member_ids | ref_ids
+    edge_pairs = session.scalars(
+        select(Relation).where(Relation.status.in_(("active", "pending")))
+    ).all()
+    for edge in edge_pairs:
+        if actor.id == edge.from_user:
+            candidates.add(edge.to_user)
+        elif actor.id == edge.to_user:
+            candidates.add(edge.from_user)
+    return {
+        uid
+        for uid in candidates
+        if uid == actor.id
+        or (
+            (target := session.get(User, uid)) is not None
+            and evaluate(session, actor, target).visible
+        )
+    }
 
 
 __all__ = [
-    "FULL",
-    "INVISIBLE",
+    "ALL_PURPOSES",
+    "BASELINE_FIELDS",
+    "CATEGORY_FIELD_MAP",
+    "CONTENT_FIELDS",
+    "FIELD_CLEAR",
+    "FIELD_MASKED",
+    "HIGH_RISK_CATEGORIES",
+    "LEVEL_HOUSEHOLD_DETAIL",
+    "LEVEL_LINEAGE_SUMMARY",
+    "LEVEL_NONE",
+    "LEVEL_SELF_PRIVATE",
     "MASKED",
-    "SUMMARY",
-    "classify",
+    "MINOR_OVERLAY_FIELDS",
+    "PROFILE_FIELDS",
+    "PURPOSE_AGENT",
+    "PURPOSE_EXPORT",
+    "PURPOSE_GRAPH",
+    "PURPOSE_PROFILE",
+    "PURPOSE_RAG",
+    "PURPOSE_SEARCH",
+    "PURPOSE_STATISTICS",
+    "VisibilityDecision",
     "direct_structural_edge",
-    "reachable_ids",
-    "shared_active_space",
+    "evaluate",
+    "is_minor",
+    "payload_from_decision",
     "user_payload_for",
-    "visible_member_rows",
+    "visible_user_ids",
 ]
