@@ -574,7 +574,22 @@ def record_usage_and_promote(
     summary = recompute_space_promotion(
         session, space_id=space_id, concept_code=holder.concept_code, term=holder.term
     )
-    return usage, prior is None, summary
+    created = prior is None
+    if created:
+        emit_domain_event(
+            session,
+            event_type="term.usage_recorded",
+            aggregate_type="term_usage",
+            aggregate_id=usage.id,
+            payload={
+                "concept_code": holder.concept_code,
+                "term": holder.term,
+                "source_event": source_event,
+            },
+            space_id=space_id,
+            actor_account_id=account_id,
+        )
+    return usage, created, summary
 
 
 def list_term_alternatives(

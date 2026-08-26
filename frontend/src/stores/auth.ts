@@ -41,6 +41,8 @@ export const useAuthStore = defineStore('auth', () => {
     void import('@/stores/governance').then((m) => m.useGovernanceStore().clear())
     // Agent 会话/SSE/草稿（V2.2）：关流、清分区、删 sessionStorage Run 游标
     void import('@/stores/agent').then((m) => m.useAgentStore().clear())
+    // 记忆候选、已确认 Memory 与 RAG 引用（V2.5）随会话清空
+    void import('@/stores/memory').then((m) => m.useMemoryStore().clear())
     // 称谓缓存与解析态（V2.3）随会话清空
     void import('@/stores/kinship').then((m) => m.useKinshipStore().clear())
     // 管家建议卡片（V2.4）随会话清空

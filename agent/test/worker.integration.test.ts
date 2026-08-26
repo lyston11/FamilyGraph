@@ -366,8 +366,18 @@ function scriptedStream(
         ...(options.leakSecretInPayload ? { api_key: "sk-integration-cloud-key" } : {}),
       };
       let finalPayload: unknown = payload;
-      if (streamOptions?.onPayload) {
-        finalPayload = await streamOptions.onPayload(payload, _model);
+      try {
+        if (streamOptions?.onPayload) {
+          finalPayload = await streamOptions.onPayload(payload, _model);
+        }
+      } catch {
+        // A policy rejection must stop this provider call before it reaches
+        // the wire; finish the scripted stream so the worker can settle it.
+        const blocked = turns[0]![0]!;
+        stream.push({ type: "start", partial: blocked });
+        stream.push({ type: "done", reason: "stop", message: blocked });
+        stream.end(blocked);
+        return;
       }
       options.wirePayloads?.push(finalPayload);
 

@@ -71,7 +71,7 @@ from app.schemas.agent import (
     AgentSessionCreateRequest,
     AgentSessionOut,
 )
-from app.services import agent_events, agent_provider, agent_queue, audit
+from app.services import agent_events, agent_provider, agent_queue, audit, policy_guard
 from app.services.agent_events import TERMINAL_STREAM_EVENT_TYPES
 from app.services.agent_provider import POLICY_ALLOWED, POLICY_DENIED_NO_LOCAL
 from app.services.agent_tools import default_allowlist
@@ -249,6 +249,7 @@ def create_agent_message(
         raise_api_error(400, IDEMPOTENCY_KEY_REQUIRED, "Idempotency-Key 过长", {"max_length": 120})
     agent_session = _own_session_or_404(db, account.id, session_id)
     content_json = {"text": body.content}
+    policy_guard.enforce(policy_guard.input_hook(body.content))
 
     # 幂等快路径：命中既有消息直接裁决（不做 Provider 门禁——历史请求原样重放）
     prior = db.scalar(

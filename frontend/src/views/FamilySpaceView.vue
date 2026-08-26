@@ -255,6 +255,7 @@ void router
         <el-button v-if="auth.user?.is_admin" data-test="go-admin" @click="router.push('/admin')">管理</el-button>
         <el-button data-test="go-stats" @click="router.push('/stats')">统计</el-button>
         <el-button data-test="go-settings" @click="router.push('/settings')">设置</el-button>
+        <el-button data-test="go-memory" @click="router.push('/memory')">记忆与知识</el-button>
       </div>
     </header>
 

@@ -23,7 +23,9 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { streamSimple as openAIStreamSimple } from "@earendil-works/pi-ai/api/openai-completions";
 import type {
+  Api,
   AssistantMessageEventStream,
   Context,
   Model,
@@ -97,6 +99,12 @@ function resolveProvider(
     // worker BEFORE the model loop starts; reaching here is a wiring error.
     throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider policy did not allow this run");
   }
+  if (provider.kind !== "local" && provider.kind !== "openai_compatible") {
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      `provider "${provider.provider_id}" has no supported kind`,
+    );
+  }
   // The server resolved provider kind + model; the sidecar only contributes
   // its matching env entry (baseUrl/apiKey stay in memory).
   const entry = provider.kind === "local" ? config.providers.local : config.providers.cloud;
@@ -150,7 +158,30 @@ export async function buildRunSession(
   const policyGuard = createPolicyGuard({
     allowlist: new Set(projection.tool_allowlist),
     secrets,
+    providerKind: projection.provider?.kind ?? undefined,
+    localRequired: projection.context_blocks?.some(
+      (block) => block.sensitivity === "high" || block.sensitivity === "local_required",
+    ),
   });
+
+  const guardedStreamSimple = (
+    m: Model<Api>,
+    context: Context,
+    options?: SimpleStreamOptions,
+  ) => {
+    const guardedOptions = {
+      ...options,
+      onPayload: async (payload: unknown, payloadModel: Model<Api>) => {
+        const safePayload = policyGuard.beforeProviderRequest(payload);
+        return options?.onPayload
+          ? options.onPayload(safePayload, payloadModel)
+          : safePayload;
+      },
+    } satisfies SimpleStreamOptions;
+    return deps.streamOverride
+      ? deps.streamOverride(m as Model<"openai-completions">, context, guardedOptions)
+      : openAIStreamSimple(m as Model<"openai-completions">, context, guardedOptions);
+  };
 
   const registerProviderExtension: InlineExtension = {
     name: "familygraph-provider-registration",
@@ -162,12 +193,7 @@ export async function buildRunSession(
         apiKey: entry.apiKey ?? "unconfigured",
         api: "openai-completions",
         models: [model],
-        ...(deps.streamOverride
-          ? {
-              streamSimple: (m, context, options) =>
-                deps.streamOverride!(m as Model<"openai-completions">, context, options),
-            }
-          : {}),
+        streamSimple: guardedStreamSimple,
       });
     },
   };

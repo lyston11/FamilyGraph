@@ -15,6 +15,7 @@ import { ApiError } from '@/api/errors'
 import { useAgentStream } from '@/composables/useAgentStream'
 import { useAuthStore } from '@/stores/auth'
 import type { AgentEventPayload, AgentMessageOut, AgentSession } from '@/types/agent'
+import type { MemoryCitation } from '@/types/memory'
 import { TERMINAL_RUN_STATUSES } from '@/types/agent'
 
 /**
@@ -44,6 +45,8 @@ export interface AgentMessageView {
   status: 'sent' | 'pending' | 'failed'
   /** Assistant 结构化回复中引用的 ActionCard id；只保留整数 id。 */
   cardIds?: number[]
+  /** Assistant 结构化回复中的安全 RAG 引用投影；不信任消息中的任意对象。 */
+  citations?: MemoryCitation[]
   /** 由 SSE 回放合并产生的消息（刷新恢复去重标记） */
   fromReplay?: boolean
 }
@@ -147,6 +150,43 @@ function payloadCardIds(payload: AgentEventPayload): number[] | undefined {
   return ids.length > 0 ? [...new Set(ids)] : undefined
 }
 
+function payloadCitations(payload: AgentEventPayload): MemoryCitation[] | undefined {
+  const raw = payload.citations
+  if (!Array.isArray(raw)) return undefined
+  const citations = raw.flatMap((value): MemoryCitation[] => {
+    if (typeof value !== 'object' || value === null) return []
+    const item = value as Record<string, unknown>
+    if (
+      typeof item.source_type !== 'string' ||
+      typeof item.source_id !== 'string' ||
+      typeof item.scope !== 'string' ||
+      typeof item.sensitivity !== 'string' ||
+      !Number.isInteger(item.revision) ||
+      typeof item.citation_handle !== 'string'
+    ) {
+      return []
+    }
+    const citation: MemoryCitation = {
+      source_type: item.source_type,
+      source_id: item.source_id,
+      scope: item.scope,
+      sensitivity: item.sensitivity,
+      revision: Number(item.revision),
+      citation_handle: item.citation_handle,
+      ...(typeof item.text === 'string' ? { text: item.text } : {}),
+      ...(typeof item.index_version === 'string' ? { index_version: item.index_version } : {}),
+    }
+    if (typeof item.chunk_id === 'number' && Number.isInteger(item.chunk_id)) {
+      citation.chunk_id = item.chunk_id
+    }
+    if (typeof item.document_id === 'number' && Number.isInteger(item.document_id)) {
+      citation.document_id = item.document_id
+    }
+    return [citation]
+  })
+  return citations.length > 0 ? citations : undefined
+}
+
 function toMessageView(message: AgentMessageOut): AgentMessageView {
   return {
     id: message.id,
@@ -155,6 +195,7 @@ function toMessageView(message: AgentMessageOut): AgentMessageView {
     createdAt: message.created_at,
     status: 'sent',
     cardIds: payloadCardIds(message.content_json),
+    citations: payloadCitations(message.content_json),
   }
 }
 
@@ -195,12 +236,14 @@ export const useAgentStore = defineStore('agent', () => {
     role: 'user' | 'assistant',
     text: string,
     cardIds?: number[],
+    citations?: MemoryCitation[],
   ): void {
     for (let i = Math.min(partition.replayCursor, partition.messages.length); i < partition.messages.length; i += 1) {
       const existing = partition.messages[i]
       if (existing && !existing.fromReplay && existing.role === role && existing.text === text) {
         existing.fromReplay = true
         if (cardIds !== undefined) existing.cardIds = cardIds
+        if (citations !== undefined) existing.citations = citations
         partition.replayCursor = i + 1
         return
       }
@@ -212,6 +255,7 @@ export const useAgentStore = defineStore('agent', () => {
       createdAt: null,
       status: 'sent',
       cardIds,
+      citations,
       fromReplay: true,
     })
   }
@@ -254,7 +298,13 @@ export const useAgentStore = defineStore('agent', () => {
         break
       }
       case 'message.assistant_added':
-        mergeReplayedMessage(partition, 'assistant', payloadText(event.payload), payloadCardIds(event.payload))
+        mergeReplayedMessage(
+          partition,
+          'assistant',
+          payloadText(event.payload),
+          payloadCardIds(event.payload),
+          payloadCitations(event.payload),
+        )
         break
       case 'turn.completed':
         break

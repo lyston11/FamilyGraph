@@ -141,6 +141,7 @@ def test_heartbeat_scope_mismatch_fail_closed(client, db_session):
 def test_context_returns_projection_without_secrets(client, db_session):
     """context 返回 scope/消息投影/provider 解析；密钥明文与密文均不出现。"""
     from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
+    from app.models.context import ContextBuild
     from app.utils import secretbox, timeutil
 
     user, space, agent_session, run = _seed(db_session, name="ctx")
@@ -190,6 +191,13 @@ def test_context_returns_projection_without_secrets(client, db_session):
     assert "sk-super-secret-value" not in body  # 明文不出现
     assert "secret_ciphertext" not in payload["provider"]  # 密文不下发
     assert provider.secret_ciphertext not in body
+    assert payload["context_build_id"] is not None
+    assert (
+        db_session.scalar(
+            select(ContextBuild).where(ContextBuild.id == payload["context_build_id"])
+        )
+        is not None
+    )
 
 
 def test_events_append_and_settle_via_api(client, db_session):

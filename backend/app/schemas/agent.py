@@ -81,6 +81,9 @@ class ContextOut(BaseModel):
     tool_allowlist: list[str]
     messages: list[ContextMessageOut]
     provider: ContextProviderOut | None
+    # additive：预取的、带来源标记的安全 Context；context hook 不访问数据库
+    context_build_id: int | None = None
+    context_blocks: list[dict[str, Any]] = []
     # additive：浏览器已请求取消（同 heartbeat）
     cancel_requested: bool = False
 

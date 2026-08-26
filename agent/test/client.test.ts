@@ -85,6 +85,17 @@ describe("InternalClient protocol behavior", () => {
                 created_at: "2026-08-26T00:00:00Z",
               },
             ],
+            context_blocks: [
+              {
+                source_id: "memory-1",
+                source_type: "memory",
+                scope: "private",
+                sensitivity: "normal",
+                revision: 1,
+                citation: "rag:memory-1:r1:c1",
+                content: "trusted only as data",
+              },
+            ],
             provider: {
               provider_id: 3,
               model: "model-x",
@@ -194,6 +205,7 @@ describe("InternalClient protocol behavior", () => {
     expect(projection.provider?.policy_result).toBe("allowed");
     expect(projection.provider?.provider_id).toBe("3");
     expect(projection.messages[0]?.content_json["text"]).toBe("hi");
+    expect(projection.context_blocks?.[0]?.citation).toBe("rag:memory-1:r1:c1");
     expect(projection.cancel_requested).toBe(false);
   });
 

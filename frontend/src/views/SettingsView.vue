@@ -50,7 +50,8 @@ async function doLogout(): Promise<void> {
       <template #header>
         <div class="header">
           <span>设置</span>
-          <el-button text type="danger" data-test="logout-btn" @click="doLogout">退出登录</el-button>
+          <el-button text type="primary" data-test="go-memory" @click="router.push('/memory')">记忆与知识</el-button>
+      <el-button text type="danger" data-test="logout-btn" @click="doLogout">退出登录</el-button>
         </div>
       </template>
 
@@ -79,6 +80,14 @@ async function doLogout(): Promise<void> {
       <section class="section">
         <h2 class="section-title">修改 PIN 码</h2>
         <ChangePinForm />
+      </section>
+
+      <section class="section" data-test="memory-entry-section">
+        <h2 class="section-title">长期知识</h2>
+        <p class="meta">管理待确认记忆、共享范围和可追溯的知识引用。</p>
+        <el-button type="primary" plain data-test="go-memory" @click="router.push('/memory')">
+          打开记忆与知识
+        </el-button>
       </section>
 
       <section class="section" data-test="disclosure-section">

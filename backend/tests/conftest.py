@@ -16,6 +16,11 @@ os.environ.setdefault("AGENT_SERVICE_SECRET", "test-agent-service-secret")
 os.environ.setdefault("AGENT_RUNTIME_ENABLED", "1")
 # V2.4 Steward：测试默认开启 feature flag（生产默认关闭）
 os.environ.setdefault("STEWARD_ENABLED", "1")
+# V2.5 Memory/RAG/BehaviorProjection：测试默认开启（生产可独立关闭）
+os.environ.setdefault("MEMORY_ENABLED", "1")
+os.environ.setdefault("RAG_ENABLED", "1")
+os.environ.setdefault("BEHAVIOR_PROJECTION_ENABLED", "1")
+os.environ.setdefault("POLICY_GUARD_ENABLED", "1")
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="familygraph-tests-")
 
 # 环境变量就绪后才能导入 config（其路径/密钥在导入时读取）
@@ -57,6 +62,13 @@ _TABLES = (
     "agent_sessions",
     "agent_space_provider_settings",
     "agent_providers",
+    # v2.5 memory/RAG/context projections
+    "context_build_items",
+    "context_builds",
+    "rag_chunks",
+    "rag_documents",
+    "memories",
+    "memory_candidates",
     # v2.4 steward 块：action_cards/steward_jobs 引用 accounts/users/spaces，先于父表删
     "behavior_projections",
     "steward_jobs",

@@ -1,14 +1,14 @@
 # V2.5 Memory、RAG 与 Policy Guard 实施计划
 
-- [ ] 定义 MemoryCandidate/Memory/RAGDocument/Chunk/ContextBuild/BehaviorProjection schema 与迁移。
-- [ ] 实现 MemoryCandidateExtractor、确认/选择 scope/撤销/删除 UI 与 API。
-- [ ] 建立 RAG ingestion 白名单、FTS5 trigram、可选 embedding adapter 和 metadata filter。
-- [ ] 实现 RAGGateway 的 pre/post filter、citation、invalidation/tombstone/rebuild。
-- [ ] 实现 BehaviorProjection projector，消费 V2.4 DomainEvent，不采集泛行为。
-- [ ] 实现 ContextBuilder 的 scope/sensitivity/trust/rank/budget/provider 决策与可追溯记录。
-- [ ] 编写 `familygraph-policy-guard` 六个 hook；把 DB 预取放在 Run context endpoint，不放 context hook。
-- [ ] 扩展 Assistant 与 Steward tools/context；增加 Memory/RAG 管理和引用 UI。
-- [ ] 完成 prompt injection、PII/secret、跨 scope、删除传播、本地强制和性能测试。
+- [x] 定义 MemoryCandidate/Memory/RAGDocument/Chunk/ContextBuild/BehaviorProjection schema 与迁移。
+- [x] 实现 MemoryCandidateExtractor、确认/选择 scope/撤销/删除 UI 与 API。
+- [x] 建立 RAG ingestion 白名单、FTS5 trigram、可选 embedding adapter 和 metadata filter。
+- [x] 实现 RAGGateway 的 pre/post filter、citation、invalidation/tombstone/rebuild。
+- [x] 实现 BehaviorProjection projector，消费 V2.4 DomainEvent，不采集泛行为。
+- [x] 实现 ContextBuilder 的 scope/sensitivity/trust/rank/budget/provider 决策与可追溯记录。
+- [x] 编写 `familygraph-policy-guard` 六个 hook；把 DB 预取放在 Run context endpoint，不放 context hook。
+- [x] 扩展 Assistant 与 Steward tools/context；增加 Memory/RAG 管理和引用 UI。
+- [x] 完成 prompt injection、PII/secret、跨 scope、删除传播、本地强制和性能测试。
 
 ## 验证
 
