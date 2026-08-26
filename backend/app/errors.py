@@ -49,6 +49,9 @@ VALIDATION_ERROR = "VALIDATION_ERROR"
 DISCLOSURE_SCOPE_REQUIRES_SELF = "DISCLOSURE_SCOPE_REQUIRES_SELF"  # v2：逐空间披露仅本人可改
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
+# ---- V2.2 只读 Assistant 领域工具 ----
+FG_PROFILE_NOT_AVAILABLE = "FG_PROFILE_NOT_AVAILABLE"  # 档案不可见/不存在统一拒绝（防枚举）
+
 # ---- V2.1 Agent Runtime（内部协议 fail-closed 错误码）----
 AGENT_DISABLED = "AGENT_DISABLED"  # feature flag 关闭（RT-6 默认关）
 AGENT_TOKEN_INVALID = "AGENT_TOKEN_INVALID"  # service/run token 缺失/签名/过期/类型错

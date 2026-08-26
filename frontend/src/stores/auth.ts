@@ -39,6 +39,8 @@ export const useAuthStore = defineStore('auth', () => {
     useMembersStore().clear()
     // v2 治理缓存（确档/数据权利/争议）随会话清空，避免身份切换后残留
     void import('@/stores/governance').then((m) => m.useGovernanceStore().clear())
+    // Agent 会话/SSE/草稿（V2.2）：关流、清分区、删 sessionStorage Run 游标
+    void import('@/stores/agent').then((m) => m.useAgentStore().clear())
     // 延迟导入避免循环依赖：graph/spaces 依赖 auth 时经由函数内解析
     void import('@/stores/graph').then((m) => m.useGraphStore().clear())
     void import('@/stores/spaces').then((m) => m.useSpacesStore().clear())

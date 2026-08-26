@@ -59,3 +59,12 @@
 - SSE 断点续传无漏序、终态后连接关闭。
 - Provider 矩阵五态 + secret 不回显。
 - sidecar 侧：mock FastAPI 强制权威形状（严格校验请求体、204 空 body、ContextOut 归一化）。
+
+## 8. 只读领域工具层（V2.2 起）
+
+- 六个 `familygraph.*@1` 查询工具实现在 `services/agent_query.py`，注册表 schema 在 `agent_tools.py`：input 一律 `additionalProperties:false`（拒绝任意 actor/space 字段），scope 只取 run token claims；数值边界服务层强制（注册表子集校验器不支持 min/max）。
+- **投影口径**：`get_profile_summary` 复用 `visibility.evaluate(purpose=PURPOSE_AGENT) + payload_from_decision`，与 users 路由同一对原语；purpose=agent 上限 lineage_summary ≤ profile API，只紧不松。禁止在工具内重写可见性规则或返回 ORM 对象。
+- **防枚举**：不存在与不可见同码 `FG_PROFILE_NOT_AVAILABLE`；关系路径 BFS 对不可见途经节点剪枝，不泄露存在性。
+- **零写入**：查询工具纯 SELECT；新增写类工具前必须先落地 (run_id, tool_call_id) 去重表（见 §4 红线）。
+- **双侧 schema 同步**：TypeBox 声明与后端 input_schema 必须逐字段同类型同名——实际发生过 cursor string vs integer 漂移；新增字段时两侧同改并加快照测试。
+- **前端 SSE**：EventSource 无法带 Authorization header，必须 fetch+ReadableStream 手工分帧解析；Last-Event-ID 续传、401→refresh→重连一次收口、终态事件后不再重连。错误码→文案映射表须覆盖后端可能返回的全部 agent 错误码（含 run.failed 载荷中的 POLICY_*/PROVIDER_*/SIDECAR_ERROR）。
