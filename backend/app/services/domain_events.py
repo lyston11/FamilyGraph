@@ -14,6 +14,17 @@ from sqlalchemy.orm import Session
 from app.models.v2_foundation import DomainEvent
 from app.utils.timeutil import utcnow
 
+_INTERNAL_STEWARD_EVENT_PREFIXES = ("card.", "steward.")
+
+
+def _schedule_steward_job(event: DomainEvent, session: Session) -> None:
+    """在领域事件所属事务内登记 Steward 水位，避免提交后丢触发。"""
+    if not event.type.startswith(_INTERNAL_STEWARD_EVENT_PREFIXES):
+        # Import lazily: steward imports this module to append its own events.
+        from app.services.steward import schedule_steward_job_for_event
+
+        schedule_steward_job_for_event(session, event)
+
 
 def emit(
     session: Session,
@@ -36,4 +47,5 @@ def emit(
         created_at=utcnow(),
     )
     session.add(event)
+    _schedule_steward_job(event, session)
     return event

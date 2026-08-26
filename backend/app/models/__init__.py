@@ -12,6 +12,7 @@ from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
 from app.models.relationship_facts import RawRelationInput, SocialRelation, SourceFact
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
+from app.models.steward import ActionCard, BehaviorProjection, StewardJob
 from app.models.term_registry import TermEntry, TermUsage
 from app.models.user import User
 from app.models.v2_foundation import (
@@ -27,6 +28,7 @@ from app.models.v2_foundation import (
 
 __all__ = [
     "Account",
+    "ActionCard",
     "AgentJob",
     "AgentMessage",
     "AgentProvider",
@@ -37,6 +39,7 @@ __all__ = [
     "AuditLog",
     "AuthChallenge",
     "Base",
+    "BehaviorProjection",
     "ClaimDispute",
     "DataRightRequest",
     "DerivedFact",
@@ -55,6 +58,7 @@ __all__ = [
     "SourceFact",
     "SpaceMember",
     "SpaceProfileRef",
+    "StewardJob",
     "TermEntry",
     "TermUsage",
     "User",

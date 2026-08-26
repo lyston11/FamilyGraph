@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
+import { useActionCardsStore } from '@/stores/actionCards'
 import type { ActiveRunView, AgentMessageView, ToolSummaryView } from '@/stores/agent'
 
 /**
@@ -12,7 +14,11 @@ const props = defineProps<{
   messages: AgentMessageView[]
   toolSummaries: ToolSummaryView[]
   run: ActiveRunView | null
+  /** Assistant 消息引用卡片时使用的当前空间；其它场景可不传。 */
+  spaceId?: number | null
 }>()
+
+const actionCards = useActionCardsStore()
 
 const runActive = computed(() => props.run !== null && !props.run.terminal)
 
@@ -40,12 +46,21 @@ function roleLabel(role: AgentMessageView['role']): string {
   return role === 'user' ? '我' : '助手'
 }
 
-/** 预生成稳定 key（规避 vue-tsc 对 template v-for index 的误报） */
 const items = computed(() =>
-  props.messages.map((message, index) => ({
-    ...message,
-    key: `${index}-${message.id ?? 'local'}`,
-  })),
+  props.messages.map((message, index) => {
+    const spaceId = props.spaceId
+    const cards =
+      message.role === 'assistant' && typeof spaceId === 'number'
+        ? (message.cardIds ?? [])
+            .map((cardId) => actionCards.cardsOf(spaceId).find((card) => card.id === cardId))
+            .filter((card): card is NonNullable<typeof card> => card !== undefined)
+        : []
+    return {
+      ...message,
+      cards,
+      key: `${index}-${message.id ?? 'local'}`,
+    }
+  }),
 )
 </script>
 
@@ -68,6 +83,9 @@ const items = computed(() =>
           <span v-else-if="item.status === 'failed'" class="failed-mark">发送失败</span>
         </div>
         <span class="sr-only">{{ roleLabel(item.role) }}说</span>
+        <div v-if="item.cards.length > 0" class="message-cards" data-test="message-cards">
+          <ActionCardItem v-for="card in item.cards" :key="card.id" :card="card" />
+        </div>
       </div>
     </template>
 
@@ -121,6 +139,11 @@ const items = computed(() =>
   display: flex;
 }
 
+.bubble-row.assistant {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
 .bubble-row.user {
   justify-content: flex-end;
 }
@@ -147,6 +170,11 @@ const items = computed(() =>
 .bubble.failed {
   background: var(--el-color-danger-light-9);
   color: var(--el-color-danger);
+}
+
+.message-cards {
+  width: min(100%, 420px);
+  margin-top: 6px;
 }
 
 .pending-mark,

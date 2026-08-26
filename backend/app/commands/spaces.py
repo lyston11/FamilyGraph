@@ -15,6 +15,7 @@ from app.errors import (
     SPACE_FORBIDDEN_ACTOR,
     SPACE_NOT_FOUND,
     USER_NOT_FOUND,
+    VALIDATION_ERROR,
     raise_api_error,
 )
 from app.models import User
@@ -301,6 +302,159 @@ def request_join_by_user(
                 detail={"space_id": space.id},
             )
     return member
+
+
+def create_shared_household(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    other_user_id: int,
+    name: str | None = None,
+    commit: bool = True,
+) -> tuple[FamilySpace, int]:
+    """共同创建 HouseholdSpace，并把双方作为 active 成员加入。
+
+    返回新空间和 membership 领域事件 id；``commit=False`` 仅供上层应用命令
+    把空间创建、卡片执行状态和审计合并进同一个短事务。
+    """
+    actor = load_actor(session, ctx)
+    with command_transaction(session, commit=commit):
+        other = session.get(User, other_user_id)
+        if other is None:
+            raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
+        if other.id == actor.id:
+            raise_api_error(422, VALIDATION_ERROR, "不能与自己创建共同家庭空间")
+        if (
+            actor.profile_status != "identity_confirmed"
+            or other.profile_status != "identity_confirmed"
+        ):
+            raise_api_error(409, VALIDATION_ERROR, "双方档案尚未完成身份确认")
+
+        now = utcnow()
+        space_name = (name or "").strip() or f"{actor.name} 与 {other.name}的家庭"
+        space = FamilySpace(
+            name=space_name,
+            owner_id=actor.id,
+            kind="household",
+            created_at=now,
+        )
+        session.add(space)
+        session.flush()
+        session.add_all(
+            [
+                SpaceMember(
+                    space_id=space.id,
+                    user_id=actor.id,
+                    added_by=actor.id,
+                    role="owner",
+                    status="active",
+                    created_at=now,
+                    updated_at=now,
+                ),
+                SpaceMember(
+                    space_id=space.id,
+                    user_id=other.id,
+                    added_by=actor.id,
+                    role="member",
+                    status="active",
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+        session.flush()
+        emit(
+            session,
+            event_type="space.created",
+            aggregate_type="space",
+            aggregate_id=space.id,
+            payload={"name": space.name, "kind": "household", "owner_id": actor.id},
+            space_id=space.id,
+            actor_account_id=ctx.account_id,
+        )
+        membership_event = emit(
+            session,
+            event_type="space.membership.changed",
+            aggregate_type="space",
+            aggregate_id=space.id,
+            payload={
+                "action": "household_link_activated",
+                "user_ids": [actor.id, other.id],
+                "by": actor.id,
+            },
+            space_id=space.id,
+            actor_account_id=ctx.account_id,
+        )
+        audit.write_audit(
+            session,
+            action="space_created",
+            actor_id=actor.id,
+            target_id=space.id,
+            ip=ctx.ip,
+            detail={"name": space.name, "kind": "household", "linked_user_id": other.id},
+        )
+        session.flush()
+    return space, membership_event.id
+
+
+def request_lineage_membership(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    target_space_id: int,
+    target_user_id: int,
+    commit: bool = True,
+) -> tuple[SpaceMember, int]:
+    """向指定 LineageSpace 发起 pending 加入申请，不自动激活成员资格。"""
+    from app.services import visibility
+
+    actor = load_actor(session, ctx)
+    with command_transaction(session, commit=commit):
+        target_space = _space_or_404(session, target_space_id)
+        if target_space.kind != "lineage":
+            raise_api_error(422, VALIDATION_ERROR, "加入申请目标必须是家族空间")
+        target = session.get(User, target_user_id)
+        if target is None:
+            raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
+        if target.id == actor.id:
+            raise_api_error(422, VALIDATION_ERROR, "不能申请加入自己的家族空间")
+        if target.profile_status != "identity_confirmed":
+            raise_api_error(409, VALIDATION_ERROR, "对方档案尚未完成身份确认")
+        if not visibility.evaluate(session, actor, target).visible:
+            raise_api_error(404, USER_NOT_FOUND, "对方不存在或不可见")
+        _require_active_member(session, target_space.id, target.id)
+        if space_fsm.is_active_member(session, target_space.id, actor.id):
+            raise_api_error(409, VALIDATION_ERROR, "你已经是该家族空间成员")
+
+        member, _created = space_fsm.invite(
+            session,
+            space=target_space,
+            user_id=actor.id,
+            added_by=actor.id,
+        )
+        event = emit(
+            session,
+            event_type="space.membership.changed",
+            aggregate_type="space",
+            aggregate_id=target_space.id,
+            payload={
+                "action": "lineage_join_requested",
+                "user_id": actor.id,
+                "member_id": member.id,
+            },
+            space_id=target_space.id,
+            actor_account_id=ctx.account_id,
+        )
+        audit.write_audit(
+            session,
+            action="space_join_requested",
+            actor_id=actor.id,
+            target_id=target.id,
+            ip=ctx.ip,
+            detail={"space_id": target_space.id, "member_id": member.id},
+        )
+        session.flush()
+    return member, event.id
 
 
 def save_positions(

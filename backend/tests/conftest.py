@@ -14,6 +14,8 @@ os.environ.setdefault("BCRYPT_ROUNDS", "4")
 # V2.1 Agent Runtime：测试默认开启 feature flag 并配置共享密钥（生产默认关闭/必配）
 os.environ.setdefault("AGENT_SERVICE_SECRET", "test-agent-service-secret")
 os.environ.setdefault("AGENT_RUNTIME_ENABLED", "1")
+# V2.4 Steward：测试默认开启 feature flag（生产默认关闭）
+os.environ.setdefault("STEWARD_ENABLED", "1")
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="familygraph-tests-")
 
 # 环境变量就绪后才能导入 config（其路径/密钥在导入时读取）
@@ -55,6 +57,10 @@ _TABLES = (
     "agent_sessions",
     "agent_space_provider_settings",
     "agent_providers",
+    # v2.4 steward 块：action_cards/steward_jobs 引用 accounts/users/spaces，先于父表删
+    "behavior_projections",
+    "steward_jobs",
+    "action_cards",
     # v2.3 事实层：source_facts 引用 raw_relation_inputs，须先删子表；
     # derived_facts 只引用 users/family_spaces，置于其前即可；
     # term_usages 引用 term_entries，须先删

@@ -7,6 +7,7 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { VueFlow, useVueFlow, type Edge as FlowEdge, type Node as FlowNode } from '@vue-flow/core'
 
+import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import GlobalSearch from '@/components/common/GlobalSearch.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import RelationLookup from '@/components/kinship/RelationLookup.vue'
@@ -14,6 +15,7 @@ import PendingProfileRefs from '@/components/member/PendingProfileRefs.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import SpaceGovernanceDialog from '@/components/member/SpaceGovernanceDialog.vue'
 import { computeCanvasLayout, computeTreeLayout, type PositionedNode } from '@/composables/useLayout'
+import { useActionCardsStore } from '@/stores/actionCards'
 import { useAuthStore } from '@/stores/auth'
 import { useGraphStore } from '@/stores/graph'
 import { useKinshipStore } from '@/stores/kinship'
@@ -35,6 +37,7 @@ const members = useMembersStore()
 const spaces = useSpacesStore()
 const graph = useGraphStore()
 const kinship = useKinshipStore()
+const actionCards = useActionCardsStore()
 const router = useRouter()
 
 type Mode = LayoutMode
@@ -62,6 +65,8 @@ watch(
     // V2.3：切换空间即清空旧空间的称谓缓存与解析态（state-management.md 失效边界）
     if (typeof previousId === 'number' && typeof id === 'number' && previousId !== id) {
       kinship.resetForSpace(previousId)
+      // V2.4：切换空间即清空旧空间的管家建议缓存（state-management.md 失效边界）
+      actionCards.resetForSpace(previousId)
     }
     if (id !== null) {
       await loadPositions()
@@ -293,6 +298,9 @@ void router
 
     <!-- 关系查询（V2.3 KI-3）：自由文本解析；flag 关闭时组件自隐藏 -->
     <RelationLookup />
+
+    <!-- 管家建议 Inbox（V2.4）：入口 + pending 徽章；403/503 自隐藏 -->
+    <ActionCardInbox />
 
     <div class="filter-row">
       <input
