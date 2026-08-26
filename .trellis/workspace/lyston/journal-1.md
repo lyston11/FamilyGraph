@@ -105,3 +105,24 @@ cursor string vs integer 双侧漂移一处（sidecar 对齐后端 integer）—
 
 ### Next Steps
 归档 V2.2 → V2.3 Relationship Intelligence（确定性关系推理与称谓系统）。
+
+
+## Session 2: Completed V2.4 Steward and ActionCard
+
+**Date**: 2026-08-27
+**Task**: Completed V2.4 Steward and ActionCard
+**Branch**: `main`
+
+### Summary
+
+Delivered space-scoped Steward jobs, DomainEvent-triggered scheduling, deterministic recommendation matrix, ActionCard FSM with dedupe/cooldown/supersede, revalidated execute commands, and shared Inbox/Assistant rendering. Added cross-space, evidence, membership, target-space, disclosure, idempotency, and two-step confirmation tests. Updated backend/frontend code-specs and passed 445 backend tests plus 159 frontend tests with mypy/ruff/type-check/lint/build.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6b63aee` | (see git log) |
+
+### Status
+
+[OK] **Completed**
