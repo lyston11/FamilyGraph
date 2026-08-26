@@ -19,11 +19,27 @@ _INTERNAL_STEWARD_EVENT_PREFIXES = ("card.", "steward.")
 
 def _schedule_steward_job(event: DomainEvent, session: Session) -> None:
     """在领域事件所属事务内登记 Steward 水位，避免提交后丢触发。"""
+    if event.space_id is None and (
+        event.type.startswith("memory.") or event.type.startswith("rag.")
+    ):
+        return
     if not event.type.startswith(_INTERNAL_STEWARD_EVENT_PREFIXES):
         # Import lazily: steward imports this module to append its own events.
         from app.services.steward import schedule_steward_job_for_event
 
         schedule_steward_job_for_event(session, event)
+
+
+def _apply_rag_invalidation(event: DomainEvent, session: Session) -> None:
+    # Keep the dependency lazy: memory_rag records events through this module.
+    from app.services.memory_rag import invalidate_for_domain_event
+
+    invalidate_for_domain_event(
+        session,
+        event_type=event.type,
+        aggregate_id=event.aggregate_id,
+        payload=event.payload or {},
+    )
 
 
 def emit(
@@ -47,5 +63,6 @@ def emit(
         created_at=utcnow(),
     )
     session.add(event)
+    _apply_rag_invalidation(event, session)
     _schedule_steward_job(event, session)
     return event

@@ -367,6 +367,20 @@ def delete_profile_core(
         "account_status": target.account.status,
         "created_by": target.created_by,
     }
+    # Publish before the profile is flushed away so the RAG invalidation can
+    # still find documents owned by this profile. The event payload is a
+    # deletion-safe snapshot and does not use a foreign key to the user.
+    emit(
+        session,
+        event_type="profile.deleted",
+        aggregate_type="profile",
+        aggregate_id=target.id,
+        payload={
+            "snapshot_name": snapshot["name"],
+            "deleted_by": ctx.user_id,
+            "deleted_by_account": ctx.account_id,
+        },
+    )
     session.delete(target)  # flush 时级联删除账号等子行，audit 行保留（无 FK）
     try:
         session.flush()
@@ -379,18 +393,8 @@ def delete_profile_core(
             "该档案是家庭空间所有者，请先完成 owner 移交后再删除",
         )
 
-    # 删除后发布的事件不得引用已删除的 user/account（FK），身份记入 payload 快照
-    emit(
-        session,
-        event_type="profile.deleted",
-        aggregate_type="profile",
-        aggregate_id=target.id,
-        payload={
-            "snapshot_name": snapshot["name"],
-            "deleted_by": ctx.user_id,
-            "deleted_by_account": ctx.account_id,
-        },
-    )
+    # The deletion event was emitted before the cascade so RAG tombstones are
+    # durable even when the owner_user_id foreign key is set NULL by SQLite.
     emit(
         session,
         event_type="attachments.invalidated",

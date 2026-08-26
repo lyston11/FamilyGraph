@@ -77,6 +77,16 @@ export interface RunContextProvider {
  * object and no system prompt — the system prompt is a sidecar-local constant
  * (domain prompts arrive in V2.2+).
  */
+export interface RunContextBlock {
+  source_id: string;
+  source_type: string;
+  scope: string;
+  sensitivity: string;
+  revision: number;
+  citation: string;
+  content: string;
+}
+
 export interface RunContextProjection {
   run_id: string;
   session_id: string;
@@ -88,6 +98,7 @@ export interface RunContextProjection {
   policy_version: string;
   tool_allowlist: string[];
   messages: RunContextMessage[];
+  context_blocks?: RunContextBlock[];
   provider: RunContextProvider | null;
   cancel_requested: boolean;
 }
@@ -125,6 +136,9 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
       ? (raw["tool_allowlist"] as unknown[]).map(String)
       : [],
     messages,
+    context_blocks: Array.isArray(raw["context_blocks"])
+      ? (raw["context_blocks"] as RunContextBlock[])
+      : [],
     provider: normalizeProvider(raw["provider"]),
     cancel_requested: Boolean(raw["cancel_requested"]),
   };

@@ -929,6 +929,12 @@ def test_projection_roundtrip_and_whitelist(db_session) -> None:
     db_session.commit()
     assert row2.id == row.id
     assert row2.value_json == {"until": "2099-02-02T00:00:00"}
+    assert (
+        steward.rebuild_behavior_projections(db_session, space_id=space.id, account_id=account_id)
+        == 0
+    )
+    assert db_session.get(BehaviorProjection, row.id) is None
+    db_session.commit()
     # 非白名单前缀被拒
     with pytest.raises(fastapi.HTTPException) as exc_info:
         steward.put_projection(

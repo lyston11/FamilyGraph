@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
+import CitationList from '@/components/memory/CitationList.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
 import type { ActiveRunView, AgentMessageView, ToolSummaryView } from '@/stores/agent'
 
@@ -58,6 +59,7 @@ const items = computed(() =>
     return {
       ...message,
       cards,
+      citations: message.citations ?? [],
       key: `${index}-${message.id ?? 'local'}`,
     }
   }),
@@ -83,6 +85,9 @@ const items = computed(() =>
           <span v-else-if="item.status === 'failed'" class="failed-mark">发送失败</span>
         </div>
         <span class="sr-only">{{ roleLabel(item.role) }}说</span>
+        <div v-if="item.citations.length > 0" class="message-citations" data-test="message-citations">
+          <CitationList :citations="item.citations" compact />
+        </div>
         <div v-if="item.cards.length > 0" class="message-cards" data-test="message-cards">
           <ActionCardItem v-for="card in item.cards" :key="card.id" :card="card" />
         </div>

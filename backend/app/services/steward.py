@@ -32,11 +32,12 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import config
 from app.errors import (
+    BEHAVIOR_PROJECTION_DISABLED,
     CARD_INVALID_TRANSITION,
     STEWARD_CAUSE_INVALID,
     STEWARD_DISABLED,
@@ -123,6 +124,8 @@ def put_projection(
         raise_api_error(
             422, CARD_INVALID_TRANSITION, "不允许的行为投影键", detail={"key": projection_key}
         )
+    if not config.BEHAVIOR_PROJECTION_ENABLED:
+        raise_api_error(503, BEHAVIOR_PROJECTION_DISABLED, "行为投影功能未开启")
     row = session.scalar(
         select(BehaviorProjection).where(
             BehaviorProjection.space_id == space_id,
@@ -155,10 +158,12 @@ def set_kind_cooldown(
     kind: str,
     days: int | None = None,
     now: datetime | None = None,
-) -> BehaviorProjection:
+) -> BehaviorProjection | None:
     """卡片 dismissed 后的同 kind 冷却（ST-3：相同证据不重复骚扰的时间维度）。"""
     if kind not in CARD_KINDS:
         raise_api_error(422, CARD_INVALID_TRANSITION, "未知卡片种类", detail={"kind": kind})
+    if not config.BEHAVIOR_PROJECTION_ENABLED:
+        return None
     moment = now or utcnow()
     until = moment + timedelta(days=days if days is not None else config.STEWARD_COOLDOWN_DAYS)
     return put_projection(
@@ -174,6 +179,8 @@ def set_kind_cooldown(
 def kind_in_cooldown(
     session: Session, *, space_id: int, account_id: int, kind: str, now: datetime | None = None
 ) -> bool:
+    if not config.BEHAVIOR_PROJECTION_ENABLED:
+        return False
     row = session.scalar(
         select(BehaviorProjection).where(
             BehaviorProjection.space_id == space_id,
@@ -193,7 +200,109 @@ def kind_in_cooldown(
     return until > (now or utcnow())
 
 
-# ---- Durable queue（复用 agent_queue 的立即事务模式）----
+def rebuild_behavior_projections(
+    session: Session,
+    *,
+    space_id: int,
+    account_id: int | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Rebuild the allow-listed behavior projection from domain events.
+
+    Projection rows are a cache, not an authority.  Replaying only explicit
+    card/term events makes the result deterministic and avoids persisting
+    keyboard, click, hover, or dwell-time telemetry.
+    """
+    if not config.BEHAVIOR_PROJECTION_ENABLED:
+        return 0
+    event_accounts = {
+        int(value)
+        for value in session.scalars(
+            select(DomainEvent.actor_account_id).where(
+                DomainEvent.space_id == space_id,
+                DomainEvent.actor_account_id.is_not(None),
+                DomainEvent.type.in_(
+                    ("card.dismissed", "term.personal_updated", "term.usage_recorded")
+                ),
+            )
+        )
+        if value is not None
+    }
+    if account_id is not None:
+        account_ids = {account_id}
+        session.execute(
+            delete(BehaviorProjection).where(
+                BehaviorProjection.space_id == space_id,
+                BehaviorProjection.account_id == account_id,
+            )
+        )
+    else:
+        account_ids = event_accounts
+        session.execute(delete(BehaviorProjection).where(BehaviorProjection.space_id == space_id))
+    if not account_ids:
+        return 0
+
+    events = list(
+        session.scalars(
+            select(DomainEvent)
+            .where(
+                DomainEvent.space_id == space_id,
+                DomainEvent.actor_account_id.in_(account_ids),
+                DomainEvent.type.in_(
+                    ("card.dismissed", "term.personal_updated", "term.usage_recorded")
+                ),
+            )
+            .order_by(DomainEvent.id.asc())
+        )
+    )
+    rebuilt = 0
+    usage_counts: dict[tuple[int, str], int] = {}
+    for event in events:
+        actor = event.actor_account_id
+        if actor is None:
+            continue
+        payload = event.payload or {}
+        if event.type == "card.dismissed":
+            kind = payload.get("kind")
+            if isinstance(kind, str) and kind in CARD_KINDS:
+                until = event.created_at + timedelta(days=config.STEWARD_COOLDOWN_DAYS)
+                put_projection(
+                    session,
+                    space_id=space_id,
+                    account_id=actor,
+                    projection_key=f"card_cooldown:{kind}",
+                    value={"until": until.isoformat()},
+                    now=now or event.created_at,
+                )
+                rebuilt += 1
+        elif event.type == "term.personal_updated":
+            concept = payload.get("concept_code")
+            entry_id = payload.get("entry_id")
+            if isinstance(concept, str) and isinstance(entry_id, int):
+                put_projection(
+                    session,
+                    space_id=space_id,
+                    account_id=actor,
+                    projection_key=f"correction_preference:{concept}",
+                    value={"entry_id": entry_id, "updated_at": event.created_at.isoformat()},
+                    now=now or event.created_at,
+                )
+                rebuilt += 1
+        elif event.type == "term.usage_recorded":
+            concept = payload.get("concept_code")
+            if isinstance(concept, str):
+                key = (actor, concept)
+                usage_counts[key] = usage_counts.get(key, 0) + 1
+                put_projection(
+                    session,
+                    space_id=space_id,
+                    account_id=actor,
+                    projection_key=f"term_usage:{concept}",
+                    value={"count": usage_counts[key], "updated_at": event.created_at.isoformat()},
+                    now=now or event.created_at,
+                )
+                rebuilt += 1
+    return rebuilt
 
 
 def _cause_for_event(event_type: str) -> str:

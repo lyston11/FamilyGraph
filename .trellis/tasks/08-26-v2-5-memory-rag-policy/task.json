@@ -3,7 +3,7 @@
   "name": "v2-5-memory-rag-policy",
   "title": "FamilyGraph V2.5 Memory、RAG 与 Policy Guard",
   "description": "交付确认记忆、作用域 RAG、行为投影、Context Builder 与 Pi 安全扩展",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

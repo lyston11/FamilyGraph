@@ -25,6 +25,7 @@ from app.api.graph import router as graph_router
 from app.api.health import router as health_router
 from app.api.internal_agent import router as internal_agent_router
 from app.api.kinship import router as kinship_router
+from app.api.memory import router as memory_router
 from app.api.misc import router as misc_router
 from app.api.spaces import router as spaces_router
 from app.api.users import members_router
@@ -135,6 +136,8 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(kinship_router, prefix="/api")
 # V2.4 ActionCard 生命周期（浏览器面；STEWARD_ENABLED 默认关，503）
 app.include_router(action_cards_router, prefix="/api")
+# V2.5 Memory cards and scope-filtered RAG
+app.include_router(memory_router, prefix="/api")
 # Agent Provider 治理：platform_operator 专属（同样受 feature flag 门禁）
 app.include_router(admin_agent_router, prefix="/api/admin/agent")
 # Internal Agent 协议：仅内部网络可达（sidecar → FastAPI），不走 /api 前缀，

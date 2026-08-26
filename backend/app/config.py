@@ -84,6 +84,17 @@ STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))
 STEWARD_CARD_TTL_DAYS: int = int(os.environ.get("STEWARD_CARD_TTL_DAYS", "14"))
 STEWARD_COOLDOWN_DAYS: int = int(os.environ.get("STEWARD_COOLDOWN_DAYS", "7"))
 
+# ---- V2.5 Memory / RAG / Policy Guard（可独立回滚，默认关闭 Memory/RAG）----
+# 关闭 Memory 时不产生候选/确认记忆；RAG 关闭时保留结构化 Assistant 工具路径，
+# 不把会话全文作为隐式补偿 Context。Policy Guard 关闭时 fail-closed，不向 Provider 发送请求。
+MEMORY_ENABLED: bool = os.environ.get("MEMORY_ENABLED", "").lower() in ("1", "true")
+RAG_ENABLED: bool = os.environ.get("RAG_ENABLED", "").lower() in ("1", "true")
+BEHAVIOR_PROJECTION_ENABLED: bool = os.environ.get("BEHAVIOR_PROJECTION_ENABLED", "").lower() in (
+    "1",
+    "true",
+)
+POLICY_GUARD_ENABLED: bool = os.environ.get("POLICY_GUARD_ENABLED", "1").lower() in ("1", "true")
+
 
 def ensure_data_dirs() -> None:
     """确保数据卷目录存在（db/uploads/backups），幂等。"""

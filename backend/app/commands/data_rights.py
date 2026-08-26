@@ -356,7 +356,7 @@ def execute_delete_request(
             event_type="data_right.delete.executed",
             aggregate_type="data_right_request",
             aggregate_id=request.id,
-            payload={"profile_id": actor.id, "requestor_account": ctx.account_id},
+            payload={"profile_id": subject.id, "requestor_account": ctx.account_id},
             actor_account_id=ctx.account_id,
         )
         audit.write_audit(
@@ -365,7 +365,7 @@ def execute_delete_request(
             actor_id=actor.id,
             target_id=request.id,
             ip=ctx.ip,
-            detail={"type": "delete", "subject": actor.id},
+            detail={"type": "delete", "subject": subject.id},
         )
 
         deleted = delete_profile_core(session, ctx, subject, confirm_name=confirm_name)

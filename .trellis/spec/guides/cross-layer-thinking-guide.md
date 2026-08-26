@@ -51,7 +51,27 @@ For each boundary:
 
 ---
 
-## Common Cross-Layer Mistakes
+## FamilyGraph V2.5 真源—投影—上下文复审（2026-08-26）
+
+V2.5 的跨层数据流必须保持以下边界：
+
+```text
+AgentMessage / 授权文档
+  → MemoryCandidate（仅待审）
+  → explicit confirm + scope/visibility checks
+  → Memory / RAGDocument / RAGChunk
+  → SQL scope filter + VisibilityPolicy + sensitivity filter
+  → RAGHit / ContextBuild
+  → Node Policy Guard
+  → Provider payload / Assistant response
+```
+
+- `AgentMessage`、候选原文、Memory、RAG 文档、ContextBuild 和摘要是不同记录链；任意一层的摘要都不能代替上一层真源。
+- 每个跨层 payload 必须携带可追溯的 `source_id`/`source_type`、revision、scope、citation 或 event id；消费方复用共享 schema/decoder，不在组件或 hook 内重复 cast。
+- 删除/撤销/过期事件先让服务端授权查询失效，再清理 FTS/embedding 物理数据；UI 和 Agent 都以同一服务端状态为准。
+- Provider/Guard 只是第二道防线，不会扩大 FastAPI 已授予的可见性；相反，任何不确定、masked 或敏感 payload 必须继续收紧。
+- `BehaviorProjection` 是由 append-only `DomainEvent` 重建的派生缓存；不得把 projection、ContextBuild 或 Agent 摘要反向当作 SourceFact、原始话语或 Memory 原文。
+
 
 ### Mistake 1: Implicit Format Assumptions
 

@@ -35,6 +35,7 @@ from app.errors import (
     extract_api_error,
     raise_api_error,
 )
+from app.models.account import Account
 from app.models.agent import AgentJob, AgentMessage, AgentRun, AgentSession
 from app.schemas.agent import (
     ContextMessageOut,
@@ -52,7 +53,16 @@ from app.schemas.agent import (
     ToolExecuteOut,
     ToolExecuteRequest,
 )
-from app.services import agent_events, agent_provider, agent_queue, agent_tokens, agent_tools, audit
+from app.services import (
+    agent_events,
+    agent_provider,
+    agent_queue,
+    agent_tokens,
+    agent_tools,
+    audit,
+    context_builder,
+    policy_guard,
+)
 from app.services.agent_events import EventEntry
 from app.utils import security, timeutil
 
@@ -287,6 +297,35 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
     )
     recent.reverse()
     resolution = agent_provider.resolve_for_space(db, agent_session.space_id)
+    context_build_id: int | None = None
+    context_blocks: list[dict[str, object]] = []
+    latest_text = next(
+        (
+            message.content_json.get("text")
+            for message in reversed(recent)
+            if message.role == "user" and isinstance(message.content_json.get("text"), str)
+        ),
+        None,
+    )
+    if isinstance(latest_text, str) and latest_text.strip():
+        actor_account = db.get(Account, agent_session.account_id)
+        if actor_account is not None:
+            built = context_builder.ContextBuilder(db).build(
+                actor=actor_account.user,
+                space_id=agent_session.space_id,
+                agent_kind=agent_session.agent_kind,
+                query=latest_text,
+                run_id=run.id,
+                provider_kind=resolution.kind,
+                policy_version=run.policy_version,
+            )
+            context_build_id = built.build_id
+            context_blocks = (
+                policy_guard.enforce(policy_guard.context_hook(built.as_data_blocks())) or []
+            )
+            # ContextBuild/Items are the auditable server-side record for this
+            # prefetch.  Persist only after all policy checks succeed.
+            db.commit()
     return ContextOut(
         run_id=run.id,
         session_id=agent_session.id,
@@ -311,6 +350,8 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
             secret_ref=resolution.secret_ref,
         ),
         cancel_requested=bool(run.cancel_requested),
+        context_build_id=context_build_id,
+        context_blocks=context_blocks,
     )
 
 
@@ -371,6 +412,13 @@ def execute_tool(
     db: Session = Depends(get_db),
 ) -> ToolExecuteOut:
     run, agent_session, claims = _authorize_run(db, request, run_id)
+    decision = policy_guard.tool_call_hook(
+        tool=tool_name,
+        version=body.version,
+        arguments=body.input,
+        allowlist=claims["tool_allowlist"],
+    )
+    policy_guard.enforce(decision, code="POLICY_TOOL_BLOCKED")
     # running 态门禁与四类拒绝码在服务层统一执行并写审计
     output = agent_tools.execute(
         db,
@@ -383,6 +431,10 @@ def execute_tool(
         tool_call_id=body.tool_call_id,
     )
     db.commit()
+    result_decision = policy_guard.tool_result_hook(output)
+    safe_output = policy_guard.enforce(result_decision, code="POLICY_TOOL_RESULT_BLOCKED")
+    if isinstance(safe_output, dict):
+        output = safe_output
     return ToolExecuteOut(ok=True, tool=tool_name, version=body.version, output=output)
 
 
@@ -394,6 +446,9 @@ def settle_run_endpoint(
     db: Session = Depends(get_db),
 ) -> SettleOut:
     run, _agent_session, _claims = _authorize_run(db, request, run_id)
+    policy_guard.enforce(
+        policy_guard.agent_settled(status=body.status), code="POLICY_PROVIDER_BLOCKED"
+    )
     try:
         settled = agent_queue.settle_run(
             db, run, status=body.status, error_code=body.error_code, error=body.error
