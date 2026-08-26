@@ -11,6 +11,9 @@ import tempfile
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 # bcrypt cost 降级：套件速度（生产默认 12）
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
+# V2.1 Agent Runtime：测试默认开启 feature flag 并配置共享密钥（生产默认关闭/必配）
+os.environ.setdefault("AGENT_SERVICE_SECRET", "test-agent-service-secret")
+os.environ.setdefault("AGENT_RUNTIME_ENABLED", "1")
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="familygraph-tests-")
 
 # 环境变量就绪后才能导入 config（其路径/密钥在导入时读取）
@@ -42,7 +45,16 @@ def db_session():
 
 
 # 清表顺序：子表→父表（满足 FK，无需关外键）。v2 合同表追加于尾部。
+# agent 块：runs.job_id↔jobs.run_id 循环由 ondelete 解环（删 jobs 时 runs.job_id 置空），
+# 故顺序为 events→messages→jobs→runs→sessions。
 _TABLES = (
+    "agent_run_events",
+    "agent_messages",
+    "agent_jobs",
+    "agent_runs",
+    "agent_sessions",
+    "agent_space_provider_settings",
+    "agent_providers",
     "node_positions",
     "attachments",
     "space_profile_refs",
@@ -154,3 +166,74 @@ def login(client: TestClient, name: str, pin: str):
 
 def auth_header(token_pair: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_pair['access_token']}"}
+
+
+# ---- V2.1 Agent Runtime 造数辅助（绕过浏览器 API，浏览器 API 属后续 Block）----
+
+
+def create_agent_fixture(session, *, name: str):
+    """创建 user+account+space 三件套，返回 (user, space)。"""
+    from app.models.space import FamilySpace
+
+    user = create_user_with_pin(session, name, "123456")
+    space = FamilySpace(
+        name=f"{name}-space", kind="household", owner_id=user.id, created_at=user.created_at
+    )
+    session.add(space)
+    session.commit()
+    return user, space
+
+
+def create_agent_session(session, *, account_id: int, space_id: int, kind: str = "assistant"):
+    """直建 AgentSession（scope 固定）。"""
+    from app.models.agent import AgentSession
+    from app.utils import timeutil
+
+    row = AgentSession(
+        account_id=account_id, space_id=space_id, agent_kind=kind, created_at=timeutil.utcnow()
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+def create_agent_message(session, agent_session, *, role: str = "user", content=None):
+    """直建会话消息（content_json 结构化投影，不存 Provider 私有 payload）。"""
+    from app.models.agent import AgentMessage
+    from app.utils import timeutil
+
+    row = AgentMessage(
+        session_id=agent_session.id,
+        role=role,
+        content_json=content or {"text": "hello"},
+        created_at=timeutil.utcnow(),
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+def create_space_member(
+    session,
+    space_id: int,
+    user_id: int,
+    *,
+    role: str = "member",
+    status: str = "active",
+):
+    """直建空间成员行（浏览器 Agent API 测试满足 active 成员校验）。"""
+    from app.models.space import SpaceMember
+    from app.utils import timeutil
+
+    now = timeutil.utcnow()
+    row = SpaceMember(
+        space_id=space_id,
+        user_id=user_id,
+        role=role,
+        status=status,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.commit()
+    return row

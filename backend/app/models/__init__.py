@@ -1,6 +1,8 @@
 """ORM 模型汇总：Alembic env.py 挂载 target_metadata 与测试建表使用。"""
 
 from app.models.account import Account
+from app.models.agent import AgentJob, AgentMessage, AgentRun, AgentRunEvent, AgentSession
+from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.audit_log import AuditLog
 from app.models.auth_challenge import AuthChallenge
 from app.models.base import Base
@@ -22,6 +24,13 @@ from app.models.v2_foundation import (
 
 __all__ = [
     "Account",
+    "AgentJob",
+    "AgentMessage",
+    "AgentProvider",
+    "AgentRun",
+    "AgentRunEvent",
+    "AgentSession",
+    "AgentSpaceProviderSetting",
     "AuditLog",
     "AuthChallenge",
     "Base",

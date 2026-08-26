@@ -12,6 +12,8 @@ from starlette.responses import Response
 
 from app import config, logctx
 from app.api.admin import router as admin_router
+from app.api.admin_agent import router as admin_agent_router
+from app.api.agent import router as agent_router
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
 from app.api.bootstrap import router as bootstrap_router
@@ -20,6 +22,7 @@ from app.api.deps import close_request_db, require_pin_changed
 from app.api.governance import router as governance_router
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
+from app.api.internal_agent import router as internal_agent_router
 from app.api.misc import router as misc_router
 from app.api.spaces import router as spaces_router
 from app.api.users import members_router
@@ -124,3 +127,10 @@ app.include_router(misc_router, prefix="/api")
 app.include_router(attachments_router, prefix="/api")
 app.include_router(spaces_router, prefix="/api")
 app.include_router(governance_router, prefix="/api")
+# 浏览器 Agent API（JWT；feature flag 关闭一律 503，RT-6）
+app.include_router(agent_router, prefix="/api")
+# Agent Provider 治理：platform_operator 专属（同样受 feature flag 门禁）
+app.include_router(admin_agent_router, prefix="/api/admin/agent")
+# Internal Agent 协议：仅内部网络可达（sidecar → FastAPI），不走 /api 前缀，
+# nginx 不代理该前缀；feature flag 关闭时端点一律 503（RT-6）。
+app.include_router(internal_agent_router, prefix="/internal/agent")
