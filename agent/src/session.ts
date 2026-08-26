@@ -32,6 +32,7 @@ import type {
 import type { AgentConfig, ProviderEnvConfig } from "./config.js";
 import { RunEventBuffer } from "./events.js";
 import { createPolicyGuard, type PolicyGuard } from "./policy.js";
+import { ASSISTANT_SYSTEM_PROMPT } from "./prompt.js";
 import { createDomainTools, defaultToolNames, type DomainToolName } from "./tools.js";
 import type { InternalClient, RunContextProjection } from "./client.js";
 
@@ -49,15 +50,6 @@ export class ProviderPolicyError extends Error {
     this.name = new.target.name;
   }
 }
-
-/**
- * Sidecar-local base system prompt (V2.1 runtime validation only).
- * Domain prompts are a V2.2+ concern and no longer travel through the
- * FastAPI context projection.
- */
-export const BASE_SYSTEM_PROMPT =
-  "你是 FamilyGraph 家庭空间助手（runtime 验证阶段的骨架实现），" +
-  "当前仅用于验证 Agent Runtime 执行链路；领域提示词将在后续版本接入。";
 
 export interface SessionBundle {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -137,7 +129,7 @@ export async function buildRunSession(
     !projection.tool_allowlist.every((name) => defaultToolNames().includes(name))
   ) {
     throw new Error(
-      `context allowlist contains tools outside the V2.1 skeleton registry: ${projection.tool_allowlist.join(", ")}`,
+      `context allowlist contains tools outside the sidecar registry: ${projection.tool_allowlist.join(", ")}`,
     );
   }
 
@@ -189,8 +181,9 @@ export async function buildRunSession(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    // System prompt is a sidecar-local constant; domain prompts arrive V2.2+.
-    systemPrompt: BASE_SYSTEM_PROMPT,
+    // System prompt is a sidecar-local constant (V2.2 assistant domain prompt);
+    // it never travels through the FastAPI context projection.
+    systemPrompt: ASSISTANT_SYSTEM_PROMPT,
   });
   await loader.reload();
 

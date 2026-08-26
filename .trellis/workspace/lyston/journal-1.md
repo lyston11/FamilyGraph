@@ -86,3 +86,22 @@ trellis-check PASS（7 非阻塞项，#1/#2 当场修复，其余移交 V2.2/V2.
 
 ### Next Steps
 归档 V2.1 → 启动 V2.2 只读 Assistant（问答/关系解释/悬浮 UI），为其注册 Foundation 只读 scoped tools。
+
+---
+
+## 2026-08-26 · V2.2 只读 Assistant（问答/关系解释/全局悬浮 UI）
+
+### 交付（三并行块）
+- C1 后端：AgentQueryService + 六个 familygraph.*@1 只读工具（purpose=agent 投影、防枚举同码、BFS 剪枝、8KB 截断、23 表零写入快照测试）
+- C2 sidecar：九工具声明接线、ASSISTANT_SYSTEM_PROMPT（事实三态/唯一真源/只读边界/对抗拒绝）、allowlist 放行单测
+- C3 前端：api/store(space_id 分区)/useAgentStream(fetch-SSE+Last-Event-ID+refresh 重连)/八组件（Launcher/Panel 双容器/ScopeBanner/工具 chip/ErrorNotice）/clearSession 联动
+
+### 终态门禁
+backend **281 passed** + mypy strict 83 文件；agent vitest **44**；frontend vitest **112 (21 files)**；三端 lint/type-check/build 全绿。
+compose E2E：入队→租约→context→无真实 key 可解释失败 PROVIDER_UNRESOLVED（预期）。trellis-check PASS（3 项非阻塞，#1/#2 文案映射当场修，#3 移交 V2.3）。
+
+### 联调修复
+cursor string vs integer 双侧漂移一处（sidecar 对齐后端 integer）——再次验证 spec §6「双侧各自实现必漂移」教训，本次在派发前预先逐字段核对才抓出。
+
+### Next Steps
+归档 V2.2 → V2.3 Relationship Intelligence（确定性关系推理与称谓系统）。

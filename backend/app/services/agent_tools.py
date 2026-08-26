@@ -1,8 +1,9 @@
 """版本化领域工具注册表与执行门禁（RT-3 / notes.md）。
 
-首版仅注册测试/只读骨架工具（echo、probe_scope、steward_ping），
-证明「token scope → 注册表校验 → 服务层执行 → 审计」全链路；
-正式业务工具在 V2.2/V2.3 增加。严格校验 fail-closed，四类拒绝码均写安全审计：
+骨架协议工具（echo、probe_scope、steward_ping）验证「token scope → 注册表
+校验 → 服务层执行 → 审计」全链路；V2.2 起六个只读领域工具（AgentQueryService，
+见 services/agent_query.py）以 min_kind=assistant 注册。严格校验 fail-closed，
+四类拒绝码均写安全审计：
 - 未知工具        → AGENT_TOOL_UNKNOWN
 - 版本不匹配      → AGENT_TOOL_VERSION_UNSUPPORTED
 - schema 违规     → AGENT_TOOL_SCHEMA_INVALID（额外字段/类型/必填）
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import raise_api_error
 from app.models.agent import AgentRun, AgentSession
-from app.services import audit
+from app.services import agent_query, audit
 
 # JSON schema 子集校验支持的标量类型
 _SUPPORTED_TYPES = {"string", "integer", "boolean"}
@@ -60,9 +61,38 @@ TOOL_ECHO = "familygraph.echo"
 TOOL_PROBE_SCOPE = "familygraph.probe_scope"
 TOOL_STEWARD_PING = "familygraph.steward_ping"
 
+# V2.2 只读 Assistant 领域工具（合同与 schema 权威在 services/agent_query.py）
+_QUERY_TOOL_DESCRIPTIONS = {
+    agent_query.TOOL_GET_SELF_CONTEXT: "当前空间/本人摘要（scope 横幅数据源，只读）",
+    agent_query.TOOL_LIST_VISIBLE_PEOPLE: "列出当前空间可见人物（offset 分页，只读）",
+    agent_query.TOOL_GET_PROFILE_SUMMARY: "读取可见档案投影（VisibilityPolicy 投影，只读）",
+    agent_query.TOOL_SEARCH_SPACE: "在当前空间 scope 内搜索人物（只读）",
+    agent_query.TOOL_GET_RELATIONSHIP_PATH: "取得两人可见关系路径（BFS ≤6 跳，只读）",
+    agent_query.TOOL_EXPLAIN_STRUCTURAL_PATH: "解释已确定结构路径并给出依据（只读）",
+}
+
+
+def _query_tool_specs() -> tuple[ToolSpec, ...]:
+    """六个版本化只读领域工具的注册表条目（min_kind=assistant）。"""
+    specs = []
+    for name in sorted(agent_query.QUERY_TOOL_NAMES):
+        specs.append(
+            ToolSpec(
+                name=name,
+                version=1,
+                description=_QUERY_TOOL_DESCRIPTIONS[name],
+                input_schema=agent_query.QUERY_TOOL_SPECS_INPUT_SCHEMAS[name],
+                output_schema={"type": "object"},
+                min_kind="assistant",
+            )
+        )
+    return tuple(specs)
+
+
 REGISTRY: dict[str, ToolSpec] = {
     spec.name: spec
     for spec in (
+        *_query_tool_specs(),
         ToolSpec(
             name=TOOL_ECHO,
             version=1,
@@ -120,10 +150,10 @@ def resolve_tool(name: str, version: int) -> ToolSpec:
 
 
 def default_allowlist(kind: str) -> list[str]:
-    """浏览器创建 Run 的默认工具白名单：注册表内该 kind 可用的全部骨架工具。
+    """浏览器创建 Run 的默认工具白名单：注册表内该 kind 可用的全部骨架/领域工具。
 
-    首版只含测试/只读工具；正式业务工具在 V2.2/V2.3 注册后自动纳入。
-    min_kind='steward' 的工具不对 assistant 开放（与执行期门禁同一语义）。
+    min_kind='steward' 的工具不对 assistant 开放（与执行期门禁同一语义）；
+    V2.2 只读领域工具自动纳入 assistant 默认白名单（仍零写入）。
     """
     return sorted(
         name for name, spec in REGISTRY.items() if spec.min_kind is None or spec.min_kind == kind
@@ -231,6 +261,10 @@ def execute(
         spec = resolve_tool(name, version)
         check_scope(run, claims, spec)
         validate_input(spec, input_payload)
+        # 分发也纳入同一拒绝审计路径：领域工具的范围/形状拒绝同属协议违规
+        output = _dispatch(
+            db, spec, run=run, agent_session=agent_session, input_payload=input_payload
+        )
     except ToolProtocolError as exc:
         audit.write_audit(
             db,
@@ -241,7 +275,6 @@ def execute(
         )
         db.commit()
         raise_api_error(exc.status_code, exc.code, exc.message, exc.detail)
-    output = _dispatch(spec, run=run, agent_session=agent_session, input_payload=input_payload)
     audit_detail: dict[str, object] = {
         "tool": spec.name,
         "version": spec.version,
@@ -260,13 +293,29 @@ def execute(
 
 
 def _dispatch(
+    db: Session,
     spec: ToolSpec,
     *,
     run: AgentRun,
     agent_session: AgentSession,
     input_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """首版骨架工具实现（只读、无副作用）；正式业务工具走 domain command。"""
+    """分发执行：V2.2 只读领域工具走 AgentQueryService；骨架工具无副作用。
+
+    领域服务的 QueryToolError 在此转译为 ToolProtocolError，使范围/形状拒绝
+    复用 execute() 的统一安全审计路径；正常业务结果错误（如档案不可见）不
+    属协议违规，由服务层直接抛统一 API 错误。
+    """
+    if spec.name in agent_query.QUERY_TOOL_NAMES:
+        try:
+            return agent_query.execute_query_tool(
+                db,
+                agent_session=agent_session,
+                name=spec.name,
+                input_payload=input_payload,
+            )
+        except agent_query.QueryToolError as exc:
+            raise ToolProtocolError(exc.status_code, exc.code, exc.message, exc.detail) from None
     if spec.name == TOOL_ECHO:
         return {"text": input_payload["text"]}
     if spec.name == TOOL_STEWARD_PING:

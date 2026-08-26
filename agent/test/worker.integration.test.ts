@@ -217,6 +217,20 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
             },
           });
         }
+        if (toolName === "familygraph.list_visible_people") {
+          // Visibility-projected shape as the V2.2 AgentQueryService would return.
+          const listInput = body.input as { query?: string };
+          return respond(200, {
+            ok: true,
+            tool: toolName,
+            version: body.version,
+            output: {
+              people: [{ user_id: 12, name: "王明", fact_state: "confirmed" }],
+              next_cursor: null,
+              ...(listInput?.query !== undefined ? { query: listInput.query } : {}),
+            },
+          });
+        }
         return respond(200, { ok: true, tool: toolName, version: body.version, output: {} });
       }
       if (req.method === "POST" && url === `/internal/agent/runs/${job.run_id}/settle`) {
@@ -385,6 +399,25 @@ function echoToolCallTurn(callId: string, args: Record<string, unknown>): Assist
   return [
     assistantMessage({
       content: [{ type: "toolCall", id: callId, name: "familygraph.echo", arguments: args }],
+      api: "openai-completions",
+      provider: "cloud",
+      model: "test-model",
+      usage,
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    }),
+  ];
+}
+
+function listVisiblePeopleToolCallTurn(
+  callId: string,
+  args: Record<string, unknown>,
+): AssistantMessage[] {
+  return [
+    assistantMessage({
+      content: [
+        { type: "toolCall", id: callId, name: "familygraph.list_visible_people", arguments: args },
+      ],
       api: "openai-completions",
       provider: "cloud",
       model: "test-model",
@@ -634,4 +667,60 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(await worker.tryLeaseAndRun()).toBe(false);
     expect(state.settles).toHaveLength(0);
   });
+
+  it("V2.2: assistant run drives familygraph.list_visible_people end-to-end via FastAPI", async () => {
+    resetState();
+    // Full six-tool assistant allowlist — session construction only succeeds
+    // because every name is declared in the sidecar registry.
+    const runKey = enqueueJob({
+      allowlist: [
+        "familygraph.get_self_context",
+        "familygraph.list_visible_people",
+        "familygraph.get_profile_summary",
+        "familygraph.search_space",
+        "familygraph.get_relationship_path",
+        "familygraph.explain_structural_path",
+      ],
+    });
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([
+        listVisiblePeopleToolCallTurn("tc_lv1", { query: "王", limit: 5 }),
+        textTurn("在当前空间找到 1 位可见家人：王明。"),
+      ]),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    // Execute reached FastAPI exactly once with the shared-contract body.
+    expect(state.toolCalls).toHaveLength(1);
+    expect(state.toolCalls[0]).toMatchObject({
+      run_id: runKey,
+      tool: "familygraph.list_visible_people",
+    });
+    expect(state.toolCalls[0]!.body).toEqual({
+      version: 1,
+      input: { query: "王", limit: 5 },
+      tool_call_id: "tc_lv1",
+    });
+
+    // Event sequence keeps the C3-rendered payload shapes.
+    const events = state.eventsByRun.get(runKey) ?? [];
+    const started = events.find((e) => e.type === "tool.execution.started");
+    expect(started?.public_payload).toEqual({
+      tool_call_id: "tc_lv1",
+      tool_name: "familygraph.list_visible_people",
+      tool_version: 1,
+    });
+    const completed = events.find((e) => e.type === "tool.execution.completed");
+    expect(completed?.public_payload).toEqual({
+      tool_call_id: "tc_lv1",
+      tool_name: "familygraph.list_visible_people",
+      is_error: false,
+    });
+    expect(events[events.length - 1]!.type).toBe("run.settled");
+    expect(state.settles).toEqual([
+      { run_id: runKey, status: "succeeded", error_code: undefined, error: undefined },
+    ]);
+  }, 30000);
 });
