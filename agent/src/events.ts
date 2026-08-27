@@ -39,6 +39,17 @@ export interface UserMessagePayload {
 export interface AssistantMessagePayload {
   role: "assistant";
   text: string;
+  /** Web citations collected from fetch_approved_page during this turn. */
+  web_citations?: WebCitationPayload[];
+}
+
+/** Bounded external citation projection (backend WebCitationOut). */
+export interface WebCitationPayload {
+  url: string;
+  title: string;
+  excerpt: string;
+  fetched_at: string;
+  trust: "external";
 }
 export interface ToolExecutionStartedPayload {
   tool_call_id: string;
@@ -106,9 +117,37 @@ function extractText(content: unknown): string {
     .join("");
 }
 
+/** Extract a bounded web citation from a fetch_approved_page tool result. */
+function extractWebCitation(result: unknown): WebCitationPayload | null {
+  if (result === null || typeof result !== "object") return null;
+  const raw = result as Record<string, unknown>;
+  const citation = raw["citation"];
+  if (citation === null || typeof citation !== "object") return null;
+  const c = citation as Record<string, unknown>;
+  if (
+    typeof c["url"] !== "string" ||
+    typeof c["title"] !== "string" ||
+    typeof c["excerpt"] !== "string" ||
+    typeof c["fetched_at"] !== "string" ||
+    c["trust"] !== "external"
+  ) {
+    return null;
+  }
+  return {
+    url: c["url"],
+    title: c["title"],
+    excerpt: c["excerpt"].slice(0, 4000),
+    fetched_at: c["fetched_at"],
+    trust: "external",
+  };
+}
+
 /**
  * Deterministic Pi→FG event mapper. Returns the list of FG events generated
  * for one session broadcast event; unknown/ignored session events yield [].
+ *
+ * Web citations are collected from fetch_approved_page tool results and
+ * attached to the next assistant message; the buffer owns that state.
  */
 export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "seq">> {
   switch (event.type) {
@@ -162,10 +201,15 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
 /**
  * Ordered buffer of events for one run. The worker appends user/system-level
  * events directly and feeds session broadcasts through `onSessionEvent`.
+ *
+ * Web citations from fetch_approved_page tool results are collected here and
+ * attached to the next assistant message (then cleared), so a turn's external
+ * sources travel with the answer that used them.
  */
 export class RunEventBuffer {
   private nextSeq = 1;
   private readonly pending: FgEvent[] = [];
+  private webCitations: WebCitationPayload[] = [];
 
   push<T extends FgEventType>(type: T, public_payload: FgEventPayloadMap[T]): void {
     this.pending.push({ seq: this.nextSeq++, type, public_payload });
@@ -173,8 +217,17 @@ export class RunEventBuffer {
 
   /** Feed one session broadcast; returns count of produced events. */
   onSessionEvent(event: SessionEventLike): number {
+    if (event.type === "tool_execution_end" && event.toolName === "familygraph.fetch_approved_page") {
+      const citation = extractWebCitation(event.result);
+      if (citation !== null) this.webCitations.push(citation);
+    }
     const mapped = mapSessionEvent(event);
     for (const item of mapped) {
+      if (item.type === "message.assistant_added" && this.webCitations.length > 0) {
+        const payload = item.public_payload as AssistantMessagePayload;
+        payload.web_citations = this.webCitations.slice();
+        this.webCitations = [];
+      }
       this.push(item.type, item.public_payload);
     }
     return mapped.length;

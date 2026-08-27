@@ -151,3 +151,26 @@ Backend: 497 tests pass, mypy clean. Frontend: type-check/lint/168 tests pass (n
 ### Status
 
 [OK] **In progress**
+
+## Session 4: V2.6 Controlled Web — sidecar alignment, citation pipeline, deploy hardening
+
+**Date**: 2026-08-27
+**Task**: 08-26-v2-6-controlled-web (in_progress)
+**Branch**: `main`
+
+### Summary
+
+Closed the remaining V2.6 gaps across all three layers and verified an empty-volume Compose E2E:
+
+- Registered `search_web`/`fetch_approved_page` in the agent sidecar `tools.ts` (same names/schema as backend) — without this the sidecar's fail-closed allowlist check would reject any run once the backend discloses web tools.
+- Built the web-citation pipeline: sidecar `RunEventBuffer` extracts `trust=external` citations from `fetch_approved_page` results and attaches them to the next `message.assistant_added` event's `web_citations`; frontend store parses them and `WebCitationList.vue` renders external sources distinctly from local Memory citations (AC-W4).
+- Extended `app/backup.py` `verify_restore` to cover V2 source tables (agent/memory/rag/action-card/source-fact/domain-event) plus FTS-vs-projection self-consistency (WEB-6).
+- Hardened `docker-compose.yml`: `CONTROLLED_WEB_ENABLED` default 0, `stop_grace_period` on api/agent.
+- Fixed a production-blocking bug found by the E2E: `httpx` was dev-only but `controlled_web.py` imports it in production — moved it to main dependencies in `pyproject.toml`.
+- Empty-volume Compose E2E: all three images build; api/web/agent healthy; migration reaches 0015; web tables created; `python -m app.backup` succeeds with V2+FTS counts; agent restart recovers healthy; `/internal/*` returns 404 through nginx; web admin endpoint 401 unauthenticated; `CONTROLLED_WEB_ENABLED=False` by default.
+
+Backend 497 tests + mypy clean; agent type-check/lint/64 tests/build; frontend type-check/lint/169 tests/build.
+
+### Status
+
+[OK] **In progress**

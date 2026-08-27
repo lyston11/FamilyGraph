@@ -22,12 +22,16 @@ services:
       AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
       # V2.3 Relationship Intelligence
       RELATIONSHIP_INTELLIGENCE_ENABLED: ${RELATIONSHIP_INTELLIGENCE_ENABLED:-0}
+      # V2.6 Controlled Web：平台总开关（默认关闭；空间还需 owner/admin 单独 opt-in）
+      CONTROLLED_WEB_ENABLED: ${CONTROLLED_WEB_ENABLED:-0}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷
       - app_data:/data
     networks:
       - frontend
       - backend
+    # 优雅停机：先停止接收新连接，给 uvicorn 时间完成在途请求与 lease 释放
+    stop_grace_period: 30s
     healthcheck:
       test:
         [
@@ -75,6 +79,8 @@ services:
       # PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
     networks:
       - backend
+    # 优雅停机：SIGTERM → worker.stop + health.close；在途 Run 由 FastAPI reaper 回收
+    stop_grace_period: 10s
     healthcheck:
       test:
         [
