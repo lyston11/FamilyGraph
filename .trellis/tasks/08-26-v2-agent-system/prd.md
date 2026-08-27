@@ -112,16 +112,16 @@
 
 ## Acceptance Criteria
 
-- [ ] AC-P1：七个子任务均具备独立、可测试的 PRD、design、implement、notes、handoff，并保持 `planning`。
-- [ ] AC-P2：身份、空间、事实、可见性、Agent、Memory/RAG 与推荐之间只有一个权威合同，不存在 v1 “直系边自动 full”或 owner 删除级联空间的残留语义。
-- [ ] AC-P3：任何 Agent 路径都无法直接写 SourceFact、发送加入申请、扩大公开范围、读取其他空间或绕过 VisibilityPolicy。
-- [ ] AC-P4：交互 Run 的创建、持久化 SSE、断线续传和幂等重试可证明不会重复执行工具副作用。
-- [ ] AC-P5：同一用户不同空间、不同用户同一空间、Assistant 与 Steward 的 Session、Memory、RAG 和工具授权均有隔离测试。
-- [ ] AC-P6：关系称谓能保留原始输入，确定性路径可解释，四级称谓优先级及两人使用规则可验证。
-- [ ] AC-P7：provisional 档案在确档前不进入推荐池；所有推荐只生成卡片，用户明确动作后才发送申请或写正式事实。
-- [ ] AC-P8：云/本地 Provider 策略、敏感强制本地、无静默 fallback、受控联网默认关闭均有失败态验收。
-- [ ] AC-P9：桌面与移动端完成全局悬浮助手旅程，空间切换和登出不残留跨 scope 内容。
-- [ ] AC-P10：空库部署、迁移、备份恢复、后端/前端/Node 测试和 Docker 全链路验收全部通过。
+- [x] AC-P1：七个子任务均具备独立、可测试的 PRD、design、implement、notes、handoff，并保持 `planning`。
+- [x] AC-P2：身份、空间、事实、可见性、Agent、Memory/RAG 与推荐之间只有一个权威合同，不存在 v1 “直系边自动 full”或 owner 删除级联空间的残留语义。
+- [x] AC-P3：任何 Agent 路径都无法直接写 SourceFact、发送加入申请、扩大公开范围、读取其他空间或绕过 VisibilityPolicy。
+- [x] AC-P4：交互 Run 的创建、持久化 SSE、断线续传和幂等重试可证明不会重复执行工具副作用。
+- [x] AC-P5：同一用户不同空间、不同用户同一空间、Assistant 与 Steward 的 Session、Memory、RAG 和工具授权均有隔离测试。
+- [x] AC-P6：关系称谓能保留原始输入，确定性路径可解释，四级称谓优先级及两人使用规则可验证。
+- [x] AC-P7：provisional 档案在确档前不进入推荐池；所有推荐只生成卡片，用户明确动作后才发送申请或写正式事实。
+- [x] AC-P8：云/本地 Provider 策略、敏感强制本地、无静默 fallback、受控联网默认关闭均有失败态验收。
+- [x] AC-P9：桌面与移动端完成全局悬浮助手旅程，空间切换和登出不残留跨 scope 内容。
+- [x] AC-P10：空库部署、迁移、备份恢复、后端/前端/Node 测试和 Docker 全链路验收全部通过。
 
 ## Out Of Scope
 
