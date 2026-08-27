@@ -49,13 +49,42 @@ def create_backup() -> tuple[Path, Path]:
 
 
 def verify_restore(restored_db_path: Path) -> dict[str, int]:
-    """恢复演练校验：integrity_check + 行数统计。"""
+    """恢复演练校验：integrity_check + 关键表行数 + FTS 完整性。
+
+    V2.6 扩展：覆盖 Agent/Memory/RAG/ActionCard/SourceFact 真源表，并校验
+    rag_chunks_fts 与 active 文档投影一致（恢复后 FTS 可重建，但快照内应自洽）。
+    """
     con = sqlite3.connect(str(restored_db_path))
     try:
         assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         counts: dict[str, int] = {}
-        for table in ("users", "accounts", "relations", "space_members", "attachments"):
+        for table in (
+            "users",
+            "accounts",
+            "relations",
+            "space_members",
+            "attachments",
+            # V2 真源：Agent / Memory / RAG / ActionCard / SourceFact
+            "agent_sessions",
+            "agent_runs",
+            "agent_run_events",
+            "agent_messages",
+            "memories",
+            "rag_documents",
+            "rag_chunks",
+            "action_cards",
+            "source_facts",
+            "domain_events",
+        ):
             counts[table] = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        # FTS 完整性：active 文档的 chunk 投影与 FTS 行数一致（恢复后自洽）
+        fts_rows = con.execute("SELECT COUNT(*) FROM rag_chunks_fts").fetchone()[0]
+        projected = con.execute(
+            "SELECT COUNT(*) FROM rag_chunks WHERE status = 'active' AND document_id IN "
+            "(SELECT id FROM rag_documents WHERE status = 'active')"
+        ).fetchone()[0]
+        counts["rag_chunks_fts"] = fts_rows
+        counts["rag_chunks_projected"] = projected
         return counts
     finally:
         con.close()

@@ -248,4 +248,40 @@ describe('agent store（V2.2 Block C3）', () => {
     await vi.waitFor(() => expect(useAgentStore().partitions.size).toBe(0))
     expect(streamClose).toHaveBeenCalled()
   })
+
+  it('事件投影：解析受控联网外部引用（web_citations）并丢弃非法项', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(
+      makeEvent(1, 'message.assistant_added', {
+        role: 'assistant',
+        text: '外部资料回答',
+        web_citations: [
+          {
+            url: 'https://www.example.com/page',
+            title: 'Example',
+            excerpt: 'bounded excerpt',
+            fetched_at: '2026-08-27T00:00:00Z',
+            trust: 'external',
+          },
+          // 非法项：trust 不是 external，必须被丢弃
+          { url: 'https://evil.example.com', title: 'x', excerpt: 'y', fetched_at: 'z', trust: 'internal' },
+          // 非法项：缺字段
+          { url: 'https://bad.example.com' },
+        ],
+      }),
+    )
+
+    const message = store.partitions.get(1)?.messages.find((m) => m.text === '外部资料回答')
+    expect(message?.webCitations).toEqual([
+      {
+        url: 'https://www.example.com/page',
+        title: 'Example',
+        excerpt: 'bounded excerpt',
+        fetched_at: '2026-08-27T00:00:00Z',
+        trust: 'external',
+      },
+    ])
+  })
 })

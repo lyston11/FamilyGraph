@@ -94,3 +94,12 @@ export interface AgentRunEvent {
   payload: AgentEventPayload
   created_at: string
 }
+
+/** 受控联网外部引用（backend WebCitationOut / agent WebCitationPayload） */
+export interface WebCitation {
+  url: string
+  title: string
+  excerpt: string
+  fetched_at: string
+  trust: 'external'
+}

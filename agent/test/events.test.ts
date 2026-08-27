@@ -93,4 +93,62 @@ describe("RunEventBuffer", () => {
     ]);
     expect(buffer.size).toBe(0);
   });
+
+  it("attaches fetch_approved_page citations to the next assistant message", () => {
+    const buffer = new RunEventBuffer();
+    buffer.onSessionEvent({
+      type: "tool_execution_end",
+      toolCallId: "tc_w",
+      toolName: "familygraph.fetch_approved_page",
+      result: {
+        content: "page text",
+        citation: {
+          url: "https://www.example.com/page",
+          title: "Example",
+          excerpt: "bounded excerpt",
+          fetched_at: "2026-08-27T00:00:00Z",
+          trust: "external",
+        },
+      },
+      isError: false,
+    });
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    });
+    const drained = buffer.drain();
+    const assistant = drained.find((e) => e.type === "message.assistant_added")!;
+    expect(assistant.public_payload).toEqual({
+      role: "assistant",
+      text: "answer",
+      web_citations: [
+        {
+          url: "https://www.example.com/page",
+          title: "Example",
+          excerpt: "bounded excerpt",
+          fetched_at: "2026-08-27T00:00:00Z",
+          trust: "external",
+        },
+      ],
+    });
+  });
+
+  it("drops malformed or non-external citations and never leaks raw tool results", () => {
+    const buffer = new RunEventBuffer();
+    buffer.onSessionEvent({
+      type: "tool_execution_end",
+      toolCallId: "tc_bad",
+      toolName: "familygraph.fetch_approved_page",
+      result: { citation: { url: "https://x", title: "t", excerpt: "e", fetched_at: "d", trust: "internal" } },
+      isError: false,
+    });
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    });
+    const drained = buffer.drain();
+    const assistant = drained.find((e) => e.type === "message.assistant_added")!;
+    expect(assistant.public_payload).toEqual({ role: "assistant", text: "answer" });
+    expect(JSON.stringify(drained)).not.toContain("https://x");
+  });
 });

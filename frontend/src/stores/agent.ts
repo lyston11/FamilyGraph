@@ -14,7 +14,7 @@ import {
 import { ApiError } from '@/api/errors'
 import { useAgentStream } from '@/composables/useAgentStream'
 import { useAuthStore } from '@/stores/auth'
-import type { AgentEventPayload, AgentMessageOut, AgentSession } from '@/types/agent'
+import type { AgentEventPayload, AgentMessageOut, AgentSession, WebCitation } from '@/types/agent'
 import type { MemoryCitation } from '@/types/memory'
 import { TERMINAL_RUN_STATUSES } from '@/types/agent'
 
@@ -47,6 +47,8 @@ export interface AgentMessageView {
   cardIds?: number[]
   /** Assistant 结构化回复中的安全 RAG 引用投影；不信任消息中的任意对象。 */
   citations?: MemoryCitation[]
+  /** Assistant 结构化回复中的受控联网外部引用（trust=external）。 */
+  webCitations?: WebCitation[]
   /** 由 SSE 回放合并产生的消息（刷新恢复去重标记） */
   fromReplay?: boolean
 }
@@ -187,6 +189,34 @@ function payloadCitations(payload: AgentEventPayload): MemoryCitation[] | undefi
   return citations.length > 0 ? citations : undefined
 }
 
+function payloadWebCitations(payload: AgentEventPayload): WebCitation[] | undefined {
+  const raw = payload.web_citations
+  if (!Array.isArray(raw)) return undefined
+  const citations = raw.flatMap((value): WebCitation[] => {
+    if (typeof value !== 'object' || value === null) return []
+    const item = value as Record<string, unknown>
+    if (
+      typeof item.url !== 'string' ||
+      typeof item.title !== 'string' ||
+      typeof item.excerpt !== 'string' ||
+      typeof item.fetched_at !== 'string' ||
+      item.trust !== 'external'
+    ) {
+      return []
+    }
+    return [
+      {
+        url: item.url,
+        title: item.title,
+        excerpt: item.excerpt,
+        fetched_at: item.fetched_at,
+        trust: 'external',
+      },
+    ]
+  })
+  return citations.length > 0 ? citations : undefined
+}
+
 function toMessageView(message: AgentMessageOut): AgentMessageView {
   return {
     id: message.id,
@@ -196,6 +226,7 @@ function toMessageView(message: AgentMessageOut): AgentMessageView {
     status: 'sent',
     cardIds: payloadCardIds(message.content_json),
     citations: payloadCitations(message.content_json),
+    webCitations: payloadWebCitations(message.content_json),
   }
 }
 
@@ -237,6 +268,7 @@ export const useAgentStore = defineStore('agent', () => {
     text: string,
     cardIds?: number[],
     citations?: MemoryCitation[],
+    webCitations?: WebCitation[],
   ): void {
     for (let i = Math.min(partition.replayCursor, partition.messages.length); i < partition.messages.length; i += 1) {
       const existing = partition.messages[i]
@@ -244,6 +276,7 @@ export const useAgentStore = defineStore('agent', () => {
         existing.fromReplay = true
         if (cardIds !== undefined) existing.cardIds = cardIds
         if (citations !== undefined) existing.citations = citations
+        if (webCitations !== undefined) existing.webCitations = webCitations
         partition.replayCursor = i + 1
         return
       }
@@ -256,6 +289,7 @@ export const useAgentStore = defineStore('agent', () => {
       status: 'sent',
       cardIds,
       citations,
+      webCitations,
       fromReplay: true,
     })
   }
@@ -304,6 +338,7 @@ export const useAgentStore = defineStore('agent', () => {
           payloadText(event.payload),
           payloadCardIds(event.payload),
           payloadCitations(event.payload),
+          payloadWebCitations(event.payload),
         )
         break
       case 'turn.completed':

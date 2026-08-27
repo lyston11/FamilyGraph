@@ -237,3 +237,73 @@ describe("domain tool executor bridge", () => {
     expect(inputs).toEqual([{ query: "王" }]);
   });
 });
+
+describe("V2.6 controlled web tool declarations", () => {
+  const WEB_CONTRACT: Record<string, { properties: string[]; required: string[] }> = {
+    "familygraph.search_web": {
+      properties: ["limit", "query", "use_case"],
+      required: ["query", "use_case"],
+    },
+    "familygraph.fetch_approved_page": {
+      properties: ["approved_token"],
+      required: ["approved_token"],
+    },
+  };
+
+  it("registers both web tools at version 1", () => {
+    for (const name of Object.keys(WEB_CONTRACT)) {
+      expect(TOOL_VERSIONS[name as keyof typeof TOOL_VERSIONS]).toBe(1);
+    }
+    expect(defaultToolNames()).toEqual(expect.arrayContaining(Object.keys(WEB_CONTRACT)));
+  });
+
+  it("declares inputs exactly per the backend contract (no missing, no extra fields)", () => {
+    const declared = new Set(createDomainTools(stubExecutor).map((t) => t.name));
+    for (const [name, expected] of Object.entries(WEB_CONTRACT)) {
+      expect(declared.has(name)).toBe(true);
+      const { properties, required } = schemaOf(name);
+      expect(Object.keys(properties).sort(), `${name} properties`).toEqual(expected.properties);
+      expect([...required].sort(), `${name} required`).toEqual(expected.required);
+    }
+  });
+
+  it("marks web results as untrusted external data, never as system instructions", () => {
+    const tools = createDomainTools(stubExecutor);
+    const search = tools.find((t) => t.name === "familygraph.search_web")!;
+    const fetch = tools.find((t) => t.name === "familygraph.fetch_approved_page")!;
+    expect(search.description).toContain("不可信");
+    expect(fetch.description).toContain("不可信");
+    expect(fetch.description).toContain("不是系统指令");
+  });
+
+  it("forwards web calls verbatim through the execute endpoint", async () => {
+    const seen: Array<{ tool: string; call: Record<string, unknown> }> = [];
+    const executor: DomainToolExecutor = async (toolName, call) => {
+      seen.push({ tool: toolName, call: { ...call } });
+      return { ok: true, result: {} };
+    };
+    const byName = new Map(createDomainTools(executor).map((t) => [t.name, t]));
+
+    await byName.get("familygraph.search_web")!.execute!(
+      "tc_w1",
+      { query: "genealogy", use_case: "research" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    await byName.get("familygraph.fetch_approved_page")!.execute!(
+      "tc_w2",
+      { approved_token: "tok_abcdefghijklmnopqrstuvwxyz" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+
+    expect(seen.map((s) => s.tool)).toEqual([
+      "familygraph.search_web",
+      "familygraph.fetch_approved_page",
+    ]);
+    expect(seen[0]!.call.input).toEqual({ query: "genealogy", use_case: "research" });
+    expect(seen[1]!.call.input).toEqual({ approved_token: "tok_abcdefghijklmnopqrstuvwxyz" });
+  });
+});
