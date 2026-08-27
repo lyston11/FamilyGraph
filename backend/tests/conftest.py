@@ -62,6 +62,12 @@ _TABLES = (
     "agent_sessions",
     "agent_space_provider_settings",
     "agent_providers",
+    # v2.6 controlled web: tokens/citations/usage must be cleared before accounts/spaces
+    "web_citations",
+    "web_request_usage",
+    "web_approved_urls",
+    "web_space_configs",
+    "web_platform_configs",
     # v2.5 memory/RAG/context projections
     "context_build_items",
     "context_builds",

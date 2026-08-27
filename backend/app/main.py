@@ -19,6 +19,8 @@ from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
 from app.api.bootstrap import router as bootstrap_router
 from app.api.connections import router as connections_router
+from app.api.controlled_web import admin_router as controlled_web_admin_router
+from app.api.controlled_web import router as controlled_web_router
 from app.api.deps import close_request_db, require_pin_changed
 from app.api.governance import router as governance_router
 from app.api.graph import router as graph_router
@@ -138,6 +140,9 @@ app.include_router(kinship_router, prefix="/api")
 app.include_router(action_cards_router, prefix="/api")
 # V2.5 Memory cards and scope-filtered RAG
 app.include_router(memory_router, prefix="/api")
+# V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）
+app.include_router(controlled_web_router, prefix="/api")
+app.include_router(controlled_web_admin_router, prefix="/api")
 # Agent Provider 治理：platform_operator 专属（同样受 feature flag 门禁）
 app.include_router(admin_agent_router, prefix="/api/admin/agent")
 # Internal Agent 协议：仅内部网络可达（sidecar → FastAPI），不走 /api 前缀，

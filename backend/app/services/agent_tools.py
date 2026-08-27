@@ -20,9 +20,14 @@ from typing import Any, NoReturn
 from sqlalchemy.orm import Session
 
 from app import config
-from app.errors import KINSHIP_FLAG_DISABLED, raise_api_error
+from app.errors import (
+    KINSHIP_FLAG_DISABLED,
+    POLICY_TOOL_BLOCKED,
+    WEB_TOOL_DISABLED,
+    raise_api_error,
+)
 from app.models.agent import AgentRun, AgentSession
-from app.services import agent_query, audit, intake_extractor, terms
+from app.services import agent_query, audit, controlled_web, intake_extractor, terms
 
 # JSON schema 子集校验支持的标量类型
 _SUPPORTED_TYPES = {"string", "integer", "boolean"}
@@ -71,6 +76,8 @@ TOOL_STEWARD_PING = "familygraph.steward_ping"
 TOOL_RESOLVE_FREE_TEXT_RELATION = "familygraph.resolve_free_text_relation"
 TOOL_GET_TERM_ALTERNATIVES = "familygraph.get_term_alternatives"
 TOOL_RECORD_TERM_USAGE = "familygraph.record_term_usage"
+TOOL_SEARCH_WEB = "familygraph.search_web"
+TOOL_FETCH_APPROVED_PAGE = "familygraph.fetch_approved_page"
 _KINSHIP_INTAKE_TOOLS = frozenset(
     {TOOL_RESOLVE_FREE_TEXT_RELATION, TOOL_GET_TERM_ALTERNATIVES, TOOL_RECORD_TERM_USAGE}
 )
@@ -210,6 +217,40 @@ REGISTRY: dict[str, ToolSpec] = {
             output_schema={"type": "object"},
             min_kind="assistant",
         ),
+        ToolSpec(
+            name=TOOL_SEARCH_WEB,
+            version=1,
+            description="在当前已授权空间内搜索受控联网 Provider（结果不可信，仅返回批准凭据）",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "maxLength": 500},
+                    "use_case": {"type": "string", "maxLength": 32},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query", "use_case"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            error_codes=(WEB_TOOL_DISABLED,),
+            min_kind="assistant",
+        ),
+        ToolSpec(
+            name=TOOL_FETCH_APPROVED_PAGE,
+            version=1,
+            description="抓取当前空间搜索结果批准的一次性 URL，不接受任意网址",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "approved_token": {"type": "string", "maxLength": 256},
+                },
+                "required": ["approved_token"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            error_codes=(WEB_TOOL_DISABLED,),
+            min_kind="assistant",
+        ),
     )
 }
 
@@ -230,15 +271,35 @@ def resolve_tool(name: str, version: int) -> ToolSpec:
     return spec
 
 
-def default_allowlist(kind: str) -> list[str]:
-    """浏览器创建 Run 的默认工具白名单：注册表内该 kind 可用的全部骨架/领域工具。
+def default_allowlist(
+    kind: str,
+    db: Session | None = None,
+    *,
+    account_id: int | None = None,
+    space_id: int | None = None,
+) -> list[str]:
+    """Return the run's default allowlist, including Web only after both opt-ins.
 
-    min_kind='steward' 的工具不对 assistant 开放（与执行期门禁同一语义）；
-    V2.2 只读领域工具自动纳入 assistant 默认白名单（仍零写入）。
+    The optional database scope keeps backwards compatibility for tests and the
+    protocol fixtures while ensuring a real run never advertises disabled Web tools.
     """
-    return sorted(
-        name for name, spec in REGISTRY.items() if spec.min_kind is None or spec.min_kind == kind
+    # Web tools are opt-in by policy; exclude them from the static traversal so a
+    # disabled platform/space flag never advertises them to the model.
+    _web_tools = {TOOL_SEARCH_WEB, TOOL_FETCH_APPROVED_PAGE}
+    allowlist = sorted(
+        name
+        for name, spec in REGISTRY.items()
+        if (spec.min_kind is None or spec.min_kind == kind) and name not in _web_tools
     )
+    if (
+        kind == "assistant"
+        and db is not None
+        and account_id is not None
+        and space_id is not None
+        and controlled_web.agent_tools_enabled(db, account_id=account_id, space_id=space_id)
+    ):
+        allowlist.extend([TOOL_FETCH_APPROVED_PAGE, TOOL_SEARCH_WEB])
+    return sorted(allowlist)
 
 
 def validate_input(spec: ToolSpec, payload: dict[str, Any]) -> None:
@@ -437,6 +498,34 @@ def _dispatch(
                 "eligible_accounts": int(summary["eligible_accounts"]),
             },
         }
+    if spec.name == TOOL_SEARCH_WEB:
+        try:
+            result = controlled_web.search_web(
+                db,
+                account_id=agent_session.account_id,
+                space_id=agent_session.space_id,
+                run_id=run.id,
+                query=input_payload["query"],
+                use_case=input_payload["use_case"],
+                limit=int(input_payload.get("limit", 5)),
+            )
+        except controlled_web.WebGatewayError as exc:
+            raise ToolProtocolError(exc.status_code, exc.code, exc.message, exc.detail) from None
+        db.commit()
+        return result
+    if spec.name == TOOL_FETCH_APPROVED_PAGE:
+        try:
+            result = controlled_web.fetch_approved_page(
+                db,
+                account_id=agent_session.account_id,
+                space_id=agent_session.space_id,
+                run_id=run.id,
+                approved_token=input_payload["approved_token"],
+            )
+        except controlled_web.WebGatewayError as exc:
+            raise ToolProtocolError(exc.status_code, exc.code, exc.message, exc.detail) from None
+        db.commit()
+        return result
     if spec.name in agent_query.QUERY_TOOL_NAMES:
         try:
             return agent_query.execute_query_tool(

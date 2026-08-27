@@ -296,7 +296,12 @@ def create_agent_message(
             content_json=content_json,
             idempotency_key=key,
             policy_version=config.AGENT_POLICY_VERSION,
-            tool_allowlist=default_allowlist("assistant"),
+            tool_allowlist=default_allowlist(
+                "assistant",
+                db,
+                account_id=account.id,
+                space_id=agent_session.space_id,
+            ),
         )
     except FastAPIHTTPException as exc:
         api_error = extract_api_error(exc.detail) or {}
