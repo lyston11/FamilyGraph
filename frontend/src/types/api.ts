@@ -6,6 +6,11 @@
 export interface UserOut {
   id: number
   name: string
+  /**
+   * v2 兼容键：语义已从 v1「全局数据权」改为 platform_operator 派生
+   * （backend/app/schemas/auth.py 同键注释）。仅用于 UI 隐藏 admin 入口；
+   * 后端最终鉴权是 require_platform_operator，不信任此布尔。
+   */
   is_admin: boolean
   pin_must_change: boolean
   /** 账号生命周期：managed → claimed（唯一转换点=首登认领，v2 §0.3） */
@@ -124,6 +129,7 @@ export interface MemberPermissions {
 export interface Member {
   id: number
   name: string
+  /** platform_operator 派生（v2 兼容键，见 UserOut.is_admin 注释）。 */
   is_admin: boolean
   gender: GenderType
   birth: StructuredDate | null

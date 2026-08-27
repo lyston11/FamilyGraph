@@ -71,7 +71,8 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
 
-  // 管理员路由双重校验（后端 API 另有 403）
+  // 管理员路由双重校验（后端 API 另有 platform_operator 强鉴权）。
+  // is_admin 为 v2 兼容键，语义 = platform_operator（非 v1 全局数据权）。
   if (to.meta.adminOnly && auth.user?.is_admin !== true) {
     return { name: 'family-space' }
   }
