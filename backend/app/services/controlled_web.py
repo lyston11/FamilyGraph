@@ -34,6 +34,7 @@ from app.errors import (
     WEB_BUDGET_EXCEEDED,
     WEB_DOMAIN_NOT_ALLOWED,
     WEB_FETCH_TOO_LARGE,
+    WEB_FETCH_UNSUPPORTED_TYPE,
     WEB_PROVIDER_INVALID_RESPONSE,
     WEB_PROVIDER_UNAVAILABLE,
     WEB_QUERY_BLOCKED,
@@ -114,6 +115,27 @@ def _visible_text(raw: bytes, content_type: str | None) -> str:
     parser = _VisibleTextParser()
     parser.feed(decoded)
     return " ".join(parser.parts).strip()
+
+
+# 只允许文本类响应；PDF/图片/二进制/octet-stream 一律拒绝（AC-W2 非文本响应）。
+_TEXT_CONTENT_TYPES = {
+    "text/html",
+    "text/plain",
+    "application/xhtml+xml",
+    "application/json",
+    "application/xml",
+    "text/xml",
+}
+
+
+def _ensure_text_content_type(content_type: str | None) -> None:
+    if content_type is None:
+        # 缺失 content-type 时 fail-closed：无法证明是文本，拒绝。
+        raise WebGatewayError(415, WEB_FETCH_UNSUPPORTED_TYPE, "网页响应缺少内容类型")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type in _TEXT_CONTENT_TYPES or media_type.startswith("text/"):
+        return
+    raise WebGatewayError(415, WEB_FETCH_UNSUPPORTED_TYPE, "网页响应不是文本内容")
 
 
 def _hash_query(query: str) -> str:
@@ -497,6 +519,8 @@ def _fetch_bytes(url: str, max_bytes: int) -> tuple[bytes, str | None]:
         ) as client:
             with client.stream("GET", url, headers={"Accept": "text/html,text/plain"}) as response:
                 response.raise_for_status()
+                content_type = response.headers.get("content-type")
+                _ensure_text_content_type(content_type)
                 content_length = response.headers.get("content-length")
                 if content_length and int(content_length) > max_bytes:
                     raise WebGatewayError(413, WEB_FETCH_TOO_LARGE, "网页内容超过大小上限")
@@ -505,7 +529,7 @@ def _fetch_bytes(url: str, max_bytes: int) -> tuple[bytes, str | None]:
                     output.extend(chunk)
                     if len(output) > max_bytes:
                         raise WebGatewayError(413, WEB_FETCH_TOO_LARGE, "网页内容超过大小上限")
-                return bytes(output), response.headers.get("content-type")
+                return bytes(output), content_type
     except WebGatewayError:
         raise
     except (httpx.HTTPError, ValueError, UnicodeError):

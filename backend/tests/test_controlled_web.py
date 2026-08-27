@@ -20,6 +20,8 @@ from app.errors import (
     WEB_APPROVAL_USED,
     WEB_BUDGET_EXCEEDED,
     WEB_DOMAIN_NOT_ALLOWED,
+    WEB_FETCH_UNSUPPORTED_TYPE,
+    WEB_PROVIDER_UNAVAILABLE,
     WEB_QUERY_BLOCKED,
     WEB_RATE_LIMITED,
     WEB_SPACE_DISABLED,
@@ -32,7 +34,11 @@ from app.models.controlled_web import (
     WebSpaceConfig,
 )
 from app.services import controlled_web
-from app.services.controlled_web import WebGatewayError, _validate_public_url
+from app.services.controlled_web import (
+    WebGatewayError,
+    _ensure_text_content_type,
+    _validate_public_url,
+)
 
 
 # ---- 造数辅助 ---------------------------------------------------------------
@@ -334,6 +340,39 @@ def test_validate_public_url_rejects_credentials_in_url():
     with pytest.raises(WebGatewayError) as exc:
         _validate_public_url("https://user:pass@example.com/")
     assert exc.value.code == WEB_URL_INVALID
+
+
+# ---- AC-W2 content-type / 非文本响应 -----------------------------------------
+
+
+def test_ensure_text_content_type_accepts_text_media_types():
+    for content_type in (
+        "text/html; charset=utf-8",
+        "text/plain",
+        "application/xhtml+xml",
+        "application/json",
+        "text/xml",
+    ):
+        _ensure_text_content_type(content_type)  # 不抛错
+
+
+def test_ensure_text_content_type_rejects_non_text():
+    for content_type in (
+        "application/pdf",
+        "image/png",
+        "application/octet-stream",
+        "application/zip",
+        "video/mp4",
+    ):
+        with pytest.raises(WebGatewayError) as exc:
+            _ensure_text_content_type(content_type)
+        assert exc.value.code == WEB_FETCH_UNSUPPORTED_TYPE
+
+
+def test_ensure_text_content_type_rejects_missing():
+    with pytest.raises(WebGatewayError) as exc:
+        _ensure_text_content_type(None)
+    assert exc.value.code == WEB_FETCH_UNSUPPORTED_TYPE
 
 
 def test_search_filters_results_outside_allowlist(db_session, monkeypatch):
@@ -666,6 +705,36 @@ def test_monthly_budget_exhaustion_blocks_search(db_session, monkeypatch):
             limit=5,
         )
     assert exc.value.code == WEB_BUDGET_EXCEEDED
+
+
+def test_provider_outage_returns_stable_error(db_session, monkeypatch):
+    """Provider outage surfaces WEB_PROVIDER_UNAVAILABLE, never a raw exception (AC-W7)."""
+    monkeypatch.setattr(config, "CONTROLLED_WEB_ENABLED", True)
+    owner, space = create_agent_fixture(db_session, name="web-outage")
+    create_space_member(db_session, space.id, owner.id, role="owner")
+    _enable_platform(db_session)
+    _enable_space(db_session, space_id=space.id)
+    db_session.commit()
+    _patch_dns(monkeypatch)
+
+    # 真实 _provider_search 内部把 httpx 异常转换为稳定错误码
+    class _BoomClient:
+        def __init__(self, *args, **kwargs):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(controlled_web.httpx, "Client", _BoomClient)
+
+    with pytest.raises(WebGatewayError) as exc:
+        controlled_web.search_web(
+            db_session,
+            account_id=owner.account.id,
+            space_id=space.id,
+            run_id=None,
+            query="q",
+            use_case="research",
+            limit=5,
+        )
+    assert exc.value.code == WEB_PROVIDER_UNAVAILABLE
 
 
 # ---- usage audit never stores raw query -------------------------------------
