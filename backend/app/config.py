@@ -93,7 +93,26 @@ BEHAVIOR_PROJECTION_ENABLED: bool = os.environ.get("BEHAVIOR_PROJECTION_ENABLED"
     "1",
     "true",
 )
+
+
+# Policy Guard 关闭时 fail-closed，不向 Provider 发送请求。
 POLICY_GUARD_ENABLED: bool = os.environ.get("POLICY_GUARD_ENABLED", "1").lower() in ("1", "true")
+
+# ---- V2.6 Controlled Web（平台与空间双重开关，默认关闭）----
+# FastAPI 是唯一 egress 边界；即使空间/平台配置打开，global flag 关闭也拒绝。
+CONTROLLED_WEB_ENABLED: bool = os.environ.get("CONTROLLED_WEB_ENABLED", "").lower() in (
+    "1",
+    "true",
+)
+CONTROLLED_WEB_TOKEN_TTL_SECONDS: int = int(
+    os.environ.get("CONTROLLED_WEB_TOKEN_TTL_SECONDS", "300")
+)
+CONTROLLED_WEB_CONNECT_TIMEOUT_SECONDS: float = float(
+    os.environ.get("CONTROLLED_WEB_CONNECT_TIMEOUT_SECONDS", "5")
+)
+CONTROLLED_WEB_READ_TIMEOUT_SECONDS: float = float(
+    os.environ.get("CONTROLLED_WEB_READ_TIMEOUT_SECONDS", "15")
+)
 
 
 def ensure_data_dirs() -> None:

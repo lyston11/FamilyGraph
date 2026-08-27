@@ -126,3 +126,28 @@ Delivered space-scoped Steward jobs, DomainEvent-triggered scheduling, determini
 ### Status
 
 [OK] **Completed**
+
+## Session 3: V2.6 Controlled Web — regression repair, disclosure fix, PII minimization
+
+**Date**: 2026-08-27
+**Task**: 08-26-v2-6-controlled-web (in_progress)
+**Branch**: `main`
+
+### Summary
+
+Resumed V2.6 work and found the working tree had 4 regressions plus an undisclosable tool bug over an otherwise complete controlled-web implementation (models/schemas/service/api/migration):
+
+- Restored `config.POLICY_GUARD_ENABLED` (V2.5) that the V2.6 config block had overwritten — fixed 19 failing tests.
+- Restored `memory_router` mount in `main.py` that the controlled-web router insertion had deleted.
+- Restored `TOOL_RECORD_TERM_USAGE` ToolSpec in `agent_tools.py` that the web tool insertion had replaced.
+- Removed duplicate `backend/alembic/` tree (alembic.ini `script_location=migrations`).
+- Fixed tool disclosure bug: `default_allowlist` now excludes web tools from the static traversal and only adds them when `agent_tools_enabled` returns True (AC-W1 — disabled tools must never be advertised).
+- Implemented WEB-3 query PII/secret minimization (`_sanitize_query`, `WEB_QUERY_BLOCKED`): resident ID / phone / email / secret tokens / opaque hex / masked placeholders / clustered CJK address tokens are fail-closed before quota and egress.
+- Added 39 targeted tests covering default-off, dual opt-in, SSRF (loopback/RFC1918/metadata/port/credentials), allowlist filtering, one-use/expiry/cross-account tokens, quota/budget, usage never stores raw query, PII/secret rejection, and tool disclosure mirroring policy.
+- Wrote `.trellis/spec/backend/controlled-web.md` and registered it in the backend spec index.
+
+Backend: 497 tests pass, mypy clean. Frontend: type-check/lint/168 tests pass (no web integration yet — separate work surface).
+
+### Status
+
+[OK] **In progress**

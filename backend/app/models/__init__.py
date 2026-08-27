@@ -7,6 +7,13 @@ from app.models.audit_log import AuditLog
 from app.models.auth_challenge import AuthChallenge
 from app.models.base import Base
 from app.models.context import ContextBuild, ContextBuildItem
+from app.models.controlled_web import (
+    WebApprovedURL,
+    WebCitation,
+    WebPlatformConfig,
+    WebRequestUsage,
+    WebSpaceConfig,
+)
 from app.models.derived_fact import DerivedFact
 from app.models.memory import Memory, MemoryCandidate
 from app.models.node_position import NodePosition
@@ -71,4 +78,9 @@ __all__ = [
     "TermEntry",
     "TermUsage",
     "User",
+    "WebApprovedURL",
+    "WebCitation",
+    "WebPlatformConfig",
+    "WebRequestUsage",
+    "WebSpaceConfig",
 ]
