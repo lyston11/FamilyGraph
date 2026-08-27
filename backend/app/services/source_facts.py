@@ -300,3 +300,96 @@ def revise_source_fact(
         session, event_type=EVENT_REVISED, fact=fact, actor_account_id=actor_account_id
     )
     return fact
+
+
+def _structural_fact_mapping(
+    dir_class: str, from_user: int, to_user: int
+) -> tuple[str, int, int] | None:
+    """v1 结构边 → SourceFact 方向合同（v1：to_user 是 from_user 的 dir_class）。
+
+    - elder f→t：t 是 f 长辈 → biological_parent(t, f)
+    - younger f→t：f 是 t 长辈 → biological_parent(f, t)
+    - spouse：对称 → spouse(f, t)
+    peer 与非结构类不映射（返回 None）。
+    """
+    if dir_class == "elder":
+        return "biological_parent", to_user, from_user
+    if dir_class == "younger":
+        return "biological_parent", from_user, to_user
+    if dir_class == "spouse":
+        return "spouse", from_user, to_user
+    return None
+
+
+def map_structural_edge_to_fact(
+    session: Session,
+    *,
+    from_user: int,
+    to_user: int,
+    dir_class: str,
+    asserted_by_account_id: int | None = None,
+) -> SourceFact | None:
+    """把已接受的 v1 结构边映射为 confirmed SourceFact（幂等，E1 生产入口）。
+
+    血缘/配偶事实是全局事实（space_id=None），与 v1 结构边的全局信任代理语义一致；
+    不因建立时是否携带空间成员意图而限定 scope。peer 边不映射。
+
+    幂等：同类型非 revoked 事实已存在时，proposed/disputed 晋升 confirmed，
+    已 confirmed 直接复用——不重复创建、不抛 duplicate（connection accept 可重入）。
+    """
+    mapping = _structural_fact_mapping(dir_class, from_user, to_user)
+    if mapping is None:
+        return None
+    fact_type, subject_id, object_id = mapping
+    existing = _find_active_duplicate(
+        session,
+        fact_type=fact_type,
+        subject_user_id=subject_id,
+        object_user_id=object_id,
+        space_id=None,
+    )
+    if existing is not None:
+        if existing.state in (FACT_PROPOSED, FACT_DISPUTED):
+            transition_source_fact(
+                session, existing, ACTION_CONFIRM, actor_account_id=asserted_by_account_id
+            )
+        return existing
+    return create_source_fact(
+        session,
+        fact_type=fact_type,
+        subject_user_id=subject_id,
+        object_user_id=object_id,
+        provenance="connection_accept",
+        space_id=None,
+        asserted_by_account_id=asserted_by_account_id,
+        state=FACT_CONFIRMED,
+    )
+
+
+def revoke_structural_edge_fact(
+    session: Session,
+    *,
+    from_user: int,
+    to_user: int,
+    dir_class: str,
+    actor_account_id: int | None = None,
+) -> None:
+    """断开 v1 结构边时同步失效对应 SourceFact（AC-KI8：撤权后 DerivedFact/回答及时失效）。
+
+    只 revoke confirmed/disputed；proposed 无法直接 revoke（FSM 无该转换），防御性跳过。
+    """
+    mapping = _structural_fact_mapping(dir_class, from_user, to_user)
+    if mapping is None:
+        return
+    fact_type, subject_id, object_id = mapping
+    existing = _find_active_duplicate(
+        session,
+        fact_type=fact_type,
+        subject_user_id=subject_id,
+        object_user_id=object_id,
+        space_id=None,
+    )
+    if existing is not None and existing.state in (FACT_CONFIRMED, FACT_DISPUTED):
+        transition_source_fact(
+            session, existing, ACTION_REVOKE, actor_account_id=actor_account_id
+        )

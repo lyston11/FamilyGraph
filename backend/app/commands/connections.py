@@ -18,7 +18,7 @@ from app.errors import (
 from app.models.relation import Relation
 from app.models.space import FamilySpace
 from app.models.user import User
-from app.services import audit, relation_fsm, space_fsm
+from app.services import audit, relation_fsm, source_facts, space_fsm
 from app.services.domain_events import emit
 from app.utils.timeutil import utcnow
 
@@ -132,6 +132,17 @@ def decide_connection_request(
                 m.updated_at = utcnow()
             edge.pending_space_id = None
 
+        # E1 生产入口：结构边被双方确认后写 confirmed SourceFact（peer 不映射）。
+        # 与 relation 边同事务，避免两套事实源漂移（父任务 AC-P2 单一权威合同）。
+        if accept:
+            source_facts.map_structural_edge_to_fact(
+                session,
+                from_user=edge.from_user,
+                to_user=edge.to_user,
+                dir_class=edge.dir_class,
+                asserted_by_account_id=ctx.account_id,
+            )
+
         _relation_event(session, ctx, edge, "accepted" if accept else "rejected")
         audit.write_audit(
             session,
@@ -169,6 +180,14 @@ def revoke_relation(session: Session, ctx: ActorContext, edge_id: int) -> Relati
         edge = _edge_for_actor(session, edge_id, actor.id)
         counterpart = edge.to_user if actor.id == edge.from_user else edge.from_user
         relation_fsm.transition(edge, "revoke", actor.id, session)
+        # 断连同步失效对应 SourceFact，保证 DerivedFact/回答及时失效（AC-KI8）。
+        source_facts.revoke_structural_edge_fact(
+            session,
+            from_user=edge.from_user,
+            to_user=edge.to_user,
+            dir_class=edge.dir_class,
+            actor_account_id=ctx.account_id,
+        )
         _relation_event(session, ctx, edge, "revoked")
         audit.write_audit(
             session,
