@@ -173,4 +173,26 @@ Backend 497 tests + mypy clean; agent type-check/lint/64 tests/build; frontend t
 
 ### Status
 
-[OK] **In progress**
+[OK] **Completed**
+
+## Session 5: V2.6 E2E verification, operations runbook, full v2 archive
+
+**Date**: 2026-08-27
+**Task**: 08-26-v2-6-controlled-web -> archived; 08-26-v2-agent-system -> archived
+**Branch**: `main`
+
+### Summary
+
+Closed the final V2.6 gaps and archived the entire v2 Agent system:
+
+- AC-W2 gap: `_fetch_bytes` accepted any content-type — added `_ensure_text_content_type` (text/* + xhtml/xml/json allowlist; missing fails closed) rejecting PDF/image/binary with `WEB_FETCH_UNSUPPORTED_TYPE`.
+- AC-W7: provider-outage test asserting httpx failures surface as `WEB_PROVIDER_UNAVAILABLE`.
+- Empty-volume Compose E2E with real guga Provider (glm-5.2-fast): bootstrap admin, register AgentProvider, create space, dual-layer web config, real public fetch (httpbin.org/html) through DNS/IP + content-type + HTML cleaning + citation record, one-use token CAS rejection, SSRF real rejection (private/metadata/loopback), PII real rejection (phone/secret), backup/restore with V2 tables + FTS self-consistency.
+- Operations runbook in README: feature flags & kill switch, health, graceful shutdown, run lease recovery, log redaction, event retention/compression, Provider secret rotation (LLM + web), backup/restore.
+- Archived v2-6 (7/7 children done) and the v2-agent-system parent (AC-P1..AC-P10 all checked).
+
+Final gates: backend 501 tests + mypy clean; agent 64 tests; frontend 169 tests.
+
+### Status
+
+[OK] **Completed — all v2 tasks archived**
