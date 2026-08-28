@@ -198,6 +198,31 @@ def test_pending_membership_minimal_visibility_both_ways(db_session, client, mat
     assert r2.json()["birth"] == MASKED
 
 
+def test_custodian_does_not_get_household_detail_for_provisional(db_session, client, matrix):
+    """F3：代管创建者不得仅凭 created_by 绕过 provisional 最小节点规则。"""
+    jia = matrix["甲"]
+    child = create_user_with_pin(
+        db_session,
+        "待认领子",
+        "000000",
+        claim_status="managed",
+        profile_status="provisional",
+        created_by=jia.id,
+        gender="f",
+        birth={"cal_type": "solar", "date": "2015-05-05"},
+        bio="私人描述",
+    )
+    ha = _h(client, "甲", "111111")
+    r = client.get(f"/api/users/{child.id}", headers=ha)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "待认领子"
+    # provisional 档案最小节点规则：即使是代管人也无 household_detail 内容字段
+    assert body["gender"] == MASKED
+    assert body["birth"] == MASKED
+    assert body["bio"] == MASKED
+
+
 def test_provisional_ref_minimal_node_not_space_member(db_session, client, matrix):
     """AC-F2：provisional 只以最小节点出现；非 SpaceMember；无推荐资格。"""
     from app.services.identity_fsm import recommendation_eligible

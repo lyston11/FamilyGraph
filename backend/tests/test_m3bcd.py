@@ -93,6 +93,18 @@ def test_stats_scope_excludes_invisible(db_session, client: TestClient, three_fa
 # ---- m3d 搜索 ----
 
 
+def test_stats_does_not_leak_masked_gender(client: TestClient, three_families):
+    """F2：直系边对端仅 lineage_summary，gender 被遮蔽，不得计入 m/f 桶。"""
+    ha = _login(client, "甲", "111111")
+    s = client.get("/api/stats", headers=ha).json()
+    # 甲（本人 self）gender=m 明文；乙（直系边 lineage_summary）gender 被遮蔽进 unknown
+    assert s["by_gender"]["m"] == 1
+    assert s["by_gender"]["f"] == 0
+    assert s["by_gender"]["unknown"] == 1
+    # 乙的性别不能通过任何聚合桶出现
+    assert sum(s["by_gender"].values()) == s["total"]
+
+
 def test_search_hits_within_visibility_only(db_session, client: TestClient, three_families):
     ha = _login(client, "甲", "111111")
     # v2：直系对端乙可命中；peer 对端丙与无关丁不可命中
