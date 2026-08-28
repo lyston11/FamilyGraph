@@ -1,0 +1,14 @@
+{"file":".trellis/spec/architecture.md","reason":"V2 身份、空间、VisibilityPolicy、数据权利和 Agent 不变量的全局权威合同。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"迁移、事务、约束、WAL、备份和数据权利修复必须遵守的后端数据库边界。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"audit actor、request/run 关联和 PIN/JWT/PII/secret 脱敏要求。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端 lint、format、mypy、pytest、IDOR、Memory/RAG 和安全门禁。"}
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"Pi sidecar、token、内部协议、SSE、Provider 和工具幂等合同。"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"SourceFact/DerivedFact/TermRegistry、四级推断和原文保留边界。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"Steward 单空间、ActionCard FSM、推荐矩阵和 execute 重校验边界。"}
+{"file":".trellis/spec/backend/controlled-web.md","reason":"受控联网、SSRF、PII、approved token、引用和默认关闭合同。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端质量命令、375px 人工验收和可访问性基线。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"空间切换、登出、401 和敏感 Pinia/SSE 缓存清理规则。"}
+{"file":".trellis/spec/frontend/action-card.md","reason":"ActionCard 双入口共享状态、确认和错误降级合同。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"API/服务/数据库/sidecar/前端跨层数据流、共享 schema 和投影复用检查。"}
+{"file":".trellis/tasks/08-28-v2-audit-remediation/research/audit-baseline.md","reason":"本任务整改的审计事实、严重度、代码锚点和证据等级。"}
+{"file":".trellis/tasks/08-28-v2-audit-remediation/research/verification-protocol.md","reason":"实施阶段统一命令、隐私/Runtime/Web 矩阵、空库恢复和 AC 证据格式。"}

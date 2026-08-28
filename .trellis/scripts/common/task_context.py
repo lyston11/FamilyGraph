@@ -173,54 +173,68 @@ def _is_exempt_from_code_file_warning(file_path: str, task_rel: str) -> bool:
 def _resolve_context_entry_path(
     file_path: str, repo_root: Path, task_dir: Path | None
 ) -> Path | None:
-    """Resolve a JSONL entry, binding archived self-references to the archive copy.
+    """Resolve a JSONL entry, remapping stale active-task references to archived copies.
 
-    Exact historical self-references are remapped only for archived tasks.
-    ``None`` means the remapped path traversed or resolved outside that archive.
+    Entries may keep the pre-archive layout (``.trellis/tasks/<name>/...``)
+    even after ``<name>`` was moved under ``.trellis/tasks/archive/YYYY-MM/<name>/``.
+    This applies both to the task's own directory and to sibling/parent tasks it
+    references. Resolution order:
+
+    1. the path as written (repo-relative);
+    2. a live task directory under ``.trellis/tasks/<name>/``;
+    3. a unique archived task directory under ``.trellis/tasks/archive/*/<name>/``.
+
+    ``None`` means the entry is not resolvable (missing, ambiguous, malformed,
+    or the remapped path escapes the archive).
     """
-    repo_path = repo_root / file_path
-    if task_dir is None:
+    repo_rel = file_path.replace("\\", "/")
+    repo_path = repo_root / repo_rel
+
+    # Path exists exactly as written — nothing to remap.
+    if repo_path.exists():
         return repo_path
 
+    marker = f"{DIR_WORKFLOW}/{DIR_TASKS}/"
+    if not repo_rel.startswith(marker):
+        return repo_path
+
+    remainder = repo_rel[len(marker):].rstrip("/")
+    if not remainder:
+        return repo_path
+    parts = remainder.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None  # malformed / traversal — fail closed
+
+    name = parts[0]
+    relative_parts = tuple(parts[1:])
+
+    # A live task directory wins over an archived one.
+    live_task = repo_root / DIR_WORKFLOW / DIR_TASKS / name
+    if live_task.is_dir():
+        return repo_path
+
+    # Otherwise look for a unique archived copy under archive/YYYY-MM/<name>/.
+    archive_base = repo_root / DIR_WORKFLOW / DIR_TASKS / DIR_ARCHIVE
+    matches: list[Path] = []
+    if archive_base.is_dir():
+        for month in archive_base.iterdir():
+            if not month.is_dir():
+                continue
+            candidate = month / name
+            if candidate.is_dir():
+                matches.append(candidate)
+
+    if len(matches) != 1:
+        # Missing or ambiguous — report the original path rather than guess.
+        return repo_path
+
+    archived_task = matches[0]
     try:
-        task_parts = task_dir.resolve().relative_to(repo_root.resolve()).parts
-    except ValueError:
-        return repo_path
-
-    archive_prefix = (DIR_WORKFLOW, DIR_TASKS, DIR_ARCHIVE)
-    if len(task_parts) != 5 or task_parts[:3] != archive_prefix:
-        return repo_path
-
-    year_month = task_parts[3]
-    if (
-        len(year_month) != 7
-        or year_month[4] != "-"
-        or not year_month[:4].isdigit()
-        or not year_month[5:].isdigit()
-    ):
-        return repo_path
-
-    historical_root = f"{DIR_WORKFLOW}/{DIR_TASKS}/{task_dir.name}"
-    posix_path = file_path.replace("\\", "/")
-    if posix_path == historical_root:
-        relative_parts: tuple[str, ...] = ()
-    elif posix_path.startswith(f"{historical_root}/"):
-        relative_path = posix_path[len(historical_root) + 1 :]
-        if relative_path.endswith("/"):
-            relative_path = relative_path[:-1]
-        relative_parts = tuple(relative_path.split("/")) if relative_path else ()
-        if any(part in ("", ".", "..") for part in relative_parts):
-            return None
-    else:
-        return repo_path
-
-    try:
-        archive_root = task_dir.resolve()
-        resolved_path = task_dir.joinpath(*relative_parts).resolve()
-        resolved_path.relative_to(archive_root)
+        resolved = archived_task.joinpath(*relative_parts).resolve()
+        resolved.relative_to(archived_task.resolve())
     except (OSError, RuntimeError, ValueError):
         return None
-    return resolved_path
+    return resolved
 
 
 def _validate_jsonl(jsonl_file: Path, repo_root: Path, task_dir: Path | None = None) -> int:

@@ -1,0 +1,30 @@
+{
+  "id": "v2-audit-remediation",
+  "name": "v2-audit-remediation",
+  "title": "V2 审计整改与发布就绪",
+  "description": "根据 2026-08-28 对 FamilyGraph Trellis v2 的全面审计，修复数据与隐私边界、Agent Runtime、Provider 接线、跨空间隔离、事件一致性、导出安全、测试证据和 Trellis 归档治理问题；完成可复现的发布验收后才允许归档。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-08-28",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "audit_baseline": "dc46e34",
+    "source_task": "08-26-v2-agent-system",
+    "release_gate": "blocked_until_all_p0_p1_closed"
+  }
+}
