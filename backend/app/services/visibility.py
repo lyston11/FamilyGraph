@@ -222,8 +222,12 @@ def _base_level(
     """原始层级判定（不含 purpose 收紧）。返回 (level, source)。"""
     if actor.id == target.id:
         return LEVEL_SELF_PRIVATE, "self"
-    # 代管创建者保有查看权，映射 household_detail（编辑权仍由 custody 判定）
+    # 代管创建者保有查看权，映射 household_detail（编辑权仍由 custody 判定）。
+    # provisional 档案遵循最小节点规则：即使是代管人也不得越过 household_detail
+    # 读取性别/精确生卒/简介等字段（F3 收紧，design D-04）。
     if space_context is None and target.created_by == actor.id:
+        if target.profile_status == "provisional":
+            return LEVEL_LINEAGE_SUMMARY, "custodian_provisional"
         return LEVEL_HOUSEHOLD_DETAIL, "custodian"
     household, lineage = _shared_space_kinds(session, actor.id, target.id, space_context)
     if household:

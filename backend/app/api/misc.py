@@ -13,7 +13,14 @@ from app.models.account import Account
 from app.models.relation import Relation
 from app.models.user import User
 from app.services.lunar import lunar_to_solar, solar_to_lunar
-from app.services.visibility import PURPOSE_SEARCH, evaluate, visible_user_ids
+from app.services.visibility import (
+    FIELD_CLEAR,
+    PURPOSE_SEARCH,
+    PURPOSE_STATISTICS,
+    evaluate,
+    visible_user_ids,
+)
+from app.utils.timeutil import utcnow
 
 router = APIRouter(tags=["misc"])
 
@@ -45,17 +52,28 @@ def stats(
     total = len(users)
     by_gender: dict[str, int] = {"m": 0, "f": 0, "unknown": 0}
     generation: dict[int, int] = {}
-    this_month = __import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow().month
+    now = utcnow()
+    this_month = now.month
     birthdays: list[dict[str, Any]] = []
     for u in users:
-        by_gender[u.gender] = by_gender.get(u.gender, 0) + 1
+        # F2：统计必须消费字段级投影；被遮蔽的 gender/birth 不得进入聚合。
+        decision = evaluate(session, actor, u, purpose=PURPOSE_STATISTICS)
+        if not decision.visible:  # 冗余防线，理论上 visible 集已过滤
+            continue
+        if decision.fields.get("gender") == FIELD_CLEAR:
+            by_gender[u.gender] = by_gender.get(u.gender, 0) + 1
+        else:
+            by_gender["unknown"] += 1
+        birth_clear = decision.fields.get("birth") == FIELD_CLEAR
+        if not birth_clear:
+            continue
         birth = u.birth if isinstance(u.birth, dict) else {}
         date_str = birth.get("date") or birth.get("mirror_date")
         if date_str:
             try:
                 month = int(str(date_str).split("-")[1].lstrip("0") or 0)
                 gen_year = int(str(date_str).split("-")[0])
-                gen = __import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow().year - gen_year
+                gen = now.year - gen_year
                 bucket = min(gen // 20 * 20, 120) if gen > 0 else 0
                 generation[bucket] = generation.get(bucket, 0) + 1
                 if month == this_month:
