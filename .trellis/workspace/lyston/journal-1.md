@@ -62,6 +62,33 @@ IDOR 矩阵 5 用例 + 申请流 3 用例 + 附件链 5 用例 + 端到端旅程
 
 [OK] **Completed**
 
+## 2026-08-30 会话：V2 Agent Runtime Full Repair 最终核验与取消竞态加固
+
+任务：`08-30-v2-agent-runtime-full-repair`（保持 `in_progress`，未归档）。工作树含其他进程的 frontend redesign，未执行 reset/checkout。
+
+### 本次核验与修复
+
+- 确认运行时是 `pi-coding-agent` session/loop + `pi-ai` protocol adapter（无独立 pi-sdk）；首版云模型严格使用 `liu-dada/gpt-5.6-sol` / `openai-responses`，不使用 guga 或 luna 作为运行配置。
+- Provider profile、provider_name/id 语义、runtime snapshot、ProviderGateway 唯一 egress、credential-key policy guard、空/非法 body fail-closed、Responses wire、sidecar cancellation 均已落地。
+- 新增后端取消竞态门禁：`agent_tools.execute` 在分发前复核 `cancel_requested`；Provider proxy 在建立上游连接前及流式 chunk 边界复核 Run 状态/取消标记；新增回归测试。
+- Provider 上游连接异常路径显式关闭 `httpx.AsyncClient`，避免连接池泄漏。
+- Provider proxy 额外绑定 run snapshot 的 model/stream/token cap，防止持有效 token 的 sidecar 改模型或绕过输出上限。
+- `.env` 权限保持 `0600`；不读取、不输出、不记录密钥。
+
+### 门禁证据
+
+- backend `pytest -q`：560 passed；ruff check/format、mypy（120 files）通过。
+- agent type-check/lint/build 通过；Vitest 12 files / 78 tests passed。
+- frontend（包含其他进程 dirty redesign）type-check/lint/build 通过；Vitest 37 files / 233 tests passed。
+- `docker compose config --quiet` 通过；`task.py validate 08-30-v2-agent-runtime-full-repair` 通过（implement 8/8、check 5/5）。
+
+### 未闭环
+
+- 真实 `liu-dada/gpt-5.6-sol` 成功正文回显尚未取得；仅有本地 Responses wire stub 与失败/取消回归证据。上游恢复后补脱敏 E2E（provider/model/status/字节数/正文长度，不含 key/token）。
+- Session history 按公开合同恢复 user/assistant 文本与 citation；Pi 私有 tool call/result 不写 AgentMessage。若需恢复工具结果，另立任务设计受控摘要与敏感级别。
+
+状态：**代码与本地门禁通过；真实 provider success evidence 待补，任务保持 in_progress。**
+
 ### Next Steps
 
 - v1 已可发布使用；待办：手机视口人工走查、迁云按 README 清单执行；v2 计划见 HANDOFF（agent 推荐/互反称谓/Q8 等）
@@ -362,6 +389,27 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 | `f596ead` | (see git log) |
 | `add7fec` | (see git log) |
 | `7d5c8e2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 4: 前端后台角色分域与安全收尾
+
+**Date**: 2026-08-30
+**Task**: 前端后台角色分域与安全收尾
+**Branch**: `feat/frontend-role-boundaries`
+
+### Summary
+
+完成平台运营后台 /admin 与家庭空间管理 /spaces/:spaceId/manage 分域，补齐导航、空间图隔离、邀请与 ownership transfer active membership 授权、平台运营者 visibility/RAG 隔离；前端 40/242、后端 571、Agent 80 门禁通过。主会话完成 /admin、空间管理、双主题和 375px 无溢出验证；完整 compose 逐页人工矩阵仍待后续执行。并行 v2-agent-runtime 改动未纳入本次提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `77babc7` | (see git log) |
 
 ### Status
 
