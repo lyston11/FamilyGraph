@@ -8,13 +8,18 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_authenticated_user
 from app.errors import (
-    WEB_CITATION_NOT_FOUND,
     SPACE_FORBIDDEN_ACTOR,
     SPACE_NOT_FOUND,
+    WEB_CITATION_NOT_FOUND,
     raise_api_error,
 )
 from app.models.account import Account
-from app.models.controlled_web import WebCitation, WebPlatformConfig, WebSpaceConfig, WebRequestUsage
+from app.models.controlled_web import (
+    WebCitation,
+    WebPlatformConfig,
+    WebRequestUsage,
+    WebSpaceConfig,
+)
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
 from app.schemas.controlled_web import (
@@ -66,7 +71,9 @@ def _space_admin(db: Session, identity: tuple[User, Account], space_id: int) -> 
     return member
 
 
-def _platform_request_to_model(body: WebPlatformConfigRequest, actor: User, account: Account) -> WebPlatformConfig:
+def _platform_request_to_model(
+    body: WebPlatformConfigRequest, actor: User, account: Account
+) -> WebPlatformConfig:
     now = timeutil.utcnow()
     secret: str | None = None
     if body.provider_secret is not None:
@@ -141,7 +148,9 @@ def update_platform_config(
         row.updated_by_account_id = account.id
         if body.provider_secret is not None:
             secret_value = body.provider_secret.get_secret_value()
-            row.provider_secret_ciphertext = secretbox.encrypt_secret(secret_value) if secret_value else None
+            row.provider_secret_ciphertext = (
+                secretbox.encrypt_secret(secret_value) if secret_value else None
+            )
     db.commit()
     audit.write_audit(
         db,

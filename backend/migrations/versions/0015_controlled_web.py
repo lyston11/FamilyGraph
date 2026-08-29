@@ -57,7 +57,9 @@ def upgrade() -> None:
             sa.ForeignKey("accounts.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.CheckConstraint("max_results >= 1 AND max_results <= 50", name="ck_web_space_max_results"),
+        sa.CheckConstraint(
+            "max_results >= 1 AND max_results <= 50", name="ck_web_space_max_results"
+        ),
         sa.CheckConstraint("max_fetch_bytes > 0", name="ck_web_space_fetch_bytes"),
         sa.CheckConstraint("max_requests_per_minute > 0", name="ck_web_space_rate"),
     )
@@ -78,7 +80,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column(
-            "run_id", sa.Integer(), sa.ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+            "run_id",
+            sa.Integer(),
+            sa.ForeignKey("agent_runs.id", ondelete="SET NULL"),
+            nullable=True,
         ),
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("domain", sa.String(255), nullable=False),
@@ -86,7 +91,9 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("used_at", sa.DateTime(), nullable=True),
-        sa.CheckConstraint("used_at IS NULL OR used_at >= created_at", name="ck_web_token_used_after_create"),
+        sa.CheckConstraint(
+            "used_at IS NULL OR used_at >= created_at", name="ck_web_token_used_after_create"
+        ),
     )
     op.create_index(
         "ix_web_approved_urls_scope",
@@ -109,7 +116,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column(
-            "run_id", sa.Integer(), sa.ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+            "run_id",
+            sa.Integer(),
+            sa.ForeignKey("agent_runs.id", ondelete="SET NULL"),
+            nullable=True,
         ),
         sa.Column("tool", sa.String(32), nullable=False),
         sa.Column("provider", sa.String(64), nullable=True),
@@ -134,7 +144,10 @@ def upgrade() -> None:
         "web_citations",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
-            "run_id", sa.Integer(), sa.ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+            "run_id",
+            sa.Integer(),
+            sa.ForeignKey("agent_runs.id", ondelete="CASCADE"),
+            nullable=False,
         ),
         sa.Column(
             "account_id",

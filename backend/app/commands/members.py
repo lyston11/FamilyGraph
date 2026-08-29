@@ -7,9 +7,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commands.context import ActorContext, command_transaction, load_actor
@@ -17,17 +21,19 @@ from app.errors import (
     AUTH_INVALID_CREDENTIALS,
     CONFIRM_NAME_MISMATCH,
     DISCLOSURE_SCOPE_REQUIRES_SELF,
+    IDEMPOTENCY_PAYLOAD_CONFLICT,
     OWNER_TRANSFER_REQUIRED,
     SPACE_NOT_FOUND,
     UNIFIED_CREDENTIAL_MESSAGE,
     USER_NOT_FOUND,
+    VALIDATION_ERROR,
     raise_api_error,
 )
 from app.models import Account, User
 from app.models.attachment import Attachment
 from app.models.space import FamilySpace, SpaceProfileRef
-from app.models.v2_foundation import ProfileFactReview
-from app.services import audit, custody, identity_fsm
+from app.models.v2_foundation import MemberCreationRequest, ProfileFactReview
+from app.services import audit, custody, identity_fsm, relation_fsm, source_facts
 from app.services import disclosure as disclosure_service
 from app.services.domain_events import emit
 from app.utils import security, timeutil
@@ -83,6 +89,84 @@ def _seed_fact_reviews(session: Session, member: User) -> None:
         )
 
 
+def _create_member_core(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    name: str,
+    gender: str = "unknown",
+    birth: dict[str, Any] | None = None,
+    death: dict[str, Any] | None = None,
+    bio: str | None = None,
+    privacy_mode: str = "handover",
+    space_membership_space_id: int | None = None,
+) -> tuple[User, str]:
+    """建房核心（F-1/F-3）：provisional 档案 + managed 账号 + 一次性 PIN + 空间引用
+    + 确档清单。不管理事务，由调用方包在自己的 command_transaction 内。
+    """
+    actor = load_actor(session, ctx)
+    now = timeutil.utcnow()
+    pin = security.generate_pin()
+    member = User(
+        name=name.strip(),
+        created_at=now,
+        gender=gender,
+        birth=_enrich(birth),
+        death=_enrich(death),
+        bio=bio,
+        privacy_mode=privacy_mode,
+        created_by=actor.id,
+        # F-3：新建他人恒为 provisional 档案；身份确认由本人完成
+        profile_status="provisional",
+    )
+    member.account = Account(
+        pin_hash=security.hash_pin(pin),
+        pin_must_change=True,
+        token_version=0,
+        failed_attempts=0,
+        locked_until=None,
+        status="managed",
+    )
+    session.add(member)
+    session.flush()  # 取得 id 供空间引用/清单/审计引用
+
+    space_id: int | None = None
+    if space_membership_space_id is not None:
+        space = session.get(FamilySpace, space_membership_space_id)
+        if space is None or not space_fsm_is_active(session, space.id, actor.id):
+            raise_api_error(404, SPACE_NOT_FOUND, "目标家庭空间不存在或无权操作")
+        space_id = space.id
+        session.add(
+            SpaceProfileRef(
+                space_id=space.id,
+                user_id=member.id,
+                added_by=actor.id,
+                status="active",
+                created_at=now,
+            )
+        )
+
+    _seed_fact_reviews(session, member)
+    emit(
+        session,
+        event_type="profile.created",
+        aggregate_type="profile",
+        aggregate_id=member.id,
+        payload={"name": member.name, "created_by": actor.id},
+        space_id=space_id,
+        actor_account_id=ctx.account_id,
+    )
+    audit.write_audit(
+        session,
+        action="profile_created",
+        actor_id=actor.id,
+        target_id=member.id,
+        ip=ctx.ip,
+        detail={"name": member.name, "privacy_mode": privacy_mode},
+    )
+    return member, pin
+
+
 def create_member(
     session: Session,
     ctx: ActorContext,
@@ -95,72 +179,197 @@ def create_member(
     privacy_mode: str = "handover",
     space_membership_space_id: int | None = None,
 ) -> tuple[User, str]:
-    """建档：user+account+一次性 PIN + 可选空间最小引用 + 确档清单播种。
+    """低层建房（内部/测试用）：仅 user+account+PIN，无关系。
 
+    公开「名字+关系必填」语义由 create_managed_member（POST /users）强制。
     返回 (member, 明文 PIN)；PIN 仅本次响应可见（A3/AD-1）。
     """
-    actor = load_actor(session, ctx)
-    now = timeutil.utcnow()
-    pin = security.generate_pin()
     with command_transaction(session):
-        member = User(
-            name=name.strip(),
-            created_at=now,
+        return _create_member_core(
+            session,
+            ctx,
+            name=name,
             gender=gender,
-            birth=_enrich(birth),
-            death=_enrich(death),
+            birth=birth,
+            death=death,
             bio=bio,
             privacy_mode=privacy_mode,
-            created_by=actor.id,
-            # F-3：新建他人恒为 provisional 档案；身份确认由本人完成
-            profile_status="provisional",
+            space_membership_space_id=space_membership_space_id,
         )
-        member.account = Account(
-            pin_hash=security.hash_pin(pin),
-            pin_must_change=True,
-            token_version=0,
-            failed_attempts=0,
-            locked_until=None,
-            status="managed",
-        )
-        session.add(member)
-        session.flush()  # 取得 id 供空间引用/清单/审计引用
 
-        space_id: int | None = None
-        if space_membership_space_id is not None:
-            space = session.get(FamilySpace, space_membership_space_id)
-            if space is None or not space_fsm_is_active(session, space.id, actor.id):
-                raise_api_error(404, SPACE_NOT_FOUND, "目标家庭空间不存在或无权操作")
-            space_id = space.id
-            session.add(
-                SpaceProfileRef(
-                    space_id=space.id,
-                    user_id=member.id,
-                    added_by=actor.id,
-                    status="active",
-                    created_at=now,
-                )
+
+def create_managed_member(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    name: str,
+    relation_dir_class: str,
+    idempotency_key: str,
+    request_hash: str,
+    gender: str = "unknown",
+    birth: dict[str, Any] | None = None,
+    death: dict[str, Any] | None = None,
+    bio: str | None = None,
+    privacy_mode: str = "handover",
+    space_membership_space_id: int | None = None,
+    relation_label: str | None = None,
+    relation_text: str | None = None,
+) -> tuple[User, str | None, bool]:
+    """F-1 原子建档：provisional 档案 + managed 账号 +（AD-4 新建例外）直接 active
+    关系 + 关系原文 + proposed SourceFact + 空间引用 + 事件/审计 + 幂等台账，
+    任一步失败整体回滚。
+
+    返回 (member, pin, replayed)。新建时返回一次性 PIN；同幂等键重放返回原
+    档案但不回放 PIN（replayed=True, pin=None）—— 初始 PIN 只出现一次。
+    """
+    actor = load_actor(session, ctx)
+    key = idempotency_key.strip()
+    if not key:
+        raise_api_error(422, VALIDATION_ERROR, "缺少幂等请求键")
+    if len(key) > 120:
+        raise_api_error(422, VALIDATION_ERROR, "幂等请求键过长")
+
+    prior = _find_member_creation(session, actor.id, key)
+    if prior is not None:
+        return _replay_member_creation(session, prior, request_hash)
+
+    try:
+        with command_transaction(session):
+            member, pin = _create_member_core(
+                session,
+                ctx,
+                name=name,
+                gender=gender,
+                birth=birth,
+                death=death,
+                bio=bio,
+                privacy_mode=privacy_mode,
+                space_membership_space_id=space_membership_space_id,
             )
 
-        _seed_fact_reviews(session, member)
-        emit(
-            session,
-            event_type="profile.created",
-            aggregate_type="profile",
-            aggregate_id=member.id,
-            payload={"name": member.name, "created_by": actor.id},
-            space_id=space_id,
-            actor_account_id=ctx.account_id,
+            # AD-4 新建账号例外：managed 新档由代管人创建 → relation 直接 active
+            edge = relation_fsm.create_relation(
+                session,
+                from_user=actor.id,
+                to_user=member.id,
+                dir_class=relation_dir_class,
+                label=relation_label,
+                status="active",
+            )
+
+            # 关系原文 append-only（有则保存）；无原文时以 dir_class+label 组成上下文
+            raw_text_id: int | None = None
+            if relation_text is not None and relation_text.strip():
+                raw = source_facts.create_raw_relation_input(
+                    session,
+                    author_account_id=ctx.account_id,
+                    text=relation_text,
+                    context={"dir_class": relation_dir_class, "label": relation_label},
+                )
+                raw_text_id = raw.id
+            # proposed SourceFact（关系仍待对方确档确认；结构真源不由写入者单方决定）
+            source_facts.create_structural_edge_proposal(
+                session,
+                from_user=actor.id,
+                to_user=member.id,
+                dir_class=relation_dir_class,
+                raw_text_id=raw_text_id,
+                asserted_by_account_id=ctx.account_id,
+            )
+
+            emit(
+                session,
+                event_type="relation.created",
+                aggregate_type="relation",
+                aggregate_id=edge.id,
+                payload={
+                    "from_user": edge.from_user,
+                    "to_user": edge.to_user,
+                    "dir_class": edge.dir_class,
+                    "status": edge.status,
+                },
+                actor_account_id=ctx.account_id,
+            )
+            audit.write_audit(
+                session,
+                action="relation_created",
+                actor_id=actor.id,
+                target_id=member.id,
+                ip=ctx.ip,
+                detail={"relation_id": edge.id, "dir_class": relation_dir_class},
+            )
+
+            session.add(
+                MemberCreationRequest(
+                    actor_user_id=actor.id,
+                    idempotency_key=key,
+                    request_hash=request_hash,
+                    member_user_id=member.id,
+                    relation_id=edge.id,
+                    created_at=timeutil.utcnow(),
+                )
+            )
+    except IntegrityError:
+        # 并发窗口：同 key 由另一请求先提交 → 唯一约束冲突，按重放裁决
+        session.rollback()
+        prior = _find_member_creation(session, actor.id, key)
+        if prior is not None:
+            return _replay_member_creation(session, prior, request_hash)
+        raise
+    return member, pin, False
+
+
+def _find_member_creation(
+    session: Session, actor_user_id: int, key: str
+) -> MemberCreationRequest | None:
+    return session.scalar(
+        select(MemberCreationRequest).where(
+            MemberCreationRequest.actor_user_id == actor_user_id,
+            MemberCreationRequest.idempotency_key == key,
         )
-        audit.write_audit(
-            session,
-            action="profile_created",
-            actor_id=actor.id,
-            target_id=member.id,
-            ip=ctx.ip,
-            detail={"name": member.name, "privacy_mode": privacy_mode},
-        )
-    return member, pin
+    )
+
+
+def _replay_member_creation(
+    session: Session, prior: MemberCreationRequest, request_hash: str
+) -> tuple[User, str | None, bool]:
+    if prior.request_hash != request_hash:
+        raise_api_error(409, IDEMPOTENCY_PAYLOAD_CONFLICT, "相同请求键但请求内容不同")
+    member = session.get(User, prior.member_user_id)
+    if member is None:
+        raise_api_error(409, VALIDATION_ERROR, "幂等请求对应的档案已不存在")
+    return member, None, True
+
+
+def canonical_member_request_hash(
+    *,
+    name: str,
+    gender: str,
+    birth: dict[str, Any] | None,
+    death: dict[str, Any] | None,
+    bio: str | None,
+    privacy_mode: str,
+    space_membership_space_id: int | None,
+    relation_dir_class: str,
+    relation_label: str | None,
+    relation_text: str | None,
+) -> str:
+    """请求内容指纹：稳定字段序 + key 排序；同请求键重放时据此判定内容一致。"""
+    canonical = {
+        "name": name.strip(),
+        "gender": gender,
+        "birth": birth,
+        "death": death,
+        "bio": bio,
+        "privacy_mode": privacy_mode,
+        "space_membership_space_id": space_membership_space_id,
+        "relation_dir_class": relation_dir_class,
+        "relation_label": relation_label,
+        "relation_text": relation_text.strip() if relation_text else None,
+    }
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 def space_fsm_is_active(session: Session, space_id: int, user_id: int) -> bool:

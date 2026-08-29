@@ -1,11 +1,18 @@
 # FamilyGraph 开发/部署底座（m0a；V2.1 新增 agent sidecar）
 #
 # 用法：
-#   全新克隆：docker compose up --build -d
-#   前端:     http://localhost:8080 （/api 经 nginx 反代到 api）
+#   部署：在 .env 提供 SECRET_KEY 与 AGENT_SERVICE_SECRET（强随机值），然后
+#         docker compose up --build -d
+#   前端: http://localhost:8080 （/api 经 nginx 反代到 api）
 #   API 健康: http://localhost:8000/api/health
 #
-# 安全提示：下方 SECRET_KEY 默认值仅供本地试用；部署前务必用 .env 或环境变量覆盖。
+# 安全合同（P1 收口）：
+#   - 弱默认密钥 fail-closed：SECRET_KEY / AGENT_SERVICE_SECRET 未提供即拒启，
+#     不再提供 dev 弱默认值；开发联调需显式 DEV_ALLOW_WEAK_SECRETS=1（.env）。
+#   - internal agent 协议（8001）绑定 api 在 backend 网络的接口 IP
+#     （INTERNAL_AGENT_API_HOST=172.28.0.10，静态分配），frontend 网络上的
+#     web/nginx 与宿主均无法路由到该接口；backend 网络设 internal:true，
+#     sidecar 无外网 egress（模型流量经 api 容器的 ProviderGateway 代理转发）。
 
 services:
   api:
@@ -13,24 +20,37 @@ services:
     image: familygraph-api:0.1.0
     restart: unless-stopped
     ports:
+      # 仅公开 listener 发布到宿主；internal agent 协议（8001）不发布端口，
+      # 且只绑定 backend 网络接口（见 INTERNAL_AGENT_API_HOST）
       - "8000:8000"
     environment:
       DATA_DIR: /data
-      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      # fail-closed：未在 .env 提供强随机密钥即拒启（compose 层与 config 层双保险）
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 必须在 .env 中提供强随机值}
+      AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:?AGENT_SERVICE_SECRET 必须在 .env 中提供强随机值}
+      DEV_ALLOW_WEAK_SECRETS: ${DEV_ALLOW_WEAK_SECRETS:-0}
       # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
-      AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
+      # P1 网络隔离：internal listener 只绑定 backend 网络静态 IP（web/宿主不可路由）
+      INTERNAL_AGENT_API_HOST: 172.28.0.10
       # V2.3 Relationship Intelligence
       RELATIONSHIP_INTELLIGENCE_ENABLED: ${RELATIONSHIP_INTELLIGENCE_ENABLED:-0}
       # V2.6 Controlled Web：平台总开关（默认关闭；空间还需 owner/admin 单独 opt-in）
       CONTROLLED_WEB_ENABLED: ${CONTROLLED_WEB_ENABLED:-0}
+      # V2.4 Steward：领域开关 + 进程内 canonical job worker 泵（双开关）
+      STEWARD_ENABLED: ${STEWARD_ENABLED:-0}
+      STEWARD_WORKER_ENABLED: ${STEWARD_WORKER_ENABLED:-0}
+      MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-5}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷
       - app_data:/data
     networks:
-      - frontend
-      - backend
+      frontend: {}
+      backend:
+        # 静态 IP：INTERNAL_AGENT_API_HOST 依赖该地址确定 internal 接口
+        ipv4_address: 172.28.0.10
     # 优雅停机：先停止接收新连接，给 uvicorn 时间完成在途请求与 lease 释放
+    # （serve.py 共享信号处理器让双 listener 同时优雅退出）
     stop_grace_period: 30s
     healthcheck:
       test:
@@ -57,8 +77,9 @@ services:
       - frontend
     # 注意：web 不挂载数据卷——nginx 禁止直挂 uploads，附件下载走后端授权端点
 
-  # V2.1 Agent sidecar（B2）：无业务 DB、无 uploads 卷、不暴露端口；
-  # 仅在 backend 内部网络可达（FastAPI + 获准 Provider egress）。
+  # V2.1 Agent sidecar（B2）：无业务 DB、无 uploads 卷、不暴露端口、
+  # 无外网 egress（backend 网络 internal:true；模型流量经 api 的 Provider
+  # 代理转发，api_key 不出服务端）。
   agent:
     build: ./agent
     image: familygraph-agent:0.1.0
@@ -66,17 +87,14 @@ services:
     depends_on:
       - api
     environment:
+      # 公开 base 仅用于 /api/health 探针；internal 协议走独立 listener
       FG_API_BASE_URL: http://api:8000
-      AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:-dev-agent-secret-change-me}
+      # internal agent 协议独立端口（api 容器内，不发布宿主端口，仅 backend
+      # internal 网络可达；nginx/浏览器/宿主均无法触达）
+      FG_INTERNAL_API_BASE_URL: http://api:8001
+      AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:?AGENT_SERVICE_SECRET 必须在 .env 中提供强随机值}
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       HEALTH_PORT: "8080"
-      # 本地联调 stub Provider（生产由部署环境覆盖/留空）
-      AGENT_PROVIDER_CLOUD_BASE_URL: ${AGENT_PROVIDER_CLOUD_BASE_URL:-}
-      AGENT_PROVIDER_CLOUD_MODEL: ${AGENT_PROVIDER_CLOUD_MODEL:-}
-      AGENT_PROVIDER_CLOUD_API_KEY: ${AGENT_PROVIDER_CLOUD_API_KEY:-}
-      # Provider 密钥占位：正式密钥由 platform_operator 经管理后台注册
-      # （secretbox 加密落库，sidecar 经 context 的 secret_ref 对账），此处仅留示例位。
-      # PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
     networks:
       - backend
     # 优雅停机：SIGTERM → worker.stop + health.close；在途 Run 由 FastAPI reaper 回收
@@ -99,4 +117,10 @@ volumes:
 
 networks:
   frontend:
+  # internal：sidecar ↔ api 专用；internal:true 禁止容器访问外网，
+  # api 因同时挂在 frontend 网络仍可出网（Provider/Controlled Web egress 唯一出口）
   backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

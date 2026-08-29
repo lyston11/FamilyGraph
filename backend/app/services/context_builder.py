@@ -99,19 +99,25 @@ class ContextBuilder:
         if prefetched is None:
             if self.db is None:
                 raise_api_error(500, POLICY_CONTEXT_INVALID, "context 缺少预取数据")
-            sources = tuple(
-                ContextSource.from_hit(hit)
-                for hit in search_rag(
-                    self.db,
-                    actor=actor,
-                    account=actor.account,
-                    space_id=space_id,
-                    query=query,
-                    agent_kind=agent_kind,
-                    provider_kind=provider_kind,
-                    raise_on_restricted=True,
+            # RAG 关闭时助手仍需可运行：不把会话全文当隐式补偿上下文，只产出空
+            # context（结构化 Assistant 工具路径保留）。RAG 检索由浏览器面
+            # /rag/search 端点独立门禁（503 RAG_DISABLED），此处不硬阻断 Run。
+            if config.RAG_ENABLED:
+                sources = tuple(
+                    ContextSource.from_hit(hit)
+                    for hit in search_rag(
+                        self.db,
+                        actor=actor,
+                        account=actor.account,
+                        space_id=space_id,
+                        query=query,
+                        agent_kind=agent_kind,
+                        provider_kind=provider_kind,
+                        raise_on_restricted=True,
+                    )
                 )
-            )
+            else:
+                sources = ()
         else:
             sources = tuple(prefetched)
         if any(source.sensitivity in ("high", "local_required") for source in sources):

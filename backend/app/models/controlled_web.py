@@ -5,7 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -15,9 +25,7 @@ class WebPlatformConfig(Base):
     """Singleton platform gate; no family data is stored here."""
 
     __tablename__ = "web_platform_configs"
-    __table_args__ = (
-        CheckConstraint("id = 1", name="ck_web_platform_config_singleton"),
-    )
+    __table_args__ = (CheckConstraint("id = 1", name="ck_web_platform_config_singleton"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -68,7 +76,9 @@ class WebApprovedURL(Base):
 
     __tablename__ = "web_approved_urls"
     __table_args__ = (
-        CheckConstraint("used_at IS NULL OR used_at >= created_at", name="ck_web_token_used_after_create"),
+        CheckConstraint(
+            "used_at IS NULL OR used_at >= created_at", name="ck_web_token_used_after_create"
+        ),
         Index("ix_web_approved_urls_scope", "space_id", "account_id", "expires_at"),
     )
 
@@ -86,6 +96,10 @@ class WebApprovedURL(Base):
     url: Mapped[str] = mapped_column(Text, nullable=False)
     domain: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 签发本次批准的 search 用途：fetch 时按它取 policy（0019 迁移）
+    use_case: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="research", server_default="research"
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -128,9 +142,7 @@ class WebCitation(Base):
     """Citations are linked to a run/message and contain only bounded excerpts."""
 
     __tablename__ = "web_citations"
-    __table_args__ = (
-        Index("ix_web_citations_run", "run_id"),
-    )
+    __table_args__ = (Index("ix_web_citations_run", "run_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int | None] = mapped_column(

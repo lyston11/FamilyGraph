@@ -270,12 +270,12 @@ def test_cancel_queued_immediate_writes_terminal_event_and_audit(client, db_sess
     assert audit_row is not None and audit_row.actor_id is not None
 
 
-def test_cancel_running_then_settle_overrides_to_cancelled(client, db_session):
+def test_cancel_running_then_settle_overrides_to_cancelled(client, internal_client, db_session):
     _user, _space, headers, session_row = _member_session(client, db_session, "cancelrun")
     created = _post_message(client, headers, session_row["id"], "跑到一半", "key-r")
     run_id = created.json()["run"]["id"]
 
-    lease = client.post(
+    lease = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sidecar-x"},
         headers={"Authorization": f"Bearer {agent_tokens.issue_service_token()}"},

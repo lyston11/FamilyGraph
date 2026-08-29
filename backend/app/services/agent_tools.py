@@ -17,17 +17,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import config
 from app.errors import (
+    AGENT_TOOL_CALL_CONFLICT,
+    AGENT_TOOL_CALL_IN_PROGRESS,
     KINSHIP_FLAG_DISABLED,
-    POLICY_TOOL_BLOCKED,
     WEB_TOOL_DISABLED,
     raise_api_error,
 )
-from app.models.agent import AgentRun, AgentSession
+from app.models.account import Account
+from app.models.agent import AgentRun, AgentSession, AgentToolCall
 from app.services import agent_query, audit, controlled_web, intake_extractor, terms
+from app.utils import timeutil
 
 # JSON schema 子集校验支持的标量类型
 _SUPPORTED_TYPES = {"string", "integer", "boolean"}
@@ -387,11 +392,13 @@ def execute(
     input_payload: dict[str, Any],
     tool_call_id: str | None = None,
 ) -> dict[str, Any]:
-    """running 态门禁 → 注册表校验 → scope 门禁 → schema 校验 → 执行 → 审计。
+    """running 态门禁 → 副作用去重 → 注册表校验 → scope 门禁 → schema 校验 → 执行 → 审计。
 
     五类协议拒绝在此统一写安全审计并先提交（审计不随拒绝回滚），再抛 API 错误。
-    tool_call_id 为 sidecar 透传元数据，仅记录进执行审计（副作用去重表 V2.4 落地）。
+    tool_call_id 为 sidecar 透传元数据：同 (run_id, tool_call_id) 幂等重放首次输出
+    （不重执行、不重复审计）；不同工具/版本 → AGENT_TOOL_CALL_CONFLICT。
     """
+    claim: AgentToolCall | None = None
     try:
         if run.status != "running":
             raise ToolProtocolError(
@@ -400,14 +407,83 @@ def execute(
                 "工具仅在 running 状态可执行",
                 {"status": run.status},
             )
+
+        # 副作用去重先于任何执行：同 id 命中直接返回首次结果（调用方/端点照常运行
+        # tool_result_hook，不绕过结果策略）。result_json 为空表示占位仍在途，
+        # 说明另一并发请求正在执行同 tool_call_id（P1 并发去重窗口收口）。
+        def _prior() -> AgentToolCall | None:
+            if tool_call_id is None:
+                return None
+            return db.scalar(
+                select(AgentToolCall).where(
+                    AgentToolCall.run_id == run.id,
+                    AgentToolCall.tool_call_id == tool_call_id,
+                )
+            )
+
+        def _replay_or_reject(prior: AgentToolCall) -> dict[str, Any] | None:
+            if prior.tool_name != name or prior.tool_version != version:
+                raise_api_error(
+                    409,
+                    AGENT_TOOL_CALL_CONFLICT,
+                    "相同 tool_call_id 但工具或版本不一致",
+                    detail={
+                        "tool_call_id": tool_call_id,
+                        "expected": {"tool": prior.tool_name, "version": prior.tool_version},
+                        "got": {"tool": name, "version": version},
+                    },
+                )
+            if not prior.result_json:
+                raise_api_error(
+                    409,
+                    AGENT_TOOL_CALL_IN_PROGRESS,
+                    "相同 tool_call_id 的调用正在并发执行",
+                    detail={"tool_call_id": tool_call_id},
+                )
+            return dict(prior.result_json)
+
+        prior = _prior()
+        if prior is not None:
+            replayed = _replay_or_reject(prior)
+            if replayed is not None:
+                return replayed
         spec = resolve_tool(name, version)
         check_scope(run, claims, spec)
         validate_input(spec, input_payload)
+        # 原子占位：唯一索引 (run_id, tool_call_id) 使并发同 id 请求在 flush 处
+        # 冲突，先占位者独占执行权，后到者回放/拒绝——副作用不再可能双执行。
+        if tool_call_id is not None:
+            claim = AgentToolCall(
+                run_id=run.id,
+                tool_call_id=tool_call_id,
+                tool_name=spec.name,
+                tool_version=spec.version,
+                result_json={},
+                created_at=timeutil.utcnow(),
+            )
+            db.add(claim)
+            try:
+                db.flush()
+            except IntegrityError:
+                db.rollback()
+                prior = _prior()
+                if prior is None:  # pragma: no cover - 理论不可达：占位已被提交才可能冲突
+                    raise
+                replayed = _replay_or_reject(prior)
+                if replayed is not None:
+                    return replayed
+                raise  # pragma: no cover
         # 分发也纳入同一拒绝审计路径：领域工具的范围/形状拒绝同属协议违规
         output = _dispatch(
             db, spec, run=run, agent_session=agent_session, input_payload=input_payload
         )
+        if claim is not None:
+            claim.result_json = dict(output)
     except ToolProtocolError as exc:
+        if claim is not None:
+            # 拒绝路径不得留下空占位（否则该 tool_call_id 永久 in-flight）；
+            # 一并丢弃本次工具的部分写入，fail-closed 后由审计提交记录拒绝。
+            db.rollback()
         audit.write_audit(
             db,
             action="agent_tool_denied",
@@ -424,12 +500,18 @@ def execute(
     }
     if tool_call_id is not None:
         audit_detail["tool_call_id"] = tool_call_id
+    # 归属语义（design.md §6）：actor_id 必须是 users.id；account/session 另存 detail。
+    account = db.get(Account, agent_session.account_id)
     audit.write_audit(
         db,
         action="agent_tool_executed",
-        actor_id=agent_session.account_id,
+        actor_id=account.user_id if account is not None else None,
         target_id=run.id,
-        detail=audit_detail,
+        detail={
+            **audit_detail,
+            "account_id": agent_session.account_id,
+            "session_id": agent_session.id,
+        },
     )
     return output
 
@@ -511,7 +593,6 @@ def _dispatch(
             )
         except controlled_web.WebGatewayError as exc:
             raise ToolProtocolError(exc.status_code, exc.code, exc.message, exc.detail) from None
-        db.commit()
         return result
     if spec.name == TOOL_FETCH_APPROVED_PAGE:
         try:
@@ -524,7 +605,6 @@ def _dispatch(
             )
         except controlled_web.WebGatewayError as exc:
             raise ToolProtocolError(exc.status_code, exc.code, exc.message, exc.detail) from None
-        db.commit()
         return result
     if spec.name in agent_query.QUERY_TOOL_NAMES:
         try:

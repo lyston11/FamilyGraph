@@ -3,6 +3,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import NoReturn
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -32,7 +33,7 @@ from app.api.misc import router as misc_router
 from app.api.spaces import router as spaces_router
 from app.api.users import members_router
 from app.api.users import router as users_router
-from app.errors import INTERNAL_ERROR, VALIDATION_ERROR, extract_api_error
+from app.errors import INTERNAL_ERROR, VALIDATION_ERROR, extract_api_error, raise_api_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # 生产禁用锁定需二次确认：留 WARNING 日志线索（design.md 回滚形态）
         logger.warning("AUTH_LOCKOUT_DISABLED=true：登录锁定已关闭，仅允许开发态使用")
     logctx.setup_logging()
-    yield
+    # 后台维护循环（agent reaper / steward canonical job 泵）：
+    # serve.py 双 listener 共享 lifespan，start 内部进程级单例防重复启动。
+    from app.services import maintenance
+
+    maintenance.start_maintenance_loop()
+    try:
+        yield
+    finally:
+        await maintenance.stop_maintenance_loop()
 
 
 def _error_envelope(code: str, message: str, detail: object = None) -> dict[str, object]:
@@ -147,4 +156,26 @@ app.include_router(controlled_web_admin_router, prefix="/api")
 app.include_router(admin_agent_router, prefix="/api/admin/agent")
 # Internal Agent 协议：仅内部网络可达（sidecar → FastAPI），不走 /api 前缀，
 # nginx 不代理该前缀；feature flag 关闭时端点一律 503（RT-6）。
-app.include_router(internal_agent_router, prefix="/internal/agent")
+# P1 网络隔离裁定：internal 协议不再挂载到公开 listener，由下方 internal_app
+# 在独立端口（compose backend 网络，不发布宿主端口）单独 serve；公开 app 对
+# /internal/* 一律显式 404 fail-closed。启动入口见 app.serve。
+
+
+@app.api_route(
+    "/internal/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+    response_model=None,
+)
+async def internal_route_rejected(rest: str) -> NoReturn:
+    """公开 listener 上不存在 internal 协议：不泄露路由存在性。"""
+    raise_api_error(404, "NOT_FOUND", "资源不存在")
+
+
+# ---- internal app：独立 listener，与公开 app 共享中间件/错误外壳合同 ----
+internal_app = FastAPI(title="FamilyGraph Internal Agent API", lifespan=lifespan)
+internal_app.middleware("http")(request_context_middleware)
+internal_app.add_exception_handler(Exception, unhandled_exception_handler)
+internal_app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+internal_app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
+internal_app.include_router(internal_agent_router, prefix="/internal/agent")

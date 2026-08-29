@@ -67,6 +67,9 @@ class ContextProviderOut(BaseModel):
     kind: str | None
     policy_result: str
     secret_ref: str | None
+    # ProviderGateway 注入的运行期配置（仅 internal listener；见 agent_provider.ProviderRuntime）
+    base_url: str | None = None
+    api_key: str | None = None
 
 
 class ContextOut(BaseModel):

@@ -312,6 +312,21 @@ def confirm_candidate(
     scope, space_id = _parse_memory_scope(scope, space_id)
     _validate_sensitivity(candidate.sensitivity)
     _validate_scope(scope, space_id)
+    # P1 RAG session-space 绑定：来源会话属空间 A 的候选不得确认到空间 B；
+    # private（本人）不受限。来源无会话（授权文档/手工）时不施加绑定。
+    if scope in _SHARED_SCOPES and candidate.source_message_id is not None:
+        source_space_id = db.scalar(
+            select(AgentSession.space_id)
+            .join(AgentMessage, AgentMessage.session_id == AgentSession.id)
+            .where(AgentMessage.id == candidate.source_message_id)
+        )
+        if source_space_id is not None and space_id != source_space_id:
+            raise_api_error(
+                422,
+                MEMORY_SCOPE_FORBIDDEN,
+                "记忆候选来源会话空间与目标空间不一致",
+                {"source_space_id": source_space_id, "target_space_id": space_id},
+            )
     if scope in _SHARED_SCOPES:
         if candidate.sensitivity == "high":
             raise_api_error(422, MEMORY_SENSITIVE_SCOPE_FORBIDDEN, "高敏感记忆不能公开到空间")

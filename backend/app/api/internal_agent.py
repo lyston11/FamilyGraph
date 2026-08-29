@@ -19,6 +19,7 @@ from typing import Any, NoReturn
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi import HTTPException as FastAPIHTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -64,6 +65,7 @@ from app.services import (
     policy_guard,
 )
 from app.services.agent_events import EventEntry
+from app.services.provider_proxy import provider_proxy_base_url as agent_provider_proxy_base_url
 from app.utils import security, timeutil
 
 
@@ -279,12 +281,62 @@ def heartbeat_job(
     )
 
 
+# ---- provider proxy（P1 唯一 egress：sidecar 经此调用云端 Provider）----
+
+
+@router.post("/runs/{run_id}/provider/chat/completions")
+async def proxy_provider_chat_completions(
+    run_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """把 sidecar 的模型请求代理到已注册 Provider（服务端解密 + 唯一外网 egress）。
+
+    认证与 run 级 scope 核验复用 run token 合同；Run 必须处于活跃状态。
+    上游错误一律脱敏为通用错误体；成功响应（含 SSE 流）原样透传。
+    """
+    from app.services import provider_proxy
+
+    run, agent_session, _claims = _authorize_run(db, request, run_id)
+    body = await request.body()
+    try:
+        client, upstream, provider_id = await provider_proxy.stream_provider_response(
+            db,
+            run=run,
+            space_id=agent_session.space_id,
+            body=body,
+            content_type=request.headers.get("content-type"),
+            accept=request.headers.get("accept"),
+            user_agent=request.headers.get("user-agent"),
+        )
+    except provider_proxy.ProviderProxyError as exc:
+        db.commit()  # 审计先提交（拒绝路径惯例）
+        raise_api_error(exc.status_code, exc.code, exc.message)
+    media_type = upstream.headers.get("content-type", "application/json")
+    return StreamingResponse(
+        provider_proxy.passthrough_with_audit(
+            db,
+            run=run,
+            provider_id=provider_id,
+            client=client,
+            upstream=upstream,
+            on_finish=db.commit,
+        ),
+        status_code=upstream.status_code,
+        media_type=media_type,
+    )
+
+
 # ---- runs ----
 
 
 @router.get("/runs/{run_id}/context", response_model=ContextOut)
 def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) -> ContextOut:
-    """session scope、最近消息投影与 Provider 解析结果；绝不含密钥材料。"""
+    """session scope、最近消息投影与 Provider 运行期解析（含服务端解密的 base_url/api_key）。
+
+    凭据只下发给已验签的 run token 持有者（internal listener / sidecar-only 网络），
+    绝不出现在浏览器 API、SSE、领域事件或日志；浏览器 Provider 治理端点只暴露 has_secret。
+    """
     run, agent_session, _claims = _authorize_run(db, request, run_id)
     limit = config.AGENT_CONTEXT_MESSAGE_LIMIT
     recent = list(
@@ -297,6 +349,11 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
     )
     recent.reverse()
     resolution = agent_provider.resolve_for_space(db, agent_session.space_id)
+    # P1 唯一 egress：不再向 sidecar 下发解密凭据/base_url，只下发代理路径；
+    # 模型流量经 POST /runs/{id}/provider/chat/completions 由服务端转发。
+    proxy_base_url = (
+        agent_provider_proxy_base_url(run.id) if resolution.policy_result == "allowed" else None
+    )
     context_build_id: int | None = None
     context_blocks: list[dict[str, object]] = []
     latest_text = next(
@@ -348,6 +405,8 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
             kind=resolution.kind,
             policy_result=resolution.policy_result,
             secret_ref=resolution.secret_ref,
+            base_url=proxy_base_url,
+            api_key=None,
         ),
         cancel_requested=bool(run.cancel_requested),
         context_build_id=context_build_id,

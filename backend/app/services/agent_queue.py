@@ -503,6 +503,18 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
             run.updated_at = moment
             if outcome in ("expired", "cancelled"):
                 run.settled_at = moment
+                # 终态事件由服务端唯一写入（不含 sidecar）：reaper 与 settle/cancel 同口径
+                agent_events.insert_event(
+                    db,
+                    run,
+                    seq=agent_events.next_seq(db, run.id),
+                    event_type=agent_events.TERMINAL_EVENT_FOR[outcome],
+                    public_payload={
+                        "status": outcome,
+                        **({"error_code": AGENT_LEASE_EXPIRED} if outcome == "expired" else {}),
+                    },
+                    created_at=moment,
+                )
             if outcome == "expired":
                 run.error_code = AGENT_LEASE_EXPIRED
             audit.write_audit(

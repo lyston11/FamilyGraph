@@ -81,7 +81,13 @@ def my_graph(
             levels[eid] = decision.level
         else:
             levels[eid] = vis.LEVEL_NONE
-    filtered_edges = [e for e in edges if e.from_user in levels and e.to_user in levels]
+    # 只保留两端点均可见的边；隐藏端点的边整体丢弃（不泄露 ID/类型/标签/创建者视角）
+    filtered_edges = [
+        e
+        for e in edges
+        if levels.get(e.from_user, vis.LEVEL_NONE) != vis.LEVEL_NONE
+        and levels.get(e.to_user, vis.LEVEL_NONE) != vis.LEVEL_NONE
+    ]
     node_ids = {eid for eid, lv in levels.items() if lv != vis.LEVEL_NONE}
 
     # m1c：指定空间时，限定为该空间 active 成员的子图（家庭空间页数据源）

@@ -54,12 +54,20 @@ def test_export_request_generates_file_and_download(db_session, client) -> None:
     assert row.result_path and file_path.exists()
 
     content = file_path.read_text(encoding="utf-8")
-    assert '"profile"' in content and "导出者" in content  # 本人 self_private 全字段
+    # F4/R-04：磁盘只落 envelope 密文，不含明文 PII
+    assert "导出者" not in content and '"profile"' not in content
+    assert '"wrapped_key"' in content and '"ciphertext"' in content
 
-    # 下载：归属校验 + 审计
+    # 下载：归属校验 + 解密明文 + 一次性消费 + 审计
     download = client.get(f"/api/data-rights/{row.id}/export-file", headers=auth_header(tokens))
     assert download.status_code == 200
+    assert '"profile"' in download.text and "导出者" in download.text
     assert download.headers["X-Content-Type-Options"] == "nosniff"
+
+    # 一次性：同一请求者二次下载拒绝
+    again = client.get(f"/api/data-rights/{row.id}/export-file", headers=auth_header(tokens))
+    assert again.status_code == 410
+    assert again.json()["error"]["code"] == "DATA_RIGHT_EXPORT_CONSUMED"
 
     create_user_with_pin(db_session, "无关下载者", "222222")
     other_tokens = login(client, "无关下载者", "222222").json()
@@ -284,6 +292,27 @@ def test_claim_dispute_lifecycle_preserves_evidence(db_session) -> None:
 # ---- revocation propagation contract ----
 
 
+def test_export_envelope_is_not_plaintext_and_reaper_resets_stale_processing(
+    db_session,
+) -> None:
+    """F4：worker 崩溃恢复 —— 陈旧 processing 复位 pending；文件密文不含明文。"""
+    from datetime import timedelta
+
+    user = create_user_with_pin(db_session, "崩溃恢复人", "123123")
+    request = dr_commands.create_data_right_request(db_session, _ctx(user), request_type="export")
+    # 模拟 worker 在 pending→processing 后崩溃：状态停滞 + 已过期阈值
+    request.status = "processing"
+    request.created_at = utcnow() - timedelta(minutes=30)
+    db_session.commit()
+
+    with dr_commands.command_transaction(db_session):
+        reset = dr_commands.reap_stale_export_requests(db_session)
+    assert reset == 1
+    db_session.expire_all()
+    row = db_session.get(DataRightRequest, request.id)
+    assert row.status == "pending"
+
+
 def test_relation_revocation_emits_invalidation_event(db_session) -> None:
     """撤权传播：关系撤销/成员移除后 domain_events 含对应失效事实。"""
     from app.commands import connections as connection_commands
@@ -300,3 +329,27 @@ def test_relation_revocation_emits_invalidation_event(db_session) -> None:
 
     types = _event_types(db_session)
     assert {"relation.requested", "relation.accepted", "relation.revoked"} <= types
+
+
+def test_corrupted_export_does_not_consume_download_eligibility(db_session, client) -> None:
+    """P1 回归：密文损坏时下载失败，但一次性下载资格不被消费；修复后可重试。"""
+    create_user_with_pin(db_session, "损坏导出者", "121212")
+    tokens = login(client, "损坏导出者", "121212").json()
+
+    resp = client.post("/api/data-rights/export", headers=auth_header(tokens))
+    assert resp.status_code == 201, resp.text
+    request_id = resp.json()["id"]
+
+    db_session.expire_all()
+    row = db_session.get(DataRightRequest, request_id)
+    file_path = UPLOADS_DIR / "exports" / (row.result_path or "")
+    assert row.result_path and file_path.exists()
+    file_path.write_text("{not-json", encoding="utf-8")
+
+    broken = client.get(f"/api/data-rights/{request_id}/export-file", headers=auth_header(tokens))
+    assert broken.status_code == 410
+    assert broken.json()["error"]["code"] == "DATA_RIGHT_REQUEST_EXPIRED"
+
+    # 资格未消费：修复密文后同请求可成功下载
+    db_session.refresh(row)
+    assert row.downloaded_at is None

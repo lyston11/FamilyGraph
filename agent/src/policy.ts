@@ -125,6 +125,23 @@ export interface PolicyGuard {
   readonly beforeProviderRequest: (payload: unknown) => unknown;
 }
 
+/** Cache of non-credential request fields that merely contain "token". */
+const NON_CREDENTIAL_TOKEN_FIELDS = new Set([
+  "max_tokens",
+  "max_completion_tokens",
+  "max_output_tokens",
+  "include_usage",
+  "stream_options",
+]);
+
+const CREDENTIAL_KEY_RE =
+  /^(?:access|auth|bearer|refresh|id|session|api|provider|client|personal|customer)?[-_]?(?:tokens?|api[-_]?key|secret|password)$|^(?:authorization|secret|password|api[-_]?key)$/i;
+
+function isCredentialKey(key: string): boolean {
+  if (NON_CREDENTIAL_TOKEN_FIELDS.has(key)) return false;
+  return CREDENTIAL_KEY_RE.test(key);
+}
+
 /** Recursively redacts secret occurrences and sensitive object keys. */
 export function redactSecrets(value: unknown, secrets: readonly string[]): unknown {
   if (typeof value === "string") {
@@ -138,7 +155,7 @@ export function redactSecrets(value: unknown, secrets: readonly string[]): unkno
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = /api[-_]?key|authorization|secret|password|token/i.test(key)
+      out[key] = isCredentialKey(key)
         ? "[REDACTED]"
         : redactSecrets(item, secrets);
     }

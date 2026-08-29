@@ -24,6 +24,7 @@ from app.commands.members import delete_profile_core
 from app.errors import (
     BREAK_GLASS_NOTE_REQUIRED,
     CLAIM_DISPUTE_NOT_FOUND,
+    DATA_RIGHT_EXPORT_CONSUMED,
     DATA_RIGHT_EXPORT_NOT_READY,
     DATA_RIGHT_INVALID_TRANSITION,
     DATA_RIGHT_REQUEST_EXPIRED,
@@ -39,6 +40,7 @@ from app.models.v2_foundation import ClaimDispute, DataRightRequest, ProfileFact
 from app.services import audit
 from app.services.domain_events import emit
 from app.services.visibility import PURPOSE_EXPORT
+from app.utils import secretbox
 from app.utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,9 @@ logger = logging.getLogger(__name__)
 REQUEST_TYPES = ("export", "correct", "delete")
 # 更正申请允许的目标字段（其余字段拒绝；结构化日期经 enrich 校验）
 CORRECTABLE_FIELDS = ("name", "gender", "birth", "death", "bio")
+
+# 导出请求停在 processing 超过该时长视为 worker 崩溃，reaper 复位为 pending 可重试
+_EXPORT_PROCESSING_STALE_MINUTES = 15
 
 
 def _request_or_404(session: Session, ctx: ActorContext, request_id: int) -> DataRightRequest:
@@ -120,6 +125,9 @@ def create_data_right_request(
 
 def list_own_requests(session: Session, ctx: ActorContext) -> list[DataRightRequest]:
     load_actor(session, ctx)
+    # 机会式崩溃恢复：陈旧 processing 导出复位 pending 后再列清单
+    with command_transaction(session):
+        reap_stale_export_requests(session)
     return list(
         session.scalars(
             select(DataRightRequest)
@@ -225,9 +233,9 @@ def process_export_request(request_id: int) -> None:
         exports_dir = UPLOADS_DIR / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
         file_name = f"data_export_{request_id}.json"
-        (exports_dir / file_name).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # F4/R-04：磁盘只落 envelope 密文（每文件随机 DEK，DEK 由 SECRET_KEY 包裹）
+        envelope = secretbox.encrypt_envelope(json.dumps(payload, ensure_ascii=False))
+        (exports_dir / file_name).write_text(json.dumps(envelope), encoding="utf-8")
 
         now = utcnow()
         with command_transaction(session):
@@ -262,10 +270,11 @@ def process_export_request(request_id: int) -> None:
 
 def open_export_file(
     session: Session, ctx: ActorContext, request_id: int
-) -> tuple[DataRightRequest, Path]:
-    """下载前置校验：归属 → completed → 未过期（惰性过期清理文件）。
+) -> tuple[DataRightRequest, str]:
+    """下载前置校验：归属 → completed → 未过期 → 未消费（一次性）→ 解密返回明文。
 
-    过期是终态事实：在同一事务内持久化后再返回 410（不随失败回滚）。
+    过期与一次性消费均为终态事实：同一事务持久化后再返回错误（不随失败回滚）。
+    返回 (request, 明文 JSON 文本)；明文只经授权响应内存流转，不重新落盘。
     """
     from app.config import UPLOADS_DIR
 
@@ -308,13 +317,28 @@ def open_export_file(
             stale_path.unlink()
         raise_api_error(410, DATA_RIGHT_REQUEST_EXPIRED, "导出文件已过期，请重新申请")
 
+    plaintext = ""
     with command_transaction(session):
         request = _request_or_404(session, ctx, request_id)
         if request.status != "completed" or not request.result_path:
             raise_api_error(409, DATA_RIGHT_EXPORT_NOT_READY, "导出文件尚未生成或已失效")
+        if request.downloaded_at is not None:
+            raise_api_error(410, DATA_RIGHT_EXPORT_CONSUMED, "导出文件已下载，不可重复获取")
         path = UPLOADS_DIR / "exports" / Path(request.result_path).name
         if not path.exists():
             raise_api_error(410, DATA_RIGHT_REQUEST_EXPIRED, "导出文件已过期，请重新申请")
+        ciphertext = path.read_text(encoding="utf-8")
+        # P1：先在同一事务内验证密文可解密，再消费一次性下载资格——损坏/密钥
+        # 轮换失配的导出不得烧掉用户唯一一次下载机会（修复后可重试）。
+        try:
+            envelope = json.loads(ciphertext)
+            plaintext = secretbox.decrypt_envelope(envelope)
+        except secretbox.SecretBoxError:
+            raise_api_error(410, DATA_RIGHT_REQUEST_EXPIRED, "导出文件已失效，请重新申请")
+        except (ValueError, TypeError, json.JSONDecodeError):
+            raise_api_error(410, DATA_RIGHT_REQUEST_EXPIRED, "导出文件已失效，请重新申请")
+        # 一次性消费在同一事务内落地，避免并发重复下载都拿到明文
+        request.downloaded_at = now
         audit.write_audit(
             session,
             action="data_right_export_downloaded",
@@ -323,7 +347,38 @@ def open_export_file(
             ip=ctx.ip,
             detail={},
         )
-    return request, path
+
+    # 解密已在事务内完成（损坏密文不消费下载资格）；密文受损/密钥轮换在事务内
+    # 即拒绝，不返回损坏明文。
+    return request, plaintext
+
+
+def reap_stale_export_requests(session: Session) -> int:
+    """崩溃恢复（F4/R-04）：processing 超时未完成的导出复位为 pending 可重试。
+
+    worker 在 pending→processing 之间崩溃会永久停在 processing；本函数把超时行
+    复位（调用方自管事务），返回复位行数。
+    """
+    cutoff = utcnow() - timedelta(minutes=_EXPORT_PROCESSING_STALE_MINUTES)
+    result = session.execute(
+        update(DataRightRequest)
+        .where(
+            DataRightRequest.type == "export",
+            DataRightRequest.status == "processing",
+            DataRightRequest.created_at < cutoff,
+        )
+        .values(status="pending")
+    )
+    if result.rowcount:
+        audit.write_audit(
+            session,
+            action="data_right_export_reaped",
+            actor_id=None,
+            target_id=None,
+            ip=None,
+            detail={"reset_count": result.rowcount},
+        )
+    return result.rowcount
 
 
 def execute_delete_request(

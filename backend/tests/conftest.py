@@ -55,9 +55,18 @@ def db_session():
 # agent 块：runs.job_id↔jobs.run_id 循环由 ondelete 解环（删 jobs 时 runs.job_id 置空），
 # 故顺序为 events→messages→jobs→runs→sessions。
 _TABLES = (
+    # v2.5 memory/RAG/context projections：memory_candidates/memories 的
+    # source_message_id 引用 agent_messages，必须先于其删除
+    "context_build_items",
+    "context_builds",
+    "rag_chunks",
+    "rag_documents",
+    "memories",
+    "memory_candidates",
     "agent_run_events",
     "agent_messages",
     "agent_jobs",
+    "agent_tool_calls",
     "agent_runs",
     "agent_sessions",
     "agent_space_provider_settings",
@@ -68,13 +77,6 @@ _TABLES = (
     "web_approved_urls",
     "web_space_configs",
     "web_platform_configs",
-    # v2.5 memory/RAG/context projections
-    "context_build_items",
-    "context_builds",
-    "rag_chunks",
-    "rag_documents",
-    "memories",
-    "memory_candidates",
     # v2.4 steward 块：action_cards/steward_jobs 引用 accounts/users/spaces，先于父表删
     "behavior_projections",
     "steward_jobs",
@@ -100,6 +102,7 @@ _TABLES = (
     "disclosure_preferences",
     "platform_role_assignments",
     "space_members",
+    "member_creation_requests",
     "relations",
     "family_spaces",
     "audit_log",
@@ -125,6 +128,14 @@ def client() -> TestClient:
     from app.main import app
 
     return TestClient(app)
+
+
+@pytest.fixture()
+def internal_client() -> TestClient:
+    """P1 网络隔离：internal agent 协议挂载在独立 internal_app（独立 listener）。"""
+    from app.main import internal_app
+
+    return TestClient(internal_app)
 
 
 def create_user_with_pin(

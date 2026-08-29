@@ -217,3 +217,37 @@ class AgentJob(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<AgentJob {self.id} run={self.run_id} {self.kind}/{self.status}>"
+
+
+class AgentToolCall(Base):
+    """工具调用执行台账：同 (run_id, tool_call_id) 至多一行，供副作用去重（R4）。
+
+    仅 sidecar 携带显式 tool_call_id 时记录；重放同 id 幂等返回首次输出，
+    不同工具/版本 → AGENT_TOOL_CALL_CONFLICT（409）。result_json 存未经过
+    tool_result_hook 的输出，API 边界重试时照常再次执行结果策略 guard。
+    """
+
+    __tablename__ = "agent_tool_calls"
+    __table_args__ = (
+        Index(
+            "uq_agent_tool_calls_run_call",
+            "run_id",
+            "tool_call_id",
+            unique=True,
+            sqlite_where=sa.text("tool_call_id IS NOT NULL"),
+        ),
+        Index("ix_agent_tool_calls_run_id", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<AgentToolCall {self.id} run={self.run_id} {self.tool_name}@{self.tool_version}>"

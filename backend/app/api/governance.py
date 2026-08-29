@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -266,14 +266,16 @@ def download_export(
     request: Request,
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
-) -> FileResponse:
-    """下载导出文件：归属 + completed + 未过期校验全在命令内；过期惰性清理后 410。"""
-    _row, path = data_right_commands.open_export_file(session, _ctx(request, identity), request_id)
-    return FileResponse(
-        path,
+) -> Response:
+    """下载导出：命令层完成归属/未过期/一次性消费校验并解密密文后以明文流返回。"""
+    _row, plaintext = data_right_commands.open_export_file(
+        session, _ctx(request, identity), request_id
+    )
+    return Response(
+        content=plaintext,
         media_type="application/json",
         headers={
-            "Content-Disposition": f'attachment; filename="{path.name}"',
+            "Content-Disposition": f'attachment; filename="data_export_{request_id}.json"',
             "X-Content-Type-Options": "nosniff",
         },
     )
