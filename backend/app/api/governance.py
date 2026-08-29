@@ -38,7 +38,7 @@ from app.schemas.v2_foundation import (
     TransferCreate,
     TransferOut,
 )
-from app.services.space_fsm import find_membership
+from app.services import space_fsm
 
 router = APIRouter(tags=["v2-governance"])
 
@@ -120,7 +120,8 @@ def list_transfers(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[TransferOut]:
     actor, _account = identity
-    if find_membership(session, space_id, actor.id) is None:
+    member = space_fsm.find_membership(session, space_id, actor.id)
+    if member is None or space_fsm.effective_status(member) != "active":
         raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
     rows = ownership_commands.list_transfers_for_space(session, space_id)
     return [TransferOut.model_validate(r) for r in rows]

@@ -17,9 +17,9 @@ onMounted(() => {
 <template>
   <main class="memory-view">
     <header class="topbar">
-      <NButton quaternary data-test="memory-back" @click="router.push('/')">← 家庭空间</NButton>
+      <NButton quaternary data-test="memory-back" @click="router.push({ name: 'family-space' })">← 家庭空间</NButton>
       <span class="topbar-label">FamilyGraph / Knowledge</span>
-      <NButton quaternary data-test="memory-settings" @click="router.push('/settings')">设置</NButton>
+      <NButton quaternary data-test="memory-settings" @click="router.push({ name: 'settings' })">设置</NButton>
     </header>
     <MemoryManager />
   </main>

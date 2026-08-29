@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NEmpty, NSpin } from 'naive-ui'
+import { useRouter } from 'vue-router'
+import { NButton, NEmpty, NSpin } from 'naive-ui'
 
 import { fetchStats, type StatsPayload } from '@/api/stats'
 
@@ -10,6 +11,7 @@ import { fetchStats, type StatsPayload } from '@/api/stats'
  */
 const stats = ref<StatsPayload | null>(null)
 const loading = ref(false)
+const router = useRouter()
 
 onMounted(async () => {
   loading.value = true
@@ -42,7 +44,12 @@ const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.co
 <template>
   <NSpin :show="loading">
     <main class="stats-view">
-      <h2 class="title">家族统计</h2>
+        <header class="title-row">
+          <NButton text data-test="stats-back" @click="router.push({ name: 'family-space' })">
+            ← 家庭空间
+          </NButton>
+          <h2 class="title">家族统计</h2>
+        </header>
 
       <template v-if="stats">
         <section class="cards" data-test="stats-cards">
@@ -97,8 +104,16 @@ const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.co
   padding: 24px;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
 .title {
-  margin: 0 0 16px;
+  margin: 0;
   font-family: var(--fg-font-display);
   font-size: 20px;
   color: var(--fg-ink);

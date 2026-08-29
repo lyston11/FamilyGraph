@@ -60,6 +60,7 @@ async function mountView() {
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
+      { path: '/settings', name: 'settings', component: { template: '<div />' } },
       {
         path: '/force-change-pin',
         name: 'force-change-pin',
@@ -152,6 +153,37 @@ describe('LoginView', () => {
 
     expect(wrapper.find('[data-test="login-error"]').text()).toContain('6 位数字')
     expect(mockedLogin).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('登录成功且必须改 PIN：进入 force-change-pin 并保留安全 redirect', async () => {
+    mockedLogin.mockResolvedValue(makePair({ pin_must_change: true }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: LoginView },
+        {
+          path: '/force-change-pin',
+          name: 'force-change-pin',
+          component: { template: '<div />' },
+        },
+      ],
+    })
+    await router.push({ name: 'login', query: { redirect: '/settings' } })
+    await router.isReady()
+    const pinia = createPinia()
+    const wrapper = mount(MessageProvidedLogin, {
+      global: { plugins: [pinia, router] },
+      attachTo: document.body,
+    })
+
+    await wrapper.find('[data-test="login-name"] input').setValue('张三')
+    await wrapper.find('[data-test="login-pin"] input').setValue('123456')
+    await wrapper.find('[data-test="login-submit"]').trigger('click')
+
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('force-change-pin'))
+    expect(router.currentRoute.value.query.redirect).toBe('/settings')
     wrapper.unmount()
   })
 

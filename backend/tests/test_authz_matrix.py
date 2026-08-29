@@ -269,6 +269,58 @@ def test_platform_operator_reads_family_profile_404(db_session, client, matrix):
     assert ids == {matrix["运营者"].id}
 
 
+def test_platform_operator_with_active_membership_stays_out_of_family_visibility(
+    db_session, client, matrix
+):
+    """组合身份回归：platform_operator + active membership 仍 fail-closed。"""
+    from app.models.space import SpaceMember
+    from app.services import visibility
+
+    operator = matrix["运营者"]
+    target = matrix["乙"]
+    space = matrix["H1"]
+    db_session.add(
+        SpaceMember(
+            space_id=space.id,
+            user_id=operator.id,
+            added_by=operator.id,
+            role="member",
+            status="active",
+            created_at=space.created_at,
+            updated_at=space.created_at,
+        )
+    )
+    db_session.commit()
+
+    for purpose in visibility.ALL_PURPOSES:
+        decision = visibility.evaluate(
+            db_session,
+            operator,
+            target,
+            space_context=space.id,
+            purpose=purpose,
+        )
+        assert decision.level == visibility.LEVEL_NONE
+        assert not decision.visible
+
+    headers = _h(client, "运营者", "999999")
+    profile = client.get(f"/api/users/{target.id}", headers=headers)
+    assert profile.status_code == 404
+
+    graph = client.get(f"/api/graph/me?scope=family&depth=5&space_id={space.id}", headers=headers)
+    assert graph.status_code == 200
+    assert {node["id"] for node in graph.json()["nodes"]} == {operator.id}
+    assert target.id not in {node["id"] for node in graph.json()["nodes"]}
+
+    search = client.get("/api/search", params={"q": target.name}, headers=headers)
+    assert search.status_code == 200
+    assert all(hit["id"] != target.id for hit in search.json())
+
+    statistics = client.get("/api/stats", headers=headers)
+    assert statistics.status_code == 200
+    assert statistics.json()["total"] <= 1
+
+
 def test_unrelated_user_invisible_404_and_graph_excluded(db_session, client, matrix):
     hg = _h(client, "庚", "888888")
     r = client.get(f"/api/users/{matrix['乙'].id}", headers=hg)

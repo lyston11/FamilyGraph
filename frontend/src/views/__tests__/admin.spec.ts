@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { defineComponent, h } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NDialogProvider, NMessageProvider } from 'naive-ui'
 
@@ -67,12 +68,21 @@ const ProvidedAdmin = defineComponent({
 
 async function mountAdmin() {
   const pinia = createPinia()
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'family-space', component: { template: '<div />' } },
+      { path: '/admin', name: 'admin', component: AdminView },
+    ],
+  })
+  await router.push('/admin')
+  await router.isReady()
   const wrapper = mount(ProvidedAdmin, {
-    global: { plugins: [pinia] },
+    global: { plugins: [pinia, router] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
-  return wrapper
+  return { wrapper, router }
 }
 
 describe('AdminView（v2 平台运营者语义）', () => {
@@ -81,11 +91,19 @@ describe('AdminView（v2 平台运营者语义）', () => {
     document.body.innerHTML = ''
   })
 
+  it('管理后台返回按钮使用 family-space 命名路由', async () => {
+    const { wrapper, router } = await mountAdmin()
+
+    await wrapper.find('[data-test="admin-back"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('family-space'))
+    wrapper.unmount()
+  })
+
   it('签发 owner 邀请：一次性 token 仅弹窗展示一次，列表出现有效记录', async () => {
     const created: OwnerInvitationCreated = { ...makeInvitation(), token: 'tok-secret-123' }
     mockedCreateInvitation.mockResolvedValue(created)
     vi.mocked(adminApi.fetchOwnerInvitations).mockResolvedValue([makeInvitation()])
-    const wrapper = await mountAdmin()
+    const { wrapper } = await mountAdmin()
 
     expect(wrapper.find('[data-test="operator-scope-hint"]').exists()).toBe(true)
 
@@ -112,7 +130,7 @@ describe('AdminView（v2 平台运营者语义）', () => {
   it('更正决议（break-glass）：理由为空时提交禁用；填写后调用 resolveCorrection', async () => {
     mockedFetchRights.mockResolvedValue([makeCorrection()])
     mockedResolveCorrection.mockResolvedValue(makeCorrection({ status: 'completed' }))
-    const wrapper = await mountAdmin()
+    const { wrapper } = await mountAdmin()
 
     await vi.waitFor(() =>
       expect(wrapper.find('[data-test="resolve-correction-21"]').exists()).toBe(true),
@@ -152,7 +170,7 @@ describe('AdminView（v2 平台运营者语义）', () => {
       },
     ])
     mockedResolveDispute.mockResolvedValue({ id: 31, status: 'resolved_reject', resolution_note: 'x' })
-    const wrapper = await mountAdmin()
+    const { wrapper } = await mountAdmin()
 
     await vi.waitFor(() =>
       expect(wrapper.find('[data-test="resolve-dispute-31"]').exists()).toBe(true),
