@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ElementPlus from 'element-plus'
 
-import * as graphApi from '@/api/graph'
 import * as membersApi from '@/api/members'
 import * as spacesApi from '@/api/spaces'
 import MemberCreateWizard from '@/components/member/MemberCreateWizard.vue'
@@ -18,10 +17,6 @@ vi.mock('@/api/members', () => ({
   updateMember: vi.fn(),
   updateDisclosure: vi.fn(),
   removeMember: vi.fn(),
-}))
-
-vi.mock('@/api/graph', () => ({
-  createConnectionRequest: vi.fn().mockResolvedValue({ id: 99 }),
 }))
 
 vi.mock('@/api/spaces', () => ({
@@ -40,7 +35,6 @@ vi.mock('@/api/spaces', () => ({
 }))
 
 const mockedCreate = vi.mocked(membersApi.createMember)
-const mockedConnect = vi.mocked(graphApi.createConnectionRequest)
 
 function makeMember(overrides: Partial<Member> = {}): Member {
   return {
@@ -90,9 +84,6 @@ async function fillInfoStep(wrapper: ReturnType<typeof mount>, name = '母亲'):
 describe('MemberCreateWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // clearAllMocks 保留 mockImplementation，但清空 mockResolvedValue 的结果记录；
-    // 为稳妥起见重设默认实现
-    mockedConnect.mockResolvedValue({ id: 99 } as never)
   })
 
   it('第一步：名字为空禁用下一步；仅填名字仍禁用（关系必填）；选关系后放行', async () => {
@@ -123,7 +114,7 @@ describe('MemberCreateWizard', () => {
       global: { plugins: [pinia, ElementPlus] },
     })
     const store = useMembersStore(pinia)
-    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '654321' })
+    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '654321', replayed: false })
     await wrapper.vm.$nextTick()
 
     await fillInfoStep(wrapper)
@@ -140,16 +131,15 @@ describe('MemberCreateWizard', () => {
 
     await vi.waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ name: '母亲', privacy_mode: 'perpetual', space_membership: null }),
+        expect.objectContaining({
+          name: '母亲',
+          privacy_mode: 'perpetual',
+          space_membership: null,
+          relation_dir_class: 'elder',
+          relation_label: null,
+        }),
+        expect.any(String),
       ),
-    )
-    // v2 F-1：关系以合并请求发出（对方确档后自行确认）
-    await vi.waitFor(() =>
-      expect(mockedConnect).toHaveBeenCalledWith({
-        target_id: 2,
-        dir_class: 'elder',
-        label: null,
-      }),
     )
     // store 已落新档案（服务端数据唯一来源）
     await vi.waitFor(() => expect(store.members).toHaveLength(1))
@@ -171,7 +161,6 @@ describe('MemberCreateWizard', () => {
       expect(wrapper.find('[data-test="wizard-error"]').text()).toBe('请求参数不合法'),
     )
     expect(wrapper.emitted('created')).toBeUndefined()
-    expect(mockedConnect).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -196,7 +185,7 @@ describe('MemberCreateWizard', () => {
       pending_count: 0,
       member_count: 1,
     } satisfies FamilySpace)
-    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '111111' })
+    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '111111', replayed: false })
     const wrapper = await mountWizard()
 
     // 等待 onMounted 的 spaces.load() 完成
@@ -232,6 +221,7 @@ describe('MemberCreateWizard', () => {
     await vi.waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith(
         expect.objectContaining({ space_membership: { space_id: 7 } }),
+        expect.any(String),
       ),
     )
     wrapper.unmount()

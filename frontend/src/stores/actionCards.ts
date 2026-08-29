@@ -74,16 +74,24 @@ export const useActionCardsStore = defineStore('actionCards', () => {
 
   // ---- 列表 ----
 
+  /** 会话代际：clear / resetForSpace 递增，迟到响应不得回写新分区状态（P2 隔离） */
+  let storeGeneration = 0
+
   async function loadForSpace(spaceId: number): Promise<void> {
+    const generation = storeGeneration
     const partition = requirePartition(spaceId)
     if (partition.hidden) return
     partition.loading = true
     partition.error = null
     try {
-      partition.cards = await fetchActionCards(spaceId)
+      const cards = await fetchActionCards(spaceId)
+      // 响应期间分区被清/重置（clear、resetForSpace）或分区对象已被替换则丢弃
+      if (generation !== storeGeneration || partitionOf(spaceId) !== partition) return
+      partition.cards = cards
       partition.loaded = true
       partition.hidden = false
     } catch (error) {
+      if (generation !== storeGeneration || partitionOf(spaceId) !== partition) return
       if (error instanceof ApiError) {
         if (isEntryHiddenError(error)) {
           partition.hidden = true
@@ -94,7 +102,9 @@ export const useActionCardsStore = defineStore('actionCards', () => {
         partition.error = { code: 'NETWORK_ERROR', message: '' }
       }
     } finally {
-      partition.loading = false
+      if (generation === storeGeneration && partitionOf(spaceId) === partition) {
+        partition.loading = false
+      }
     }
   }
 
@@ -173,11 +183,13 @@ export const useActionCardsStore = defineStore('actionCards', () => {
 
   /** 空间切换：清空该空间分区（下次进入重新拉取） */
   function resetForSpace(spaceId: number): void {
+    storeGeneration += 1
     partitions.value.delete(spaceId)
   }
 
   /** 登出 / 账号切换 / 撤权（auth.clearSession 调用）：全量清理 */
   function clear(): void {
+    storeGeneration += 1
     partitions.value.clear()
   }
 

@@ -1,6 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { NMessageProvider } from 'naive-ui'
 
 import ElementPlus from 'element-plus'
 
@@ -142,6 +144,14 @@ function makeMatrix(overrides?: {
   }
 }
 
+// SettingsView 主体仍是 element-plus（P5 迁移），但其引用的 ChangePinForm 已迁
+// naive-ui，setup 期 useMessage 需要 NMessageProvider 祖先；div 根保证查询稳定
+const MessageProvidedSettings = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(SettingsView))])
+  },
+})
+
 async function mountSettings(pinia: Pinia) {
   const auth = useAuthStore(pinia)
   // setup store 的 ref 可直接赋值（先取 store 再注入，避免 state 替换不生效）
@@ -153,7 +163,7 @@ async function mountSettings(pinia: Pinia) {
     claim_status: 'claimed',
     profile_status: 'identity_confirmed',
   }
-  const wrapper = mount(SettingsView, {
+  const wrapper = mount(MessageProvidedSettings, {
     global: { plugins: [pinia, ElementPlus] },
     attachTo: document.body,
   })

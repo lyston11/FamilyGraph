@@ -1,9 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
 
 import * as governanceApi from '@/api/governance'
 import IdentitySetupView from '@/views/IdentitySetupView.vue'
@@ -40,9 +40,16 @@ function makeReview(overrides: Partial<FactReview> = {}): FactReview {
   }
 }
 
-// el-dialog 默认 teleport 到 body
+// n-modal 内容 teleport 到 body
 const dialogInBody = (): Element | null =>
   document.querySelector('[data-test="dispute-dialog"]')
+
+// 单根包裹组件：naive useMessage 需 NMessageProvider 祖先；div 根保证 test-utils 元素查询稳定
+const MessageProvidedSetup = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(IdentitySetupView))])
+  },
+})
 
 async function mountView(
   userOverrides: Partial<{ profile_status: string }> = {},
@@ -70,8 +77,8 @@ async function mountView(
       ...userOverrides,
     },
   }
-  const wrapper = mount(IdentitySetupView, {
-    global: { plugins: [pinia, router, ElementPlus] },
+  const wrapper = mount(MessageProvidedSetup, {
+    global: { plugins: [pinia, router] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
@@ -181,6 +188,7 @@ describe('IdentitySetupView（v2 F-1 确档向导）', () => {
     await wrapper.find('[data-test="review-dispute-1"]').trigger('click')
     await vi.waitFor(() => expect(dialogInBody()).not.toBeNull())
 
+    // data-test 经 input-props 落在原生 textarea 上
     const note = document.querySelector<HTMLTextAreaElement>('[data-test="dispute-note-input"]')!
     note.value = '这个名字不是我的'
     note.dispatchEvent(new Event('input'))

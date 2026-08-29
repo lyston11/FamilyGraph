@@ -33,6 +33,20 @@ function buildOverrides(name: ThemeName): GlobalThemeOverrides {
       dividerColor: vars['line'],
       borderRadius: vars['radius-control'],
       borderRadiusSmall: vars['radius-control'],
+      // 语义状态色：与 design.md §3.4 领域状态徽章同源（confirmed/proposed/disputed），
+      // 悬停/按下暂取同色，避免 naive 默认色与本主题色相冲突
+      successColor: vars['status-confirmed'],
+      successColorHover: vars['status-confirmed'],
+      successColorPressed: vars['status-confirmed'],
+      successColorSuppl: vars['status-confirmed'],
+      warningColor: vars['status-proposed'],
+      warningColorHover: vars['status-proposed'],
+      warningColorPressed: vars['status-proposed'],
+      warningColorSuppl: vars['status-proposed'],
+      errorColor: vars['status-disputed'],
+      errorColorHover: vars['status-disputed'],
+      errorColorPressed: vars['status-disputed'],
+      errorColorSuppl: vars['status-disputed'],
     },
   }
 }

@@ -352,6 +352,9 @@ export const useAgentStore = defineStore('agent', () => {
       case 'run.cancelled':
         finishRun(partition, 'cancelled')
         break
+      case 'run.expired':
+        finishRun(partition, 'expired')
+        break
       default:
         // 未知类型（未来版本 additive）：忽略，不崩溃
         break

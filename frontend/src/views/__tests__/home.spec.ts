@@ -94,7 +94,7 @@ describe('HomeView', () => {
 
   it('建档成功 → 一次性 PIN 弹窗出现；关闭后 PIN 清空不可回看', async () => {
     mockedFetch.mockResolvedValue([makeMember()])
-    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '123456' })
+    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '123456', replayed: false })
     const wrapper = await mountHome()
 
     // 打开向导走完三步提交（弹窗内容渲染需等待一个 tick）

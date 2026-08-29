@@ -111,3 +111,56 @@ describe('spaces store（AD-3）', () => {
     expect(store.profileRefs).toEqual([])
   })
 })
+
+describe('spaces store 会话代际隔离（P2）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('clear 后旧 load 的迟到响应不回写新会话状态', async () => {
+    let resolveSpaces: (value: FamilySpace[]) => void = () => {}
+    mockedFetch.mockImplementation(
+      () =>
+        new Promise<FamilySpace[]>((resolve) => {
+          resolveSpaces = resolve
+        }),
+    )
+    mockedMembers.mockResolvedValue([])
+    const store = useSpacesStore()
+
+    const pending = store.load()
+    store.clear() // 登出/切换：代际递增
+    resolveSpaces([makeSpace()])
+    await pending
+
+    expect(store.spaces).toEqual([])
+    expect(store.loading).toBe(false)
+  })
+
+  it('空间切换期间旧空间的成员响应不回写新空间', async () => {
+    const store = useSpacesStore()
+    let resolveOld: (value: Awaited<ReturnType<typeof spacesApi.fetchSpaceMembers>>) => void =
+      () => {}
+    mockedFetch.mockResolvedValue([makeSpace(), makeSpace({ id: 2 })])
+    mockedMembers.mockImplementation(() => {
+      if (mockedMembers.mock.calls.length === 1) {
+        return new Promise((resolve) => {
+          resolveOld = resolve
+        }) as never
+      }
+      return Promise.resolve([]) as never
+    })
+    // 初始 load 挂在空间 1 的成员请求上，不整句 await（其迟到响应稍后到达）
+    void store.load()
+
+    const switchToNew = store.loadMembers(2)
+    // 新空间先完成；随后旧空间的迟到响应到达
+    resolveOld([
+      { id: 501, space_id: 1, user_id: 99, user_name: '旧空间成员', added_by: 1, role: 'owner', status: 'active', updated_at: '2026-08-29T00:00:00' },
+    ])
+    await switchToNew
+    expect(store.members).toEqual([])
+    expect(store.currentSpaceId).toBe(2)
+  })
+})

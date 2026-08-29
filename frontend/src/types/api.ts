@@ -153,6 +153,10 @@ export interface MemberCreatePayload {
   privacy_mode?: PrivacyMode
   /** AD-4 新建例外：managed 新档由代管人创建 → 空间成员直接 active */
   space_membership?: { space_id: number } | null
+  /** F-1 必填：与创建者的关系（AD-4 新建例外 → 直接 active） */
+  relation_dir_class: DirClass
+  relation_label?: string | null
+  relation_text?: string | null
 }
 
 export interface MemberUpdatePayload {
@@ -163,10 +167,11 @@ export interface MemberUpdatePayload {
   bio?: string | null
 }
 
-/** 建档响应：PIN 明文仅此一次，之后任何接口不可再取 */
+/** 建档响应：PIN 明文仅此一次；幂等重放时 pin=null 且 replayed=true */
 export interface MemberCreateResponse {
   user: Member
-  pin: string
+  pin: string | null
+  replayed: boolean
 }
 
 // ---- v2 待确档最小引用（AC-F2 可观测性；后端 SpaceProfileRefOut） ----

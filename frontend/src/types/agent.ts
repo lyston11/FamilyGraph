@@ -62,6 +62,7 @@ export const AGENT_EVENT_TYPES = [
   'run.settled',
   'run.failed',
   'run.cancelled',
+  'run.expired',
 ] as const
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number]
@@ -71,6 +72,7 @@ export const TERMINAL_STREAM_EVENT_TYPES: readonly string[] = [
   'run.settled',
   'run.failed',
   'run.cancelled',
+  'run.expired',
 ]
 
 /** Run 终态（models.agent.RUN_TERMINAL_STATUSES） */

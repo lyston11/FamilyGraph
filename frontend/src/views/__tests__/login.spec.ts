@@ -1,9 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
 import * as authApi from '@/api/auth'
@@ -42,9 +42,16 @@ function makePair(overrides: Partial<TokenPairResponse['user']> = {}): TokenPair
   }
 }
 
-// el-dialog 默认 teleport 到 body，弹窗断言走 document 查询
+// n-modal 内容 teleport 到 body，弹窗断言走 document 查询
 const dialogInBody = (): Element | null =>
   document.querySelector('[data-test="challenge-dialog"]')
+
+// 单根包裹组件：naive useMessage 需 NMessageProvider 祖先；div 根保证 test-utils 元素查询稳定
+const MessageProvidedLogin = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(LoginView))])
+  },
+})
 
 async function mountView() {
   const pinia = createPinia()
@@ -60,8 +67,8 @@ async function mountView() {
       },
     ],
   })
-  const wrapper = mount(LoginView, {
-    global: { plugins: [pinia, router, ElementPlus] },
+  const wrapper = mount(MessageProvidedLogin, {
+    global: { plugins: [pinia, router] },
     attachTo: document.body,
   })
   await router.isReady()
@@ -82,8 +89,8 @@ describe('LoginView', () => {
   it('渲染登录表单', async () => {
     const { wrapper } = await mountView()
 
-    expect(wrapper.find('[data-test="login-name"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="login-pin"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="login-name"] input').exists()).toBe(true)
+    expect(wrapper.find('[data-test="login-pin"] input').exists()).toBe(true)
     expect(wrapper.find('h1').text()).toBe('FamilyGraph')
     wrapper.unmount()
   })
@@ -92,8 +99,8 @@ describe('LoginView', () => {
     mockedLogin.mockResolvedValue(makePair())
     const { wrapper } = await mountView()
 
-    await wrapper.find('[data-test="login-name"]').setValue('张三')
-    await wrapper.find('[data-test="login-pin"]').setValue('123456')
+    await wrapper.find('[data-test="login-name"] input').setValue('张三')
+    await wrapper.find('[data-test="login-pin"] input').setValue('123456')
     await wrapper.find('[data-test="login-submit"]').trigger('click')
 
     await vi.waitFor(() => expect(mockedLogin).toHaveBeenCalledWith('张三', '123456'))
@@ -107,8 +114,8 @@ describe('LoginView', () => {
     )
     const { wrapper } = await mountView()
 
-    await wrapper.find('[data-test="login-name"]').setValue('张三')
-    await wrapper.find('[data-test="login-pin"]').setValue('000000')
+    await wrapper.find('[data-test="login-name"] input').setValue('张三')
+    await wrapper.find('[data-test="login-pin"] input').setValue('000000')
     await wrapper.find('[data-test="login-submit"]').trigger('click')
 
     await vi.waitFor(() =>
@@ -121,8 +128,8 @@ describe('LoginView', () => {
   it('本地校验：PIN 非 6 位数字时直接提示', async () => {
     const { wrapper } = await mountView()
 
-    await wrapper.find('[data-test="login-name"]').setValue('张三')
-    await wrapper.find('[data-test="login-pin"]').setValue('123')
+    await wrapper.find('[data-test="login-name"] input').setValue('张三')
+    await wrapper.find('[data-test="login-pin"] input').setValue('123')
     await wrapper.find('[data-test="login-submit"]').trigger('click')
 
     expect(wrapper.find('[data-test="login-error"]').text()).toContain('6 位数字')
@@ -143,16 +150,18 @@ describe('LoginView', () => {
     mockedSelect.mockResolvedValue(makePair({ id: 2, name: '大壮' }))
     const { wrapper } = await mountView()
 
-    await wrapper.find('[data-test="login-name"]').setValue('大壮')
-    await wrapper.find('[data-test="login-pin"]').setValue('123456')
+    await wrapper.find('[data-test="login-name"] input').setValue('大壮')
+    await wrapper.find('[data-test="login-pin"] input').setValue('123456')
     await wrapper.find('[data-test="login-submit"]').trigger('click')
 
     // 弹窗出现且列出两个候选
     await vi.waitFor(() => expect(dialogInBody()).not.toBeNull())
-    const radios = dialogInBody()!.querySelectorAll('.candidate-list .el-radio')
+    const radios = dialogInBody()!.querySelectorAll<HTMLInputElement>(
+      '.candidate-list input[type="radio"]',
+    )
     expect(radios.length).toBe(2)
 
-    radios[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    radios[1].click()
     await new Promise((resolve) => setTimeout(resolve))
 
     const confirm = document.querySelector<HTMLButtonElement>('[data-test="challenge-confirm"]')!
@@ -176,13 +185,15 @@ describe('LoginView', () => {
     )
     const { wrapper } = await mountView()
 
-    await wrapper.find('[data-test="login-name"]').setValue('大壮')
-    await wrapper.find('[data-test="login-pin"]').setValue('123456')
+    await wrapper.find('[data-test="login-name"] input').setValue('大壮')
+    await wrapper.find('[data-test="login-pin"] input').setValue('123456')
     await wrapper.find('[data-test="login-submit"]').trigger('click')
     await vi.waitFor(() => expect(dialogInBody()).not.toBeNull())
 
-    const radio = dialogInBody()!.querySelector('.candidate-list .el-radio')!
-    radio.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    const radio = dialogInBody()!.querySelector<HTMLInputElement>(
+      '.candidate-list input[type="radio"]',
+    )!
+    radio.click()
     await new Promise((resolve) => setTimeout(resolve))
     ;(document.querySelector('[data-test="challenge-confirm"]') as HTMLButtonElement).click()
 

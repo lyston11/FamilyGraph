@@ -82,27 +82,22 @@ onMounted(async () => {
   }
 })
 
-async function resetPin(row: AdminUserRow) {
+async function resetPin(row: AdminUserRow): Promise<void> {
   try {
-    await ElMessageBoxConfirmName(String(row.id), row.name)
+    // 列表不含家庭姓名（R-03），确认按账号 ID + 后端 confirm 标志 + 审计兜底
+    const { ElMessageBox } = await import('element-plus')
+    await ElMessageBox.confirm(
+      `确认重置账号 #${row.id} 的登录 PIN？该账号当前所有会话将立即失效，新 PIN 仅本次显示。`,
+      '重置 PIN',
+      { confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning' },
+    )
     const { pin } = await adminResetPin(row.id)
     oneTimePin.value = pin
-    oneTimeFor.value = row.name
+    oneTimeFor.value = String(row.id)
     await loadLogs()
   } catch {
     /* 用户取消或失败 */
   }
-}
-
-async function ElMessageBoxConfirmName(_id: string, name: string): Promise<void> {
-  // 简化确认：输入名字校验由后端 confirm 标志 + 前端弹窗承担
-  const { ElMessageBox } = await import('element-plus')
-  await ElMessageBox.prompt(`请输入「${name}」以确认重置 PIN`, '重置 PIN', {
-    confirmButtonText: '确认重置',
-    cancelButtonText: '取消',
-    inputPattern: new RegExp(`^${name}$`),
-    inputErrorMessage: '名字不一致',
-  })
 }
 
 function invitationStatus(inv: OwnerInvitation): { text: string; type: 'success' | 'info' | 'danger' | 'warning' } {
@@ -221,7 +216,6 @@ async function submitDisputeResolution(): Promise<void> {
       <h3>用户管理</h3>
       <el-table :data="users" size="small" data-test="admin-user-table">
         <el-table-column prop="id" label="ID" width="64" />
-        <el-table-column prop="name" label="名字" />
         <el-table-column label="账号状态" width="110">
           <template #default="{ row }">
             <el-tag v-if="row.is_admin" size="small" type="danger">平台运营</el-tag>
@@ -237,7 +231,6 @@ async function submitDisputeResolution(): Promise<void> {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="privacy_mode" label="归属" width="110" />
         <el-table-column label="操作" width="140">
           <template #default="{ row }">
             <el-button size="small" type="warning" :data-test="`reset-pin-${row.id}`" @click="resetPin(row)">
@@ -461,7 +454,7 @@ async function submitDisputeResolution(): Promise<void> {
 
     <!-- 一次性 PIN 弹窗 -->
     <el-dialog :model-value="oneTimePin !== ''" title="新 PIN（仅显示一次）" width="380px" @update:model-value="oneTimePin = ''">
-      <p>「{{ oneTimeFor }}」的新 PIN：</p>
+      <p>账号 #{{ oneTimeFor }} 的新 PIN：</p>
       <p class="big-pin" data-test="one-time-admin-pin">{{ oneTimePin }}</p>
       <p class="hint">该成员下次登录将强制修改。请立即转交并截图保存。</p>
     </el-dialog>

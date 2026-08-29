@@ -20,9 +20,15 @@ export async function fetchMember(id: number): Promise<Member> {
   return data
 }
 
-/** 建档：响应携带一次性 PIN 明文，此后任何接口不可再取 */
-export async function createMember(payload: MemberCreatePayload): Promise<MemberCreateResponse> {
-  const { data } = await apiClient.post<MemberCreateResponse>('/users', payload)
+/** 原子建档：一次提交名字+关系；Idempotency-Key 保证重试/并发不重复建边。
+ *  响应携带一次性 PIN 明文（仅首次）；幂等重放时 pin=null。 */
+export async function createMember(
+  payload: MemberCreatePayload,
+  idempotencyKey: string,
+): Promise<MemberCreateResponse> {
+  const { data } = await apiClient.post<MemberCreateResponse>('/users', payload, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  })
   return data
 }
 

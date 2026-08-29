@@ -6,6 +6,7 @@ import type {
   ClanDisclosure,
   Member,
   MemberCreatePayload,
+  MemberCreateResponse,
   MemberUpdatePayload,
 } from '@/types/api'
 
@@ -23,24 +24,36 @@ export const useMembersStore = defineStore('members', () => {
     () => members.value.find((member) => member.id === drawerTargetId.value) ?? null,
   )
 
+  /** 会话代际：clear/登出后递增，旧请求的响应一律不得回写新会话状态（P2 隔离） */
+  let storeGeneration = 0
+
   function clear(): void {
+    storeGeneration += 1
     members.value = []
     drawerTargetId.value = null
     loading.value = false
   }
 
   async function load(): Promise<void> {
+    const generation = storeGeneration
     loading.value = true
     try {
-      members.value = await membersApi.fetchMembers()
+      const result = await membersApi.fetchMembers()
+      if (generation === storeGeneration) members.value = result
     } finally {
-      loading.value = false
+      if (generation === storeGeneration) loading.value = false
     }
   }
 
-  async function create(payload: MemberCreatePayload): Promise<{ user: Member; pin: string }> {
-    const result = await membersApi.createMember(payload)
-    members.value.push(result.user)
+  async function create(
+    payload: MemberCreatePayload,
+    idempotencyKey: string,
+  ): Promise<MemberCreateResponse> {
+    const result = await membersApi.createMember(payload, idempotencyKey)
+    // 幂等重放不重复 push（首次已入列表）
+    if (!members.value.some((m) => m.id === result.user.id)) {
+      members.value.push(result.user)
+    }
     return result
   }
 
