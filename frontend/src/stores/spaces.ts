@@ -23,6 +23,11 @@ import {
 /** 家庭空间状态（m1c）。AD-3：空列表时由首页引导创建默认空间。 */
 export const useSpacesStore = defineStore('spaces', {
   state: () => ({
+    /**
+     * 会话代际（非持久视图状态）：clear/登出后递增；异步响应回写前校验，
+     * 旧会话/旧空间的迟到响应不得覆盖新状态（P2 隔离）。
+     */
+    generation: 0,
     spaces: [] as FamilySpace[],
     /** 当前查看的空间（默认优先级见 architecture §3） */
     currentSpaceId: null as number | null,
@@ -50,23 +55,33 @@ export const useSpacesStore = defineStore('spaces', {
   },
   actions: {
     async load() {
+      const generation = this.generation
       this.loading = true
       try {
-        this.spaces = await fetchSpaces()
+        const spaces = await fetchSpaces()
+        if (generation !== this.generation) return
+        this.spaces = spaces
         if (this.currentSpaceId === null && this.spaces.length > 0) {
           this.currentSpaceId = this.spaces[0].id
         }
         if (this.currentSpaceId !== null) await this.loadMembers(this.currentSpaceId)
         else this.members = []
       } finally {
-        this.loading = false
+        if (generation === this.generation) this.loading = false
       }
     },
     async loadMembers(spaceId: number) {
+      const generation = this.generation
       this.currentSpaceId = spaceId
-      this.members = await fetchSpaceMembers(spaceId)
-      this.transfers = await fetchOwnershipTransfers(spaceId).catch(() => [])
-      this.profileRefs = await fetchSpaceProfileRefs(spaceId).catch(() => [])
+      const members = await fetchSpaceMembers(spaceId)
+      if (generation !== this.generation || this.currentSpaceId !== spaceId) return
+      this.members = members
+      const transfers = await fetchOwnershipTransfers(spaceId).catch(() => [])
+      if (generation !== this.generation || this.currentSpaceId !== spaceId) return
+      this.transfers = transfers
+      const refs = await fetchSpaceProfileRefs(spaceId).catch(() => [])
+      if (generation !== this.generation || this.currentSpaceId !== spaceId) return
+      this.profileRefs = refs
     },
     async create(name: string) {
       const space = await createSpace(name)
@@ -105,6 +120,8 @@ export const useSpacesStore = defineStore('spaces', {
       }
     },
     clear() {
+      this.generation += 1
+      this.loading = false
       this.spaces = []
       this.members = []
       this.profileRefs = []

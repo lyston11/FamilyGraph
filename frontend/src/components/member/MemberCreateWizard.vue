@@ -4,7 +4,6 @@ import { ElMessage } from 'element-plus'
 
 import { fetchLunarMirror } from '@/api/lunar'
 import { ApiError } from '@/api/errors'
-import { createConnectionRequest } from '@/api/graph'
 import { createSpace } from '@/api/spaces'
 import { useMembersStore } from '@/stores/members'
 import { useSpacesStore } from '@/stores/spaces'
@@ -16,7 +15,7 @@ import type { DirClass, GenderType, PrivacyMode, StructuredDate } from '@/types/
  * 对方确档前仅为 provisional 档案：选空间只建 space_profile_refs 最小节点引用，
  * 不是正式 SpaceMember；与创建者的关系以待确认合并请求发出，本人确档后可确认。
  */
-const emit = defineEmits<{ close: []; created: [{ name: string; pin: string }] }>()
+const emit = defineEmits<{ close: []; created: [{ name: string; pin: string | null }] }>()
 
 const members = useMembersStore()
 const spacesStore = useSpacesStore()
@@ -24,6 +23,7 @@ const spacesStore = useSpacesStore()
 const step = ref(0)
 const submitting = ref(false)
 const errorMessage = ref('')
+const idempotencyKey = ref('')
 
 // ---- 关系（F-1 必填）：TA 是我的 ___；以合并请求发出，对方确档后可确认 ----
 const RELATION_OPTIONS: { value: DirClass; text: string }[] = [
@@ -177,34 +177,37 @@ async function submit(): Promise<void> {
   submitting.value = true
   errorMessage.value = ''
   try {
-    const result = await members.create({
-      name: form.name.trim(),
-      gender: form.gender,
-      birth: buildStructuredDate(form.birthCalType, form.birthDate),
-      death: form.deathEnabled
-        ? buildStructuredDate(form.deathCalType, form.deathDate)
-        : null,
-      bio: form.bio.trim() || null,
-      privacy_mode: form.privacyMode,
-      space_membership:
-        chosenSpaceId.value !== null ? { space_id: chosenSpaceId.value } : null,
-    })
-    // 关系以合并请求发出（pending）：对方确档后自行确认，符合显式同意语义
-    try {
-      await createConnectionRequest({
-        target_id: result.user.id,
-        dir_class: relationDir.value as DirClass,
-        label: relationLabel.value.trim() || null,
-      })
-    } catch {
-      ElMessage.warning('档案已创建，但关系请求发送失败，可稍后在「添加关系」中补发')
-    }
+    const result = await members.create(
+      {
+        name: form.name.trim(),
+        gender: form.gender,
+        birth: buildStructuredDate(form.birthCalType, form.birthDate),
+        death: form.deathEnabled
+          ? buildStructuredDate(form.deathCalType, form.deathDate)
+          : null,
+        bio: form.bio.trim() || null,
+        privacy_mode: form.privacyMode,
+        space_membership:
+          chosenSpaceId.value !== null ? { space_id: chosenSpaceId.value } : null,
+        relation_dir_class: relationDir.value as DirClass,
+        relation_label: relationLabel.value.trim() || null,
+      },
+      ensureIdempotencyKey(),
+    )
+    // 档案 + 关系已原子提交；重放时不再回放一次性 PIN（仅首次可见）
     emit('created', { name: result.user.name, pin: result.pin })
   } catch (error) {
     errorMessage.value = error instanceof ApiError ? error.message : '建档失败，请稍后重试'
   } finally {
     submitting.value = false
   }
+}
+
+function ensureIdempotencyKey(): string {
+  if (!idempotencyKey.value) {
+    idempotencyKey.value = crypto.randomUUID()
+  }
+  return idempotencyKey.value
 }
 
 function reset(): void {
@@ -221,6 +224,7 @@ function reset(): void {
   form.privacyMode = 'handover'
   relationDir.value = ''
   relationLabel.value = ''
+  idempotencyKey.value = ''
   spaceChoice.value = 'none'
   joinHouseholdSpaceId.value = null
   joinLineageSpaceId.value = null
@@ -272,7 +276,7 @@ function handleClose(): void {
             data-test="wizard-relation-label"
           />
           <div class="confirm-hint">
-            关系将以待确认请求发出，对方确档并确认后正式生效。
+            新建档案为 provisional，由你代管：关系将在建档时直接建立，对方确档后可再确认与修正。
           </div>
         </div>
       </el-form-item>

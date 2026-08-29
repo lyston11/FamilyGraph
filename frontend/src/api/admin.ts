@@ -9,17 +9,33 @@ import { apiClient } from './client'
 
 export interface AdminUserRow {
   id: number
-  name: string
   is_admin: boolean
-  gender: string
-  privacy_mode: string
   /** 账号状态（managed|claimed；无凭据为 null） */
   claim_status: string | null
   /** 档案确档状态（provisional|identity_confirmed） */
   profile_status: string | null
-  created_by: number | null
   locked_until: string | null
   created_at: string
+}
+
+export interface AdminUserLookupRow {
+  id: number
+  name: string
+  claim_status: string | null
+  profile_status: string | null
+}
+
+export async function fetchAdminUsers(): Promise<AdminUserRow[]> {
+  const { data } = await apiClient.get<AdminUserRow[]>('/admin/users')
+  return data
+}
+
+/** break-glass：按名字前缀还原账号标识（仅供重置 PIN / 数据兑底定位，服务端审计）。 */
+export async function fetchAdminUserLookup(name: string): Promise<AdminUserLookupRow[]> {
+  const { data } = await apiClient.get<AdminUserLookupRow[]>('/admin/users/lookup', {
+    params: { name },
+  })
+  return data
 }
 
 export interface AuditRow {
@@ -30,11 +46,6 @@ export interface AuditRow {
   ip: string | null
   detail_json: string | null
   created_at: string | null
-}
-
-export async function fetchAdminUsers(): Promise<AdminUserRow[]> {
-  const { data } = await apiClient.get<AdminUserRow[]>('/admin/users')
-  return data
 }
 
 export async function fetchAuditLogs(limit = 200): Promise<AuditRow[]> {

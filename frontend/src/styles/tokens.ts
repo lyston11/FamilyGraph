@@ -139,7 +139,8 @@ const paperPalette: PaperPalette = {
   vermilionPressed: '#a53124',
   indigo: '#3d5a6c',
   moss: '#5f7052',
-  ochre: '#a8752c',
+  // 调深自 #a8752c：小字文本对宣纸底 / 8% 软底须 ≥4.5:1（WCAG AA，2026-08-29 实测 5.39 / 4.86）
+  ochre: '#8c5f1d',
   seal: '#6f6a59',
   lineHairline: '#ddd4bf',
   lineStrong: '#c8bda0',
@@ -156,9 +157,11 @@ const modernPalette: ModernPalette = {
   blue: '#2f6fb3',
   blueHover: '#3d80c4',
   bluePressed: '#275e98',
-  cyan: '#2b8a8f',
+  // 调深自 #2b8a8f：实底徽章白字对纯白底须 ≥4.5:1（WCAG AA，2026-08-29 实测 5.70）
+  cyan: '#1f7176',
   indigo: '#4c5fbf',
-  amber: '#9a6b15',
+  // 调深自 #9a6b15：小字文本对纯白底 / 8% 软底须 ≥4.5:1（WCAG AA，2026-08-29 实测 6.20 / 5.55）
+  amber: '#82590f',
   red: '#c0392b',
   slate: '#6f7683',
   lineHairline: '#e5e8ec',

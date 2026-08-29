@@ -113,10 +113,11 @@ function closeWizard(): void {
   wizardOpen.value = false
 }
 
-function onCreated(result: { name: string; pin: string }): void {
+function onCreated(result: { name: string; pin: string | null }): void {
   wizardOpen.value = false
   issuedName.value = result.name
-  issuedPin.value = result.pin // 弹窗关闭时置空，此后不可回看
+  // 幂等重放时不回看一次性 PIN（仅首次可见）
+  issuedPin.value = result.pin ?? ''
 }
 
 function dismissPin(): void {
