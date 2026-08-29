@@ -371,8 +371,6 @@ const filterInputProps = {
   'data-test': 'canvas-filter-input',
   'aria-label': '空间内筛选',
 } as VueInputHTMLAttributes
-
-void router
 </script>
 
 <template>

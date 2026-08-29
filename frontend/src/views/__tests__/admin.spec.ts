@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NDialogProvider, NMessageProvider } from 'naive-ui'
 
 import * as adminApi from '@/api/admin'
 import AdminView from '@/views/AdminView.vue'
@@ -57,10 +57,18 @@ function makeCorrection(overrides: Partial<DataRightRequest> = {}): DataRightReq
   }
 }
 
+// AdminView 迁 naive-ui（P5）：useMessage/useDialog 需 provider 祖先；
+// n-modal teleport 到 body，弹层断言走 document 查询；div 根保证组件树查询稳定
+const ProvidedAdmin = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(NDialogProvider, () => h(AdminView)))])
+  },
+})
+
 async function mountAdmin() {
   const pinia = createPinia()
-  const wrapper = mount(AdminView, {
-    global: { plugins: [pinia, ElementPlus] },
+  const wrapper = mount(ProvidedAdmin, {
+    global: { plugins: [pinia] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
@@ -90,12 +98,15 @@ describe('AdminView（v2 平台运营者语义）', () => {
     await vi.waitFor(() =>
       expect(wrapper.find('[data-test="invitation-table"]').text()).toContain('有效'),
     )
-    // 关闭弹窗后 token 不再出现在页面（不可回看）
-    ;(document.querySelector('.el-dialog') as HTMLElement).dispatchEvent(
-      new Event('close', { bubbles: false }),
-    )
-    wrapper.vm.$nextTick()
+    // 关闭路径：点 n-card 头部关闭钮 → update:show=false → issuedToken 清空。
+    // jsdom 下 n-modal 离场过渡不结束、内容节点滞留 DOM，故卸载后再断言
+    // （与 OneTimePinDialog.spec「卸载后 PIN 不应再出现」同一约定）
+    const closeButton = document.querySelector<HTMLElement>('.n-card-header__close')!
+    closeButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve))
     wrapper.unmount()
+    await new Promise((resolve) => setTimeout(resolve))
+    expect(document.querySelector('[data-test="issued-token"]')).toBeNull()
   })
 
   it('更正决议（break-glass）：理由为空时提交禁用；填写后调用 resolveCorrection', async () => {
@@ -151,10 +162,12 @@ describe('AdminView（v2 平台运营者语义）', () => {
       expect(document.querySelector('[data-test="dispute-resolve-dialog"]')).not.toBeNull(),
     )
 
-    // 选择「驳回认领」
-    const radios = document.querySelectorAll('[data-test="dispute-outcome-group"] .el-radio')
+    // 选择「驳回认领」：n-radio 渲染原生 input，走原生 click
+    const radios = document.querySelectorAll<HTMLInputElement>(
+      '[data-test="dispute-outcome-group"] input[type="radio"]',
+    )
     expect(radios.length).toBe(2)
-    ;(radios[1].querySelector('.el-radio__original') as HTMLInputElement).click()
+    radios[1].click()
     await new Promise((resolve) => setTimeout(resolve))
 
     const note = document.querySelector<HTMLTextAreaElement>('[data-test="dispute-note-input"]')!

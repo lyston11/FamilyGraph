@@ -4,8 +4,6 @@ import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
 
-import ElementPlus from 'element-plus'
-
 import * as governanceApi from '@/api/governance'
 import * as membersApi from '@/api/members'
 import SettingsView from '@/views/SettingsView.vue'
@@ -144,8 +142,8 @@ function makeMatrix(overrides?: {
   }
 }
 
-// SettingsView 主体仍是 element-plus（P5 迁移），但其引用的 ChangePinForm 已迁
-// naive-ui，setup 期 useMessage 需要 NMessageProvider 祖先；div 根保证查询稳定
+// SettingsView 全量迁 naive-ui（P5）：useMessage 需 NMessageProvider 祖先；
+// div 根保证查询稳定
 const MessageProvidedSettings = defineComponent({
   render() {
     return h('div', [h(NMessageProvider, () => h(SettingsView))])
@@ -164,7 +162,7 @@ async function mountSettings(pinia: Pinia) {
     profile_status: 'identity_confirmed',
   }
   const wrapper = mount(MessageProvidedSettings, {
-    global: { plugins: [pinia, ElementPlus] },
+    global: { plugins: [pinia] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
@@ -252,6 +250,28 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
         7,
       ),
     )
+    wrapper.unmount()
+  })
+
+  it('主题切换：双预览卡点击切主题，aria-pressed 与 data-theme / localStorage 同步', async () => {
+    const wrapper = await mountSettings(pinia)
+
+    const paperCard = wrapper.find('[data-test="theme-card-paper"]')
+    const modernCard = wrapper.find('[data-test="theme-card-modern"]')
+    // 默认纸墨
+    expect(paperCard.attributes('aria-pressed')).toBe('true')
+    expect(modernCard.attributes('aria-pressed')).toBe('false')
+    expect(document.documentElement.dataset.theme).toBe('paper')
+
+    await modernCard.trigger('click')
+    expect(modernCard.attributes('aria-pressed')).toBe('true')
+    expect(paperCard.attributes('aria-pressed')).toBe('false')
+    expect(document.documentElement.dataset.theme).toBe('modern')
+    expect(localStorage.getItem('fg-theme')).toBe('modern')
+
+    // 切回纸墨
+    await paperCard.trigger('click')
+    expect(document.documentElement.dataset.theme).toBe('paper')
     wrapper.unmount()
   })
 
