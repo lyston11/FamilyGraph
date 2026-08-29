@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件规范：组合式 API、MaskedField 单点、a11y 基线、空状态引导；本次换库后该文件本身也需更新。"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "目录分层规则：views 不直接 axios、画布组件禁业务请求；新增 shell/styles 文件落位依据。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "四绿门禁命令、禁止模式、V2.5 Memory/RAG UI 合同、375px 与首渲染性能基线。"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "strict TS 与运行时校验要求，token 类型定义（tokens.ts）须遵守。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 划分与敏感清理红线；新增 stores/ui.ts（主题）须符合划分规则。"}
+{"file": ".trellis/spec/architecture.md", "reason": "VisibilityPolicy 与身份状态机的权威语义，UI 状态徽章（确档/事实/遮罩）必须与之对齐。"}
+{"file": ".trellis/tasks/08-29-frontend-redesign/design.md", "reason": "本任务技术设计：Naive UI 选型理由、三层 token、双主题架构、迁移差异清单、分域阶段。"}
+{"file": "/Users/lyston/Obsidian/lyston/Codex/项目与服务/familygraph/00 FamilyGraph v2 Agent 系统总体架构与设计决策.md", "reason": "Assistant/Steward 双 Agent 人格与边界——Agent 面板视觉设计依据。"}
+{"file": "/Users/lyston/Obsidian/lyston/Codex/项目与服务/familygraph/01 FamilyGraph v2 身份、空间与隐私设计.md", "reason": "Account/Profile/Fact 三态与空间模型——节点/卡片状态徽章与空间类型标识的领域语义。"}
+{"file": "/Users/lyston/Obsidian/lyston/Codex/项目与服务/familygraph/03 FamilyGraph v2 关系推理与称谓系统设计.md", "reason": "称谓四级来源与路径证据合同——KinshipTermPanel/RelationLookup 展示设计依据。"}
+{"file": "/Users/lyston/Obsidian/lyston/Codex/项目与服务/familygraph/04 FamilyGraph v2 Steward、领域事件与 ActionCard 设计.md", "reason": "ActionCard 状态机、双入口 UI 合同、两步确认——收件箱与卡片视觉设计依据。"}

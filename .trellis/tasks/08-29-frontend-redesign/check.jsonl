@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "验收门禁：lint/type-check/test/build 四绿；禁止模式（直连 axios、v-html、内联布局样式）；三布局/遮罩/challenge 测试红线；V2.5 Memory/RAG UI 合同；375px 与首渲染基线。"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "检查 a11y 基线（label 绑定、焦点陷阱、aria-label、对比度 AA）与 MaskedField 单点渲染未被迁移破坏。"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "检查迁移后无 any 泄漏、token 类型完整、event.target 未类型化取值等红线。"}
+{"file": ".trellis/spec/architecture.md", "reason": "检查 UI 状态表达（确档/事实/遮罩/卡片状态）与 VisibilityPolicy、身份状态机语义一致，无越权展示。"}
+{"file": ".trellis/tasks/08-29-frontend-redesign/prd.md", "reason": "验收标准清单（R1-R8 与 AC 逐条核对）与 Out of Scope 边界。"}
+{"file": ".trellis/tasks/08-29-frontend-redesign/design.md", "reason": "核对实现与设计一致：token 单一来源、双主题切换不刷新、themeOverrides 同源、迁移差异逐项核销。"}
+{"file": ".trellis/tasks/08-29-frontend-redesign/implement.md", "reason": "逐 Phase 核对清单完成度、回滚点提交、风险文件处理与 task.py start 前检查。"}

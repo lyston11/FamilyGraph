@@ -1,19 +1,6 @@
-/* 全局样式（m4a）：响应式断点与 a11y 基线 */
-
-html,
-body {
-  margin: 0;
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* 键盘导航可见焦点（WCAG 2.4.7） */
-:focus-visible {
-  outline: 2px solid var(--el-color-primary);
-  outline-offset: 2px;
-}
+/* 全局样式（m4a）：响应式断点与通用交互过渡。
+ * 基座（字体栈/背景点阵/焦点环/reduced-motion）已移至 tokens.css；
+ * 颜色一律走 --fg-* 主题变量，本文件不写死色值。 */
 
 /* 移动端断点：顶栏/卡片/画布自适应 */
 @media (max-width: 768px) {
@@ -62,11 +49,4 @@ body {
 .scope-switch:active,
 .layout-switch:active {
   transform: scale(0.97);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
 }

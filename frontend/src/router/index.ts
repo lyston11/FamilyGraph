@@ -2,6 +2,13 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    /** 'blank'：沉浸页（登录/引导/改 PIN/确档），App.vue 不渲染应用壳 */
+    chrome?: 'blank'
+  }
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -19,23 +26,25 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
-      meta: { public: true },
+      meta: { public: true, chrome: 'blank' },
     },
     {
       path: '/onboarding',
       name: 'onboarding',
       component: () => import('@/views/OnboardingView.vue'),
-      meta: { public: true },
+      meta: { public: true, chrome: 'blank' },
     },
     {
       path: '/force-change-pin',
       name: 'force-change-pin',
       component: () => import('@/views/ChangePinView.vue'),
+      meta: { chrome: 'blank' },
     },
     {
       path: '/identity-setup',
       name: 'identity-setup',
       component: () => import('@/views/IdentitySetupView.vue'),
+      meta: { chrome: 'blank' },
     },
     {
       path: '/stats',
