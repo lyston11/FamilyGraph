@@ -15,6 +15,14 @@ npm run build       # 生产构建零报错
 - 移动端验收（m4a）前，所有新页面需在 375px 视口人工过一遍并记录。
 - 性能基线：家族视图首次渲染 <2s（几十人规模），超出即检查是否漏用折叠/虚拟化。
 
+## 主题与组件库门禁（2026-08-29 naive-ui 迁移后生效）
+
+- 组件库回归闸门：`grep -rEn "El[A-Z]|<el-|v-loading|el-loading|element-plus|--el-|@element-plus" frontend/src frontend/*.config.ts frontend/index.html` 必须零命中（`label-props`/`cancel-btn`/`panel-*` 等子串误报需逐一排除后再判定）；package.json/lockfile 不得出现 element-plus。
+- 颜色红线闸门：新增/修改的组件样式不得出现写死色值（hex/rgb/hsl）；颜色一律走 `var(--fg-*)` 或既有变量 color-mix 派生。新颜色值只允许出现在 `styles/tokens.ts`，且必须双主题（paper/modern）同步补齐并在 `styles/naive-themes.ts` 显式派生。
+- 对比度核验：新增任何色值组合（文字/底、徽章白字/底、彩字/soft 底）必须按 WCAG 相对亮度公式计算：正文 ≥4.5:1，大字（≥18.66px bold 或 24px）与图形 ≥3:1；计算脚本直连 tokens.ts 取值，结果落任务附录。有 naive-themes 派生消费的 token 改动需确认派生映射同步。
+- 主题行为测试：主题相关改动需覆盖 data-theme 切换、CSS 变量注入、localStorage 持久化（参照 settings.spec 主题用例）；主题切换不刷新页面。
+- 375px 人工走查须双主题各一遍，检查点清单落当次任务 implement.md 附录（参照 08-29-frontend-redesign 附录一：浮层可关、无横向滚动、44px 点按目标、reduced-motion OS 级开关复核）。
+
 ## V2.5 Memory/RAG 验收检查（2026-08-26）
 
 - Memory/RAG 页面必须复用服务端权威 store；组件不直接拼接 scope、citation 或权限结果，不把 Assistant 文本摘要当作 Memory 真源。
