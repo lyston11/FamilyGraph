@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { NButton, NSelect } from 'naive-ui'
+import type { SelectOption } from 'naive-ui'
 import { computed } from 'vue'
 
 import type { AgentSession } from '@/types/agent'
@@ -23,35 +25,40 @@ function formatFallbackTitle(session: AgentSession): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-const options = computed(() =>
+const options = computed<SelectOption[]>(() =>
   props.sessions.map((session) => ({
-    id: session.id,
-    title: props.titles[session.id] || formatFallbackTitle(session),
+    value: session.id,
+    label: props.titles[session.id] || formatFallbackTitle(session),
   })),
 )
+
+function onSelect(value: number | string | null): void {
+  if (typeof value === 'number') emit('select', value)
+}
 </script>
 
 <template>
   <div class="session-list" data-test="session-list">
-    <el-select
-      :model-value="activeSessionId"
+    <!-- aria-label 落包裹层（naive-ui 不透传到原生 input，P6 记入规范约定） -->
+    <NSelect
       class="select"
       size="small"
-      aria-label="选择会话"
-      data-test="session-select"
+      :value="activeSessionId"
+      :options="options"
       :disabled="disabled"
-      @update:model-value="(value: number | undefined) => value !== undefined && emit('select', value)"
-    >
-      <el-option v-for="opt in options" :key="opt.id" :value="opt.id" :label="opt.title" />
-    </el-select>
-    <el-button
+      data-test="session-select"
+      aria-label="选择会话"
+      @update:value="onSelect"
+    />
+    <NButton
       size="small"
+      secondary
       data-test="new-session-btn"
       :disabled="disabled"
       @click="emit('create')"
     >
       新会话
-    </el-button>
+    </NButton>
   </div>
 </template>
 

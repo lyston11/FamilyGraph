@@ -14,6 +14,15 @@ function formatFetchedAt(value: string): string {
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
 }
+
+/** 域名徽章：仅解析展示 URL 主机名（纯字符串，无请求、无原始正文渲染） */
+function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
 </script>
 
 <template>
@@ -35,7 +44,11 @@ function formatFetchedAt(value: string): string {
           <a :href="citation.url" target="_blank" rel="noopener noreferrer" class="title">
             {{ citation.title }}
           </a>
-          <el-tag size="small" type="warning">外部</el-tag>
+          <!-- 来源徽章：域名 + 用途标签（外部=未经家谱确认 → 未确认警示阶） -->
+          <span class="fg-badge fg-badge--neutral" data-test="web-citation-domain">
+            {{ domainOf(citation.url) }}
+          </span>
+          <span class="fg-badge fg-badge--proposed" data-test="web-citation-external">外部</span>
         </div>
         <p v-if="!compact && citation.excerpt" class="excerpt">{{ citation.excerpt }}</p>
         <div class="meta">
@@ -52,12 +65,12 @@ function formatFetchedAt(value: string): string {
   width: 100%;
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--fg-line);
 }
 
 .heading {
   margin: 0 0 6px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
   font-weight: 600;
 }
@@ -71,7 +84,7 @@ function formatFetchedAt(value: string): string {
 
 .citation {
   min-width: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -84,7 +97,7 @@ function formatFetchedAt(value: string): string {
 }
 
 .title {
-  color: var(--el-color-primary);
+  color: var(--fg-accent);
   text-decoration: none;
   font-weight: 600;
   word-break: break-all;
@@ -96,7 +109,7 @@ function formatFetchedAt(value: string): string {
 
 .excerpt {
   margin: 3px 0;
-  color: var(--el-text-color-regular);
+  color: var(--fg-ink);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -108,12 +121,12 @@ function formatFetchedAt(value: string): string {
 }
 
 .url {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   word-break: break-all;
 }
 
 .fetched {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   white-space: nowrap;
 }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { NButton } from 'naive-ui'
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -16,21 +17,20 @@ onMounted(() => {
 <template>
   <main class="memory-view">
     <header class="topbar">
-      <el-button text data-test="memory-back" @click="router.push('/')">← 家庭空间</el-button>
+      <NButton quaternary data-test="memory-back" @click="router.push('/')">← 家庭空间</NButton>
       <span class="topbar-label">FamilyGraph / Knowledge</span>
-      <el-button text data-test="memory-settings" @click="router.push('/settings')">设置</el-button>
+      <NButton quaternary data-test="memory-settings" @click="router.push('/settings')">设置</NButton>
     </header>
     <MemoryManager />
   </main>
 </template>
 
 <style scoped>
+/* 页面底色随主题 token（body 点阵基座之上，仅保留主色柔光 wash） */
 .memory-view {
   min-height: 100vh;
   padding: 24px clamp(16px, 5vw, 72px) 48px;
-  background:
-    radial-gradient(circle at 84% 0%, rgb(196 229 213 / 48%), transparent 34%),
-    #f7fbf8;
+  background: radial-gradient(circle at 84% 0%, var(--fg-accent-soft), transparent 34%);
 }
 
 .topbar {
@@ -42,7 +42,7 @@ onMounted(() => {
 }
 
 .topbar-label {
-  color: #78918b;
+  color: var(--fg-ink-faint);
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;

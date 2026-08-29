@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { NAlert, NButton, NModal, useMessage } from 'naive-ui'
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 
 import {
   ACTION_CARD_ERRORS,
@@ -17,12 +17,15 @@ import type { ActionCard, ActionCardState } from '@/types/actionCard'
  * - pending/viewed → [了解详情][不接受][接受]；
  * - accepted → 两步发送：「发起申请」仅打开确认弹层（再次显示目标空间与
  *   披露影响），显式确认按钮才调用 execute——卡片接受不代替最终发送动作；
- * - 终态（executed/dismissed/expired/superseded）只读。
+ * - 终态（executed/dismissed/expired/superseded）只读；
+ * - 状态徽章阶（design.md §3.4）：沿用 .fg-badge--* 领域状态工具类 +
+ *   --fg-status-* token，禁止新造颜色；过期卡整体灰化。
  */
 const props = defineProps<{ card: ActionCard }>()
 
 const actionCards = useActionCardsStore()
 const spaces = useSpacesStore()
+const message = useMessage()
 
 const busy = ref(false)
 const executing = ref(false)
@@ -45,19 +48,23 @@ const STATE_LABELS: Record<ActionCardState, string> = {
   superseded: '已被更新',
 }
 
-const STATE_TAG_TYPES: Record<ActionCardState, 'primary' | 'success' | 'warning' | 'info'> = {
-  pending: 'warning',
-  viewed: 'primary',
-  accepted: 'success',
-  executed: 'success',
-  dismissed: 'info',
-  expired: 'info',
-  superseded: 'info',
+/** 状态 → .fg-badge--* 阶（tokens.css 领域状态工具类，两主题同源） */
+const STATE_BADGE_CLASSES: Record<ActionCardState, string> = {
+  pending: 'fg-badge--accent',
+  viewed: 'fg-badge--proposed',
+  accepted: 'fg-badge--confirmed',
+  executed: 'fg-badge--confirmed',
+  dismissed: 'fg-badge--neutral',
+  expired: 'fg-badge--provisional',
+  superseded: 'fg-badge--neutral',
 }
 
 const title = computed(() => KIND_TITLES[props.card.kind] ?? '管家建议')
 const stateLabel = computed(() => STATE_LABELS[props.card.state])
-const stateTagType = computed(() => STATE_TAG_TYPES[props.card.state])
+const stateBadgeClass = computed(() => STATE_BADGE_CLASSES[props.card.state])
+
+/** 过期灰化：expired 整卡降饱和（终态可辨识、不喧宾） */
+const isExpired = computed(() => props.card.state === 'expired')
 
 /** 活跃态（可操作）：pending/viewed 或 accepted（两步发送） */
 const interactive = computed(
@@ -115,7 +122,7 @@ async function runTransition(action: 'view' | 'dismiss' | 'accept'): Promise<voi
   try {
     await actionCards.transition(props.card.space_id, props.card.id, action)
   } catch (error) {
-    ElMessage.warning(describeError(error))
+    message.warning(describeError(error))
   } finally {
     busy.value = false
   }
@@ -132,10 +139,10 @@ async function onExecute(): Promise<void> {
   try {
     await actionCards.execute(props.card.space_id, props.card.id)
     confirmVisible.value = false
-    ElMessage.success('申请已发送')
+    message.success('申请已发送')
   } catch (error) {
     // 失败保持 accepted：弹层留在原地供用户重试或关闭
-    ElMessage.error(
+    message.error(
       describeError(
         error,
         error instanceof ApiError
@@ -150,10 +157,16 @@ async function onExecute(): Promise<void> {
 </script>
 
 <template>
-  <el-card class="action-card" shadow="never" data-test="action-card-item">
+  <article
+    class="action-card"
+    :class="{ 'is-expired': isExpired }"
+    data-test="action-card-item"
+  >
     <div class="head">
       <span class="title" data-test="card-title">{{ title }}</span>
-      <el-tag size="small" :type="stateTagType" data-test="card-state-tag">{{ stateLabel }}</el-tag>
+      <span class="fg-badge" :class="stateBadgeClass" data-test="card-state-tag">
+        {{ stateLabel }}
+      </span>
     </div>
 
     <p v-if="card.object_user" class="participants" data-test="card-participants">
@@ -173,21 +186,21 @@ async function onExecute(): Promise<void> {
     <p class="privacy" data-test="card-privacy">隐私影响：{{ card.privacy_effect }}</p>
 
     <div class="meta">
-      <el-tag v-if="expiryBadge" size="small" type="warning" effect="plain" data-test="card-expiry">
+      <span v-if="expiryBadge" class="fg-badge fg-badge--proposed" data-test="card-expiry">
         {{ expiryBadge }}
-      </el-tag>
+      </span>
       <span class="created">创建于 {{ formatDate(card.created_at) }}</span>
     </div>
 
     <div v-if="interactive || canExecute" class="ops">
       <template v-if="interactive">
-        <el-button size="small" :disabled="busy" data-test="card-view-btn" @click="onView">
+        <NButton size="small" secondary :disabled="busy" data-test="card-view-btn" @click="onView">
           了解详情
-        </el-button>
-        <el-button size="small" :disabled="busy" data-test="card-dismiss-btn" @click="onDismiss">
+        </NButton>
+        <NButton size="small" secondary :disabled="busy" data-test="card-dismiss-btn" @click="onDismiss">
           不接受
-        </el-button>
-        <el-button
+        </NButton>
+        <NButton
           size="small"
           type="primary"
           :disabled="busy"
@@ -195,9 +208,9 @@ async function onExecute(): Promise<void> {
           @click="onAccept"
         >
           接受
-        </el-button>
+        </NButton>
       </template>
-      <el-button
+      <NButton
         v-else-if="canExecute"
         size="small"
         type="primary"
@@ -205,51 +218,67 @@ async function onExecute(): Promise<void> {
         @click="confirmVisible = true"
       >
         发起申请
-      </el-button>
+      </NButton>
     </div>
 
     <!-- 两步发送确认弹层：再次显示目标空间与披露影响 -->
-    <el-dialog
-      v-model="confirmVisible"
+    <NModal
+      v-model:show="confirmVisible"
+      preset="card"
       title="确认发起申请"
-      width="420px"
-      append-to-body
+      class="execute-confirm-modal"
       data-test="execute-confirm-dialog"
-      @update:model-value="(value: boolean) => (confirmVisible = value)"
     >
       <p data-test="confirm-target-space">目标空间：<strong>{{ targetSpaceName }}</strong></p>
       <p>将执行：{{ actionText }}</p>
-      <el-alert type="warning" :closable="false" data-test="confirm-privacy">
+      <NAlert type="warning" :show-icon="true" data-test="confirm-privacy">
         隐私影响：{{ card.privacy_effect }}
-      </el-alert>
+      </NAlert>
       <template #footer>
-        <el-button data-test="execute-cancel" @click="confirmVisible = false">再想想</el-button>
-        <el-button
-          type="primary"
-          :loading="executing"
-          data-test="execute-confirm"
-          @click="onExecute"
-        >
-          确认发送
-        </el-button>
+        <div class="modal-actions">
+          <NButton data-test="execute-cancel" @click="confirmVisible = false">再想想</NButton>
+          <NButton
+            type="primary"
+            :loading="executing"
+            data-test="execute-confirm"
+            @click="onExecute"
+          >
+            确认发送
+          </NButton>
+        </div>
       </template>
-    </el-dialog>
-  </el-card>
+    </NModal>
+  </article>
 </template>
 
 <style scoped>
 .action-card {
-  border: 1px solid var(--el-border-color-lighter);
+  padding: 14px;
+  border: 1px solid var(--fg-line);
+  border-radius: var(--fg-radius-card);
+  background: var(--fg-surface-raised);
+  box-shadow: var(--fg-shadow-card);
+}
+
+/* 过期灰化（design.md §3.4）：整卡降不透明度 + 降饱和，状态章仍可读 */
+.action-card.is-expired {
+  opacity: 0.66;
+}
+
+.action-card.is-expired .fg-badge {
+  filter: grayscale(0.5);
 }
 
 .head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 
 .title {
   font-weight: 600;
+  color: var(--fg-ink);
 }
 
 .participants,
@@ -262,13 +291,21 @@ async function onExecute(): Promise<void> {
   line-height: 1.6;
 }
 
+.participants {
+  color: var(--fg-ink);
+}
+
 .reason {
-  color: var(--el-text-color-primary);
+  color: var(--fg-ink);
 }
 
 .evidence,
 .privacy {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
+}
+
+.action-line strong {
+  color: var(--fg-ink);
 }
 
 .meta {
@@ -279,7 +316,7 @@ async function onExecute(): Promise<void> {
 }
 
 .created {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 
@@ -288,5 +325,11 @@ async function onExecute(): Promise<void> {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 10px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>

@@ -92,9 +92,11 @@ watch(open, (value) => {
   position: fixed;
   right: calc(20px + env(safe-area-inset-right));
   bottom: calc(20px + env(safe-area-inset-bottom));
+  /* 低于 n-drawer/n-modal 浮层（naive 浮层 zIndex ≥ 2000），高于壳导航（100） */
   z-index: 1500;
 }
 
+/* 朱砂/青蓝圆形按钮：主色实底 + 主题浮起阴影 */
 .launcher-btn {
   display: flex;
   align-items: center;
@@ -104,9 +106,9 @@ watch(open, (value) => {
   border-radius: 50%;
   border: none;
   cursor: pointer;
-  background: var(--el-color-primary);
-  color: #fff;
-  box-shadow: var(--el-box-shadow-light);
+  background: var(--fg-accent);
+  color: var(--fg-accent-ink);
+  box-shadow: var(--fg-shadow-raised);
   transition: transform 0.15s ease;
 }
 
@@ -115,7 +117,7 @@ watch(open, (value) => {
 }
 
 .launcher-btn:focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--fg-accent);
   outline-offset: 3px;
 }
 
