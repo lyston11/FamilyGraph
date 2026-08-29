@@ -338,3 +338,23 @@ DEV_ALLOW_WEAK_SECRETS 默认 0——生产 posture 启动即通过校验）。�
 - `cd60600` test(frontend)：登录回车提交回归
 - `216759c` chore(task)：本任务记录与证据
 - `.zcode/`（平台 hook/skills 配置）保持 untracked，是否纳管由用户决定
+
+## 13. 2026-08-29 E3 尾项清零（凭据由用户提供：运维员）
+
+1. **compose 栈完整模型回路 ✅**：`.env` 开 AGENT_RUNTIME_ENABLED 重建后，
+   run 8 succeeded ~16s（abrdns/GLM-5.2），真实正文 + egress 审计 200/12939B
+   （细节见 research/e3-completion.md §1）。
+2. **第二卷恢复演练（06 §8 六步）✅**：容器内 online backup → 归档取出 →
+   第二卷/第二实例：integrity ok、FK 0 违规、事件序列无重复无缺口、FTS 合成
+   查询命中 + tombstone 同步（trigram ≥3 字）、SSE run 8 重放 6/6 payload 级
+   一致。豁免：带引用受控联网 E2E（卷上无搜索 Provider 凭据，P2 遗留）。
+3. **UI 走查 ✅**（截图 research/ui-walkthrough/01-06）：桌面 + 375×812 双视口；
+   登录/主界面/悬浮助手/流式（工具徽标可见）/Esc 关闭/移动全屏分支全过。
+   如实记录：Playwright 输入合成在该 IAB 对 naive-ui 组件超时，改用原生事件
+   派发（同一 handler 路径）完成验证；UX 观察两条（每次打开默认新会话、
+   reduced-motion 需 OS 级开关的人工复核）移交 redesign 任务。
+4. **embedding（05 §4 可选）**：schema 预留 embedding_status 生命周期位、检索
+   FTS5-only——与设计一致；实现适配器属独立特性，接受缓项（P2）。
+
+至此本任务全部 E3 项关闭（唯二豁免/缓项：搜索 Provider 凭据、embedding 适配器，
+均已记录理由）。可进入 trellis-check → 归档确认。

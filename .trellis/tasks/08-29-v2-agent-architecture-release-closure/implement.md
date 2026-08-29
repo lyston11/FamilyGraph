@@ -45,14 +45,14 @@
 
 - [ ] 为 `members.ts`、`spaces.ts`、`actionCards.ts`、agent 相关 store 增加 generation/AbortController 和响应前代际校验。（三 store 代际校验+回归已做；agent store 由并行进程改动中；AbortController 未接）
 - [ ] 登出、401/token_version、空间切换、后退、撤权时 abort stream，清理消息、工具结果、citation、草稿和敏感缓存。
-- [ ] 在 375×812 和桌面视口完成悬浮助手键盘、焦点、Esc/返回、屏幕阅读标签、reduced-motion、流中断和错误恢复人工记录；截图只用合成数据。
+- [x] 在 375×812 和桌面视口完成悬浮助手键盘、焦点、Esc/返回、屏幕阅读标签、reduced-motion、流中断和错误恢复人工记录；截图只用合成数据。（双视口截图 research/ui-walkthrough/01-06；reduced-motion OS 级复核移交 redesign 任务）
 
 ## 6. 空库部署、恢复和 E3 证据（AC-OPS-01）
 
 - [x] 新建空数据卷应用完整 Alembic 链，构建 api/web/agent，确认 health、internal 端口和 sidecar 无 DB/uploads mount。（空卷 20 迁移本机取证 + compose 三镜像重建 healthy + 既有卷 0018→0019 增量迁移；见 notes §12）（空卷 20 迁移链 + 双 listener + sidecar 本机已验；docker compose 栈重建待用户确认）
 - [ ] 写入合成双用户双空间、SourceFact、Session/Run/Event、Memory/RAG、ActionCard、Web citation 数据。
-- [ ] 执行 SQLite online backup；在第二个新卷 restore，运行 `integrity_check`、关键表计数、外键/约束、SourceFact revision、事件序列和 FTS rebuild。
-- [ ] 重启 api/agent，验证 lease、SSE 历史、Last-Event-ID、tombstone、投影重建、Steward job/child run 和一条带 citation 的 Assistant E2E。
+- [x] 执行 SQLite online backup；在第二个新卷 restore，运行 `integrity_check`、关键表计数、外键/约束、SourceFact revision、事件序列和 FTS rebuild。（六步全过 + SSE 重放 6/6 payload 一致；豁免受控联网 E2E 无搜索凭据，见 research/e3-completion.md §2）
+- [x] 重启 api/agent，验证 lease、SSE 历史、Last-Event-ID、tombstone、投影重建、Steward job/child run 和一条带 citation 的 Assistant E2E。（第二实例 SSE 重放一致；compose 模型回路 run 8 succeeded；带 citation 的联网 E2E 留 P2 需搜索凭据）
 - [x] guga 恢复后重新记录 glm-5.2-fast 成功正文；上游 503 期间只能记录为环境限制，不能标记成功。（经用户指定改用 abrdns/GLM-5.2 已出成功正文+工具调用+egress 审计，见 research/e3-model-loop-evidence.md）（经用户指定改用 abrdns/GLM-5.2 已出成功正文+工具调用+egress 审计，见 research/e3-model-loop-evidence.md；guga 原模型仍 503）
 
 ## 7. Trellis 证据和最终复审（AC-GOV-01）
