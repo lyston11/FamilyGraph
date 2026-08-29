@@ -55,15 +55,15 @@
 
 ## Acceptance Criteria
 
-- [ ] 全仓库无 `el-*` 组件引用；package.json 移除 element-plus，引入 naive-ui。
-- [ ] 主题系统：默认纸墨主题；设置/导航处可切换到清雅主题，刷新后持久；两主题下背景点阵、字体、主色、组件观感均完整；主题切换不刷新页面。
-- [ ] 10 个视图 + 全部组件在新组件库下功能回归：登录→改PIN→确档→空间→画布→成员→关系→行动卡→助手→记忆→统计→管理。
-- [ ] 设计 token 单一来源；组件不写死颜色值；Naive UI themeOverrides 与自绘样式同源。
-- [ ] 画布节点、成员卡片、家族树布局按新设计实现并可视化状态徽章（确档状态/事实状态/遮罩）；连线样式区分事实状态。
-- [ ] MaskedField/空状态/aria-label/对比度等 a11y 红线在新 UI 下保持；三布局切换、遮罩渲染、challenge 登录的组件级测试保留。
-- [ ] `npm run lint`、`npm run type-check`、`npm run test`、`npm run build` 四绿。
-- [ ] 375px 视口人工过一遍主要页面并记录。
-- [ ] `component-guidelines.md` 更新为新组件库与主题体系约定。
+- [x] 全仓库无 `el-*` 组件引用；package.json 移除 element-plus，引入 naive-ui。（R5：目标模式 grep 零命中，lockfile 0 残留）
+- [x] 主题系统：默认纸墨主题；设置/导航处可切换到清雅主题，刷新后持久；两主题下背景点阵、字体、主色、组件观感均完整；主题切换不刷新页面。（P0 store + P5 SettingsView 主题卡 + settings.spec 持久化用例；人工复看并入最终走查）
+- [x] 设计 token 单一来源；组件不写死颜色值；Naive UI themeOverrides 与自绘样式同源。（P0 架构 + P5-4 对比度核验时同源脚本验证；trellis-check 各 Phase 逐域复核）
+- [x] 画布节点、成员卡片、家族树布局按新设计实现并可视化状态徽章（确档状态/事实状态/遮罩）；连线样式区分事实状态。（R3）
+- [x] MaskedField/空状态/aria-label/对比度等 a11y 红线在新 UI 下保持；三布局切换、遮罩渲染、challenge 登录的组件级测试保留。（各 Phase check 复核；测试 201 例含全部红线用例）
+- [x] `npm run lint`、`npm run type-check`、`npm run test`、`npm run build` 四绿。（R5 终态：201 例，主 chunk 426.50 kB）
+- [x] `component-guidelines.md` 更新为新组件库与主题体系约定。（Phase 6，e593ff3）
+- [ ] 10 个视图 + 全部组件在新组件库下功能回归：登录→改PIN→确档→空间→画布→成员→关系→行动卡→助手→记忆→统计→管理。（自动化层：201 例组件级测试全绿；**浏览器端到端人工走查待执行**——compose 栈凭据用户持有，清单见 implement.md 附录一）
+- [ ] 375px 视口人工过一遍主要页面并记录。（同上，走查清单 implement.md 附录一，17 项 × 双主题）
 
 ## Out of Scope
 
