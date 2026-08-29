@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// 应用壳骨架（design.md §3.1）：顶部导航（产品标识 / 全局搜索挂位 / 主题切换 / 用户菜单占位）。
-// P0 仅骨架：搜索与用户菜单为挂位，分别随 P4-4 / P5 接入；样式全走 --fg-* token。
+// 应用壳（design.md §3.1）：顶部导航（产品标识 / 全局搜索 / 主题切换 / 用户菜单占位）。
+// 用户菜单与视图导航收敛归 P5；样式全走 --fg-* token。
 import { NSwitch } from 'naive-ui'
 
+import GlobalSearch from '@/components/common/GlobalSearch.vue'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
@@ -17,7 +18,7 @@ function onThemeSwitch(value: boolean): void {
     <header class="shell-header">
       <div class="shell-brand">FamilyGraph</div>
       <div class="shell-search">
-        <!-- 全局搜索挂位（P4-4 迁移 GlobalSearch 时接入） -->
+        <GlobalSearch />
       </div>
       <div class="shell-actions">
         <NSwitch

@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import { NDrawer } from 'naive-ui'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 import PanelContent from './PanelContent.vue'
 
 /**
  * AssistantPanel（PRD AS-3 / AC-AS1）：
- * - 桌面 ≥768px：el-drawer 抽屉，宽度可拖拽/键盘调整；
+ * - 桌面 ≥768px：n-drawer 抽屉，宽度可拖拽/键盘调整（自绘 resize 手柄保留键盘路径）；
  * - 移动端 <768px：全屏面板（不复用固定 420px 的 ProfileDrawer 方案）；
- * - 两种容器共享 PanelContent 内容层；打开时焦点入面板、Esc 关闭、
- *   关闭后由宿主把焦点还给 launcher；reduced-motion 下禁用过渡动画。
+ * - 两种容器共享 PanelContent 内容层（人格标识位 / ScopeBanner / 会话层都在其中）；
+ *   打开时焦点入面板、Esc 关闭、关闭后由宿主把焦点还给 launcher。
+ * - naive 浮层 zIndex ≥2000（vdirs zindexable 自增），压过 launcher 1500 与壳导航 100。
  */
 // open 仅模板使用；焦点管理在 PanelContent 内部处理
 defineProps<{ open: boolean }>()
@@ -79,15 +81,15 @@ function onResizePointerdown(event: PointerEvent): void {
 
 <template>
   <!-- 桌面：可调宽抽屉 -->
-  <el-drawer
+  <NDrawer
     v-if="!isMobile"
-    :model-value="open"
-    title="家庭助手"
-    :size="`${drawerWidth}px`"
-    class="assistant-drawer"
-    append-to-body
+    :show="open"
+    placement="right"
+    :width="drawerWidth"
+    :auto-focus="false"
+    :content-style="{ padding: '0', height: '100%' }"
     data-test="assistant-panel"
-    @update:model-value="(value: boolean) => !value && close()"
+    @update:show="(value: boolean) => !value && close()"
   >
     <div
       class="resize-handle"
@@ -99,14 +101,14 @@ function onResizePointerdown(event: PointerEvent): void {
       @pointerdown="onResizePointerdown"
       @keydown="onResizeKeydown"
     ></div>
-    <PanelContent ref="contentRef" :open="open" @escape="close" />
-  </el-drawer>
+    <PanelContent ref="contentRef" :open="open" @escape="close" @close="close" />
+  </NDrawer>
 
   <!-- 移动端：全屏面板 -->
   <Teleport to="body">
     <Transition name="assistant-fade">
       <div v-if="open && isMobile" class="mobile-overlay" data-test="assistant-panel-mobile">
-        <PanelContent ref="contentRef" :open="open" @escape="close" />
+        <PanelContent ref="contentRef" :open="open" @escape="close" @close="close" />
       </div>
     </Transition>
   </Teleport>
@@ -126,7 +128,7 @@ function onResizePointerdown(event: PointerEvent): void {
 
 .resize-handle:hover,
 .resize-handle:focus-visible {
-  background: var(--el-color-primary-light-7);
+  background: var(--fg-accent-soft);
 }
 
 .mobile-overlay {
@@ -135,7 +137,7 @@ function onResizePointerdown(event: PointerEvent): void {
   z-index: 2000;
   display: flex;
   flex-direction: column;
-  background: var(--el-bg-color);
+  background: var(--fg-surface-raised);
 }
 
 /* reduced-motion：关闭面板过渡动画 */
@@ -159,22 +161,5 @@ function onResizePointerdown(event: PointerEvent): void {
 .assistant-fade-enter-from,
 .assistant-fade-leave-to {
   opacity: 0;
-}
-</style>
-
-<style>
-/* el-drawer 经 teleport 渲染在组件外：用自定义类名收敛必要的内容布局 */
-.assistant-drawer .el-drawer__body {
-  padding: 0;
-  overflow: hidden;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .assistant-drawer {
-    transition: none !important;
-  }
 }
 </style>

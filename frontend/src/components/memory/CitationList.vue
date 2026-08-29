@@ -30,7 +30,7 @@ function sourceLabel(sourceType: string): string {
           <strong>{{ sourceLabel(citation.source_type) }}</strong>
           <span>来源 {{ citation.source_id }}</span>
           <span>修订 {{ citation.revision }}</span>
-          <el-tag size="small" type="info">{{ citation.scope }}</el-tag>
+          <span class="fg-badge fg-badge--neutral">{{ citation.scope }}</span>
         </div>
         <p v-if="!compact && citation.text" class="quote">{{ citation.text }}</p>
         <code class="handle">{{ citation.citation_handle }}</code>
@@ -40,16 +40,17 @@ function sourceLabel(sourceType: string): string {
 </template>
 
 <style scoped>
+/* 与 agent 域 WebCitationList 同一视觉语言：发丝线分隔 + 来源徽章（design.md §3.4） */
 .citations {
   width: 100%;
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--fg-line);
 }
 
 .heading {
   margin: 0 0 6px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
   font-weight: 600;
 }
@@ -63,7 +64,7 @@ function sourceLabel(sourceType: string): string {
 
 .citation {
   min-width: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -76,18 +77,18 @@ function sourceLabel(sourceType: string): string {
 }
 
 .citation-meta strong {
-  color: var(--el-text-color-regular);
+  color: var(--fg-ink);
 }
 
 .quote {
   margin: 3px 0;
-  color: var(--el-text-color-regular);
+  color: var(--fg-ink);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .handle {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   word-break: break-all;
 }
 </style>

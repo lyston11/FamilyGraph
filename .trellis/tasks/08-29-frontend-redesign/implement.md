@@ -50,13 +50,15 @@
 
 ## Phase 4：Agent / ActionCard / Memory 域
 
-- [ ] P4-1 agent 域：AssistantLauncher、AssistantPanel、PanelContent、MessageList、AgentComposer、SessionList、ScopeBanner、ErrorNotice、WebCitationList（SSE 流式渲染回归）
-- [ ] P4-2 actioncard 域：ActionCardInbox、ActionCardItem（状态徽章阶 + 两步确认 + 双入口同 store 合同保持）
-- [ ] P4-3 memory 域：MemoryManager、CitationList（V2.5 合同：候选确认信息完整、跨空间清理、Policy Guard 错误不静默）
-- [ ] P4-4 GlobalSearch（下拉/teleport/z-index 回归）
-- [ ] P4-5 同步改写 `components/{agent,actioncard,memory}/__tests__/*`、`stores/__tests__/{agent,actionCards,memory,governance,spaces}.spec.ts`
-- [ ] P4-6 门禁四绿 + 冒烟
-- [ ] **Commit `feat(frontend): agent/actioncard/memory 域迁移`（回滚点 R4）**
+- [x] P4-1 agent 域 9 组件迁移（AssistantLauncher/AssistantPanel/PanelContent/MessageList/AgentComposer/SessionList/ScopeBanner/ErrorNotice/WebCitationList）✅ 2026-08-29；PanelContent 新增人格标识位（data-test=assistant-persona）；el-drawer→NDrawer（auto-focus=false 由 PanelContent 自有焦点圈接管，Esc 兜底）；WebCitationList 域名徽章 + "外部"警示标签；SSE 流式渲染组件级回归（协议事件分片投喂断言渐进渲染）
+- [x] P4-2 actioncard 域：状态徽章阶（pending=accent/viewed=proposed/accepted·executed=confirmed/dismissed·superseded=neutral/expired=provisional）+ 过期整卡灰化 + 两步确认弹层保留目标空间/隐私影响；双入口同 store 合同保持（零接口）
+- [x] P4-3 memory 域：MemoryManager 写死色板清零、ElMessageBox→useDialog().warning、v-loading→NSpin、敏感等级徽章阶；确认弹层补敏感等级徽章（data-test=confirm-memory-sensitivity）+ 共享 scope 按候选允许度置灰（trellis-check 修复）；Policy Guard 错误不静默保持；CitationList 与 WebCitationList 视觉语言统一；MemoryView 宿主页随域迁移
+- [x] P4-4 GlobalSearch：NInput + 自绘结果下拉（无 teleport，壳导航堆叠上下文论证见文件头注释）；补齐 Esc/方向键循环高亮/Enter 选择/点击外部关闭（trellis-check 补齐 + 4 测试）；接入 AppShell 原挂位
+- [x] P4-5 组件测试 7 文件改写（去 ElementPlus 注册、统一 NMessageProvider/NDialogProvider harness、n-modal/n-drawer teleport 断言走 document 查询）；新增 GlobalSearch.spec 4 例；stores/{agent,actionCards,memory,governance,spaces}.spec 零改动（grep 证实无库内 DOM 断言且 store 逻辑零改动）
+- [x] P4-6 门禁四绿（lint 0 错 / type-check 0 错 / test 200 例 / build 主 chunk 1531.43 kB vs R3 1342.81 kB +188.6 kB——双库过渡期固有：App.vue 静态引入 AssistantLauncher→Panel→ActionCardItem 链把 NDrawer/NSelect/NModal 等拉进主 chunk；P5-2 移除 element-plus 时可评估 defineAsyncComponent 懒加载 AssistantLauncher 压主 chunk）
+- [x] **Commit `feat(frontend): agent/actioncard/memory 域迁移`（回滚点 R4）** → 见 git log
+- trellis-check 复核：通过（0 P0；3 P1 复核中自修并补测试；3 P2 移交：① SessionList aria-label 透传限制→P6 规范 ② 主 chunk +188.6 kB→P5-3 记录/评估懒加载 ③ PanelContent 焦点圈不含 resize 手柄（HEAD 既有，Esc 兜底可用））
+- UX 观察保持原样待决策：悬浮助手每次打开默认新会话（行为未动，移交用户决策）
 
 ## Phase 5：Stats / Admin / Settings + 收尾
 

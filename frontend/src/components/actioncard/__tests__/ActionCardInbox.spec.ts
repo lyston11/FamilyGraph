@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
+import { defineComponent, h } from 'vue'
 
 import { ACTION_CARD_ERRORS } from '@/api/actionCards'
 import * as actionCardsApi from '@/api/actionCards'
@@ -50,9 +50,15 @@ function makeCard(overrides: Partial<ActionCard> = {}): ActionCard {
 
 let pinia: Pinia
 
+// Inbox 内嵌 ActionCardItem（useMessage 需要 NMessageProvider 祖先）
 async function mountInbox(): Promise<ReturnType<typeof mount>> {
-  const wrapper = mount(ActionCardInbox, {
-    global: { plugins: [pinia, ElementPlus] },
+  const Harness = defineComponent({
+    render() {
+      return h('div', [h(NMessageProvider, () => h(ActionCardInbox))])
+    },
+  })
+  const wrapper = mount(Harness, {
+    global: { plugins: [pinia] },
   })
   await new Promise((resolve) => setTimeout(resolve))
   return wrapper

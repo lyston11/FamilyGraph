@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { NButton } from 'naive-ui'
 import { computed, ref } from 'vue'
 
 /**
@@ -55,18 +56,18 @@ defineExpose({ focus: () => inputEl.value?.focus() })
       <span v-if="maxLength" class="counter" aria-hidden="true">
         {{ modelValue.length }}/{{ maxLength }}
       </span>
-      <el-button
+      <NButton
         v-if="canCancel"
         size="small"
         type="warning"
-        plain
+        secondary
         data-test="cancel-run-btn"
         :disabled="cancelling === true"
         @click="emit('cancel')"
       >
         取消回答
-      </el-button>
-      <el-button
+      </NButton>
+      <NButton
         type="primary"
         size="small"
         data-test="send-btn"
@@ -74,7 +75,7 @@ defineExpose({ focus: () => inputEl.value?.focus() })
         @click="emit('send')"
       >
         发送
-      </el-button>
+      </NButton>
     </div>
   </div>
 </template>
@@ -82,29 +83,33 @@ defineExpose({ focus: () => inputEl.value?.focus() })
 <style scoped>
 .composer {
   padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--fg-line);
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--el-bg-color);
+  background: var(--fg-surface-raised);
 }
 
 .input {
   width: 100%;
   resize: none;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
+  border: 1px solid var(--fg-line-strong);
+  border-radius: var(--fg-radius-control);
   padding: 8px 10px;
   font-size: 14px;
   font-family: inherit;
   line-height: 1.5;
   box-sizing: border-box;
-  background: var(--el-bg-color);
-  color: var(--el-text-color-primary);
+  background: var(--fg-surface);
+  color: var(--fg-ink);
+}
+
+.input::placeholder {
+  color: var(--fg-ink-faint);
 }
 
 .input:focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--fg-accent);
   outline-offset: 1px;
 }
 
@@ -117,7 +122,7 @@ defineExpose({ focus: () => inputEl.value?.focus() })
 
 .counter {
   margin-right: auto;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 </style>

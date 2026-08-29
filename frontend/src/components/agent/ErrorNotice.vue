@@ -47,15 +47,16 @@ const canRetry = computed(() => props.error?.code === CLIENT_AGENT_ERRORS.STREAM
 </template>
 
 <style scoped>
+/* 争议/错误语义走 --fg-status-disputed（design.md §3.4），柔底用 color-mix 派生 */
 .error-notice {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 14px 8px;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-radius: var(--fg-radius-control);
+  background: color-mix(in srgb, var(--fg-status-disputed) 8%, var(--fg-surface-raised));
+  color: var(--fg-status-disputed);
   font-size: 13px;
 }
 
@@ -71,7 +72,7 @@ const canRetry = computed(() => props.error?.code === CLIENT_AGENT_ERRORS.STREAM
 .retry {
   border: none;
   background: none;
-  color: var(--el-color-danger);
+  color: var(--fg-status-disputed);
   font-size: 13px;
   cursor: pointer;
   text-decoration: underline;
@@ -79,7 +80,7 @@ const canRetry = computed(() => props.error?.code === CLIENT_AGENT_ERRORS.STREAM
 }
 
 .retry:focus-visible {
-  outline: 2px solid var(--el-color-danger);
+  outline: 2px solid var(--fg-status-disputed);
   outline-offset: 2px;
 }
 </style>

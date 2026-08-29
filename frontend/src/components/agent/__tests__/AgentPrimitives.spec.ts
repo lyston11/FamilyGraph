@@ -1,18 +1,19 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
+import { defineComponent, h } from 'vue'
 
 import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
 import ErrorNotice from '@/components/agent/ErrorNotice.vue'
 import MessageList from '@/components/agent/MessageList.vue'
 import ScopeBanner from '@/components/agent/ScopeBanner.vue'
 import SessionList from '@/components/agent/SessionList.vue'
+import WebCitationList from '@/components/agent/WebCitationList.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
 import type { AgentSession } from '@/types/agent'
 
-/** 消息流原语组件：气泡、工具 chip、进行中指示、错误文案映射、scope 徽标 */
+/** 消息流原语组件：气泡、工具 chip、进行中指示、错误文案映射、scope 徽标、引用来源 */
 
 describe('MessageList', () => {
   beforeEach(() => {
@@ -29,7 +30,6 @@ describe('MessageList', () => {
         toolSummaries: [],
         run: null,
       },
-      global: { plugins: [ElementPlus] },
     })
     const items = wrapper.findAll('[data-test="message-item"]')
     expect(items).toHaveLength(2)
@@ -42,6 +42,7 @@ describe('MessageList', () => {
 
   it('助手消息中的 card_ids 与空间 Inbox 共用 ActionCardItem', () => {
     const pinia = createPinia()
+    setActivePinia(pinia)
     const actionCards = useActionCardsStore(pinia)
     actionCards.partitions.set(7, {
       cards: [
@@ -66,24 +67,31 @@ describe('MessageList', () => {
       hidden: false,
       error: null,
     })
-    const wrapper = mount(MessageList, {
-      props: {
-        messages: [
-          {
-            id: 2,
-            role: 'assistant',
-            text: '我找到一条建议。',
-            createdAt: null,
-            status: 'sent',
-            cardIds: [3],
-          },
-        ],
-        toolSummaries: [],
-        run: null,
-        spaceId: 7,
+    // ActionCardItem 内部 useMessage 需要 NMessageProvider 祖先（App 层已备好）
+    const Harness = defineComponent({
+      render() {
+        return h('div', [
+          h(NMessageProvider, () =>
+            h(MessageList, {
+              messages: [
+                {
+                  id: 2,
+                  role: 'assistant',
+                  text: '我找到一条建议。',
+                  createdAt: null,
+                  status: 'sent',
+                  cardIds: [3],
+                },
+              ],
+              toolSummaries: [],
+              run: null,
+              spaceId: 7,
+            }),
+          ),
+        ])
       },
-      global: { plugins: [pinia, ElementPlus] },
     })
+    const wrapper = mount(Harness, { global: { plugins: [pinia] } })
     expect(wrapper.find('[data-test="message-cards"]').exists()).toBe(true)
     expect(wrapper.findComponent(ActionCardItem).exists()).toBe(true)
     expect(wrapper.find('[data-test="card-title"]').text()).toContain('加入族谱空间建议')
@@ -99,7 +107,6 @@ describe('MessageList', () => {
         ],
         run: null,
       },
-      global: { plugins: [ElementPlus] },
     })
     const chips = wrapper.findAll('[data-test="tool-chip"]')
     expect(chips).toHaveLength(2)
@@ -117,7 +124,6 @@ describe('MessageList', () => {
         toolSummaries: [],
         run: { id: 9, status: 'running', terminal: false },
       },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.find('[data-test="thinking-indicator"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="live-region"]').attributes('aria-live')).toBe('polite')
@@ -131,7 +137,6 @@ describe('MessageList', () => {
         toolSummaries: [],
         run: { id: 9, status: 'cancelled', terminal: true },
       },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.find('[data-test="thinking-indicator"]').exists()).toBe(false)
   })
@@ -141,7 +146,6 @@ describe('ErrorNotice', () => {
   it('结构化错误码映射为中文文案，不透传 detail JSON', () => {
     const wrapper = mount(ErrorNotice, {
       props: { error: { code: 'AGENT_RUN_LIMIT', message: '' } },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.find('[data-test="error-notice"]').text()).toContain('并发任务较多')
     expect(wrapper.find('[data-test="error-retry"]').exists()).toBe(false)
@@ -150,7 +154,6 @@ describe('ErrorNotice', () => {
   it('STREAM_LOST 提供重试入口', async () => {
     const wrapper = mount(ErrorNotice, {
       props: { error: { code: 'STREAM_LOST', message: '' } },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.text()).toContain('连接中断')
     await wrapper.find('[data-test="error-retry"]').trigger('click')
@@ -160,7 +163,6 @@ describe('ErrorNotice', () => {
   it('error=null 不渲染', () => {
     const wrapper = mount(ErrorNotice, {
       props: { error: null },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.find('[data-test="error-notice"]').exists()).toBe(false)
   })
@@ -172,7 +174,6 @@ describe('ScopeBanner', () => {
       props: {
         space: { id: 2, name: '宗族', owner_id: 1, kind: 'lineage', created_at: '2026-08-26T00:00:00', pending_count: 0, member_count: 3 },
       },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.text()).toContain('宗族')
     expect(wrapper.text()).toContain('宗族空间')
@@ -182,7 +183,6 @@ describe('ScopeBanner', () => {
   it('无空间 → 明确提示', () => {
     const wrapper = mount(ScopeBanner, {
       props: { space: null },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.text()).toContain('暂无可用空间')
   })
@@ -195,7 +195,6 @@ describe('SessionList', () => {
     ]
     const wrapper = mount(SessionList, {
       props: { sessions, activeSessionId: 11, titles: {} },
-      global: { plugins: [ElementPlus] },
     })
     expect(wrapper.text()).not.toContain('谁是我的长辈') // 未加载历史 → 用回退标题
     const btn = wrapper.find('[data-test="new-session-btn"]')
@@ -209,11 +208,40 @@ describe('SessionList', () => {
     ]
     const wrapper = mount(SessionList, {
       props: { sessions, activeSessionId: 11, titles: { 11: '谁是我的长辈？' } },
-      global: { plugins: [ElementPlus] },
     })
-    // el-select 延迟渲染选中项标签：等待一次微任务队列
+    // n-select 选中项标签渲染在 base-selection 内：等待一次渲染队列
     await wrapper.vm.$nextTick()
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('谁是我的长辈？')
+  })
+})
+
+describe('WebCitationList（受控联网引用，占位不劣化）', () => {
+  const citation = {
+    url: 'https://www.example.com/张氏源流',
+    title: '张氏源流考',
+    excerpt: '张氏出自姬姓…',
+    fetched_at: '2026-08-26T00:00:00',
+    trust: 'external' as const,
+  }
+
+  it('标题链接 + 域名徽章 + 外部标签（域名/用途标签视觉）', () => {
+    const wrapper = mount(WebCitationList, { props: { citations: [citation] } })
+    expect(wrapper.find('[data-test="web-citation-list"]').exists()).toBe(true)
+    const link = wrapper.find('a.title')
+    expect(link.attributes('href')).toBe(citation.url)
+    expect(link.attributes('rel')).toContain('noopener')
+    expect(wrapper.find('[data-test="web-citation-domain"]').text()).toContain('www.example.com')
+    expect(wrapper.find('[data-test="web-citation-external"]').text()).toContain('外部')
+    expect(wrapper.text()).toContain('未经家谱确认')
+  })
+
+  it('compact 模式不渲染摘要正文；空引用不渲染', () => {
+    const wrapper = mount(WebCitationList, { props: { citations: [citation], compact: true } })
+    expect(wrapper.find('.excerpt').exists()).toBe(false)
+    expect(wrapper.find('[data-test="web-citation-list"]').exists()).toBe(true)
+
+    const empty = mount(WebCitationList, { props: { citations: [] } })
+    expect(empty.find('[data-test="web-citation-list"]').exists()).toBe(false)
   })
 })
