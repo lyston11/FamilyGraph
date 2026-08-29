@@ -20,14 +20,14 @@
 
 ## Egress / SSRF
 
-- `_validate_public_url` 在每次 DNS resolve 后校验 IP：拒绝 loopback / RFC1918 / link-local（169.254.x，含云 metadata）/ reserved / multicast / unspecified；拒绝非 http/https、凭据 URL、非标准端口。
+- `_validate_public_url` 在每次 DNS resolve 后校验 IP：拒绝 loopback / RFC1918 / link-local（169.254.x，含云 metadata）/ reserved / multicast / unspecified；拒绝非 http/https、凭据 URL、非标准端口。**返回已验证 IP 集合**；`_fetch_bytes`/`_provider_search` 经 `_PinnedTCPBackend` 只连接该集合（连接层 DNS 钉扎，TOCTOU 关闭；TLS SNI/证书校验仍用原域名）。
 - `_ensure_allowed_domain` 强制平台 allowlist（host 或后缀匹配）；denied 优先。
 - fetch 不跟随 redirect（`follow_redirects=False`）；content-length 与流式累计字节双重上限（`WEB_FETCH_TOO_LARGE`）。
 - provider endpoint 也走 `_validate_public_url` + allowlist（平台自管，但仍校验）。
 
 ## approved token
 
-- `search_web` 成功结果签发短期 token（`CONTROLLED_WEB_TOKEN_TTL_SECONDS`，默认 300s），绑定 account/space/url/domain，`token_hash` 唯一。
+- `search_web` 成功结果签发短期 token（`CONTROLLED_WEB_TOKEN_TTL_SECONDS`，默认 300s），绑定 account/space/url/domain，`token_hash` 唯一；行上持久化签发用途 `use_case`（migration 0019），`fetch_approved_page` 按该用途取 policy（非法值回退 research），citation 返回体携带 `use_case`。
 - `fetch_approved_page` 用 CAS `UPDATE ... WHERE used_at IS NULL` 一次性 claim，在 egress 之前完成——并发调用无法重复使用同一 token。
 - token 不可被其他 account 使用；过期 token 返回 `WEB_APPROVAL_EXPIRED`。
 

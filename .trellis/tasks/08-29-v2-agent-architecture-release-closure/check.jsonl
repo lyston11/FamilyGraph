@@ -7,3 +7,7 @@
 {"file": ".trellis/tasks/08-28-v2-audit-remediation/research/audit-baseline.md", "reason": "复核已知 P0/P1/P2 缺陷及 file:line 证据"}
 {"file": ".trellis/tasks/08-28-v2-audit-remediation/research/verification-protocol.md", "reason": "复核 E2/E3 命令、空库恢复和安全矩阵证据"}
 {"file": ".trellis/tasks/08-29-v2-agent-architecture-release-closure/research/audit-followup.md", "reason": "本次审计复核结论和未闭环风险清单"}
+{"file": ".trellis/tasks/08-29-v2-agent-architecture-release-closure/research/e3-model-loop-evidence.md", "reason": "真实模型回路 E2E（run 4 succeeded + 工具调用 + egress 审计 + 负向连通性）"}
+{"file": ".trellis/tasks/08-29-v2-agent-architecture-release-closure/research/e3-completion.md", "reason": "compose 栈 run 8 succeeded、第二卷恢复六步 + SSE 重放 6/6、双视口 UI 走查截图 01-06"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "trellis-check 后同步：context 代理路径合同与 /provider/chat/completions 代理端点（唯一 egress）"}
+{"file": ".trellis/spec/backend/controlled-web.md", "reason": "trellis-check 后同步：连接层 IP 钉扎（TOCTOU 关闭）与 approved token use_case 字段"}
