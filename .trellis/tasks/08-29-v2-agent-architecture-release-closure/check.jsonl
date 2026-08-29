@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/architecture.md", "reason": "按全局架构合同检查身份、空间、可见性和 Agent 边界"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "检查 Pi runtime、internal token、SSE、队列和工具协议"}
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "检查 Steward 单空间、ActionCard FSM、证据 revision 和推荐矩阵"}
+{"file": ".trellis/spec/backend/controlled-web.md", "reason": "检查 Web egress、DNS/redirect、PII、配额、引用和 Steward 无 Web"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "检查登出、401、空间切换和敏感缓存失效"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流、schema、事件、缓存和真源一致性检查"}
+{"file": ".trellis/tasks/08-28-v2-audit-remediation/research/audit-baseline.md", "reason": "复核已知 P0/P1/P2 缺陷及 file:line 证据"}
+{"file": ".trellis/tasks/08-28-v2-audit-remediation/research/verification-protocol.md", "reason": "复核 E2/E3 命令、空库恢复和安全矩阵证据"}
+{"file": ".trellis/tasks/08-29-v2-agent-architecture-release-closure/research/audit-followup.md", "reason": "本次审计复核结论和未闭环风险清单"}

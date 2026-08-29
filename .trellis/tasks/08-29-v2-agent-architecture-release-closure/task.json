@@ -1,0 +1,29 @@
+{
+  "id": "v2-agent-architecture-release-closure",
+  "name": "v2-agent-architecture-release-closure",
+  "title": "V2 Agent 架构收口与发布阻断清零",
+  "description": "承接 V2 审计整改复审结果，统一 Assistant/Pi/Steward 执行架构，关闭可见性、internal 网络、工具协议、Provider、导出、RAG/Web 隔离、前端缓存和发布证据缺口，并使 Trellis 工件与真实实现一致。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-08-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "f596ead",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-28-v2-audit-remediation",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "source_audit": "08-28-v2-audit-remediation",
+    "release_gate": "blocked_until_all_p1_closed"
+  }
+}

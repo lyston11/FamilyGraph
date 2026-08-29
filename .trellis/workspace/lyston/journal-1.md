@@ -196,3 +196,150 @@ Final gates: backend 501 tests + mypy clean; agent 64 tests; frontend 169 tests.
 ### Status
 
 [OK] **Completed — all v2 tasks archived**
+
+---
+
+## Session: 08-28-v2-audit-remediation 整改执行
+
+**Date**: 2026-08-28
+**Task**: 08-28-v2-audit-remediation (in_progress)
+**Branch**: `main`（未提交；Pi implement 禁 commit）
+
+### 本轮完成块
+
+- **G0/G1 工件**：`task.py validate` 当前任务 + 归档父任务 `08-26-v2-agent-system` 全通过（JSONL 14/5 条目，无 stale 引用）。
+- **F1 原子建档** `create_managed_member` + 幂等台账 `member_creation_requests`（migration 0016）+ Wizard 单次提交。
+- **F2/F3 VisibilityPolicy 收口**：stats/custody/operator 出口改字段投影；operator 用户列表删除家庭 PII（name/gender/birth/privacy_mode）。
+- **F4 导出**：envelope 加密（secretbox `encrypt_envelope`）+ 一次性下载台账 `downloaded_at`（migration 0017）。
+- **R1 ProviderGateway**：`resolve_runtime` 服务端解密 base_url+api_key 经 internal context 注入 sidecar；sidecar 以投影为唯一真源（删除 `resolveProvider(config, ...)` 的 env 旁路）。
+- **R2 弱密钥防线**：`config._reject_weak_default_secrets`；生产拒启弱默认，开发需 `DEV_ALLOW_WEAK_SECRETS=1`。
+- **R3 schema 合同**：新增 `test_agent_schema_contract.py`（7 条）锁定 internal wire 契约（extra=forbid + 字段/约束）。
+- **R4 事件/审计**：`agent_tool_calls` 副作用去重（migration 0018，`(run_id, tool_call_id)` 幂等/409）；审计 actor 语义修正为 users.id + account/session 入 detail；`run.expired` 注册并同步 backend/sidecar/frontend 三份事件枚举；reaper 写终态事件；sidecar 移除重复 `message.user_added` 与重复终态事件（backend 唯一拥有）。
+- **回归**：SSE/browser/steward/relationship/source-fact/memory-rag/controlled-web 定向 166 passed。
+- **发布门禁**：
+  - backend: 528 passed + mypy clean + ruff clean
+  - agent: 64 passed + type-check/lint/build clean
+  - frontend: 169 passed + type-check/lint/build clean
+  - 全新卷 `alembic upgrade head`（18 步全迁移）干净
+  - `docker compose build` 三镜像成功；`up -d` api/agent/web healthy
+  - 网络边界：nginx `/internal/` → 404；直连 api:8000 `/internal/agent` → 503（默认关）
+  - `app.backup` 在线备份 + integrity/计数/FTS 校验通过
+
+### 残余（未完成，需用户确认/环境）
+
+1. 真实 openai-compatible stub 容器走通完整模型回路（lease→context→pi→tool→settle）——repo 无 stub，属 E3 联调。
+2. 375×812 与桌面人工 UI 走查 + 合成数据截图（需真实浏览器）。
+3. 合成数据非空库的 backup→restore→重启回放（本轮验证了空库恢复自洽）。
+
+### Status
+
+[WIP] **实现与门禁全绿；E3 人工/真实联调三项残余，未提交未归档**
+
+---
+
+## 2026-08-29 会话：V2 Agent 架构收口（08-29 子任务）执行中暂停
+
+**任务**：`08-29-v2-agent-architecture-release-closure`（P0，parent `08-28-v2-audit-remediation`）。
+本轮用户批准 start（degraded 模式，无 session identity），从 planning 进入 in_progress。
+基线 HEAD `6f93f6f`，工作树与其他进程未提交改动叠加，**本轮改动未 commit**。
+
+### 本轮落地（全部带回归测试，backend 531 passed @ 拆分后）
+
+- **P1 graph 隐藏边**：边过滤改两端点可见性判定（`graph.py`），隐藏端点 ID/label/creator 不再随边泄露。
+- **P1 internal 网络隔离**：`/internal/agent/*` 从公开 app 拆出 `internal_app`，公开 listener `/internal/*` 一律 404；新增 `app/serve.py` 双 listener（8000 公开 / 8001 internal，不发布宿主端口）；sidecar `FG_INTERNAL_API_BASE_URL` 分离 base；12 个 internal 测试迁 `internal_client` + 公开 listener 404 回归。**E2E（宿主/nginx 不可达）未验**。
+- **P1 工具并发去重**：`execute` 原子占位（空 result_json + 唯一索引 flush 冲突兜底）→ 回填；in-flight 命中 409 `AGENT_TOOL_CALL_IN_PROGRESS`；拒绝路径回滚占位。
+- **P1 导出资格**：下载路径事务内先解密后消费一次性资格；损坏密文 410 且不烧资格（回归）。成熟 AEAD 未做。
+- **P1 RAG session-space**：共享 scope 确认绑定来源 message 的 session 空间（回归含同空间放行）；顺修 conftest 清表顺序。
+- **P1 Web fetch 用途**：`web_approved_urls.use_case`（migration 0019）+ fetch 按凭据用途取 policy（fact_check-only 空间回归）；DNS TOCTOU/redirect 未做。
+- agent vitest 65 passed / type-check 绿；compose config 通过；`agent_queue.py` ruff format 修复。
+
+### 暂停状态
+
+- 最后一轮全量 pytest/mypy/format 复验被中断；重启后先跑完。
+- 剩余 P1：成熟 AEAD、DNS TOCTOU、错误脱敏统一、ProviderGateway 唯一 egress、Guard fail-closed 合同、Steward canonical Job 生产入口、前端 store generation/abort；E3 全部未开始。
+- 进度快照已写入子任务 `notes.md §7`；`implement.md` 勾选已完成项（含部分完成标注）。
+
+### Status
+
+[WIP] **6 项 P1 代码+回归落地未提交；全量复验中断；E3 与剩余 P1 未动**
+
+---
+
+## 2026-08-29 会话续：收口任务第二段（Web TOCTOU/脱敏/前端代际）
+
+承接上午暂停点。基线仍 `6f93f6f`（未 commit），与并行进程改动叠加。
+
+- **P1 错误脱敏**：`agent/src/redact.ts`（URL 凭据/Bearer/API key 形参替换+控制字符+300 截断），worker assistant-error 与 catch-all settle/log 接线，5 单测。
+- **P1 DNS TOCTOU**：`_validate_public_url` 返回验证 IP 集；`_PinnedTCPBackend`（httpcore.SyncBackend 子类）+ `_pinned_client`（httpx 0.28.1 内部 pool 替换，注释声明版本耦合）；fetch/provider_search 钉扎连接；redirect 维持 fail-closed。回归断言域名永不进 connect。
+- **并行进程整合**：secretbox AEAD（AES-256-GCM+HKDF+key_id）确认与"先解密后消费"组合正确，顺带清 lint/format。
+- **P2 前端代际**：members/spaces/actionCards 三 store 迟到响应不回写（spaces 2 回归，含 clear 复位 loading 修复）。
+- 全绿：backend 536+mypy+ruff；agent 70+build；frontend 171+build。
+- 剩余 P1（ProviderGateway 唯一 egress、Steward 生产入口）与并行进程热文件直接冲突，留待协调后单独执行；E3 全部未动。
+- 工具注：shell hook 相对路径按 cwd 解析，cwd 在子目录时全局拦截；会话内两度 shim 恢复，建议 trellis 改绝对路径。
+
+### Status
+
+[WIP] **P1 剩两项大重构（需协调）+E3；其余 P1/P2 代码与回归已落地未提交**
+
+---
+
+## 2026-08-29 会话三段：无并行进程；ProviderGateway/Guard 复核 + Steward 生产入口落地
+
+用户确认并行进程已停止。复核原"大重构"项：ProviderGateway（唯一解密出口
+resolve_runtime→internal context 单路径；sidecar 单源 projection）、Guard
+直接 onPayload fail-closed（HTTP 前抛错）、AgentJob(kind="steward") 生产零写
+路径——三项经 anchor 级代码复核均已收口（notes §9），无需重写。
+
+新实现 canonical StewardJob 生产入口：`services/maintenance.py` 进程内维护循环
+（agent reaper + steward reaper + queued 作业泵 ≤10/tick，毒药作业 failed 结算
+不卡泵），lifespan 启停 + 双 listener 单例防重，`STEWARD_WORKER_ENABLED`/
+`MAINTENANCE_INTERVAL_SECONDS` 新配置，compose 透传。5 例 tick 级回归
+（端到端/过期回队/关闭 noop/reaper 接线/崩溃结算）。
+
+全绿：backend 541 + mypy strict 119 文件 + ruff；frontend 171；agent 70；
+compose config 通过。改动仍未 commit；E3 证据未开始。
+
+### Status
+
+[WIP] **代码层 P1/P2 全部落地或复核收口；余 E3 证据与 commit/AC 回写**
+
+---
+
+## 2026-08-29 会话四段：独立复核整改（Provider 代理 / 停机生命周期 / 网络与弱密钥）
+
+独立复核推翻 §9 两处"已收口"：解密集中 ≠ egress 集中；双 listener 停机互斥；
+compose 网络隔离不完整；弱密钥默认值；证据不可复现（宿主无 venv PATH）。
+
+整改：① Provider 代理——context 只下发代理路径（不解密/无 api_key），sidecar
+以 run token 打 internal 代理端点，服务端解密转发 + 流式透传 + 字节审计 +
+错误脱敏（6+4 例回归，context 合同断言更新）；② serve.py 共享信号处理器
+（uvicorn per-server capture 覆盖问题）+ maintenance 引用计数启停；③ compose
+backend 网络 internal:true + 172.28.0.0/24 静态 IP 绑定 internal 接口 +
+SECRET_KEY/AGENT_SERVICE_SECRET :? 必填 + 移除 sidecar 平行 env；④ 启动校验
+（端口冲突/生产禁通配 internal host/维护间隔）。
+
+全绿（绝对路径可复现命令见 notes §10）：backend 547+mypy 120 文件+ruff；
+agent 74+build；frontend 176+build；compose config 0。
+
+### Status
+
+[WIP] **代码层整改完成；E3 运行证据与 commit 待用户安排**
+
+---
+
+## 2026-08-29 会话五段：E3 真实模型回路打通（abrdns GLM-5.2）
+
+按用户指定换用 pi 配置 abrdns/GLM-5.2（精确大小写 id——new-api 网关大小写敏感，
+小写报 no channel）。空库 20 迁移 + 双 listener + sidecar 全链路 run 4
+**succeeded ~18s**：模型自主调用 get_self_context 工具，真实中文正文，
+egress 审计 200×2（5.5KB+16KB）——Provider 代理唯一 egress 在真实上游下验证。
+guga-copy/deepseek 重载荷间歇 503 → run 1 failed 留作 fail-closed 证据。
+
+顺带修两缺陷：代理透传 Content-Type/Accept/UA（否则上游 400）；sidecar 注入
+pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
+证据：research/e3-model-loop-evidence.md；AC 部分项升级为有 E3 证据。
+仍待：compose 栈重建复验、375px、第二卷恢复、commit。
+
+### Status
+
+[WIP] **真实模型回路 E2E 已取证；余 compose 栈 E3 与 commit 待用户**
