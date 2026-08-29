@@ -36,6 +36,9 @@ export const fgVarNames = [
   'status-disputed',
   'status-provisional',
   'status-masked',
+  // 信息色（NAlert type="info" 等；naive-themes 从本变量派生 infoColor，
+  // 避免 naive 默认蓝脱离色板。L1 来源：两主题 indigo 原始色）
+  'info',
   // 背景点阵：点色 / 点距
   'dot',
   'dot-gap',
@@ -193,6 +196,7 @@ export const paperTokens: ThemeTokens = {
     'status-disputed': paperPalette.vermilion,
     'status-provisional': paperPalette.inkFaint,
     'status-masked': paperPalette.seal,
+    'info': paperPalette.indigo,
     'dot': paperPalette.paperDot,
     'dot-gap': '22px',
     'font-display':
@@ -229,6 +233,7 @@ export const modernTokens: ThemeTokens = {
     'status-disputed': modernPalette.red,
     'status-provisional': modernPalette.inkFaint,
     'status-masked': modernPalette.slate,
+    'info': modernPalette.indigo,
     'dot': modernPalette.grayDot,
     'dot-gap': '24px',
     // 无衬线标题：引用 tokens.css 的静态正文栈，避免第二份字体字面量

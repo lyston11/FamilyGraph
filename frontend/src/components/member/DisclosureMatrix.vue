@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, onMounted, reactive, ref } from 'vue'
+import { NButton, NDataTable, NSwitch, NTooltip, useMessage } from 'naive-ui'
+import type { DataTableColumns } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
 import { fetchDisclosureMatrix } from '@/api/members'
@@ -25,6 +26,7 @@ import {
 const auth = useAuthStore()
 const members = useMembersStore()
 const spaces = useSpacesStore()
+const message = useMessage()
 
 const saving = ref(false)
 
@@ -105,9 +107,9 @@ async function save(): Promise<void> {
         await members.setDisclosure(selfId, fiveFlags(spaceDraft(space.id)), space.id)
       }
     }
-    ElMessage.success('披露偏好已更新')
+    message.success('披露偏好已更新')
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
+    message.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
   } finally {
     saving.value = false
   }
@@ -122,6 +124,90 @@ function fiveFlags(source: Record<DisclosureCategory, boolean>) {
     attachments: source.attachments,
   }
 }
+
+const HIGH_RISK_HINT = '高敏感类别：合同恒不公开，任何层级不得自动开放'
+
+/** 单元格开关：高敏感=禁用 + 提示；基础类=可切换（值直连草稿） */
+function renderSwitch(
+  category: DisclosureCategory,
+  getValue: () => boolean,
+  setValue: (value: boolean) => void,
+  dataTest: string,
+): ReturnType<typeof h> {
+  if (isHighRisk(category)) {
+    return h(
+      NTooltip,
+      { trigger: 'hover', placement: 'top' },
+      {
+        trigger: () =>
+          h(NSwitch, {
+            value: false,
+            disabled: true,
+            'data-test': dataTest,
+          }),
+        default: () => HIGH_RISK_HINT,
+      },
+    )
+  }
+  return h(NSwitch, {
+    value: getValue(),
+    'onUpdate:value': (value: boolean) => setValue(value),
+    'data-test': dataTest,
+  })
+}
+
+/** 矩阵行：类别键（n-data-table 行必须是对象） */
+interface CategoryRow {
+  category: DisclosureCategory
+}
+
+const categoryRows: CategoryRow[] = DISCLOSURE_CATEGORIES.map((category) => ({ category }))
+
+const columns = computed<DataTableColumns<CategoryRow>>(() => {
+  const base: DataTableColumns<CategoryRow> = [
+    {
+      title: '类别',
+      key: 'category',
+      width: 110,
+      render: (row) => DISCLOSURE_CATEGORY_LABELS[row.category],
+    },
+    {
+      title: '全局',
+      key: 'global',
+      width: 84,
+      render: (row) =>
+        renderSwitch(
+          row.category,
+          () => draftGlobal[row.category],
+          (value) => {
+            draftGlobal[row.category] = value
+          },
+          isHighRisk(row.category)
+            ? 'disclosure-switch-disabled'
+            : `disclosure-switch-${row.category}`,
+        ),
+    },
+  ]
+  for (const space of spaces.spaces) {
+    base.push({
+      title: space.name,
+      key: `space-${space.id}`,
+      width: 120,
+      render: (row) =>
+        renderSwitch(
+          row.category,
+          () => spaceDraft(space.id)[row.category],
+          (value) => {
+            spaceDraft(space.id)[row.category] = value
+          },
+          isHighRisk(row.category)
+            ? `disclosure-space-disabled-${space.id}`
+            : `disclosure-space-${space.id}-${row.category}`,
+        ),
+    })
+  }
+  return base
+})
 </script>
 
 <template>
@@ -130,53 +216,18 @@ function fiveFlags(source: Record<DisclosureCategory, boolean>) {
       对非同空间且无直系关系的族人，名字与称谓始终可见；以下内容按开关决定是否公开。默认全部不公开；
       高敏感类别与健康、住址等信息不因任何身份自动开放。未成年人档案始终按最小披露遮蔽。
     </p>
-    <el-table :data="[...DISCLOSURE_CATEGORIES]" size="small" data-test="disclosure-table">
-      <el-table-column label="类别" width="120">
-        <template #default="{ row }">{{ DISCLOSURE_CATEGORY_LABELS[row as DisclosureCategory] }}</template>
-      </el-table-column>
-      <el-table-column label="全局" width="100">
-        <template #default="{ row }">
-          <el-tooltip
-            v-if="isHighRisk(row as DisclosureCategory)"
-            content="高敏感类别：合同恒不公开，任何层级不得自动开放"
-            placement="top"
-          >
-            <el-switch v-model="draftGlobal[row as DisclosureCategory]" disabled data-test="disclosure-switch-disabled" />
-          </el-tooltip>
-          <el-switch
-            v-else
-            v-model="draftGlobal[row as DisclosureCategory]"
-            :data-test="`disclosure-switch-${row}`"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-for="space in spaces.spaces"
-        :key="space.id"
-        :label="space.name"
-        width="140"
-      >
-        <template #default="{ row }">
-          <el-tooltip
-            v-if="isHighRisk(row as DisclosureCategory)"
-            content="高敏感类别：合同恒不公开，任何层级不得自动开放"
-            placement="top"
-          >
-            <el-switch :model-value="false" disabled :data-test="`disclosure-space-disabled-${space.id}`" />
-          </el-tooltip>
-          <el-switch
-            v-else
-            v-model="spaceDraft(space.id)[row as DisclosureCategory]"
-            :data-test="`disclosure-space-${space.id}-${row}`"
-          />
-        </template>
-      </el-table-column>
-    </el-table>
+    <NDataTable
+      size="small"
+      :columns="columns"
+      :data="categoryRows"
+      :row-key="(row: CategoryRow) => row.category"
+      data-test="disclosure-table"
+    />
     <div class="actions">
       <span class="hint">基础五类可按空间覆盖全局偏好{{ spaces.spaces.length ? '；高敏感类别恒不公开' : '' }}。</span>
-      <el-button type="primary" :loading="saving" data-test="disclosure-save" @click="save">
+      <NButton type="primary" :loading="saving" data-test="disclosure-save" @click="save">
         保存披露偏好
-      </el-button>
+      </NButton>
     </div>
   </section>
 </template>
@@ -184,7 +235,7 @@ function fiveFlags(source: Record<DisclosureCategory, boolean>) {
 <style scoped>
 .desc {
   margin: 0 0 10px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -194,10 +245,11 @@ function fiveFlags(source: Record<DisclosureCategory, boolean>) {
   justify-content: space-between;
   align-items: center;
   margin-top: 10px;
+  gap: 12px;
 }
 
 .hint {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 </style>

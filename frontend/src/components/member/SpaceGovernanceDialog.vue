@@ -1,6 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, ref } from 'vue'
+import {
+  NAlert,
+  NButton,
+  NDataTable,
+  NInput,
+  NModal,
+  NSelect,
+  useMessage,
+} from 'naive-ui'
+import type { DataTableColumns, SelectOption } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
 import { fetchMembersByPrefix } from '@/api/members'
@@ -18,6 +27,7 @@ const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
 const auth = useAuthStore()
 const spaces = useSpacesStore()
+const message = useMessage()
 
 const ROLE_LABELS: Record<SpaceRole, string> = {
   owner: '所有者',
@@ -25,11 +35,13 @@ const ROLE_LABELS: Record<SpaceRole, string> = {
   member: '成员',
   guest: '访客',
 }
-const ROLE_TAG_TYPES: Record<SpaceRole, 'danger' | 'warning' | 'info' | 'success'> = {
-  owner: 'danger',
-  space_admin: 'warning',
-  member: 'info',
-  guest: 'success',
+/** 角色 → 领域徽章（--fg-status-* 同源）：owner=主色实底 / admin=proposed /
+ * member=中性 / guest=provisional 虚线章（.fg-badge--* 见 tokens.css） */
+const ROLE_BADGE_CLASS: Record<SpaceRole, string> = {
+  owner: 'fg-badge fg-badge--accent',
+  space_admin: 'fg-badge fg-badge--proposed',
+  member: 'fg-badge fg-badge--neutral',
+  guest: 'fg-badge fg-badge--provisional',
 }
 
 // ---- 邀请 ----
@@ -65,9 +77,39 @@ const transferCandidates = computed(() =>
   spaces.activeMembers.filter((m) => m.user_id !== myUserId.value),
 )
 
+const transferOptions = computed<SelectOption[]>(() =>
+  transferCandidates.value.map((m) => ({ label: memberName(m), value: m.user_id })),
+)
+
 function memberName(m: SpaceMemberInfo): string {
   return m.user_name ?? `#${m.user_id}`
 }
+
+const memberColumns = computed<DataTableColumns<SpaceMemberInfo>>(() => [
+  {
+    title: '名字',
+    key: 'name',
+    render: (row) => memberName(row),
+  },
+  {
+    title: '角色',
+    key: 'role',
+    width: 100,
+    render: (row) =>
+      h('span', { class: ROLE_BADGE_CLASS[row.role] }, ROLE_LABELS[row.role]),
+  },
+  {
+    title: '状态',
+    key: 'status',
+    width: 84,
+    render: (row) =>
+      h(
+        'span',
+        { class: row.status === 'active' ? 'fg-badge fg-badge--confirmed' : 'fg-badge fg-badge--proposed' },
+        row.status === 'active' ? '已加入' : '待确认',
+      ),
+  },
+])
 
 async function searchCandidates(): Promise<void> {
   if (!keyword.value.trim()) return
@@ -76,7 +118,7 @@ async function searchCandidates(): Promise<void> {
     const memberIds = new Set(spaces.members.map((m) => m.user_id))
     candidates.value = data.filter((m) => m.id !== myUserId.value && !memberIds.has(m.id))
   } catch {
-    ElMessage.error('搜索失败，请稍后重试')
+    message.error('搜索失败，请稍后重试')
   }
 }
 
@@ -84,10 +126,10 @@ async function invite(member: Member): Promise<void> {
   invitingId.value = member.id
   try {
     await spaces.invite(member.id)
-    ElMessage.success('邀请已发送')
+    message.success('邀请已发送')
     candidates.value = candidates.value.filter((m) => m.id !== member.id)
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '邀请失败，请稍后重试')
+    message.error(error instanceof ApiError ? error.message : '邀请失败，请稍后重试')
   } finally {
     invitingId.value = null
   }
@@ -98,10 +140,10 @@ async function initiateTransfer(): Promise<void> {
   transferring.value = true
   try {
     await spaces.initiateTransfer(transferTargetId.value)
-    ElMessage.success('移交请求已发出，等待对方接受')
+    message.success('移交请求已发出，等待对方接受')
     transferTargetId.value = null
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '发起移交失败')
+    message.error(error instanceof ApiError ? error.message : '发起移交失败')
   } finally {
     transferring.value = false
   }
@@ -112,9 +154,9 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
   if (!transfer) return
   try {
     await spaces.respondTransfer(transfer.id, action)
-    ElMessage.success(action === 'accept' ? '你已成为该空间所有者' : '移交已取消')
+    message.success(action === 'accept' ? '你已成为该空间所有者' : '移交已取消')
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '操作失败')
+    message.error(error instanceof ApiError ? error.message : '操作失败')
   }
 }
 
@@ -124,81 +166,73 @@ function close(): void {
 </script>
 
 <template>
-  <el-dialog
-    :model-value="visible"
+  <NModal
+    :show="visible"
+    preset="card"
     :title="`空间管理 · ${spaces.currentSpace?.name ?? ''}`"
-    width="560px"
-    :data-test="'space-governance-dialog'"
-    @update:model-value="emit('update:visible', $event)"
-    @closed="close"
+    data-test="space-governance-dialog"
+    @update:show="emit('update:visible', $event)"
+    @after-leave="close"
   >
     <!-- kind 与我的角色徽标 -->
     <div class="badges" data-test="space-badges">
-      <el-tag size="small" :type="spaces.currentSpace?.kind === 'lineage' ? 'success' : 'primary'">
+      <span
+        class="fg-badge"
+        :class="spaces.currentSpace?.kind === 'lineage' ? 'fg-badge--accent' : 'fg-badge--confirmed'"
+      >
         {{ spaces.currentSpace?.kind === 'lineage' ? '族谱空间' : '家庭空间' }}
-      </el-tag>
-      <el-tag v-if="myRole" size="small" :type="ROLE_TAG_TYPES[myRole]" :data-test="'my-role-tag'">
+      </span>
+      <span v-if="myRole" class="fg-badge" :class="ROLE_BADGE_CLASS[myRole]" data-test="my-role-tag">
         我的角色：{{ ROLE_LABELS[myRole] }}
-      </el-tag>
+      </span>
     </div>
 
-    <el-alert
+    <NAlert
       v-if="myRole === 'guest'"
       type="info"
-      :closable="false"
+      :show-icon="true"
       class="guest-hint"
       data-test="guest-hint"
     >
       你以访客身份参与此空间，仅可见最小化信息，不获得家庭详情。
-    </el-alert>
+    </NAlert>
 
     <!-- 成员列表 -->
     <h3 class="block-title">成员</h3>
-    <el-table :data="spaces.members" size="small" data-test="member-table">
-      <el-table-column label="名字">
-        <template #default="{ row }">{{ memberName(row) }}</template>
-      </el-table-column>
-      <el-table-column label="角色" width="110">
-        <template #default="{ row }">
-          <el-tag size="small" :type="ROLE_TAG_TYPES[row.role as SpaceRole]">
-            {{ ROLE_LABELS[row.role as SpaceRole] }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="90">
-        <template #default="{ row }">
-          <el-tag size="small" :type="row.status === 'active' ? 'success' : 'warning'">
-            {{ row.status === 'active' ? '已加入' : '待确认' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-    </el-table>
+    <NDataTable
+      size="small"
+      :columns="memberColumns"
+      :data="spaces.members"
+      :row-key="(row: SpaceMemberInfo) => row.id"
+      data-test="member-table"
+    />
 
     <!-- 邀请（owner / space_admin） -->
     <template v-if="canInvite">
       <h3 class="block-title">邀请新成员</h3>
       <div class="invite-row">
-        <el-input
-          v-model="keyword"
+        <NInput
+          v-model:value="keyword"
           placeholder="输入名字前缀搜索已有账号"
           class="invite-input"
           data-test="governance-invite-search"
           @keyup.enter="searchCandidates"
         />
-        <el-button data-test="governance-invite-search-btn" @click="searchCandidates">搜索</el-button>
+        <NButton data-test="governance-invite-search-btn" @click="searchCandidates">搜索</NButton>
       </div>
       <ul class="candidates">
         <li v-for="m in candidates" :key="m.id" class="candidate-row">
           <span>{{ m.name }}（#{{ m.id }}）</span>
-          <el-button
-            size="small"
+          <NButton
+            size="tiny"
             type="primary"
+            secondary
             :loading="invitingId === m.id"
             :data-test="`governance-invite-${m.id}`"
             @click="invite(m)"
           >
             邀请
-          </el-button>
+          </NButton>
         </li>
       </ul>
     </template>
@@ -211,19 +245,19 @@ function close(): void {
           「{{ spaces.spaces.find((s) => s.id === pendingTransfer?.space_id)?.name }}」的所有者请求把空间移交给你。
         </span>
         <div class="transfer-actions">
-          <el-button type="primary" size="small" data-test="transfer-accept" @click="respondTransfer('accept')">
+          <NButton type="primary" size="small" data-test="transfer-accept" @click="respondTransfer('accept')">
             接受
-          </el-button>
-          <el-button size="small" data-test="transfer-decline" @click="respondTransfer('cancel')">
+          </NButton>
+          <NButton size="small" data-test="transfer-decline" @click="respondTransfer('cancel')">
             谢绝
-          </el-button>
+          </NButton>
         </div>
       </template>
       <template v-else-if="pendingTransferByMe">
         <span>等待对方接受你的移交请求…</span>
-        <el-button size="small" data-test="transfer-cancel" @click="respondTransfer('cancel')">
+        <NButton size="small" data-test="transfer-cancel" @click="respondTransfer('cancel')">
           取消移交
-        </el-button>
+        </NButton>
       </template>
       <template v-else>
         <span>本空间有一份待处理的移交请求。</span>
@@ -231,37 +265,33 @@ function close(): void {
     </div>
     <template v-else-if="isOwner">
       <div class="transfer-row">
-        <el-select
-          v-model="transferTargetId"
+        <NSelect
+          v-model:value="transferTargetId"
           placeholder="选择接任者（活跃成员）"
           class="transfer-select"
+          :options="transferOptions"
           data-test="transfer-target-select"
-        >
-          <el-option
-            v-for="m in transferCandidates"
-            :key="m.id"
-            :label="memberName(m)"
-            :value="m.user_id"
-          />
-        </el-select>
-        <el-button
+        />
+        <NButton
           type="warning"
-          plain
+          secondary
           :loading="transferring"
           :disabled="transferTargetId === null"
           data-test="transfer-initiate"
           @click="initiateTransfer"
         >
           发起移交
-        </el-button>
+        </NButton>
       </div>
       <p class="hint">移交后你将降为管理员；删除档案前必须完成移交或退出所有权。</p>
     </template>
 
     <template #footer>
-      <el-button data-test="governance-close" @click="close">关闭</el-button>
+      <div class="footer-actions">
+        <NButton data-test="governance-close" @click="close">关闭</NButton>
+      </div>
     </template>
-  </el-dialog>
+  </NModal>
 </template>
 
 <style scoped>
@@ -278,6 +308,7 @@ function close(): void {
 .block-title {
   margin: 16px 0 8px;
   font-size: 14px;
+  color: var(--fg-ink);
 }
 
 .invite-row {
@@ -300,6 +331,7 @@ function close(): void {
   justify-content: space-between;
   align-items: center;
   padding: 6px 0;
+  color: var(--fg-ink);
 }
 
 .transfer-row {
@@ -315,10 +347,11 @@ function close(): void {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
+  padding: 10px 12px;
+  background-color: var(--fg-surface-sunken);
+  border-radius: var(--fg-radius-control);
   font-size: 13px;
+  color: var(--fg-ink);
 }
 
 .transfer-actions {
@@ -328,7 +361,19 @@ function close(): void {
 
 .hint {
   margin-top: 8px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+</style>
+
+<style>
+/* n-modal 卡片根节点 teleport 到 body：用 data-test 锚定宽度 */
+[data-test='space-governance-dialog'] {
+  width: min(560px, calc(100vw - 48px));
 }
 </style>

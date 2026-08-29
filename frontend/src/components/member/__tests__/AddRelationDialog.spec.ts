@@ -2,8 +2,6 @@ import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import ElementPlus from 'element-plus'
-
 import type { Member } from '@/types/api'
 
 // makeMember 用函数声明（提升），供 vi.mock 工厂引用
@@ -48,11 +46,27 @@ import { useAuthStore } from '@/stores/auth'
 
 const mockedCreate = mocks.createConnectionRequest
 
+// n-modal 内容 teleport 到 body，交互统一走 document 查询
+function click(selector: string): void {
+  const target = document.querySelector(selector)
+  expect(target, selector).not.toBeNull()
+  target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+async function setInput(selector: string, value: string): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(selector)
+  expect(input, selector).not.toBeNull()
+  input!.value = value
+  input!.dispatchEvent(new Event('input'))
+  await new Promise((resolve) => setTimeout(resolve))
+}
+
 async function mountDialog() {
   const pinia = createPinia()
   const wrapper = mount(AddRelationDialog, {
     props: { visible: true },
-    global: { plugins: [pinia, ElementPlus] },
+    global: { plugins: [pinia] },
+    attachTo: document.body,
   })
   const auth = useAuthStore(pinia)
   auth.user = {
@@ -74,6 +88,7 @@ describe('AddRelationDialog', () => {
     mocks.fetchMyGraph.mockClear()
     mocks.fetchIncomingConnections.mockClear()
     mockedCreate.mockReset()
+    document.body.innerHTML = ''
   })
 
   it('搜索排除本人并展示候选', async () => {
@@ -83,8 +98,9 @@ describe('AddRelationDialog', () => {
       makeMember({ id: 1, name: '我' }),
     ]
     await wrapper.vm.$nextTick()
-    const items = wrapper.findAll('[data-test="candidate"]')
+    const items = document.querySelectorAll('[data-test="candidate"]')
     expect(items.length).toBe(2)
+    wrapper.unmount()
   })
 
   it('四分类提交：选人 → 选结构类 → 发送请求携带正确 dir_class 与称谓', async () => {
@@ -103,22 +119,29 @@ describe('AddRelationDialog', () => {
     ;(wrapper.vm as unknown as { results: Member[] }).results = [makeMember({ id: 2, name: '三叔' })]
     await wrapper.vm.$nextTick()
 
-    await wrapper.find('[data-test="candidate"]').trigger('click')
+    click('[data-test="candidate"]')
+    await new Promise((resolve) => setTimeout(resolve))
 
-    const radios = wrapper.findAll('[data-test="dir-class-group"] input[type="radio"]')
+    // n-radio 原生 input：native click 触发 change（Phase 1 login.spec 同款交互）
+    const radios = document.querySelectorAll<HTMLInputElement>(
+      '[data-test="dir-class-group"] input[type="radio"]',
+    )
     expect(radios.length).toBe(4)
-    await radios[3].setValue(true) // 配偶
-    await radios[0].setValue(true) // 长辈
+    radios[3].click() // 配偶
+    await new Promise((resolve) => setTimeout(resolve))
+    radios[0].click() // 长辈
+    await new Promise((resolve) => setTimeout(resolve))
 
-    await wrapper.find('input[placeholder="选填，如：三叔公"]').setValue('三叔公')
+    await setInput('input[placeholder="选填，如：三叔公"]', '三叔公')
 
-    await wrapper.find('[data-test="submit-relation"]').trigger('click')
+    click('[data-test="submit-relation"]')
     await vi.waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1))
     expect(mockedCreate).toHaveBeenCalledWith({
       target_id: 2,
       dir_class: 'elder',
       label: '三叔公',
     })
+    wrapper.unmount()
   })
 
   it('提交成功后展示等待确认提示且不可重复提交', async () => {
@@ -136,10 +159,13 @@ describe('AddRelationDialog', () => {
     const wrapper = await mountDialog()
     ;(wrapper.vm as unknown as { results: Member[] }).results = [makeMember()]
     await wrapper.vm.$nextTick()
-    await wrapper.find('[data-test="candidate"]').trigger('click')
-    await wrapper.find('[data-test="submit-relation"]').trigger('click')
+    click('[data-test="candidate"]')
+    await new Promise((resolve) => setTimeout(resolve))
+    click('[data-test="submit-relation"]')
     await vi.waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1))
-    await vi.waitFor(() => expect(wrapper.text()).toContain('等待对方确认'))
-    expect(wrapper.find('[data-test="submit-relation"]').exists()).toBe(false)
+    // 成功提示以 NAlert 渲染（teleport 到 body），提交按钮隐藏防重复提交
+    await vi.waitFor(() => expect(document.body.textContent).toContain('等待对方确认'))
+    expect(document.querySelector('[data-test="submit-relation"]')).toBeNull()
+    wrapper.unmount()
   })
 })

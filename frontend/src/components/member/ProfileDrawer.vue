@@ -1,8 +1,25 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import {
+  NButton,
+  NDatePicker,
+  NDescriptions,
+  NDescriptionsItem,
+  NDrawer,
+  NForm,
+  NFormItem,
+  NInput,
+  NModal,
+  NRadio,
+  NRadioGroup,
+  NSelect,
+  NSwitch,
+  useMessage,
+} from 'naive-ui'
+import type { InputHTMLAttributes } from 'vue'
 
 import { ApiError } from '@/api/errors'
+import AttachmentsSection from '@/components/member/AttachmentsSection.vue'
 import KinshipTermPanel from '@/components/kinship/KinshipTermPanel.vue'
 import { useMembersStore } from '@/stores/members'
 import type { ClanDisclosure, GenderType, StructuredDate } from '@/types/api'
@@ -10,12 +27,15 @@ import type { ClanDisclosure, GenderType, StructuredDate } from '@/types/api'
 /**
  * 档案抽屉：查看 / 按权编辑 / 披露开关组（AD-9）/ 删除输入名字确认。
  * 编辑与删除入口由后端返回的 permissions 控制，无权态直接隐藏操作。
+ * 视觉：分节卡（基本信息 / 称谓关系 / 披露 / 危险区 / 附件）；领域状态徽章
+ * 复用 --fg-status-* 模式（design.md §3.4）。
  */
 const props = defineProps<{ memberId: number }>()
 
 const emit = defineEmits<{ close: [] }>()
 
 const members = useMembersStore()
+const message = useMessage()
 
 const member = computed(() =>
   members.members.find((candidate) => candidate.id === props.memberId),
@@ -85,7 +105,7 @@ async function saveEdit(): Promise<void> {
       birth: buildBirth(),
       bio: editForm.bio.trim() || null,
     })
-    ElMessage.success('档案已更新')
+    message.success('档案已更新')
     editing.value = false
   } catch (error) {
     editError.value = error instanceof ApiError ? error.message : '保存失败，请稍后重试'
@@ -99,9 +119,9 @@ async function saveDisclosure(): Promise<void> {
   savingDisclosure.value = true
   try {
     await members.setDisclosure(member.value.id, { ...disclosureDraft })
-    ElMessage.success('披露设置已更新')
+    message.success('披露设置已更新')
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
+    message.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
   } finally {
     savingDisclosure.value = false
   }
@@ -114,10 +134,19 @@ const confirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref('')
 
+// data-* 未收录进 Vue 的 HTML 属性类型，断言收窄；运行时 naive 原样透传到原生 input
+const confirmNameInputProps = {
+  'data-test': 'delete-confirm-input',
+} as InputHTMLAttributes
+
 function askDelete(): void {
   confirmName.value = ''
   deleteError.value = ''
   deleteDialogVisible.value = true
+}
+
+function onDrawerShowChange(show: boolean): void {
+  if (!show) emit('close')
 }
 
 async function doDelete(): Promise<void> {
@@ -126,7 +155,7 @@ async function doDelete(): Promise<void> {
   deleteError.value = ''
   try {
     await members.remove(member.value.id, confirmName.value)
-    ElMessage.success('档案已删除')
+    message.success('档案已删除')
     deleteDialogVisible.value = false
     emit('close')
   } catch (error) {
@@ -157,151 +186,200 @@ function formatDate(value: StructuredDate | null): string {
   const prefix = calPrefix(value.cal_type)
   return value.date ? `${prefix}${value.date}` : '不详'
 }
+
+const calOptions = [
+  { label: '公历', value: 'solar' },
+  { label: '农历', value: 'lunar' },
+  { label: '不详', value: 'none' },
+]
 </script>
 
 <template>
-  <el-drawer
-    :model-value="true"
-    :title="member?.name ?? '档案'"
-    size="420px"
+  <NDrawer
+    :show="true"
+    placement="right"
+    :width="420"
     data-test="profile-drawer"
-    @close="emit('close')"
+    @update:show="onDrawerShowChange"
   >
     <template v-if="member">
       <div class="badges" data-test="drawer-badges">
-        <el-tag :type="member.claim_status === 'claimed' ? 'success' : 'warning'" size="small">
-          {{ member.claim_status === 'claimed' ? '已认领' : '待认领' }}
-        </el-tag>
-        <el-tag type="info" size="small">
+        <!-- 认领状态：claimed=已确档实底 / managed=待确档虚线章（--fg-status-*） -->
+        <span
+          class="fg-badge"
+          :class="member.claim_status === 'claimed' ? 'fg-badge--confirmed' : 'fg-badge--provisional'"
+        >
+          {{ member.claim_status === 'claimed' ? '已确档' : '待确档' }}
+        </span>
+        <span class="fg-badge fg-badge--neutral">
           {{ member.privacy_mode === 'handover' ? '移交本人' : '永久管理' }}
-        </el-tag>
+        </span>
       </div>
 
       <!-- 称谓（V2.3 KI-5）：resolve 结果 + 个人纠正；flag 关闭时自动隐藏 -->
-      <KinshipTermPanel :member-id="memberId" />
+      <section class="drawer-section">
+        <h3 class="section-title">称谓关系</h3>
+        <KinshipTermPanel :member-id="memberId" />
+      </section>
 
-      <!-- 查看态 -->
-      <el-descriptions v-if="!editing" :column="1" border class="section" data-test="profile-view">
-        <el-descriptions-item label="名字">{{ member.name }}</el-descriptions-item>
-        <el-descriptions-item label="性别">{{ genderLabel(member.gender) }}</el-descriptions-item>
-        <el-descriptions-item label="出生">{{ formatDate(member.birth) }}</el-descriptions-item>
-        <el-descriptions-item label="去世">{{ formatDate(member.death) }}</el-descriptions-item>
-        <el-descriptions-item label="简介">{{ member.bio || '—' }}</el-descriptions-item>
-      </el-descriptions>
+      <!-- 查看态：基本信息分节卡 -->
+      <section class="drawer-section">
+        <h3 class="section-title">基本信息</h3>
+        <NDescriptions v-if="!editing" :column="1" bordered data-test="profile-view">
+          <NDescriptionsItem label="名字">{{ member.name }}</NDescriptionsItem>
+          <NDescriptionsItem label="性别">{{ genderLabel(member.gender) }}</NDescriptionsItem>
+          <NDescriptionsItem label="出生">{{ formatDate(member.birth) }}</NDescriptionsItem>
+          <NDescriptionsItem label="去世">{{ formatDate(member.death) }}</NDescriptionsItem>
+          <NDescriptionsItem label="简介">{{ member.bio || '—' }}</NDescriptionsItem>
+        </NDescriptions>
 
-      <!-- 编辑态（permissions.edit 才可进入） -->
-      <el-form
-        v-else
-        label-position="top"
-        class="section"
-        data-test="profile-edit-form"
-        @submit.prevent="saveEdit"
-      >
-        <el-form-item label="名字" required>
-          <el-input v-model="editForm.name" maxlength="100" data-test="edit-name" />
-        </el-form-item>
-        <el-form-item label="性别">
-          <el-radio-group v-model="editForm.gender" data-test="edit-gender">
-            <el-radio value="f">女</el-radio>
-            <el-radio value="m">男</el-radio>
-            <el-radio value="unknown">不详</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="出生">
-          <div class="date-row">
-            <el-select v-model="editForm.birthCalType" class="cal-select" data-test="edit-birth-cal">
-              <el-option label="公历" value="solar" />
-              <el-option label="农历" value="lunar" />
-              <el-option label="不详" value="none" />
-            </el-select>
-            <el-date-picker
-              v-if="editForm.birthCalType !== 'none'"
-              v-model="editForm.birthDate"
-              type="date"
-              value-format="YYYY-MM-DD"
-              data-test="edit-birth-date"
+        <!-- 编辑态（permissions.edit 才可进入） -->
+        <NForm
+          v-else
+          label-placement="top"
+          :show-feedback="false"
+          data-test="profile-edit-form"
+          @submit.prevent="saveEdit"
+        >
+          <NFormItem label="名字" required>
+            <NInput v-model:value="editForm.name" :maxlength="100" data-test="edit-name" />
+          </NFormItem>
+          <NFormItem label="性别">
+            <NRadioGroup v-model:value="editForm.gender" data-test="edit-gender">
+              <NRadio value="f">女</NRadio>
+              <NRadio value="m">男</NRadio>
+              <NRadio value="unknown">不详</NRadio>
+            </NRadioGroup>
+          </NFormItem>
+          <NFormItem label="出生">
+            <div class="date-row">
+              <NSelect
+                v-model:value="editForm.birthCalType"
+                class="cal-select"
+                :options="calOptions"
+                data-test="edit-birth-cal"
+              />
+              <NDatePicker
+                v-if="editForm.birthCalType !== 'none'"
+                :formatted-value="editForm.birthDate || null"
+                type="date"
+                value-format="yyyy-MM-dd"
+                data-test="edit-birth-date"
+                @update:formatted-value="(v: string | null) => (editForm.birthDate = v ?? '')"
+              />
+            </div>
+          </NFormItem>
+          <NFormItem label="简介">
+            <NInput
+              v-model:value="editForm.bio"
+              type="textarea"
+              :rows="2"
+              :maxlength="2000"
+              data-test="edit-bio"
             />
+          </NFormItem>
+          <p v-if="editError" class="error" data-test="edit-error">{{ editError }}</p>
+          <div class="actions">
+            <NButton data-test="edit-cancel" @click="editing = false">取消</NButton>
+            <NButton type="primary" :loading="savingEdit" data-test="edit-save" @click="saveEdit">
+              保存
+            </NButton>
           </div>
-        </el-form-item>
-        <el-form-item label="简介">
-          <el-input v-model="editForm.bio" type="textarea" :rows="2" maxlength="2000" data-test="edit-bio" />
-        </el-form-item>
-        <p v-if="editError" class="error" data-test="edit-error">{{ editError }}</p>
-        <div class="actions">
-          <el-button data-test="edit-cancel" @click="editing = false">取消</el-button>
-          <el-button type="primary" :loading="savingEdit" data-test="edit-save" @click="saveEdit">
-            保存
-          </el-button>
-        </div>
-      </el-form>
-
-      <el-button
-        v-if="member.permissions.edit && !editing"
-        type="primary"
-        plain
-        class="section"
-        data-test="start-edit"
-        @click="startEdit"
-      >
-        编辑档案
-      </el-button>
+        </NForm>
+        <NButton
+          v-if="member.permissions.edit && !editing"
+          type="primary"
+          secondary
+          class="section-action"
+          data-test="start-edit"
+          @click="startEdit"
+        >
+          编辑档案
+        </NButton>
+      </section>
 
       <!-- 披露开关组（AD-9）：修改权 = 编辑权主体 -->
-      <section v-if="member.permissions.edit" class="section disclosure" data-test="disclosure-group">
-        <h3 class="block-title">家族空间外披露</h3>
-        <p class="block-desc">对非同空间且无直系关系的族人，名字与称谓始终可见；以下内容按开关决定是否公开。</p>
-        <div class="switch-row"><span>头像</span><el-switch v-model="disclosureDraft.avatar" data-test="disclosure-avatar" /></div>
-        <div class="switch-row"><span>相册照片</span><el-switch v-model="disclosureDraft.photos" data-test="disclosure-photos" /></div>
-        <div class="switch-row"><span>生卒日期</span><el-switch v-model="disclosureDraft.dates" data-test="disclosure-dates" /></div>
-        <div class="switch-row"><span>简介</span><el-switch v-model="disclosureDraft.bio" data-test="disclosure-bio" /></div>
-        <div class="switch-row"><span>链接附件</span><el-switch v-model="disclosureDraft.attachments" data-test="disclosure-attachments" /></div>
-        <el-button
+      <section v-if="member.permissions.edit" class="drawer-section" data-test="disclosure-group">
+        <h3 class="section-title">家族空间外披露</h3>
+        <p class="section-desc">
+          对非同空间且无直系关系的族人，名字与称谓始终可见；以下内容按开关决定是否公开。
+        </p>
+        <div class="switch-row">
+          <span>头像</span>
+          <NSwitch v-model:value="disclosureDraft.avatar" data-test="disclosure-avatar" />
+        </div>
+        <div class="switch-row">
+          <span>相册照片</span>
+          <NSwitch v-model:value="disclosureDraft.photos" data-test="disclosure-photos" />
+        </div>
+        <div class="switch-row">
+          <span>生卒日期</span>
+          <NSwitch v-model:value="disclosureDraft.dates" data-test="disclosure-dates" />
+        </div>
+        <div class="switch-row">
+          <span>简介</span>
+          <NSwitch v-model:value="disclosureDraft.bio" data-test="disclosure-bio" />
+        </div>
+        <div class="switch-row">
+          <span>链接附件</span>
+          <NSwitch v-model:value="disclosureDraft.attachments" data-test="disclosure-attachments" />
+        </div>
+        <NButton
           type="primary"
           :loading="savingDisclosure"
+          class="section-action"
           data-test="disclosure-save"
           @click="saveDisclosure"
         >
           保存披露设置
-        </el-button>
+        </NButton>
+      </section>
+
+      <!-- 附件分节（权限由后端强制） -->
+      <section class="drawer-section">
+        <h3 class="section-title">附件</h3>
+        <AttachmentsSection :user-id="memberId" :can-edit="member?.permissions?.edit === true" />
       </section>
 
       <!-- 危险区（permissions.delete 才显示） -->
-      <section v-if="member.permissions.delete" class="danger">
-        <h3 class="block-title">删除档案</h3>
-        <p class="block-desc">将同时移除其账号、会话与关联数据，且不可恢复。</p>
-        <el-button type="danger" plain data-test="delete-btn" @click="askDelete">删除此档案</el-button>
+      <section v-if="member.permissions.delete" class="drawer-section danger">
+        <h3 class="section-title">删除档案</h3>
+        <p class="section-desc">将同时移除其账号、会话与关联数据，且不可恢复。</p>
+        <NButton type="error" secondary data-test="delete-btn" @click="askDelete">
+          删除此档案
+        </NButton>
       </section>
 
       <!-- 删除二次确认：输入名字 -->
-      <el-dialog
-        v-model="deleteDialogVisible"
+      <NModal
+        v-model:show="deleteDialogVisible"
+        preset="card"
         title="确认删除档案"
-        width="380px"
-        append-to-body
         data-test="delete-confirm-dialog"
       >
         <p class="confirm-text">
           此操作不可恢复。请输入档案名字
           <strong>{{ member.name }}</strong> 以确认：
         </p>
-        <el-input v-model="confirmName" placeholder="输入名字确认" data-test="delete-confirm-input" />
+        <NInput v-model:value="confirmName" placeholder="输入名字确认" :input-props="confirmNameInputProps" />
         <p v-if="deleteError" class="error" data-test="delete-error">{{ deleteError }}</p>
         <template #footer>
-          <el-button data-test="delete-cancel" @click="deleteDialogVisible = false">取消</el-button>
-          <el-button
-            type="danger"
-            :disabled="confirmName !== member.name"
-            :loading="deleting"
-            data-test="delete-submit"
-            @click="doDelete"
-          >
-            确认删除
-          </el-button>
+          <div class="modal-actions">
+            <NButton data-test="delete-cancel" @click="deleteDialogVisible = false">取消</NButton>
+            <NButton
+              type="error"
+              :disabled="confirmName !== member.name"
+              :loading="deleting"
+              data-test="delete-submit"
+              @click="doDelete"
+            >
+              确认删除
+            </NButton>
+          </div>
         </template>
-      </el-dialog>
+      </NModal>
     </template>
-  <AttachmentsSection :user-id="memberId" :can-edit="member?.permissions?.edit === true" />
-  </el-drawer>
+  </NDrawer>
 </template>
 
 <style scoped>
@@ -311,19 +389,34 @@ function formatDate(value: StructuredDate | null): string {
   margin-bottom: 16px;
 }
 
-.section {
-  margin-bottom: 20px;
+/* 领域状态徽章走 tokens.css 的 .fg-badge--* 工具类（design.md §3.4 全站统一） */
+
+/* 分节卡：纸墨=纸面立牌分节；清雅=白底圆角分区（观感由 token 驱动） */
+.drawer-section {
+  margin-bottom: 16px;
+  padding: 14px 16px 16px;
+  background-color: var(--fg-surface);
+  border: 1px solid var(--fg-line);
+  border-radius: var(--fg-radius-card);
 }
 
-.block-title {
-  margin: 0 0 6px;
+.section-title {
+  margin: 0 0 8px;
+  font-family: var(--fg-font-display);
   font-size: 14px;
+  font-weight: 700;
+  color: var(--fg-ink);
 }
 
-.block-desc {
+.section-desc {
   margin: 0 0 10px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
+  line-height: 1.6;
+}
+
+.section-action {
+  margin-top: 12px;
 }
 
 .switch-row {
@@ -332,10 +425,7 @@ function formatDate(value: StructuredDate | null): string {
   align-items: center;
   padding: 6px 0;
   font-size: 14px;
-}
-
-.disclosure .el-button {
-  margin-top: 10px;
+  color: var(--fg-ink);
 }
 
 .date-row {
@@ -346,16 +436,17 @@ function formatDate(value: StructuredDate | null): string {
 
 .cal-select {
   width: 110px;
+  flex-shrink: 0;
 }
 
 .actions {
   display: flex;
   gap: 8px;
+  margin-top: 8px;
 }
 
 .danger {
-  border-top: 1px solid var(--el-border-color-lighter);
-  padding-top: 16px;
+  border-color: color-mix(in srgb, var(--fg-status-disputed) 35%, transparent);
 }
 
 .confirm-text {
@@ -364,7 +455,22 @@ function formatDate(value: StructuredDate | null): string {
 }
 
 .error {
-  color: var(--el-color-danger);
+  margin: 8px 0 0;
+  color: var(--fg-status-disputed);
   font-size: 13px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+</style>
+
+<style>
+/* n-drawer / n-modal 根节点 teleport 到 body，scoped 选择器不可达：
+   用 data-test 锚定删除确认弹窗宽度（内容样式仍走 scoped，slot 内容带 scope id） */
+[data-test='delete-confirm-dialog'] {
+  width: min(380px, calc(100vw - 48px));
 }
 </style>

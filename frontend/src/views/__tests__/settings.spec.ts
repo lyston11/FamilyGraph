@@ -187,15 +187,16 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
   it('披露矩阵渲染全部类别；高敏感类别开关禁用；保存提交基础五类', async () => {
     const wrapper = await mountSettings(pinia)
 
-    const rows = wrapper.findAll('[data-test="disclosure-table"] .el-table__row')
+    // n-data-table：tbody 行数 = 10 个披露类别
+    const rows = wrapper.findAll('[data-test="disclosure-table"] tbody tr')
     expect(rows.length).toBe(10)
 
     // 高敏感类别（health 等）禁用
     expect(wrapper.find('[data-test="disclosure-switch-disabled"]').exists()).toBe(true)
-    // 基础类别可切换
-    const avatarSwitch = wrapper.find('[data-test="disclosure-switch-avatar"] input')
+    // 基础类别可切换（n-switch 无原生 input，交互走根元素 click）
+    const avatarSwitch = wrapper.find('[data-test="disclosure-switch-avatar"]')
     expect(avatarSwitch.exists()).toBe(true)
-    await avatarSwitch.setValue(true)
+    await avatarSwitch.trigger('click')
     await new Promise((resolve) => setTimeout(resolve))
 
     mockedUpdateDisclosure.mockResolvedValue(makeSelfMember())
@@ -232,15 +233,15 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     const wrapper = await mountSettings(pinia)
 
     // 矩阵同步后，空间列基础类别开关可用且反映已保存值（dates=true）
-    const spaceDates = wrapper.find('[data-test="disclosure-space-7-dates"] input')
+    const spaceDates = wrapper.find('[data-test="disclosure-space-7-dates"]')
     expect(spaceDates.exists()).toBe(true)
-    await vi.waitFor(() => expect((spaceDates.element as HTMLInputElement).checked).toBe(true))
+    await vi.waitFor(() => expect(spaceDates.attributes('aria-checked')).toBe('true'))
 
     // 高敏感单元格禁用（独立 data-test 哨兵）
     expect(wrapper.find('[data-test="disclosure-space-disabled-7"]').exists()).toBe(true)
 
     // 在该空间开放 avatar（全局未开）→ 保存时携带 space_id=7
-    await wrapper.find('[data-test="disclosure-space-7-avatar"] input').setValue(true)
+    await wrapper.find('[data-test="disclosure-space-7-avatar"]').trigger('click')
     mockedUpdateDisclosure.mockResolvedValue(makeSelfMember())
     await wrapper.find('[data-test="disclosure-save"]').trigger('click')
 

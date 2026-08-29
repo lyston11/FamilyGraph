@@ -21,5 +21,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // jsdom 缺失 API 补丁（matchMedia 等，naive-ui 弹层渲染依赖，见文件头注释）
+    setupFiles: ['./vitest.setup.ts'],
   },
 })

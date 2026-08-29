@@ -1,7 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { ElMessage } from 'element-plus'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { NMessageProvider } from 'naive-ui'
 
 import ElementPlus from 'element-plus'
 
@@ -29,6 +31,15 @@ vi.mock('@/api/kinship', () => ({
   resolveKinship: vi.fn(),
   recordTermUsage: vi.fn(),
   parseRelationText: vi.fn(),
+}))
+
+// 抽屉内嵌 AttachmentsSection（挂载即拉取附件列表），mock 掉避免真实 XHR
+vi.mock('@/api/attachments', () => ({
+  fetchAttachments: vi.fn().mockResolvedValue([]),
+  addLink: vi.fn(),
+  deleteAttachment: vi.fn(),
+  uploadImage: vi.fn(),
+  attachmentRawUrl: vi.fn(() => ''),
 }))
 
 const mockedResolve = vi.mocked(kinshipApi.resolveKinship)
@@ -126,8 +137,16 @@ async function mountDrawer() {
   })
   spaces.currentSpaceId = 10
 
-  const wrapper = mount(ProfileDrawer, {
-    props: { memberId: member.id },
+  // ProfileDrawer 已迁 naive-ui：setup 期 useMessage 需 NMessageProvider 祖先；
+  // 内嵌 KinshipTermPanel 仍为 element-plus（P3 迁移），需保留全局注册
+  const MessageProvidedDrawer = defineComponent({
+    render() {
+      return h('div', [
+        h(NMessageProvider, () => h(ProfileDrawer, { memberId: member.id })),
+      ])
+    },
+  })
+  const wrapper = mount(MessageProvidedDrawer, {
     global: { plugins: [pinia, ElementPlus] },
     attachTo: document.body,
   })

@@ -1,15 +1,19 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
 
 import * as membersApi from '@/api/members'
+import * as spacesApi from '@/api/spaces'
 import HomeView from '@/views/HomeView.vue'
-import type { Member } from '@/types/api'
+import { useSpacesStore } from '@/stores/spaces'
+import type { FamilySpace, Member, SpaceMemberInfo } from '@/types/api'
 
 vi.mock('@/api/members', () => ({
   fetchMembers: vi.fn(),
+  fetchMembersByPrefix: vi.fn(),
   fetchMember: vi.fn(),
   createMember: vi.fn(),
   updateMember: vi.fn(),
@@ -17,8 +21,63 @@ vi.mock('@/api/members', () => ({
   removeMember: vi.fn(),
 }))
 
+// 空间与图 store 在 onMounted 即请求（mock 掉避免 jsdom 真实 XHR）
+vi.mock('@/api/spaces', () => ({
+  fetchSpaces: vi.fn().mockResolvedValue([]),
+  createSpace: vi.fn(),
+  fetchSpaceMembers: vi.fn().mockResolvedValue([]),
+  fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
+  inviteToSpace: vi.fn(),
+  removeOrWithdrawMembership: vi.fn(),
+  resolveMembership: vi.fn(),
+  joinByUser: vi.fn(),
+  getSpacePositions: vi.fn(),
+  putSpacePositions: vi.fn(),
+  createOwnershipTransfer: vi.fn(),
+  fetchOwnershipTransfers: vi.fn().mockResolvedValue([]),
+  respondOwnershipTransfer: vi.fn(),
+}))
+
+vi.mock('@/api/graph', () => ({
+  fetchMyGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [], scope: 'family' }),
+  createConnectionRequest: vi.fn(),
+  fetchIncomingConnections: vi.fn().mockResolvedValue([]),
+  resolveConnection: vi.fn(),
+  revokeRelation: vi.fn(),
+}))
+
 const mockedFetch = vi.mocked(membersApi.fetchMembers)
 const mockedCreate = vi.mocked(membersApi.createMember)
+const mockedFetchSpaces = vi.mocked(spacesApi.fetchSpaces)
+const mockedFetchSpaceMembers = vi.mocked(spacesApi.fetchSpaceMembers)
+const mockedResolveMembership = vi.mocked(spacesApi.resolveMembership)
+
+function makeSpace(overrides: Partial<FamilySpace> = {}): FamilySpace {
+  return {
+    id: 1,
+    name: '我们家',
+    owner_id: 1,
+    kind: 'household',
+    created_at: '2026-08-25T00:00:00',
+    pending_count: 0,
+    member_count: 2,
+    ...overrides,
+  }
+}
+
+function makeMembership(overrides: Partial<SpaceMemberInfo> = {}): SpaceMemberInfo {
+  return {
+    id: 99,
+    space_id: 1,
+    user_id: 5,
+    user_name: null,
+    added_by: null,
+    role: 'member',
+    status: 'active',
+    updated_at: '2026-08-25T00:00:00',
+    ...overrides,
+  }
+}
 
 function makeMember(overrides: Partial<Member> = {}): Member {
   return {
@@ -46,20 +105,46 @@ function makeMember(overrides: Partial<Member> = {}): Member {
   }
 }
 
+// naive useMessage 需 NMessageProvider 祖先；div 根保证 test-utils 元素查询稳定
+const MessageProvidedHome = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(HomeView))])
+  },
+})
+
 async function mountHome(): Promise<ReturnType<typeof mount>> {
   const pinia = createPinia()
-  const router = {
-    push: vi.fn(),
-  } as unknown as import('vue-router').Router
-  const wrapper = mount(HomeView, {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'home', component: HomeView },
+      { path: '/settings', name: 'settings', component: { template: '<div />' } },
+    ],
+  })
+  const wrapper = mount(MessageProvidedHome, {
     global: {
-      plugins: [pinia, ElementPlus],
-      mocks: { $router: router, $route: { path: '/' } },
+      plugins: [pinia, router],
     },
     attachTo: document.body,
   })
+  await router.isReady()
   await new Promise((resolve) => setTimeout(resolve))
   return wrapper
+}
+
+// n-modal 内容 teleport 到 body，交互统一走 document 查询
+function clickInBody(selector: string): void {
+  const target = document.querySelector(selector)
+  expect(target, selector).not.toBeNull()
+  target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+async function setInputInBody(selector: string, value: string): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(selector)
+  expect(input, selector).not.toBeNull()
+  input!.value = value
+  input!.dispatchEvent(new Event('input'))
+  await new Promise((resolve) => setTimeout(resolve))
 }
 
 describe('HomeView', () => {
@@ -77,7 +162,7 @@ describe('HomeView', () => {
     wrapper.unmount()
   })
 
-  it('渲染与我相关的档案列表并展示认领状态', async () => {
+  it('渲染与我相关的档案列表并展示确档状态徽章（--fg-status-* 语义）', async () => {
     mockedFetch.mockResolvedValue([
       makeMember({ claim_status: 'claimed' }),
       makeMember({ id: 3, name: '父亲', gender: 'm', claim_status: 'managed' }),
@@ -86,8 +171,9 @@ describe('HomeView', () => {
 
     const cards = wrapper.findAll('[data-test="member-card"]')
     expect(cards).toHaveLength(2)
-    expect(cards[0].text()).toContain('已认领')
-    expect(cards[1].text()).toContain('待认领')
+    // v2 身份状态机投影：claimed=已确档（实底）/ managed=待确档（虚线章）
+    expect(cards[0].text()).toContain('已确档')
+    expect(cards[1].text()).toContain('待确档')
     expect(cards[1].text()).toContain('父亲')
     wrapper.unmount()
   })
@@ -97,22 +183,28 @@ describe('HomeView', () => {
     mockedCreate.mockResolvedValue({ user: makeMember(), pin: '123456', replayed: false })
     const wrapper = await mountHome()
 
-    // 打开向导走完三步提交（弹窗内容渲染需等待一个 tick）
+    // 打开向导走完三步提交（n-modal teleport 渲染需等待）
     await wrapper.find('[data-test="open-wizard"]').trigger('click')
-    await new Promise((resolve) => setTimeout(resolve))
-    expect(wrapper.find('[data-test="wizard-name"]').exists()).toBe(true)
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-name"] input')).not.toBeNull(),
+    )
     // v2 F-1：名字与关系必填
-    await wrapper.find('[data-test="wizard-name"]').setValue('母亲')
-    const relationRadios = wrapper
-      .find('[data-test="wizard-relation-dir"]')
-      .findAll('.el-radio')
-    relationRadios[0].find('.el-radio__original').setValue(true)
+    await setInputInBody('[data-test="wizard-name"] input', '母亲')
+    const relationRadios = document.querySelectorAll<HTMLInputElement>(
+      '[data-test="wizard-relation-dir"] input[type="radio"]',
+    )
+    expect(relationRadios.length).toBe(4)
+    relationRadios[0].click() // 长辈
     await new Promise((resolve) => setTimeout(resolve))
-    await wrapper.find('[data-test="wizard-next"]').trigger('click')
-    await new Promise((resolve) => setTimeout(resolve))
-    await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click')
-    await new Promise((resolve) => setTimeout(resolve))
-    await wrapper.find('[data-test="wizard-submit"]').trigger('click')
+    clickInBody('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
+    clickInBody('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-confirm"]')).not.toBeNull(),
+    )
+    clickInBody('[data-test="wizard-submit"]')
 
     await vi.waitFor(() =>
       expect(document.querySelector('[data-test="one-time-pin"]')?.textContent).toBe('123456'),
@@ -122,6 +214,53 @@ describe('HomeView', () => {
     await new Promise((resolve) => setTimeout(resolve))
     // v-if 卸载 + 父组件清空内存态：PIN 不可回看
     expect(document.querySelector('[data-test="one-time-pin"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('空间切换器带类型标识（design.md §3.3）：Household=共同生活 / Lineage=谱系', async () => {
+    mockedFetchSpaces.mockResolvedValue([
+      makeSpace({ id: 1, name: '我们家', kind: 'household' }),
+      makeSpace({ id: 2, name: '王家族谱', kind: 'lineage' }),
+    ])
+    const wrapper = await mountHome()
+
+    // load() 自动选中第一个空间（household）→ 触发器 render-label 显示「共同生活」
+    const switcher = () => wrapper.find('[data-test="space-switcher"]')
+    await vi.waitFor(() => expect(switcher().text()).toContain('共同生活'))
+    expect(switcher().text()).toContain('我们家')
+
+    // 切到族谱空间 → 标识随 kind 变化（同一 render-label 通道）
+    const spaces = useSpacesStore()
+    spaces.currentSpaceId = 2
+    await wrapper.vm.$nextTick()
+    await vi.waitFor(() => expect(switcher().text()).toContain('谱系'))
+    expect(switcher().text()).toContain('王家族谱')
+    wrapper.unmount()
+  })
+
+  it('邀请行（AD-3）：接受/拒绝分别携带正确的 membership 与 action 调用 resolveMembership', async () => {
+    mockedFetchSpaces.mockResolvedValue([makeSpace()])
+    mockedFetchSpaceMembers.mockResolvedValue([
+      makeMembership({ id: 99, user_id: 5, status: 'pending' }),
+    ])
+    mockedResolveMembership.mockResolvedValue(makeMembership({ id: 99, status: 'active' }))
+    const wrapper = await mountHome()
+
+    // 收到的邀请以独立行展示，带接受/拒绝两个动作
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-test="space-invite"]').exists()).toBe(true),
+    )
+    expect(wrapper.find('[data-test="space-invite"]').text()).toContain('邀请你加入')
+
+    await wrapper.find('[data-test="accept-invite"]').trigger('click')
+    await vi.waitFor(() => expect(mockedResolveMembership).toHaveBeenCalledWith(99, 'accept'))
+    // 成功反馈经 naive message 渲染到 body
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain('已加入家庭空间'),
+    )
+
+    await wrapper.find('[data-test="reject-invite"]').trigger('click')
+    await vi.waitFor(() => expect(mockedResolveMembership).toHaveBeenCalledWith(99, 'reject'))
     wrapper.unmount()
   })
 })

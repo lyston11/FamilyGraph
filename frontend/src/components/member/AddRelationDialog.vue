@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NRadio, NRadioGroup } from 'naive-ui'
 
 import type { DirClass, Member } from '@/types/api'
 
@@ -62,74 +63,78 @@ function close() {
 </script>
 
 <template>
-  <el-dialog
-    :model-value="visible"
+  <NModal
+    :show="visible"
+    preset="card"
     title="添加关系"
-    width="420px"
-    @update:model-value="emit('update:visible', $event)"
-    @closed="close"
+    data-test="add-relation-dialog"
+    @update:show="emit('update:visible', $event)"
+    @after-leave="close"
   >
-    <el-alert
-      v-if="submitted"
-      type="success"
-      :closable="false"
-      title="请求已发送，等待对方确认后生效"
-    />
-    <template v-else>
-      <el-form label-width="72px">
-        <el-form-item label="搜索家人">
+    <NAlert v-if="submitted" type="success" :show-icon="true" title="请求已发送，等待对方确认后生效" />
+
+    <NForm v-else label-placement="left" :label-width="72" :show-feedback="false">
+      <NFormItem label="搜索家人">
+        <div class="search-block">
           <div class="search-row">
-            <el-input v-model="keyword" placeholder="输入名字前缀" @keyup.enter="search" />
-            <el-button @click="search">搜索</el-button>
+            <NInput v-model:value="keyword" placeholder="输入名字前缀" @keyup.enter="search" />
+            <NButton @click="search">搜索</NButton>
           </div>
           <div class="hint">找不到？请先通过「添加成员」建档</div>
-        </el-form-item>
+        </div>
+      </NFormItem>
 
-        <el-form-item v-if="results.length" label="选择">
-          <ul class="candidates">
-            <li
-              v-for="m in results"
-              :key="m.id"
-              :class="{ active: selected?.id === m.id }"
-              data-test="candidate"
-              @click="choose(m)"
-            >
-              {{ m.name }}（#{{ m.id }}）
-            </li>
-          </ul>
-        </el-form-item>
+      <NFormItem v-if="results.length" label="选择">
+        <ul class="candidates">
+          <li
+            v-for="m in results"
+            :key="m.id"
+            class="candidate"
+            :class="{ active: selected?.id === m.id }"
+            data-test="candidate"
+            @click="choose(m)"
+          >
+            {{ m.name }}（#{{ m.id }}）
+          </li>
+        </ul>
+      </NFormItem>
 
-        <el-form-item v-if="selected" label="TA 是我的">
-          <el-radio-group v-model="dirClass" data-test="dir-class-group">
-            <el-radio v-for="opt in DIR_OPTIONS" :key="opt.value" :value="opt.value">
-              {{ opt.text }}
-            </el-radio>
-          </el-radio-group>
-        </el-form-item>
+      <NFormItem v-if="selected" label="TA 是我的">
+        <NRadioGroup v-model:value="dirClass" data-test="dir-class-group">
+          <NRadio v-for="opt in DIR_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.text }}
+          </NRadio>
+        </NRadioGroup>
+      </NFormItem>
 
-        <el-form-item v-if="selected" label="称谓">
-          <el-input v-model="label" placeholder="选填，如：三叔公" maxlength="64" />
-        </el-form-item>
-      </el-form>
-    </template>
+      <NFormItem v-if="selected" label="称谓">
+        <NInput v-model:value="label" placeholder="选填，如：三叔公" :maxlength="64" />
+      </NFormItem>
+    </NForm>
 
     <template #footer>
-      <el-button @click="close">关闭</el-button>
-      <el-button
-        v-if="!submitted"
-        type="primary"
-        :disabled="!selected"
-        :loading="submitting"
-        data-test="submit-relation"
-        @click="submit"
-      >
-        发送请求
-      </el-button>
+      <div class="footer-actions">
+        <NButton @click="close">关闭</NButton>
+        <NButton
+          v-if="!submitted"
+          type="primary"
+          :disabled="!selected"
+          :loading="submitting"
+          data-test="submit-relation"
+          @click="submit"
+        >
+          发送请求
+        </NButton>
+      </div>
     </template>
-  </el-dialog>
+  </NModal>
 </template>
 
 <style scoped>
+.search-block {
+  width: 100%;
+}
+
 .search-row {
   display: flex;
   gap: 8px;
@@ -137,7 +142,7 @@ function close() {
 }
 
 .hint {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
   margin-top: 4px;
 }
@@ -149,14 +154,29 @@ function close() {
   width: 100%;
 }
 
-.candidates li {
+.candidate {
   cursor: pointer;
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: var(--fg-radius-control);
+  border: 1px solid transparent;
 }
 
-.candidates li.active,
-.candidates li:hover {
-  background: var(--el-fill-color-light);
+.candidate.active,
+.candidate:hover {
+  background-color: var(--fg-accent-soft);
+  border-color: var(--fg-accent);
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+</style>
+
+<style>
+/* n-modal 卡片根节点 teleport 到 body：用 data-test 锚定宽度 */
+[data-test='add-relation-dialog'] {
+  width: min(420px, calc(100vw - 48px));
 }
 </style>

@@ -28,11 +28,11 @@
 
 ## Phase 2：Home + 成员域
 
-- [ ] P2-1 HomeView 布局重构（空间切换器 + 空间类型标识 + 成员卡重绘）
-- [ ] P2-2 member 域组件：ProfileDrawer、MemberCreateWizard、AddRelationDialog、AttachmentsSection、DataRightsPanel、DisclosureMatrix、SpaceGovernanceDialog、OneTimePinDialog、PendingProfileRefs
-- [ ] P2-3 MaskedField 主题化锁样式（保持单点实现不分散）
-- [ ] P2-4 同步改写 `components/member/__tests__/*`、`views/__tests__/home.spec.ts`
-- [ ] P2-5 门禁四绿 + 冒烟（建档向导全流程、披露矩阵、遮罩显示）
+- [x] P2-1 HomeView 布局重构（空间切换器 + 空间类型标识 + 成员卡重绘）
+- [x] P2-2 member 域组件：ProfileDrawer、MemberCreateWizard、AddRelationDialog、AttachmentsSection、DataRightsPanel、DisclosureMatrix、SpaceGovernanceDialog、OneTimePinDialog、PendingProfileRefs
+- [x] P2-3 MaskedField 主题化锁样式（保持单点实现不分散）
+- [x] P2-4 同步改写 `components/member/__tests__/*`、`views/__tests__/home.spec.ts`（+settings.spec 失效断言；新增空间类型标识与邀请行用例；vitest.setup.ts stub jsdom 缺失 API）
+- [x] P2-5 门禁四绿（179 例）+ trellis-check 复核（修复：ProfileDrawer 附件区 import 缺失、DataRightsPanel NDatePicker 同类空串 bug 统一映射）
 - [ ] **Commit `feat(frontend): home/成员域迁移 + 卡片重设计`（回滚点 R2）**
 
 ## Phase 3：画布域（家族空间/家族树）

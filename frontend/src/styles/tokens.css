@@ -29,6 +29,53 @@ body {
   outline-offset: 2px;
 }
 
+/* 领域状态徽章工具类（design.md §3.4 全站统一，R6）：
+   文本对比红线——confirmed/disputed/accent 为实底白字（≥4.5:1）；
+   proposed/neutral 为彩字描边无柔底（文字直接落在卡面 ≥4.5:1）；
+   provisional 边框用状态色（图形 ≥3:1），文字走 ink-secondary（ink-faint 对纸面仅 3.1:1）。
+   经 h()/teleport 渲染的节点 scopeId 不可达，故落在静态基座层供全站复用。 */
+.fg-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.fg-badge--confirmed {
+  color: var(--fg-surface-raised);
+  background-color: var(--fg-status-confirmed);
+  border: 1px solid var(--fg-status-confirmed);
+}
+
+.fg-badge--proposed {
+  color: var(--fg-status-proposed);
+  border: 1px solid color-mix(in srgb, var(--fg-status-proposed) 45%, transparent);
+}
+
+.fg-badge--disputed {
+  color: var(--fg-status-disputed);
+  border: 1px dashed var(--fg-status-disputed);
+}
+
+.fg-badge--provisional {
+  color: var(--fg-ink-secondary);
+  border: 1px dashed var(--fg-status-provisional);
+}
+
+.fg-badge--neutral {
+  color: var(--fg-ink-secondary);
+  border: 1px solid var(--fg-line-strong);
+}
+
+.fg-badge--accent {
+  color: var(--fg-accent-ink);
+  background-color: var(--fg-accent);
+  border: 1px solid var(--fg-accent);
+}
+
 /* 动效降级 */
 @media (prefers-reduced-motion: reduce) {
   * {
