@@ -20,3 +20,8 @@ frontend/coverage/
 .idea/
 .vscode/
 .DS_Store
+
+# AI 工具平台配置（按平台本地使用，不入库；.trellis/.agents 除外）
+.codex/
+.pi/
+.zcode/
