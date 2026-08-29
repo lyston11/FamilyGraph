@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 
 import { useAgentStore } from '@/stores/agent'
 import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 
-import AssistantPanel from './AssistantPanel.vue'
+// P5 体积优化（P4 移交建议）：面板（NDrawer + PanelContent/消息/行动卡链）拆独立
+// chunk 异步加载；launcher 按钮保持静态渲染、首帧立即可见（悬浮体验无回归）。
+// chunk 在挂载后即开始预取，用户点击面板时通常已就绪。
+const AssistantPanel = defineAsyncComponent(() => import('./AssistantPanel.vue'))
 
 /**
  * AssistantLauncher（PRD AS-3）：全局悬浮入口，挂载于 App.vue。

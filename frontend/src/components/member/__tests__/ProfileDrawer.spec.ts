@@ -4,8 +4,6 @@ import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
 
-import ElementPlus from 'element-plus'
-
 import * as membersApi from '@/api/members'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import { useMembersStore } from '@/stores/members'
@@ -59,7 +57,7 @@ function makeMember(overrides: Partial<Member> = {}): Member {
 }
 
 // n-drawer/n-modal 默认 teleport 到 body，断言与点击走 document 查询；
-// 内嵌 KinshipTermPanel 仍为 element-plus（P3 迁移），需保留全局注册
+// 内嵌 KinshipTermPanel 已迁 naive-ui（P3），无需全局注册
 function click(selector: string): void {
   const target = document.querySelector(selector)
   expect(target, selector).not.toBeNull()
@@ -82,7 +80,7 @@ async function mountWithMember(member: Member) {
   store.members.push(member)
   store.openDrawer(member.id)
   const wrapper = mount(MessageProvidedDrawer, {
-    global: { plugins: [pinia, ElementPlus] },
+    global: { plugins: [pinia] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 根组件（design.md §2.2/§3.1）：全局 providers + 主题 token 注入 + 壳条件渲染。
-// 过渡期：element-plus 全局注册仍在（P5-9 移除）；naive-ui 组件按需 import。
+// P5 收尾：旧组件库已全量移除，naive-ui 为唯一组件库（组件按需 import）。
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -46,6 +46,6 @@ watchEffect(() => {
       </NDialogProvider>
     </NMessageProvider>
   </NConfigProvider>
-  <!-- 悬浮 Assistant 保持全局（壳外，design.md §3.1），P4 迁移时视觉随主题 -->
+  <!-- 悬浮 Assistant 保持全局（壳外，design.md §3.1）；面板内容经 defineAsyncComponent 懒加载 -->
   <AssistantLauncher />
 </template>

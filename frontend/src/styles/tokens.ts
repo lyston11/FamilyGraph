@@ -186,8 +186,10 @@ export const paperTokens: ThemeTokens = {
     'accent': paperPalette.vermilion,
     'accent-hover': paperPalette.vermilionHover,
     'accent-pressed': paperPalette.vermilionPressed,
-    // 朱砂 10% 柔和底（rgba 字面量，色相同 accent）
-    'accent-soft': 'rgba(192, 57, 43, 0.1)',
+    // 朱砂 6% 柔和底（rgba 字面量，色相同 accent）。P5-4 对比度核验：10% 时
+    // accent 彩字（称谓 chip/头像字）在其合成底上仅 4.29:1，不达 AA；降到 6%
+    // 后实测 4.56:1（≥4.5）。naive-themes 不消费该变量，无需同步派生映射。
+    'accent-soft': 'rgba(192, 57, 43, 0.06)',
     'accent-ink': paperPalette.paperRaised,
     'line': paperPalette.lineHairline,
     'line-strong': paperPalette.lineStrong,

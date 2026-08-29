@@ -1,17 +1,12 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 
-import ElementPlus from 'element-plus'
-
 import App from './App.vue'
 import router from './router'
 import { wireAuthInterceptors } from '@/stores/auth'
 
 import './styles/global.css'
-import 'element-plus/dist/index.css'
-import 'element-plus/theme-chalk/el-message.css'
-import 'element-plus/theme-chalk/el-dialog.css'
-// 设计 token 静态基座（置于 element-plus 样式之后，确保基座规则优先）
+// 设计 token 静态基座（P5 起为唯一样式基座：旧组件库样式已全量移除）
 import './styles/tokens.css'
 
 const app = createApp(App)
@@ -21,5 +16,4 @@ app.use(createPinia())
 wireAuthInterceptors()
 
 app.use(router)
-app.use(ElementPlus)
 app.mount('#app')
