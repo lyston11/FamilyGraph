@@ -4,6 +4,9 @@ import type { AgentConfig } from "../src/config.js";
 export function makeAgentConfig(apiPort: number): AgentConfig {
   return {
     apiBaseUrl: `http://127.0.0.1:${apiPort}`,
+    internalApiBaseUrl: `http://127.0.0.1:${apiPort}`,
+    providerStreamMaxRetries: 5,
+    providerStreamMaxRetryDelayMs: 1000,
     serviceSecret: "test-service-secret",
     sidecarId: "sc-test",
     healthPort: 0,

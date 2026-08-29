@@ -15,6 +15,7 @@
 
 import type { InternalClient, LeasedJob } from "./client.js";
 import type { AgentConfig } from "./config.js";
+import { redactErrorText } from "./redact.js";
 import { RunEventBuffer, type FgEvent } from "./events.js";
 import type { Logger } from "./logger.js";
 import { buildRunSession } from "./session.js";
@@ -166,7 +167,30 @@ export class SidecarWorker {
       });
       const { session } = bundle;
 
+      const lastAssistantError: {
+        current: { stopReason: string; errorMessage?: string } | null;
+      } = { current: null };
       session.subscribe((event) => {
+        const raw = event as {
+          type?: string;
+          message?: { role?: string; stopReason?: string; errorMessage?: string };
+        };
+        // A provider stream error surfaces as an assistant message with
+        // stopReason === "error" instead of a thrown exception; never report it
+        // as a successful run.
+        if (
+          raw.type === "message_end" &&
+          raw.message?.role === "assistant" &&
+          raw.message.stopReason === "error"
+        ) {
+          lastAssistantError.current = {
+            stopReason: "error",
+            errorMessage:
+              typeof raw.message.errorMessage === "string"
+                ? raw.message.errorMessage
+                : undefined,
+          };
+        }
         events.onSessionEvent(event as { type: string });
       });
 
@@ -188,7 +212,8 @@ export class SidecarWorker {
       const modelPrompt = contextText
         ? `${promptText}\n\n<familygraph_context>\n${contextText}\n</familygraph_context>`
         : promptText;
-      events.push("message.user_added", { role: "user", text: promptText });
+      // message.user_added is backend-owned (written once at enqueue, seq 0) and
+      // already present in projection.messages; the sidecar only consumes it.
 
       // Batched event flushing while the model loop runs.
       const flusher = this.startEventFlusher(job.run_id, job.run_token, events);
@@ -212,10 +237,8 @@ export class SidecarWorker {
               : kinds.has("local_provider_required") || kinds.has("cloud_provider_forbidden")
                 ? "POLICY_PROVIDER_BLOCKED"
                 : "POLICY_SECRET_LEAK";
-        events.push("run.failed", {
-          error_code: errorCode,
-          message: "policy guard blocked activity during this run",
-        });
+        // Terminal event is backend-owned: /settle writes run.failed with the
+        // error code below. The sidecar only flushes any pending turn events.
         await this.flushEvents(job.run_id, job.run_token, events.drain());
         await this.client.settleRun(job.run_id, job.run_token, "failed", {
           code: errorCode,
@@ -228,7 +251,23 @@ export class SidecarWorker {
         });
         return;
       }
-      events.push("run.settled", {});
+      if (lastAssistantError.current !== null) {
+        // Provider returned an errored assistant message (no usable answer).
+        // Do not settle succeeded: surface the redacted provider error.
+        // Upstream error text is redacted before any durable sink (settle/log).
+        const message = redactErrorText(
+          lastAssistantError.current.errorMessage ?? "provider stream ended in error",
+        );
+        await this.flushEvents(job.run_id, job.run_token, events.drain());
+        await this.client.settleRun(job.run_id, job.run_token, "failed", {
+          code: "PROVIDER_STREAM_ERROR",
+          message,
+        });
+        log.warn("run settled failed: provider stream error", { message });
+        return;
+      }
+      // Terminal event (run.settled) is written by the backend /settle handler;
+      // the sidecar must not emit a duplicate.
       await this.flushEvents(job.run_id, job.run_token, events.drain());
       await this.client.settleRun(job.run_id, job.run_token, "succeeded");
       log.info("run settled succeeded");
@@ -239,8 +278,8 @@ export class SidecarWorker {
           : "SIDECAR_ERROR";
       const errorCode =
         rawErrorCode === "POLICY_SECRET_IN_PROVIDER_PAYLOAD" ? "POLICY_SECRET_LEAK" : rawErrorCode;
-      const message = error instanceof Error ? error.message : String(error);
-      // Never include secret material in error payloads.
+      const message = redactErrorText(error instanceof Error ? error.message : String(error));
+      // Never include secret material in error payloads (redactErrorText enforces).
       log.error("run failed", { error_code: errorCode, message });
       try {
         const token = job.run_token;
@@ -270,7 +309,7 @@ export class SidecarWorker {
       policyResult === undefined
         ? "provider resolution unavailable for this run"
         : `provider policy refuses this run (${policyResult})`;
-    events.push("run.failed", { error_code: errorCode, message });
+    // Backend /settle writes the run.failed terminal event with error_code.
     await this.flushEvents(job.run_id, job.run_token, events.drain());
     await this.client.settleRun(job.run_id, job.run_token, "failed", {
       code: errorCode,
@@ -332,6 +371,7 @@ export class SidecarWorker {
     runToken: string,
     batch: FgEvent[],
   ): Promise<void> {
+    if (batch.length === 0) return Promise.resolve();
     return this.client.appendEvents(runId, runToken, batch).then(() => undefined);
   }
 }

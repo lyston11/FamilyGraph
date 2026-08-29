@@ -5,8 +5,12 @@
  *
  * Registry (V2.1): run.started, message.user_added, turn.started,
  * turn.completed, message.assistant_added, tool.execution.started,
- * tool.execution.completed, run.settled, run.failed, run.cancelled.
+ * tool.execution.completed, run.settled, run.failed, run.cancelled, run.expired.
  * card.* is a reserved namespace for V2.4 and must not be emitted here.
+ *
+ * message.user_added and all terminal events (run.settled/run.failed/
+ * run.cancelled/run.expired) are backend-owned; this sidecar emits only
+ * run.started, turn.*, message.assistant_added and tool.execution.*.
  */
 
 export const EVENT_TYPES = [
@@ -20,6 +24,7 @@ export const EVENT_TYPES = [
   "run.settled",
   "run.failed",
   "run.cancelled",
+  "run.expired",
 ] as const;
 
 export type FgEventType = (typeof EVENT_TYPES)[number];
@@ -77,6 +82,7 @@ export type FgEventPayloadMap = {
   "run.settled": TerminalPayload;
   "run.failed": TerminalPayload;
   "run.cancelled": TerminalPayload;
+  "run.expired": TerminalPayload;
 };
 export type FgEventPayload = FgEventPayloadMap[FgEventType];
 

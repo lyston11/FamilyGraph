@@ -366,6 +366,37 @@ def map_structural_edge_to_fact(
     )
 
 
+def create_structural_edge_proposal(
+    session: Session,
+    *,
+    from_user: int,
+    to_user: int,
+    dir_class: str,
+    raw_text_id: int | None = None,
+    asserted_by_account_id: int | None = None,
+) -> SourceFact | None:
+    """把代管人新建 managed 新档时的结构边映射为 proposed SourceFact（F-1）。
+
+    AD-4 新建账号例外：relation 边直接 active，但关系事实本身仍待对方确档确认，
+    故落 proposed（provenance=profile_form），不直接 confirmed。peer 边不映射。
+    """
+    mapping = _structural_fact_mapping(dir_class, from_user, to_user)
+    if mapping is None:
+        return None
+    fact_type, subject_id, object_id = mapping
+    return create_source_fact(
+        session,
+        fact_type=fact_type,
+        subject_user_id=subject_id,
+        object_user_id=object_id,
+        provenance="profile_form",
+        space_id=None,
+        asserted_by_account_id=asserted_by_account_id,
+        raw_text_id=raw_text_id,
+        state=FACT_PROPOSED,
+    )
+
+
 def revoke_structural_edge_fact(
     session: Session,
     *,
@@ -390,6 +421,4 @@ def revoke_structural_edge_fact(
         space_id=None,
     )
     if existing is not None and existing.state in (FACT_CONFIRMED, FACT_DISPUTED):
-        transition_source_fact(
-            session, existing, ACTION_REVOKE, actor_account_id=actor_account_id
-        )
+        transition_source_fact(session, existing, ACTION_REVOKE, actor_account_id=actor_account_id)

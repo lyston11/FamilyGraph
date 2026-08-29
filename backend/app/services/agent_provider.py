@@ -17,11 +17,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
+from app.utils import secretbox
 
 POLICY_ALLOWED = "allowed"
 POLICY_DENIED = "denied"
 POLICY_DENIED_NO_LOCAL = "denied_no_local"
 POLICY_DENIED_CLOUD_FORBIDDEN = "denied_cloud_forbidden"
+
+
+@dataclass(frozen=True)
+class ProviderRuntime:
+    """注入 sidecar 的运行期 Provider 配置（ProviderGateway 唯一解密出口）。
+
+    凭据只经 internal listener 下发给已验签的 run token 持有者；此对象
+    不得出现在浏览器 API、SSE、领域事件、审计或普通日志。base_url 必填
+    （否则不可发起请求）；local Provider 允许无 api_key。
+    """
+
+    provider_id: int
+    kind: str
+    model: str
+    base_url: str
+    api_key: str | None
 
 
 @dataclass(frozen=True)
@@ -107,4 +124,40 @@ def find_local_provider(db: Session) -> AgentProvider | None:
     """是否存在已启用的本地 Provider（local_required 且空间未选云时的解释依据）。"""
     return db.scalar(
         select(AgentProvider).where(AgentProvider.kind == "local", AgentProvider.enabled.is_(True))
+    )
+
+
+def resolve_runtime(db: Session, space_id: int) -> ProviderRuntime | None:
+    """把空间级 Provider 解析为可注入 sidecar 的运行期配置（含解密凭据）。
+
+    权威链：DB Provider 注册 → 空间选择的 policy（allowed）→ secretbox 解密。
+    policy 非 allowed、provider/model 缺失或 base_url 为空一律返回 None（fail-closed），
+    调用方将其映射为可解释拒绝，绝不回退到 sidecar 环境变量。
+    """
+    resolution = resolve_for_space(db, space_id)
+    if (
+        resolution.policy_result != POLICY_ALLOWED
+        or resolution.provider_id is None
+        or resolution.model is None
+    ):
+        return None
+    provider = db.get(AgentProvider, resolution.provider_id)
+    if provider is None:
+        return None
+    base_url = (provider.base_url or "").strip()
+    if not base_url:
+        return None
+    api_key: str | None = None
+    if provider.secret_ciphertext:
+        try:
+            api_key = secretbox.decrypt_secret(provider.secret_ciphertext)
+        except secretbox.SecretBoxError:
+            # 密文轮换/损坏必须拒绝，绝不静默无凭据调用
+            return None
+    return ProviderRuntime(
+        provider_id=provider.id,
+        kind=provider.kind,
+        model=resolution.model,
+        base_url=base_url,
+        api_key=api_key,
     )

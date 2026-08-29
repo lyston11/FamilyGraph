@@ -40,7 +40,6 @@ from app.services.controlled_web import (
     _validate_public_url,
 )
 
-
 # ---- 造数辅助 ---------------------------------------------------------------
 
 
@@ -108,7 +107,7 @@ def _fake_search_results(*results: dict[str, str]) -> list[dict[str, str]]:
 def _patch_provider_search(monkeypatch, results: list[dict[str, str]] | None = None):
     payload = {"results": _fake_search_results(*(results or ()))}
 
-    def _fake(endpoint, secret_ciphertext, query, limit):
+    def _fake(endpoint, secret_ciphertext, query, limit, *, allowed_addresses):
         assert endpoint  # endpoint required
         assert secret_ciphertext  # secret must be decrypted inside gateway
         return payload["results"]
@@ -117,7 +116,7 @@ def _patch_provider_search(monkeypatch, results: list[dict[str, str]] | None = N
 
 
 def _patch_fetch_bytes(monkeypatch, body: bytes, content_type: str = "text/html; charset=utf-8"):
-    def _fake(url, max_bytes):
+    def _fake(url, max_bytes, *, allowed_addresses):
         assert len(body) <= max_bytes
         return body, content_type
 
@@ -143,23 +142,22 @@ def _patch_dns(monkeypatch, *, host_map: dict[str, str] | None = None):
 
         parsed = urlparse(url)
         if parsed.scheme.lower() not in {"http", "https"}:
-            raise controlled_web.WebGatewayError(
-                422, WEB_URL_INVALID, "仅允许 http/https 网址"
-            )
+            raise controlled_web.WebGatewayError(422, WEB_URL_INVALID, "仅允许 http/https 网址")
         if parsed.username or parsed.password or not parsed.hostname:
-            raise controlled_web.WebGatewayError(
-                422, WEB_URL_INVALID, "网址不得包含凭据或缺少域名"
-        )
+            raise controlled_web.WebGatewayError(422, WEB_URL_INVALID, "网址不得包含凭据或缺少域名")
         if parsed.port is not None and parsed.port not in {80, 443}:
-            raise controlled_web.WebGatewayError(
-                422, WEB_URL_INVALID, "网址端口不在允许范围"
-            )
+            raise controlled_web.WebGatewayError(422, WEB_URL_INVALID, "网址端口不在允许范围")
         host = parsed.hostname.rstrip(".").lower()
+        # P1：返回形状与真实现一致——(hostname, scheme, 已验证 IP 集合)。
+        # 替身用假公网地址（TEST-NET-3 之外的可文档化保留段不适用，用 203.0.113.x
+        # 会被真实现当 reserved 拒绝；这里走替身路径不会做私网判定，但 fetch 的
+        # 钉扎 connect 会失败 → 由 _patch_fetch_bytes 替掉，不触网）。
+        pinned = frozenset({"198.51.100.10"})
         if host not in safe_hosts:
             # Let the real validator's domain allowlist logic decide (returns
             # the hostname so _ensure_allowed_domain can reject unknown hosts).
-            return host, parsed.scheme.lower()
-        return safe_hosts[host], parsed.scheme.lower()
+            return host, parsed.scheme.lower(), pinned
+        return safe_hosts[host], parsed.scheme.lower(), pinned
 
     monkeypatch.setattr(controlled_web, "_validate_public_url", _fake)
 
@@ -175,9 +173,12 @@ def test_tools_not_enabled_when_platform_flag_off(db_session, monkeypatch):
     _enable_space(db_session, space_id=space.id)
     db_session.commit()
 
-    assert controlled_web.agent_tools_enabled(
-        db_session, account_id=owner.account.id, space_id=space.id
-    ) is False
+    assert (
+        controlled_web.agent_tools_enabled(
+            db_session, account_id=owner.account.id, space_id=space.id
+        )
+        is False
+    )
 
 
 def test_tools_not_enabled_when_platform_config_missing(db_session, monkeypatch):
@@ -188,9 +189,12 @@ def test_tools_not_enabled_when_platform_config_missing(db_session, monkeypatch)
     _enable_space(db_session, space_id=space.id)
     db_session.commit()
 
-    assert controlled_web.agent_tools_enabled(
-        db_session, account_id=owner.account.id, space_id=space.id
-    ) is False
+    assert (
+        controlled_web.agent_tools_enabled(
+            db_session, account_id=owner.account.id, space_id=space.id
+        )
+        is False
+    )
 
 
 def test_tools_not_enabled_when_space_disabled(db_session, monkeypatch):
@@ -202,9 +206,12 @@ def test_tools_not_enabled_when_space_disabled(db_session, monkeypatch):
     row.enabled = False  # space opt-out even with platform on
     db_session.commit()
 
-    assert controlled_web.agent_tools_enabled(
-        db_session, account_id=owner.account.id, space_id=space.id
-    ) is False
+    assert (
+        controlled_web.agent_tools_enabled(
+            db_session, account_id=owner.account.id, space_id=space.id
+        )
+        is False
+    )
 
 
 def test_search_denied_when_global_flag_off(db_session, monkeypatch):
@@ -782,9 +789,12 @@ def test_agent_tools_enabled_when_both_opt_ins(db_session, monkeypatch):
     _enable_space(db_session, space_id=space.id)
     db_session.commit()
 
-    assert controlled_web.agent_tools_enabled(
-        db_session, account_id=owner.account.id, space_id=space.id
-    ) is True
+    assert (
+        controlled_web.agent_tools_enabled(
+            db_session, account_id=owner.account.id, space_id=space.id
+        )
+        is True
+    )
 
 
 def test_default_allowlist_excludes_web_tools_when_disabled(db_session, monkeypatch):
@@ -912,7 +922,7 @@ def test_search_accepts_safe_query(db_session, monkeypatch):
     _patch_dns(monkeypatch)
     received: dict[str, object] = {}
 
-    def _capture(endpoint, secret, query, limit):
+    def _capture(endpoint, secret, query, limit, *, allowed_addresses):
         received["query"] = query
         return _fake_search_results()
 
@@ -929,3 +939,86 @@ def test_search_accepts_safe_query(db_session, monkeypatch):
     )
     assert result["results"]
     assert received["query"] == "Qing dynasty genealogy customs"  # stripped only
+
+
+def test_fetch_uses_issuing_use_case_policy(db_session, monkeypatch):
+    """P1 回归：fetch 按批准凭据签发时的 use_case 取 policy，而非固定 research。"""
+    monkeypatch.setattr(config, "CONTROLLED_WEB_ENABLED", True)
+    owner, space = create_agent_fixture(db_session, name="web-usecase-owner")
+    create_space_member(db_session, space.id, owner.id, role="owner")
+    _enable_platform(db_session)
+    # 空间仅授权 fact_check：固定 research 的旧实现会在 fetch 时 403
+    _enable_space(db_session, space_id=space.id, use_cases=["fact_check"])
+    db_session.commit()
+    _patch_dns(monkeypatch)
+
+    _patch_provider_search(monkeypatch)
+    _patch_fetch_bytes(monkeypatch, b"<html><body><p>Fact check page</p></body></html>")
+
+    search = controlled_web.search_web(
+        db_session,
+        account_id=owner.account.id,
+        space_id=space.id,
+        run_id=None,
+        query="q",
+        use_case="fact_check",
+        limit=5,
+    )
+    assert search["results"], search
+    token = search["results"][0]["approved_token"]
+    db_session.commit()
+
+    fetched = controlled_web.fetch_approved_page(
+        db_session,
+        account_id=owner.account.id,
+        space_id=space.id,
+        run_id=None,
+        approved_token=token,
+    )
+    assert fetched["content"] == "Fact check page"
+    assert fetched["citation"]["use_case"] == "fact_check"
+
+
+def test_fetch_pins_tcp_to_validated_address(monkeypatch):
+    """P1 TOCTOU 回归：_fetch_bytes 只连验证过的 IP，连接时不再解析 DNS。
+
+    记录钉扎 backend 实际尝试的 connect 地址：host 参数（域名）永不进入
+    socket 连接；TEST-NET-3 钉扎地址不可路由时按 502 fail-closed。
+    """
+    import httpcore
+
+    attempted: list[str] = []
+
+    class _RecordingBackend(controlled_web._PinnedTCPBackend):
+        def __init__(self, allowed: frozenset[str]) -> None:
+            super().__init__(allowed)
+
+        def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+            last_exc: Exception | None = None
+            for address in self._allowed:
+                attempted.append(address)
+                try:
+                    return httpcore.SyncBackend.connect_tcp(
+                        self,
+                        address,
+                        port,
+                        timeout=timeout,
+                        local_address=local_address,
+                        socket_options=socket_options,
+                    )
+                except (OSError, httpcore.ConnectError) as exc:
+                    last_exc = exc
+            assert last_exc is not None
+            raise last_exc
+
+    monkeypatch.setattr(controlled_web, "_PinnedTCPBackend", _RecordingBackend)
+    monkeypatch.setattr(controlled_web.config, "CONTROLLED_WEB_CONNECT_TIMEOUT_SECONDS", 0.2)
+
+    pinned = frozenset({"203.0.113.10"})  # TEST-NET-3：不可路由
+    with pytest.raises(controlled_web.WebGatewayError) as exc:
+        controlled_web._fetch_bytes(
+            "https://www.allowed.example.com/a", 1024, allowed_addresses=pinned
+        )
+    assert exc.value.status_code == 502
+    # 连接目标只允许是钉扎 IP；域名自身不得作为 connect 目标出现
+    assert attempted == ["203.0.113.10"]

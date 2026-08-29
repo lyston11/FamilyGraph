@@ -19,6 +19,8 @@ dependencies = [
     "python-multipart==0.0.20",
     # V2.6 Controlled Web：FastAPI 是唯一 egress 边界，生产代码直接依赖 httpx
     "httpx==0.28.1",
+    # V2 数据权利导出：成熟 AEAD envelope（AES-GCM），替代自制 XOR+HMAC
+    "cryptography==44.0.2",
 ]
 
 [project.optional-dependencies]

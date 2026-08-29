@@ -43,9 +43,7 @@ def _confirmed(db_session, fact_type: str, subject: int, obj: int) -> SourceFact
 def test_elder_maps_to_biological_parent_direction(db_session, two_users):
     a, b = two_users
     # v1 elder f→t：to_user(b) 是 from_user(a) 的长辈 → biological_parent(b, a)
-    fact = map_structural_edge_to_fact(
-        db_session, from_user=a.id, to_user=b.id, dir_class="elder"
-    )
+    fact = map_structural_edge_to_fact(db_session, from_user=a.id, to_user=b.id, dir_class="elder")
     db_session.commit()
     assert fact is not None
     assert fact.fact_type == "biological_parent"
@@ -71,9 +69,7 @@ def test_younger_maps_to_biological_parent_direction(db_session, two_users):
 
 def test_spouse_maps_to_spouse_symmetric(db_session, two_users):
     a, b = two_users
-    fact = map_structural_edge_to_fact(
-        db_session, from_user=a.id, to_user=b.id, dir_class="spouse"
-    )
+    fact = map_structural_edge_to_fact(db_session, from_user=a.id, to_user=b.id, dir_class="spouse")
     db_session.commit()
     assert fact.fact_type == "spouse"
     assert fact.subject_user_id == a.id
@@ -83,9 +79,7 @@ def test_spouse_maps_to_spouse_symmetric(db_session, two_users):
 
 def test_peer_does_not_map(db_session, two_users):
     a, b = two_users
-    fact = map_structural_edge_to_fact(
-        db_session, from_user=a.id, to_user=b.id, dir_class="peer"
-    )
+    fact = map_structural_edge_to_fact(db_session, from_user=a.id, to_user=b.id, dir_class="peer")
     assert fact is None
     assert db_session.scalars(select(SourceFact)).all() == []
 
@@ -117,15 +111,11 @@ def test_mapping_is_idempotent_and_promotes_existing(db_session, two_users):
 
 def test_revoke_synchronously_invalidates_fact(db_session, two_users):
     a, b = two_users
-    fact = map_structural_edge_to_fact(
-        db_session, from_user=a.id, to_user=b.id, dir_class="elder"
-    )
+    fact = map_structural_edge_to_fact(db_session, from_user=a.id, to_user=b.id, dir_class="elder")
     db_session.commit()
     assert fact.state == FACT_CONFIRMED
 
-    revoke_structural_edge_fact(
-        db_session, from_user=a.id, to_user=b.id, dir_class="elder"
-    )
+    revoke_structural_edge_fact(db_session, from_user=a.id, to_user=b.id, dir_class="elder")
     db_session.commit()
     db_session.refresh(fact)
     assert fact.state == FACT_REVOKED

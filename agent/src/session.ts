@@ -31,7 +31,7 @@ import type {
   Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { AgentConfig, ProviderEnvConfig } from "./config.js";
+import type { AgentConfig } from "./config.js";
 import { RunEventBuffer } from "./events.js";
 import { createPolicyGuard, type PolicyGuard } from "./policy.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "./prompt.js";
@@ -71,6 +71,31 @@ export interface BuildSessionDeps {
   shouldStopToolCalls?: () => boolean;
 }
 
+const TOKEN_CAP_KEYS = new Set(["max_tokens", "max_completion_tokens", "maxTokens"]);
+
+/**
+ * Ensure any token-cap field that survives provider-body re-serialization is an
+ * integer. Some openai-compatible relays (Go GeneralOpenAIRequest) reject string
+ * token caps with an unmarshal error, so the sidecar guarantees the wire type.
+ * This is defense-in-depth on top of policy.ts preserving such fields.
+ */
+function coerceTokenCaps(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(coerceTokenCaps);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (TOKEN_CAP_KEYS.has(key) && item !== undefined && item !== null) {
+        const asNumber = Number(item);
+        out[key] = Number.isFinite(asNumber) && asNumber > 0 ? Math.floor(asNumber) : item;
+      } else {
+        out[key] = coerceTokenCaps(item);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 function buildModelLiteral(
   providerId: string,
   modelId: string,
@@ -82,18 +107,23 @@ function buildModelLiteral(
     api: "openai-completions",
     provider: providerId,
     baseUrl,
-    reasoning: false,
-    input: ["text"],
+    reasoning: true,
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
+    contextWindow: 200_000,
     maxTokens: 8192,
+    // openai-compatible 中转（含 zhipu glm 系）：发送 max_tokens 而非
+    // max_completion_tokens，避免中转 Go 网关按 string 拒绝 uint token 上限；
+    // 其余 compat 交由 pi-ai 依 baseUrl 自动探测（与用户 pi 的 guga 配置一致）。
+    compat: { maxTokensField: "max_tokens" },
   };
 }
 
-function resolveProvider(
+export function resolveProvider(
   config: AgentConfig,
   provider: RunContextProjection["provider"],
-): { entry: ProviderEnvConfig & { baseUrl: string }; modelId: string; providerId: string } {
+  runToken: string,
+): { entry: { kind: "openai_compatible" | "local"; baseUrl: string; apiKey: string | undefined; model: string }; modelId: string; providerId: string } {
   if (provider === null || provider.policy_result !== "allowed") {
     // Explainable refusals for policy_result !== "allowed" are handled by the
     // worker BEFORE the model loop starts; reaching here is a wiring error.
@@ -105,17 +135,28 @@ function resolveProvider(
       `provider "${provider.provider_id}" has no supported kind`,
     );
   }
-  // The server resolved provider kind + model; the sidecar only contributes
-  // its matching env entry (baseUrl/apiKey stay in memory).
-  const entry = provider.kind === "local" ? config.providers.local : config.providers.cloud;
-  if (provider.model === null || entry.baseUrl === undefined) {
+  // P1 唯一 egress：server 下发的 base_url 是 internal 代理路径（"/internal/..."），
+  // 真实 Provider base_url/api_key 不出服务端；sidecar 把模型请求指向代理端点，
+  // 以 run token 作为 Bearer 凭据，代理在服务端重新解密并转发。
+  const rawBaseUrl = provider.base_url;
+  if (provider.model === null || rawBaseUrl === null || rawBaseUrl === "") {
     throw new ProviderPolicyError(
       "PROVIDER_UNRESOLVED",
-      `no usable sidecar configuration matches provider "${provider.provider_id}"`,
+      `no runtime config matches provider "${provider.provider_id}"`,
     );
   }
+  let baseUrl: string;
+  let apiKey: string | undefined;
+  if (rawBaseUrl.startsWith("/")) {
+    baseUrl = new URL(rawBaseUrl, config.internalApiBaseUrl).toString().replace(/\/$/, "");
+    apiKey = runToken;
+  } else {
+    // 兼容路径：直接下发完整 base_url（本地 Provider 场景）；api_key 仍来自 projection
+    baseUrl = rawBaseUrl;
+    apiKey = provider.api_key ?? undefined;
+  }
   return {
-    entry: { ...entry, baseUrl: entry.baseUrl },
+    entry: { kind: provider.kind, baseUrl, apiKey, model: provider.model },
     modelId: provider.model,
     providerId: provider.provider_id || "familygraph-provider",
   };
@@ -141,7 +182,7 @@ export async function buildRunSession(
     );
   }
 
-  const { entry, modelId, providerId } = resolveProvider(config, projection.provider);
+  const { entry, modelId, providerId } = resolveProvider(config, projection.provider, runToken);
   const model = buildModelLiteral(providerId, modelId, entry.baseUrl);
 
   // Fully offline model/auth runtime: no catalog refresh, no network probing,
@@ -171,11 +212,15 @@ export async function buildRunSession(
   ) => {
     const guardedOptions = {
       ...options,
-      onPayload: async (payload: unknown, payloadModel: Model<Api>) => {
-        const safePayload = policyGuard.beforeProviderRequest(payload);
-        return options?.onPayload
-          ? options.onPayload(safePayload, payloadModel)
-          : safePayload;
+      // 中转型上游（如 guga）在重载荷下会间歇 503 service_busy：
+      // 网关层按指数退避重试（5xx/408/409/429），不改变请求内容。
+      maxRetries: config.providerStreamMaxRetries,
+      maxRetryDelayMs: config.providerStreamMaxRetryDelayMs,
+      onPayload: async (payload: unknown, _payloadModel: Model<Api>) => {
+        // Redaction happens here directly; do NOT re-dispatch through the
+        // coding-agent runner's before_provider_request hook, which stringifies
+        // the body and corrupts integer token caps on openai-compatible relays.
+        return coerceTokenCaps(policyGuard.beforeProviderRequest(payload));
       },
     } satisfies SimpleStreamOptions;
     return deps.streamOverride

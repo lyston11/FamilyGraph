@@ -374,3 +374,42 @@ def test_graph_family_vs_clan_scope(db_session, client: TestClient):
     lone = client.get("/api/graph/me?scope=clan", headers=hd).json()
     assert {n["id"] for n in lone["nodes"]} == {d.id}
     assert lone["edges"] == []
+
+
+# ---- v2 可见性：隐藏端点的边必须整体丢弃 ----
+
+
+def test_graph_hidden_endpoint_edges_removed(db_session, client: TestClient):
+    """peer-only（LEVEL_NONE）端点的边不得泄露端点 ID/类型/标签/创建者视角。"""
+    a = create_user_with_pin(db_session, "甲甲", "505050")
+    b = create_user_with_pin(db_session, "乙乙", "606060")
+    c = create_user_with_pin(db_session, "丙丙", "707070")  # peer-only → 对甲不可见
+    db_session.commit()
+
+    def _mk(from_u, to_u, cls, label=None):
+        edge = Relation(
+            from_user=from_u.id,
+            to_user=to_u.id,
+            dir_class=cls,
+            label=label,
+            created_by=from_u.id,
+            status="active",
+            created_at=__import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow(),
+            updated_at=__import__("app.utils.timeutil", fromlist=["utcnow"]).utcnow(),
+        )
+        db_session.add(edge)
+        return edge
+
+    _mk(a, b, "elder", "妈妈")
+    _mk(b, c, "peer", "同事")
+    db_session.commit()
+
+    h = _login_header(client, "甲甲", "505050")
+    for scope in ("family", "clan"):
+        resp = client.get(f"/api/graph/me?scope={scope}&depth=10", headers=h).json()
+        ids = {n["id"] for n in resp["nodes"]}
+        assert a.id in ids and b.id in ids and c.id not in ids
+        # 回归核心：任何边不得引用隐藏节点 c（无论作为 from 还是 to）
+        for e in resp["edges"]:
+            assert c.id not in (e["from_user"], e["to_user"]), (scope, e)
+        assert all({e["from_user"], e["to_user"]} == {a.id, b.id} for e in resp["edges"])

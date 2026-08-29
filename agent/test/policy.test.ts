@@ -179,4 +179,38 @@ describe("familygraph-policy-guard", () => {
     handlers.get("agent_settled")!({});
     expect(settled).toHaveBeenCalledWith({ type: "agent_settled" });
   });
+
+  it("preserves numeric provider token caps while still redacting credential keys", () => {
+    const { guard, handlers } = installGuard(["familygraph.echo"]);
+    const out = handlers.get("before_provider_request")!({
+      payload: {
+        max_tokens: 8192,
+        max_completion_tokens: 4096,
+        stream_options: { include_usage: true },
+        api_key: "leak-me",
+        authorization: "Bearer leak-me",
+        access_token: "leak-me",
+        messages: [{ content: "call me alice@example.com" }],
+      },
+    }) as {
+      max_tokens: number;
+      max_completion_tokens: number;
+      stream_options: { include_usage: boolean };
+      api_key: string;
+      authorization: string;
+      access_token: string;
+      messages: Array<{ content: string }>;
+    };
+
+    // Token-cap request fields must survive as numbers (openai relays reject strings).
+    expect(out.max_tokens).toBe(8192);
+    expect(out.max_completion_tokens).toBe(4096);
+    expect(out.stream_options).toEqual({ include_usage: true });
+    // Genuine credential keys are still redacted.
+    expect(out.api_key).toBe("[REDACTED]");
+    expect(out.authorization).toBe("[REDACTED]");
+    expect(out.access_token).toBe("[REDACTED]");
+    expect(out.messages[0]!.content).not.toContain("alice@example.com");
+    expect(guard.violationCount).toBe(0);
+  });
 });

@@ -42,6 +42,7 @@ EVENT_TYPES: frozenset[str] = frozenset(
         "run.settled",
         "run.failed",
         "run.cancelled",
+        "run.expired",
     }
 )
 
@@ -50,6 +51,7 @@ TERMINAL_EVENT_FOR: dict[str, str] = {
     "succeeded": "run.settled",
     "failed": "run.failed",
     "cancelled": "run.cancelled",
+    "expired": "run.expired",
 }
 
 # 终态事件类型集合：SSE 流发送后即关闭（design.md）

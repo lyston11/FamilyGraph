@@ -2,24 +2,34 @@
 disclosure 校验 / 删除级联与审计快照（implement.md #5）。
 """
 
+import itertools
+
 from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
 from app.models.account import Account
 from app.models.audit_log import AuditLog
 from app.models.refresh_session import RefreshSession
+from app.models.relation import Relation
+from app.models.relationship_facts import SourceFact
 from app.models.user import User
+from app.models.v2_foundation import MemberCreationRequest
+
+_key_counter = itertools.count(1)
 
 
-def _create_member(client, headers, **overrides):
+def _create_member(client, headers, *, key=None, **overrides):
     payload = {
         "name": "母亲",
         "gender": "f",
         "birth": {"cal_type": "solar", "date": "1960-05-01", "mirror_date": "1960:4:6"},
         "privacy_mode": "handover",
+        "relation_dir_class": "elder",
         **overrides,
     }
-    return client.post("/api/users", json=payload, headers=headers)
+    if key is None:
+        key = f"mk-{next(_key_counter)}"
+    return client.post("/api/users", json=payload, headers={**headers, "Idempotency-Key": key})
 
 
 def test_create_member_issues_one_time_pin_and_audit(client, db_session) -> None:
@@ -29,7 +39,8 @@ def test_create_member_issues_one_time_pin_and_audit(client, db_session) -> None
     response = _create_member(client, auth_header(tokens))
     assert response.status_code == 201
     body = response.json()
-    assert set(body) == {"user", "pin"}
+    assert set(body) == {"user", "pin", "replayed"}
+    assert body["replayed"] is False
     assert len(body["pin"]) == 6 and body["pin"].isdigit()
 
     user_payload = body["user"]
@@ -37,11 +48,9 @@ def test_create_member_issues_one_time_pin_and_audit(client, db_session) -> None
     assert user_payload["claim_status"] == "managed"
     assert user_payload["privacy_mode"] == "handover"
     assert user_payload["created_by"] == creator.id
-    assert user_payload["birth"] == {
-        "cal_type": "solar",
-        "date": "1960-05-01",
-        "mirror_date": "1960:4:6",
-    }
+    # F3：provisional 最小节点 —— 代管创建者也不回读出生（字段投影遮罩）
+    assert user_payload["birth"] == {"__masked__": True}
+    assert user_payload["gender"] == {"__masked__": True}
     # AD-9 默认披露开关全 false
     assert set(user_payload["clan_disclosure"].values()) == {False}
     assert user_payload["permissions"] == {"edit": True, "delete": True}
@@ -50,7 +59,25 @@ def test_create_member_issues_one_time_pin_and_audit(client, db_session) -> None
     account = db_session.query(Account).filter(Account.user_id == member.id).one()
     assert account.pin_must_change is True
 
-    # 审计留痕 created_by，且任何审计/日志字段不含 PIN 明文（脱敏红线）
+    # F-1：名字+关系原子落库 —— relation 直接 active（AD-4 新建例外）
+    edge = db_session.query(Relation).filter(Relation.to_user == member.id).one()
+    assert edge.from_user == creator.id
+    assert edge.status == "active"
+    assert edge.dir_class == "elder"
+    # 关系事实落 proposed（待对方确档后再确认，profile_form 来源）
+    fact = (
+        db_session.query(SourceFact)
+        .filter(
+            SourceFact.subject_user_id == member.id,
+            SourceFact.object_user_id == creator.id,
+        )
+        .one()
+    )
+    assert fact.state == "proposed"
+    assert fact.provenance == "profile_form"
+    # 幂等台账落一行
+    assert db_session.query(MemberCreationRequest).filter_by(member_user_id=member.id).count() == 1
+
     audits = db_session.query(AuditLog).filter(AuditLog.action == "profile_created").all()
     assert len(audits) == 1
     assert audits[0].actor_id == creator.id
@@ -325,3 +352,75 @@ def test_challenge_candidates_include_created_by_name(client, db_session) -> Non
     by_id = {c["id"]: c for c in candidates}
     assert by_id[standalone.id]["created_by_name"] is None
     assert by_id[managed.id]["created_by_name"] == "李四"
+
+
+def test_member_list_does_not_bypass_field_projection(client, db_session) -> None:
+    """F2/F3：列表出口与详情出口同源字段投影，provisional 内容字段不回读。"""
+    create_user_with_pin(db_session, "张三", "123456")
+    tokens = login(client, "张三", "123456").json()
+    created = _create_member(client, auth_header(tokens), gender="f")
+    assert created.status_code == 201
+    member_id = created.json()["user"]["id"]
+
+    rows = client.get("/api/users", headers=auth_header(tokens)).json()
+    row = next(r for r in rows if r["id"] == member_id)
+    # 代管创建者对 provisional 档案不得经列表读到性别/出生（与 GET /users/{id} 同源）
+    assert row["gender"] == {"__masked__": True}
+    assert row["birth"] == {"__masked__": True}
+    assert row["bio"] == {"__masked__": True}
+    assert row["name"] == "母亲"
+
+
+def test_create_member_idempotent_replay_returns_same_member_without_pin(
+    client, db_session
+) -> None:
+    """F-1：同 key 同内容重放返回首结果（replayed=true, pin=null），不重复建边。"""
+    create_user_with_pin(db_session, "张三", "123456")
+    headers = auth_header(login(client, "张三", "123456").json())
+    key = "k-replay"
+
+    first = _create_member(client, headers, key=key)
+    assert first.status_code == 201
+    assert first.json()["replayed"] is False
+    member_id = first.json()["user"]["id"]
+    assert first.json()["pin"] is not None
+
+    second = _create_member(client, headers, key=key)
+    assert second.status_code == 201
+    assert second.json()["replayed"] is True
+    assert second.json()["pin"] is None
+    assert second.json()["user"]["id"] == member_id
+
+    # 未产生第二个档案或第二条边；幂等台账仍只有一行
+    assert db_session.query(User).filter(User.name == "母亲").count() == 1
+    assert db_session.query(Relation).filter(Relation.to_user == member_id).count() == 1
+    assert (
+        db_session.query(MemberCreationRequest).filter_by(idempotency_key="k-replay").count() == 1
+    )
+
+
+def test_create_member_same_key_different_payload_conflict(client, db_session) -> None:
+    """F-1：同 key 不同内容 → 409 IDEMPOTENCY_PAYLOAD_CONFLICT，不落新档案。"""
+    create_user_with_pin(db_session, "张三", "123456")
+    headers = auth_header(login(client, "张三", "123456").json())
+
+    first = _create_member(client, headers, key="k-conflict")
+    assert first.status_code == 201
+    member_id = first.json()["user"]["id"]
+
+    second = _create_member(client, headers, key="k-conflict", name="另一个名字")
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "IDEMPOTENCY_PAYLOAD_CONFLICT"
+    assert db_session.query(User).filter(User.id == member_id).count() == 1
+
+
+def test_create_member_invalid_space_rolls_back_profile_and_relation(client, db_session) -> None:
+    """F-1：任一步失败整体回滚 —— 空间无效时不留孤儿档案或边。"""
+    create_user_with_pin(db_session, "张三", "123456")
+    headers = auth_header(login(client, "张三", "123456").json())
+
+    resp = _create_member(client, headers, key="k-rollback", space_membership={"space_id": 999999})
+    assert resp.status_code == 404
+    assert db_session.query(User).filter(User.name == "母亲").count() == 0
+    assert db_session.query(Relation).count() == 0
+    assert db_session.query(MemberCreationRequest).count() == 0

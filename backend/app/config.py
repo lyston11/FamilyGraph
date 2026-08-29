@@ -68,6 +68,17 @@ AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT: int = int(
 AGENT_CONTEXT_MESSAGE_LIMIT: int = int(os.environ.get("AGENT_CONTEXT_MESSAGE_LIMIT", "50"))
 # 浏览器创建 Assistant Run 的默认策略版本与消息正文上限（RT-4 content 校验）
 AGENT_POLICY_VERSION: str = os.environ.get("AGENT_POLICY_VERSION", "v2-agent-runtime-1")
+# ProviderGateway 代理（唯一 egress）：sidecar 经 internal 代理端点调用云端
+# Provider，真实凭据与外网 egress 全部留在 api 容器内（P1 收口）
+AGENT_PROVIDER_PROXY_TIMEOUT_SECONDS: int = int(
+    os.environ.get("AGENT_PROVIDER_PROXY_TIMEOUT_SECONDS", "300")
+)
+AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS: int = int(
+    os.environ.get("AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS", "10")
+)
+AGENT_PROVIDER_PROXY_MAX_BYTES: int = int(
+    os.environ.get("AGENT_PROVIDER_PROXY_MAX_BYTES", str(10 * 1024 * 1024))
+)
 AGENT_MESSAGE_MAX_LENGTH: int = int(os.environ.get("AGENT_MESSAGE_MAX_LENGTH", "8000"))
 # SSE 实时通知的兜底轮询间隔与心跳间隔（跨进程 append 不在本进程注册表内，靠轮询兜底；
 # 重连回放始终以 DB 为准保证不漏序）
@@ -79,6 +90,10 @@ AGENT_SSE_KEEPALIVE_SECONDS: float = float(os.environ.get("AGENT_SSE_KEEPALIVE_S
 STEWARD_ENABLED: bool = os.environ.get("STEWARD_ENABLED", "").lower() in ("1", "true")
 # lease 时长与重试上限（reaper 按 lease_expires_at 回队/判死）
 STEWARD_LEASE_TTL_SECONDS: int = int(os.environ.get("STEWARD_LEASE_TTL_SECONDS", "300"))
+# 进程内 Steward worker 泵（与 STEWARD_ENABLED 双开关；测试/单进程默认关）
+STEWARD_WORKER_ENABLED: bool = os.environ.get("STEWARD_WORKER_ENABLED", "").lower() in ("1", "true")
+# 后台维护循环周期（agent reaper + steward pump）
+MAINTENANCE_INTERVAL_SECONDS: float = float(os.environ.get("MAINTENANCE_INTERVAL_SECONDS", "5"))
 STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))
 # 卡片有效期与 dismissed 后同 kind 冷却天数（ST-4 有效期 / ST-3 不重复骚扰）
 STEWARD_CARD_TTL_DAYS: int = int(os.environ.get("STEWARD_CARD_TTL_DAYS", "14"))
@@ -121,10 +136,43 @@ def ensure_data_dirs() -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
+# 部署安全（design.md §2.1）：拒绝已知弱默认密钥，除非显式 DEV_ALLOW_WEAK_SECRETS。
+DEV_ALLOW_WEAK_SECRETS: bool = os.environ.get("DEV_ALLOW_WEAK_SECRETS", "").lower() in (
+    "1",
+    "true",
+)
+_WEAK_SECRETS = {
+    "dev-secret-change-me",
+    "dev-agent-secret-change-me",
+    "change-me",
+    "secret",
+    "",
+}
+
+
+def _reject_weak_default_secrets() -> None:
+    """弱默认密钥防线：SECRET_KEY 或启用的 Agent 协议密钥命中已知弱值即拒启。"""
+    if DEV_ALLOW_WEAK_SECRETS:
+        return
+    if SECRET_KEY.strip() in _WEAK_SECRETS:
+        raise RuntimeError(
+            "SECRET_KEY 命中已知弱默认值：请提供真实随机密钥，"
+            "或仅开发态显式设置 DEV_ALLOW_WEAK_SECRETS=1"
+        )
+    if MAINTENANCE_INTERVAL_SECONDS <= 0:
+        raise RuntimeError("MAINTENANCE_INTERVAL_SECONDS 必须为正数")
+    if AGENT_RUNTIME_ENABLED and AGENT_SERVICE_SECRET in _WEAK_SECRETS:
+        raise RuntimeError(
+            "AGENT_SERVICE_SECRET 命中已知弱默认值：请提供真实随机密钥，"
+            "或仅开发态显式设置 DEV_ALLOW_WEAK_SECRETS=1"
+        )
+
+
 def ensure_ready() -> None:
-    """启动前校验：SECRET_KEY 必须由环境变量提供，否则拒绝启动。"""
+    """启动前校验：SECRET_KEY 必须由环境提供且非弱默认，否则拒绝启动。"""
     if not SECRET_KEY.strip():
         raise RuntimeError(
             "SECRET_KEY 未设置：请通过环境变量提供会话签名密钥（拒绝以弱默认值启动）"
         )
+    _reject_weak_default_secrets()
     ensure_data_dirs()

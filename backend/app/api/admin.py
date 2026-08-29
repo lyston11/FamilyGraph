@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -48,7 +48,11 @@ def admin_list_users(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[dict[str, Any]]:
-    """全量用户列表（系统管理视图；不含任何档案敏感字段）。"""
+    """平台账号列表（系统管理视图；仅平台元数据，不含家庭姓名/性别/出生）。
+
+    operator 只管理账号生命周期（认领/确档/锁定）与系统配置；浏览或兜底家庭
+    资料必须走带原因、带审计的 break-glass 通道（见下方 lookup / PATCH）。
+    """
     _require_admin(identity, session)
     users = session.query(User).order_by(User.id).all()
     out = []
@@ -57,17 +61,54 @@ def admin_list_users(
         out.append(
             {
                 "id": u.id,
-                "name": u.name,
                 "is_admin": is_platform_operator(session, acc),
-                "gender": u.gender,
-                "privacy_mode": u.privacy_mode,
                 "claim_status": acc.status if acc else None,
                 "profile_status": u.profile_status,
-                "created_by": u.created_by,
                 "locked_until": acc.locked_until.isoformat() if acc and acc.locked_until else None,
                 "created_at": u.created_at.isoformat(),
             }
         )
+    return out
+
+
+@router.get("/users/lookup")
+def admin_user_lookup(
+    request: Request,
+    name: str = Query(min_length=1, max_length=100),
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[dict[str, Any]]:
+    """break-glass 账号检索：按名字前缀还原账号标识（审计留痕）。
+
+    仅供重置 PIN / 数据兑底等人工兜底定位账号使用；不提供家庭字段浏览。
+    """
+    actor = _require_admin(identity, session)
+    rows = (
+        session.query(User)
+        .filter(User.name.like(f"{name.strip()}%"))
+        .order_by(User.id)
+        .limit(20)
+        .all()
+    )
+    out = []
+    for u in rows:
+        acc = session.scalar(select(Account).where(Account.user_id == u.id))
+        out.append(
+            {
+                "id": u.id,
+                "name": u.name,
+                "claim_status": acc.status if acc else None,
+                "profile_status": u.profile_status,
+            }
+        )
+    audit.write_audit(
+        session,
+        action="operator_name_lookup",
+        actor_id=actor.id,
+        ip=_client_ip(request),
+        detail={"prefix": name.strip(), "hits": len(out)},
+    )
+    session.commit()
     return out
 
 

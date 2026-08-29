@@ -34,11 +34,14 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_user_jwt_forbidden_on_internal_routes(client, db_session):
+def test_user_jwt_forbidden_on_internal_routes(client, internal_client, db_session):
     """用户 JWT 打 internal 一律 403 并写安全审计（RT-3）。"""
     _seed(db_session, name="jwt")
+    # 登录走公开 app；internal listener 上不存在任何公开路由
     token_pair = login(client, "jwt", "123456").json()
-    response = client.get("/internal/agent/runs/1/context", headers=auth_header(token_pair))
+    response = internal_client.get(
+        "/internal/agent/runs/1/context", headers=auth_header(token_pair)
+    )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "AGENT_INTERNAL_FORBIDDEN"
     audit_row = db_session.scalar(
@@ -46,7 +49,7 @@ def test_user_jwt_forbidden_on_internal_routes(client, db_session):
     )
     assert audit_row is not None
 
-    lease_response = client.post(
+    lease_response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=auth_header(token_pair),
@@ -54,10 +57,10 @@ def test_user_jwt_forbidden_on_internal_routes(client, db_session):
     assert lease_response.status_code == 403
 
 
-def test_missing_or_garbage_token_unauthorized(client, db_session):
+def test_missing_or_garbage_token_unauthorized(internal_client, db_session):
     _seed(db_session, name="noauth")
-    assert client.get("/internal/agent/runs/1/context").status_code == 401
-    garbage = client.post(
+    assert internal_client.get("/internal/agent/runs/1/context").status_code == 401
+    garbage = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth("not-a-valid-token"),
@@ -66,18 +69,20 @@ def test_missing_or_garbage_token_unauthorized(client, db_session):
     assert garbage.json()["error"]["code"] == "AGENT_TOKEN_INVALID"
 
 
-def test_service_token_cannot_access_run_endpoints(client, db_session):
+def test_service_token_cannot_access_run_endpoints(internal_client, db_session):
     """token 类型混淆 fail-closed：service token 只可 lease。"""
     _, _, _, run = _seed(db_session, name="confuse")
     service_token = issue_service_token()
-    response = client.get(f"/internal/agent/runs/{run.id}/context", headers=_auth(service_token))
+    response = internal_client.get(
+        f"/internal/agent/runs/{run.id}/context", headers=_auth(service_token)
+    )
     assert response.status_code == 401
 
 
-def test_lease_flow_happy_path(client, db_session):
+def test_lease_flow_happy_path(internal_client, db_session):
     """lease → 200 合同字段齐全；再次 lease → 204 无可租。"""
     _, _, _, run = _seed(db_session, name="leaseflow")
-    first = client.post(
+    first = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sidecar-a"},
         headers=_auth(issue_service_token()),
@@ -92,7 +97,7 @@ def test_lease_flow_happy_path(client, db_session):
     claims = decode_run_token(body["run_token"])
     assert claims["run_id"] == run.id and claims["job_id"] == body["job_id"]
 
-    second = client.post(
+    second = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sidecar-b"},
         headers=_auth(issue_service_token()),
@@ -100,10 +105,10 @@ def test_lease_flow_happy_path(client, db_session):
     assert second.status_code == 204
 
 
-def test_lease_without_kind_returns_any_queued(client, db_session):
+def test_lease_without_kind_returns_any_queued(internal_client, db_session):
     """sidecar 不再传 kind：仅 {leased_by} 即可租到任意队列任务。"""
     _, _, _, run = _seed(db_session, name="noskind")
-    response = client.post(
+    response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"leased_by": "sc"},
         headers=_auth(issue_service_token()),
@@ -112,11 +117,11 @@ def test_lease_without_kind_returns_any_queued(client, db_session):
     assert response.json()["run_id"] == run.id
 
 
-def test_heartbeat_scope_mismatch_fail_closed(client, db_session):
+def test_heartbeat_scope_mismatch_fail_closed(internal_client, db_session):
     """用别的 run 的 token 打 heartbeat：scope 不匹配拒绝 + 审计。"""
     _, _, _, run_a = _seed(db_session, name="hba")
     _, _, _, run_b = _seed(db_session, name="hbb")
-    grant_a_response = client.post(
+    grant_a_response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
@@ -126,19 +131,21 @@ def test_heartbeat_scope_mismatch_fail_closed(client, db_session):
 
     job_b_id = run_b.job_id
     assert job_b_id is not None
-    mismatch = client.post(
+    mismatch = internal_client.post(
         f"/internal/agent/jobs/{job_b_id}/heartbeat",
         headers=_auth(token_a),
     )
     assert mismatch.status_code == 403
     assert mismatch.json()["error"]["code"] == "AGENT_TOKEN_SCOPE_MISMATCH"
 
-    ok = client.post(f"/internal/agent/jobs/{run_a.job_id}/heartbeat", headers=_auth(token_a))
+    ok = internal_client.post(
+        f"/internal/agent/jobs/{run_a.job_id}/heartbeat", headers=_auth(token_a)
+    )
     assert ok.status_code == 200
     assert ok.json()["ok"] is True
 
 
-def test_context_returns_projection_without_secrets(client, db_session):
+def test_context_returns_projection_without_secrets(internal_client, db_session):
     """context 返回 scope/消息投影/provider 解析；密钥明文与密文均不出现。"""
     from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
     from app.models.context import ContextBuild
@@ -169,7 +176,7 @@ def test_context_returns_projection_without_secrets(client, db_session):
     )
     db_session.commit()
 
-    grant_response = client.post(
+    grant_response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
@@ -177,7 +184,7 @@ def test_context_returns_projection_without_secrets(client, db_session):
     assert grant_response.status_code == 200
     token = grant_response.json()["run_token"]
 
-    response = client.get(f"/internal/agent/runs/{run.id}/context", headers=_auth(token))
+    response = internal_client.get(f"/internal/agent/runs/{run.id}/context", headers=_auth(token))
     assert response.status_code == 200
     body = response.text
     payload = response.json()
@@ -188,7 +195,11 @@ def test_context_returns_projection_without_secrets(client, db_session):
     assert provider_view["policy_result"] == "allowed"
     assert provider_view["model"] == "model-x"
     assert provider_view["secret_ref"].startswith("agent_providers/")
-    assert "sk-super-secret-value" not in body  # 明文不出现
+    # P1 唯一 egress：context 只下发代理路径；真实 base_url/api_key 不出服务端
+    assert provider_view["base_url"] == f"/internal/agent/runs/{run.id}/provider"
+    assert provider_view["api_key"] is None
+    assert "api.example.com" not in body
+    assert "sk-super-secret-value" not in body
     assert "secret_ciphertext" not in payload["provider"]  # 密文不下发
     assert provider.secret_ciphertext not in body
     assert payload["context_build_id"] is not None
@@ -200,17 +211,17 @@ def test_context_returns_projection_without_secrets(client, db_session):
     )
 
 
-def test_events_append_and_settle_via_api(client, db_session):
+def test_events_append_and_settle_via_api(internal_client, db_session):
     """events:append 幂等 + settle 终态 + 终态事件自动追加（RT-4）。"""
     _, _, _, run = _seed(db_session, name="evapi")
-    lease_response = client.post(
+    lease_response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
     )
     token = lease_response.json()["run_token"]
 
-    append = client.post(
+    append = internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={"events": [{"seq": 1, "type": "run.started", "public_payload": {}}]},
         headers=_auth(token),
@@ -218,7 +229,7 @@ def test_events_append_and_settle_via_api(client, db_session):
     assert append.status_code == 200
     assert [a["seq"] for a in append.json()["accepted"]] == [1]
 
-    retry = client.post(
+    retry = internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={"events": [{"seq": 1, "type": "run.started", "public_payload": {}}]},
         headers=_auth(token),
@@ -226,7 +237,7 @@ def test_events_append_and_settle_via_api(client, db_session):
     assert retry.status_code == 200
     assert retry.json() == {"accepted": [], "duplicates": [1]}
 
-    unknown = client.post(
+    unknown = internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={"events": [{"seq": 2, "type": "card.show", "public_payload": {}}]},
         headers=_auth(token),
@@ -234,7 +245,7 @@ def test_events_append_and_settle_via_api(client, db_session):
     assert unknown.status_code == 422
     assert unknown.json()["error"]["code"] == "AGENT_EVENT_INVALID"
 
-    settle = client.post(
+    settle = internal_client.post(
         f"/internal/agent/runs/{run.id}/settle",
         json={"status": "succeeded"},
         headers=_auth(token),
@@ -242,7 +253,7 @@ def test_events_append_and_settle_via_api(client, db_session):
     assert settle.status_code == 200
     assert settle.json()["status"] == "succeeded"
 
-    again = client.post(
+    again = internal_client.post(
         f"/internal/agent/runs/{run.id}/settle",
         json={"status": "failed", "error_code": "X"},
         headers=_auth(token),
@@ -251,10 +262,10 @@ def test_events_append_and_settle_via_api(client, db_session):
     assert again.json()["error"]["code"] == "AGENT_RUN_TERMINAL"
 
 
-def test_feature_flag_disabled_returns_503(client, db_session, monkeypatch):
+def test_feature_flag_disabled_returns_503(internal_client, db_session, monkeypatch):
     """RT-6：总开关关闭时 internal 端点一律 503 AGENT_DISABLED（默认关闭）。"""
     monkeypatch.setattr(config, "AGENT_RUNTIME_ENABLED", False)
-    response = client.post(
+    response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
@@ -263,16 +274,16 @@ def test_feature_flag_disabled_returns_503(client, db_session, monkeypatch):
     assert response.json()["error"]["code"] == "AGENT_DISABLED"
 
 
-def test_run_token_from_other_run_denied_on_tools(client, db_session):
+def test_run_token_from_other_run_denied_on_tools(internal_client, db_session):
     """工具执行要求 token 与 DB 双向一致；篡改 scope 的 token fail-closed。"""
     _, _, _, run = _seed(db_session, name="toolsc")
-    lease_response = client.post(
+    lease_response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
     )
     token = lease_response.json()["run_token"]
-    client.post(
+    internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={"events": [{"seq": 1, "type": "run.started", "public_payload": {}}]},
         headers=_auth(token),
@@ -288,7 +299,7 @@ def test_run_token_from_other_run_denied_on_tools(client, db_session):
         space_id=legit_claims["space_id"],
         tool_allowlist=["familygraph.steward_ping"],
     )
-    denied = client.post(
+    denied = internal_client.post(
         f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
         json={"version": 1, "input": {"text": "hi"}},
         headers=_auth(forged),
@@ -296,7 +307,7 @@ def test_run_token_from_other_run_denied_on_tools(client, db_session):
     assert denied.status_code == 403
     assert denied.json()["error"]["code"] == "AGENT_TOKEN_SCOPE_MISMATCH"
 
-    ok = client.post(
+    ok = internal_client.post(
         f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
         json={"version": 1, "input": {"text": "hi"}},
         headers=_auth(token),
@@ -305,25 +316,25 @@ def test_run_token_from_other_run_denied_on_tools(client, db_session):
     assert ok.json()["output"] == {"text": "hi"}
 
 
-def test_tool_execute_records_tool_call_id_in_audit(client, db_session):
+def test_tool_execute_records_tool_call_id_in_audit(internal_client, db_session):
     """tool_call_id 透传进执行审计；未知额外字段（如 tool_version）仍被拒绝。"""
     from app.models.audit_log import AuditLog as AuditLogModel
 
     _, _, _, run = _seed(db_session, name="tcid")
-    lease_response = client.post(
+    lease_response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"leased_by": "sc"},
         headers=_auth(issue_service_token()),
     )
     token = lease_response.json()["run_token"]
-    started = client.post(
+    started = internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={"events": [{"seq": 1, "type": "run.started", "public_payload": {}}]},
         headers=_auth(token),
     )
     assert started.status_code == 200
 
-    ok = client.post(
+    ok = internal_client.post(
         f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
         json={"version": 1, "input": {"text": "hi"}, "tool_call_id": "tc_42"},
         headers=_auth(token),
@@ -338,9 +349,85 @@ def test_tool_execute_records_tool_call_id_in_audit(client, db_session):
     assert audit_row.detail["tool_call_id"] == "tc_42"
 
     # strict schema：已废弃的 tool_version 额外字段 fail-closed（422）
-    extra = client.post(
+    extra = internal_client.post(
         f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
         json={"version": 1, "input": {"text": "hi"}, "tool_version": 1},
         headers=_auth(token),
     )
     assert extra.status_code == 422
+
+
+def test_tool_call_dedup_and_actor_semantics(internal_client, db_session):
+    """R4：同 (run_id, tool_call_id) 幂等重放；审计 actor 为 users.id 而非 accounts.id。"""
+    from app.models.agent import AgentToolCall
+    from app.models.audit_log import AuditLog as AuditLogModel
+
+    user, space, agent_session, run = _seed(db_session, name="dedup")
+    lease_response = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"leased_by": "sc"},
+        headers=_auth(issue_service_token()),
+    )
+    token = lease_response.json()["run_token"]
+    started = internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={"events": [{"seq": 1, "type": "run.started", "public_payload": {}}]},
+        headers=_auth(token),
+    )
+    assert started.status_code == 200
+
+    body = {"version": 1, "input": {"text": "ping"}, "tool_call_id": "tc_dedup_1"}
+    first = internal_client.post(
+        f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
+        json=body,
+        headers=_auth(token),
+    )
+    assert first.status_code == 200
+    assert first.json()["output"] == {"text": "ping"}
+
+    # 重放：同一输出、不重复执行、不重复审计、不新增台账行
+    replay = internal_client.post(
+        f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
+        json=body,
+        headers=_auth(token),
+    )
+    assert replay.status_code == 200
+    assert replay.json()["output"] == {"text": "ping"}
+    calls = db_session.scalars(select(AgentToolCall).where(AgentToolCall.run_id == run.id)).all()
+    assert len(calls) == 1
+    executed_audits = db_session.scalars(
+        select(AuditLogModel).where(
+            AuditLogModel.action == "agent_tool_executed", AuditLogModel.target_id == run.id
+        )
+    ).all()
+    assert len(executed_audits) == 1
+
+    # 审计 actor 归属语义：actor_id == users.id；account/session 另存 detail
+    assert executed_audits[0].actor_id == user.id
+    assert executed_audits[0].detail["account_id"] == user.account.id
+    assert executed_audits[0].detail["session_id"] == agent_session.id
+
+    # 同 id 不同版本 → 409 AGENT_TOOL_CALL_CONFLICT（fail-closed；去重在版本解析前）
+    conflict = internal_client.post(
+        f"/internal/agent/runs/{run.id}/tools/familygraph.echo/execute",
+        json={"version": 2, "input": {"text": "ping"}, "tool_call_id": "tc_dedup_1"},
+        headers=_auth(token),
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "AGENT_TOOL_CALL_CONFLICT"
+
+
+def test_internal_routes_absent_from_public_listener(client, db_session):
+    """P1 网络隔离回归：公开 app 不挂载 internal 协议，任意方法一律 404。"""
+    _seed(db_session, name="pub")
+    token = issue_service_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    for method in ("get", "post", "put", "patch", "delete"):
+        response = client.request(
+            method,
+            "/internal/agent/jobs/lease",
+            json={"kind": "assistant", "leased_by": "sc"},
+            headers=headers,
+        )
+        assert response.status_code == 404, (method, response.status_code)
+        assert "error" in response.json()

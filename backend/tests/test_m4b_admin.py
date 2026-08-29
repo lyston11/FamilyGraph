@@ -42,6 +42,20 @@ def test_non_admin_403_everywhere(client: TestClient, admin_and_user):
     assert client.get("/api/admin/audit-logs", headers=hu).status_code == 403
 
 
+def test_operator_user_list_excludes_family_pii(client: TestClient, admin_and_user):
+    """F3/R-03：普通管理列表仅平台元数据，不含家庭姓名/性别/出生。"""
+    admin, user = admin_and_user
+    ha = _login(client, "管长", "000000")
+    rows = client.get("/api/admin/users", headers=ha).json()
+    row = next(r for r in rows if r["id"] == user.id)
+    assert "name" not in row
+    assert "gender" not in row
+    assert "privacy_mode" not in row
+    assert "birth" not in row
+    assert row["claim_status"] == "claimed"
+    assert row["profile_status"] == "identity_confirmed"
+
+
 def test_reset_pin_one_time_and_sessions_revoked(db_session, client: TestClient, admin_and_user):
     admin, user = admin_and_user
     ha = _login(client, "管长", "000000")
@@ -94,10 +108,10 @@ def test_admin_update_user_transfer_custody(db_session, client: TestClient, admi
         "transferred_to": guardian.id,
     }
     db_session.expire_all()
-    # v2：operator 无家庭数据读取权 → 成员 API 404；改名结果经 admin API 核实
+    # v2：operator 无家庭数据读取权 → 成员 API 404；改名结果经 break-glass 检索核实
     member_view = client.get(f"/api/users/{user.id}", headers=_login(client, "管长", "000000"))
     assert member_view.status_code == 404
-    admin_rows = client.get("/api/admin/users", headers=ha).json()
+    admin_rows = client.get("/api/admin/users/lookup", params={"name": "改名"}, headers=ha).json()
     row = next(r for r in admin_rows if r["id"] == user.id)
     assert row["name"] == "改名群众"
 
@@ -131,7 +145,6 @@ def test_admin_update_user_requires_break_glass_note(client: TestClient, admin_a
     assert blank.status_code == 422
     assert blank.json()["error"]["code"] == "BREAK_GLASS_NOTE_REQUIRED"
 
-    # 失败路径不落任何修改
-    rows = client.get("/api/admin/users", headers=ha).json()
-    row = next(r for r in rows if r["id"] == user.id)
-    assert row["name"] != "改名"
+    # 失败路径不落任何修改（break-glass 检索不得命中新名字）
+    rows = client.get("/api/admin/users/lookup", params={"name": "改名"}, headers=ha).json()
+    assert all(r["id"] != user.id for r in rows)

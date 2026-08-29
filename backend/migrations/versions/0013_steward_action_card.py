@@ -50,9 +50,7 @@ def upgrade() -> None:
         ["space_id", "account_id", "projection_key"],
         unique=True,
     )
-    op.create_index(
-        "ix_behavior_projections_account", "behavior_projections", ["account_id"]
-    )
+    op.create_index("ix_behavior_projections_account", "behavior_projections", ["account_id"])
 
     op.create_table(
         "action_cards",
@@ -60,9 +58,7 @@ def upgrade() -> None:
         sa.Column(
             "kind",
             sa.String(32),
-            sa.CheckConstraint(
-                "kind IN ('household_link','lineage_request')", name="ck_ac_kind"
-            ),
+            sa.CheckConstraint("kind IN ('household_link','lineage_request')", name="ck_ac_kind"),
             nullable=False,
         ),
         sa.Column(
@@ -123,9 +119,7 @@ def upgrade() -> None:
         sqlite_where=sa.text("state IN ('pending','viewed','accepted')"),
     )
     op.create_index("ix_action_cards_space_state", "action_cards", ["space_id", "state"])
-    op.create_index(
-        "ix_action_cards_recipient", "action_cards", ["recipient_account_id", "state"]
-    )
+    op.create_index("ix_action_cards_recipient", "action_cards", ["recipient_account_id", "state"])
     op.create_index("ix_action_cards_subject", "action_cards", ["subject_user_id"])
     op.create_index("ix_action_cards_object", "action_cards", ["object_user_id"])
 

@@ -10,6 +10,7 @@ from app.models.agent import AgentJob
 from app.models.rag import RAGChunk
 from app.models.space import FamilySpace
 from app.models.v2_foundation import DomainEvent
+from app.services import context_builder as cb
 from app.services.domain_events import emit
 from app.services.memory_rag import (
     confirm_candidate,
@@ -341,3 +342,77 @@ def test_shared_memory_isolation_and_revoke_tombstone(db_session):
         )
         == []
     )
+
+
+def test_assistant_context_degrades_to_empty_when_rag_disabled(db_session, monkeypatch):
+    """RAG 关闭时助手仍可运行：context 降级为空（不把会话全文当补偿上下文）。"""
+    monkeypatch.setattr(config, "RAG_ENABLED", False)
+    owner, space = create_agent_fixture(db_session, name="rag-off")
+    create_space_member(db_session, space.id, owner.id, role="owner")
+    db_session.commit()
+
+    built = cb.ContextBuilder(db_session).build(
+        actor=owner,
+        space_id=space.id,
+        agent_kind="assistant",
+        query="anything",
+        run_id=None,
+        provider_kind="openai_compatible",
+    )
+    # 不抛 RAG_DISABLED；context 为空且可信边界不变
+    assert built.sources == ()
+    assert built.as_data_blocks() == []
+    assert built.provider_policy == "allowed"
+
+
+def test_cross_space_confirmation_from_session_source_rejected(db_session):
+    """P1 RAG session-space 绑定：空间 A 会话来源的候选不得确认到空间 B。"""
+    from conftest import create_agent_message, create_agent_session
+
+    owner, space_a = create_agent_fixture(db_session, name="rag-bind-a")
+    create_space_member(db_session, space_a.id, owner.id, role="owner")
+    # 空间 B：本人也是 active 成员（否则会被成员检查先拒绝，测不到绑定规则）
+    from app.models.space import FamilySpace as _FS
+
+    space_b = _FS(
+        name="rag-bind-b-space", kind="household", owner_id=owner.id, created_at=owner.created_at
+    )
+    db_session.add(space_b)
+    db_session.commit()
+    create_space_member(db_session, space_b.id, owner.id, role="owner")
+
+    session_a = create_agent_session(db_session, account_id=owner.account.id, space_id=space_a.id)
+    message = create_agent_message(db_session, session_a, content="space A chat")
+    db_session.commit()
+
+    candidate = propose_candidate(
+        db_session,
+        author_account_id=owner.account.id,
+        source_message_id=message.id,
+        source_quote="Space A only secret.",
+        summary="A secret from space A conversation.",
+        suggested_scope="household",
+        purpose="family reference",
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as ei:
+        confirm_candidate(
+            db_session,
+            candidate_id=candidate.id,
+            confirmer=owner,
+            confirmer_account=owner.account,
+            scope=f"household:{space_b.id}",
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail["__api_error__"]["code"] == "MEMORY_SCOPE_FORBIDDEN"
+
+    # 同空间确认不受影响
+    memory = confirm_candidate(
+        db_session,
+        candidate_id=candidate.id,
+        confirmer=owner,
+        confirmer_account=owner.account,
+        scope=f"household:{space_a.id}",
+    )
+    assert memory.space_id == space_a.id

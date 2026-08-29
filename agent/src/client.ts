@@ -62,13 +62,17 @@ export type ProviderPolicyResult =
   | "denied_no_local"
   | "denied_cloud_forbidden";
 
-/** Server-side provider resolution (ContextProviderOut). No secret material. */
+/** Server-side provider resolution (ContextProviderOut), including the
+ * ProviderGateway runtime config (base_url + decrypted api_key) injected over
+ * the internal listener. api_key/base_url must never be logged or persisted. */
 export interface RunContextProvider {
   provider_id: string;
   model: string | null;
   kind: "openai_compatible" | "local" | null;
   policy_result: ProviderPolicyResult;
   secret_ref: string | null;
+  base_url: string | null;
+  api_key: string | null;
 }
 
 /**
@@ -160,6 +164,8 @@ function normalizeProvider(value: unknown): RunContextProvider | null {
         ? raw["policy_result"]
         : "denied",
     secret_ref: raw["secret_ref"] == null ? null : String(raw["secret_ref"]),
+    base_url: raw["base_url"] == null ? null : String(raw["base_url"]),
+    api_key: raw["api_key"] == null ? null : String(raw["api_key"]),
   };
 }
 
@@ -187,7 +193,11 @@ export class InternalClient {
     token: string,
     body?: unknown,
   ): Promise<{ status: number; json: unknown }> {
-    const url = `${this.config.apiBaseUrl}${path}`;
+    // P1 网络隔离：internal 协议与公开 API 分 listener；/api/health 仍走公开 base
+    const base = path.startsWith("/internal/")
+      ? this.config.internalApiBaseUrl
+      : this.config.apiBaseUrl;
+    const url = `${base}${path}`;
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.backoff.maxAttempts; attempt++) {
       try {

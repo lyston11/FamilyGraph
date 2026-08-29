@@ -202,6 +202,15 @@ def test_reaper_returns_to_queue_then_expires_after_attempts(db_session):
     agent_queue.reaper_pass(db_session)
     assert grant.job.status == "expired" and grant.run.status == "expired"
     assert grant.run.error_code == "AGENT_LEASE_EXPIRED"
+    # 终态事件由服务端唯一写入（run.expired），且携带 error_code（R4）
+    terminal = db_session.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == grant.run.id)
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert terminal is not None
+    assert terminal.type == "run.expired"
+    assert terminal.public_payload["error_code"] == "AGENT_LEASE_EXPIRED"
     # 终态不再可租，reaper 不再处理
     assert agent_queue.lease_next(db_session, kind="assistant", leased_by="sc") is None
     assert agent_queue.reaper_pass(db_session) == 0

@@ -13,7 +13,9 @@ edit/delete 判定在 services/custody.py 与命令层。platform_operator 无�
 拦截并引导移交（§0.5，RESTRICT 兑底）。
 """
 
-from fastapi import APIRouter, Depends, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_authenticated_user
@@ -122,24 +124,41 @@ def list_related_members(
 def create_member(
     payload: MemberCreateRequest,
     request: Request,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberCreateResponse:
-    """建档（命令：commands.members.create_member）：创建 user+account 并配发
-    一次性 PIN（一次性展示，日志/审计不落值）。v2 F-3：创建他人为 provisional 档案；
-    选择空间时仅建 space_profile_refs 最小节点引用 —— provisional 人物不是
-    SpaceMember、不进推荐资格查询。重名允许（A2），ID 区分。
+    """原子建档（命令：commands.members.create_managed_member）：名字+关系必填。
 
-    注（F-1「名字和关系必填」）：MemberCreateRequest 刻意不含关系字段 —— 必填关系
-    语义由建档向导提交后的 POST /connection-requests 承担（AD-4 合并请求语义：
-    关系与可选空间邀请一次发出，对方确认后同时生效）。前端 MemberCreateWizard
-    以 canNextFromInfo 强制名字与关系双必填后才可进入下一步。
+    F-1/F-3：单事务内 provisional 档案 + managed 账号 +（AD-4 新建例外）直接 active
+    关系 + 关系原文 + proposed SourceFact + 可选空间最小引用 + 事件/审计。
+    幂等：同 (actor, Idempotency-Key) 同内容重放返回原档案（pin=null, replayed=true），
+    不同内容 409 IDEMPOTENCY_PAYLOAD_CONFLICT。
     """
     actor, _account = identity
+    key = idempotency_key.strip() if idempotency_key else ""
+    if not key:
+        raise_api_error(400, "IDEMPOTENCY_KEY_REQUIRED", "缺少 Idempotency-Key 请求头")
+    if len(key) > 120:
+        raise_api_error(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key 过长")
     ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
     birth = payload.birth.model_dump(exclude_none=True) if payload.birth else None
     death = payload.death.model_dump(exclude_none=True) if payload.death else None
-    member, pin = member_commands.create_member(
+    request_hash = member_commands.canonical_member_request_hash(
+        name=payload.name,
+        gender=payload.gender,
+        birth=birth,
+        death=death,
+        bio=payload.bio,
+        privacy_mode=payload.privacy_mode,
+        space_membership_space_id=(
+            payload.space_membership.space_id if payload.space_membership else None
+        ),
+        relation_dir_class=payload.relation_dir_class,
+        relation_label=payload.relation_label,
+        relation_text=payload.relation_text,
+    )
+    member, pin, replayed = member_commands.create_managed_member(
         session,
         ctx,
         name=payload.name,
@@ -151,8 +170,15 @@ def create_member(
         space_membership_space_id=(
             payload.space_membership.space_id if payload.space_membership else None
         ),
+        relation_dir_class=payload.relation_dir_class,
+        relation_label=payload.relation_label,
+        relation_text=payload.relation_text,
+        idempotency_key=key,
+        request_hash=request_hash,
     )
-    return MemberCreateResponse(user=_member_out(session, member, actor), pin=pin)
+    return MemberCreateResponse(
+        user=_member_out(session, member, actor), pin=pin, replayed=replayed
+    )
 
 
 @members_router.get("/{user_id}", response_model=MemberOut)

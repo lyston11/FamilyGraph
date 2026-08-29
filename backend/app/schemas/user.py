@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.user import BASIC_DISCLOSURE_KEYS
+from app.schemas.relation import DirClass
 from app.services.custody import RelationAccess, resolve_relation
 from app.services.disclosure import basic_disclosure_flags
 
@@ -76,6 +77,14 @@ class SpaceMembershipInline(BaseModel):
 
 
 class MemberCreateRequest(BaseModel):
+    """建档请求（F-1：名字 + 与创建者的关系必填）。
+
+    AD-4 新建账号例外：新建 managed 新档时 relation 直接 active（创建者即代管人）；
+    只有目标是已存在/已 claimed 账号才走 pending 合并请求流（POST /connection-requests）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=100)
     gender: GenderType = "unknown"
     birth: StructuredDate | None = None
@@ -83,6 +92,10 @@ class MemberCreateRequest(BaseModel):
     bio: str | None = Field(default=None, max_length=2000)
     privacy_mode: PrivacyMode = "handover"
     space_membership: SpaceMembershipInline | None = None
+    # 与创建者的关系（必填）：dir_class + 可选称谓 + 可选关系原文（append-only ≤200 字）
+    relation_dir_class: DirClass
+    relation_label: str | None = Field(default=None, max_length=64)
+    relation_text: str | None = Field(default=None, max_length=200)
 
 
 class MemberUpdateRequest(BaseModel):
@@ -142,10 +155,11 @@ class MemberOut(BaseModel):
 
 
 class MemberCreateResponse(BaseModel):
-    """建档响应：PIN 明文仅此一次，此后任何接口不可再取（A3/AD-1）。"""
+    """建档响应：PIN 明文仅此一次（replayed=True 时 pin 为 null，不回放初始 PIN）。"""
 
     user: MemberOut
-    pin: str = Field(pattern=r"^\d{6}$")
+    pin: str | None = Field(default=None, pattern=r"^\d{6}$")
+    replayed: bool = False
 
 
 def structured_date_payload(value: Any) -> dict[str, Any] | None:
@@ -156,32 +170,29 @@ def structured_date_payload(value: Any) -> dict[str, Any] | None:
 
 
 def member_payload(session: Any, target: Any, actor: Any) -> dict[str, Any]:
-    """构造对外成员视图：档案字段 + 披露开关 + 当前主体权限投影。
+    """构造对外成员视图：字段经 visibility 投影（F2/F3），再附披露开关与权限。
 
-    v2：is_admin 键保留以兼容前端，语义为 platform_operator 角色派生；
-    claim_status 权威源为 accounts.status。仅在可见性判定通过后调用。
+    与 GET /users/{id} 的字段级投影同源：provisional/minor/masked 字段一律以
+    MASKED 哨兵返回，不允许任何列表/写回出口绕过字段投影读原始列。
     """
+    from app.services import visibility
     from app.services.platform_roles import is_platform_operator
 
     access: RelationAccess = resolve_relation(actor, target)
-    return {
-        "id": target.id,
-        "name": target.name,
-        "is_admin": is_platform_operator(session, target.account),
-        "gender": target.gender,
-        "birth": structured_date_payload(target.birth),
-        "death": structured_date_payload(target.death),
-        "bio": target.bio,
-        "avatar_path": target.avatar_path,
-        "privacy_mode": target.privacy_mode,
-        "claim_status": target.account.status,
-        "created_by": target.created_by,
-        "created_at": target.created_at,
-        "clan_disclosure": {
-            key: bool(value) for key, value in basic_disclosure_flags(session, target).items()
-        },
-        "permissions": {"edit": access.edit, "delete": access.delete},
+    payload = visibility.user_payload_for(
+        session, actor, target, purpose=visibility.PURPOSE_PROFILE
+    )
+    if payload is None:  # 防御：调用方应在入口已过滤（不可见 = 404）
+        payload = visibility.payload_from_decision(
+            visibility.evaluate(session, actor, target, purpose=visibility.PURPOSE_PROFILE),
+            target,
+        )
+    payload["is_admin"] = is_platform_operator(session, target.account)
+    payload["clan_disclosure"] = {
+        key: bool(value) for key, value in basic_disclosure_flags(session, target).items()
     }
+    payload["permissions"] = {"edit": access.edit, "delete": access.delete}
+    return payload
 
 
 __all__ = [

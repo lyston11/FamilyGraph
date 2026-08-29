@@ -215,6 +215,7 @@ class DataRightRequest(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<DataRightRequest {self.type}/{self.status} subject={self.subject_profile_id}>"
@@ -241,6 +242,38 @@ class DomainEvent(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<DomainEvent {self.id} {self.type} {self.aggregate_type}#{self.aggregate_id}>"
+
+
+class MemberCreationRequest(Base):
+    """建档幂等台账（F1/R-01）：同 (actor, key) 至多一行，重放返回首次结果。
+
+    request_hash 绑定请求内容；同 key 不同 hash 返回 409
+    IDEMPOTENCY_PAYLOAD_CONFLICT。relation_id 用 SET NULL：关系后续可被 revoke，
+    台账仍保留（证明该次提交已被消费），不得因关系撤销而删除。
+    """
+
+    __tablename__ = "member_creation_requests"
+    __table_args__ = (
+        sa.UniqueConstraint("actor_user_id", "idempotency_key", name="uq_mcr_actor_key"),
+        Index("ix_member_creation_requests_member", "member_user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    member_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    relation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("relations.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<MemberCreationRequest actor={self.actor_user_id} member={self.member_user_id}>"
 
 
 class ProfileFactReview(Base):

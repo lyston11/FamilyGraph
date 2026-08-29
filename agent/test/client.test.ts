@@ -7,6 +7,9 @@ import type { AgentConfig } from "../src/config.js";
 function testConfig(port: number): AgentConfig {
   return {
     apiBaseUrl: `http://127.0.0.1:${port}`,
+    internalApiBaseUrl: `http://127.0.0.1:${port}`,
+    providerStreamMaxRetries: 0,
+    providerStreamMaxRetryDelayMs: 1000,
     serviceSecret: "unit-secret",
     sidecarId: "sc-unit",
     healthPort: 0,
@@ -102,6 +105,8 @@ describe("InternalClient protocol behavior", () => {
               kind: "openai_compatible",
               policy_result: "allowed",
               secret_ref: "agent_providers/3",
+              base_url: "https://cloud.example.internal/v1",
+              api_key: "sk-cloud-key",
             },
             cancel_requested: false,
           });
@@ -204,6 +209,8 @@ describe("InternalClient protocol behavior", () => {
     expect(projection.attempt).toBe(2);
     expect(projection.provider?.policy_result).toBe("allowed");
     expect(projection.provider?.provider_id).toBe("3");
+    expect(projection.provider?.base_url).toBe("https://cloud.example.internal/v1");
+    expect(projection.provider?.api_key).toBe("sk-cloud-key");
     expect(projection.messages[0]?.content_json["text"]).toBe("hi");
     expect(projection.context_blocks?.[0]?.citation).toBe("rag:memory-1:r1:c1");
     expect(projection.cancel_requested).toBe(false);
@@ -212,6 +219,9 @@ describe("InternalClient protocol behavior", () => {
   it("throws TransientError when retries are exhausted", async () => {
     const config = testConfig(port);
     config.apiBaseUrl = "http://127.0.0.1:9"; // nothing listens here
+    config.internalApiBaseUrl = "http://127.0.0.1:9";
+    config.providerStreamMaxRetries = 0;
+    config.providerStreamMaxRetryDelayMs = 1000;
     config.requestTimeoutMs = 300;
     const client = new InternalClient(config, {
       backoff: { baseDelayMs: 1, maxDelayMs: 2, maxAttempts: 2 },

@@ -182,7 +182,7 @@ def _bearer(token: str) -> dict[str, str]:
 # ---- 合同形状：经 internal execute 端点 ----
 
 
-def test_six_tools_contract_via_internal_endpoint(client, db_session):
+def test_six_tools_contract_via_internal_endpoint(client, internal_client, db_session):
     world = _world(db_session)
     session_row = _b_context(db_session, world)
     run = agent_queue.enqueue_run(
@@ -192,7 +192,7 @@ def test_six_tools_contract_via_internal_endpoint(client, db_session):
         policy_version="p1",
         tool_allowlist=ALL_SIX_TOOLS,
     )
-    lease = client.post(
+    lease = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"leased_by": "sidecar-c1"},
         headers=_bearer(issue_service_token()),
@@ -201,7 +201,7 @@ def test_six_tools_contract_via_internal_endpoint(client, db_session):
     body = lease.json()
     assert body["run_id"] == run.id
     headers = _bearer(body["run_token"])
-    started = client.post(
+    started = internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={"events": [{"seq": 0, "type": "run.started", "public_payload": {}}]},
         headers=headers,
@@ -209,7 +209,7 @@ def test_six_tools_contract_via_internal_endpoint(client, db_session):
     assert started.status_code == 200
 
     def _execute(name: str, payload: dict) -> dict:
-        response = client.post(
+        response = internal_client.post(
             f"/internal/agent/runs/{run.id}/tools/{name}/execute",
             json={"version": 1, "input": payload, "tool_call_id": f"tc-{name}"},
             headers=headers,
@@ -265,7 +265,7 @@ def test_six_tools_contract_via_internal_endpoint(client, db_session):
     assert len(explained["explanation"]) <= 600
 
     # 额外字段仍被 V2.1 schema 校验拒绝（fail-closed 不因新工具放宽）
-    bad = client.post(
+    bad = internal_client.post(
         f"/internal/agent/runs/{run.id}/tools/{agent_query.TOOL_GET_SELF_CONTEXT}/execute",
         json={"version": 1, "input": {"space_id": world["lineage"].id}},
         headers=headers,
@@ -659,3 +659,56 @@ def test_registry_min_kind_gating(db_session):
     with pytest.raises(HTTPException) as exc_info:
         _call(db_session, limited_run, session_row, agent_query.TOOL_GET_SELF_CONTEXT)
     assert _error_code(exc_info) == "AGENT_TOOL_SCOPE_DENIED"
+
+
+def test_tool_call_inflight_placeholder_rejected_concurrently(internal_client, db_session):
+    """P1 并发去重窗口回归：空 result_json 占位 = 并发执行中，第二请求 409 拒绝，
+    不重放空结果、不二次执行副作用。"""
+    from app.models.agent import AgentToolCall
+    from app.utils import timeutil
+
+    world = _world(db_session)
+    session_row = _b_context(db_session, world)
+    run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=ALL_SIX_TOOLS,
+    )
+    lease = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"leased_by": "sidecar-conc"},
+        headers=_bearer(issue_service_token()),
+    )
+    assert lease.status_code == 200
+    headers = _bearer(lease.json()["run_token"])
+    internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={"events": [{"seq": 0, "type": "run.started", "public_payload": {}}]},
+        headers=headers,
+    )
+    # 模拟另一请求已原子占位（result 空 = 在途）
+    db_session.add(
+        AgentToolCall(
+            run_id=run.id,
+            tool_call_id="tc-concurrent",
+            tool_name=agent_query.TOOL_GET_SELF_CONTEXT,
+            tool_version=1,
+            result_json={},
+            created_at=timeutil.utcnow(),
+        )
+    )
+    db_session.commit()
+
+    dup = internal_client.post(
+        f"/internal/agent/runs/{run.id}/tools/{agent_query.TOOL_GET_SELF_CONTEXT}/execute",
+        json={
+            "version": 1,
+            "input": {"space_id": world["lineage"].id, "user_id": world["m"].id},
+            "tool_call_id": "tc-concurrent",
+        },
+        headers=headers,
+    )
+    assert dup.status_code == 409
+    assert dup.json()["error"]["code"] == "AGENT_TOOL_CALL_IN_PROGRESS"

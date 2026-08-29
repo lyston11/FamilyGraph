@@ -70,6 +70,9 @@ let idCounter = 0;
 function makeConfig(port: number): AgentConfig {
   return {
     apiBaseUrl: `http://127.0.0.1:${port}`,
+    internalApiBaseUrl: `http://127.0.0.1:${port}`,
+    providerStreamMaxRetries: 0,
+    providerStreamMaxRetryDelayMs: 1000,
     serviceSecret: "integration-service-secret",
     sidecarId: "sc-it",
     healthPort: 0,
@@ -241,6 +244,19 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
           error_code: body.error_code,
           error: body.error,
         });
+        // Backend /settle writes the terminal event (run.settled/run.failed) at
+        // the next seq; the sidecar must not emit it. Mirror that ownership here.
+        const seen = state.eventsByRun.get(String(job.run_id)) ?? [];
+        const nextSeq = seen.reduce((m, e) => Math.max(m, e.seq), -1) + 1;
+        seen.push({
+          seq: nextSeq,
+          type: body.status === "failed" ? "run.failed" : "run.settled",
+          public_payload:
+            body.status === "failed" && body.error_code !== undefined
+              ? { status: body.status, error_code: String(body.error_code) }
+              : { status: body.status },
+        });
+        state.eventsByRun.set(String(job.run_id), seen);
         return respond(200, {
           ok: true,
           run_id: job.run_id,
@@ -289,6 +305,14 @@ function enqueueJob(
     allowlist: [...options.allowlist],
     ...(options.provider !== undefined ? { provider: options.provider } : {}),
   });
+  // Backend enqueue owns message.user_added at seq 0 (interactive assistant run).
+  state.eventsByRun.set(String(runId), [
+    {
+      seq: 0,
+      type: "message.user_added",
+      public_payload: { role: "user", text: "Please echo 'ping' then say done." },
+    },
+  ]);
   return String(runId);
 }
 
@@ -318,7 +342,9 @@ function contextProjection(job: MockJob): Record<string, unknown> {
         model: "test-model",
         kind: "openai_compatible",
         policy_result: "allowed",
-        secret_ref: null,
+        secret_ref: "agent_providers/3",
+        base_url: "https://cloud.example.internal/v1",
+        api_key: "sk-integration-cloud-key",
       } satisfies Record<string, unknown>),
     cancel_requested: false,
   };
@@ -522,12 +548,16 @@ describe("worker full cycle against mock FastAPI", () => {
     // Event stream: monotonic seq, lifecycle order, whitelisted payloads.
     const events = state.eventsByRun.get(runKey) ?? [];
     const types = events.map((e) => e.type);
-    expect(types.indexOf("message.user_added")).toBeGreaterThanOrEqual(0);
-    expect(types.indexOf("message.user_added")).toBeLessThan(types.indexOf("run.started"));
+    // message.user_added is backend-owned (seq 0); the sidecar did not re-emit it.
+    expect(types.filter((t) => t === "message.user_added")).toHaveLength(1);
+    expect(types[0]).toBe("message.user_added");
+    expect(types.indexOf("run.started")).toBe(1);
     expect(types.filter((t) => t === "turn.completed").length).toBeGreaterThanOrEqual(2);
     expect(types).toContain("tool.execution.started");
     expect(types).toContain("tool.execution.completed");
     expect(types).toContain("message.assistant_added");
+    // Terminal event is backend-owned (written by /settle), exactly once.
+    expect(types.filter((t) => t === "run.settled").length).toBe(1);
     expect(types[types.length - 1]).toBe("run.settled");
     const seqs = events.map((e) => e.seq);
     expect([...seqs].sort((a, b) => a - b)).toEqual(seqs);
@@ -654,7 +684,7 @@ describe("worker full cycle against mock FastAPI", () => {
 
     expect(await worker.tryLeaseAndRun()).toBe(true);
 
-    // Explainable refusal: no model loop, no tool call, no user_added event.
+    // Explainable refusal: no model loop, no tool call, no sidecar-re-emitted user event.
     expect(modelLoopStarted).toBe(false);
     expect(state.toolCalls).toHaveLength(0);
     expect(state.settles).toHaveLength(1);
@@ -667,8 +697,10 @@ describe("worker full cycle against mock FastAPI", () => {
       message: "provider policy refuses this run (denied_no_local)",
     });
     const events = state.eventsByRun.get(runKey) ?? [];
-    expect(events.map((e) => e.type)).toEqual(["run.failed"]);
-    expect(events[0]!.public_payload).toMatchObject({ error_code: "PROVIDER_DENIED_NO_LOCAL" });
+    // message.user_added (seq 0, backend-owned) is the only non-terminal event;
+    // run.failed is written by the backend /settle handler.
+    expect(events.map((e) => e.type)).toEqual(["message.user_added", "run.failed"]);
+    expect(events[1]!.public_payload).toMatchObject({ error_code: "PROVIDER_DENIED_NO_LOCAL" });
   }, 30000);
 
   it("returns false when queue is empty (HTTP 204)", async () => {
