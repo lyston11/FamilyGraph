@@ -305,3 +305,36 @@ SECRET_KEY=... AGENT_SERVICE_SECRET=... docker compose config  # → exit 0
 - 证据全文：`research/e3-model-loop-evidence.md`。
 - 仍待：docker compose 空库栈重建（用户 OrbStack 栈为旧镜像，需确认）、
   internal 负向连通性、375px 走查、第二卷恢复。
+
+## 12. 2026-08-29 E3：compose 栈重建与网络隔离实测（commit f596ead 镜像）
+
+用户确认重建。`.env` 提供强随机 SECRET_KEY/AGENT_SERVICE_SECRET（gitignored，
+DEV_ALLOW_WEAK_SECRETS 默认 0——生产 posture 启动即通过校验）。三镜像重建
+（基础镜像经 daocloud 镜像源拉取：Docker Hub 直连超时），`docker compose up -d`
+三容器 healthy。
+
+### 隔离/连通性矩阵（全部符合合同）
+
+| 路径 | 结果 | 判定 |
+|---|---|---|
+| 宿主 → api:8000 /api/health | `{"status":"ok"}` | 公开面正常 |
+| 宿主 → api:8001 | connection refused | internal 未发布宿主 ✓ |
+| 宿主 → api:8000 /internal/*（POST lease） | 404 | 公开面 fail-closed ✓ |
+| web(frontend 网) → api:8001 | connection refused（解析到 192.168.147.2，无 8001） | 静态 IP 绑定生效 ✓ |
+| web → api:8000 /internal/* | 404 | ✓ |
+| agent(backend 网) → api:8001 | 503 AGENT_DISABLED（应用层响应，路由可达） | sidecar 通路 ✓ |
+| agent → 172.28.0.10:8001 | 503 同上 | 绑定 IP 生效 ✓ |
+
+- 既有数据卷上增量迁移 `0018 → 0019_web_approved_use_case` 成功（api 启动日志）。
+- 说明：该卷为用户既有 dev 数据，未重置；「空库 compose 自举」证据由本机空卷
+  迁移链（§11/§7）+ 本节增量迁移共同覆盖。
+- compose 栈上的完整模型回路需既有账号凭据（bootstrap 管理员 PIN 由用户持有），
+  未执行；代理链路本身已在 §11 本机同代码路径取证。
+
+### 提交记录
+
+- `f596ead` fix(v2-agent)：backend/agent/compose 全部整改（task.json 已绑定）
+- `771001d` feat(frontend)：naive-ui Phase 1（WIP，redesign 任务）+ store 代际
+- `cd60600` test(frontend)：登录回车提交回归
+- `216759c` chore(task)：本任务记录与证据
+- `.zcode/`（平台 hook/skills 配置）保持 untracked，是否纳管由用户决定

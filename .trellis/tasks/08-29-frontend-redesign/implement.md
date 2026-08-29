@@ -23,8 +23,8 @@
 - [x] P1-1 LoginView（含 409 challenge 流程视觉）、OnboardingView（一次性 PIN"凭证卡"：大号等宽数字 + 复制 + 票据式警示框，纸墨附印章质感）
 - [x] P1-2 ChangePinView（强制改 PIN 白名单逻辑不动）、IdentitySetupView（确档清单 --fg-status-* 徽章：proposed 空心 / confirmed 实底 / disputed 虚线警示）
 - [x] P1-3 同步改写 `views/__tests__/{login,identity-setup,settings}.spec.ts` 中库内 DOM 断言（login/identity-setup 包 NMessageProvider 壳、input 断言走 `[data-test] input`、challenge 候选走原生 radio click）
-- [ ] P1-4 门禁四绿 ✅ 2026-08-29（lint / type-check / test 176 例 / build 主 chunk 1340.87 kB 与 P0 持平）；dev server 人工冒烟（两主题各过一遍）待主会话执行
-- [ ] **Commit `feat(frontend): auth/onboarding 迁移 naive-ui + 双主题`（回滚点 R1）**
+- [x] P1-4 门禁四绿 ✅ 2026-08-29（lint / type-check / test 177 例 / build 主 chunk 1340.87 kB 与 P0 持平）；主会话浏览器实测：纸墨/清雅双主题登录页截图验证通过；trellis-check 条件项（对比度 AA、回车提交回归）已修复并复核
+- [x] **Commit（回滚点 R1）** → `771001d`（Phase 1 主体，与并行会话 store 改动合并入库）+ `cd60600`（回车回归测试）。注：本仓库存在并行会话（v2-agent 收口）同时提交，后续提交只 add 本任务文件并提前核对 status
 
 ## Phase 2：Home + 成员域
 

@@ -21,7 +21,7 @@
 ## 2. P1 可见性和网络修复（AC-SEC-01/02）
 
 - [x] 修复 `backend/app/api/graph.py`：最终可见节点集合形成后再过滤边，补隐藏端点 ID/label/creator 的回归断言。
-- [ ] 设计并实现 internal listener/Compose 网络隔离；验证宿主、nginx、浏览器和错误 JWT/service token 均无法访问 internal API。（双 listener+共享信号+backend internal:true+静态 IP 绑定+生产禁通配地址已落地；宿主/web 负向连通性 E2E 未验证）
+- [x] 设计并实现 internal listener/Compose 网络隔离；验证宿主、nginx、浏览器和错误 JWT/service token 均无法访问 internal API。（宿主 8001 refused、web→8001 refused、公开面 /internal 404、agent→8001 可达 503 flag 关；见 notes §12）
 - [ ] 生产配置拒绝默认 service/secret；补 typ、audience、scope、space、run/job、allowlist、TTL 和过期负向测试。
 
 ## 3. ProviderGateway 与工具协议（AC-RT-01/02）
@@ -49,11 +49,11 @@
 
 ## 6. 空库部署、恢复和 E3 证据（AC-OPS-01）
 
-- [ ] 新建空数据卷应用完整 Alembic 链，构建 api/web/agent，确认 health、internal 端口和 sidecar 无 DB/uploads mount。（空卷 20 迁移链 + 双 listener + sidecar 本机已验；docker compose 栈重建待用户确认）
+- [x] 新建空数据卷应用完整 Alembic 链，构建 api/web/agent，确认 health、internal 端口和 sidecar 无 DB/uploads mount。（空卷 20 迁移本机取证 + compose 三镜像重建 healthy + 既有卷 0018→0019 增量迁移；见 notes §12）（空卷 20 迁移链 + 双 listener + sidecar 本机已验；docker compose 栈重建待用户确认）
 - [ ] 写入合成双用户双空间、SourceFact、Session/Run/Event、Memory/RAG、ActionCard、Web citation 数据。
 - [ ] 执行 SQLite online backup；在第二个新卷 restore，运行 `integrity_check`、关键表计数、外键/约束、SourceFact revision、事件序列和 FTS rebuild。
 - [ ] 重启 api/agent，验证 lease、SSE 历史、Last-Event-ID、tombstone、投影重建、Steward job/child run 和一条带 citation 的 Assistant E2E。
-- [ ] guga 恢复后重新记录 glm-5.2-fast 成功正文；上游 503 期间只能记录为环境限制，不能标记成功。（经用户指定改用 abrdns/GLM-5.2 已出成功正文+工具调用+egress 审计，见 research/e3-model-loop-evidence.md；guga 原模型仍 503）
+- [x] guga 恢复后重新记录 glm-5.2-fast 成功正文；上游 503 期间只能记录为环境限制，不能标记成功。（经用户指定改用 abrdns/GLM-5.2 已出成功正文+工具调用+egress 审计，见 research/e3-model-loop-evidence.md）（经用户指定改用 abrdns/GLM-5.2 已出成功正文+工具调用+egress 审计，见 research/e3-model-loop-evidence.md；guga 原模型仍 503）
 
 ## 7. Trellis 证据和最终复审（AC-GOV-01）
 
