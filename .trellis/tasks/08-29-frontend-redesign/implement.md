@@ -72,13 +72,14 @@
 - [x] P5-4 对比度核验 ✅ 2026-08-29：一次性 Node 脚本（/tmp，不进版本库）直接 import tokens.ts 计算两主题 15 项组合，发现 1 项不达标并修复：paper `accent-soft` 10%→6%（10% 时朱砂彩字于其合成底仅 4.29:1，6% 后 4.56:1；naive-themes.ts 不消费该变量，无需同步派生映射）。全表见下方附录二。
 - [x] P5-5 门禁四绿 ✅ 2026-08-29：lint 0 错 / type-check 0 错 / test 32 文件 201 例全过（较 R4 +1：新增 SettingsView 主题切换用例）/ build 成功（主 chunk 426.50 kB）。
 - [x] 移交项核销：① FamilySpaceView `void router` 死语句已删除（router 在模板仍有使用，非死变量）；② P4 主 chunk 体积建议已实施（见 P5-3）。
-- [ ] **Commit `feat(frontend): 全站迁移收尾`（回滚点 R5）**（主会话执行）
+- [x] **Commit `feat(frontend): 全站迁移收尾`（回滚点 R5）** → 13dc51f（trellis-check 复核通过：0 P0/0 P1，3 P2 延后——AssistantPanel 异步 chunk 无 onError 回退、纸墨 accent-soft 6% 视觉辨识度走查确认、MemoryManager 注释保留）
 
 ## Phase 6（任务收尾，Phase 3 之后任一点可做）
 
-- [ ] P6-1 更新 `.trellis/spec/frontend/component-guidelines.md`：Naive UI 约定、token 红线（组件禁写死色值）、主题扩展规则
-- [ ] P6-2 `.trellis/spec/frontend/quality-guidelines.md` 增补主题/迁移相关门禁（如需要）
-- [ ] **Commit `docs(spec): 前端规范更新至 naive-ui + 双主题`**
+- [x] P6-1 更新 `.trellis/spec/frontend/component-guidelines.md` → 重写为 v1：naive-ui 约定（按需 import/useMessage/useDialog、迁移差异：NSelect options disabled、NBadge 无 primary、NDatePicker 空串映射、input-props aria-label）、token 三层红线（组件禁写死色值/新色只进 tokens.ts 双主题同步/组件不判断主题）、领域状态徽章复用、naive-ui 测试约定（Provider harness/teleport document 查询/jsdom 离场过渡/Handle stub）、浮层层级规则（naive 基数 ≥2000）✅ 2026-08-29
+- [x] P6-2 `.trellis/spec/frontend/quality-guidelines.md` 增补「主题与组件库门禁」：el-* 回归闸门 grep（含子串误报排除规则）、颜色红线闸门、对比度核验流程（WCAG 阈值 + 脚本直连 tokens.ts）、主题行为测试要求、375px 双主题走查清单约定 ✅ 2026-08-29
+- [x] `.trellis/spec/frontend/index.md` 同步：技术栈行改 Naive UI + 双主题 token；component/quality 两份规范状态 → v1
+- [x] **Commit `docs(spec): 前端规范更新至 naive-ui + 双主题`** → 见 git log
 
 ## 风险文件与注意点
 
