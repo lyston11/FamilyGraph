@@ -343,3 +343,26 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 ### Status
 
 [WIP] **真实模型回路 E2E 已取证；余 compose 栈 E3 与 commit 待用户**
+
+
+## Session 3: V2 Agent 收口 trellis-check 复验与父子任务归档
+
+**Date**: 2026-08-29
+**Task**: V2 Agent 收口 trellis-check 复验与父子任务归档
+**Branch**: `main`
+
+### Summary
+
+对 08-29-v2-agent-architecture-release-closure 执行 trellis-check：task.py validate 父子任务均通过；backend ruff/format/mypy(120 files)/pytest 547 passed 全绿；agent type-check/lint/74 tests/build 全绿；frontend 复验被中断，此前记录 176 passed（后续由 redesign 任务延续）。用户确认任务已完成，归档子任务与父任务 08-28-v2-audit-remediation（archive/2026-08/）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f596ead` | (see git log) |
+| `add7fec` | (see git log) |
+| `7d5c8e2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
