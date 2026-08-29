@@ -1,20 +1,22 @@
 import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { defineComponent, h } from 'vue'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { NMessageProvider } from 'naive-ui'
 
 import OneTimePinDialog from '@/components/member/OneTimePinDialog.vue'
 
-vi.mock('@/api/members', () => ({
-  fetchMembers: vi.fn(),
-  fetchMember: vi.fn(),
-  createMember: vi.fn(),
-  updateMember: vi.fn(),
-  updateDisclosure: vi.fn(),
-  removeMember: vi.fn(),
-}))
+// naive useMessage 需 NMessageProvider 祖先；div 根保证 test-utils 元素查询稳定
+const MessageProvidedDialog = defineComponent({
+  render() {
+    return h('div', [
+      h(NMessageProvider, () =>
+        h(OneTimePinDialog, { pin: '654321', memberName: '母亲' }),
+      ),
+    ])
+  },
+})
 
-// 弹窗渲染在组件树内（无 teleport），配合 attachTo 用 document 查询亦可
+// n-modal 内容 teleport 到 body，断言与点击走 document 查询
 const pinInBody = (): string | null =>
   document.querySelector('[data-test="one-time-pin"]')?.textContent ?? null
 
@@ -24,9 +26,7 @@ describe('OneTimePinDialog', () => {
   })
 
   function mountDialog() {
-    return mount(OneTimePinDialog, {
-      props: { pin: '654321', memberName: '母亲' },
-      global: { plugins: [ElementPlus] },
+    return mount(MessageProvidedDialog, {
       attachTo: document.body,
     })
   }
@@ -48,7 +48,9 @@ describe('OneTimePinDialog', () => {
     ;(document.querySelector('[data-test="pin-done"]') as HTMLButtonElement).click()
     await new Promise((resolve) => setTimeout(resolve))
 
-    expect(wrapper.emitted('close')).toHaveLength(1)
+    // 组件树内查找（n-modal DOM teleport 到 body，但组件实例仍在树内）
+    const dialog = wrapper.findComponent(OneTimePinDialog)
+    expect(dialog.emitted('close')).toHaveLength(1)
     // 模拟父组件响应 close：卸载组件后 PIN 不应再出现在任何界面
     wrapper.unmount()
     expect(pinInBody()).toBeNull()

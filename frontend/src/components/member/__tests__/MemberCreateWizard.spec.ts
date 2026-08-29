@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
 
 import * as membersApi from '@/api/members'
 import * as spacesApi from '@/api/spaces'
@@ -62,72 +62,117 @@ function makeMember(overrides: Partial<Member> = {}): Member {
   }
 }
 
+// naive useMessage 需 NMessageProvider 祖先；n-modal 内容 teleport 到 body
+const MessageProvidedWizard = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(MemberCreateWizard))])
+  },
+})
+
+// n-modal 内容 teleport 到 body，交互统一走 document 查询
+function click(selector: string): void {
+  const target = document.querySelector(selector)
+  expect(target, selector).not.toBeNull()
+  target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+async function setInput(selector: string, value: string): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(selector)
+  expect(input, selector).not.toBeNull()
+  input!.value = value
+  input!.dispatchEvent(new Event('input'))
+  await new Promise((resolve) => setTimeout(resolve))
+}
+
+/** n-radio 原生 input：native click 触发 change（Phase 1 login.spec 同款交互） */
+async function clickRadio(groupSelector: string, index: number): Promise<void> {
+  const radios = document.querySelectorAll<HTMLInputElement>(
+    `${groupSelector} input[type="radio"]`,
+  )
+  expect(radios.length, groupSelector).toBeGreaterThan(index)
+  radios[index].click()
+  await new Promise((resolve) => setTimeout(resolve))
+}
+
+const nextButton = (): HTMLButtonElement =>
+  document.querySelector<HTMLButtonElement>('[data-test="wizard-next"]')!
+
 async function mountWizard() {
   const pinia = createPinia()
-  const wrapper = mount(MemberCreateWizard, {
-    global: { plugins: [pinia, ElementPlus] },
+  const wrapper = mount(MessageProvidedWizard, {
+    global: { plugins: [pinia] },
+    attachTo: document.body,
   })
   await wrapper.vm.$nextTick()
   return wrapper
 }
 
 /** 第一步通用操作：填名字 + 选关系（F-1 双必填） */
-async function fillInfoStep(wrapper: ReturnType<typeof mount>, name = '母亲'): Promise<void> {
-  await wrapper.find('[data-test="wizard-name"]').setValue(name)
-  const relationRadios = wrapper
-    .find('[data-test="wizard-relation-dir"]')
-    .findAll('.el-radio')
-  relationRadios[0].find('.el-radio__original').setValue(true)
-  await new Promise((resolve) => setTimeout(resolve))
+async function fillInfoStep(name = '母亲'): Promise<void> {
+  await setInput('[data-test="wizard-name"] input', name)
+  await clickRadio('[data-test="wizard-relation-dir"]', 0)
 }
 
 describe('MemberCreateWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    document.body.innerHTML = ''
   })
 
   it('第一步：名字为空禁用下一步；仅填名字仍禁用（关系必填）；选关系后放行', async () => {
     const wrapper = await mountWizard()
 
-    const next = wrapper.find('[data-test="wizard-next"]')
-    expect((next.element as HTMLButtonElement).disabled).toBe(true)
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-next"]')).not.toBeNull(),
+    )
+    expect(nextButton().disabled).toBe(true)
 
-    await wrapper.find('[data-test="wizard-name"]').setValue('母亲')
-    expect((next.element as HTMLButtonElement).disabled).toBe(true)
+    await setInput('[data-test="wizard-name"] input', '母亲')
+    expect(nextButton().disabled).toBe(true)
 
-    const relationRadios = wrapper
-      .find('[data-test="wizard-relation-dir"]')
-      .findAll('.el-radio')
+    const relationRadios = document.querySelectorAll(
+      '[data-test="wizard-relation-dir"] input[type="radio"]',
+    )
     expect(relationRadios.length).toBe(4)
-    relationRadios[0].find('.el-radio__original').setValue(true)
-    await new Promise((resolve) => setTimeout(resolve))
+    await clickRadio('[data-test="wizard-relation-dir"]', 0)
 
-    expect((next.element as HTMLButtonElement).disabled).toBe(false)
-    await next.trigger('click')
-    expect(wrapper.find('[data-test="wizard-step-mode"]').exists()).toBe(true)
+    expect(nextButton().disabled).toBe(false)
+    click('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
     wrapper.unmount()
   })
 
   it('完整流程（无空间）：资料 → 归属模式 → 确认提交 → 建档 + 关系请求发出 + PIN 弹窗', async () => {
     const pinia = createPinia()
-    const wrapper = mount(MemberCreateWizard, {
-      global: { plugins: [pinia, ElementPlus] },
+    const wrapper = mount(MessageProvidedWizard, {
+      global: { plugins: [pinia] },
+      attachTo: document.body,
     })
     const store = useMembersStore(pinia)
     mockedCreate.mockResolvedValue({ user: makeMember(), pin: '654321', replayed: false })
     await wrapper.vm.$nextTick()
 
-    await fillInfoStep(wrapper)
-    await wrapper.find('[data-test="wizard-next"]').trigger('click')
+    await fillInfoStep()
+    click('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
 
-    // 归属模式：默认 handover，选择「永久管理」（与 login.spec 相同的点击方式）
-    const radios = wrapper.find('[data-test="wizard-mode"]').findAll('.el-radio')
-    expect(radios.length).toBe(2)
-    radios[1].find('.el-radio__original').setValue(true)
+    // 归属模式：默认 handover，选择「永久管理」（n-radio 原生 input click）
+    const modeRadios = document.querySelectorAll(
+      '[data-test="wizard-mode"] input[type="radio"]',
+    )
+    expect(modeRadios.length).toBe(2)
+    ;(modeRadios[1] as HTMLInputElement).click()
     await new Promise((resolve) => setTimeout(resolve))
     expect(store.members).toHaveLength(0)
-    await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click')
-    await wrapper.find('[data-test="wizard-submit"]').trigger('click')
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-confirm"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-submit"]')
 
     await vi.waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith(
@@ -143,7 +188,11 @@ describe('MemberCreateWizard', () => {
     )
     // store 已落新档案（服务端数据唯一来源）
     await vi.waitFor(() => expect(store.members).toHaveLength(1))
-    expect(wrapper.emitted('created')).toEqual([[{ name: '母亲', pin: '654321' }]])
+    await vi.waitFor(() =>
+      expect(wrapper.findComponent(MemberCreateWizard).emitted('created')).toEqual([
+        [{ name: '母亲', pin: '654321' }],
+      ]),
+    )
     wrapper.unmount()
   })
 
@@ -152,15 +201,23 @@ describe('MemberCreateWizard', () => {
     mockedCreate.mockRejectedValue(new ApiError(422, 'VALIDATION_ERROR', '请求参数不合法'))
     const wrapper = await mountWizard()
 
-    await fillInfoStep(wrapper)
-    await wrapper.find('[data-test="wizard-next"]').trigger('click')
-    await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click')
-    await wrapper.find('[data-test="wizard-submit"]').trigger('click')
+    await fillInfoStep()
+    click('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-confirm"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-submit"]')
 
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-test="wizard-error"]').text()).toBe('请求参数不合法'),
+      expect(document.querySelector('[data-test="wizard-error"]')?.textContent).toBe(
+        '请求参数不合法',
+      ),
     )
-    expect(wrapper.emitted('created')).toBeUndefined()
+    expect(wrapper.findComponent(MemberCreateWizard).emitted('created')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -191,32 +248,37 @@ describe('MemberCreateWizard', () => {
     // 等待 onMounted 的 spaces.load() 完成
     await new Promise((resolve) => setTimeout(resolve))
 
-    await fillInfoStep(wrapper)
-    await wrapper.find('[data-test="wizard-next"]').trigger('click')
-    await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click') // 进入空间步骤
+    await fillInfoStep()
+    click('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-to-confirm"]') // 进入空间步骤
 
-    const stepSpace = wrapper.find('[data-test="wizard-step-space"]')
-    expect(stepSpace.exists()).toBe(true)
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-space"]')).not.toBeNull(),
+    )
 
     // 选「家庭空间」但未选具体空间 → 下一步被拦截
-    const choiceRadios = wrapper.find('[data-test="wizard-space-choice"]').findAll('.el-radio')
-    expect(choiceRadios.length).toBe(3)
-    choiceRadios[1].find('.el-radio__original').setValue(true)
-    await new Promise((resolve) => setTimeout(resolve))
-    await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click')
-    expect(wrapper.find('[data-test="wizard-step-space"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="wizard-error"]').text()).toContain('请先选择一个具体空间')
+    await clickRadio('[data-test="wizard-space-choice"]', 1)
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-error"]')?.textContent).toContain(
+        '请先选择一个具体空间',
+      ),
+    )
 
     // 切到族谱空间并内联新建 → 自动选中 → 可进入确认
-    choiceRadios[2].find('.el-radio__original').setValue(true)
-    await new Promise((resolve) => setTimeout(resolve))
-    await wrapper.find('[data-test="wizard-lineage-name"]').setValue('王家族谱')
-    await wrapper.find('[data-test="wizard-lineage-create"]').trigger('click')
+    await clickRadio('[data-test="wizard-space-choice"]', 2)
+    await setInput('[data-test="wizard-lineage-name"] input', '王家族谱')
+    click('[data-test="wizard-lineage-create"]')
     await vi.waitFor(() => expect(spacesApi.createSpace).toHaveBeenCalledWith('王家族谱', 'lineage'))
 
-    await wrapper.find('[data-test="wizard-to-confirm"]').trigger('click')
-    expect(wrapper.find('[data-test="wizard-step-confirm"]').exists()).toBe(true)
-    await wrapper.find('[data-test="wizard-submit"]').trigger('click')
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-confirm"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-submit"]')
 
     await vi.waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith(

@@ -1,6 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { NMessageProvider } from 'naive-ui'
 
 import ElementPlus from 'element-plus'
 
@@ -16,6 +18,15 @@ vi.mock('@/api/members', () => ({
   updateMember: vi.fn(),
   updateDisclosure: vi.fn(),
   removeMember: vi.fn(),
+}))
+
+// 抽屉内嵌 AttachmentsSection（挂载即拉取附件列表），mock 掉避免真实 XHR
+vi.mock('@/api/attachments', () => ({
+  fetchAttachments: vi.fn().mockResolvedValue([]),
+  addLink: vi.fn(),
+  deleteAttachment: vi.fn(),
+  uploadImage: vi.fn(),
+  attachmentRawUrl: vi.fn(() => ''),
 }))
 
 const mockedRemove = vi.mocked(membersApi.removeMember)
@@ -47,7 +58,8 @@ function makeMember(overrides: Partial<Member> = {}): Member {
   }
 }
 
-// el-drawer/el-dialog 默认 teleport 到 body，断言与点击走 document 查询
+// n-drawer/n-modal 默认 teleport 到 body，断言与点击走 document 查询；
+// 内嵌 KinshipTermPanel 仍为 element-plus（P3 迁移），需保留全局注册
 function click(selector: string): void {
   const target = document.querySelector(selector)
   expect(target, selector).not.toBeNull()
@@ -57,13 +69,19 @@ function click(selector: string): void {
 const text = (selector: string): string | undefined =>
   document.querySelector(selector)?.textContent ?? undefined
 
+// naive useMessage 需 NMessageProvider 祖先；div 根保证组件树查询稳定
+const MessageProvidedDrawer = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(ProfileDrawer, { memberId: 2 }))])
+  },
+})
+
 async function mountWithMember(member: Member) {
   const pinia = createPinia()
   const store = useMembersStore(pinia)
   store.members.push(member)
   store.openDrawer(member.id)
-  const wrapper = mount(ProfileDrawer, {
-    props: { memberId: member.id },
+  const wrapper = mount(MessageProvidedDrawer, {
     global: { plugins: [pinia, ElementPlus] },
     attachTo: document.body,
   })
@@ -94,7 +112,8 @@ describe('ProfileDrawer', () => {
     mockedDisclosure.mockResolvedValue(member)
 
     expect(document.querySelector('[data-test="disclosure-group"]')).not.toBeNull()
-    click('[data-test="disclosure-avatar"] .el-switch__core')
+    // n-switch 根节点自带 onClick（无原生 input，Phase 1 后交互走根元素 click）
+    click('[data-test="disclosure-avatar"]')
     await new Promise((resolve) => setTimeout(resolve))
     click('[data-test="disclosure-save"]')
 
@@ -124,6 +143,7 @@ describe('ProfileDrawer', () => {
       document.querySelector<HTMLButtonElement>('[data-test="delete-submit"]')!
     expect(submit().disabled).toBe(true)
 
+    // data-test 经 input-props 落在 n-input 的原生 input 上
     const input = document.querySelector<HTMLInputElement>('[data-test="delete-confirm-input"]')!
     input.value = '错误名字'
     input.dispatchEvent(new Event('input'))
@@ -137,7 +157,7 @@ describe('ProfileDrawer', () => {
 
     await vi.waitFor(() => expect(mockedRemove).toHaveBeenCalledWith(member.id, '母亲'))
     await vi.waitFor(() => expect(store.drawerTargetId).toBeNull())
-    await vi.waitFor(() => expect(wrapper.emitted('close')).toHaveLength(1))
+    await vi.waitFor(() => expect(wrapper.findComponent(ProfileDrawer).emitted('close')).toHaveLength(1))
     wrapper.unmount()
   })
 
@@ -162,7 +182,7 @@ describe('ProfileDrawer', () => {
       .click()
 
     await vi.waitFor(() => expect(text('[data-test="delete-error"]')).toContain('名字不一致'))
-    expect(wrapper.emitted('close')).toBeUndefined()
+    expect(wrapper.findComponent(ProfileDrawer).emitted('close')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -188,7 +208,7 @@ describe('ProfileDrawer', () => {
 
     // AC-F5：引导到移交流程（提及移交），不展示原始错误码文案
     await vi.waitFor(() => expect(text('[data-test="delete-error"]')).toContain('移交'))
-    expect(wrapper.emitted('close')).toBeUndefined()
+    expect(wrapper.findComponent(ProfileDrawer).emitted('close')).toBeUndefined()
     wrapper.unmount()
   })
 })

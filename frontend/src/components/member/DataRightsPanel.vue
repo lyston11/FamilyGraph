@@ -1,6 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, onMounted, ref } from 'vue'
+import {
+  NAlert,
+  NButton,
+  NDataTable,
+  NDatePicker,
+  NEmpty,
+  NForm,
+  NFormItem,
+  NInput,
+  NModal,
+  NRadio,
+  NRadioGroup,
+  NSelect,
+  useMessage,
+} from 'naive-ui'
+import type { DataTableColumns, SelectOption } from 'naive-ui'
+import type {
+  InputHTMLAttributes as VueInputHTMLAttributes,
+  TextareaHTMLAttributes as VueTextareaHTMLAttributes,
+} from 'vue'
 
 import { ApiError } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
@@ -10,9 +29,11 @@ import type { CorrectableField, DataRightRequest } from '@/types/api'
 /**
  * 我的数据面板（v2 F-5）：自助导出 / 更正 / 删除注销申请 + 认领争议入口。
  * 所有请求状态可追溯；导出产物过期后不可下载（后端 410）。
+ * 请求状态徽章与全站领域状态同源（--fg-status-*，design.md §3.4）。
  */
 const auth = useAuthStore()
 const governance = useGovernanceStore()
+const message = useMessage()
 
 const requestingExport = ref(false)
 
@@ -30,6 +51,16 @@ const deleteDialogVisible = ref(false)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref('')
+
+// data-* 未收录进 Vue 的 HTML 属性类型，断言收窄；运行时 naive 原样透传到原生 input
+const deleteConfirmInputProps = {
+  'data-test': 'delete-request-confirm-input',
+} as VueInputHTMLAttributes
+
+const disputeEvidenceInputProps = {
+  'data-test': 'dispute-evidence-input',
+  'aria-label': '争议情况描述',
+} as VueTextareaHTMLAttributes
 
 // ---- 认领争议 ----
 const disputeDialogVisible = ref(false)
@@ -54,17 +85,73 @@ const STATUS_LABELS: Record<DataRightRequest['status'], string> = {
   expired: '已过期',
 }
 
+/** 请求状态 → 领域状态徽章（--fg-status-* 同源，design.md §3.4） */
+function statusBadgeClass(status: DataRightRequest['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'fg-badge fg-badge--confirmed'
+    case 'rejected':
+      return 'fg-badge fg-badge--disputed'
+    case 'expired':
+      return 'fg-badge fg-badge--neutral'
+    default:
+      // pending / processing：进行中 = proposed 空心
+      return 'fg-badge fg-badge--proposed'
+  }
+}
+
 function formatTime(value: string | null): string {
   return value ? value.replace('T', ' ').slice(0, 16) : '—'
 }
+
+const historyColumns = computed<DataTableColumns<DataRightRequest>>(() => [
+  { title: '编号', key: 'id', width: 60 },
+  {
+    title: '类型',
+    key: 'type',
+    width: 64,
+    render: (row) => TYPE_LABELS[row.type],
+  },
+  {
+    title: '状态',
+    key: 'status',
+    width: 84,
+    render: (row) =>
+      h(
+        'span',
+        { class: statusBadgeClass(row.status), 'data-test': `dr-status-${row.id}` },
+        STATUS_LABELS[row.status],
+      ),
+  },
+  { title: '创建时间', key: 'created_at', width: 130, render: (row) => formatTime(row.created_at) },
+  { title: '过期时间', key: 'expires_at', width: 130, render: (row) => formatTime(row.expires_at) },
+  {
+    title: '操作',
+    key: 'actions',
+    render: (row) =>
+      downloadableExports.value.some((e) => e.id === row.id)
+        ? h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'primary',
+              secondary: true,
+              'data-test': `download-export-${row.id}`,
+              onClick: () => download(row.id),
+            },
+            { default: () => '下载导出文件' },
+          )
+        : null,
+  },
+])
 
 async function doRequestExport(): Promise<void> {
   requestingExport.value = true
   try {
     await governance.requestExport()
-    ElMessage.success('导出申请已提交，完成后可在列表下载（产物有过期时间）')
+    message.success('导出申请已提交，完成后可在列表下载（产物有过期时间）')
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '申请失败，请稍后重试')
+    message.error(error instanceof ApiError ? error.message : '申请失败，请稍后重试')
   } finally {
     requestingExport.value = false
   }
@@ -86,10 +173,10 @@ async function download(requestId: number): Promise<void> {
     URL.revokeObjectURL(url)
   } catch (error) {
     if (error instanceof ApiError && error.code === 'DATA_RIGHT_REQUEST_EXPIRED') {
-      ElMessage.warning('该导出文件已过期，请重新申请')
+      message.warning('该导出文件已过期，请重新申请')
       await governance.loadDataRights().catch(() => undefined)
     } else {
-      ElMessage.error('下载失败，请稍后重试')
+      message.error('下载失败，请稍后重试')
     }
   }
 }
@@ -125,16 +212,16 @@ function buildCorrectionFields(): Record<string, unknown> | null {
 async function submitCorrection(): Promise<void> {
   const fields = buildCorrectionFields()
   if (!fields) {
-    ElMessage.warning('请填写更正后的值')
+    message.warning('请填写更正后的值')
     return
   }
   correcting.value = true
   try {
     await governance.requestCorrection(fields)
-    ElMessage.success('更正申请已提交，等待平台人工决议（理由与审计留痕）')
+    message.success('更正申请已提交，等待平台人工决议（理由与审计留痕）')
     correctDialogVisible.value = false
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '申请失败，请稍后重试')
+    message.error(error instanceof ApiError ? error.message : '申请失败，请稍后重试')
   } finally {
     correcting.value = false
   }
@@ -146,7 +233,7 @@ async function submitDeletion(): Promise<void> {
   try {
     const request = await governance.requestDeletion()
     await governance.executeDelete(request.id, deleteConfirmName.value.trim())
-    ElMessage.success('档案与账号已删除。感谢你曾使用 FamilyGraph。')
+    message.success('档案与账号已删除。感谢你曾使用 FamilyGraph。')
     deleteDialogVisible.value = false
     // 本地会话即刻失效：清空全部缓存并回登录页
     auth.clearSession()
@@ -168,11 +255,11 @@ async function raiseDispute(): Promise<void> {
   raisingDispute.value = true
   try {
     await governance.raiseDispute(auth.user.id, { description: disputeEvidence.value.trim() })
-    ElMessage.success('争议已提交，平台将人工复核并保留双方证据原文')
+    message.success('争议已提交，平台将人工复核并保留双方证据原文')
     disputeDialogVisible.value = false
     disputeEvidence.value = ''
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '提交失败，请稍后重试')
+    message.error(error instanceof ApiError ? error.message : '提交失败，请稍后重试')
   } finally {
     raisingDispute.value = false
   }
@@ -182,7 +269,7 @@ async function withdraw(disputeId: number): Promise<void> {
   try {
     await governance.withdrawDispute(disputeId)
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '撤回失败')
+    message.error(error instanceof ApiError ? error.message : '撤回失败')
   }
 }
 
@@ -192,59 +279,45 @@ const DISPUTE_STATUS_LABELS: Record<string, string> = {
   resolved_reject: '已驳回',
   withdrawn: '已撤回',
 }
+
+const correctFieldOptions: SelectOption[] = [
+  { label: '名字', value: 'name' },
+  { label: '性别', value: 'gender' },
+  { label: '出生日期', value: 'birth' },
+  { label: '去世日期', value: 'death' },
+  { label: '简介', value: 'bio' },
+]
 </script>
 
 <template>
   <section class="data-rights" data-test="data-rights-panel">
     <!-- 申请区 -->
     <div class="request-row">
-      <el-button type="primary" plain :loading="requestingExport" data-test="request-export-btn" @click="doRequestExport">
+      <NButton type="primary" secondary :loading="requestingExport" data-test="request-export-btn" @click="doRequestExport">
         申请数据导出
-      </el-button>
-      <el-button plain data-test="open-correct-dialog" @click="openCorrectDialog">申请资料更正</el-button>
-      <el-button type="danger" plain data-test="open-delete-dialog" @click="deleteDialogVisible = true">
+      </NButton>
+      <NButton secondary data-test="open-correct-dialog" @click="openCorrectDialog">申请资料更正</NButton>
+      <NButton type="error" secondary data-test="open-delete-dialog" @click="deleteDialogVisible = true">
         申请删除 / 注销
-      </el-button>
-      <el-button plain data-test="open-dispute-dialog" @click="disputeDialogVisible = true">
+      </NButton>
+      <NButton secondary data-test="open-dispute-dialog" @click="disputeDialogVisible = true">
         提交认领争议
-      </el-button>
+      </NButton>
     </div>
 
     <!-- 申请历史 -->
     <h4 class="block-title">申请记录</h4>
-    <el-table :data="governance.dataRights" size="small" empty-text="暂无申请" data-test="data-right-history">
-      <el-table-column prop="id" label="编号" width="70" />
-      <el-table-column label="类型" width="80">
-        <template #default="{ row }">{{ TYPE_LABELS[row.type as keyof typeof TYPE_LABELS] }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="90">
-        <template #default="{ row }">
-          <el-tag size="small" :type="row.status === 'completed' ? 'success' : row.status === 'rejected' ? 'danger' : 'info'" :data-test="`dr-status-${row.id}`">
-            {{ STATUS_LABELS[row.status as keyof typeof STATUS_LABELS] }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="创建时间" width="140">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-      </el-table-column>
-      <el-table-column label="过期时间" width="140">
-        <template #default="{ row }">{{ formatTime(row.expires_at) }}</template>
-      </el-table-column>
-      <el-table-column label="操作">
-        <template #default="{ row }">
-          <el-button
-            v-if="downloadableExports.some((e) => e.id === row.id)"
-            size="small"
-            type="primary"
-            plain
-            :data-test="`download-export-${row.id}`"
-            @click="download(row.id)"
-          >
-            下载导出文件
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <NDataTable
+      size="small"
+      :columns="historyColumns"
+      :data="governance.dataRights"
+      :row-key="(row: DataRightRequest) => row.id"
+      data-test="data-right-history"
+    >
+      <template #empty>
+        <NEmpty description="暂无申请" size="small" />
+      </template>
+    </NDataTable>
 
     <!-- 我的争议 -->
     <template v-if="governance.disputes.length > 0">
@@ -252,101 +325,102 @@ const DISPUTE_STATUS_LABELS: Record<string, string> = {
       <ul class="dispute-list" data-test="my-dispute-list">
         <li v-for="d in governance.disputes" :key="d.id" class="dispute-row">
           <span>#{{ d.id }} · {{ DISPUTE_STATUS_LABELS[d.status] ?? d.status }} · {{ formatTime(d.created_at) }}</span>
-          <el-button v-if="d.status === 'open'" size="small" plain @click="withdraw(d.id)">撤回</el-button>
+          <NButton v-if="d.status === 'open'" size="tiny" secondary @click="withdraw(d.id)">撤回</NButton>
         </li>
       </ul>
     </template>
 
     <!-- 更正申请弹窗 -->
-    <el-dialog v-model="correctDialogVisible" title="申请资料更正" width="420px" data-test="correct-dialog">
-      <el-form label-position="top">
-        <el-form-item label="选择字段">
-          <el-select v-model="correctField" data-test="correct-field-select">
-            <el-option label="名字" value="name" />
-            <el-option label="性别" value="gender" />
-            <el-option label="出生日期" value="birth" />
-            <el-option label="去世日期" value="death" />
-            <el-option label="简介" value="bio" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="更正后的值">
-          <el-input v-if="correctField === 'name'" v-model="correctValueName" maxlength="100" data-test="correct-value-name" />
-          <el-radio-group v-else-if="correctField === 'gender'" v-model="correctValueGender" data-test="correct-value-gender">
-            <el-radio value="f">女</el-radio>
-            <el-radio value="m">男</el-radio>
-            <el-radio value="unknown">不详</el-radio>
-          </el-radio-group>
-          <el-date-picker
+    <NModal v-model:show="correctDialogVisible" preset="card" title="申请资料更正" data-test="correct-dialog">
+      <NForm label-placement="top" :show-feedback="false">
+        <NFormItem label="选择字段">
+          <NSelect v-model:value="correctField" :options="correctFieldOptions" data-test="correct-field-select" />
+        </NFormItem>
+        <NFormItem label="更正后的值">
+          <NInput v-if="correctField === 'name'" v-model:value="correctValueName" :maxlength="100" data-test="correct-value-name" />
+          <NRadioGroup v-else-if="correctField === 'gender'" v-model:value="correctValueGender" data-test="correct-value-gender">
+            <NRadio value="f">女</NRadio>
+            <NRadio value="m">男</NRadio>
+            <NRadio value="unknown">不详</NRadio>
+          </NRadioGroup>
+          <NDatePicker
             v-else-if="correctField === 'birth' || correctField === 'death'"
-            v-model="correctValueDate"
+            :formatted-value="correctValueDate || null"
             type="date"
-            value-format="YYYY-MM-DD"
+            value-format="yyyy-MM-dd"
             placeholder="公历日期"
             data-test="correct-value-date"
+            @update:formatted-value="(v: string | null) => (correctValueDate = v ?? '')"
           />
-          <el-input v-else v-model="correctValueBio" type="textarea" :rows="3" maxlength="2000" data-test="correct-value-bio" />
-        </el-form-item>
+          <NInput v-else v-model:value="correctValueBio" type="textarea" :rows="3" :maxlength="2000" data-test="correct-value-bio" />
+        </NFormItem>
         <p class="hint">批准后将由平台按白名单字段应用更正；处理需 break-glass 理由并完整审计。</p>
-      </el-form>
+      </NForm>
       <template #footer>
-        <el-button @click="correctDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="correcting" data-test="correct-submit" @click="submitCorrection">
-          提交申请
-        </el-button>
+        <div class="footer-actions">
+          <NButton @click="correctDialogVisible = false">取消</NButton>
+          <NButton type="primary" :loading="correcting" data-test="correct-submit" @click="submitCorrection">
+            提交申请
+          </NButton>
+        </div>
       </template>
-    </el-dialog>
+    </NModal>
 
     <!-- 删除/注销确认弹窗 -->
-    <el-dialog v-model="deleteDialogVisible" title="申请删除 / 注销" width="420px" data-test="delete-request-dialog">
-      <el-alert type="error" :closable="false" class="mb8">
+    <NModal v-model:show="deleteDialogVisible" preset="card" title="申请删除 / 注销" data-test="delete-request-dialog">
+      <NAlert type="error" :show-icon="true" class="mb8">
         删除不可恢复：档案、账号、会话、附件与空间引用将一并移除；涉及的空间所有权必须先完成移交。
         导出缓存中的副本随备份轮转淘汰。
-      </el-alert>
+      </NAlert>
       <p class="confirm-text">
         请输入你的名字 <strong>{{ auth.user?.name }}</strong> 以确认：
       </p>
-      <el-input v-model="deleteConfirmName" placeholder="输入名字确认" data-test="delete-request-confirm-input" />
+      <NInput v-model:value="deleteConfirmName" placeholder="输入名字确认" :input-props="deleteConfirmInputProps" />
       <p v-if="deleteError" class="error" data-test="delete-request-error">{{ deleteError }}</p>
       <template #footer>
-        <el-button @click="deleteDialogVisible = false">取消</el-button>
-        <el-button
-          type="danger"
-          :disabled="deleteConfirmName !== auth.user?.name"
-          :loading="deleting"
-          data-test="delete-request-submit"
-          @click="submitDeletion"
-        >
-          确认删除并注销
-        </el-button>
+        <div class="footer-actions">
+          <NButton @click="deleteDialogVisible = false">取消</NButton>
+          <NButton
+            type="error"
+            :disabled="deleteConfirmName !== auth.user?.name"
+            :loading="deleting"
+            data-test="delete-request-submit"
+            @click="submitDeletion"
+          >
+            确认删除并注销
+          </NButton>
+        </div>
       </template>
-    </el-dialog>
+    </NModal>
 
     <!-- 认领争议弹窗 -->
-    <el-dialog v-model="disputeDialogVisible" title="提交认领争议" width="420px" data-test="raise-dispute-dialog">
+    <NModal v-model:show="disputeDialogVisible" preset="card" title="提交认领争议" data-test="raise-dispute-dialog">
       <p class="hint mb8">
         若你认为某档案归属存在错误（例如他人以你名义建档），可提交争议说明。证据原文将被保留，平台人工复核需记录理由与审计。
       </p>
-      <el-input
-        v-model="disputeEvidence"
+      <NInput
+        v-model:value="disputeEvidence"
         type="textarea"
         :rows="4"
-        maxlength="1000"
+        :maxlength="1000"
         placeholder="描述情况：涉及谁、错在哪里、依据是什么"
-        data-test="dispute-evidence-input"
+        :input-props="disputeEvidenceInputProps"
       />
       <template #footer>
-        <el-button @click="disputeDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="!disputeEvidence.trim()"
-          :loading="raisingDispute"
-          data-test="raise-dispute-submit"
-          @click="raiseDispute"
-        >
-          提交争议
-        </el-button>
+        <div class="footer-actions">
+          <NButton @click="disputeDialogVisible = false">取消</NButton>
+          <NButton
+            type="primary"
+            :disabled="!disputeEvidence.trim()"
+            :loading="raisingDispute"
+            data-test="raise-dispute-submit"
+            @click="raiseDispute"
+          >
+            提交争议
+          </NButton>
+        </div>
       </template>
-    </el-dialog>
+    </NModal>
   </section>
 </template>
 
@@ -361,6 +435,7 @@ const DISPUTE_STATUS_LABELS: Record<string, string> = {
 .block-title {
   margin: 12px 0 8px;
   font-size: 14px;
+  color: var(--fg-ink);
 }
 
 .dispute-list {
@@ -375,7 +450,8 @@ const DISPUTE_STATUS_LABELS: Record<string, string> = {
   align-items: center;
   padding: 6px 0;
   font-size: 13px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  color: var(--fg-ink);
+  border-bottom: 1px solid var(--fg-line);
 }
 
 .confirm-text {
@@ -388,14 +464,29 @@ const DISPUTE_STATUS_LABELS: Record<string, string> = {
 }
 
 .hint {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
 
 .error {
   margin-top: 8px;
-  color: var(--el-color-danger);
+  color: var(--fg-status-disputed);
   font-size: 13px;
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+</style>
+
+<style>
+/* 弹窗宽度：n-modal 根节点 teleport 到 body，以 data-test 锚定 */
+[data-test='correct-dialog'],
+[data-test='delete-request-dialog'],
+[data-test='raise-dispute-dialog'] {
+  width: min(420px, calc(100vw - 48px));
 }
 </style>

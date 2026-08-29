@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
 
 import * as membersApi from '@/api/members'
 import * as spacesApi from '@/api/spaces'
@@ -83,10 +83,34 @@ function makeTransfer(overrides: Partial<OwnershipTransfer> = {}): OwnershipTran
 
 let pinia: Pinia
 
-async function mountDialog(): Promise<ReturnType<typeof mount>> {
-  const wrapper = mount(SpaceGovernanceDialog, {
-    props: { visible: true },
-    global: { plugins: [pinia, ElementPlus] },
+// n-modal 内容 teleport 到 body，交互统一走 document 查询
+function click(selector: string): void {
+  const target = document.querySelector(selector)
+  expect(target, selector).not.toBeNull()
+  target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+async function setInput(selector: string, value: string): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(selector)
+  expect(input, selector).not.toBeNull()
+  input!.value = value
+  input!.dispatchEvent(new Event('input'))
+  await new Promise((resolve) => setTimeout(resolve))
+}
+
+const text = (selector: string): string | undefined =>
+  document.querySelector(selector)?.textContent ?? undefined
+
+// naive useMessage 需 NMessageProvider 祖先；div 根保证组件树查询稳定
+const MessageProvidedDialog = defineComponent({
+  render() {
+    return h('div', [h(NMessageProvider, () => h(SpaceGovernanceDialog, { visible: true }))])
+  },
+})
+
+async function mountDialog() {
+  const wrapper = mount(MessageProvidedDialog, {
+    global: { plugins: [pinia] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
@@ -128,10 +152,10 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     seedState(1, allMembers())
     const wrapper = await mountDialog()
 
-    expect(wrapper.find('[data-test="my-role-tag"]').text()).toContain('所有者')
-    expect(wrapper.find('[data-test="guest-hint"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(true)
+    expect(text('[data-test="my-role-tag"]')).toContain('所有者')
+    expect(document.querySelector('[data-test="guest-hint"]')).toBeNull()
+    expect(document.querySelector('[data-test="governance-invite-search"]')).not.toBeNull()
+    expect(document.querySelector('[data-test="transfer-target-select"]')).not.toBeNull()
     // 可移交候选排除自己（下拉打开后才渲染，这里仅断言非 owner 不在候选逻辑内：由后续测试覆盖）
     wrapper.unmount()
   })
@@ -144,16 +168,16 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     ])
     const wrapper = await mountDialog()
 
-    await wrapper.find('[data-test="governance-invite-search"]').setValue('新')
-    await wrapper.find('[data-test="governance-invite-search-btn"]').trigger('click')
+    await setInput('[data-test="governance-invite-search"] input', '新')
+    click('[data-test="governance-invite-search-btn"]')
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-test="governance-invite-9"]').exists()).toBe(true),
+      expect(document.querySelector('[data-test="governance-invite-9"]')).not.toBeNull(),
     )
     // 已是空间成员的搜索结果被过滤
-    expect(wrapper.find('[data-test="governance-invite-2"]').exists()).toBe(false)
+    expect(document.querySelector('[data-test="governance-invite-2"]')).toBeNull()
 
     mockedInvite.mockResolvedValue(makeMembership({ id: 20, user_id: 9, status: 'pending' }))
-    await wrapper.find('[data-test="governance-invite-9"]').trigger('click')
+    click('[data-test="governance-invite-9"]')
     await vi.waitFor(() => expect(mockedInvite).toHaveBeenCalledWith(1, 9))
     wrapper.unmount()
   })
@@ -162,23 +186,25 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     seedState(1, allMembers())
     const wrapper = await mountDialog()
 
-    const initiate = () => wrapper.find('[data-test="transfer-initiate"]')
-    expect((initiate().element as HTMLButtonElement).disabled).toBe(true)
+    const initiate = () => document.querySelector<HTMLButtonElement>('[data-test="transfer-initiate"]')!
+    expect(initiate().disabled).toBe(true)
 
-    await wrapper.find('[data-test="transfer-target-select"]').trigger('click')
+    // n-select：键盘路径（jsdom 下虚拟列表视口高为 0，选项 DOM 不渲染）——
+    // 第一次 Enter 打开下拉（autoPending 落在首个候选），第二次 Enter 选中。
+    // 首个候选即第一个非自己成员（用户2），与真实键盘用户路径一致。
+    const selection = () =>
+      document.querySelector('[data-test="transfer-target-select"] .n-base-selection')!
+    selection().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await vi.waitFor(() =>
-      expect(document.querySelector('.el-select-dropdown__item')).not.toBeNull(),
+      expect(document.querySelector('.n-base-select-menu')).not.toBeNull(),
     )
-    // 第一个选项即第一个非自己成员（用户2）
-    document
-      .querySelector('.el-select-dropdown__item')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    selection().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await new Promise((resolve) => setTimeout(resolve))
     await new Promise((resolve) => setTimeout(resolve))
-    expect((initiate().element as HTMLButtonElement).disabled).toBe(false)
+    expect(initiate().disabled).toBe(false)
 
     mockedCreateTransfer.mockResolvedValue(makeTransfer())
-    await initiate().trigger('click')
+    initiate().click()
     await vi.waitFor(() => expect(mockedCreateTransfer).toHaveBeenCalledWith(1, 2))
     wrapper.unmount()
   })
@@ -187,15 +213,15 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     seedState(2, allMembers(), [makeTransfer()])
     const wrapper = await mountDialog()
 
-    expect(wrapper.find('[data-test="my-role-tag"]').text()).toContain('管理员')
-    expect(wrapper.find('[data-test="transfer-pending"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="transfer-accept"]').exists()).toBe(true)
+    expect(text('[data-test="my-role-tag"]')).toContain('管理员')
+    expect(document.querySelector('[data-test="transfer-pending"]')).not.toBeNull()
+    expect(document.querySelector('[data-test="transfer-accept"]')).not.toBeNull()
     // space_admin 可邀请新成员（§0.2），但不能发起移交（仅 owner）
-    expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
+    expect(document.querySelector('[data-test="governance-invite-search"]')).not.toBeNull()
+    expect(document.querySelector('[data-test="transfer-target-select"]')).toBeNull()
 
     mockedRespondTransfer.mockResolvedValue(makeTransfer({ status: 'accepted', decided_at: 'x' }))
-    await wrapper.find('[data-test="transfer-accept"]').trigger('click')
+    click('[data-test="transfer-accept"]')
     await vi.waitFor(() => expect(mockedRespondTransfer).toHaveBeenCalledWith(50, 'accept'))
     wrapper.unmount()
   })
@@ -204,11 +230,11 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     seedState(1, allMembers(), [makeTransfer()])
     const wrapper = await mountDialog()
 
-    expect(wrapper.find('[data-test="transfer-cancel"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="transfer-accept"]').exists()).toBe(false)
+    expect(document.querySelector('[data-test="transfer-cancel"]')).not.toBeNull()
+    expect(document.querySelector('[data-test="transfer-accept"]')).toBeNull()
 
     mockedRespondTransfer.mockResolvedValue(makeTransfer({ status: 'cancelled', decided_at: 'x' }))
-    await wrapper.find('[data-test="transfer-cancel"]').trigger('click')
+    click('[data-test="transfer-cancel"]')
     await vi.waitFor(() => expect(mockedRespondTransfer).toHaveBeenCalledWith(50, 'cancel'))
     wrapper.unmount()
   })
@@ -217,10 +243,10 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     seedState(3, allMembers())
     const wrapper = await mountDialog()
 
-    expect(wrapper.find('[data-test="guest-hint"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="my-role-tag"]').text()).toContain('访客')
-    expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
+    expect(document.querySelector('[data-test="guest-hint"]')).not.toBeNull()
+    expect(text('[data-test="my-role-tag"]')).toContain('访客')
+    expect(document.querySelector('[data-test="governance-invite-search"]')).toBeNull()
+    expect(document.querySelector('[data-test="transfer-target-select"]')).toBeNull()
     wrapper.unmount()
   })
 })

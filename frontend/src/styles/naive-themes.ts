@@ -47,6 +47,11 @@ function buildOverrides(name: ThemeName): GlobalThemeOverrides {
       errorColorHover: vars['status-disputed'],
       errorColorPressed: vars['status-disputed'],
       errorColorSuppl: vars['status-disputed'],
+      // 信息色（NAlert type="info" 等）：indigo 同源，避免 naive 默认蓝脱离色板
+      infoColor: vars['info'],
+      infoColorHover: vars['info'],
+      infoColorPressed: vars['info'],
+      infoColorSuppl: vars['info'],
     },
   }
 }
