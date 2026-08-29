@@ -1,0 +1,38 @@
+/* 设计 token 静态基座（design.md §2.1/§2.2）。
+ * 颜色一律引用 --fg-* 主题变量（值由 tokens.ts 在 App.vue 运行时注入
+ * documentElement），本文件不写死任何色值；正文字体栈为两主题共用的静态变量。 */
+
+:root {
+  /* 正文/界面字体栈（标题栈 --fg-font-display 随主题注入：纸墨=宋体栈，清雅=引用本变量） */
+  --fg-font-body:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  font-family: var(--fg-font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 画布风格背景：主题底色 + 细点阵，随主题联动（纸墨暖点阵 / 清雅冷灰点阵） */
+body {
+  background-color: var(--fg-surface);
+  background-image: radial-gradient(circle, var(--fg-dot) 1px, transparent 1px);
+  background-size: var(--fg-dot-gap) var(--fg-dot-gap);
+}
+
+/* 键盘导航可见焦点（WCAG 2.4.7）：跟随主题主色 */
+:focus-visible {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 2px;
+}
+
+/* 动效降级 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

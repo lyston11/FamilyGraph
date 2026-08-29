@@ -11,6 +11,8 @@ import './styles/global.css'
 import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/el-message.css'
 import 'element-plus/theme-chalk/el-dialog.css'
+// 设计 token 静态基座（置于 element-plus 样式之后，确保基座规则优先）
+import './styles/tokens.css'
 
 const app = createApp(App)
 app.use(createPinia())
