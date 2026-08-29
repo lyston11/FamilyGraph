@@ -1,0 +1,8 @@
+{"file":".trellis/spec/architecture.md","reason":"V2 visibility, identity, state-machine, provider egress and domain-command contracts are authoritative."}
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"Internal Pi protocol, token, queue, provider and tool contracts."}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"Visibility purpose, TermRegistry precedence and SourceFact/DerivedFact write boundaries."}
+{"file":".trellis/spec/backend/controlled-web.md","reason":"Approved-token transaction, SSRF and web tool constraints."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite WAL, migration, transaction and backup rules."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed error and fail-closed response conventions."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Secret/PII redaction and audit requirements."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Required cross-layer data-flow review for backend, sidecar and Compose changes."}
