@@ -5,6 +5,7 @@ import { NButton, NEmpty, NInput, NModal, NSpin, useMessage } from 'naive-ui'
 import type { TextareaHTMLAttributes } from 'vue'
 
 import { ApiError } from '@/api/errors'
+import { getSafeInternalRedirect } from '@/router/redirect'
 import { useAuthStore } from '@/stores/auth'
 import { useGovernanceStore } from '@/stores/governance'
 import type { FactReview } from '@/types/api'
@@ -138,7 +139,7 @@ async function confirmReview(review: FactReview): Promise<void> {
 }
 
 function finish(): void {
-  const target = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+  const target = getSafeInternalRedirect(route.query.redirect) ?? '/'
   void router.replace(target)
 }
 </script>

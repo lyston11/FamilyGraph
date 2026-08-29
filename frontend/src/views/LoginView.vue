@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { NButton, NForm, NFormItem, NInput, NModal, NRadio, useMessage } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
+import { getSafeInternalRedirect } from '@/router/redirect'
 import type { ChallengeCandidate } from '@/types/api'
 import { useAuthStore } from '@/stores/auth'
 
@@ -28,12 +29,15 @@ const candidates = ref<ChallengeCandidate[]>([])
 const selectedUserId = ref<number | null>(null)
 
 function redirectAfterLogin(): void {
-  const target = route.query.redirect
+  const target = getSafeInternalRedirect(route.query.redirect)
   if (auth.mustChangePin) {
-    void router.replace({ name: 'force-change-pin' })
+    void router.replace({
+      name: 'force-change-pin',
+      query: target ? { redirect: target } : undefined,
+    })
     return
   }
-  if (typeof target === 'string' && target.startsWith('/')) {
+  if (target) {
     void router.replace(target)
     return
   }

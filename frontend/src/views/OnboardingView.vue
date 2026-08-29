@@ -7,7 +7,7 @@ import { ApiError } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
 
 /**
- * 首启引导页（沉浸页，meta.chrome='blank'）：系统无任何用户时创建管理员。
+ * 首启引导页（沉浸页，meta.chrome='blank'）：系统无任何用户时创建平台运营者。
  * 随机 PIN 仅本次展示（Q3 默认方案），提示截图保存、不可回看——以"凭证卡"呈现：
  * 大号等宽数字 + 复制按钮 + 票据式警示框；纸墨主题附朱砂"凭"字印章质感。
  */
@@ -43,7 +43,7 @@ onUnmounted(() => {
 
 async function submit(): Promise<void> {
   if (!name.value.trim()) {
-    errorMessage.value = '请输入管理员名字'
+    errorMessage.value = '请输入平台运营者名字'
     return
   }
   submitting.value = true
@@ -71,10 +71,10 @@ function goLogin(): void {
 
       <template v-if="!issuedPin">
         <h1 class="title">欢迎使用 FamilyGraph</h1>
-        <p class="desc">首次启动，请创建管理员账号。系统将生成一次性随机 PIN 码。</p>
+        <p class="desc">首次启动，请创建平台运营者账号。系统将生成一次性随机 PIN 码。</p>
 
         <NForm class="form" label-placement="top" :show-feedback="false" @submit.prevent="submit">
-          <NFormItem label="管理员名字" :label-props="{ for: 'onboarding-name-input' }">
+          <NFormItem label="平台运营者名字" :label-props="{ for: 'onboarding-name-input' }">
             <NInput
               v-model:value="name"
               placeholder="例如：族长"
@@ -93,7 +93,7 @@ function goLogin(): void {
             data-test="onboarding-submit"
             @click="submit"
           >
-            创建管理员
+            创建平台运营者账号
           </NButton>
         </NForm>
       </template>
@@ -150,7 +150,7 @@ function goLogin(): void {
           </NButton>
         </div>
 
-        <p class="admin-name">管理员：{{ name }}</p>
+        <p class="admin-name">平台运营者：{{ name }}</p>
         <NButton class="submit" type="primary" block data-test="onboarding-done" @click="goLogin">
           我已保存，去登录
         </NButton>

@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import ChangePinForm from '@/components/common/ChangePinForm.vue'
+import { getSafeInternalRedirect } from '@/router/redirect'
 
 /**
  * 首登强制改 PIN 页（沉浸页，meta.chrome='blank'；pin_must_change=true 时的唯一可停留页面）。
  * 改毕服务端使全部会话失效 → 回登录页。白名单路由逻辑在守卫内，本页不感知。
  */
 const router = useRouter()
+const route = useRoute()
 
 function onChanged(): void {
-  void router.replace({ name: 'login' })
+  const redirect = getSafeInternalRedirect(route.query.redirect)
+  void router.replace({
+    name: 'login',
+    query: redirect ? { redirect } : undefined,
+  })
 }
 </script>
 

@@ -70,7 +70,12 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
   <main class="settings-view">
     <NCard class="card" data-test="settings-card">
       <template #header>
-        <span class="card-title">设置</span>
+        <div class="title-row">
+          <NButton text data-test="settings-back" @click="router.push({ name: 'family-space' })">
+            ← 家庭空间
+          </NButton>
+          <span class="card-title">设置</span>
+        </div>
       </template>
       <template #header-extra>
         <div class="header">
@@ -84,7 +89,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
       <section class="section">
         <h2 class="section-title">当前账号</h2>
         <p class="meta" data-test="current-user">
-          {{ auth.user?.name }}<template v-if="auth.user?.is_admin">（平台运营者）</template>
+          {{ auth.user?.name }}<template v-if="auth.isPlatformOperator">（平台运营者）</template>
         </p>
       </section>
 
@@ -179,6 +184,13 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
   font-family: var(--fg-font-display);
   font-size: 18px;
   color: var(--fg-ink);
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .header {

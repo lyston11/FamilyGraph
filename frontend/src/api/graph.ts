@@ -6,9 +6,15 @@ import type {
 
 import { apiClient } from './client'
 
-/** 我的图数据：family=±depth；clan=全连通分量 */
-export async function fetchMyGraph(scope: 'family' | 'clan' = 'family', depth = 1): Promise<GraphData> {
-  const { data } = await apiClient.get<GraphData>('/graph/me', { params: { scope, depth } })
+/** 我的图数据：family=±depth；clan=全连通分量。指定 spaceId 时服务端将结果限定到该空间。 */
+export async function fetchMyGraph(
+  scope: 'family' | 'clan' = 'family',
+  depth = 1,
+  spaceId?: number,
+): Promise<GraphData> {
+  const params: { scope: 'family' | 'clan'; depth: number; space_id?: number } = { scope, depth }
+  if (spaceId !== undefined) params.space_id = spaceId
+  const { data } = await apiClient.get<GraphData>('/graph/me', { params })
   return data
 }
 

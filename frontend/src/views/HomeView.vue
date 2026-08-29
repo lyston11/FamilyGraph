@@ -74,12 +74,16 @@ const inviteKeyword = ref('')
 const inviteCandidates = ref<Member[]>([])
 const invitingId = ref<number | null>(null)
 
-function openInviteDialog() {
+function openInviteDialog(): void {
+  if (!spacesStore.canInvite) {
+    message.error('仅空间所有者或空间管理员可邀请成员')
+    return
+  }
   inviteOpen.value = true
 }
 
 async function doInviteSearch() {
-  if (!inviteKeyword.value.trim()) return
+  if (!spacesStore.canInvite || !inviteKeyword.value.trim()) return
   try {
     const data = await fetchMembersByPrefix(inviteKeyword.value.trim())
     const currentIds = new Set(spacesStore.activeMembers.map((m) => m.user_id))
@@ -90,6 +94,10 @@ async function doInviteSearch() {
 }
 
 async function inviteUser(member: Member) {
+  if (!spacesStore.canInvite) {
+    message.error('仅空间所有者或空间管理员可邀请成员')
+    return
+  }
   invitingId.value = member.id
   try {
     await spacesStore.invite(member.id)
@@ -219,6 +227,9 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
         >
           <NButton data-test="open-relation-dialog" @click="openRelationDialog">添加关系</NButton>
         </NBadge>
+        <NButton data-test="go-family-space" @click="router.push({ name: 'family-space' })">
+          家庭空间
+        </NButton>
         <NButton data-test="go-settings" @click="goSettings">设置</NButton>
       </div>
     </header>
@@ -244,7 +255,13 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
             aria-label="切换家庭空间"
             @update:value="(id: number) => spacesStore.loadMembers(id)"
           />
-          <NButton size="small" secondary data-test="invite-member" @click="openInviteDialog">邀请成员</NButton>
+          <NButton
+            v-if="spacesStore.canInvite"
+            size="small"
+            secondary
+            data-test="invite-member"
+            @click="openInviteDialog"
+          >邀请成员</NButton>
         </div>
         <div v-for="inv in spacesStore.pendingForMe" :key="inv.id" class="invite-row" data-test="space-invite">
           <span>「{{ spacesStore.spaces.find((s) => s.id === inv.space_id)?.name ?? '未知空间' }}」邀请你加入</span>

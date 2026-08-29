@@ -79,8 +79,9 @@ onMounted(async () => {
     members.load().catch(() => undefined),
     spaces.load().catch(() => undefined),
   ])
-  await loadPositions()
-  await graph.loadGraph(viewScope.value, 5).catch(() => undefined)
+  const currentSpaceId = spaces.currentSpaceId
+  if (currentSpaceId !== null) await loadPositions()
+  await graph.loadGraph(viewScope.value, 5, currentSpaceId).catch(() => undefined)
 })
 
 watch(
@@ -94,12 +95,15 @@ watch(
     }
     if (id !== null) {
       await loadPositions()
-      await graph.loadGraph(viewScope.value, 5).catch(() => undefined)
+      await graph.loadGraph(viewScope.value, 5, id).catch(() => undefined)
+    } else {
+      savedPositions.value = new Map()
+      await graph.loadGraph(viewScope.value, 5, null).catch(() => undefined)
     }
   },
 )
 watch(viewScope, async (scope) => {
-  await graph.loadGraph(scope, 5).catch(() => undefined)
+  await graph.loadGraph(scope, 5, spaces.currentSpaceId).catch(() => undefined)
 })
 
 function memberName(id: number): string {
@@ -107,12 +111,8 @@ function memberName(id: number): string {
 }
 
 /** 我的空间角色（v2 §0.2 四角色）；非 active 成员为 null */
-const myRole = computed(() => {
-  const mine = spaces.members.find(
-    (m) => m.user_id === auth.user?.id && m.status === 'active',
-  )
-  return mine?.role ?? null
-})
+const myRole = computed(() => spaces.currentRole)
+const canManageSpace = computed(() => spaces.canManageSpace)
 
 /** 发给我的 pending owner 移交（受让人视角，AC-F5） */
 const incomingTransfer = computed(() =>
@@ -351,8 +351,13 @@ function setMode(next: string | number | boolean | null): void {
   mode.value = nextMode
 }
 
-function openProfile(id: number) {
+function openProfile(id: number): void {
   drawerMemberId.value = id
+}
+
+function openGovernance(): void {
+  if (!spaces.canManageSpace) return
+  governanceOpen.value = true
 }
 
 /** 确档状态徽章（与 MemberNode 同一投影规则：claimed ⇆ identity_confirmed） */
@@ -380,7 +385,14 @@ const filterInputProps = {
       <GlobalSearch />
       <div class="actions">
         <NButton type="primary" data-test="go-home" @click="router.push('/home')">添加家人</NButton>
-        <NButton v-if="auth.user?.is_admin" data-test="go-admin" @click="router.push('/admin')">管理</NButton>
+        <NButton v-if="auth.isPlatformOperator" data-test="go-admin" @click="router.push('/admin')">平台运营后台</NButton>
+        <NButton
+          v-if="canManageSpace && spaces.currentSpace"
+          data-test="go-space-management"
+          @click="router.push({ name: 'space-management', params: { spaceId: spaces.currentSpace.id } })"
+        >
+          空间管理
+        </NButton>
         <NButton data-test="go-stats" @click="router.push('/stats')">统计</NButton>
         <NButton data-test="go-settings" @click="router.push('/settings')">设置</NButton>
         <NButton data-test="go-memory" @click="router.push('/memory')">记忆与知识</NButton>
@@ -421,7 +433,13 @@ const filterInputProps = {
           {{ spaces.currentSpace.kind === 'lineage' ? '族谱空间' : '家庭空间' }}
         </NTag>
         <NTag v-if="myRole === 'guest'" size="small" type="warning" data-test="guest-badge">访客</NTag>
-        <NButton size="small" secondary data-test="open-governance" @click="governanceOpen = true">空间管理</NButton>
+        <NButton
+          v-if="canManageSpace"
+          size="small"
+          secondary
+          data-test="open-governance"
+          @click="openGovernance"
+        >空间管理</NButton>
 
         <!-- 待确档最小引用（AC-F2）：provisional 人物非正式成员，仅名字 -->
         <PendingProfileRefs :refs="spaces.profileRefs" />
@@ -460,7 +478,7 @@ const filterInputProps = {
     <!-- 收到 owner 移交请求横幅（AC-F5） -->
     <NAlert v-if="incomingTransfer" type="warning" :show-icon="true" data-test="transfer-banner">
       「{{ spaces.spaces.find((s) => s.id === incomingTransfer?.space_id)?.name }}」的所有者请求把空间移交给你，请在「空间管理」中处理。
-      <NButton size="tiny" type="warning" secondary class="inline-action" @click="governanceOpen = true">去处理</NButton>
+      <NButton size="tiny" type="warning" secondary class="inline-action" @click="openGovernance">去处理</NButton>
     </NAlert>
 
     <!-- 待处理：空间邀请 / 连接请求（m2c） -->

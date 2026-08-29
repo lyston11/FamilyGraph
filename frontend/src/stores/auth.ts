@@ -29,6 +29,11 @@ export const useAuthStore = defineStore('auth', () => {
   // ---- 派生 ----
   const isLoggedIn = computed(() => accessToken.value !== null && user.value !== null)
   const mustChangePin = computed(() => user.value?.pin_must_change === true)
+  /**
+   * 平台运营者身份仅用于平台运营后台入口；保留 is_admin 作为后端兼容投影，
+   * 不表示对任何家庭空间或家庭资料拥有额外读取权（architecture §0.2）。
+   */
+  const isPlatformOperator = computed(() => user.value?.is_admin === true)
 
   function clearSession(): void {
     accessToken.value = null
@@ -147,6 +152,7 @@ export const useAuthStore = defineStore('auth', () => {
     systemInitialized,
     isLoggedIn,
     mustChangePin,
+    isPlatformOperator,
     checkBootstrap,
     login,
     selectCandidate,

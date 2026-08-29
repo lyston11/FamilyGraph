@@ -68,9 +68,9 @@
   - StatsView：el-card→自绘数字立牌（`--fg-*` token + 显示字体）、el-empty→NEmpty、v-loading→NSpin；本月生日行加"寿"字印章点（纸墨隐喻），数据语义与 data-test 不变。
   - SettingsView：NCard/NForm/NButton 迁移 + 新增「外观主题」双主题预览小卡（纸墨/清雅，预览色取自 tokens.ts L2 token，不写死色值），aria-pressed + data-test=theme-card-{paper,modern}，消费 stores/ui.setTheme（持久化由 store 承担）；AppShell 顶栏 NSwitch 切换保留。
 - [x] P5-2 全库 `grep -r "el-"` 清零 ✅ 2026-08-29：main.ts 移除 `app.use(ElementPlus)` 与 3 条 EP CSS import；App.vue 移除过渡期注释；package.json 移除 element-plus（@element-plus/icons-vue 无引用），`npm install` 后 lockfile 0 命中；目标模式（`El[A-Z]|<el-|v-loading|el-loading|element-plus|--el-`）全库仅余子串误报；vite/vitest 配置本无 EP alias/auto-import，无需清理。
-- [x] P5-3 build 体积对比 ✅ 2026-08-29：主 chunk R4 1531.43 kB → R5 426.50 kB（gzip 140.93 kB），**-72%**（移除 EP 全量 + P4 移交建议落地：AssistantPanel 改 defineAsyncComponent 独立 chunk 15.37 kB，launcher 按钮保持静态首帧渲染、首屏立即可见，仅抽屉/面板内容懒加载，悬浮体验无回归；DataTable/DatePicker/Select 等重组件亦随路由与面板拆分为懒加载 chunk）。375px 人工走查合并至最终验收，走查清单见下方附录。
+- [x] P5-3 build 体积对比 ✅ 2026-08-29：主 chunk R4 1531.43 kB → R5 430.77 kB（gzip 141.98 kB），**约 -72%**（移除 EP 全量 + P4 移交建议落地：AssistantPanel 改 defineAsyncComponent 独立 chunk，launcher 按钮保持静态首帧渲染、首屏立即可见，仅抽屉/面板内容懒加载，悬浮体验无回归；DataTable/DatePicker/Select 等重组件亦随路由与面板拆分为懒加载 chunk）。375px 人工走查合并至最终验收，走查清单见下方附录。
 - [x] P5-4 对比度核验 ✅ 2026-08-29：一次性 Node 脚本（/tmp，不进版本库）直接 import tokens.ts 计算两主题 15 项组合，发现 1 项不达标并修复：paper `accent-soft` 10%→6%（10% 时朱砂彩字于其合成底仅 4.29:1，6% 后 4.56:1；naive-themes.ts 不消费该变量，无需同步派生映射）。全表见下方附录二。
-- [x] P5-5 门禁四绿 ✅ 2026-08-29：lint 0 错 / type-check 0 错 / test 32 文件 201 例全过（较 R4 +1：新增 SettingsView 主题切换用例）/ build 成功（主 chunk 426.50 kB）。
+- [x] P5-5 门禁四绿 ✅ 2026-08-29：lint 0 错 / type-check 0 错 / test 40 文件 242 例全过（当前最终重跑结果；较 R4 +43：新增 SettingsView 主题切换及后续角色分域回归）/ build 成功（主 chunk 430.77 kB，gzip 141.98 kB）。
 - [x] 移交项核销：① FamilySpaceView `void router` 死语句已删除（router 在模板仍有使用，非死变量）；② P4 主 chunk 体积建议已实施（见 P5-3）。
 - [x] **Commit `feat(frontend): 全站迁移收尾`（回滚点 R5）** → 13dc51f（trellis-check 复核通过：0 P0/0 P1，3 P2 延后——AssistantPanel 异步 chunk 无 onError 回退、纸墨 accent-soft 6% 视觉辨识度走查确认、MemoryManager 注释保留）
 
@@ -155,3 +155,77 @@
 | 清雅 | info 信息色文字 / 卡面 | 5.68:1 | ≥4.5 | PASS |
 
 修复记录：纸墨 `accent-soft` 10%→6%（朱砂彩字在其合成底上 4.29:1 → 4.56:1）；`naive-themes.ts` 无该变量派生，无需同步。
+
+
+## 导航连通性修复（浏览器审查发现）
+
+### 根因
+
+浏览器审查发现应用壳只有品牌、搜索、主题切换和占位用户按钮，没有公共导航；Settings、Stats、Admin 缺少稳定的家庭空间返回入口，Home 也无法回到 `/` 家庭空间。此前路由守卫在 refresh resume 之前执行 `adminOnly` 判断，管理员硬刷新 `/admin` 会被误判为普通用户；登录、强制改 PIN 和确档深链接之间也没有完整传递原始 redirect。
+
+### 修复范围
+
+- AppShell 增加基于命名路由的家庭空间、成员、统计、记忆与知识、设置导航，并按管理员身份显示管理后台；品牌改为可访问的家庭空间 RouterLink，导航支持 active class、`aria-current="page"` 和 375px 横向滚动/折行布局。
+- Settings、Stats、Admin 增加 `data-test` 返回按钮，Home 增加家庭空间入口；Memory 的返回和设置入口统一改用命名路由。
+- 路由守卫调整为先 bootstrap、onboarding、resume，再处理公开路由、登录、管理员权限和身份流程；管理员硬刷新恢复后可停留在 `/admin`，登录重定向及普通用户权限行为保持安全。
+- 新增统一的内部 redirect 校验，拒绝外部 URL、`//` 和反斜杠路径；登录进入强制改 PIN、改 PIN 完成回登录、确档完成回原页面均保留安全 redirect。
+
+### 测试
+
+已补齐并通过路由守卫、应用壳和页面入口/返回行为测试：管理员 refresh token 硬刷新、普通用户 `/admin`、无凭据登录回跳、refresh 失败、forced PIN/identity setup redirect、导航 active/a11y、375px CSS contract，以及 Settings/Stats/Admin/Home 的入口行为。角色分域追加后，`frontend` 门禁结果为 `npm run lint`、`npm run type-check`、`npm run test`（当前重跑结果见下方“最终 P1 安全修复”）和 `npm run build` 全部通过。测试中 Settings 的删除流程仍输出既有 jsdom navigation stderr，但不影响测试结果。
+
+### 浏览器验证记录
+
+主会话已使用本地凭据完成部分真实浏览器验证：
+
+- 登录后 AppShell 同时显示“平台运营后台”和“空间管理”；该账号同时具备 `platform_operator` 与本地演示空间 owner 身份，交叉入口同时出现符合权限合同。
+- `/admin` 标题为“平台运营后台”，展示账号、PIN、Owner Onboarding、数据权利、认领争议和审计日志，不展示家庭姓名、出生、关系等家庭敏感字段。
+- `/spaces/4/manage` 标题为“家庭空间管理”，展示空间名称/类型、当前角色“空间所有者”、成员与待处理数量、成员治理、邀请、所有权移交和待确档引用。
+- 两个页面在 375px 视口均无横向溢出（`innerWidth=375`，`scrollWidth=360`，`bodyScrollWidth=360`）；纸墨/清雅主题切换与 `data-theme` 持久化通过。
+
+完整 compose 栈的逐页人工矩阵仍待执行：普通 member/guest、仅 platform operator 且无空间 membership、多空间切换后的隔离、`/admin` 硬刷新、三种画布布局、reduced-motion、全部 375×667 页面及截图级证据尚未全部复核。自动化测试不能替代该人工验收。
+
+### 既有缺陷（非本次导航引入）
+
+已复现 `MemberCreateWizard` 留空生日时会发送 `{cal_type: 'solar', date: null}`；后端 `StructuredDate` 要求 solar/lunar 的 `date` 必填，且 `validation_exception_handler` 序列化 `ValueError` 会导致 500。本次不修改后端，仅记录该既有缺陷。
+
+## 角色拆分：平台运营后台与家庭空间管理（本次追加）
+
+### 分域与授权
+
+- `/admin` 明确为 `platformOperatorOnly`，只允许 `platform_operator`；`adminOnly` 仅作迁移期类型兼容，不能解释为空间管理员。
+- 新增命名路由 `space-management`：`/spaces/:spaceId/manage`，守卫按目标 `spaceId` 重新加载并确认当前用户 active membership 的 role 为 `owner` 或 `space_admin`。member、guest、无 membership 以及仅拥有 platform_operator 身份者均回到 `family-space`。
+- `auth.isPlatformOperator` 作为语义明确的前端派生 getter，后端保留 `is_admin` 兼容投影；`spaces` store 集中提供 `currentMembership/currentRole/isSpaceOwner/isSpaceAdmin/canManageSpace/canInvite/canTransferOwnership`，不混入 custody/profile 状态。
+- `SpaceGovernancePanel` 承载共享邀请、成员表、owner transfer/pending transfer、待确档引用内容；`SpaceGovernanceDialog` 仅保留兼容弹窗包装。独立 `SpaceManagementView` 展示家庭空间、名称/类型/角色、成员与待处理统计和治理内容，不调用 `api/admin.ts`，不新增联网、break-glass 或角色升降级能力。
+- AppShell/FamilySpace 的平台入口文案为“平台运营后台”，空间入口仅对当前 owner/space_admin 显示并指向当前 spaceId；Home 邀请入口与后端 gate 一致，普通 member/guest 不显示邀请动作。
+- 后端共享 `invite_member` command 在 owner/space_admin 授权处统一拒绝 member/guest；平台角色不改变家庭空间边界。未修改 platform admin 数据边界、controlled-web、owner 退出/移除或角色升降级 API。
+
+### 测试与未纳入范围
+
+- 新增/扩展 router owner、space_admin、member、guest、platform_operator 和未登录深链矩阵；AppShell 平台/空间入口及普通角色隐藏；spaces 派生权限；后端 `test_space_invite_authz.py` 覆盖 owner/admin 允许、member/guest 拒绝、platform_operator 隔离。
+- 已运行 focused 前端 role/governance tests（38 tests）与完整 frontend tests（当前重跑结果见下方“最终 P1 安全修复”）；真实 compose 栈的双主题 375px 人工走查仍未执行。
+- 本次未实现空间角色升降级、controlled-web、break-glass、owner 退出/移除和新的 platform admin 数据能力。
+
+## 最终 P1 安全修复（2026-08-30）
+
+### P1-A：RAG authorless 文档可见性绕过
+
+- `memory_rag._author_visible()` 现在复用 server-side `platform_roles.is_platform_operator()`；authorless public authorized 文档对普通 owner/member 保留既有合法检索语义，但 `platform_operator + active membership` 组合身份在 RAG 可见性复核时 fail-closed。
+- 新增回归覆盖：普通 owner、普通 active member 可检索 authorless public 文档；operator 即使拥有同空间 active membership 也返回空结果；非成员仍返回空结果。
+
+### P1-B：ownership transfer 创建授权
+
+- `ownership.create_transfer()` 现在统一要求发起人的 membership 经 `space_fsm.effective_status(member) == "active"`；removed、pending 及已过期 pending（effective status 为 withdrawn）均以当前合同 `404 SPACE_NOT_FOUND` 拒绝，不创建 transfer。
+- active owner 正向 transfer 流程保持通过；目标成员仍按原有 active membership 要求校验，空间管理员/普通角色语义与平台边界未改变。
+
+### 最终验证
+
+- Backend focused：18 passed（本次 P1-A/P1-B 直接回归：`test_memory_rag_service.py` + `test_ownership_transfer.py`）。相关授权扩展 focused：38 passed。
+- Backend full：571 passed（包含本次新增安全回归）。
+- Backend mypy：120 source files，无错误。
+- Backend ruff：check 通过；format check 通过（197 files）。
+- Frontend full：lint、type-check、test（40 files / 242 tests）、build 全部通过；测试保留既有 jsdom navigation stderr，不影响结果。
+- Agent full：lint、type-check、test（12 files / 80 tests）、build 全部通过。
+- 真实 compose 栈的完整浏览器走查仍未全部执行（375×667，纸墨/清雅双主题及 reduced-motion）；主会话已完成登录、AppShell 双入口、`/admin` 平台后台、`/spaces/4/manage` 家庭空间管理以及两个页面的 375px 无溢出和主题切换验证。
+
+本次已实现平台运营后台与家庭空间管理分域、graph `space_id` 隔离、空间 invite gate、RAG authorless 可见性修复和 ownership transfer active membership 校验；未纳入 controlled-web、owner 退出/移除、角色升降级及新的 platform admin 数据能力。

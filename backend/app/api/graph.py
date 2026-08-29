@@ -75,7 +75,15 @@ def my_graph(
             continue
         u = session.get(User, eid)
         decision = (
-            vis.evaluate(session, actor, u, purpose=vis.PURPOSE_GRAPH) if u is not None else None
+            vis.evaluate(
+                session,
+                actor,
+                u,
+                purpose=vis.PURPOSE_GRAPH,
+                space_context=space_id,
+            )
+            if u is not None
+            else None
         )
         if decision is not None and decision.visible:
             levels[eid] = decision.level

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
@@ -57,6 +58,7 @@ const oneTimeFor = ref('')
 
 const message = useMessage()
 const dialog = useDialog()
+const router = useRouter()
 
 // ---- owner 邀请 ----
 const issuedToken = ref('')
@@ -437,7 +439,12 @@ async function submitDisputeResolution(): Promise<void> {
 <template>
   <NSpin :show="loading">
     <main class="admin-view">
-      <h2 class="title">平台运营后台</h2>
+      <header class="title-row">
+        <NButton text data-test="admin-back" @click="router.push({ name: 'family-space' })">
+          ← 家庭空间
+        </NButton>
+        <h2 class="title">平台运营后台</h2>
+      </header>
       <NAlert type="info" :show-icon="true" class="scope-hint" data-test="operator-scope-hint">
         平台运营者仅管理系统与安全策略，无家庭数据浏览权。数据兑底操作均需填写理由并完整审计。
       </NAlert>
@@ -631,8 +638,16 @@ async function submitDisputeResolution(): Promise<void> {
   padding: 24px;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .title {
-  margin: 0 0 12px;
+  margin: 0;
   font-family: var(--fg-font-display);
   font-size: 20px;
   color: var(--fg-ink);

@@ -21,6 +21,7 @@ from app.commands.context import ActorContext, command_transaction, load_actor
 from app.errors import (
     OWNER_TRANSFER_INVALID,
     OWNER_TRANSFER_REQUIRED,
+    SPACE_FORBIDDEN_ACTOR,
     SPACE_NOT_FOUND,
     raise_api_error,
 )
@@ -70,10 +71,13 @@ def create_transfer(
     now = utcnow()
     with command_transaction(session):
         space = session.get(FamilySpace, space_id)
-        if space is None or space_fsm.find_membership(session, space_id, actor.id) is None:
+        if space is None:
+            raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
+        actor_member = space_fsm.find_membership(session, space_id, actor.id)
+        if actor_member is None or space_fsm.effective_status(actor_member) != "active":
             raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
         if space.owner_id != actor.id:
-            raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅空间所有者可发起移交")
+            raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅空间所有者可发起移交")
         if to_user_id == actor.id:
             raise_api_error(409, OWNER_TRANSFER_INVALID, "不能把空间移交给自己")
         target_member = space_fsm.find_membership(session, space_id, to_user_id)

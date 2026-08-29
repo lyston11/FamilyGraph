@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as spacesApi from '@/api/spaces'
+import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 import type { FamilySpace } from '@/types/api'
 
@@ -39,6 +40,73 @@ function makeSpace(overrides: Partial<FamilySpace> = {}): FamilySpace {
 }
 
 describe('spaces store（AD-3）', () => {
+  it('按 active membership 集中派生空间权限，不混用 custody/profile 状态', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      name: '所有者',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    const store = useSpacesStore()
+    store.spaces = [makeSpace()]
+    store.currentSpaceId = 1
+    store.members = [
+      {
+        id: 1,
+        space_id: 1,
+        user_id: 1,
+        added_by: 1,
+        role: 'owner',
+        status: 'active',
+        updated_at: '2026-08-29T00:00:00',
+      },
+    ]
+
+    expect(store.currentMembership?.role).toBe('owner')
+    expect(store.currentRole).toBe('owner')
+    expect(store.isSpaceOwner).toBe(true)
+    expect(store.isSpaceAdmin).toBe(false)
+    expect(store.canManageSpace).toBe(true)
+    expect(store.canInvite).toBe(true)
+    expect(store.canTransferOwnership).toBe(true)
+
+    store.members[0]!.status = 'removed'
+    expect(store.currentMembership).toBeNull()
+    expect(store.canManageSpace).toBe(false)
+  })
+
+  it('space_admin 可管理和邀请但不能发起所有权移交', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      name: '空间管理员',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    const store = useSpacesStore()
+    store.spaces = [makeSpace()]
+    store.currentSpaceId = 1
+    store.members = [{
+      id: 1,
+      space_id: 1,
+      user_id: 1,
+      added_by: 1,
+      role: 'space_admin',
+      status: 'active',
+      updated_at: '2026-08-29T00:00:00',
+    }]
+
+    expect(store.isSpaceAdmin).toBe(true)
+    expect(store.canManageSpace).toBe(true)
+    expect(store.canInvite).toBe(true)
+    expect(store.canTransferOwnership).toBe(false)
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()

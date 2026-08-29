@@ -35,7 +35,7 @@ from app.models.memory import MEMORY_SCOPES, SENSITIVITY_LEVELS, Memory, MemoryC
 from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
-from app.services import visibility
+from app.services import platform_roles, visibility
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.utils.timeutil import utcnow
@@ -549,7 +549,10 @@ def _fts_match(value: str) -> str:
 
 def _author_visible(db: Session, actor: User, document: RAGDocument, space_id: int) -> bool:
     if document.author_account_id is None:
-        return True
+        # Authorless documents retain their existing public-assistant semantics for
+        # ordinary family identities. A platform operator is never a family-data
+        # identity, even when a membership row happens to grant SQL scope access.
+        return not platform_roles.is_platform_operator(db, actor.account)
     author = db.scalar(
         select(User)
         .join(Account, Account.user_id == User.id)

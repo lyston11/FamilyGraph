@@ -125,6 +125,18 @@ def rename_space(
     return space
 
 
+def _require_space_manager(session: Session, space_id: int, user_id: int) -> SpaceMember:
+    """空间邀请只能由当前 active owner/space_admin 发起。
+
+    这是共享领域命令层的授权边界，不能依赖前端按钮隐藏；platform_operator
+    也不会因平台角色获得任何家庭空间写权限。
+    """
+    member = _require_active_member(session, space_id, user_id)
+    if member.role not in ("owner", "space_admin"):
+        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅空间所有者或空间管理员可邀请成员")
+    return member
+
+
 def invite_member(
     session: Session,
     ctx: ActorContext,
@@ -135,7 +147,7 @@ def invite_member(
     """邀请已有账号进空间 → pending（幂等）。"""
     actor = load_actor(session, ctx)
     with command_transaction(session):
-        _require_active_member(session, space_id, actor.id)
+        _require_space_manager(session, space_id, actor.id)
         space = _space_or_404(session, space_id)
         target = session.get(User, user_id)
         if target is None:
