@@ -14,17 +14,16 @@
 - [x] P0-6 `main.ts`/`App.vue`：新增 `n-config-provider`（message/dialog/notification providers）+ token 注入 watchEffect。**注意：过渡期保留 `app.use(ElementPlus)` 与其 CSS import（未迁移页面仍依赖全局注册），P5-9 全库清零时才移除**
 - [x] P0-7 `components/shell/AppShell.vue` 骨架 + router `meta.chrome: 'blank'` 标记沉浸页（login/onboarding/change-pin/identity-setup）；App.vue 按当前路由 meta 条件渲染 `<AppShell>`（内含 RouterView + 顶部导航）或裸 RouterView
 - [x] P0-8 门禁四绿 + 记录构建体积对比（主 chunk 1159→1340 kB，过渡期双库共存 +180 kB，P5 移除 element-plus 后预期净降；trellis-check 复核通过，0 阻断）
-- [ ] **Commit `feat(frontend): design tokens + naive-ui 基建`（回滚点 R0）**
-- [ ] **Commit `feat(frontend): design tokens + naive-ui 基建`（回滚点 R0）**
+- [x] **Commit `feat(frontend): design tokens + naive-ui 基建`（回滚点 R0）** → aca08ba
 
 > 注：P0 结束时 element-plus 仍在 package.json 且全局注册保留（业务组件尚未迁完，双库过渡共存）；全库移除放 P5-9。
 
 ## Phase 1：认证与流程页
 
-- [ ] P1-1 LoginView（含 409 challenge 流程视觉）、OnboardingView
-- [ ] P1-2 ChangePinView（强制改 PIN 白名单逻辑不动）、IdentitySetupView（确档清单视觉）
-- [ ] P1-3 同步改写 `views/__tests__/{login,identity-setup,settings}.spec.ts` 中库内 DOM 断言
-- [ ] P1-4 门禁四绿 + dev server 人工冒烟（两主题各过一遍）
+- [x] P1-1 LoginView（含 409 challenge 流程视觉）、OnboardingView（一次性 PIN"凭证卡"：大号等宽数字 + 复制 + 票据式警示框，纸墨附印章质感）
+- [x] P1-2 ChangePinView（强制改 PIN 白名单逻辑不动）、IdentitySetupView（确档清单 --fg-status-* 徽章：proposed 空心 / confirmed 实底 / disputed 虚线警示）
+- [x] P1-3 同步改写 `views/__tests__/{login,identity-setup,settings}.spec.ts` 中库内 DOM 断言（login/identity-setup 包 NMessageProvider 壳、input 断言走 `[data-test] input`、challenge 候选走原生 radio click）
+- [ ] P1-4 门禁四绿 ✅ 2026-08-29（lint / type-check / test 176 例 / build 主 chunk 1340.87 kB 与 P0 持平）；dev server 人工冒烟（两主题各过一遍）待主会话执行
 - [ ] **Commit `feat(frontend): auth/onboarding 迁移 naive-ui + 双主题`（回滚点 R1）**
 
 ## Phase 2：Home + 成员域
