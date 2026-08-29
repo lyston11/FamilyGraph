@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as kinshipApi from '@/api/kinship'
 import { ApiError } from '@/api/errors'
-import ElementPlus from 'element-plus'
 import RelationLookup from '@/components/kinship/RelationLookup.vue'
 import { useSpacesStore } from '@/stores/spaces'
 import type { ParseResult } from '@/types/kinship'
@@ -62,7 +61,7 @@ async function mountLookup(): Promise<ReturnType<typeof mount>> {
     member_count: 2,
   })
   spaces.currentSpaceId = 10
-  const wrapper = mount(RelationLookup, { global: { plugins: [pinia, ElementPlus] } })
+  const wrapper = mount(RelationLookup, { global: { plugins: [pinia] } })
   await new Promise((resolve) => setTimeout(resolve))
   return wrapper
 }
@@ -91,7 +90,8 @@ describe('RelationLookup', () => {
     expect(panel.text()).toContain('舅爷爷')
     expect(panel.text()).toContain('标准称谓')
     expect(panel.text()).toContain('图上依据：奶奶的兄弟')
-    expect(wrapper.findAll('[data-test="lookup-morphemes"] .el-tag')).toHaveLength(2)
+    // 词素 chips 走全站 fg-badge 工具类（库内类名断言改语义选择器）
+    expect(wrapper.findAll('[data-test="lookup-morphemes"] .morpheme-chip')).toHaveLength(2)
   })
 
   it('supported：提案卡片明确「不会自动改动档案事实」', async () => {

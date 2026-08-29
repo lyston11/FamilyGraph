@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { InputHTMLAttributes as VueInputHTMLAttributes } from 'vue'
+import { NAlert, NButton, NInput } from 'naive-ui'
 
 import { useKinshipStore } from '@/stores/kinship'
 import { useSpacesStore } from '@/stores/spaces'
@@ -12,6 +14,7 @@ import type { TermSourceLevel } from '@/types/kinship'
  * - 原文只读展示，任何解析产物都不覆盖用户输入（KI-4）；
  * - flag 关闭（503 KINSHIP_FLAG_DISABLED）→ 整个入口隐藏；
  * - 图上找不到证据（graph_proof.found=false）→ 降级提示，不伪造概念或方向。
+ * - 来源四级小标签 + 图上依据（design.md §3.4：称谓来源必须可见）。
  */
 const MAX_LENGTH = 80
 
@@ -48,6 +51,11 @@ const SOURCE_LEVEL_LABELS: Record<TermSourceLevel, string> = {
 function sourceLabel(level: TermSourceLevel | null | undefined): string {
   return level ? (SOURCE_LEVEL_LABELS[level] ?? level) : ''
 }
+
+const lookupInputProps = {
+  'data-test': 'lookup-input',
+  'aria-label': '关系查询输入',
+} as VueInputHTMLAttributes
 </script>
 
 <template>
@@ -58,54 +66,53 @@ function sourceLabel(level: TermSourceLevel | null | undefined): string {
   >
     <p class="block-title">关系查询</p>
     <!-- ambiguous 追问：内联展示后允许再次输入 -->
-    <el-alert
+    <NAlert
       v-if="result?.resolution_class === 'ambiguous' && result.clarifying_question"
       type="info"
-      :closable="false"
+      :show-icon="true"
       class="clarify"
       data-test="lookup-clarify"
     >
       {{ result.clarifying_question }}
-    </el-alert>
+    </NAlert>
 
     <div class="input-row">
-      <el-input
-        v-model="text"
+      <NInput
+        v-model:value="text"
         :maxlength="MAX_LENGTH"
-        show-word-limit
+        show-count
         clearable
         placeholder='试试输入叫法，如「妈妈」「舅爷爷」「奶奶的兄弟」'
-        aria-label="关系查询输入"
-        data-test="lookup-input"
+        :input-props="lookupInputProps"
         @keyup.enter="submit"
       />
-      <el-button
+      <NButton
         type="primary"
-        plain
+        secondary
         :loading="kinship.parseLoading"
         :disabled="!canSubmit"
         data-test="lookup-submit"
         @click="submit"
       >
         解析
-      </el-button>
+      </NButton>
     </div>
 
-    <!-- determined：概念称谓 + 结构路径依据 + 词素 chips -->
+    <!-- determined：概念称谓 + 来源标签 + 结构路径依据 + 词素 chips -->
     <div
       v-if="result?.resolution_class === 'determined' && result.candidate && !unproven"
       class="panel determined"
       data-test="lookup-determined"
     >
       <span class="term">{{ result.candidate.term }}</span>
-      <el-tag size="small" type="success">{{ sourceLabel(result.candidate.term_source_level) }}</el-tag>
+      <span class="fg-badge fg-badge--confirmed">{{ sourceLabel(result.candidate.term_source_level) }}</span>
       <code v-if="result.candidate.concept_code" class="concept">{{ result.candidate.concept_code }}</code>
       <p v-if="result.graph_proof.explanation_structural" class="basis" data-test="lookup-path-basis">
         图上依据：{{ result.graph_proof.explanation_structural }}
       </p>
       <div v-if="result.evidence_morphemes.length" class="morphemes" data-test="lookup-morphemes">
         <span class="muted">依据词素：</span>
-        <el-tag v-for="m in result.evidence_morphemes" :key="m" size="small" type="info">{{ m }}</el-tag>
+        <span v-for="m in result.evidence_morphemes" :key="m" class="fg-badge fg-badge--neutral morpheme-chip">{{ m }}</span>
       </div>
     </div>
 
@@ -115,12 +122,12 @@ function sourceLabel(level: TermSourceLevel | null | undefined): string {
       class="panel supported"
       data-test="lookup-supported"
     >
-      <el-alert type="warning" :closable="false">
+      <NAlert type="warning" :show-icon="true">
         <p v-for="(proposal, index) in result.proposals" :key="index" class="proposal-line">
           建议：{{ proposal.summary }}
         </p>
         <p class="muted">在你确认之前，这不会自动改动任何档案事实。</p>
-      </el-alert>
+      </NAlert>
     </div>
 
     <!-- conflicting：冲突列表 + 原文保留展示 -->
@@ -153,6 +160,7 @@ function sourceLabel(level: TermSourceLevel | null | undefined): string {
   margin: 0 0 6px;
   font-size: 14px;
   font-weight: 600;
+  color: var(--fg-ink);
 }
 
 .clarify {
@@ -168,25 +176,29 @@ function sourceLabel(level: TermSourceLevel | null | undefined): string {
 .panel {
   margin-top: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
+  border: 1px solid var(--fg-line);
+  border-radius: var(--fg-radius-control);
+  background-color: var(--fg-surface-raised);
 }
 
 .term {
+  font-family: var(--fg-font-display);
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   margin-right: 8px;
+  color: var(--fg-ink);
 }
 
 .concept {
   margin-left: 8px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-faint);
   font-size: 12px;
 }
 
 .basis {
   margin: 8px 0 4px;
   font-size: 13px;
+  color: var(--fg-ink-secondary);
 }
 
 .morphemes {
@@ -204,25 +216,25 @@ function sourceLabel(level: TermSourceLevel | null | undefined): string {
 .conflict-list {
   margin: 0 0 6px;
   padding-left: 18px;
-  color: var(--el-color-danger);
+  color: var(--fg-status-disputed);
   font-size: 13px;
 }
 
 .muted {
   margin: 4px 0 0;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 
 .degraded {
   margin: 8px 0 0;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 13px;
 }
 
 .error {
   margin: 8px 0 0;
-  color: var(--el-color-danger);
+  color: var(--fg-status-disputed);
   font-size: 13px;
 }
 </style>

@@ -1,11 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
-import { ElMessage } from 'element-plus'
 import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
-
-import ElementPlus from 'element-plus'
 
 import * as kinshipApi from '@/api/kinship'
 import { ApiError } from '@/api/errors'
@@ -101,7 +98,7 @@ function makeResolve(overrides: Partial<KinshipResolve> = {}): KinshipResolve {
   }
 }
 
-// el-dialog teleport 到 body，交互统一走 document
+// n-modal teleport 到 body，交互统一走 document
 function click(selector: string): void {
   const target = document.querySelector(selector)
   expect(target, selector).not.toBeNull()
@@ -137,8 +134,8 @@ async function mountDrawer() {
   })
   spaces.currentSpaceId = 10
 
-  // ProfileDrawer 已迁 naive-ui：setup 期 useMessage 需 NMessageProvider 祖先；
-  // 内嵌 KinshipTermPanel 仍为 element-plus（P3 迁移），需保留全局注册
+  // ProfileDrawer 及内嵌 KinshipTermPanel 均为 naive-ui：setup 期 useMessage
+  // 需 NMessageProvider 祖先
   const MessageProvidedDrawer = defineComponent({
     render() {
       return h('div', [
@@ -147,7 +144,7 @@ async function mountDrawer() {
     },
   })
   const wrapper = mount(MessageProvidedDrawer, {
-    global: { plugins: [pinia, ElementPlus] },
+    global: { plugins: [pinia] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
@@ -157,8 +154,6 @@ async function mountDrawer() {
 describe('ProfileDrawer 称谓区（V2.3 Block E4c）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.spyOn(ElMessage, 'success').mockImplementation(() => ({}) as ReturnType<typeof ElMessage.success>)
-    vi.spyOn(ElMessage, 'info').mockImplementation(() => ({}) as ReturnType<typeof ElMessage.info>)
     document.body.innerHTML = ''
   })
 
@@ -203,7 +198,8 @@ describe('ProfileDrawer 称谓区（V2.3 Block E4c）', () => {
     )
     // 纠正成功后 force 重算：resolve 调用数从 1 → 2
     await vi.waitFor(() => expect(mockedResolve).toHaveBeenCalledTimes(2))
-    expect(ElMessage.success).toHaveBeenCalled()
+    // 成功反馈经 naive message 渲染到 body
+    await vi.waitFor(() => expect(document.body.textContent).toContain('个人称谓已更新'))
     wrapper.unmount()
   })
 
@@ -229,8 +225,9 @@ describe('ProfileDrawer 称谓区（V2.3 Block E4c）', () => {
         sourceEvent: 'manual_select',
       }),
     )
+    // 晋升 toast 经 naive message 渲染到 body
     await vi.waitFor(() =>
-      expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('推荐叫法')),
+      expect(document.body.textContent).toContain('推荐叫法'),
     )
     wrapper.unmount()
   })
