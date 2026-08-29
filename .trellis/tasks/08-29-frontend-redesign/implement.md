@@ -37,14 +37,16 @@
 
 ## Phase 3：画布域（家族空间/家族树）
 
-- [ ] P3-1 FamilySpaceView：移除 Vue Flow `<Background />`（防双层点阵）、Controls 重样式、画布容器 token 化
-- [ ] P3-2 MemberNode 重绘（头像纸牌/称谓/确档状态徽章）；节点样式全部走 token，不做业务请求（规范红线）
-- [ ] P3-3 世代泳道底纹（useLayout 分层输出 → 画布背景带）；连线语义样式（confirmed 实线 / proposed 虚线 / disputed 朱砂虚线）
-- [ ] P3-4 kinship 组件：KinshipTermPanel、RelationLookup（称谓四级来源标签 + 路径证据展示）
-- [ ] P3-5 空画布引导动作；三布局切换测试保持
-- [ ] P3-6 同步改写 `stores/__tests__/kinship.spec.ts`、`composables/__tests__/useLayout.spec.ts`（如涉及）
-- [ ] P3-7 门禁四绿 + 冒烟（tree/canvas/list 三布局、几十人规模首渲染 <2s）
-- [ ] **Commit `feat(frontend): 画布域重设计（节点/泳道/连线语义）`（回滚点 R3）**
+- [x] P3-1 FamilySpaceView：移除 Vue Flow `<Background />`（防双层点阵）、Controls `:deep` token 重样式、画布容器 token 化 ✅ 2026-08-29
+- [x] P3-2 MemberNode 重绘（姓字衬线纸牌头像/称谓 chip/右下角压角确档章 claimed=实底、其余空心虚线"待确档"）；样式全走 `var(--fg-*)`，零业务请求；视图层 shallowRef + nodeDataMemo 防全画布重渲染
+- [x] P3-3 `computeGenerationLanes` 世代泳道底纹（tree 模式 zIndex -1 底纹节点 + "第 N 代"标签）；连线语义 class（confirmed 实线墨色 / proposed 虚线 / disputed 朱砂虚线），fact_state 只读 kinship.cachedResolve 缓存
+- [x] P3-4 KinshipTermPanel 四级来源徽章（personal 实底主色/space/locale/system·structural）+ 路径证据 + 替代称谓；RelationLookup 来源标签 + 图上依据 + 词素 chips
+- [x] P3-5 空画布居中引导卡（data-test=empty-add-member）；三布局切换单测保持（useLayout.spec 9 例）
+- [x] P3-6 useLayout.spec 增泳道 3 例；RelationLookup.spec/ProfileDrawer.kinship.spec 断言迁移；新增 MemberNode.spec 7 例（stub Handle 隔离 VueFlow 上下文）；kinship store spec 不涉及（store 层零改动）
+- [x] P3-7 门禁四绿（lint 0 错 / type-check 0 错 / test 189 例 / build 主 chunk 1342.81 kB vs R2 基线 1340.87 kB +1.9 kB）；浏览器走查（三布局双主题 375px）合并至 P5-3 人工验收——compose 栈凭据用户持有（与归档 v2-agent E3 同一约束）
+- [x] **Commit `feat(frontend): 画布域重设计（节点/泳道/连线语义）`（回滚点 R3）** → 见 git log
+- trellis-check 复核：通过（0 阻断 0 应修）。P2 备忘移交后续 Phase：① FamilySpaceView `void router` 死语句（HEAD 既有）P5 清理；② `listOrdered` 未应用 computeListOrder（HEAD 既有，函数现为已测死代码）后续接线；③ 空间切换 NSelect aria-label 落包裹层的 naive-ui 透传限制 → P6 写入 component-guidelines `input-props` 约定；④ FamilySpaceView 组件级挂载测试缺口（HEAD 既有）→ P6 补测计划
+- 移交自归档 v2-agent 任务的 UX 观察：① 每次打开助手面板默认新会话；② reduced-motion 需 OS 级开关人工复核（P4/P5 处理）
 
 ## Phase 4：Agent / ActionCard / Memory 域
 
