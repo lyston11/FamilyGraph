@@ -108,6 +108,24 @@ describe('LoginView', () => {
     wrapper.unmount()
   })
 
+  it('回车提交：名字/PIN 任意输入框按 Enter 触发登录，且单次触发只提交一次', async () => {
+    mockedLogin.mockResolvedValue(makePair())
+    const { wrapper } = await mountView()
+
+    await wrapper.find('[data-test="login-name"] input').setValue('张三')
+    await wrapper.find('[data-test="login-pin"] input').setValue('123456')
+
+    // PIN 框回车（回归：naive 迁移后 NButton 默认 attr-type=button，无隐式提交）
+    await wrapper.find('[data-test="login-pin"] input').trigger('keyup', { key: 'Enter' })
+    await vi.waitFor(() => expect(mockedLogin).toHaveBeenCalledTimes(1))
+
+    // 名字框回车同样可提交
+    mockedLogin.mockClear()
+    await wrapper.find('[data-test="login-name"] input').trigger('keyup', { key: 'Enter' })
+    await vi.waitFor(() => expect(mockedLogin).toHaveBeenCalledTimes(1))
+    wrapper.unmount()
+  })
+
   it('凭据错误：展示后端统一文案（防枚举），不调用消歧', async () => {
     mockedLogin.mockRejectedValue(
       new ApiError(401, 'AUTH_INVALID_CREDENTIALS', '名字或 PIN 码错误'),
