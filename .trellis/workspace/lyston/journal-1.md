@@ -62,6 +62,25 @@ IDOR 矩阵 5 用例 + 申请流 3 用例 + 附件链 5 用例 + 端到端旅程
 
 [OK] **Completed**
 
+## Session 5: V2 Agent Runtime 全面复核与修复
+
+**Date**: 2026-08-30
+**Task**: 08-30-v2-agent-runtime-full-repair（继续 in_progress）
+
+复核确认 Assistant 运行时由 `pi-coding-agent` 承载 session/agent loop，模型协议由
+`pi-ai` 的 `openai-responses` adapter 承载，不存在独立 pi-sdk。云 Provider 固定为
+`liu-dada/gpt-5.6-sol`（`https://api.liu-dada.com/v1`，reasoning、text+image、
+272000/60000、五级 thinking）。
+
+本轮修复：denied/no-provider snapshot 不可复活与严格类型校验；Provider/工具
+dispatch 的数据库 CAS cancellation fence；凭据 header 变体阻断；事件 flusher
+单 pump 保序重试；移除完整 transcript 不再使用的消息上限配置；Compose 不能关闭
+Provider profile 门禁。未读取或写入任何密钥、run token、密文。
+
+门禁：backend 571 pytest、ruff/format/mypy；agent 80 tests、type-check/lint/build；
+frontend 242 tests、type-check/lint/build；Compose config、Trellis validate、diff
+check 全部通过。唯一未闭环是外部 liu-dada 成功正文证据，因此任务保持 in_progress。
+
 ## 2026-08-30 会话：V2 Agent Runtime Full Repair 最终核验与取消竞态加固
 
 任务：`08-30-v2-agent-runtime-full-repair`（保持 `in_progress`，未归档）。工作树含其他进程的 frontend redesign，未执行 reset/checkout。
@@ -410,6 +429,27 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 | Hash | Message |
 |------|---------|
 | `77babc7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 5: 空间邀请契约修正：active member 可邀请
+
+**Date**: 2026-08-30
+**Task**: 空间邀请契约修正：active member 可邀请
+**Branch**: `feat/frontend-role-boundaries`
+
+### Summary
+
+按用户确认的产品契约把空间邀请从 owner/space_admin 放宽到 active member（guest 仍禁止，受邀人仍需接受）；同步 canInvite、Home 邀请入口、后端命令与双侧测试，architecture 授权矩阵新增邀请行。前端 40 文件/243 测试通过，后端 571 通过（唯一失败来自并行 v2-agent-runtime 未提交文件，与本任务无关）。族谱空间开辟审批流与 Agent 归属规划记录为后续任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `21bed18` | (see git log) |
 
 ### Status
 

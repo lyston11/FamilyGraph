@@ -7,7 +7,7 @@
 ### Runtime contract
 
 - 运行时依赖为 `@earendil-works/pi-ai@0.84.3` 与 `@earendil-works/pi-coding-agent@0.84.3`；没有独立 `pi-sdk`。`pi-coding-agent` 持有 Assistant session/loop，`pi-ai` 持有 `openai-responses`/`openai-completions` 协议 adapter。
-- 首版云 profile 固定为 `liu-dada / gpt-5.6-sol`：`openai-responses`、`https://api.liu-dada.com/v1`、reasoning=true、text+image、contextWindow=272000、maxTokens=60000、thinking levels=low/medium/high/xhigh/max。生产门禁由 `AGENT_PROVIDER_STANDARD_PROFILE_ONLY=1` 控制；local Provider 仍可用于本地敏感数据。
+- 首版云 profile 固定为 `liu-dada / gpt-5.6-sol`：`openai-responses`、`https://api.liu-dada.com/v1`、reasoning=true、text+image、contextWindow=272000、maxTokens=60000、thinking levels=low/medium/high/xhigh/max。生产门禁由后端代码固定启用（不可由环境变量关闭）；local Provider 仍可用于本地敏感数据。
 - Provider key 只在后端 ProviderGateway 解密并注入上游 Authorization。Context projection 仅包含 run-scoped internal gateway path、provider_name 和非敏感能力元数据；sidecar 不读取 Provider key、不直连外部 base URL。
 - `provider_id` 是 DB/audit 数字标识，`provider_name` 是 Pi 注册语义；两者不再混用。Run 创建时保存 runtime snapshot，Provider 配置版本改变时 fail-closed。
 
@@ -46,3 +46,24 @@
 
 - `.env` 已设置为 `0600`；不要读取、复制或提交其内容。
 - 文档和日志只记录 profile 元数据、状态码、字节数和测试结果；不记录任何 API key、run token 或密文。
+
+## 2026-08-30 follow-up audit and repair addendum
+
+本次复核确认运行时是 `pi-coding-agent`（session/agent loop）+ `pi-ai`
+（`openai-responses` wire adapter），不是独立 `pi-sdk`。云模型固定使用
+`liu-dada/gpt-5.6-sol` profile；`AGENT_PROVIDER_STANDARD_PROFILE_ONLY` 已从
+Compose 可覆盖配置中移除，后端代码固定启用门禁。
+
+新增修复：denied runtime snapshot（包括无 Provider 的 `provider_id=null`）不可因
+后续空间配置改变而复活；allowed snapshot 严格校验数值/枚举/容器字段；Provider
+Gateway 和工具 dispatch 在出网/副作用前执行数据库 CAS cancellation fence；policy
+guard 覆盖凭据 header 变体；事件 flusher 单 pump 严格按 seq 保序并保留失败 batch；
+删除未使用的 `AGENT_CONTEXT_MESSAGE_LIMIT`，ContextOut 始终返回完整 transcript。
+
+最新门禁：backend `pytest -q` **571 passed**，ruff/format/mypy（120 files）通过；
+agent `npm test` **12 files / 80 tests passed**，type-check/lint/build 通过；frontend
+`npm test -- --run` **40 files / 242 tests**，type-check/lint/build 通过；Compose
+config、Trellis validate、git diff --check 通过。
+
+唯一未闭环：尚未取得一次真实 `liu-dada/gpt-5.6-sol` 成功正文回显；任务保持
+`in_progress`，不虚构外部 Provider 成功证据。
