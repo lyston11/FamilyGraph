@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-08-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~505 | Active |
+| `journal-1.md` | ~526 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-08-30 | 完成空间管理员审批流程 | `68b45e9` | `feat/space-manager-approval` |
 | 6 | 2026-08-30 | 完成 V2 Agent Runtime Provider 兼容修复并归档 | `79e3fa0`, `fe80479` | `feat/frontend-role-boundaries` |
 | 5 | 2026-08-30 | 空间邀请契约修正：active member 可邀请 | `21bed18` | `feat/frontend-role-boundaries` |
 | 4 | 2026-08-30 | 前端后台角色分域与安全收尾 | `77babc7` | `feat/frontend-role-boundaries` |
