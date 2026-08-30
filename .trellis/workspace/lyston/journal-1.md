@@ -481,3 +481,25 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 完成 V2 Agent Runtime Provider 兼容修复并归档
+
+**Date**: 2026-08-30
+**Task**: 完成 V2 Agent Runtime Provider 兼容修复并归档
+**Branch**: `feat/frontend-role-boundaries`
+
+### Summary
+
+修复 Pi/pi-ai openai-responses Provider 工具名 wire 兼容性：canonical familygraph.* 仅在出站映射为 familygraph_*，policy/events 再反解回规范名；通过 Agent 87 项测试、Agent 相关后端 114 项测试、真实 liu-dada/gpt-5.6-sol 成功正文与取消 E2E，并归档 v2-agent-runtime-full-repair。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `79e3fa0` | (see git log) |
+| `fe80479` | (see git log) |
+
+### Status
+
+[OK] **Completed**
