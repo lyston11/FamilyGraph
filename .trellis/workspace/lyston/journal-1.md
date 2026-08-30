@@ -503,3 +503,24 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: 完成空间管理员审批流程
+
+**Date**: 2026-08-30
+**Task**: 完成空间管理员审批流程
+**Branch**: `feat/space-manager-approval`
+
+### Summary
+
+将管理者申请收窄为已有空间 active member 晋升 space_admin 的平台审批流程；保留 member 邀请和自由建空间语义，补齐并发提交/裁决安全、前后端测试与 0021→0020 迁移协调记录。前端 250 测试、后端 587 测试、mypy、Ruff 和任务校验全通过。并行 runtime 的 backend/tests/conftest.py 未暂存。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `68b45e9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
