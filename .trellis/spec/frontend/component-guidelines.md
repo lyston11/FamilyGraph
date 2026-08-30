@@ -50,3 +50,10 @@
 
 - naive 浮层（modal/drawer/popover）自增 z-index 基数 ≥2000；壳导航 sticky z=100；自绘悬浮件（AssistantLauncher=1500）必须低于 naive 基数，避免被浮层压住或反向遮挡。
 - 下拉默认页内绝对定位即可（壳导航形成堆叠上下文）；引入 teleport 前先论证层级与主题（CSS 变量挂 root，teleport 不丢主题，但层级协调成本变高）。
+
+## 审批/裁决表约定（AdminView 系；2026-08-30 空间管理者申请起沉淀）
+
+- 运营者审批表沿用既有模式：NDataTable + `DataTableColumns<T>` h() 列渲染；行内动作「通过」直接调用裁决 API（approve 备注可选），「驳回」弹 NModal 填理由且提交钮在理由为空时 disabled（后端仍 422 兜底）。
+- 申请/裁决状态徽章复用领域状态工具类：pending → `fg-badge--proposed`（空心"审批中"）、approved → `fg-badge--confirmed`（"已通过"）、rejected → `fg-badge--disputed`（"未通过"+平台备注），不新增颜色/样式。
+- 队列只展示裁决所需最小数据（申请人名/类型/目标名），不做家庭敏感字段扩展；文案统一「已通过/未通过并留痕审计」。
+- n-select 在 jsdom 测试中的选择走键盘路径（`.n-base-selection` 两次 Enter，见 SpaceGovernanceDialog.spec / MemberCreateWizard.spec）。

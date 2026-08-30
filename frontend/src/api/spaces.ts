@@ -1,4 +1,12 @@
-import type { FamilySpace, OwnershipTransfer, SpaceMemberInfo, SpaceProfileRefInfo } from '@/types/api'
+import type {
+  FamilySpace,
+  ManagerApplicationStatus,
+  ManagerRequestKind,
+  OwnershipTransfer,
+  SpaceManagerApplication,
+  SpaceMemberInfo,
+  SpaceProfileRefInfo,
+} from '@/types/api'
 
 import { apiClient } from './client'
 
@@ -7,9 +15,34 @@ export async function fetchSpaces(): Promise<FamilySpace[]> {
   return data
 }
 
-/** 创建空间：owner 即 active 成员；kind 默认 household（v2 §0.4） */
 export async function createSpace(name: string, kind?: 'household' | 'lineage'): Promise<FamilySpace> {
   const { data } = await apiClient.post<FamilySpace>('/spaces', { name, kind })
+  return data
+}
+
+/**
+ * 提交成为已有空间管理员的申请（需平台运营者审批）。
+ * 邀请成员不走此流程，active member（除 guest）可直接邀请。
+ */
+export async function submitManagerApplication(
+  requestKind: ManagerRequestKind,
+  payload: { spaceId: number },
+): Promise<SpaceManagerApplication> {
+  const { data } = await apiClient.post<SpaceManagerApplication>('/spaces/manager-applications', {
+    request_kind: requestKind,
+    space_id: payload.spaceId,
+  })
+  return data
+}
+
+/** 我的管理者申请与状态（pending/approved/rejected + 平台备注） */
+export async function fetchMyManagerApplications(
+  status?: ManagerApplicationStatus,
+): Promise<SpaceManagerApplication[]> {
+  const { data } = await apiClient.get<SpaceManagerApplication[]>(
+    '/spaces/manager-applications/mine',
+    { params: status ? { status } : {} },
+  )
   return data
 }
 

@@ -21,7 +21,7 @@ import {
   respondOwnershipTransfer,
 } from '@/api/spaces'
 
-/** 家庭空间状态（m1c）。AD-3：空列表时由首页引导创建默认空间。 */
+/** 家庭空间状态（m1c）。空列表时由首页引导创建家庭空间。 */
 export const useSpacesStore = defineStore('spaces', {
   state: () => ({
     /**
@@ -122,8 +122,8 @@ export const useSpacesStore = defineStore('spaces', {
       if (generation !== this.generation || this.currentSpaceId !== spaceId) return
       this.profileRefs = refs
     },
-    async create(name: string) {
-      const space = await createSpace(name)
+    async create(name: string, kind: 'household' | 'lineage' = 'household') {
+      const space = await createSpace(name, kind)
       this.spaces.unshift(space)
       await this.loadMembers(space.id)
       return space

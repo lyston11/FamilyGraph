@@ -251,6 +251,27 @@ export interface SpaceMemberInfo {
   updated_at: string
 }
 
+// ---- 空间管理者申请（任务 08-30-space-manager-approval；与后端 schemas/space.py 对应） ----
+
+export type ManagerRequestKind = 'space_admin'
+export type ManagerApplicationStatus = 'pending' | 'approved' | 'rejected'
+
+/** 空间管理员申请：指向申请人所在的目标空间 */
+export interface SpaceManagerApplication {
+  id: number
+  applicant_user_id: number
+  /** 队列/本人列表附带的名字投影 */
+  applicant_name?: string | null
+  space_id: number
+  space_name?: string | null
+  request_kind: ManagerRequestKind
+  status: ManagerApplicationStatus
+  /** 平台备注（reject 必填，approve 可选） */
+  decision_note: string | null
+  created_at: string
+  decided_at: string | null
+}
+
 // ---- v2 Foundation 治理域（与 backend/app/schemas/v2_foundation.py 一一对应） ----
 
 /** 「这是我」合并确认结果（F-1 唯一合法联动） */

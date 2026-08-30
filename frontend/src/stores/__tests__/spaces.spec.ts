@@ -9,6 +9,8 @@ import type { FamilySpace } from '@/types/api'
 vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn(),
   createSpace: vi.fn(),
+  submitManagerApplication: vi.fn(),
+  fetchMyManagerApplications: vi.fn().mockResolvedValue([]),
   fetchSpaceMembers: vi.fn(),
   fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
@@ -159,7 +161,7 @@ describe('spaces store（AD-3）', () => {
     expect(mockedMembers).toHaveBeenCalledWith(1)
   })
 
-  it('无任何空间 → 空列表（首页引导创建默认空间，AD-3.4）', async () => {
+  it('无任何空间 → 空列表（首页展示创建空间入口）', async () => {
     mockedFetch.mockResolvedValue([])
     const store = useSpacesStore()
     await store.load()
@@ -172,8 +174,13 @@ describe('spaces store（AD-3）', () => {
     vi.mocked(spacesApi.createSpace).mockResolvedValue(makeSpace({ id: 5, name: '我们家' }))
     mockedMembers.mockResolvedValue([
       {
-        id: 9, space_id: 5, user_id: 1, added_by: 1,
-        role: 'owner', status: 'active', updated_at: '2026-08-25T00:00:00',
+        id: 9,
+        space_id: 5,
+        user_id: 1,
+        added_by: 1,
+        role: 'owner',
+        status: 'active',
+        updated_at: '2026-08-25T00:00:00',
       },
     ])
     const store = useSpacesStore()
@@ -182,7 +189,6 @@ describe('spaces store（AD-3）', () => {
     expect(store.currentSpaceId).toBe(5)
     expect(store.activeMembers).toHaveLength(1)
   })
-
   it('loadMembers 同步拉取待确档最小引用；失败时置空不阻塞（AC-F2）', async () => {
     mockedFetch.mockResolvedValue([makeSpace({ id: 3, kind: 'lineage' })])
     mockedMembers.mockResolvedValue([])

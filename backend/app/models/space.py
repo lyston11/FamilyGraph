@@ -19,7 +19,9 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
+    Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +30,10 @@ from app.models.base import Base
 SPACE_MEMBER_STATUSES = ("pending", "active", "rejected", "withdrawn", "removed")
 SPACE_MEMBER_ROLES = ("owner", "space_admin", "member", "guest")
 PENDING_EXPIRY_DAYS = 30
+
+# 空间管理者申请（平台运营者审批制，任务 08-30-space-manager-approval）
+MANAGER_REQUEST_KINDS = ("space_admin",)
+MANAGER_APPLICATION_STATUSES = ("pending", "approved", "rejected")
 
 
 class FamilySpace(Base):
@@ -109,3 +115,56 @@ class SpaceProfileRef(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<SpaceProfileRef space={self.space_id} user={self.user_id} {self.status}>"
+
+
+class SpaceManagerApplication(Base):
+    """空间管理者申请（平台运营者审批制，任务 08-30-space-manager-approval）。
+
+    request_kind 只有 ``space_admin``：申请人成为目标空间的 space_admin。
+    申请人须为该空间 active member；owner/space_admin/guest 不适用。
+
+    裁决语义：approve/reject 由 platform_operator 在管理端做出（reject 理由必填）；
+    裁决终态不可再变（重复裁决 409）。现有空间 owner 只经 ownership_transfers
+    FSM 变更，本模型绝不触碰 family_spaces.owner_id。
+
+    唯一性：同一 (applicant, space, kind) 至多一条 pending。
+    """
+
+    __tablename__ = "space_manager_applications"
+    __table_args__ = (
+        CheckConstraint("request_kind IN ('space_admin')", name="ck_sma_kind"),
+        CheckConstraint("status IN ('pending','approved','rejected')", name="ck_sma_status"),
+        CheckConstraint("space_id IS NOT NULL", name="ck_sma_space_required"),
+        Index(
+            "uq_space_manager_application_pending",
+            "applicant_user_id",
+            "space_id",
+            "request_kind",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+        ),
+        Index("ix_space_manager_applications_applicant", "applicant_user_id"),
+        Index("ix_space_manager_applications_space", "space_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    request_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<SpaceManagerApplication {self.id} applicant={self.applicant_user_id}"
+            f" kind={self.request_kind} {self.status}>"
+        )
