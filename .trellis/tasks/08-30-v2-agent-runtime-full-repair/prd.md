@@ -32,7 +32,7 @@
 ## Acceptance criteria
 
 - [x] AC-PROVIDER：运行时只接受 allowlisted `liu-dada/gpt-5.6-sol` profile；api=`openai-responses`，272000/60000、reasoning、模态和 thinking map 与本机 Pi 配置一致；密钥不进入 projection、日志、事件或 sidecar 环境；Run context/provider 使用同一 snapshot。
-- [partial] AC-CANCEL：用户取消、lease 过期、membership 撤销均使 Pi session/provider stream 在可观测超时内中止；不再产生后续重试/settle succeeded；有单测和真实 stub-stream 回归。真实上游中止尚待 liu-dada 可用时补证据。
+- [x] AC-CANCEL：用户取消、lease 过期、membership 撤销均使 Pi session/provider stream 在可观测超时内中止；不再产生后续重试/settle succeeded；有单测和真实 stub-stream 回归。真实 liu-dada Run 14 取消后最终 `failed/PROVIDER_STREAM_ERROR` 且 `cancel_requested=true`，未 settle succeeded。
 - [x] AC-PROXY：Provider 请求体超过 `AGENT_PROVIDER_PROXY_MAX_BYTES` 在读取前拒绝；最终 `before_provider_request` policy 失败时请求不出网；上游错误、断流、客户端断开均 settle failed 并有脱敏 audit。
 - [x] AC-AUTHZ：run token 绑定 run/job/kind/account/space；每次 internal context/provider/tool 请求检查 run active 与当前 active membership，撤权后返回 401/403/409 且写 audit。
 - [x] AC-QUEUE：Assistant sidecar 只能租 `agent_kind=assistant`；Steward job 只能由 maintenance canonical worker 消费；毒药作业不会转成 Assistant 执行。
@@ -40,8 +40,8 @@
 - [x] AC-GRAPH-TERMS：Graph visibility 调用包含 space_context；空间/个人别名可反解析，冲突按优先级收敛且 raw input 不变。
 - [x] AC-TOOLS：三方工具 schema 快照逐字段一致；非法长度/数值/枚举/数组项 fail-closed；term usage 只有服务端确认 consent 才计数。
 - [x] AC-WEB：approved token CAS 提交后再进行外部请求；网络失败不会留下已消费但未执行的 token；既有 SSRF/allowlist/PII 门禁不回退。
-- [partial] AC-OPS：README 的干净环境启动说明能通过 Compose config；api/agent readiness 与 web healthcheck 语义一致；secret 文件权限受限；真实 stub provider 与 `liu-dada` 配置 E2E 记录成功和失败证据。真实 liu-dada 成功正文回显尚缺。
-- [partial] AC-GOV：本任务 `task.py validate`、lint/type-check/test、AC 逐条 command/exit code/artifact 回写完成后才标记 completed；不得用“JSONL 可解析”冒充实现完成。所有本地门禁与证据已回写，任务因真实 provider success 缺失保持 in_progress。
+- [partial] AC-OPS：README 的干净环境启动说明能通过 Compose config；api/agent readiness 与 web healthcheck 语义一致；secret 文件权限受限；真实 stub provider 与 `liu-dada` 配置 E2E 已记录成功和失败证据，Run 12 已取得正文。全量项目门禁当前被并行未提交任务的 8 个后端接口断言失败和 1 个前端语法错误阻断。
+- [partial] AC-GOV：本任务 `task.py validate`、Agent/Agent-backend lint/type-check/test、AC 逐条证据和真实 Provider success/cancel 均已回写；状态仍为 `in_progress`，因为并行 space-manager/frontend 改动尚未闭环，不能将全项目门禁失败冒充完成。
 
 ## Risks and rollback
 

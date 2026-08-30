@@ -6,6 +6,7 @@
  */
 
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { canonicalToolName } from "./tools.js";
 
 const INJECTION_MARKERS = [
   "ignore previous instructions",
@@ -68,10 +69,7 @@ type ViolationKind =
   | "cloud_provider_forbidden"
   | "secret_in_provider_payload";
 
-type NoticeKind =
-  | "sensitive_redacted"
-  | "pii_redacted"
-  | "unconfirmed_fact_annotated";
+type NoticeKind = "sensitive_redacted" | "pii_redacted" | "unconfirmed_fact_annotated";
 
 const BLOCKING_VIOLATION_KINDS = new Set<ViolationKind>([
   "unsafe_input",
@@ -155,9 +153,7 @@ export function redactSecrets(value: unknown, secrets: readonly string[]): unkno
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = isCredentialKey(key)
-        ? "[REDACTED]"
-        : redactSecrets(item, secrets);
+      out[key] = isCredentialKey(key) ? "[REDACTED]" : redactSecrets(item, secrets);
     }
     return out;
   }
@@ -219,13 +215,15 @@ function containsScopeOverride(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsScopeOverride);
   if (value === null || typeof value !== "object") return false;
   return Object.entries(value as Record<string, unknown>).some(
-    ([key, item]) => SCOPE_KEYS.has(key.toLowerCase().replaceAll("-", "_")) || containsScopeOverride(item),
+    ([key, item]) =>
+      SCOPE_KEYS.has(key.toLowerCase().replaceAll("-", "_")) || containsScopeOverride(item),
   );
 }
 
 function isUnconfirmed(value: unknown): boolean {
   if (typeof value === "string") {
-    if (/\b(?:unconfirmed|pending|proposed|disputed)\b|未经确认|待确认|有争议/i.test(value)) return true;
+    if (/\b(?:unconfirmed|pending|proposed|disputed)\b|未经确认|待确认|有争议/i.test(value))
+      return true;
     try {
       return isUnconfirmed(JSON.parse(value));
     } catch {
@@ -371,10 +369,19 @@ function violation(
   options.onViolation?.(item);
 }
 
-function notice(notices: PolicyNotice[], options: PolicyGuardOptions, kind: NoticeKind, detail: string): void {
+function notice(
+  notices: PolicyNotice[],
+  options: PolicyGuardOptions,
+  kind: NoticeKind,
+  detail: string,
+): void {
   const item = { kind, detail } satisfies PolicyNotice;
   notices.push(item);
   options.onNotice?.(item);
+}
+
+function canonicalPolicyToolName(value: string): string {
+  return canonicalToolName(value) ?? value;
 }
 
 export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
@@ -411,7 +418,12 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
       violation(violations, options, "masked_data", "provider payload contained masked data");
     }
     if (hasPii) {
-      notice(notices, options, "pii_redacted", "unnecessary PII was removed before provider transport");
+      notice(
+        notices,
+        options,
+        "pii_redacted",
+        "unnecessary PII was removed before provider transport",
+      );
     }
     if (providerBlocked || hasMaskedData || hasSecret) {
       const error = new Error(
@@ -438,7 +450,12 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
       // input: cheap first-pass screening before prompt expansion.
       pi.on("input", (event) => {
         if (containsInjection(event.text) || containsSecret(event.text, options.secrets)) {
-          violation(violations, options, "unsafe_input", "input contains unsafe or secret material");
+          violation(
+            violations,
+            options,
+            "unsafe_input",
+            "input contains unsafe or secret material",
+          );
           return { action: "handled" };
         }
         return { action: "continue" };
@@ -446,6 +463,7 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
 
       // tool_call: only server-issued, registered domain tools may execute.
       pi.on("tool_call", (event) => {
+        const canonicalName = canonicalPolicyToolName(event.toolName);
         const inputSize = serialized(event.input).length;
         if (
           inputSize > maxToolInputChars ||
@@ -465,16 +483,16 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
             terminate: true,
           };
         }
-        if (!options.allowlist.has(event.toolName)) {
+        if (!options.allowlist.has(canonicalName)) {
           violation(
             violations,
             options,
             "tool_not_allowed",
-            `tool "${event.toolName}" is not in the run allowlist`,
+            `tool "${canonicalName}" is not in the run allowlist`,
           );
           return {
             block: true,
-            reason: `policy: tool not allowed: ${event.toolName}`,
+            reason: `policy: tool not allowed: ${canonicalName}`,
             terminate: true,
           };
         }
@@ -486,16 +504,36 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
       pi.on("tool_result", (event) => {
         const safe = sanitizeToolResult(event.content, options.secrets, maxToolResultChars);
         if (safe.redacted) {
-          notice(notices, options, "sensitive_redacted", "tool result contained redacted sensitive material");
+          notice(
+            notices,
+            options,
+            "sensitive_redacted",
+            "tool result contained redacted sensitive material",
+          );
         }
         if (safe.oversized) {
-          violation(violations, options, "tool_result_too_large", "tool result exceeded the output limit");
+          violation(
+            violations,
+            options,
+            "tool_result_too_large",
+            "tool result exceeded the output limit",
+          );
         }
         if (safe.unconfirmed) {
-          notice(notices, options, "unconfirmed_fact_annotated", "tool result was labeled as unconfirmed");
+          notice(
+            notices,
+            options,
+            "unconfirmed_fact_annotated",
+            "tool result was labeled as unconfirmed",
+          );
         }
         if (safe.injection) {
-          violation(violations, options, "prompt_injection", "tool result contained an instruction-like data block");
+          violation(
+            violations,
+            options,
+            "prompt_injection",
+            "tool result contained an instruction-like data block",
+          );
         }
         if (safe.masked) {
           violation(violations, options, "masked_data", "tool result contained masked data");
@@ -515,7 +553,12 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
         let changed = false;
         const safeMessages = event.messages.flatMap((message) => {
           if (containsInjection(message)) {
-            violation(violations, options, "prompt_injection", "context contained an instruction-like data block");
+            violation(
+              violations,
+              options,
+              "prompt_injection",
+              "context contained an instruction-like data block",
+            );
             changed = true;
             return [];
           }
@@ -528,11 +571,21 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
           const safe = redactSensitive(message, options.secrets);
           const annotated = unconfirmed ? annotateUnconfirmedMessage(safe) : safe;
           if (unconfirmed) {
-            notice(notices, options, "unconfirmed_fact_annotated", "context contained an unconfirmed fact");
+            notice(
+              notices,
+              options,
+              "unconfirmed_fact_annotated",
+              "context contained an unconfirmed fact",
+            );
             changed = true;
           }
           if (serialized(annotated) !== serialized(message)) {
-            notice(notices, options, "pii_redacted", "context contained redacted sensitive material");
+            notice(
+              notices,
+              options,
+              "pii_redacted",
+              "context contained redacted sensitive material",
+            );
             changed = true;
           }
           return [annotated as typeof message];
@@ -546,12 +599,13 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
 
       // This catches unknown tools that Pi rejects before tool_call can run.
       pi.on("tool_execution_end", (event) => {
-        if (!options.allowlist.has(event.toolName)) {
+        const canonicalName = canonicalPolicyToolName(event.toolName);
+        if (!options.allowlist.has(canonicalName)) {
           violation(
             violations,
             options,
             "tool_not_allowed",
-            `attempted tool "${event.toolName}" is outside the run allowlist`,
+            `attempted tool "${canonicalName}" is outside the run allowlist`,
           );
         }
       });

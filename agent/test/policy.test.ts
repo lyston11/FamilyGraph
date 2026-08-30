@@ -101,11 +101,36 @@ describe("familygraph-policy-guard", () => {
 
     const scopeOverride = installGuard(["familygraph.echo"]);
     expect(
-      (scopeOverride.handlers.get("tool_call")!({
-        toolName: "familygraph.echo",
-        input: { space_id: 99, text: "hello" },
-      }) as { block?: boolean }).block,
+      (
+        scopeOverride.handlers.get("tool_call")!({
+          toolName: "familygraph.echo",
+          input: { space_id: 99, text: "hello" },
+        }) as { block?: boolean }
+      ).block,
     ).toBe(true);
+  });
+
+  it("accepts provider wire names against the canonical allowlist", () => {
+    const allowed = installGuard(["familygraph.list_visible_people"]);
+    expect(
+      allowed.handlers.get("tool_call")!({
+        toolName: "familygraph_list_visible_people",
+        input: { query: "Alice" },
+      }),
+    ).toBeUndefined();
+    allowed.handlers.get("tool_execution_end")!({
+      toolName: "familygraph_list_visible_people",
+      isError: false,
+    });
+    expect(allowed.guard.violationCount).toBe(0);
+
+    const blocked = installGuard(["familygraph.echo"]);
+    const decision = blocked.handlers.get("tool_call")!({
+      toolName: "familygraph_list_visible_people",
+      input: {},
+    }) as { block?: boolean; reason?: string; terminate?: boolean };
+    expect(decision).toMatchObject({ block: true, terminate: true });
+    expect(decision.reason).toContain("familygraph.list_visible_people");
   });
 
   it("bounds tool results and labels unconfirmed facts without failing the run", () => {
@@ -115,7 +140,9 @@ describe("familygraph-policy-guard", () => {
       onNotice,
     });
     const result = handlers.get("tool_result")!({
-      content: [{ type: "text", text: JSON.stringify({ confirmed: false, value: "alice@example.com" }) }],
+      content: [
+        { type: "text", text: JSON.stringify({ confirmed: false, value: "alice@example.com" }) },
+      ],
     }) as { content: Array<{ type: "text"; text: string }>; isError: boolean };
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text.length).toBeLessThanOrEqual(20);

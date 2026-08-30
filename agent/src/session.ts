@@ -39,7 +39,12 @@ import type { AgentConfig } from "./config.js";
 import { RunEventBuffer } from "./events.js";
 import { createPolicyGuard, type PolicyGuard } from "./policy.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "./prompt.js";
-import { createDomainTools, defaultToolNames, type DomainToolName } from "./tools.js";
+import {
+  createDomainTools,
+  defaultToolNames,
+  providerWireName,
+  type DomainToolName,
+} from "./tools.js";
 import type { InternalClient, RunContextProjection } from "./client.js";
 
 /** Raised when provider policy makes this run unexecutable (explainable refusal). */
@@ -68,7 +73,11 @@ export interface BuildSessionDeps {
   // The bivariant method keeps existing completions-only test doubles
   // assignable while the runtime also supports the openai-responses adapter.
   streamOverride?: {
-    bivarianceHack(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
+    bivarianceHack(
+      model: Model<Api>,
+      context: Context,
+      options?: SimpleStreamOptions,
+    ): AssistantMessageEventStream;
   }["bivarianceHack"];
   agentDir?: string;
   /** Returns true when the run must stop issuing tool calls (cancel/lease lost). */
@@ -144,7 +153,12 @@ export function resolveProvider(
   runToken: string,
   expectedRunId?: string,
 ): {
-  entry: { kind: "openai_compatible" | "local"; baseUrl: string; apiKey: string | undefined; model: string };
+  entry: {
+    kind: "openai_compatible" | "local";
+    baseUrl: string;
+    apiKey: string | undefined;
+    model: string;
+  };
   modelId: string;
   providerId: string;
   providerName: string;
@@ -174,10 +188,16 @@ export function resolveProvider(
   // URLs and projected credentials are rejected so a compromised projection
   // cannot create a sidecar egress escape hatch.
   if (!rawBaseUrl.startsWith("/internal/")) {
-    throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider projection must use internal gateway");
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      "provider projection must use internal gateway",
+    );
   }
   if (provider.api_key !== null) {
-    throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider projection must not contain credentials");
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      "provider projection must not contain credentials",
+    );
   }
   let parsed: URL;
   try {
@@ -192,7 +212,10 @@ export function resolveProvider(
     parsed.hash !== "" ||
     (expectedRunId !== undefined && match[1] !== expectedRunId)
   ) {
-    throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider projection is not bound to this run");
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      "provider projection is not bound to this run",
+    );
   }
   const baseUrl = parsed.toString().replace(/\/$/, "");
   const apiKey = runToken;
@@ -234,7 +257,10 @@ export async function buildRunSession(
     runToken,
     projection.run_id,
   );
-  if (projection.provider?.api !== "openai-completions" && projection.provider?.api !== "openai-responses") {
+  if (
+    projection.provider?.api !== "openai-completions" &&
+    projection.provider?.api !== "openai-responses"
+  ) {
     throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider protocol is unsupported");
   }
   const api = projection.provider.api;
@@ -274,11 +300,7 @@ export async function buildRunSession(
     ),
   });
 
-  const guardedStreamSimple = (
-    m: Model<Api>,
-    context: Context,
-    options?: SimpleStreamOptions,
-  ) => {
+  const guardedStreamSimple = (m: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
     const guardedOptions = {
       ...options,
       signal: deps.signal ?? options?.signal,
@@ -330,13 +352,16 @@ export async function buildRunSession(
   });
   await loader.reload();
 
-  const domainTools = createDomainTools((toolName: DomainToolName, call) => {
-    if (deps.shouldStopToolCalls?.()) {
-      // Cancel requested / lease lost: no further tool calls reach FastAPI.
-      throw new Error("run stop requested; tool call skipped");
-    }
-    return client.executeTool(projection.run_id, runToken, toolName, call, deps.signal);
-  });
+  const domainTools = createDomainTools(
+    (toolName: DomainToolName, call) => {
+      if (deps.shouldStopToolCalls?.()) {
+        // Cancel requested / lease lost: no further tool calls reach FastAPI.
+        throw new Error("run stop requested; tool call skipped");
+      }
+      return client.executeTool(projection.run_id, runToken, toolName, call, deps.signal);
+    },
+    { providerWireNames: true },
+  );
 
   const { session } = await createAgentSession({
     cwd: agentDir,
@@ -344,7 +369,9 @@ export async function buildRunSession(
     modelRuntime,
     model,
     noTools: "all",
-    tools: [...projection.tool_allowlist],
+    // Pi uses these names when constructing provider requests. Keep the
+    // server-issued allowlist canonical, but emit provider-safe wire names.
+    tools: projection.tool_allowlist.map((name) => providerWireName(name as DomainToolName)),
     customTools: domainTools,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(agentDir),
@@ -356,7 +383,9 @@ export async function buildRunSession(
   // Pi agent state so provider requests contain the complete conversation.
   const latestUserId = [...projection.messages]
     .reverse()
-    .find((message) => message.role === "user" && typeof message.content_json["text"] === "string")?.id;
+    .find(
+      (message) => message.role === "user" && typeof message.content_json["text"] === "string",
+    )?.id;
   const zeroUsage = () => ({
     input: 0,
     output: 0,
@@ -369,7 +398,8 @@ export async function buildRunSession(
     .filter((message) => message.id !== latestUserId)
     .flatMap((message): Message[] => {
       const text = message.content_json["text"];
-      if ((message.role !== "user" && message.role !== "assistant") || typeof text !== "string") return [];
+      if ((message.role !== "user" && message.role !== "assistant") || typeof text !== "string")
+        return [];
       const timestamp = Date.parse(message.created_at) || Date.now();
       if (message.role === "user") {
         return [{ role: "user" as const, content: text, timestamp }];

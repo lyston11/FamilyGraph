@@ -99,3 +99,47 @@ Pi stream 且不 settle succeeded。
 真实 `liu-dada/gpt-5.6-sol` 成功正文回显仍未取得；因此 AC-OPS、AC-CANCEL、AC-GOV
   继续保持 partial，任务不可归档。上游恢复后只需补一次脱敏成功 E2E，并记录
   provider/model/status/字节数/正文长度，不记录 Authorization、run token、密钥或密文。
+
+## 2026-08-30 provider wire-name repair and real E2E
+
+本轮联调定位并修复了一个真实 Provider 兼容性缺口：`pi-ai` 的
+`openai-responses` adapter 会原样发送 Pi tool definition 的名称；liu-dada
+对带 `.` 的函数名返回 502，而无工具或下划线函数名请求返回 200。后端规范名
+不能改动，因此 sidecar 新增单一 canonical↔wire 映射：
+
+- `familygraph.*` 继续作为后端 allowlist、工具执行、审计和公开事件的规范名；
+- provider 出站 declaration 使用 `familygraph_*`（例如
+  `familygraph.list_visible_people` → `familygraph_list_visible_people`）；
+- Pi policy/event hook 收到 wire 名后先反解 canonical，再执行 allowlist 校验、
+  FastAPI dispatch 和 citation 投影；未知名保持 fail-closed；
+- `createDomainTools()` 默认 API 和 executor 行为保持 canonical，只有
+  `providerWireNames: true` 的 session 出站路径使用 wire 名。
+
+改动文件：`agent/src/tools.ts`、`session.ts`、`policy.ts`、`events.ts`，以及
+对应工具/policy/events/worker 集成回归测试。Agent 门禁结果：type-check、lint、
+build 全部通过；**12 files / 87 tests passed**。
+
+### 脱敏真实 Provider 证据
+
+- 重建后的 `familygraph-agent-1` healthy；api、agent、web 均 healthy。
+- Run **12**：`provider=liu-dada`、`model=gpt-5.6-sol`、`api=openai-responses`，
+  `status=succeeded`，assistant 正文长度 **13**，正文：`当前空间暂无我可见的人物。`。
+  Agent 审计记录 3 次 `agent_provider_egress` 均 `upstream_status=200`，读取字节
+  数为 32695/31082/26811；事件中的工具名为规范
+  `familygraph.list_visible_people`，证明 wire→canonical 反解和真实工具执行均生效。
+- Run **14**：同一 profile 在真实请求进入 leased/running 后触发取消，取消接口
+  HTTP 200；最终 `status=failed`、`error_code=PROVIDER_STREAM_ERROR`、
+  `cancel_requested=true`，未产生 succeeded。审计含一次上游 200 egress（取消时
+  读取 0 bytes）和 `agent_run_cancel_requested`；服务端仍是最终裁决者。
+
+### 当前门禁备注
+
+- Agent 相关后端回归：`pytest` 114 passed；Trellis `task.py validate` 通过；
+  `git diff --check` 通过。
+- 全量 backend 当前为 **579 passed / 8 failed**，失败全部来自并行未提交的
+  `08-30-space-manager-approval` 改动（其测试仍按旧接口调用）；本任务相关测试
+  无失败。Frontend 全量门禁当前也被并行 redesign 文件
+  `frontend/src/components/member/MemberCreateWizard.vue` 的未提交语法缺失阻断；
+  本任务未修改、未覆盖这些路径，保留给对应并行任务处理。
+- 因真实 liu-dada 成功和取消证据均已取得，本任务自身 AC-CANCEL/AC-OPS 的外部
+  证据已补齐；全项目门禁的并行工作树阻断仍需在归档前由相应任务修复。

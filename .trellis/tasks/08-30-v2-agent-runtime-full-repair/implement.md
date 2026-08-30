@@ -56,7 +56,7 @@ Rollback is feature-flag disablement first; additive schema changes are safe bec
 证据只引用可复现命令、测试或代码入口；不以“JSONL 可解析”替代实现证据。
 
 - [x] **AC-PROVIDER** — `backend/app/services/agent_provider.py` 的标准 profile gate、snapshot 与 runtime fail-closed；`agent/test/responses-wire.test.ts` 验证 `liu-dada/gpt-5.6-sol` Responses wire；`backend/tests/test_agent_provider.py`、`test_agent_admin_providers.py`、`test_agent_schema_contract.py` 通过。projection 无 `api_key`，sidecar 仅使用 internal gateway path。
-- [partial] **AC-CANCEL** — `agent/test/worker.integration.test.ts` 的 AbortController/Pi stream stub 通过；后端工具与 Provider proxy 增加 `cancel_requested` 门禁并有回归测试。真实上游中止尚未执行，待 liu-dada 可用后补脱敏 E2E。
+- [x] **AC-CANCEL** — `agent/test/worker.integration.test.ts` 的 AbortController/Pi stream stub 通过；后端工具与 Provider proxy 增加 `cancel_requested` 门禁并有回归测试。真实 liu-dada Run 14 在 leased/running 后取消，最终 `failed/PROVIDER_STREAM_ERROR` 且 `cancel_requested=true`，未 settle succeeded。
 - [x] **AC-PROXY** — body limit、空/非法/非 object 422、model/stream/token cap 与 run snapshot 绑定、最终 policy guard-before-egress、上游错误/断流审计与 AsyncClient 异常关闭均已实现；`backend/tests/test_provider_proxy.py` 相关用例通过。
 - [x] **AC-AUTHZ** — `_authorize_run()` 每次 internal 请求核验 token scope、run/job/kind/account/space、active membership；internal 401/403/409/410 与审计回归通过。
 - [x] **AC-QUEUE** — sidecar lease 固定 `kind=assistant`，Steward 由 maintenance canonical worker 消费；poison/steward boundary 回归通过。
@@ -64,8 +64,8 @@ Rollback is feature-flag disablement first; additive schema changes are safe bec
 - [x] **AC-GRAPH-TERMS** — graph 将 `space_context` 传入 VisibilityPolicy；TermRegistry personal > space > locale > system 反向解析与 raw input 保留测试通过。
 - [x] **AC-TOOLS** — backend registry、sidecar TypeBox、internal schema 对齐；递归 string/integer/enum/array/items 校验和 `term_usage_consent` 门禁回归通过。
 - [x] **AC-WEB** — approved token CAS 在事务提交后才发起网络请求；失败补偿/审计、SSRF/DNS pin、PII/secret gate 既有测试通过。
-- [partial] **AC-OPS** — README/Compose secret、health/readiness、web healthcheck、Agent 无端口、`.env` 0600 已完成；`docker compose config --quiet` 通过。真实 `liu-dada/gpt-5.6-sol` 成功正文回显尚缺，不能虚构。
-- [partial] **AC-GOV** — `task.py validate 08-30-v2-agent-runtime-full-repair`（implement 8/8、check 5/5）和全量门禁已通过；任务仍保持 `in_progress`，待真实 provider success evidence 后再归档。
+- [partial] **AC-OPS** — README/Compose secret、health/readiness、web healthcheck、Agent 无端口、`.env` 0600 已完成；`docker compose config --quiet` 通过。真实 liu-dada Run 12 已成功并取得正文；但全量 backend/frontend 门禁当前被并行未提交任务的 8 个后端接口断言失败和 1 个前端语法错误阻断，需对应任务修复后再宣称全项目绿。
+- [partial] **AC-GOV** — 本任务 Agent 与 Agent 相关 backend 回归、`task.py validate`、`git diff --check` 全绿，真实 success/cancel 证据已回写；整体任务仍保持 `in_progress`，因为工作树中并行 `08-30-space-manager-approval`/frontend redesign 改动尚未完成，不能把全项目门禁失败隐瞒为完成。
 
 ### Final command log
 
@@ -111,3 +111,30 @@ AC-GOV 仍为 partial，禁止更新为 completed 或归档。
 ### Closure rule
 
 在没有真实 liu-dada 成功记录前，不把任务或 release gate 标为 completed；上游恢复后补一次不含密钥的成功/失败双路径记录，再更新本表和 `task.json`。
+
+## Provider wire-name repair evidence (2026-08-30)
+
+最小真实探针确认 liu-dada 的 502 根因是 OpenAI-compatible function name 中的
+`.`：无工具请求、手工下划线工具名和 Pi adapter 生成的无工具请求返回 200；带
+`familygraph.*` 工具名返回 502。修复保持后端规范合同不变，仅由 sidecar 在
+Pi/pi-ai provider 出站 declaration 使用 `familygraph_*`，并在 policy/event hook
+反解回 canonical 后再执行 allowlist、FastAPI dispatch 和公开事件。
+
+- 代码：`agent/src/tools.ts` canonical↔wire 单一映射；`session.ts` 出站工具声明
+  与 allowlist 使用 wire 名；`policy.ts`/`events.ts` 统一反解；所有 executor 和
+  后端合同仍使用 canonical 名。
+- 回归：Agent type-check、lint、build 通过，12 files/87 tests passed；新增
+  wire declaration、policy allowlist、event/citation 反解测试；worker 集成测试以
+  wire tool call 驱动并断言后端收到 canonical 名。
+- 真实成功：Run 12 使用 `liu-dada/gpt-5.6-sol/openai-responses`，三次上游 egress
+  均 200，Run succeeded，assistant 正文长度 13（`当前空间暂无我可见的人物。`），
+  tool event 仍为 `familygraph.list_visible_people`。
+- 真实取消：Run 14 同 profile 在运行后取消，cancel HTTP 200，最终
+  `failed/PROVIDER_STREAM_ERROR`、`cancel_requested=true`，未出现 succeeded。
+
+### Closure rule update
+
+真实 Provider success 和 cancellation 证据已补齐，故 AC-CANCEL 的真实路径与
+AC-OPS 的 Provider 成功证据不再缺失。任务状态暂保留 `in_progress`，仅因当前
+工作树中另一并行任务的后端测试接口契约失败（579 passed/8 failed）和前端未提交
+文件语法错误；不得把这些并行失败归因于本任务，也不得在归档前隐瞒它们。
