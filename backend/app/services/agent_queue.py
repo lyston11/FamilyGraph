@@ -43,7 +43,7 @@ from app.models.agent import (
     AgentRun,
     AgentSession,
 )
-from app.services import agent_events, audit
+from app.services import agent_events, agent_provider, audit
 from app.utils import timeutil
 
 
@@ -126,6 +126,7 @@ def _create_run_and_job(
         max_attempts=attempts,
         policy_version=policy_version,
         tool_allowlist_json=list(tool_allowlist),
+        runtime_snapshot_json=agent_provider.snapshot_for_space(db, agent_session.space_id),
         created_at=moment,
         updated_at=moment,
     )
@@ -313,13 +314,19 @@ def heartbeat(db: Session, job: AgentJob, ttl_seconds: int | None = None) -> dat
     with _immediate_tx(db):
         if job.status not in ("leased", "running"):
             raise_api_error(409, AGENT_JOB_NOT_ACTIVE, "Job 不在活跃状态，无法续租")
+        run = db.get(AgentRun, job.run_id)
+        assert run is not None
+        # Cancellation is a terminal-intent fence.  Once requested, a
+        # heartbeat may report the existing expiry but must never extend it;
+        # otherwise a healthy sidecar could keep a cancelled run leased
+        # forever and prevent reaper convergence.
+        if job.cancel_requested or run.cancel_requested:
+            return job.lease_expires_at or timeutil.utcnow()
         now = timeutil.utcnow()
         expires = now + timedelta(seconds=ttl)
         job.lease_expires_at = expires
         job.heartbeat_at = now
         job.updated_at = now
-        run = db.get(AgentRun, job.run_id)
-        assert run is not None
         run.lease_expires_at = expires
         run.heartbeat_at = now
         run.updated_at = now

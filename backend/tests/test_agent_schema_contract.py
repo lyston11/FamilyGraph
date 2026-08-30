@@ -94,8 +94,16 @@ def test_lease_out_field_contract() -> None:
 def test_context_provider_out_field_contract() -> None:
     assert _names(agent.ContextProviderOut) == [
         "provider_id",
+        "provider_name",
         "model",
         "kind",
+        "api",
+        "compat",
+        "context_window",
+        "max_tokens",
+        "reasoning",
+        "input_modalities",
+        "thinking_levels",
         "policy_result",
         "secret_ref",
         "base_url",
@@ -118,6 +126,7 @@ def test_context_out_field_contract() -> None:
         "provider",
         "context_build_id",
         "context_blocks",
+        "next_event_seq",
         "cancel_requested",
     ]
 

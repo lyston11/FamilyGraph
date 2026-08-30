@@ -10,6 +10,7 @@ from app.services.agent_provider import (
     POLICY_DENIED,
     POLICY_DENIED_CLOUD_FORBIDDEN,
     POLICY_DENIED_NO_LOCAL,
+    resolve_for_run,
     resolve_for_space,
 )
 from app.utils import timeutil
@@ -137,3 +138,195 @@ def test_provider_secret_roundtrip_through_db(db_session):
     assert stored is not None and stored.secret_ciphertext is not None
     assert "sk-db-roundtrip" not in stored.secret_ciphertext
     assert decrypt_secret(stored.secret_ciphertext) == "sk-db-roundtrip"
+
+
+def test_standard_liu_dada_profile_is_enforced_in_strict_mode(db_session, monkeypatch):
+    """生产门禁拒绝任意云 profile，但保留可选 local Provider。"""
+    from app import config
+    from app.services.agent_provider import STANDARD_MODEL, STANDARD_PROVIDER_NAME
+
+    monkeypatch.setattr(config, "AGENT_PROVIDER_STANDARD_PROFILE_ONLY", True)
+    _, space = create_agent_fixture(db_session, name="strict-profile")
+    provider = _provider(db_session, name="other-cloud", models=["model-x"])
+    _setting(db_session, space.id, provider.id, cloud=True)
+    denied = resolve_for_space(db_session, space.id)
+    assert denied.policy_result == POLICY_DENIED
+    assert denied.reason == "provider_name_not_allowed"
+
+    _, canonical_space = create_agent_fixture(db_session, name="strict-profile-ok")
+    canonical = AgentProvider(
+        name=STANDARD_PROVIDER_NAME,
+        kind="openai_compatible",
+        api="openai-responses",
+        base_url="https://api.liu-dada.com/v1",
+        compat_json={},
+        context_window=272000,
+        max_tokens=60000,
+        reasoning=True,
+        input_modalities_json=["text", "image"],
+        thinking_levels_json=["low", "medium", "high", "xhigh", "max"],
+        allowed_models_json=[STANDARD_MODEL],
+        enabled=True,
+        created_at=timeutil.utcnow(),
+        updated_at=timeutil.utcnow(),
+    )
+    db_session.add(canonical)
+    db_session.flush()
+    _setting(db_session, canonical_space.id, canonical.id, model=STANDARD_MODEL, cloud=True)
+    allowed = resolve_for_space(db_session, canonical_space.id)
+    assert allowed.policy_result == POLICY_ALLOWED
+    assert allowed.provider_name == STANDARD_PROVIDER_NAME
+
+
+def test_denied_runtime_snapshot_cannot_be_revived_by_later_setting_change(db_session):
+    """A queued Run keeps its original denied policy even after reconfiguration."""
+    from conftest import create_agent_message, create_agent_session
+
+    from app.services import agent_queue
+
+    owner, space = create_agent_fixture(db_session, name="snapshot-denied")
+    provider = _provider(db_session)
+    _setting(db_session, space.id, provider.id, cloud=False)
+    session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
+    message = create_agent_message(db_session, session)
+    run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=session,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+        message=message,
+    )
+    assert run.runtime_snapshot_json is not None
+    assert run.runtime_snapshot_json["policy_result"] == POLICY_DENIED_CLOUD_FORBIDDEN
+
+    setting = db_session.scalar(
+        select(AgentSpaceProviderSetting).where(AgentSpaceProviderSetting.space_id == space.id)
+    )
+    assert setting is not None
+    setting.cloud_allowed = True
+    db_session.commit()
+
+    resolved = resolve_for_run(db_session, run, space.id)
+    assert resolved.policy_result == POLICY_DENIED_CLOUD_FORBIDDEN
+    assert resolved.reason == "runtime_snapshot_policy_denied"
+
+
+def test_denied_no_provider_snapshot_cannot_be_revived(db_session):
+    """A no-setting denial is also immutable after a provider is configured."""
+    from conftest import create_agent_message, create_agent_session
+
+    from app.services import agent_queue
+
+    owner, space = create_agent_fixture(db_session, name="snapshot-no-provider")
+    session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
+    message = create_agent_message(db_session, session)
+    run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=session,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+        message=message,
+    )
+    assert run.runtime_snapshot_json == {
+        "provider_id": None,
+        "model": None,
+        "kind": None,
+        "api": None,
+        "compat": {},
+        "context_window": None,
+        "max_tokens": None,
+        "reasoning": None,
+        "input_modalities": [],
+        "thinking_levels": [],
+        "policy_result": POLICY_DENIED,
+        "provider_revision": None,
+        "provider_name": None,
+    }
+
+    provider = _provider(db_session)
+    _setting(db_session, space.id, provider.id, cloud=True)
+    resolved = resolve_for_run(db_session, run, space.id)
+    assert resolved.policy_result == POLICY_DENIED
+    assert resolved.reason == "runtime_snapshot_policy_denied"
+
+
+def test_allowed_runtime_snapshot_rejects_boolean_numeric_fields(db_session):
+    """JSON booleans must not pass Python's int subclass checks."""
+    from conftest import create_agent_session
+
+    owner, space = create_agent_fixture(db_session, name="snapshot-types")
+    provider = _provider(db_session)
+    _setting(db_session, space.id, provider.id, cloud=True)
+    session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
+    from app.models.agent import AgentRun
+
+    run = AgentRun(
+        session_id=session.id,
+        kind="assistant",
+        status="queued",
+        policy_version="p1",
+        tool_allowlist_json=[],
+        runtime_snapshot_json={
+            "provider_id": provider.id,
+            "model": "model-x",
+            "kind": "openai_compatible",
+            "api": "openai-completions",
+            "compat": {},
+            "context_window": True,
+            "max_tokens": 60_000,
+            "reasoning": True,
+            "input_modalities": ["text"],
+            "thinking_levels": ["low"],
+            "policy_result": POLICY_ALLOWED,
+            "provider_revision": provider.updated_at.isoformat(),
+        },
+        created_at=timeutil.utcnow(),
+        updated_at=timeutil.utcnow(),
+    )
+    db_session.add(run)
+    db_session.commit()
+    resolved = resolve_for_run(db_session, run, space.id)
+    assert resolved.policy_result == POLICY_DENIED
+    assert resolved.reason == "runtime_snapshot_invalid"
+
+
+def test_allowed_runtime_snapshot_requires_provider_revision(db_session):
+    """A mutable provider row must not silently revive a revision-less snapshot."""
+    from conftest import create_agent_session
+
+    owner, space = create_agent_fixture(db_session, name="snapshot-no-revision")
+    provider = _provider(db_session)
+    _setting(db_session, space.id, provider.id, cloud=True)
+    session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
+    from app.models.agent import AgentRun
+
+    run = AgentRun(
+        session_id=session.id,
+        kind="assistant",
+        status="queued",
+        policy_version="p1",
+        tool_allowlist_json=[],
+        runtime_snapshot_json={
+            "provider_id": provider.id,
+            "model": "model-x",
+            "kind": "openai_compatible",
+            "api": "openai-completions",
+            "compat": {},
+            "context_window": 272_000,
+            "max_tokens": 60_000,
+            "reasoning": True,
+            "input_modalities": ["text"],
+            "thinking_levels": ["low"],
+            "policy_result": POLICY_ALLOWED,
+            # provider_revision intentionally omitted
+        },
+        created_at=timeutil.utcnow(),
+        updated_at=timeutil.utcnow(),
+    )
+    db_session.add(run)
+    db_session.commit()
+    resolved = resolve_for_run(db_session, run, space.id)
+    assert resolved.policy_result == POLICY_DENIED
+    assert resolved.reason == "runtime_snapshot_invalid"

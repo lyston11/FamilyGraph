@@ -8,6 +8,8 @@
  *
  * Provider readiness reports configuration presence only; no real inference
  * probe is performed. FastAPI unavailability does not crash the sidecar.
+ * `/readyz` is the orchestration readiness contract (503 while FastAPI is
+ * unreachable); `/healthz` remains a liveness probe and stays 200.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -19,7 +21,7 @@ export function createHealthServer(
   client: InternalClient,
 ): Server {
   return createServer((req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "GET" || !req.url?.startsWith("/healthz")) {
+    if (req.method !== "GET" || !req.url || !["/healthz", "/readyz"].includes(req.url)) {
       res.writeHead(404).end();
       return;
     }
@@ -29,7 +31,9 @@ export function createHealthServer(
         fastapi,
         provider: describeProviderReadiness(config),
       });
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(req.url === "/readyz" && fastapi !== "reachable" ? 503 : 200, {
+        "Content-Type": "application/json",
+      });
       res.end(body);
     });
   });

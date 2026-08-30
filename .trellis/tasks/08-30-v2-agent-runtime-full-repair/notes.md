@@ -67,3 +67,35 @@ config、Trellis validate、git diff --check 通过。
 
 唯一未闭环：尚未取得一次真实 `liu-dada/gpt-5.6-sol` 成功正文回显；任务保持
 `in_progress`，不虚构外部 Provider 成功证据。
+
+## 2026-08-30 final gate recheck
+
+- Agent：`npm run type-check`、`npm run lint`、`npm test`、`npm run build` 全部通过；
+  **12 个测试文件 / 83 个测试**。受限沙箱首次运行无法监听 `127.0.0.1`，在获准
+  的本地回环权限下复跑通过，不能把沙箱 EPERM 误判为代码失败。
+- Backend：`.venv/bin/pytest -q` → **587 passed**；目标 Agent 回归 72/72；
+  `ruff check .`、`ruff format --check .`（200 files）、`python -m mypy app`
+  （121 source files）全部通过。
+- Frontend（保留并行 redesign 工作树）：type-check/lint/build 通过，
+  `npm test -- --run` → **40 个测试文件 / 249 个测试**。
+- Compose/Trellis：`docker compose config --quiet`、`git diff --check`、
+  `task.py validate 08-30-v2-agent-runtime-full-repair`（implement 8/8、check 5/5）
+  全部通过。
+
+本轮复核新增两项 fail-closed 收口：
+
+1. 修复 `backend/tests/test_internal_agent_api.py` 中错位的 transcript 断言与未使用
+   import，避免全量测试被测试自身的 NameError 污染。
+2. `agent/src/client.ts` 的 ContextOut 归一化不再为缺失/错误的 ID、agent kind、
+   status、attempt、policy version、event seq、cancel flag、消息或 context block
+   填充默认值；统一抛出 `invalid_context_projection`，确保畸形投影不会启动 Pi 或
+   发起 Provider/工具请求。规范已同步到 `spec/backend/agent-runtime.md` §9。
+
+本轮另加 heartbeat 401/403/409/410 的 lease-loss 处理与回归，授权撤销会立即中止
+Pi stream 且不 settle succeeded。
+同时补齐 allowed runtime snapshot 的 `provider_revision` 必填校验，防止配置/密钥
+轮换后通过被手工删改的 snapshot 继续运行。
+
+真实 `liu-dada/gpt-5.6-sol` 成功正文回显仍未取得；因此 AC-OPS、AC-CANCEL、AC-GOV
+  继续保持 partial，任务不可归档。上游恢复后只需补一次脱敏成功 E2E，并记录
+  provider/model/status/字节数/正文长度，不记录 Authorization、run token、密钥或密文。

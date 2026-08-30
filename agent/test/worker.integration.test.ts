@@ -56,6 +56,8 @@ interface MockState {
     error_code?: unknown;
     error?: unknown;
   }>;
+  cancelOnNextHeartbeat: boolean;
+  heartbeatStatus?: number;
 }
 
 const state: MockState = {
@@ -63,6 +65,7 @@ const state: MockState = {
   eventsByRun: new Map(),
   toolCalls: [],
   settles: [],
+  cancelOnNextHeartbeat: false,
 };
 
 let idCounter = 0;
@@ -124,9 +127,9 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
           return respond(401, { detail: "bad service token" });
         }
         const body = await readBody(req);
-        // Strict schema: only {leased_by} may be sent (extra=forbid).
-        if (!("leased_by" in body) || "kind" in body || "sidecar_id" in body) {
-          return respond(422, { detail: "lease body must be {leased_by}" });
+        // Strict schema: Assistant sidecars explicitly request assistant jobs.
+        if (!("leased_by" in body) || body.kind !== "assistant" || "sidecar_id" in body) {
+          return respond(422, { detail: "lease body must include kind=assistant and leased_by" });
         }
         const next = state.jobs.find((j) => j.leasedAt === undefined);
         if (!next) {
@@ -153,12 +156,19 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
       if (job === undefined) return respond(401, { detail: "unknown or unleased run token" });
 
       if (req.method === "POST" && url === `/internal/agent/jobs/${job.job_id}/heartbeat`) {
+        if (state.heartbeatStatus !== undefined) {
+          const status = state.heartbeatStatus;
+          state.heartbeatStatus = undefined;
+          return respond(status, { detail: "lease no longer valid" });
+        }
         const body = await readBody(req);
         if (Object.keys(body).length > 0) return respond(422, { detail: "heartbeat body is {}" });
+        const cancelRequested = state.cancelOnNextHeartbeat;
+        state.cancelOnNextHeartbeat = false;
         return respond(200, {
           ok: true,
           lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
-          cancel_requested: false,
+          cancel_requested: cancelRequested,
         });
       }
       if (req.method === "GET" && url === `/internal/agent/runs/${job.run_id}/context`) {
@@ -280,6 +290,8 @@ function resetState(): void {
   state.jobs.length = 0;
   state.toolCalls.length = 0;
   state.settles.length = 0;
+  state.cancelOnNextHeartbeat = false;
+  state.heartbeatStatus = undefined;
   state.eventsByRun.clear();
 }
 
@@ -341,12 +353,20 @@ function contextProjection(job: MockJob): Record<string, unknown> {
         provider_id: 3,
         model: "test-model",
         kind: "openai_compatible",
+        api: "openai-completions",
+        compat: { maxTokensField: "max_tokens" },
+        context_window: 272000,
+        max_tokens: 60000,
+        reasoning: true,
+        input_modalities: ["text", "image"],
+        thinking_levels: ["low", "medium", "high", "xhigh", "max"],
         policy_result: "allowed",
         secret_ref: "agent_providers/3",
-        base_url: "https://cloud.example.internal/v1",
-        api_key: "sk-integration-cloud-key",
+        base_url: `/internal/agent/runs/${job.run_id}/provider`,
+        api_key: null,
       } satisfies Record<string, unknown>),
     cancel_requested: false,
+    next_event_seq: 1,
   };
 }
 
@@ -371,6 +391,8 @@ interface ScriptOptions {
   leakSecretInPayload?: boolean;
   /** Captures the post-onPayload request payloads (what would hit the wire). */
   wirePayloads?: unknown[];
+  /** Keep the provider stream open until the worker's AbortSignal fires. */
+  waitForAbort?: boolean;
 }
 
 function scriptedStream(
@@ -389,7 +411,10 @@ function scriptedStream(
       const payload = {
         model: _model.id,
         messages: context.messages.map((m) => ({ role: m.role, content: "content" })),
-        ...(options.leakSecretInPayload ? { api_key: "sk-integration-cloud-key" } : {}),
+        // The sidecar must never send its service credential in a provider body.
+        // Provider API keys are no longer present in sidecar config; the
+        // service secret is the real secret available to this runtime.
+        ...(options.leakSecretInPayload ? { api_key: "integration-service-secret" } : {}),
       };
       let finalPayload: unknown = payload;
       try {
@@ -400,12 +425,26 @@ function scriptedStream(
         // A policy rejection must stop this provider call before it reaches
         // the wire; finish the scripted stream so the worker can settle it.
         const blocked = turns[0]![0]!;
-        stream.push({ type: "start", partial: blocked });
-        stream.push({ type: "done", reason: "stop", message: blocked });
-        stream.end(blocked);
+        const failed = { ...blocked, stopReason: "error" as const, errorMessage: "policy blocked" };
+        stream.push({ type: "start", partial: failed });
+        stream.push({ type: "error", reason: "error", error: failed });
+        stream.end(failed);
         return;
       }
       options.wirePayloads?.push(finalPayload);
+
+      if (options.waitForAbort) {
+        await new Promise<void>((resolve) => {
+          if (streamOptions?.signal?.aborted) return resolve();
+          streamOptions?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        const blocked = turns[0]![0]!;
+        const failed = { ...blocked, stopReason: "aborted" as const, errorMessage: "aborted" };
+        stream.push({ type: "start", partial: failed });
+        stream.push({ type: "error", reason: "aborted", error: failed });
+        stream.end(failed);
+        return;
+      }
 
       const turnIndex = context.messages.filter((m) => m.role === "toolResult").length;
       const message = turns[Math.min(turnIndex, turns.length - 1)]![0]!;
@@ -578,25 +617,14 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(JSON.stringify(events)).not.toContain("openai-completions");
   }, 30000);
 
-  it("consumes the real-shape lease response (attempt/tool_allowlist/policy_version)", async () => {
+  it("rejects a Steward lease response at the Assistant sidecar boundary", async () => {
     resetState();
-    const runKey = enqueueJob({
+    enqueueJob({
       allowlist: ["familygraph.echo"],
       agentKind: "steward",
     });
     const client = new InternalClient(makeConfig(port));
-    const job = await client.leaseJob();
-    expect(job).toEqual({
-      job_id: String(Number(runKey) - 1000),
-      run_id: runKey,
-      agent_kind: "steward",
-      attempt: 1,
-      tool_allowlist: ["familygraph.echo"],
-      policy_version: "pv-it-1",
-      run_token: `run-token-${runKey}`,
-    });
-    // No lease_ms is advertised; heartbeat derives from config.defaultLeaseMs.
-    expect("lease_ms" in (job as unknown as Record<string, unknown>)).toBe(false);
+    await expect(client.leaseJob()).rejects.toThrow("non-assistant");
   });
 
   it("blocks non-allowlisted tools without touching execute endpoint", async () => {
@@ -650,9 +678,9 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(await worker.tryLeaseAndRun()).toBe(true);
 
     // Secret never appears unredacted in wire-bound payloads or persisted events.
-    expect(JSON.stringify(wirePayloads)).not.toContain("sk-integration-cloud-key");
+    expect(JSON.stringify(wirePayloads)).not.toContain("integration-service-secret");
     expect(JSON.stringify(state.eventsByRun.get(runKey) ?? [])).not.toContain(
-      "sk-integration-cloud-key",
+      "integration-service-secret",
     );
     expect(state.settles).toHaveLength(1);
     expect(state.settles[0]!.status).toBe("failed");
@@ -702,6 +730,38 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(events.map((e) => e.type)).toEqual(["message.user_added", "run.failed"]);
     expect(events[1]!.public_payload).toMatchObject({ error_code: "PROVIDER_DENIED_NO_LOCAL" });
   }, 30000);
+
+  it("propagates server cancellation to the Pi stream and skips settle", async () => {
+    resetState();
+    enqueueJob({ allowlist: ["familygraph.echo"] });
+    state.cancelOnNextHeartbeat = true;
+    const { worker } = makeWorker(
+      (cfg) => {
+        // Heartbeat cadence is clamped to 1s; keep the scripted stream open
+        // long enough for the cancel flag to reach the worker.
+        cfg.defaultLeaseMs = 3_000;
+      },
+      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(state.settles).toHaveLength(0);
+  }, 10000);
+
+  it("aborts the Pi stream when heartbeat authorization is revoked", async () => {
+    resetState();
+    enqueueJob({ allowlist: ["familygraph.echo"] });
+    state.heartbeatStatus = 403;
+    const { worker } = makeWorker(
+      (cfg) => {
+        cfg.defaultLeaseMs = 3_000;
+      },
+      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(state.settles).toHaveLength(0);
+  }, 10000);
 
   it("returns false when queue is empty (HTTP 204)", async () => {
     resetState();

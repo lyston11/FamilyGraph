@@ -213,9 +213,13 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
  * sources travel with the answer that used them.
  */
 export class RunEventBuffer {
-  private nextSeq = 1;
+  private nextSeq: number;
   private readonly pending: FgEvent[] = [];
   private webCitations: WebCitationPayload[] = [];
+
+  constructor(startSeq = 1) {
+    this.nextSeq = Number.isInteger(startSeq) && startSeq >= 0 ? startSeq : 1;
+  }
 
   push<T extends FgEventType>(type: T, public_payload: FgEventPayloadMap[T]): void {
     this.pending.push({ seq: this.nextSeq++, type, public_payload });

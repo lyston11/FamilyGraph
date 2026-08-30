@@ -188,6 +188,28 @@ def split_chain(normalized: str) -> _ChainParse:
     )
 
 
+def _split_chain_with_registry(
+    session: Session, *, normalized: str, account_id: int, space_id: int
+) -> _ChainParse:
+    """Resolve static morphemes first, then active TermRegistry aliases."""
+    segments = tuple(segment for segment in normalized.split(_CHAIN_SEPARATOR) if segment)
+    codes: list[str] = []
+    morphemes: list[str] = []
+    unknown: str | None = None
+    for segment in segments:
+        code = _MORPHEME_CODES.get(segment)
+        if code is None:
+            code = terms.resolve_term_alias(
+                session, account_id=account_id, space_id=space_id, term=segment
+            )
+        if code is None:
+            unknown = segment
+            break
+        codes.append(code)
+        morphemes.append(segment)
+    return _ChainParse(segments, tuple(codes), tuple(morphemes), unknown)
+
+
 def _validate_text(text: str) -> str:
     stripped = text.strip()
     if not stripped:
@@ -398,7 +420,9 @@ def parse_free_text_relation(
         context={"space_id": space_id, "surface": surface},
     )
     normalized = normalize_text(stripped)
-    chain = split_chain(normalized)
+    chain = _split_chain_with_registry(
+        session, normalized=normalized, account_id=account_id, space_id=space_id
+    )
     evidence = list(chain.morphemes)
     result = _base_result(
         raw_text_id=raw.id, normalized_text=normalized, evidence_morphemes=evidence

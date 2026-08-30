@@ -18,7 +18,13 @@ describe("loadConfig", () => {
     expect(config.leasePollIntervalMs).toBe(2000);
     expect(config.healthPort).toBe(8080);
     expect(config.providers.cloud.model).toBe("gpt-test");
+    expect(config.providers.cloud.apiKey).toBeUndefined();
     expect(config.providers.local.baseUrl).toBeUndefined();
+  });
+
+  it("never imports provider API keys from environment", () => {
+    const config = loadConfig(BASE_ENV as unknown as NodeJS.ProcessEnv);
+    expect(config.providers.cloud.apiKey).toBeUndefined();
   });
 
   it("rejects missing service secret", () => {

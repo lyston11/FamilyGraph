@@ -14,8 +14,12 @@ frontend/   Vue3 + Vite + TS 应用 + eslint/vitest 门禁
 ## 启动方式一：容器模式（推荐）
 
 ```bash
-# 可选：正式部署前设置会话密钥（本地试用可用 compose 默认值）
-echo "SECRET_KEY=$(openssl rand -hex 32)" > .env
+# 正式部署前设置两个强随机密钥（Agent Runtime 也依赖第二个）
+cat > .env <<EOF
+SECRET_KEY=$(openssl rand -hex 32)
+AGENT_SERVICE_SECRET=$(openssl rand -hex 32)
+EOF
+chmod 600 .env
 
 docker compose up --build -d
 
@@ -69,8 +73,32 @@ SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件
 
 ## 安全约定
 
-- `SECRET_KEY` 必须经环境变量提供，缺失时后端拒绝启动；compose 默认值仅供本地开发。
+- `SECRET_KEY` 与 `AGENT_SERVICE_SECRET` 必须经环境变量提供强随机值；Compose 不提供默认密钥，缺失时启动失败。
 - nginx 不直接托管 uploads 目录；附件下载一律走后端授权端点（architecture.md §6/§9）。
+- Agent sidecar 不读取 Provider API key，也不直连上游；所有模型请求经 API 容器 ProviderGateway 出网。
+- 云 Provider 门禁在代码中固定启用，只允许使用下方 `liu-dada/gpt-5.6-sol` 的 Pi
+  profile；不存在可由部署环境关闭的绕过开关。本地 Provider 仍可单独注册。
+
+### Pi Provider 配置（首版）
+
+首版运行时对齐本机 Pi 的 `liu-dada / gpt-5.6-sol` profile：
+
+```json
+{
+  "name": "liu-dada",
+  "kind": "openai_compatible",
+  "api": "openai-responses",
+  "base_url": "https://api.liu-dada.com/v1",
+  "allowed_models": ["gpt-5.6-sol"],
+  "context_window": 272000,
+  "max_tokens": 60000,
+  "reasoning": true,
+  "input_modalities": ["text", "image"],
+  "thinking_levels": ["low", "medium", "high", "xhigh", "max"]
+}
+```
+
+通过 `/api/admin/agent/providers` 提交上述非敏感字段，并在创建请求的 `secret` 字段注入 API key。密钥只会以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、Trellis 文档或 Agent 容器环境。随后用 `/api/admin/agent/spaces/{space_id}/provider-settings` 选择 `gpt-5.6-sol` 并设置 `cloud_allowed=true`。
 
 ---
 
@@ -95,7 +123,7 @@ sqlite3 app.db "PRAGMA integrity_check"   # 应输出 ok
 ## 迁移到云服务器（迁云清单）
 
 1. 云服务器安装 Docker + Docker Compose。
-2. `git clone` 本仓库 → 配置 `.env`：`SECRET_KEY=<openssl rand -hex 32>`、`DATA_DIR=/data`。
+2. `git clone` 本仓库 → 配置 `.env`：`SECRET_KEY=<openssl rand -hex 32>`、`AGENT_SERVICE_SECRET=<openssl rand -hex 32>`、`DATA_DIR=/data`，并执行 `chmod 600 .env`。
 3. `docker compose up --build -d` → 首启页面初始化管理员（一次性 PIN，立即截图保存）。
 4. 数据迁移：本机执行备份 → 把 tar 包传服务器 → 按上文恢复流程导入数据卷 → 重启。
 5. 域名：DNS A 记录指向服务器 IP；HTTPS 二选一：
@@ -128,7 +156,7 @@ sqlite3 app.db "PRAGMA integrity_check"   # 应输出 ok
 ```bash
 docker compose ps                          # 三个服务应为 Up (healthy)
 curl -f http://localhost:8000/api/health   # {"status":"ok"}
-docker compose exec agent node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1))"
+docker compose exec agent node -e "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1))"
 ```
 
 ### 优雅停机
@@ -158,8 +186,8 @@ sidecar crash 或网络断开后，`agent_runs` 表中 `leased`/`running` 状态
 
 1. 在新 Provider 生成新 API key。
 2. 经管理后台 `PATCH /api/admin/agent/providers/{id}` 更新 `secret` 字段（后端用 `secretbox` 加密落库，旧值不可回显）。
-3. 重启 agent 容器（`AGENT_PROVIDER_CLOUD_API_KEY` 环境变量同步更新，sidecar 只在进程内存持有 key）。
-4. 旧 key 在 Provider 侧立即吊销。
+3. Agent sidecar 无需重启；ProviderGateway 从后端数据库在下一次 Run 读取新密钥。
+4. 旧 key 在 Provider 侧立即吊销；已有 Run 若配置版本发生变化会 fail-closed，由新 Run 使用新配置。
 
 **受控联网 search provider**：
 

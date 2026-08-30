@@ -55,15 +55,15 @@ describe("resolveProvider（P1 唯一 egress 代理路径）", () => {
     expect(entry.baseUrl).toBe("http://api:8001/internal/agent/runs/42/provider");
   });
 
-  it("非代理 base_url（本地 Provider）沿用 projection，api_key 来自下发", () => {
+  it("本地 Provider 也必须走 internal gateway，绝对 URL 与凭据均拒绝", () => {
     const config = makeConfig("http://api:8001");
-    const { entry } = resolveProvider(
-      config,
-      { ...ALLOWED, kind: "local", base_url: "http://localhost:11434/v1", api_key: "local-key" },
-      "tok",
-    );
-    expect(entry.baseUrl).toBe("http://localhost:11434/v1");
-    expect(entry.apiKey).toBe("local-key");
+    expect(() =>
+      resolveProvider(
+        config,
+        { ...ALLOWED, kind: "local", base_url: "http://localhost:11434/v1", api_key: "local-key" },
+        "tok",
+      ),
+    ).toThrow(ProviderPolicyError);
   });
 
   it("policy 非 allowed 一律 PROVIDER_UNRESOLVED", () => {

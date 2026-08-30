@@ -109,6 +109,39 @@ def test_openai_compatible_requires_base_url(client, db_session):
     assert response.status_code == 422
 
 
+def test_strict_mode_accepts_only_canonical_liu_dada_profile(client, db_session, monkeypatch):
+    from app import config
+
+    monkeypatch.setattr(config, "AGENT_PROVIDER_STANDARD_PROFILE_ONLY", True)
+    _op, headers = _operator_headers(client, db_session, name="op-strict-profile")
+    rejected = client.post(
+        "/api/admin/agent/providers",
+        json={
+            "name": "other-cloud",
+            "kind": "openai_compatible",
+            "base_url": "https://api.example.com/v1",
+            "allowed_models": ["model-x"],
+            "secret": "sk-live-abc123",
+        },
+        headers=headers,
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["detail"]["reason"] == "provider_name_not_allowed"
+    accepted = client.post(
+        "/api/admin/agent/providers",
+        json={
+            "name": "liu-dada",
+            "kind": "openai_compatible",
+            "api": "openai-responses",
+            "base_url": "https://api.liu-dada.com/v1",
+            "allowed_models": ["gpt-5.6-sol"],
+            "secret": "sk-live-abc123",
+        },
+        headers=headers,
+    )
+    assert accepted.status_code == 201
+
+
 def test_admin_agent_endpoints_disabled_when_flag_off(client, db_session, monkeypatch):
     from app import config as app_config
 

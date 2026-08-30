@@ -88,6 +88,26 @@ trellis: task.py validate 08-30-v2-agent-runtime-full-repair -> pass
 - `AGENT_PROVIDER_STANDARD_PROFILE_ONLY` 不再由环境变量覆盖；Compose/README 已
   同步为代码固定门禁语义。
 
+### Final gate recheck (2026-08-30)
+
+- Agent：type-check、lint、**83 tests / 12 files**、build 全绿；集成测试在获准的
+  本地回环权限下执行（受限沙箱的 `listen EPERM` 仅是环境限制）。
+- Backend：**587 passed**；Agent 目标回归 72/72；ruff check、format（200 files）、
+  mypy（121 source files）全绿。
+- Frontend（并行 redesign 工作树）：**249 tests / 40 files**，type-check/lint/build
+  全绿；未重排或回滚其改动。
+- Compose、`git diff --check`、`task.py validate` 全绿。
+- `InternalClient.normalizeRunContext` 现对核心字段与 context block 严格 fail-closed，
+  malformed projection 统一为 `invalid_context_projection`；对应合同已写入
+  `.trellis/spec/backend/agent-runtime.md` §9。
+- Heartbeat 401/403/409/410 均视为 lease 失效，sidecar 立即 abort Pi stream；新增
+  membership/授权撤销回归。
+- Allowed runtime snapshot 强制非空 `provider_revision`，并新增缺失 revision 的
+  fail-closed 回归。
+
+本次复核没有取得真实 `liu-dada/gpt-5.6-sol` 的成功正文回显，故 AC-OPS、AC-CANCEL、
+AC-GOV 仍为 partial，禁止更新为 completed 或归档。
+
 ### Closure rule
 
 在没有真实 liu-dada 成功记录前，不把任务或 release gate 标为 completed；上游恢复后补一次不含密钥的成功/失败双路径记录，再更新本表和 `task.json`。

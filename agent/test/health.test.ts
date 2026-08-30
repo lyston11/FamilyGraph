@@ -80,4 +80,18 @@ describe("health endpoint", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it("fails readiness while keeping liveness available", async () => {
+    const { server, url } = await startHealth();
+    upstreamUp = false;
+    try {
+      const readiness = await fetch(url.replace("/healthz", "/readyz"));
+      expect(readiness.status).toBe(503);
+      const liveness = await fetch(url);
+      expect(liveness.status).toBe(200);
+    } finally {
+      upstreamUp = true;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });

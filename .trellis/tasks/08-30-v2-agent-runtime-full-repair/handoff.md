@@ -39,9 +39,9 @@ flowchart LR
 
 ## 复核证据
 
-- Backend：571 pytest；ruff check/format；mypy 120 文件。
-- Agent：12 个测试文件、80 tests；type-check/lint/build。
-- Frontend（保留 dirty redesign）：242 tests（40 files）；type-check/lint/build。
+- Backend：587 pytest；ruff check/format；mypy 121 文件。
+- Agent：12 个测试文件、83 tests；type-check/lint/build。
+- Frontend（保留 dirty redesign）：249 tests（40 files）；type-check/lint/build。
 - Compose：`docker compose config --quiet` 通过；Trellis `task.py validate` 通过（implement 8/8、check 5/5）。
 
 ## 下一步（仅剩外部证据）
@@ -51,3 +51,18 @@ flowchart LR
 3. 成功与失败证据均回写 `notes.md`、`implement.md`、本 handoff 和 `journal-1.md`，再将 `task.json.status` 改为 `completed` 并归档。
 
 此前其他中转出现的 `503 service_busy` 属上游容量状态；不能把它当作本地 Pi adapter 协议实现错误，也不能以 guga/luna 作为本任务运行配置。
+
+## 最新复核（2026-08-30）
+
+本地门禁已重新执行并通过：Backend 587 tests、Agent 83 tests、Frontend 249 tests；
+三端 type-check/lint/build、Compose config、diff check、Trellis validate 均为 0
+退出码。Agent 集成测试需要本地 loopback 监听，受限沙箱中的 EPERM 已在获准权限下
+复跑排除。Sidecar ContextOut decoder 现对核心字段、消息、工具白名单和 context
+blocks 严格校验，异常只返回 `invalid_context_projection`，不会启动模型循环。
+Heartbeat 401/403/409/410 现在统一触发 lease-loss abort，授权撤销不会留下继续运行的
+Pi stream。
+Allowed runtime snapshot 现在要求非空 `provider_revision`，Provider 配置/密钥轮换
+不会被删改的 snapshot 绕过。
+
+唯一外部未闭环仍是一次真实 `liu-dada/gpt-5.6-sol` 成功正文回显。保持任务
+`in_progress`，不以 stub、旧中转、503 或静态配置代替成功证据。
