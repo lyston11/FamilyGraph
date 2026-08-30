@@ -71,6 +71,7 @@
 - **防枚举**：不存在与不可见同码 `FG_PROFILE_NOT_AVAILABLE`；关系路径 BFS 对不可见途经节点剪枝，不泄露存在性。
 - **零写入**：查询工具纯 SELECT；新增写类工具前必须先落地 (run_id, tool_call_id) 去重表（见 §4 红线）。
 - **双侧 schema 同步**：TypeBox 声明与后端 input_schema 必须逐字段同类型同名——实际发生过 cursor string vs integer 漂移；新增字段时两侧同改并加快照测试。
+- **Provider wire tool names**：后端 registry、run token allowlist、内部执行路径和公开审计事件始终使用规范 `familygraph.*` 名称；由于部分 OpenAI-compatible relay 拒绝函数名中的 `.`, sidecar 仅在 Pi/pi-ai 的 provider 出站声明中将其映射为 `familygraph_*`（例如 `familygraph.list_visible_people` → `familygraph_list_visible_people`）。收到 Pi 的 tool hook/event 后必须反向映射回规范名再做 allowlist 校验、执行和事件投影；未知名称 fail-closed。该 wire 适配不得改变后端 schema 或审计合同。
 - **前端 SSE**：EventSource 无法带 Authorization header，必须 fetch+ReadableStream 手工分帧解析；Last-Event-ID 续传、401→refresh→重连一次收口、终态事件后不再重连。错误码→文案映射表须覆盖后端可能返回的全部 agent 错误码（含 run.failed 载荷中的 POLICY_*/PROVIDER_*/SIDECAR_ERROR）。
 
 ## 9. Sidecar ContextOut 解码门禁（V2.7 修复）

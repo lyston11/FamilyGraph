@@ -76,6 +76,33 @@ describe("mapSessionEvent", () => {
     expect(completed[0]!.type).toBe("tool.execution.completed");
     expect(JSON.stringify(completed)).not.toContain("SENSITIVE-RESULT");
   });
+
+  it("normalizes provider wire names to canonical public event names", () => {
+    expect(
+      mapSessionEvent({
+        type: "tool_execution_start",
+        toolCallId: "tc_wire",
+        toolName: "familygraph_get_self_context",
+      }),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        public_payload: {
+          tool_call_id: "tc_wire",
+          tool_name: "familygraph.get_self_context",
+          tool_version: 1,
+        },
+      },
+    ]);
+    expect(
+      mapSessionEvent({
+        type: "tool_execution_end",
+        toolCallId: "tc_wire",
+        toolName: "familygraph_get_self_context",
+        isError: false,
+      })[0]!.public_payload,
+    ).toMatchObject({ tool_name: "familygraph.get_self_context" });
+  });
 });
 
 describe("RunEventBuffer", () => {
@@ -133,13 +160,49 @@ describe("RunEventBuffer", () => {
     });
   });
 
+  it("recognizes fetch citations when Pi reports the provider wire name", () => {
+    const buffer = new RunEventBuffer();
+    buffer.onSessionEvent({
+      type: "tool_execution_end",
+      toolCallId: "tc_wire_web",
+      toolName: "familygraph_fetch_approved_page",
+      result: {
+        citation: {
+          url: "https://www.example.com/wire",
+          title: "Wire",
+          excerpt: "wire excerpt",
+          fetched_at: "2026-08-30T00:00:00Z",
+          trust: "external",
+        },
+      },
+      isError: false,
+    });
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    });
+    expect(
+      buffer.drain().find((event) => event.type === "message.assistant_added")?.public_payload,
+    ).toMatchObject({
+      web_citations: [expect.objectContaining({ url: "https://www.example.com/wire" })],
+    });
+  });
+
   it("drops malformed or non-external citations and never leaks raw tool results", () => {
     const buffer = new RunEventBuffer();
     buffer.onSessionEvent({
       type: "tool_execution_end",
       toolCallId: "tc_bad",
       toolName: "familygraph.fetch_approved_page",
-      result: { citation: { url: "https://x", title: "t", excerpt: "e", fetched_at: "d", trust: "internal" } },
+      result: {
+        citation: {
+          url: "https://x",
+          title: "t",
+          excerpt: "e",
+          fetched_at: "d",
+          trust: "internal",
+        },
+      },
       isError: false,
     });
     buffer.onSessionEvent({

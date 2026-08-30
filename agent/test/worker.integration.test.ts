@@ -24,6 +24,7 @@ import {
 import { InternalClient, type ProviderPolicyResult } from "../src/client.js";
 import type { AgentConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
+import { providerWireName } from "../src/tools.js";
 import { SidecarWorker } from "../src/worker.js";
 
 // ---------------------------------------------------------------------------
@@ -296,13 +297,11 @@ function resetState(): void {
 }
 
 /** Enqueue one assistant job; returns the run key used in assertions. */
-function enqueueJob(
-  options: {
-    allowlist: string[];
-    provider?: Record<string, unknown>;
-    agentKind?: "assistant" | "steward";
-  },
-): string {
+function enqueueJob(options: {
+  allowlist: string[];
+  provider?: Record<string, unknown>;
+  agentKind?: "assistant" | "steward";
+}): string {
   idCounter += 1;
   const jobId = 4000 + idCounter;
   const runId = 5000 + idCounter;
@@ -452,11 +451,26 @@ function scriptedStream(
       for (const [index, block] of message.content.entries()) {
         if (block.type === "text") {
           stream.push({ type: "text_start", contentIndex: index, partial: message });
-          stream.push({ type: "text_delta", contentIndex: index, delta: block.text, partial: message });
-          stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: message });
+          stream.push({
+            type: "text_delta",
+            contentIndex: index,
+            delta: block.text,
+            partial: message,
+          });
+          stream.push({
+            type: "text_end",
+            contentIndex: index,
+            content: block.text,
+            partial: message,
+          });
         } else if (block.type === "toolCall") {
           stream.push({ type: "toolcall_start", contentIndex: index, partial: message });
-          stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: message });
+          stream.push({
+            type: "toolcall_end",
+            contentIndex: index,
+            toolCall: block,
+            partial: message,
+          });
         }
       }
       stream.push({
@@ -473,7 +487,14 @@ function scriptedStream(
 function echoToolCallTurn(callId: string, args: Record<string, unknown>): AssistantMessage[] {
   return [
     assistantMessage({
-      content: [{ type: "toolCall", id: callId, name: "familygraph.echo", arguments: args }],
+      content: [
+        {
+          type: "toolCall",
+          id: callId,
+          name: providerWireName("familygraph.echo"),
+          arguments: args,
+        },
+      ],
       api: "openai-completions",
       provider: "cloud",
       model: "test-model",
@@ -491,7 +512,12 @@ function listVisiblePeopleToolCallTurn(
   return [
     assistantMessage({
       content: [
-        { type: "toolCall", id: callId, name: "familygraph.list_visible_people", arguments: args },
+        {
+          type: "toolCall",
+          id: callId,
+          name: providerWireName("familygraph.list_visible_people"),
+          arguments: args,
+        },
       ],
       api: "openai-completions",
       provider: "cloud",
@@ -520,9 +546,7 @@ function textTurn(text: string): AssistantMessage[] {
 async function buildSessionFactory(
   turns: AssistantMessage[][],
   options: ScriptOptions = {},
-): Promise<
-  NonNullable<ConstructorParameters<typeof SidecarWorker>[0]["sessionFactory"]>
-> {
+): Promise<NonNullable<ConstructorParameters<typeof SidecarWorker>[0]["sessionFactory"]>> {
   const mod = await import("../src/session.js");
   return (cfg, cl, projection, runToken, deps) =>
     mod.buildRunSession(cfg, cl, projection, runToken, {
@@ -648,7 +672,10 @@ describe("worker full cycle against mock FastAPI", () => {
         timestamp: Date.now(),
       }),
     ];
-    const { worker } = makeWorker(undefined, await buildSessionFactory([blockedToolTurn, textTurn("ok")]));
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([blockedToolTurn, textTurn("ok")]),
+    );
 
     expect(await worker.tryLeaseAndRun()).toBe(true);
 

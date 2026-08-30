@@ -50,6 +50,40 @@ export const TOOL_VERSIONS = {
 
 export type DomainToolName = keyof typeof TOOL_VERSIONS;
 
+/**
+ * Provider-facing function names must satisfy the OpenAI-compatible function
+ * name grammar. FamilyGraph keeps dotted names as its canonical contract,
+ * but some relays (including liu-dada's gateway) reject `.` with a 5xx. The
+ * mapping is owned here so executor, policy and event layers can translate
+ * back to the canonical name without duplicating string rules.
+ */
+const PROVIDER_WIRE_NAMES = Object.freeze(
+  Object.fromEntries(
+    Object.keys(TOOL_VERSIONS).map((name) => [name, name.replaceAll(".", "_")]),
+  ) as Record<DomainToolName, string>,
+);
+const CANONICAL_BY_PROVIDER_WIRE_NAME = new Map<string, DomainToolName>(
+  Object.entries(PROVIDER_WIRE_NAMES).map(([canonical, wire]) => [
+    wire,
+    canonical as DomainToolName,
+  ]),
+);
+
+export function isDomainToolName(value: string): value is DomainToolName {
+  return Object.prototype.hasOwnProperty.call(TOOL_VERSIONS, value);
+}
+
+/** Convert a canonical FamilyGraph tool name to the provider wire spelling. */
+export function providerWireName(name: DomainToolName): string {
+  return PROVIDER_WIRE_NAMES[name];
+}
+
+/** Convert either spelling back to the canonical contract; unknown names fail closed. */
+export function canonicalToolName(value: string): DomainToolName | undefined {
+  if (isDomainToolName(value)) return value;
+  return CANONICAL_BY_PROVIDER_WIRE_NAME.get(value);
+}
+
 /** Names of the tools this sidecar may register, derived from the registry. */
 export function defaultToolNames(): string[] {
   return Object.keys(TOOL_VERSIONS);
@@ -77,12 +111,12 @@ const StewardPingSchema = Type.Object({});
 const GetSelfContextSchema = Type.Object({});
 
 const ListVisiblePeopleSchema = Type.Object({
-  query: Type.Optional(
-    Type.String({ description: "可选的姓名关键词，用于过滤可见人物列表。" }),
-  ),
+  query: Type.Optional(Type.String({ description: "可选的姓名关键词，用于过滤可见人物列表。" })),
   limit: Type.Optional(Type.Integer({ description: "可选的单次返回数量上限。" })),
   cursor: Type.Optional(
-    Type.Integer({ description: "可选的分页游标（offset 语义），取自上一次结果返回的 next_cursor。" }),
+    Type.Integer({
+      description: "可选的分页游标（offset 语义），取自上一次结果返回的 next_cursor。",
+    }),
   ),
 });
 
@@ -163,7 +197,10 @@ const FetchApprovedPageSchema = Type.Object({
   }),
 });
 
-function textResult(text: string): { content: Array<{ type: "text"; text: string }>; details: unknown } {
+function textResult(text: string): {
+  content: Array<{ type: "text"; text: string }>;
+  details: unknown;
+} {
   return { content: [{ type: "text", text }], details: undefined };
 }
 
@@ -200,7 +237,10 @@ async function queryViaExecutor(
  * forwarded verbatim for audit traceability (server-side side-effect dedupe
  * is a V2.4 deliverable; every registered tool stays strictly read-only).
  */
-export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[] {
+export function createDomainTools(
+  executor: DomainToolExecutor,
+  options: { providerWireNames?: boolean } = {},
+): ToolDefinition[] {
   const echo: ToolDefinition<typeof EchoSchema> = {
     name: "familygraph.echo",
     label: "Echo",
@@ -272,7 +312,12 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       "列出当前空间内当前用户可见的人物，可按姓名关键词过滤并支持 limit/cursor 分页；仅返回经过可见性策略投影的字段。只读工具。",
     parameters: ListVisiblePeopleSchema,
     execute: async (toolCallId, params: Static<typeof ListVisiblePeopleSchema>) =>
-      queryViaExecutor(executor, "familygraph.list_visible_people", toolCallId, compactInput({ ...params })),
+      queryViaExecutor(
+        executor,
+        "familygraph.list_visible_people",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
   };
 
   const getProfileSummary: ToolDefinition<typeof GetProfileSummarySchema> = {
@@ -294,7 +339,12 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       "在当前空间范围内按关键词搜索当前用户可见的人物，结果已经过可见性策略过滤。只读工具。",
     parameters: SearchSpaceSchema,
     execute: async (toolCallId, params: Static<typeof SearchSpaceSchema>) =>
-      queryViaExecutor(executor, "familygraph.search_space", toolCallId, compactInput({ ...params })),
+      queryViaExecutor(
+        executor,
+        "familygraph.search_space",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
   };
 
   const getRelationshipPath: ToolDefinition<typeof RelationshipPathSchema> = {
@@ -304,7 +354,12 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       "查询当前用户（或指定 from_user_id）与目标人物之间已确定的可见关系路径。若无可见路径应向用户说明资料不足。只读工具。",
     parameters: RelationshipPathSchema,
     execute: async (toolCallId, params: Static<typeof RelationshipPathSchema>) =>
-      queryViaExecutor(executor, "familygraph.get_relationship_path", toolCallId, compactInput({ ...params })),
+      queryViaExecutor(
+        executor,
+        "familygraph.get_relationship_path",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
   };
 
   const explainStructuralPath: ToolDefinition<typeof RelationshipPathSchema> = {
@@ -314,7 +369,12 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       "解释两位人物之间已确定结构路径的逐跳依据：路径中每一步的关系类型与方向。仅解释已确定的结构路径，不做地方称谓推断。只读工具。",
     parameters: RelationshipPathSchema,
     execute: async (toolCallId, params: Static<typeof RelationshipPathSchema>) =>
-      queryViaExecutor(executor, "familygraph.explain_structural_path", toolCallId, compactInput({ ...params })),
+      queryViaExecutor(
+        executor,
+        "familygraph.explain_structural_path",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
   };
 
   const resolveFreeTextRelation: ToolDefinition<typeof ResolveFreeTextRelationSchema> = {
@@ -336,7 +396,12 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       "查询某个标准亲属概念的可用叫法：本人偏好、当前空间推荐叫法与地区语言包/系统标准备选，均附来源层级；用于回答「还有其他叫法吗」。只读工具。",
     parameters: GetTermAlternativesSchema,
     execute: async (toolCallId, params: Static<typeof GetTermAlternativesSchema>) =>
-      queryViaExecutor(executor, "familygraph.get_term_alternatives", toolCallId, compactInput({ ...params })),
+      queryViaExecutor(
+        executor,
+        "familygraph.get_term_alternatives",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
   };
 
   const recordTermUsage: ToolDefinition<typeof RecordTermUsageSchema> = {
@@ -375,7 +440,7 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       }),
   };
 
-  return [
+  const tools = [
     echo,
     probeScope,
     stewardPing,
@@ -391,4 +456,12 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
     searchWeb,
     fetchApprovedPage,
   ] as unknown as ToolDefinition[];
+
+  if (!options.providerWireNames) return tools;
+  // Only declaration names cross the model/provider boundary. Every execute
+  // closure above still forwards the canonical name to FastAPI.
+  return tools.map((tool) => ({
+    ...tool,
+    name: providerWireName(tool.name as DomainToolName),
+  }));
 }
