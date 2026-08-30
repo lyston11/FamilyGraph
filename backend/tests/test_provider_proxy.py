@@ -11,8 +11,9 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from app.models.agent import AgentRun
 from app.models.audit_log import AuditLog
-from app.services import provider_proxy
+from app.services import agent_queue, provider_proxy
 from app.services.agent_tokens import issue_service_token
 
 
@@ -60,7 +61,7 @@ def _install_fake(monkeypatch, chunks: list[bytes], status_code: int = 200) -> N
     monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _FakeAsyncClient)
 
 
-def _seed_provider(db_session, *, name: str):
+def _seed_provider(db_session, *, name: str, api: str = "openai-completions"):
     """user + space + enabled provider（openai_compatible，密文落库）。"""
     from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
     from app.utils import secretbox, timeutil
@@ -76,6 +77,7 @@ def _seed_provider(db_session, *, name: str):
     provider = AgentProvider(
         name=f"{name}-p",
         kind="openai_compatible",
+        api=api,
         base_url="https://api.example.com/v1",
         secret_ciphertext=secretbox.encrypt_secret("sk-real-secret-value"),
         allowed_models_json=["model-x"],
@@ -130,7 +132,9 @@ def test_proxy_streams_upstream_and_audits_usage(internal_client, db_session, mo
     run_id, token = _lease_run_token(internal_client)
     assert run_id == run.id
 
-    request_body = b'{"model": "model-x", "messages": [{"role": "user", "content": "hi"}]}'
+    request_body = (
+        b'{"model": "model-x", "messages": [{"role": "user", "content": "hi"}], ' b'"stream": true}'
+    )
     response = internal_client.post(
         f"/internal/agent/runs/{run_id}/provider/chat/completions",
         content=request_body,
@@ -261,6 +265,7 @@ def test_proxy_fail_closed_when_provider_unresolved(internal_client, db_session,
 
     response = internal_client.post(
         f"/internal/agent/runs/{run_id}/provider/chat/completions",
+        content=b'{"model":"model-x","messages":[],"stream":true}',
         headers={"Authorization": f"Bearer {run_token}"},
     )
     assert response.status_code == 503
@@ -292,6 +297,7 @@ def test_proxy_redacts_upstream_error_body(internal_client, db_session, monkeypa
 
     response = internal_client.post(
         f"/internal/agent/runs/{run_id}/provider/chat/completions",
+        content=b'{"model":"model-x","messages":[],"stream":true}',
         headers={"Authorization": f"Bearer {run_token}"},
     )
     assert response.status_code == 502
@@ -326,7 +332,209 @@ def test_proxy_maps_network_failure_to_502(internal_client, db_session, monkeypa
 
     response = internal_client.post(
         f"/internal/agent/runs/{run_id}/provider/chat/completions",
+        content=b'{"model":"model-x","messages":[],"stream":true}',
         headers={"Authorization": f"Bearer {run_token}"},
     )
     assert response.status_code == 502
     assert "boom" not in response.text
+
+
+def test_proxy_rejects_empty_body_before_upstream(internal_client, db_session, monkeypatch):
+    """空 body fail-closed，不能创建上游 client 或发出请求。"""
+    from conftest import create_agent_session
+
+    from app.services import agent_queue
+
+    user, space, _provider = _seed_provider(db_session, name="proxy-empty-real")
+    session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+    run_id, run_token = _lease_run_token(internal_client)
+    called = False
+
+    class _ShouldNotConstruct:
+        def __init__(self, *args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("upstream client must not be constructed")
+
+    monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _ShouldNotConstruct)
+    response = internal_client.post(
+        f"/internal/agent/runs/{run_id}/provider/chat/completions",
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "AGENT_PROVIDER_REQUEST_INVALID"
+    assert called is False
+
+
+def test_proxy_rejects_non_object_json_before_upstream(internal_client, db_session, monkeypatch):
+    """JSON 数组等非 OpenAI 请求对象不得触发上游请求。"""
+    user, space, _provider = _seed_provider(db_session, name="proxy-array")
+    from conftest import create_agent_session
+
+    session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+    run_id, run_token = _lease_run_token(internal_client)
+    called = False
+
+    class _ShouldNotConstruct:
+        def __init__(self, *args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("upstream client must not be constructed")
+
+    monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _ShouldNotConstruct)
+    response = internal_client.post(
+        f"/internal/agent/runs/{run_id}/provider/chat/completions",
+        content=b"[]",
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "AGENT_PROVIDER_REQUEST_INVALID"
+    assert called is False
+
+
+def test_proxy_rejects_cancelled_run_before_upstream(internal_client, db_session, monkeypatch):
+    """取消竞态由 Gateway 二次门禁收口，不能再建立上游 client。"""
+    user, space, _provider = _seed_provider(db_session, name="proxy-cancel")
+    from conftest import create_agent_session
+
+    session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    from app.services import agent_queue
+
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+    run_id, run_token = _lease_run_token(internal_client)
+    db_session.expire_all()
+    run = db_session.get(AgentRun, run_id)
+    assert run is not None
+    run.cancel_requested = True
+    db_session.commit()
+
+    called = False
+
+    class _ShouldNotConstruct:
+        def __init__(self, *args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("cancelled run must not construct upstream client")
+
+    monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _ShouldNotConstruct)
+    response = internal_client.post(
+        f"/internal/agent/runs/{run_id}/provider/chat/completions",
+        content=b'{"model":"model-x","messages":[],"stream":true}',
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "AGENT_RUN_NOT_RUNNING"
+    assert called is False
+
+
+def test_proxy_binds_model_and_stream_contract_before_upstream(
+    internal_client, db_session, monkeypatch
+):
+    """有效 run token 也不能改模型或绕过流式/输出上限约束。"""
+    user, space, _provider = _seed_provider(db_session, name="proxy-payload-contract")
+    from conftest import create_agent_session
+
+    session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+    run_id, run_token = _lease_run_token(internal_client)
+    called = False
+
+    class _ShouldNotConstruct:
+        def __init__(self, *args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("invalid provider payload must not construct upstream client")
+
+    monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _ShouldNotConstruct)
+    for payload in (
+        b'{"model":"other-model","messages":[],"stream":true}',
+        b'{"model":"model-x","messages":[],"stream":false}',
+        b'{"model":"model-x","messages":[],"stream":true,"max_tokens":60001}',
+    ):
+        response = internal_client.post(
+            f"/internal/agent/runs/{run_id}/provider/chat/completions",
+            content=payload,
+            headers={"Authorization": f"Bearer {run_token}"},
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "AGENT_PROVIDER_REQUEST_INVALID"
+    assert called is False
+
+
+def test_proxy_rejects_route_protocol_mismatch_before_upstream(
+    internal_client, db_session, monkeypatch
+):
+    """A completions snapshot cannot be invoked through the Responses route."""
+    _install_fake(monkeypatch, [b"{}"])
+    user, space, _provider = _seed_provider(db_session, name="proxy-route-mismatch")
+    from conftest import create_agent_session
+
+    session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+    run_id, run_token = _lease_run_token(internal_client)
+    response = internal_client.post(
+        f"/internal/agent/runs/{run_id}/provider/responses",
+        content=b'{"model":"model-x","messages":[],"stream":true}',
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "AGENT_PROVIDER_REQUEST_INVALID"
+
+    # The inverse mismatch is rejected as well for a Responses profile.
+    user2, space2, _provider2 = _seed_provider(
+        db_session, name="proxy-route-mismatch-responses", api="openai-responses"
+    )
+    session2 = create_agent_session(db_session, account_id=user2.account.id, space_id=space2.id)
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session2,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+    run_id2, run_token2 = _lease_run_token(internal_client)
+    response2 = internal_client.post(
+        f"/internal/agent/runs/{run_id2}/provider/chat/completions",
+        content=b'{"model":"model-x","messages":[],"stream":true}',
+        headers={"Authorization": f"Bearer {run_token2}"},
+    )
+    assert response2.status_code == 422
+    assert response2.json()["error"]["code"] == "AGENT_PROVIDER_REQUEST_INVALID"

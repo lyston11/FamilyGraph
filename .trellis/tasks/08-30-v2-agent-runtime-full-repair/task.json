@@ -25,7 +25,7 @@
   "meta": {
     "provider_profile": "liu-dada/gpt-5.6-sol",
     "provider_api": "openai-responses",
-    "local_gates": "backend 560 tests; agent 78 tests; frontend 233 tests; compose config pass",
+    "local_gates": "backend 587 tests; agent 83 tests; frontend 249 tests; type-check/lint/build and compose config pass",
     "release_gate": "blocked_until_real_provider_success_evidence"
   }
 }

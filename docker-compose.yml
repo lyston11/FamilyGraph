@@ -31,6 +31,9 @@ services:
       DEV_ALLOW_WEAK_SECRETS: ${DEV_ALLOW_WEAK_SECRETS:-0}
       # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
+      # 首版云模型固定为与本机 Pi 一致的 liu-dada/gpt-5.6-sol profile；该
+      # 门禁由代码固定启用，不能通过部署环境变量关闭。local Provider
+      # 仍可由平台 operator 作为敏感数据回退注册。
       # P1 网络隔离：internal listener 只绑定 backend 网络静态 IP（web/宿主不可路由）
       INTERNAL_AGENT_API_HOST: 172.28.0.10
       # V2.3 Relationship Intelligence
@@ -72,9 +75,16 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - frontend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     # 注意：web 不挂载数据卷——nginx 禁止直挂 uploads，附件下载走后端授权端点
 
   # V2.1 Agent sidecar（B2）：无业务 DB、无 uploads 卷、不暴露端口、
@@ -85,7 +95,8 @@ services:
     image: familygraph-agent:0.1.0
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     environment:
       # 公开 base 仅用于 /api/health 探针；internal 协议走独立 listener
       FG_API_BASE_URL: http://api:8000
@@ -105,7 +116,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s

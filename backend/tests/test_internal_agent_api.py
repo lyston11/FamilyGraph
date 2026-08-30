@@ -106,7 +106,7 @@ def test_lease_flow_happy_path(internal_client, db_session):
 
 
 def test_lease_without_kind_returns_any_queued(internal_client, db_session):
-    """sidecar 不再传 kind：仅 {leased_by} 即可租到任意队列任务。"""
+    """兼容旧 sidecar：省略 kind 时默认只租 Assistant 队列。"""
     _, _, _, run = _seed(db_session, name="noskind")
     response = internal_client.post(
         "/internal/agent/jobs/lease",
@@ -115,6 +115,28 @@ def test_lease_without_kind_returns_any_queued(internal_client, db_session):
     )
     assert response.status_code == 200
     assert response.json()["run_id"] == run.id
+
+
+def test_http_lease_cannot_consume_steward_queue(internal_client, db_session):
+    """Steward leasing is reserved for the in-process canonical worker."""
+    user, space = create_agent_fixture(db_session, name="steward-http")
+    session = create_agent_session(
+        db_session, account_id=user.account.id, space_id=space.id, kind="steward"
+    )
+    agent_queue.enqueue_run(
+        db_session,
+        agent_session=session,
+        kind="steward",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    for payload in ({"kind": "steward", "leased_by": "sc"}, {"kind": None, "leased_by": "sc"}):
+        response = internal_client.post(
+            "/internal/agent/jobs/lease",
+            json=payload,
+            headers=_auth(issue_service_token()),
+        )
+        assert response.status_code in (403, 422)
 
 
 def test_heartbeat_scope_mismatch_fail_closed(internal_client, db_session):
@@ -151,7 +173,10 @@ def test_context_returns_projection_without_secrets(internal_client, db_session)
     from app.models.context import ContextBuild
     from app.utils import secretbox, timeutil
 
-    user, space, agent_session, run = _seed(db_session, name="ctx")
+    # Configure the provider before enqueueing: the run snapshot pins the
+    # decision at creation and a later configuration change must not revive a
+    # denied/no-provider run.
+    user, space = create_agent_fixture(db_session, name="ctx")
     provider = AgentProvider(
         name="main",
         kind="openai_compatible",
@@ -175,6 +200,16 @@ def test_context_returns_projection_without_secrets(internal_client, db_session)
         )
     )
     db_session.commit()
+    agent_session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    message = create_agent_message(db_session, agent_session)
+    run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=agent_session,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=["familygraph.echo"],
+        message=message,
+    )
 
     grant_response = internal_client.post(
         "/internal/agent/jobs/lease",
@@ -209,6 +244,37 @@ def test_context_returns_projection_without_secrets(internal_client, db_session)
         )
         is not None
     )
+
+
+def test_context_returns_complete_transcript_without_recent_limit(internal_client, db_session):
+    """Pi rehydration receives every durable message, not an arbitrary recent-N slice."""
+    from app.models.agent import AgentMessage
+    from app.utils import timeutil
+
+    user, space, session, run = _seed(db_session, name="ctx-complete")
+    for index in range(60):
+        db_session.add(
+            AgentMessage(
+                session_id=session.id,
+                role="assistant" if index % 2 else "user",
+                content_json={"text": f"message-{index}"},
+                idempotency_key=f"extra-{index}",
+                created_at=timeutil.utcnow(),
+            )
+        )
+    db_session.commit()
+    grant = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"kind": "assistant", "leased_by": "sc"},
+        headers=_auth(issue_service_token()),
+    )
+    assert grant.status_code == 200
+    token = grant.json()["run_token"]
+    response = internal_client.get(f"/internal/agent/runs/{run.id}/context", headers=_auth(token))
+    assert response.status_code == 200
+    messages = response.json()["messages"]
+    assert len(messages) == 61
+    assert messages[-1]["content_json"]["text"] == "message-59"
 
 
 def test_events_append_and_settle_via_api(internal_client, db_session):

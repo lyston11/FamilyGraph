@@ -48,8 +48,8 @@ const KINSHIP_CONTRACT: Record<string, { properties: string[]; required: string[
     required: ["concept_code"],
   },
   "familygraph.record_term_usage": {
-    properties: ["concept_code", "term"],
-    required: ["concept_code", "term"],
+    properties: ["concept_code", "consent_confirmed", "term"],
+    required: ["concept_code", "consent_confirmed", "term"],
   },
 };
 
@@ -175,7 +175,7 @@ describe("V2.3 kinship tool declarations", () => {
     );
     await byName.get("familygraph.record_term_usage")!.execute!(
       "tc_k3",
-      { concept_code: "kin.parent.mother", term: "老妈" },
+      { concept_code: "kin.parent.mother", term: "老妈", consent_confirmed: true },
       undefined,
       undefined,
       undefined as never,
@@ -190,7 +190,11 @@ describe("V2.3 kinship tool declarations", () => {
     expect(seen[0]!.call.input).toEqual({ text: "舅爷爷" });
     // Optional limit left unset must not be sent.
     expect(seen[1]!.call.input).toEqual({ concept_code: "kin.grandparent.paternal" });
-    expect(seen[2]!.call.input).toEqual({ concept_code: "kin.parent.mother", term: "老妈" });
+    expect(seen[2]!.call.input).toEqual({
+      concept_code: "kin.parent.mother",
+      term: "老妈",
+      consent_confirmed: true,
+    });
   });
 });
 

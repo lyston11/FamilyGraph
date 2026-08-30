@@ -134,6 +134,9 @@ const RecordTermUsageSchema = Type.Object({
     maxLength: 64,
     description: "用户希望使用的称谓原文。",
   }),
+  consent_confirmed: Type.Boolean({
+    description: "仅当用户在当前会话明确确认记录该称谓时为 true。",
+  }),
 });
 
 const SearchWebSchema = Type.Object({
@@ -346,6 +349,7 @@ export function createDomainTools(executor: DomainToolExecutor): ToolDefinition[
       queryViaExecutor(executor, "familygraph.record_term_usage", toolCallId, {
         concept_code: params.concept_code,
         term: params.term,
+        consent_confirmed: params.consent_confirmed,
       }),
   };
 

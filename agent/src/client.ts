@@ -6,7 +6,7 @@
  *  - everything else: the opaque run token issued in the lease response.
  *
  * Wire shapes mirror backend/app/schemas/agent.py exactly (strict
- * extra=forbid): lease body is {leased_by} only, lease responses are flat,
+ * extra=forbid): lease body is {kind:"assistant", leased_by}, lease responses are flat,
  * an empty queue is HTTP 204 with no body, events live under /events/append,
  * settle lives under /settle and only accepts "succeeded"|"failed" —
  * cancellation is adjudicated by FastAPI, never by the sidecar.
@@ -62,13 +62,22 @@ export type ProviderPolicyResult =
   | "denied_no_local"
   | "denied_cloud_forbidden";
 
-/** Server-side provider resolution (ContextProviderOut), including the
- * ProviderGateway runtime config (base_url + decrypted api_key) injected over
- * the internal listener. api_key/base_url must never be logged or persisted. */
+/** Server-side provider resolution (ContextProviderOut). The projection only
+ * carries an internal gateway path; the real base URL/key never reaches the
+ * sidecar and must never be logged or persisted. */
 export interface RunContextProvider {
   provider_id: string;
+  /** Stable provider name used by Pi (for example, "liu-dada"). */
+  provider_name?: string | null;
   model: string | null;
   kind: "openai_compatible" | "local" | null;
+  api?: "openai-completions" | "openai-responses";
+  compat?: Record<string, unknown>;
+  context_window?: number;
+  max_tokens?: number;
+  reasoning?: boolean;
+  input_modalities?: ("text" | "image")[];
+  thinking_levels?: string[];
   policy_result: ProviderPolicyResult;
   secret_ref: string | null;
   base_url: string | null;
@@ -102,6 +111,7 @@ export interface RunContextProjection {
   policy_version: string;
   tool_allowlist: string[];
   messages: RunContextMessage[];
+  next_event_seq: number;
   context_blocks?: RunContextBlock[];
   provider: RunContextProvider | null;
   cancel_requested: boolean;
@@ -118,33 +128,131 @@ export interface InternalClientOptions {
   nowMs?: () => number;
 }
 
+function normalizeContextBlocks(raw: unknown): RunContextBlock[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new InternalApiError("invalid context projection: context_blocks", 502, "invalid_context_projection");
+  }
+  return raw.map((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new InternalApiError("invalid context projection: context block", 502, "invalid_context_projection");
+    }
+    const block = value as Record<string, unknown>;
+    const stringFields = ["source_id", "source_type", "scope", "sensitivity", "citation", "content"];
+    if (
+      stringFields.some((field) => typeof block[field] !== "string") ||
+      typeof block["revision"] !== "number" ||
+      !Number.isInteger(block["revision"]) ||
+      (block["revision"] as number) < 0
+    ) {
+      throw new InternalApiError("invalid context projection: context block shape", 502, "invalid_context_projection");
+    }
+    return {
+      source_id: block["source_id"] as string,
+      source_type: block["source_type"] as string,
+      scope: block["scope"] as string,
+      sensitivity: block["sensitivity"] as string,
+      revision: block["revision"] as number,
+      citation: block["citation"] as string,
+      content: block["content"] as string,
+    };
+  });
+}
+
 /**
  * Normalize a raw ContextOut payload into the internal projection view:
  * numeric ids become strings, missing provider resolves to null and a
  * missing policy_result fails closed to "denied".
  */
 function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection {
-  const messages = Array.isArray(raw["messages"])
-    ? (raw["messages"] as RunContextMessage[])
-    : [];
+  const invalid = (field: string): never => {
+    throw new InternalApiError(`invalid context projection: ${field}`, 502, "invalid_context_projection");
+  };
+  const idFields = ["run_id", "session_id", "account_id", "space_id"];
+  for (const field of idFields) {
+    const value = raw[field];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) invalid(field);
+  }
+  if (raw["agent_kind"] !== "assistant" && raw["agent_kind"] !== "steward") {
+    invalid("agent_kind");
+  }
+  if (
+    raw["status"] !== "queued" &&
+    raw["status"] !== "leased" &&
+    raw["status"] !== "running" &&
+    raw["status"] !== "succeeded" &&
+    raw["status"] !== "failed" &&
+    raw["status"] !== "cancelled" &&
+    raw["status"] !== "expired"
+  ) {
+    invalid("status");
+  }
+  if (typeof raw["attempt"] !== "number" || !Number.isInteger(raw["attempt"]) || raw["attempt"] < 0) {
+    invalid("attempt");
+  }
+  if (typeof raw["policy_version"] !== "string" || raw["policy_version"].length === 0) {
+    invalid("policy_version");
+  }
+  if (typeof raw["next_event_seq"] !== "number" || !Number.isInteger(raw["next_event_seq"]) || raw["next_event_seq"] < 0) {
+    invalid("next_event_seq");
+  }
+  if (typeof raw["cancel_requested"] !== "boolean") invalid("cancel_requested");
+  const runId = raw["run_id"] as number;
+  const sessionId = raw["session_id"] as number;
+  const agentKind = raw["agent_kind"] as "assistant" | "steward";
+  const accountId = raw["account_id"] as number;
+  const spaceId = raw["space_id"] as number;
+  const status = raw["status"] as string;
+  const attempt = raw["attempt"] as number;
+  const policyVersion = raw["policy_version"] as string;
+  const nextEventSeq = raw["next_event_seq"] as number;
+  const cancelRequested = raw["cancel_requested"] as boolean;
+  const rawMessages = raw["messages"];
+  if (!Array.isArray(rawMessages)) {
+    throw new InternalApiError("invalid context projection: messages", 502, "invalid_context_projection");
+  }
+  const messages: RunContextMessage[] = rawMessages.map((value) => {
+    if (value === null || typeof value !== "object") {
+      throw new InternalApiError("invalid context projection: message", 502, "invalid_context_projection");
+    }
+    const message = value as Record<string, unknown>;
+    if (
+      typeof message["id"] !== "number" ||
+      !Number.isInteger(message["id"]) ||
+      typeof message["role"] !== "string" ||
+      message["content_json"] === null ||
+      typeof message["content_json"] !== "object" ||
+      Array.isArray(message["content_json"]) ||
+      typeof message["created_at"] !== "string"
+    ) {
+      throw new InternalApiError("invalid context projection: message shape", 502, "invalid_context_projection");
+    }
+    return {
+      id: message["id"] as number,
+      role: message["role"] as string,
+      content_json: message["content_json"] as Record<string, unknown>,
+      created_at: message["created_at"] as string,
+    };
+  });
+  const rawAllowlist = raw["tool_allowlist"];
+  if (!Array.isArray(rawAllowlist) || rawAllowlist.some((item) => typeof item !== "string")) {
+    throw new InternalApiError("invalid context projection: tool_allowlist", 502, "invalid_context_projection");
+  }
   return {
-    run_id: String(raw["run_id"] ?? ""),
-    session_id: String(raw["session_id"] ?? ""),
-    agent_kind: raw["agent_kind"] === "steward" ? "steward" : "assistant",
-    account_id: String(raw["account_id"] ?? ""),
-    space_id: String(raw["space_id"] ?? ""),
-    status: String(raw["status"] ?? ""),
-    attempt: Number(raw["attempt"] ?? 0),
-    policy_version: String(raw["policy_version"] ?? ""),
-    tool_allowlist: Array.isArray(raw["tool_allowlist"])
-      ? (raw["tool_allowlist"] as unknown[]).map(String)
-      : [],
+    run_id: String(runId),
+    session_id: String(sessionId),
+    agent_kind: agentKind,
+    account_id: String(accountId),
+    space_id: String(spaceId),
+    status,
+    attempt,
+    policy_version: policyVersion,
+    tool_allowlist: rawAllowlist as string[],
     messages,
-    context_blocks: Array.isArray(raw["context_blocks"])
-      ? (raw["context_blocks"] as RunContextBlock[])
-      : [],
+    next_event_seq: nextEventSeq,
+    context_blocks: normalizeContextBlocks(raw["context_blocks"]),
     provider: normalizeProvider(raw["provider"]),
-    cancel_requested: Boolean(raw["cancel_requested"]),
+    cancel_requested: cancelRequested,
   };
 }
 
@@ -152,10 +260,34 @@ function normalizeProvider(value: unknown): RunContextProvider | null {
   if (value === null || value === undefined || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   const kind = raw["kind"];
+  const protocol = raw["api"];
   return {
     provider_id: raw["provider_id"] == null ? "" : String(raw["provider_id"]),
+    provider_name: raw["provider_name"] == null ? null : String(raw["provider_name"]),
     model: raw["model"] == null ? null : String(raw["model"]),
     kind: kind === "local" || kind === "openai_compatible" ? kind : null,
+    // Missing/unknown protocol stays undefined so buildRunSession rejects the
+    // projection; never silently downgrade a Responses profile to chat
+    // completions when a field is malformed or omitted.
+    api:
+      protocol === "openai-responses" || protocol === "openai-completions"
+        ? protocol
+        : undefined,
+    compat:
+      raw["compat"] !== null && typeof raw["compat"] === "object" && !Array.isArray(raw["compat"])
+        ? (raw["compat"] as Record<string, unknown>)
+        : {},
+    context_window: typeof raw["context_window"] === "number" ? raw["context_window"] : undefined,
+    max_tokens: typeof raw["max_tokens"] === "number" ? raw["max_tokens"] : undefined,
+    reasoning: typeof raw["reasoning"] === "boolean" ? raw["reasoning"] : undefined,
+    input_modalities: Array.isArray(raw["input_modalities"])
+      ? (raw["input_modalities"] as unknown[]).filter(
+          (item): item is "text" | "image" => item === "text" || item === "image",
+        )
+      : undefined,
+    thinking_levels: Array.isArray(raw["thinking_levels"])
+      ? (raw["thinking_levels"] as unknown[]).filter((item): item is string => typeof item === "string")
+      : undefined,
     // Fail closed: an unreadable policy result must never enable inference.
     policy_result:
       raw["policy_result"] === "allowed" ||
@@ -192,6 +324,7 @@ export class InternalClient {
     path: string,
     token: string,
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<{ status: number; json: unknown }> {
     // P1 网络隔离：internal 协议与公开 API 分 listener；/api/health 仍走公开 base
     const base = path.startsWith("/internal/")
@@ -208,7 +341,9 @@ export class InternalClient {
             ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
           },
           body: body !== undefined ? JSON.stringify(body) : undefined,
-          signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)])
+            : AbortSignal.timeout(this.config.requestTimeoutMs),
         });
         if (response.ok) {
           return { status: response.status, json: await response.json().catch(() => ({})) };
@@ -227,7 +362,8 @@ export class InternalClient {
         if (!transient || attempt === this.backoff.maxAttempts) break;
         const delay = backoffDelayMs(this.backoff, attempt);
         if (delay === null) break;
-        await sleep(delay);
+        if (signal?.aborted) throw new DOMException("operation aborted", "AbortError");
+        await sleep(delay, signal);
       }
     }
     throw new TransientError(
@@ -247,7 +383,7 @@ export class InternalClient {
     return new InternalApiError(message, status, "http_error");
   }
 
-  /** POST /internal/agent/jobs/lease — service-token authenticated, {leased_by} only. */
+  /** POST /internal/agent/jobs/lease — Assistant sidecar is never a generic queue consumer. */
   async leaseJob(): Promise<LeasedJob | null> {
     const token = signServiceToken(this.config.serviceSecret, {
       sidecarId: this.config.sidecarId,
@@ -257,11 +393,14 @@ export class InternalClient {
       "POST",
       "/internal/agent/jobs/lease",
       token,
-      { leased_by: this.config.sidecarId },
+      { kind: "assistant", leased_by: this.config.sidecarId },
     );
     // Empty queue: HTTP 204 with no body (request() parses it to {}).
     if (status === 204) return null;
     const raw = json as Record<string, unknown>;
+    if (String(raw["agent_kind"] ?? "") !== "assistant") {
+      throw new InternalApiError("internal lease returned non-assistant job", 409, "queue_kind_mismatch");
+    }
     return {
       job_id: String(raw["job_id"]),
       run_id: String(raw["run_id"]),
@@ -283,23 +422,31 @@ export class InternalClient {
   async heartbeat(
     jobId: string,
     runToken: string,
+    signal?: AbortSignal,
   ): Promise<{ ok: boolean; cancelRequested: boolean }> {
     const { json } = await this.request(
       "POST",
       `/internal/agent/jobs/${encodeURIComponent(jobId)}/heartbeat`,
       runToken,
       {},
+      signal,
     );
     const body = json as { ok?: unknown; cancel_requested?: unknown };
     return { ok: Boolean(body.ok), cancelRequested: Boolean(body.cancel_requested) };
   }
 
   /** GET /internal/agent/runs/{id}/context — normalized ContextOut view. */
-  async getRunContext(runId: string, runToken: string): Promise<RunContextProjection> {
+  async getRunContext(
+    runId: string,
+    runToken: string,
+    signal?: AbortSignal,
+  ): Promise<RunContextProjection> {
     const { json } = await this.request(
       "GET",
       `/internal/agent/runs/${encodeURIComponent(runId)}/context`,
       runToken,
+      undefined,
+      signal,
     );
     return normalizeRunContext(json as Record<string, unknown>);
   }
@@ -314,12 +461,14 @@ export class InternalClient {
     runId: string,
     runToken: string,
     events: FgEvent[],
+    signal?: AbortSignal,
   ): Promise<{ accepted: number[]; duplicates: number[] }> {
     const { json } = await this.request(
       "POST",
       `/internal/agent/runs/${encodeURIComponent(runId)}/events/append`,
       runToken,
       { events },
+      signal,
     );
     const body = json as { accepted?: unknown; duplicates?: unknown };
     return {
@@ -342,6 +491,7 @@ export class InternalClient {
     runToken: string,
     toolName: string,
     call: { version: number; input: unknown; tool_call_id?: string },
+    signal?: AbortSignal,
   ): Promise<ToolExecutionResult> {
     const { json } = await this.request(
       "POST",
@@ -352,6 +502,7 @@ export class InternalClient {
         input: call.input,
         ...(call.tool_call_id !== undefined ? { tool_call_id: call.tool_call_id } : {}),
       },
+      signal,
     );
     const body = json as { ok?: unknown; output?: unknown };
     if (body.ok !== true) {

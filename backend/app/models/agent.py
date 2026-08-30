@@ -57,6 +57,11 @@ class AgentSession(Base):
         ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
     )
     agent_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Explicit user confirmation is required before the Assistant can record
+    # a term-usage signal; prompt text alone is never trusted as consent.
+    term_usage_consent: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=sa.false(), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -137,6 +142,10 @@ class AgentRun(Base):
     error_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
     tool_allowlist_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # Immutable provider selection captured when the run is created.  The
+    # gateway still re-checks current membership/policy, but never silently
+    # changes the model halfway through a run.
+    runtime_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

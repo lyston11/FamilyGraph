@@ -160,6 +160,31 @@ def test_tool_requires_running_state(db_session):
     assert exc_info.value.detail["__api_error__"]["code"] == "AGENT_RUN_NOT_RUNNING"
 
 
+def test_tool_rejected_after_server_cancellation(db_session):
+    """cancel_requested is a server gate even before the sidecar heartbeat arrives."""
+    user, space = create_agent_fixture(db_session, name="t-cancel-gate")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    run = _enqueue(db_session, session)
+    grant = _lease_and_start(db_session, run)
+    db_session.commit()
+    run.cancel_requested = True
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        agent_tools.execute(
+            db_session,
+            grant.run,
+            session,
+            {"agent_kind": "assistant"},
+            name="familygraph.echo",
+            version=1,
+            input_payload={"text": "must not execute"},
+        )
+    detail = exc_info.value.detail["__api_error__"]
+    assert detail["code"] == "AGENT_RUN_NOT_RUNNING"
+    assert detail["detail"]["reason"] == "cancel_requested"
+
+
 def test_echo_and_probe_scope_success(db_session):
     """合法调用成功：echo 回显；probe_scope 返回 scope 摘要证明授权链路。"""
     user, space = create_agent_fixture(db_session, name="t7")

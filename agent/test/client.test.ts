@@ -103,11 +103,19 @@ describe("InternalClient protocol behavior", () => {
               provider_id: 3,
               model: "model-x",
               kind: "openai_compatible",
+              api: "openai-completions",
+              compat: { maxTokensField: "max_tokens" },
+              context_window: 272000,
+              max_tokens: 60000,
+              reasoning: true,
+              input_modalities: ["text", "image"],
+              thinking_levels: ["low", "medium", "high", "xhigh", "max"],
               policy_result: "allowed",
               secret_ref: "agent_providers/3",
-              base_url: "https://cloud.example.internal/v1",
-              api_key: "sk-cloud-key",
+              base_url: "/internal/agent/runs/42/provider",
+              api_key: null,
             },
+            next_event_seq: 1,
             cancel_requested: false,
           });
         }
@@ -142,7 +150,7 @@ describe("InternalClient protocol behavior", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("sends {leased_by} only and consumes the flat lease response", async () => {
+  it("sends kind=assistant with leased_by and consumes the flat lease response", async () => {
     const client = new InternalClient(testConfig(port));
     const job = await client.leaseJob();
     expect(job).not.toBeNull();
@@ -155,7 +163,7 @@ describe("InternalClient protocol behavior", () => {
       policy_version: "pv-9",
       run_token: "run-tok",
     });
-    expect(seenLeaseBodies).toEqual([{ leased_by: "sc-unit" }]);
+    expect(seenLeaseBodies).toEqual([{ kind: "assistant", leased_by: "sc-unit" }]);
     const leaseLine = seenAuthHeaders.find((l) => l.includes("/lease"));
     expect(leaseLine).toMatch(
       /^POST \/internal\/agent\/jobs\/lease Bearer ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
@@ -209,11 +217,123 @@ describe("InternalClient protocol behavior", () => {
     expect(projection.attempt).toBe(2);
     expect(projection.provider?.policy_result).toBe("allowed");
     expect(projection.provider?.provider_id).toBe("3");
-    expect(projection.provider?.base_url).toBe("https://cloud.example.internal/v1");
-    expect(projection.provider?.api_key).toBe("sk-cloud-key");
+    expect(projection.provider?.base_url).toBe("/internal/agent/runs/42/provider");
+    expect(projection.provider?.api_key).toBeNull();
     expect(projection.messages[0]?.content_json["text"]).toBe("hi");
     expect(projection.context_blocks?.[0]?.citation).toBe("rag:memory-1:r1:c1");
     expect(projection.cancel_requested).toBe(false);
+  });
+
+  it("aborts an in-flight internal request and its retry backoff", async () => {
+    const controller = new AbortController();
+    let attempts = 0;
+    const client = new InternalClient(testConfig(port), {
+      fetchImpl: (async (
+        _input: Parameters<typeof fetch>[0],
+        init?: Parameters<typeof fetch>[1],
+      ) => {
+        attempts += 1;
+        await new Promise<void>((resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) return reject(new DOMException("aborted", "AbortError"));
+          signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+            once: true,
+          });
+        });
+        return new Response(null, { status: 503 });
+      }) as typeof fetch,
+      backoff: { baseDelayMs: 10_000, maxDelayMs: 10_000, maxAttempts: 4 },
+    });
+    const request = client.getRunContext("r1", "run-tok", controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(attempts).toBe(1);
+  });
+
+  it("fails closed when provider protocol is missing", async () => {
+    const client = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            run_id: 42,
+            session_id: 7,
+            agent_kind: "assistant",
+            account_id: 900,
+            space_id: 800,
+            status: "running",
+            attempt: 1,
+            policy_version: "pv-9",
+            tool_allowlist: [],
+            messages: [],
+            next_event_seq: 1,
+            cancel_requested: false,
+            provider: {
+              provider_id: 3,
+              policy_result: "allowed",
+              base_url: "/internal/agent/runs/42/provider",
+              api_key: null,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+    const projection = await client.getRunContext("r1", "run-tok");
+    expect(projection.provider?.api).toBeUndefined();
+  });
+
+  it("fails closed when a core context field is missing", async () => {
+    const client = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            // run_id intentionally omitted: a malformed projection must not
+            // be coerced into an empty string or a synthetic run.
+            session_id: 7,
+            agent_kind: "assistant",
+            account_id: 900,
+            space_id: 800,
+            status: "running",
+            attempt: 1,
+            policy_version: "pv-9",
+            tool_allowlist: [],
+            messages: [],
+            next_event_seq: 0,
+            cancel_requested: false,
+            provider: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+    await expect(client.getRunContext("r1", "run-tok")).rejects.toMatchObject({
+      code: "invalid_context_projection",
+    });
+  });
+
+  it("fails closed on malformed context blocks", async () => {
+    const client = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            run_id: 42,
+            session_id: 7,
+            agent_kind: "assistant",
+            account_id: 900,
+            space_id: 800,
+            status: "running",
+            attempt: 1,
+            policy_version: "pv-9",
+            tool_allowlist: [],
+            messages: [],
+            context_blocks: [{ source_id: "x" }],
+            provider: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+    await expect(client.getRunContext("r1", "run-tok")).rejects.toMatchObject({
+      code: "invalid_context_projection",
+    });
   });
 
   it("throws TransientError when retries are exhausted", async () => {

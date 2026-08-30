@@ -32,6 +32,21 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:password|passwd|secret|token|密碼|密码|密钥)\s*[:=]\s*\S+"),
     re.compile(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
 )
+# Credential-shaped keys are blocked even when their value does not resemble a
+# provider key (for example ``{"api_key": "leak-me"}``). Token-cap fields are
+# explicitly excluded because Pi/OpenAI request bodies legitimately contain
+# ``max_tokens`` and ``max_output_tokens``.
+_NON_CREDENTIAL_TOKEN_FIELDS = {
+    "max_tokens",
+    "max_completion_tokens",
+    "max_output_tokens",
+    "include_usage",
+    "stream_options",
+}
+_CREDENTIAL_KEY_RE = re.compile(
+    r"^(?:access|auth|bearer|refresh|id|session|api|provider|client|personal|customer|x)?[-_]?(?:tokens?|api[-_]?key|secret|password)$|^(?:authorization|x[-_]?authorization|cookie|set[-_]?cookie|private[-_]?key)$",
+    re.IGNORECASE,
+)
 _PII_PATTERNS = (
     re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
     re.compile(r"(?<!\d)(?=(?:\D*\d){10,})(?:\+?\d[\d -]{8,}\d)(?!\d)"),
@@ -71,8 +86,28 @@ def _strings(value: Any) -> Iterable[str]:
             yield from _strings(item)
 
 
+def _credential_key(key: object) -> bool:
+    normalized = str(key).lower().replace("-", "_")
+    return normalized not in _NON_CREDENTIAL_TOKEN_FIELDS and bool(
+        _CREDENTIAL_KEY_RE.fullmatch(normalized)
+    )
+
+
+def contains_credential_key(value: Any) -> bool:
+    """Return true when any nested object key is credential-shaped."""
+    if isinstance(value, dict):
+        return any(
+            _credential_key(key) or contains_credential_key(item) for key, item in value.items()
+        )
+    if isinstance(value, list | tuple):
+        return any(contains_credential_key(item) for item in value)
+    return False
+
+
 def contains_secret(value: Any) -> bool:
-    return any(pattern.search(text) for text in _strings(value) for pattern in _SECRET_PATTERNS)
+    return contains_credential_key(value) or any(
+        pattern.search(text) for text in _strings(value) for pattern in _SECRET_PATTERNS
+    )
 
 
 def contains_pii(value: Any) -> bool:
@@ -152,7 +187,10 @@ def _redact(value: Any) -> Any:
             result = pattern.sub("[REDACTED]", result)
         return result
     if isinstance(value, dict):
-        return {str(key): _redact(item) for key, item in value.items()}
+        return {
+            str(key): "[REDACTED]" if _credential_key(key) else _redact(item)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [_redact(item) for item in value]
     if isinstance(value, tuple):
@@ -275,6 +313,7 @@ __all__ = [
     "classify",
     "context_hook",
     "contains_pii",
+    "contains_credential_key",
     "contains_prompt_injection",
     "contains_secret",
     "enforce",

@@ -643,11 +643,48 @@ def fetch_approved_page(
     )
     if claimed.rowcount != 1:
         raise WebGatewayError(409, WEB_APPROVAL_USED, "联网批准凭据已使用")
-    hostname, _, allowed_addresses = _validate_public_url(row.url)
-    _ensure_allowed_domain(hostname, policy.platform)
-    body, content_type = _fetch_bytes(
-        row.url, policy.max_fetch_bytes, allowed_addresses=allowed_addresses
-    )
+    # Close the claim transaction before DNS/network I/O.  Keeping the SQLite
+    # transaction open across a slow remote fetch blocks unrelated requests and
+    # can make a successful CAS appear uncommitted to another worker.
+    db.commit()
+    try:
+        hostname, _, allowed_addresses = _validate_public_url(row.url)
+        _ensure_allowed_domain(hostname, policy.platform)
+        body, content_type = _fetch_bytes(
+            row.url, policy.max_fetch_bytes, allowed_addresses=allowed_addresses
+        )
+    except WebGatewayError as exc:
+        # A committed CAS claim prevents concurrent double-fetches.  If the
+        # remote request never produced a usable response, compensate the
+        # claim so a later explicit retry can use the approval token instead of
+        # leaving the user with a consumed-but-unusable token.  Policy/size
+        # failures remain consumed and are not retryable.
+        if exc.status_code >= 500:
+            row.used_at = None
+            _record_usage(
+                db,
+                account_id=account_id,
+                space_id=space_id,
+                run_id=run_id,
+                tool="fetch_approved_page",
+                provider=None,
+                domain=row.domain,
+                query_hash=None,
+                result_count=0,
+                bytes_read=0,
+                status="failed",
+                policy_decision="allowed",
+                error_code=exc.code,
+            )
+            audit.write_audit(
+                db,
+                action="controlled_web_fetch_retryable_failure",
+                actor_id=None,
+                target_id=space_id,
+                detail={"account_id": account_id, "run_id": run_id, "error_code": exc.code},
+            )
+            db.commit()
+        raise
     content = _visible_text(body, content_type)
     content = html.unescape(content)[: policy.max_fetch_bytes]
     title = row.title or hostname

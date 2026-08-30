@@ -5,7 +5,8 @@
   密钥只存 secretbox 密文（utils/secretbox.py，SECRET_KEY 派生流加密），永不回明文。
 - agent_space_provider_settings：空间级选择与开关（每空间至多一行）；
   policy 结果（cloud_allowed/local_required/denied）由 services/agent_provider.py 推导，
-  不落库。ProviderGateway 与真实调用属后续 Block，本任务只提供配置与解析。
+  不落库。ProviderGateway 在服务端使用该解析结果执行唯一 egress；运行期元数据
+  由 AgentRun.runtime_snapshot_json 固化，密钥仍只在网关解密。
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
 )
@@ -32,12 +34,28 @@ class AgentProvider(Base):
     __tablename__ = "agent_providers"
     __table_args__ = (
         CheckConstraint("kind IN ('openai_compatible','local')", name="ck_agent_providers_kind"),
+        CheckConstraint(
+            "api IN ('openai-completions','openai-responses')", name="ck_agent_providers_api"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Pi provider protocol (for example openai-responses or openai-completions).
+    # Kept server-side so the run snapshot and gateway use the same adapter.
+    api: Mapped[str] = mapped_column(String(48), default="openai-responses", nullable=False)
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    compat_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    context_window: Mapped[int] = mapped_column(Integer, default=272_000, nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=60_000, nullable=False)
+    reasoning: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    input_modalities_json: Mapped[list[str]] = mapped_column(
+        JSON, default=lambda: ["text", "image"], nullable=False
+    )
+    thinking_levels_json: Mapped[list[str]] = mapped_column(
+        JSON, default=lambda: ["low", "medium", "high", "xhigh", "max"], nullable=False
+    )
     # secretbox 密文（nonce||ciphertext||tag 的 base64url）；本地 Provider 可无密钥
     secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     allowed_models_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)

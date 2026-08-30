@@ -62,6 +62,33 @@ IDOR 矩阵 5 用例 + 申请流 3 用例 + 附件链 5 用例 + 端到端旅程
 
 [OK] **Completed**
 
+## Session 6: V2 Agent Runtime final gate recheck
+
+**Date**: 2026-08-30
+**Task**: V2 Agent Runtime Full Repair
+**Branch**: `feat/frontend-role-boundaries`
+
+### Summary
+
+重新执行并复核当前工作树：Backend `pytest -q` **587 passed**，Agent **83 tests / 12
+files**，Frontend（保留并行 redesign 修改）**249 tests / 40 files**；三端
+type-check/lint/build、Compose config、`git diff --check` 与 Trellis validate 全部
+通过。Agent 集成测试因需要本地 loopback 监听，受限沙箱的 EPERM 已在获准权限下
+复跑通过。
+
+复核期间修正 `test_internal_agent_api.py` 的错位断言，并将 sidecar ContextOut
+归一化改为核心字段、消息、context block 全部严格 fail-closed，畸形投影统一为
+`invalid_context_projection`，不得启动 Pi 或发起 Provider/工具请求；合同已同步到
+`.trellis/spec/backend/agent-runtime.md` §9。
+同时修正 heartbeat 401/403/409/410 未触发中止的竞态，授权撤销现在立即 abort
+Pi stream 且跳过 settle。
+Allowed runtime snapshot 另补非空 `provider_revision` 校验，配置/密钥轮换无法被
+缺 revision 的快照绕过。
+
+### Status
+
+[WIP] **本地质量门禁全绿；真实 liu-dada/gpt-5.6-sol 成功正文回显仍待上游恢复，任务保持 in_progress**
+
 ## Session 5: V2 Agent Runtime 全面复核与修复
 
 **Date**: 2026-08-30

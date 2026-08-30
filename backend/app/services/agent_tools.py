@@ -15,9 +15,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -35,7 +36,7 @@ from app.services import agent_query, audit, controlled_web, intake_extractor, t
 from app.utils import timeutil
 
 # JSON schema 子集校验支持的标量类型
-_SUPPORTED_TYPES = {"string", "integer", "boolean"}
+_SUPPORTED_TYPES = {"string", "integer", "boolean", "array", "object"}
 
 
 class ToolProtocolError(Exception):
@@ -215,8 +216,9 @@ REGISTRY: dict[str, ToolSpec] = {
                 "properties": {
                     "concept_code": {"type": "string", "maxLength": 128},
                     "term": {"type": "string", "maxLength": 64},
+                    "consent_confirmed": {"type": "boolean"},
                 },
-                "required": ["concept_code", "term"],
+                "required": ["concept_code", "term", "consent_confirmed"],
                 "additionalProperties": False,
             },
             output_schema={"type": "object"},
@@ -353,10 +355,37 @@ def _validate_value(schema: dict[str, Any], value: Any, *, path: str) -> None:
         max_length = schema.get("maxLength")
         if isinstance(max_length, int) and len(value) > max_length:
             _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字符串超长", {"path": path})
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字符串过短", {"path": path})
+        if isinstance(schema.get("enum"), list) and value not in schema["enum"]:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段值不在允许枚举中", {"path": path})
         return
     if expected == "integer":
         if isinstance(value, bool) or not isinstance(value, int):
             _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段须为 integer", {"path": path})
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if isinstance(minimum, int | float) and value < minimum:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段小于允许最小值", {"path": path})
+        if isinstance(maximum, int | float) and value > maximum:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段超过允许最大值", {"path": path})
+        if isinstance(schema.get("enum"), list) and value not in schema["enum"]:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段值不在允许枚举中", {"path": path})
+        return
+    if expected == "array":
+        if not isinstance(value, list):
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段须为 array", {"path": path})
+        min_items = schema.get("minItems")
+        max_items = schema.get("maxItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "数组元素过少", {"path": path})
+        if isinstance(max_items, int) and len(value) > max_items:
+            _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "数组元素过多", {"path": path})
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _validate_value(item_schema, item, path=f"{path}[{index}]")
         return
     if not isinstance(value, bool):  # expected == "boolean"
         _deny(422, "AGENT_TOOL_SCHEMA_INVALID", "字段须为 boolean", {"path": path})
@@ -407,6 +436,34 @@ def execute(
                 "工具仅在 running 状态可执行",
                 {"status": run.status},
             )
+        # Cancellation is a server-side decision and can race with the
+        # sidecar heartbeat.  Refresh immediately before any dedupe or dispatch
+        # work so a cancelled run cannot start a new tool call while its FSM is
+        # still in ``running``.
+        # Do not roll back the caller's transaction here: the API may have
+        # just promoted ``run.started`` in the same session.  A scalar refresh
+        # preserves those pending FSM writes while obtaining the latest flag
+        # visible to this transaction.
+        # Expire only the mutable gate fields.  A rollback here would discard
+        # the in-transaction ``run.started`` promotion that callers may have
+        # just appended, so preserve the FSM write while forcing a fresh
+        # scalar read for cancellation.
+        db.expire(run, ("cancel_requested",))
+        cancel_requested = run.cancel_requested
+        if run.status != "running":
+            raise ToolProtocolError(
+                409,
+                "AGENT_RUN_NOT_RUNNING",
+                "工具仅在 running 状态可执行",
+                {"status": run.status},
+            )
+        if bool(cancel_requested):
+            raise ToolProtocolError(
+                409,
+                "AGENT_RUN_NOT_RUNNING",
+                "Run 已请求取消，拒绝新的工具调用",
+                {"reason": "cancel_requested"},
+            )
 
         # 副作用去重先于任何执行：同 id 命中直接返回首次结果（调用方/端点照常运行
         # tool_result_hook，不绕过结果策略）。result_json 为空表示占位仍在途，
@@ -449,7 +506,42 @@ def execute(
                 return replayed
         spec = resolve_tool(name, version)
         check_scope(run, claims, spec)
+        # Keep the relationship-intelligence feature flag as the first
+        # capability gate.  This preserves the public contract that disabled
+        # kinship tools uniformly return KINSHIP_FLAG_DISABLED, even when a
+        # caller omitted a newly-added consent field.  Schema validation still
+        # runs before any enabled tool can execute.
+        if spec.name in _KINSHIP_INTAKE_TOOLS and not config.RELATIONSHIP_INTELLIGENCE_ENABLED:
+            raise ToolProtocolError(503, KINSHIP_FLAG_DISABLED, "关系智能能力未启用")
         validate_input(spec, input_payload)
+        # Atomically admit dispatch after all validation.  A compare-and-set
+        # UPDATE acquires SQLite's write lock, so cancellation either commits
+        # first (rowcount=0 and this call is rejected) or waits until admission
+        # commits (the call is then already in flight and may finish normally).
+        # Flush an in-request ``run.started`` promotion before the textual
+        # compare-and-set; otherwise the database would still see ``leased``
+        # while the ORM object already reports ``running``.
+        db.flush()
+        admission = cast(
+            CursorResult[Any],
+            db.execute(
+                text(
+                    "UPDATE agent_runs SET updated_at = updated_at "
+                    "WHERE id = :run_id AND status = 'running' AND cancel_requested = 0"
+                ),
+                {"run_id": run.id},
+            ),
+        )
+        if admission.rowcount != 1:
+            db.rollback()
+            raise ToolProtocolError(
+                409,
+                "AGENT_RUN_NOT_RUNNING",
+                "Run 已停止或请求取消，拒绝新的工具调用",
+                {"reason": "cancel_requested"},
+            )
+        db.commit()
+        db.expire(run, ("cancel_requested", "status"))
         # 原子占位：唯一索引 (run_id, tool_call_id) 使并发同 id 请求在 flush 处
         # 冲突，先占位者独占执行权，后到者回放/拒绝——副作用不再可能双执行。
         if tool_call_id is not None:
@@ -532,8 +624,6 @@ def _dispatch(
     V2.3 E4a：Relationship Intelligence 工具在 flag 关闭时一律拒绝（503，
     与浏览器面同一口径），拒绝走统一安全审计。
     """
-    if spec.name in _KINSHIP_INTAKE_TOOLS and not config.RELATIONSHIP_INTELLIGENCE_ENABLED:
-        raise ToolProtocolError(503, KINSHIP_FLAG_DISABLED, "关系智能能力未启用")
     if spec.name == TOOL_RESOLVE_FREE_TEXT_RELATION:
         actor, space = agent_query._resolve_scope(db, agent_session)
         return intake_extractor.parse_free_text_relation(
@@ -562,6 +652,16 @@ def _dispatch(
             limit=5 if limit is None else int(limit),
         )
     if spec.name == TOOL_RECORD_TERM_USAGE:
+        if (
+            input_payload.get("consent_confirmed") is not True
+            or not agent_session.term_usage_consent
+        ):
+            raise ToolProtocolError(
+                403,
+                "AGENT_TERM_USAGE_CONSENT_REQUIRED",
+                "记录称谓使用前需要用户明确确认",
+                {"tool": spec.name},
+            )
         actor, space = agent_query._resolve_scope(db, agent_session)
         _usage, created, summary = terms.record_usage_and_promote(
             db,
