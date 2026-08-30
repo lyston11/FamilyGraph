@@ -12,10 +12,12 @@ import AddRelationDialog from '@/components/member/AddRelationDialog.vue'
 import ProfileDrawer from '@/components/member/ProfileDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { fetchMembersByPrefix } from '@/api/members'
+import { fetchMyManagerApplications, submitManagerApplication } from '@/api/spaces'
 import { useMembersStore } from '@/stores/members'
 import { useGraphStore } from '@/stores/graph'
 import { useSpacesStore } from '@/stores/spaces'
-import type { GenderType, Member, StructuredDate } from '@/types/api'
+import { ApiError } from '@/api/errors'
+import type { GenderType, Member, SpaceManagerApplication, StructuredDate } from '@/types/api'
 
 /**
  * M1 首页：「与我相关的档案」列表（自己 + 我创建的；admin 可见全部）。
@@ -23,6 +25,8 @@ import type { GenderType, Member, StructuredDate } from '@/types/api'
  * 视觉（design.md §3.3）：空间切换器带类型图标（Household=共同生活 /
  * Lineage=谱系）；成员卡=横向立牌（姓字纸牌头像位 / 姓名 / 称谓或性别 / 生卒）
  * + 右侧 --fg-status-* 状态徽章 + 快捷动作。
+ * 空间管理权限：member 可申请成为当前空间的 space_admin，平台运营者审批；邀请成员
+ * 不需要审批，active member（除 guest）均可直接邀请。空间开辟仍沿用原有创建流程。
  */
 const auth = useAuthStore()
 const members = useMembersStore()
@@ -39,26 +43,25 @@ onMounted(() => {
   // 空间与待处理邀请（AD-3）；收到的连接请求红点（审批 UI 归 m2c）
   spacesStore.load().catch(() => undefined)
   graphStore.loadIncoming().catch(() => undefined)
+  loadMyApplications()
 })
 
 const relationDialogOpen = ref(false)
 const graphStore = useGraphStore()
 const spacesStore = useSpacesStore()
+
 const createSpaceOpen = ref(false)
 const newSpaceName = ref('')
+const applyOpen = ref(false)
+const applying = ref(false)
+const myApplications = ref<SpaceManagerApplication[]>([])
 
-// data-* 未收录进 Vue 的 HTML 属性类型，断言收窄；运行时 naive 原样透传到原生 input
 const spaceNameInputProps = {
   'data-test': 'space-name-input',
   'aria-label': '家庭空间名称',
 } as VueInputHTMLAttributes
 
-const inviteSearchInputProps = {
-  'data-test': 'invite-search',
-  'aria-label': '按名字前缀搜索成员',
-} as VueInputHTMLAttributes
-
-async function submitCreateSpace() {
+async function submitCreateSpace(): Promise<void> {
   if (!newSpaceName.value.trim()) return
   try {
     await spacesStore.create(newSpaceName.value.trim())
@@ -68,6 +71,48 @@ async function submitCreateSpace() {
     message.error('创建空间失败，请稍后重试')
   }
 }
+async function loadMyApplications(): Promise<void> {
+  try {
+    myApplications.value = await fetchMyManagerApplications()
+  } catch {
+    /* 状态行加载失败不阻塞首页 */
+  }
+}
+
+function openApplyDialog(): void {
+  applyOpen.value = true
+}
+
+async function applySpaceAdmin(): Promise<void> {
+  const space = spacesStore.currentSpace
+  if (!space) return
+  applying.value = true
+  try {
+    await submitManagerApplication('space_admin', { spaceId: space.id })
+    message.success('申请已提交，等待平台运营者审批')
+    applyOpen.value = false
+    await loadMyApplications()
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '提交失败，请稍后重试')
+  } finally {
+    applying.value = false
+  }
+}
+function applicationText(app: SpaceManagerApplication): string {
+  return `「${app.space_name ?? '目标空间'}」空间管理员申请`
+}
+
+/** 申请状态徽章：与全站领域状态同源（--fg-status-* / fg-badge） */
+function applicationBadge(app: SpaceManagerApplication): { text: string; cls: string } {
+  if (app.status === 'approved') return { text: '已通过', cls: 'fg-badge fg-badge--confirmed' }
+  if (app.status === 'rejected') return { text: '未通过', cls: 'fg-badge fg-badge--disputed' }
+  return { text: '审批中', cls: 'fg-badge fg-badge--proposed' }
+}
+
+const inviteSearchInputProps = {
+  'data-test': 'invite-search',
+  'aria-label': '按名字前缀搜索成员',
+} as VueInputHTMLAttributes
 
 const inviteOpen = ref(false)
 const inviteKeyword = ref('')
@@ -234,11 +279,11 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
       </div>
     </header>
 
-    <!-- 家庭空间区（m1c）：空态引导建默认空间 / 空间切换+成员+邀请 -->
+    <!-- 家庭空间区：创建、切换、成员邀请与管理员申请入口 -->
     <section class="space-section" data-test="space-section">
       <template v-if="spacesStore.spaces.length === 0">
         <NAlert type="info" :show-icon="true">
-          你还没有家庭空间。创建一个，把家人邀请进来吧。
+          你还没有家庭空间。可以先创建一个家庭空间，再邀请家人加入。
           <NButton size="small" type="primary" class="inline-action" data-test="create-space" @click="createSpaceOpen = true">
             创建家庭空间
           </NButton>
@@ -262,6 +307,15 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
             data-test="invite-member"
             @click="openInviteDialog"
           >邀请成员</NButton>
+          <NButton
+            v-if="spacesStore.currentRole === 'member'"
+            size="small"
+            secondary
+            data-test="apply-space-admin"
+            :loading="applying"
+            @click="openApplyDialog"
+          >申请成为管理员</NButton>
+
         </div>
         <div v-for="inv in spacesStore.pendingForMe" :key="inv.id" class="invite-row" data-test="space-invite">
           <span>「{{ spacesStore.spaces.find((s) => s.id === inv.space_id)?.name ?? '未知空间' }}」邀请你加入</span>
@@ -271,6 +325,23 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
           </span>
         </div>
       </template>
+      <!-- 我的管理者申请状态（仅已有空间 space_admin 申请） -->
+      <div
+        v-for="app in myApplications"
+        :key="app.id"
+        class="invite-row"
+        data-test="manager-application-row"
+      >
+        <span class="application-text">
+          {{ applicationText(app) }}
+          <span v-if="app.status === 'rejected' && app.decision_note" class="application-note">
+            平台备注：{{ app.decision_note }}
+          </span>
+        </span>
+        <span class="fg-badge" :class="applicationBadge(app).cls">
+          {{ applicationBadge(app).text }}
+        </span>
+      </div>
     </section>
 
     <NSpin :show="members.loading">
@@ -354,6 +425,18 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
         <div class="modal-actions">
           <NButton @click="createSpaceOpen = false">取消</NButton>
           <NButton type="primary" data-test="space-create-submit" @click="submitCreateSpace">创建</NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <NModal v-model:show="applyOpen" preset="card" title="申请成为空间管理员" data-test="apply-space-admin-dialog">
+      <p class="apply-hint">你将申请成为「{{ spacesStore.currentSpace?.name }}」的空间管理员，需平台运营者审批。</p>
+      <template #footer>
+        <div class="modal-actions">
+          <NButton @click="applyOpen = false">取消</NButton>
+          <NButton type="primary" :loading="applying" data-test="apply-space-admin-submit" @click="applySpaceAdmin">
+            提交申请
+          </NButton>
         </div>
       </template>
     </NModal>
@@ -453,6 +536,26 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.application-text {
+  min-width: 0;
+}
+
+.application-note {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-ink-secondary);
+}
+
+.apply-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--fg-ink-secondary);
+}
+
+.apply-name {
+  margin-top: 12px;
 }
 
 .member-list {
@@ -629,9 +732,11 @@ function renderSpaceLabel(option: SelectOption): VNodeChild {
 }
 
 /* n-modal 卡片根节点 teleport 到 body：用 data-test 锚定宽度 */
-[data-test='create-space-dialog'] {
-  width: min(360px, calc(100vw - 48px));
+[data-test='create-space-dialog'],
+[data-test='apply-space-admin-dialog'] {
+  width: min(460px, calc(100vw - 48px));
 }
+
 
 [data-test='invite-dialog'] {
   width: min(380px, calc(100vw - 48px));

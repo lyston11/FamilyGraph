@@ -53,6 +53,17 @@
 - 认领争议保留 evidence、状态、双方最小披露与平台人工兜底；平台人工处理需 break-glass 原因与完整审计，不因此获得日常浏览权。
 - 建档、档案修改、空间变更、关系请求、附件等 API 组合事务抽成 application/domain command，HTTP 与未来 Agent 工具共用同一授权/FSM/写入/事件/audit 短事务；外部网络调用不进入事务。
 
+### 0.7 空间管理者审批（用户确认 2026-08-30，任务 08-30-space-manager-approval）
+
+- **成为已有空间的空间管理者需要经平台运营者审批**：当前空间 active `member` 可申请由 `member` 升级为 `space_admin`；owner、已有 `space_admin`、guest 不适用。
+- **邀请与管理员审批是两条独立流程**：active member（除 guest）可以直接邀请账号，邀请只创建 pending membership，受邀人本人接受后才成为 active；邀请不需要平台运营者审批。
+- **空间创建沿用既有自由创建语义**：用户可通过 `POST /api/spaces` 创建 household/lineage 空间，自建者成为 owner + active 成员；MemberCreateWizard 也可直接创建族谱空间。共同家庭空间与 Owner Onboarding 邀请兑换路径保持不变。
+- 同一 (申请人, 目标空间, kind) 至多一条 pending（partial unique index + 命令层查重 409 `SPACE_MANAGER_APPLICATION_EXISTS`）；已裁决申请终态不可再变（重复裁决 409）。申请人须 `identity_confirmed`；guest 不能提交管理员申请。
+- **现有空间的 owner 只能通过既有 owner 移交流程（ownership_transfers FSM，现任 owner 发起）变更**；平台运营者裁决 `space_admin` 申请绝不触碰任何现有空间的 `family_spaces.owner_id`，approve 只做该空间内 active member → space_admin 一升。
+- 裁决动作（approve/reject，reject 理由必填 422）在同一短事务内完成：角色升级 + 审计（`manager_application_submitted/approved/rejected`，批准行带 `admin_action`）+ 领域事件 `space.manager_application.decided`；若审批时成员资格已变化，申请回滚为 pending。
+- 运营者队列仅展示裁决所需最小数据（申请人名、申请类型、目标空间名），不产生任何家庭数据浏览权（延续 §0.2/§0.6 边界）。
+- 实现：`backend/app/commands/manager_applications.py`、`backend/app/api/spaces.py`（用户侧提交/自查与自由建空间）、`backend/app/api/admin.py`（队列/裁决，require_platform_operator）、迁移 0021。
+
 ---
 
 ## 1. 身份模型：PersonProfile / Account / ClaimState 分离 `[AD-1]`
@@ -161,6 +172,8 @@ active  ──remove──> removed(终态, owner 或本人)
 | 统计聚合 | — | — | 计入范围 | 计入范围 | 不计入 |
 | join_request | 目标空间 owner 可见审批 | — | — | — | — |
 | 空间邀请（invite） | — | active 成员（除 guest）可邀请；受邀人需接受 | — | — | — |
+| 空间管理者申请 | 提交（identity_confirmed；guest 否）与查看本人申请 | — | — | — | — |
+| 管理者申请裁决 | platform_operator only（队列/approve/reject + audit；见 §0.7） | — | — | — | — |
 | 管理 API | is_admin only + audit | — | — | — | — |
 
 - IDOR 集成测试逐行覆盖矩阵（普通 JWT 直打 API 断言遮罩/invisible）。

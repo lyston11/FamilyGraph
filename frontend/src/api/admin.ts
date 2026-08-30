@@ -3,6 +3,7 @@ import type {
   DataRightRequest,
   OwnerInvitation,
   OwnerInvitationCreated,
+  SpaceManagerApplication,
 } from '@/types/api'
 
 import { apiClient } from './client'
@@ -128,5 +129,30 @@ export async function resolveClaimDispute(
     outcome,
     note,
   })
+  return data
+}
+
+// ---- 空间管理者申请审批（任务 08-30-space-manager-approval）----
+
+/** 审批队列（status 缺省返回全部；仅申请人/类型/目标最小数据） */
+export async function fetchManagerApplications(
+  status?: 'pending',
+): Promise<SpaceManagerApplication[]> {
+  const { data } = await apiClient.get<SpaceManagerApplication[]>('/admin/manager-applications', {
+    params: status ? { status } : {},
+  })
+  return data
+}
+
+/** 裁决：approve 效果由后端事务完成；reject 理由必填（后端兜底 422） */
+export async function decideManagerApplication(
+  applicationId: number,
+  decision: 'approve' | 'reject',
+  note?: string,
+): Promise<SpaceManagerApplication> {
+  const { data } = await apiClient.post<SpaceManagerApplication>(
+    `/admin/manager-applications/${applicationId}/decision`,
+    { decision, note: note || null },
+  )
   return data
 }

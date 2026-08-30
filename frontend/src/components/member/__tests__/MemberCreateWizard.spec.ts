@@ -8,7 +8,7 @@ import * as membersApi from '@/api/members'
 import * as spacesApi from '@/api/spaces'
 import MemberCreateWizard from '@/components/member/MemberCreateWizard.vue'
 import { useMembersStore } from '@/stores/members'
-import type { FamilySpace, Member } from '@/types/api'
+import type { Member } from '@/types/api'
 
 vi.mock('@/api/members', () => ({
   fetchMembers: vi.fn(),
@@ -23,6 +23,9 @@ vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn().mockResolvedValue([]),
   createSpace: vi.fn(),
   fetchSpaceMembers: vi.fn().mockResolvedValue([]),
+  fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
+  submitManagerApplication: vi.fn(),
+  fetchMyManagerApplications: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
   removeOrWithdrawMembership: vi.fn(),
   resolveMembership: vi.fn(),
@@ -35,6 +38,7 @@ vi.mock('@/api/spaces', () => ({
 }))
 
 const mockedCreate = vi.mocked(membersApi.createMember)
+const mockedCreateSpace = vi.mocked(spacesApi.createSpace)
 
 function makeMember(overrides: Partial<Member> = {}): Member {
   return {
@@ -221,7 +225,7 @@ describe('MemberCreateWizard', () => {
     wrapper.unmount()
   })
 
-  it('空间选择（F-3）：未选具体空间时拦截；新建族谱空间后自动选中并随建档提交引用', async () => {
+  it('空间选择（F-3）：未选具体空间时拦截；可在向导中直接新建族谱空间', async () => {
     vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([
       {
         id: 3,
@@ -233,15 +237,6 @@ describe('MemberCreateWizard', () => {
         member_count: 2,
       },
     ])
-    vi.mocked(spacesApi.createSpace).mockResolvedValue({
-      id: 7,
-      name: '王家族谱',
-      owner_id: 1,
-      kind: 'lineage',
-      created_at: '2026-08-26T00:00:00',
-      pending_count: 0,
-      member_count: 1,
-    } satisfies FamilySpace)
     mockedCreate.mockResolvedValue({ user: makeMember(), pin: '111111', replayed: false })
     const wrapper = await mountWizard()
 
@@ -259,6 +254,22 @@ describe('MemberCreateWizard', () => {
       expect(document.querySelector('[data-test="wizard-step-space"]')).not.toBeNull(),
     )
 
+    // 切到族谱空间后可直接创建，不需要管理员审批
+    await clickRadio('[data-test="wizard-space-choice"]', 2)
+    expect(document.querySelector('[data-test="wizard-lineage-hint"]')).toBeNull()
+    mockedCreateSpace.mockResolvedValue({
+      id: 8,
+      name: '新族谱',
+      owner_id: 1,
+      kind: 'lineage',
+      created_at: '2026-08-30T00:00:00',
+      pending_count: 0,
+      member_count: 1,
+    })
+    await setInput('[data-test="wizard-lineage-name"] input', '新族谱')
+    click('[data-test="wizard-lineage-create"]')
+    await vi.waitFor(() => expect(mockedCreateSpace).toHaveBeenCalledWith('新族谱', 'lineage'))
+
     // 选「家庭空间」但未选具体空间 → 下一步被拦截
     await clickRadio('[data-test="wizard-space-choice"]', 1)
     click('[data-test="wizard-to-confirm"]')
@@ -268,11 +279,54 @@ describe('MemberCreateWizard', () => {
       ),
     )
 
-    // 切到族谱空间并内联新建 → 自动选中 → 可进入确认
+    // 切到族谱空间后，新建空间已自动选中并可继续，不需要管理员审批
     await clickRadio('[data-test="wizard-space-choice"]', 2)
-    await setInput('[data-test="wizard-lineage-name"] input', '王家族谱')
-    click('[data-test="wizard-lineage-create"]')
-    await vi.waitFor(() => expect(spacesApi.createSpace).toHaveBeenCalledWith('王家族谱', 'lineage'))
+    expect(document.querySelector('[data-test="wizard-lineage-hint"]')).toBeNull()
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-confirm"]')).not.toBeNull(),
+    )
+    wrapper.unmount()
+  })
+
+  it('空间选择（F-3）：选择已有族谱空间后随建档提交引用', async () => {
+    vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([
+      {
+        id: 7,
+        name: '王家族谱',
+        owner_id: 1,
+        kind: 'lineage',
+        created_at: '2026-08-26T00:00:00',
+        pending_count: 0,
+        member_count: 1,
+      },
+    ])
+    mockedCreate.mockResolvedValue({ user: makeMember(), pin: '222222', replayed: false })
+    const wrapper = await mountWizard()
+
+    await new Promise((resolve) => setTimeout(resolve))
+    await fillInfoStep()
+    click('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-space"]')).not.toBeNull(),
+    )
+
+    await clickRadio('[data-test="wizard-space-choice"]', 2)
+    // n-select 键盘路径（SpaceGovernanceDialog.spec 同款）：jsdom 下虚拟列表视口
+    // 高为 0，选项 DOM 不渲染；第一次 Enter 打开下拉，第二次 Enter 选中首个候选
+    const selection = () =>
+      document.querySelector('[data-test="wizard-lineage-select"] .n-base-selection')!
+    selection().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await vi.waitFor(() =>
+      expect(document.querySelector('.n-base-select-menu')).not.toBeNull(),
+    )
+    selection().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve))
+    await new Promise((resolve) => setTimeout(resolve))
 
     click('[data-test="wizard-to-confirm"]')
     await vi.waitFor(() =>

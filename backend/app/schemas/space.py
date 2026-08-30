@@ -54,6 +54,38 @@ class SpaceInviteCreate(BaseModel):
     user_id: int = Field(gt=0)
 
 
+# ---- 空间管理者申请（任务 08-30-space-manager-approval）----
+
+
+class ManagerApplicationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_kind: Literal["space_admin"] = "space_admin"
+    space_id: int = Field(gt=0)
+
+
+class ManagerApplicationDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ManagerApplicationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    applicant_user_id: int
+    applicant_name: str | None = None
+    space_id: int
+    space_name: str | None = None
+    request_kind: Literal["space_admin"]
+    status: Literal["pending", "approved", "rejected"]
+    decision_note: str | None = None
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
 class PositionItem(BaseModel):
     user_id: int = Field(gt=0)
     x: float

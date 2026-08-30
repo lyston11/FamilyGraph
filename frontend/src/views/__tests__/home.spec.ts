@@ -10,7 +10,13 @@ import * as spacesApi from '@/api/spaces'
 import HomeView from '@/views/HomeView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
-import type { FamilySpace, Member, SpaceMemberInfo, SpaceRole } from '@/types/api'
+import type {
+  FamilySpace,
+  Member,
+  SpaceManagerApplication,
+  SpaceMemberInfo,
+  SpaceRole,
+} from '@/types/api'
 
 vi.mock('@/api/members', () => ({
   fetchMembers: vi.fn(),
@@ -25,7 +31,8 @@ vi.mock('@/api/members', () => ({
 // 空间与图 store 在 onMounted 即请求（mock 掉避免 jsdom 真实 XHR）
 vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn().mockResolvedValue([]),
-  createSpace: vi.fn(),
+  submitManagerApplication: vi.fn(),
+  fetchMyManagerApplications: vi.fn().mockResolvedValue([]),
   fetchSpaceMembers: vi.fn().mockResolvedValue([]),
   fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
@@ -102,6 +109,22 @@ function makeMember(overrides: Partial<Member> = {}): Member {
       attachments: false,
     },
     permissions: { edit: true, delete: true },
+    ...overrides,
+  }
+}
+
+function makeApplication(overrides: Partial<SpaceManagerApplication> = {}): SpaceManagerApplication {
+  return {
+    id: 11,
+    applicant_user_id: 5,
+    applicant_name: '空间用户',
+    space_id: 1,
+    space_name: '我们家',
+    request_kind: 'space_admin',
+    status: 'pending',
+    decision_note: null,
+    created_at: '2026-08-30T00:00:00',
+    decided_at: null,
     ...overrides,
   }
 }
@@ -321,6 +344,75 @@ describe('HomeView', () => {
 
     await wrapper.find('[data-test="reject-invite"]').trigger('click')
     await vi.waitFor(() => expect(mockedResolveMembership).toHaveBeenCalledWith(99, 'reject'))
+    wrapper.unmount()
+  })
+
+  it('member 可申请成为当前空间管理员，弹窗确认后提交并展示状态', async () => {
+    const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
+    mockedSubmit.mockResolvedValue(makeApplication())
+    const { wrapper } = await mountHome('member')
+
+    const adminEntry = wrapper.find('[data-test="apply-space-admin"]')
+    await vi.waitFor(() => expect(adminEntry.exists()).toBe(true))
+    await adminEntry.trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-test="apply-space-admin-dialog"]')).not.toBeNull())
+    await wrapper.findComponent(HomeView).vm.$nextTick()
+    clickInBody('[data-test="apply-space-admin-submit"]')
+
+    await vi.waitFor(() => expect(mockedSubmit).toHaveBeenCalledWith('space_admin', { spaceId: 1 }))
+    wrapper.unmount()
+  })
+
+  it('有空间的 member：可见「申请成为空间管理员」并携带当前空间提交', async () => {
+    const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
+    mockedSubmit.mockResolvedValue(
+      makeApplication({ id: 12, request_kind: 'space_admin', space_id: 1, space_name: '我们家' }),
+    )
+    const { wrapper } = await mountHome('member')
+
+    const adminEntry = wrapper.find('[data-test="apply-space-admin"]')
+    await vi.waitFor(() => expect(adminEntry.exists()).toBe(true))
+    await adminEntry.trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-test="apply-space-admin-dialog"]')).not.toBeNull())
+    clickInBody('[data-test="apply-space-admin-submit"]')
+
+    await vi.waitFor(() =>
+      expect(mockedSubmit).toHaveBeenCalledWith('space_admin', { spaceId: 1 }),
+    )
+    wrapper.unmount()
+  })
+
+  it('guest 不显示成为管理员入口', async () => {
+    const { wrapper } = await mountHome('guest')
+    await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalled())
+    expect(wrapper.find('[data-test="apply-space-admin"]').exists()).toBe(false)
+    wrapper.unmount()
+    mockedFetchSpaces.mockResolvedValue([])
+    mockedFetchSpaceMembers.mockResolvedValue([])
+  })
+
+  it('我的申请状态行：审批中空心章/未通过朱砂章并展示平台备注', async () => {
+    vi.mocked(spacesApi.fetchMyManagerApplications).mockResolvedValue([
+      makeApplication({ id: 21 }),
+      makeApplication({
+        id: 22,
+        request_kind: 'space_admin',
+        space_id: 1,
+        space_name: '我们家',
+        status: 'rejected',
+        decision_note: '请先完成更多成员邀请',
+        decided_at: '2026-08-31T00:00:00',
+      }),
+    ])
+    const { wrapper } = await mountHome('owner')
+
+    const rows = wrapper.findAll('[data-test="manager-application-row"]')
+    await vi.waitFor(() => expect(rows.length).toBe(2))
+    expect(rows[0].text()).toContain('我们家')
+    expect(rows[0].text()).toContain('审批中')
+    expect(rows[1].text()).toContain('管理员申请')
+    expect(rows[1].text()).toContain('未通过')
+    expect(rows[1].text()).toContain('平台备注：请先完成更多成员邀请')
     wrapper.unmount()
   })
 })

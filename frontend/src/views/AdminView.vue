@@ -21,10 +21,12 @@ import type { TextareaHTMLAttributes } from 'vue'
 import {
   adminResetPin,
   createOwnerInvitation,
+  decideManagerApplication,
   fetchAdminClaimDisputes,
   fetchAdminDataRights,
   fetchAdminUsers,
   fetchAuditLogs,
+  fetchManagerApplications,
   fetchOwnerInvitations,
   resolveClaimDispute,
   resolveCorrection,
@@ -34,15 +36,16 @@ import {
   type AuditRow,
 } from '@/api/admin'
 import { ApiError } from '@/api/errors'
-import type { DataRightRequest, OwnerInvitation } from '@/types/api'
+import type { DataRightRequest, OwnerInvitation, SpaceManagerApplication } from '@/types/api'
 
 /**
  * 平台运营后台（v2 §0.2）：仅系统管理与 break-glass 数据兑底。
  * - 用户列表 / 重置 PIN / 审计时间线（原有）
  * - owner onboarding 邀请：签发（token 明文仅显示一次）/ 撤销
+ * - 空间管理者申请（08-30-space-manager-approval）：approve / reject（理由必填）+ 审计
  * - 数据权利请求：更正决议（批准→按白名单字段应用；驳回）——理由必填 + 审计
  * - 认领争议决议：理由必填 + 审计，证据原文永不覆盖
- * operator 不提供任何家庭数据浏览权：本页不展示档案敏感字段。
+ * operator 不提供任何家庭数据浏览权：本页仅展示裁决所需最小数据。
  * P5 迁 naive-ui：n-data-table 列渲染走 h()；状态徽章与全站领域状态同源
  * （--fg-status-* 的 fg-badge 工具类，design.md §3.4）。
  */
@@ -50,6 +53,7 @@ import type { DataRightRequest, OwnerInvitation } from '@/types/api'
 const users = ref<AdminUserRow[]>([])
 const logs = ref<AuditRow[]>([])
 const invitations = ref<OwnerInvitation[]>([])
+const managerApps = ref<SpaceManagerApplication[]>([])
 const dataRights = ref<DataRightRequest[]>([])
 const disputes = ref<AdminClaimDisputeRow[]>([])
 const loading = ref(false)
@@ -77,9 +81,15 @@ const disputeOutcome = ref<'resolved_claim' | 'resolved_reject'>('resolved_claim
 const disputeNote = ref('')
 const disputeSubmitting = ref(false)
 
+// ---- 空间管理者申请：approve 直接裁决 / reject 弹窗理由必填 ----
+const managerDialog = reactive({ visible: false, applicationId: 0 })
+const managerNote = ref('')
+const managerSubmitting = ref(false)
+
 // data-* 未收录进 Vue 的 HTML 属性类型，断言收窄；运行时 naive 原样透传到原生 textarea
 const correctionNoteInputProps = { 'data-test': 'correction-note-input' } as TextareaHTMLAttributes
 const disputeNoteInputProps = { 'data-test': 'dispute-note-input' } as TextareaHTMLAttributes
+const managerNoteInputProps = { 'data-test': 'manager-note-input' } as TextareaHTMLAttributes
 
 async function loadUsers() {
   users.value = await fetchAdminUsers()
@@ -89,6 +99,9 @@ async function loadLogs() {
 }
 async function loadInvitations() {
   invitations.value = await fetchOwnerInvitations()
+}
+async function loadManagerApps() {
+  managerApps.value = await fetchManagerApplications()
 }
 async function loadDataRights() {
   dataRights.value = await fetchAdminDataRights()
@@ -100,7 +113,14 @@ async function loadDisputes() {
 onMounted(async () => {
   loading.value = true
   try {
-    await Promise.all([loadUsers(), loadLogs(), loadInvitations(), loadDataRights(), loadDisputes()])
+    await Promise.all([
+      loadUsers(),
+      loadLogs(),
+      loadInvitations(),
+      loadManagerApps(),
+      loadDataRights(),
+      loadDisputes(),
+    ])
   } catch {
     message.error('加载失败（需要平台运营者身份）')
   } finally {
@@ -434,6 +454,120 @@ async function submitDisputeResolution(): Promise<void> {
     disputeSubmitting.value = false
   }
 }
+
+// ---- 空间管理者申请（08-30-space-manager-approval）----
+
+const MANAGER_KIND_LABELS: Record<SpaceManagerApplication['request_kind'], string> = {
+  space_admin: '申请成为空间管理员',
+}
+
+/** 申请状态徽章：pending 空心（proposed）/ approved 实底 / rejected 朱砂 */
+function managerBadge(status: SpaceManagerApplication['status']): { text: string; cls: string } {
+  if (status === 'approved') return { text: '已通过', cls: 'fg-badge fg-badge--confirmed' }
+  if (status === 'rejected') return { text: '未通过', cls: 'fg-badge fg-badge--disputed' }
+  return { text: '审批中', cls: 'fg-badge fg-badge--proposed' }
+}
+
+/** 目标列：显示申请的空间名 */
+function managerTarget(row: SpaceManagerApplication): string {
+  return row.space_name ?? `空间 #${row.space_id}`
+}
+
+const managerAppColumns = computed<DataTableColumns<SpaceManagerApplication>>(() => [
+  { title: 'ID', key: 'id', width: 64 },
+  {
+    title: '申请人',
+    key: 'applicant_name',
+    width: 110,
+    render: (row) => row.applicant_name ?? `#${row.applicant_user_id}`,
+  },
+  {
+    title: '类型',
+    key: 'request_kind',
+    width: 120,
+    render: (row) => MANAGER_KIND_LABELS[row.request_kind],
+  },
+  {
+    title: '目标',
+    key: 'target',
+    render: (row) => managerTarget(row),
+  },
+  { title: '申请时间', key: 'created_at', width: 160, render: (row) => formatTime(row.created_at) },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render: (row) => {
+      const badge = managerBadge(row.status)
+      return h('span', { class: badge.cls, 'data-test': `manager-status-${row.id}` }, badge.text)
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 150,
+    render: (row) =>
+      row.status === 'pending'
+        ? h('span', { class: 'row-actions' }, [
+            h(
+              NButton,
+              {
+                size: 'tiny',
+                type: 'primary',
+                secondary: true,
+                'data-test': `approve-application-${row.id}`,
+                onClick: () => approveManagerApplication(row.id),
+              },
+              { default: () => '通过' },
+            ),
+            h(
+              NButton,
+              {
+                size: 'tiny',
+                type: 'error',
+                secondary: true,
+                'data-test': `reject-application-${row.id}`,
+                onClick: () => openManagerRejectDialog(row.id),
+              },
+              { default: () => '驳回' },
+            ),
+          ])
+        : null,
+  },
+])
+
+async function approveManagerApplication(applicationId: number): Promise<void> {
+  try {
+    await decideManagerApplication(applicationId, 'approve')
+    message.success('已通过并留痕审计')
+    await loadManagerApps()
+    await loadLogs()
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '裁决失败')
+  }
+}
+
+function openManagerRejectDialog(applicationId: number): void {
+  managerDialog.applicationId = applicationId
+  managerNote.value = ''
+  managerDialog.visible = true
+}
+
+async function submitManagerRejection(): Promise<void> {
+  if (!managerNote.value.trim()) return
+  managerSubmitting.value = true
+  try {
+    await decideManagerApplication(managerDialog.applicationId, 'reject', managerNote.value.trim())
+    message.success('已驳回并留痕审计')
+    managerDialog.visible = false
+    await loadManagerApps()
+    await loadLogs()
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '裁决失败')
+  } finally {
+    managerSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -491,6 +625,28 @@ async function submitDisputeResolution(): Promise<void> {
           :row-key="(row: OwnerInvitation) => row.id"
           data-test="invitation-table"
         />
+      </section>
+
+      <!-- 空间管理者申请（审批制：已有空间 member → space_admin；邀请不在此流程） -->
+      <section>
+        <h3 class="section-title">空间管理者申请</h3>
+        <p class="section-desc">
+          用户申请成为已有空间的 space_admin。通过后系统把该空间中的普通成员升级为管理员；驳回必须填写理由。邀请成员由空间成员直接发起，不需要平台审批；现有空间所有者仅经移交流程变更。
+        </p>
+        <NDataTable
+          size="small"
+          :columns="managerAppColumns"
+          :data="managerApps"
+          :row-key="(row: SpaceManagerApplication) => row.id"
+          data-test="manager-application-table"
+        />
+        <p
+          v-if="!managerApps.some((row) => row.status === 'pending')"
+          class="hint"
+          data-test="manager-apps-empty"
+        >
+          当前没有待审批的空间管理者申请。
+        </p>
       </section>
 
       <!-- 数据权利请求 -->
@@ -615,6 +771,41 @@ async function submitDisputeResolution(): Promise<void> {
         </template>
       </NModal>
 
+      <!-- 空间管理者申请驳回弹窗（理由必填） -->
+      <NModal
+        v-model:show="managerDialog.visible"
+        preset="card"
+        title="驳回空间管理者申请"
+        data-test="manager-reject-dialog"
+      >
+        <NForm label-placement="top" :show-feedback="false">
+          <NFormItem label="驳回理由（必填，写入审计）" required>
+            <NInput
+              v-model:value="managerNote"
+              type="textarea"
+              :rows="3"
+              :maxlength="1000"
+              placeholder="说明驳回依据，申请人可在自己的申请记录中看到该备注"
+              :input-props="managerNoteInputProps"
+            />
+          </NFormItem>
+        </NForm>
+        <template #footer>
+          <div class="footer-actions">
+            <NButton @click="managerDialog.visible = false">取消</NButton>
+            <NButton
+              type="primary"
+              :disabled="!managerNote.trim()"
+              :loading="managerSubmitting"
+              data-test="manager-reject-submit"
+              @click="submitManagerRejection"
+            >
+              提交驳回
+            </NButton>
+          </div>
+        </template>
+      </NModal>
+
       <!-- 一次性 PIN 弹窗 -->
       <NModal
         :show="oneTimePin !== ''"
@@ -734,6 +925,11 @@ section {
   justify-content: flex-end;
   gap: 12px;
 }
+
+.row-actions {
+  display: inline-flex;
+  gap: 8px;
+}
 </style>
 
 <style>
@@ -741,7 +937,8 @@ section {
 [data-test='issued-token-dialog'],
 [data-test='one-time-pin-dialog'],
 [data-test='correction-dialog'],
-[data-test='dispute-resolve-dialog'] {
+[data-test='dispute-resolve-dialog'],
+[data-test='manager-reject-dialog'] {
   width: min(460px, calc(100vw - 48px));
 }
 </style>

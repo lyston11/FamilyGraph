@@ -93,6 +93,8 @@ _TABLES = (
     "node_positions",
     "attachments",
     "space_profile_refs",
+    # 空间管理者申请引用 users/family_spaces，须先于父表删
+    "space_manager_applications",
     "profile_fact_reviews",
     "domain_events",
     "data_right_requests",
@@ -283,7 +285,34 @@ def create_space_member(
     return row
 
 
-# ---- V2.3 SourceFact 造数辅助（Block E1；不回填生产数据，仅测试映射）----
+def seed_space_with_owner(
+    session,
+    owner_user_id: int,
+    *,
+    name: str,
+    kind: str = "household",
+):
+    """直建空间 + owner active 成员行，供测试隔离造数。"""
+    from app.models.space import FamilySpace, SpaceMember
+    from app.utils import timeutil
+
+    now = timeutil.utcnow()
+    space = FamilySpace(name=name, owner_id=owner_user_id, kind=kind, created_at=now)
+    session.add(space)
+    session.flush()
+    session.add(
+        SpaceMember(
+            space_id=space.id,
+            user_id=owner_user_id,
+            added_by=owner_user_id,
+            role="owner",
+            status="active",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    session.commit()
+    return space
 
 
 def create_v1_relation(

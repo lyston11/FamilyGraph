@@ -11,6 +11,7 @@ import type {
   DataRightRequest,
   OwnerInvitation,
   OwnerInvitationCreated,
+  SpaceManagerApplication,
 } from '@/types/api'
 
 vi.mock('@/api/admin', () => ({
@@ -20,6 +21,8 @@ vi.mock('@/api/admin', () => ({
   createOwnerInvitation: vi.fn(),
   fetchOwnerInvitations: vi.fn().mockResolvedValue([]),
   revokeOwnerInvitation: vi.fn(),
+  fetchManagerApplications: vi.fn().mockResolvedValue([]),
+  decideManagerApplication: vi.fn(),
   fetchAdminDataRights: vi.fn().mockResolvedValue([]),
   resolveCorrection: vi.fn(),
   fetchAdminClaimDisputes: vi.fn().mockResolvedValue([]),
@@ -27,10 +30,30 @@ vi.mock('@/api/admin', () => ({
 }))
 
 const mockedCreateInvitation = vi.mocked(adminApi.createOwnerInvitation)
+const mockedFetchManagerApps = vi.mocked(adminApi.fetchManagerApplications)
+const mockedDecideManagerApp = vi.mocked(adminApi.decideManagerApplication)
 const mockedFetchRights = vi.mocked(adminApi.fetchAdminDataRights)
 const mockedResolveCorrection = vi.mocked(adminApi.resolveCorrection)
 const mockedFetchDisputes = vi.mocked(adminApi.fetchAdminClaimDisputes)
 const mockedResolveDispute = vi.mocked(adminApi.resolveClaimDispute)
+
+function makeManagerApplication(
+  overrides: Partial<SpaceManagerApplication> = {},
+): SpaceManagerApplication {
+  return {
+    id: 51,
+    applicant_user_id: 7,
+    applicant_name: '申请人',
+    space_id: 3,
+    space_name: '大家族',
+    request_kind: 'space_admin',
+    status: 'pending',
+    decision_note: null,
+    created_at: '2026-08-30T00:00:00',
+    decided_at: null,
+    ...overrides,
+  }
+}
 
 function makeInvitation(overrides: Partial<OwnerInvitation> = {}): OwnerInvitation {
   return {
@@ -196,6 +219,63 @@ describe('AdminView（v2 平台运营者语义）', () => {
 
     await vi.waitFor(() =>
       expect(mockedResolveDispute).toHaveBeenCalledWith(31, 'resolved_reject', '证据不足，驳回认领'),
+    )
+    wrapper.unmount()
+  })
+
+  it('空间管理者申请：approve 行内直接裁决并刷新列表', async () => {
+    mockedFetchManagerApps.mockResolvedValue([makeManagerApplication()])
+    mockedDecideManagerApp.mockResolvedValue(makeManagerApplication({ status: 'approved' }))
+    const { wrapper } = await mountAdmin()
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-test="approve-application-51"]').exists()).toBe(true),
+    )
+    expect(wrapper.find('[data-test="manager-application-table"]').text()).toContain('申请成为空间管理员')
+    expect(wrapper.find('[data-test="manager-application-table"]').text()).toContain('大家族')
+
+    await wrapper.find('[data-test="approve-application-51"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(mockedDecideManagerApp).toHaveBeenCalledWith(51, 'approve'),
+    )
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain('已通过并留痕审计'),
+    )
+    wrapper.unmount()
+  })
+
+  it('空间管理者申请：驳回必须填写理由（为空禁用），填写后携带备注裁决', async () => {
+    mockedFetchManagerApps.mockResolvedValue([
+      makeManagerApplication({ request_kind: 'space_admin', space_id: 3, space_name: '大家族' }),
+    ])
+    mockedDecideManagerApp.mockResolvedValue(makeManagerApplication({ status: 'rejected' }))
+    const { wrapper } = await mountAdmin()
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-test="reject-application-51"]').exists()).toBe(true),
+    )
+    await wrapper.find('[data-test="reject-application-51"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="manager-reject-dialog"]')).not.toBeNull(),
+    )
+
+    const submit = (): HTMLButtonElement =>
+      document.querySelector<HTMLButtonElement>('[data-test="manager-reject-submit"]')!
+    expect(submit().disabled).toBe(true)
+
+    const note = document.querySelector<HTMLTextAreaElement>('[data-test="manager-note-input"]')!
+    note.value = '目标空间成员关系已变动，请重新申请'
+    note.dispatchEvent(new Event('input'))
+    await new Promise((resolve) => setTimeout(resolve))
+    expect(submit().disabled).toBe(false)
+    submit().click()
+
+    await vi.waitFor(() =>
+      expect(mockedDecideManagerApp).toHaveBeenCalledWith(
+        51,
+        'reject',
+        '目标空间成员关系已变动，请重新申请',
+      ),
     )
     wrapper.unmount()
   })
