@@ -70,13 +70,23 @@ Rollback is feature-flag disablement first; additive schema changes are safe bec
 ### Final command log
 
 ```text
-backend: pytest -q -> 560 passed
+backend: pytest -q -> 571 passed
 backend: ruff check / ruff format --check / mypy app -> all pass (196 formatted, 120 files typed)
-agent: type-check / lint / npm test / build -> pass (12 files, 78 tests)
-frontend (dirty worktree): type-check / lint / test / build -> pass (37 files, 233 tests)
+agent: type-check / lint / npm test / build -> pass (12 files, 80 tests)
+frontend (dirty worktree): type-check / lint / test / build -> pass (40 files, 242 tests)
 compose: docker compose config --quiet -> pass
 trellis: task.py validate 08-30-v2-agent-runtime-full-repair -> pass
 ```
+
+### Follow-up repair evidence (2026-08-30)
+
+- Provider snapshot 回归覆盖 denied/no-provider 不可复活、布尔数值类型 fail-closed。
+- Provider proxy/工具覆盖 CAS cancellation fence；HTTP lease 覆盖 Steward 隔离和
+  route/API mismatch；policy guard 覆盖凭据 header 变体。
+- Agent client/worker 覆盖 AbortSignal 中止重试、Provider key env 不读取、事件
+  严格顺序重试；所有测试和门禁通过。
+- `AGENT_PROVIDER_STANDARD_PROFILE_ONLY` 不再由环境变量覆盖；Compose/README 已
+  同步为代码固定门禁语义。
 
 ### Closure rule
 

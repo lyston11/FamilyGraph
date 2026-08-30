@@ -2,7 +2,10 @@
 
 ## 当前状态
 
-**代码修复完成，本地质量门禁全绿；任务保持 `in_progress`。** 唯一未关闭门禁是一次真实 `liu-dada/gpt-5.6-sol` 成功正文回显的外部证据。不得因 stub 或 JSONL 校验通过而提前归档。
+**代码修复完成，本地质量门禁全绿；任务保持 `in_progress`。** 本次复核又收口了
+snapshot 类型/不可复活、CAS 取消门禁、事件顺序重试和凭据字段变体。唯一未关闭门禁
+是一次真实 `liu-dada/gpt-5.6-sol` 成功正文回显的外部证据。不得因 stub 或 JSONL
+校验通过而提前归档。
 
 ## 运行时裁定
 
@@ -22,6 +25,9 @@ flowchart LR
 - Steward 仍是后端确定性 worker，不能被 Assistant sidecar 租用。
 - 云 profile 固定：`liu-dada`、`gpt-5.6-sol`、`openai-responses`、`https://api.liu-dada.com/v1`、reasoning、text+image、272000 context、60000 max tokens、五级 thinking。
 - Provider key 只在后端 ProviderGateway 解密，绝不进入 projection、sidecar env、事件、日志或文档。
+- `AGENT_PROVIDER_STANDARD_PROFILE_ONLY` 为代码固定门禁，Compose 不能通过环境变量关闭。
+- Provider/工具在出网或 dispatch 前执行数据库 CAS cancellation fence；事件 flusher
+  严格按 seq 单 pump，失败 batch 保留并重试。
 
 ## 已完成
 
@@ -33,9 +39,9 @@ flowchart LR
 
 ## 复核证据
 
-- Backend：560 pytest；ruff check/format；mypy 120 文件。
-- Agent：12 个测试文件、78 tests；type-check/lint/build。
-- Frontend（保留 dirty redesign）：233 tests；type-check/lint/build。
+- Backend：571 pytest；ruff check/format；mypy 120 文件。
+- Agent：12 个测试文件、80 tests；type-check/lint/build。
+- Frontend（保留 dirty redesign）：242 tests（40 files）；type-check/lint/build。
 - Compose：`docker compose config --quiet` 通过；Trellis `task.py validate` 通过（implement 8/8、check 5/5）。
 
 ## 下一步（仅剩外部证据）
