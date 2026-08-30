@@ -185,8 +185,8 @@ describe('HomeView', () => {
     document.body.innerHTML = ''
   })
 
-  it('邀请入口仅对 owner 和 space_admin 显示', async () => {
-    for (const role of ['owner', 'space_admin'] as const) {
+  it('邀请入口对 active 成员（owner/space_admin/member）显示', async () => {
+    for (const role of ['owner', 'space_admin', 'member'] as const) {
       const { wrapper } = await mountHome(role)
       await vi.waitFor(() => expect(wrapper.find('[data-test="invite-member"]').exists()).toBe(true))
       wrapper.unmount()
@@ -195,13 +195,11 @@ describe('HomeView', () => {
     mockedFetchSpaceMembers.mockResolvedValue([])
   })
 
-  it('member 和 guest 不显示邀请入口', async () => {
-    for (const role of ['member', 'guest'] as const) {
-      const { wrapper } = await mountHome(role)
-      await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalled())
-      expect(wrapper.find('[data-test="invite-member"]').exists()).toBe(false)
-      wrapper.unmount()
-    }
+  it('guest 不显示邀请入口', async () => {
+    const { wrapper } = await mountHome('guest')
+    await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalled())
+    expect(wrapper.find('[data-test="invite-member"]').exists()).toBe(false)
+    wrapper.unmount()
     mockedFetchSpaces.mockResolvedValue([])
     mockedFetchSpaceMembers.mockResolvedValue([])
   })

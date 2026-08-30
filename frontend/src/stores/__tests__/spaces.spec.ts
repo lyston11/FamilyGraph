@@ -107,6 +107,43 @@ describe('spaces store（AD-3）', () => {
     expect(store.canTransferOwnership).toBe(false)
   })
 
+  it('canInvite：active 成员（除 guest）均可邀请；guest 与无 active membership 不可', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      name: '空间用户',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    const store = useSpacesStore()
+    store.spaces = [makeSpace()]
+    store.currentSpaceId = 1
+
+    const baseMember = {
+      id: 1,
+      space_id: 1,
+      user_id: 1,
+      added_by: 1,
+      role: 'owner' as const,
+      status: 'active' as const,
+      updated_at: '2026-08-29T00:00:00',
+    }
+
+    for (const role of ['owner', 'space_admin', 'member'] as const) {
+      store.members = [{ ...baseMember, role }]
+      expect(store.canInvite).toBe(true)
+    }
+
+    store.members = [{ ...baseMember, role: 'guest' }]
+    expect(store.canInvite).toBe(false)
+
+    // 无当前空间 active membership：pending 行不派生角色，不获得邀请权
+    store.members = [{ ...baseMember, role: 'member', status: 'pending' }]
+    expect(store.canInvite).toBe(false)
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()

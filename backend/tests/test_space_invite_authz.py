@@ -16,8 +16,9 @@ def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:
     return auth_header(response.json())
 
 
-@pytest.mark.parametrize("role", ["owner", "space_admin"])
-def test_space_manager_can_invite_member(client: TestClient, db_session, role: str) -> None:
+@pytest.mark.parametrize("role", ["owner", "space_admin", "member"])
+def test_active_member_can_invite(client: TestClient, db_session, role: str) -> None:
+    """active 成员（owner/space_admin/member）均可发起邀请（受邀人仍需接受）。"""
     actor = create_user_with_pin(db_session, f"{role}-actor", "111111")
     target = create_user_with_pin(db_session, f"{role}-target", "222222")
     now = utcnow()
@@ -37,19 +38,17 @@ def test_space_manager_can_invite_member(client: TestClient, db_session, role: s
     assert response.json()["status"] == "pending"
 
 
-@pytest.mark.parametrize("role", ["member", "guest"])
-def test_regular_space_members_cannot_invite_member(
-    client: TestClient, db_session, role: str
-) -> None:
-    owner = create_user_with_pin(db_session, f"{role}-owner", "333333")
-    actor = create_user_with_pin(db_session, f"{role}-actor", "444444")
-    target = create_user_with_pin(db_session, f"{role}-target", "555555")
+def test_guest_cannot_invite_member(client: TestClient, db_session) -> None:
+    """guest 是最小可见角色，不获得邀请权。"""
+    owner = create_user_with_pin(db_session, "guest-owner", "333333")
+    actor = create_user_with_pin(db_session, "guest-actor", "444444")
+    target = create_user_with_pin(db_session, "guest-target", "555555")
     now = utcnow()
-    space = FamilySpace(name=f"{role}-space", owner_id=owner.id, kind="household", created_at=now)
+    space = FamilySpace(name="guest-space", owner_id=owner.id, kind="household", created_at=now)
     db_session.add(space)
     db_session.flush()
     create_space_member(db_session, space.id, owner.id, role="owner")
-    create_space_member(db_session, space.id, actor.id, role=role)
+    create_space_member(db_session, space.id, actor.id, role="guest")
     db_session.commit()
 
     response = client.post(

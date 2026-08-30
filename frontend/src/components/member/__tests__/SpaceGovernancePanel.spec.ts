@@ -122,12 +122,13 @@ describe('SpaceGovernancePanel', () => {
     wrapper.unmount()
   })
 
-  it('member and guest do not see invitation or ownership controls', () => {
+  it('member 可见邀请区但无所有权移交；guest 两者均不可见', () => {
     for (const role of ['member', 'guest'] as const) {
       pinia = createPinia()
       seed(pinia, role)
       const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
-      expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(false)
+      // 邀请区随 canInvite 对 active member 放开；guest 仍隐藏
+      expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(role === 'member')
       expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
       wrapper.unmount()
     }

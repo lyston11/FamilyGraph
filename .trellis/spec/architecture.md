@@ -160,6 +160,7 @@ active  ──remove──> removed(终态, owner 或本人)
 | 搜索命中 | — | — | 允许(full 详情) | 允许(摘要) | 不可命中 |
 | 统计聚合 | — | — | 计入范围 | 计入范围 | 不计入 |
 | join_request | 目标空间 owner 可见审批 | — | — | — | — |
+| 空间邀请（invite） | — | active 成员（除 guest）可邀请；受邀人需接受 | — | — | — |
 | 管理 API | is_admin only + audit | — | — | — | — |
 
 - IDOR 集成测试逐行覆盖矩阵（普通 JWT 直打 API 断言遮罩/invisible）。
