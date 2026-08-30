@@ -76,7 +76,7 @@ const invitingId = ref<number | null>(null)
 
 function openInviteDialog(): void {
   if (!spacesStore.canInvite) {
-    message.error('仅空间所有者或空间管理员可邀请成员')
+    message.error('访客不能邀请成员')
     return
   }
   inviteOpen.value = true
@@ -95,7 +95,7 @@ async function doInviteSearch() {
 
 async function inviteUser(member: Member) {
   if (!spacesStore.canInvite) {
-    message.error('仅空间所有者或空间管理员可邀请成员')
+    message.error('访客不能邀请成员')
     return
   }
   invitingId.value = member.id

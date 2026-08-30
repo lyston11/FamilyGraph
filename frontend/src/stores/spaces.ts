@@ -70,8 +70,9 @@ export const useSpacesStore = defineStore('spaces', {
     canManageSpace(): boolean {
       return this.isSpaceOwner || this.isSpaceAdmin
     },
+    /** 邀请授权：当前空间 active 成员（除 guest）均可邀请；受邀人仍需本人接受。 */
     canInvite(): boolean {
-      return this.canManageSpace
+      return this.currentMembership !== null && this.currentRole !== 'guest'
     },
     canTransferOwnership(): boolean {
       return this.isSpaceOwner
