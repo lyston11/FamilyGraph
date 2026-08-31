@@ -15,8 +15,10 @@ class UserOut(BaseModel):
 
     id: int
     name: str
-    is_admin: bool
+    is_admin: bool = False
     pin_must_change: bool
+    principal_type: Literal["family_user", "system_admin"] = "family_user"
+    platform_role: Literal["platform_operator"] | None = None
     # v2 身份状态（F-1）：账号生命周期 managed→claimed 与档案确档 provisional→
     # identity_confirmed 是两条独立状态机，/me 直出供路由守卫判定（不再由前端
     # 从 fact-reviews 推断）。
@@ -90,18 +92,30 @@ class InitializeResponse(BaseModel):
     one_time_pin: str
 
 
-def public_user_payload(session: Session, user: Any) -> dict[str, Any]:
-    """从 ORM User 构造对外用户视图（含 account.pin_must_change）。
+def public_system_admin_payload(admin: Any, account: Any) -> dict[str, Any]:
+    """最小系统主体投影；不伪造 User/PersonProfile 字段。"""
+    return {
+        "id": admin.id,
+        "name": admin.login_name,
+        "is_admin": True,  # legacy display-only projection, never authorization
+        "pin_must_change": bool(account.pin_must_change),
+        "principal_type": "system_admin",
+        "platform_role": "platform_operator",
+        "claim_status": "claimed" if account.status == "claimed" else "managed",
+        "profile_status": "identity_confirmed",
+    }
 
-    v2：is_admin 键保留以兼容前端，语义改为 platform_operator 角色派生；
-    该角色不携带任何家庭数据读取权。
-    """
+
+def public_user_payload(session: Session, user: Any) -> dict[str, Any]:
+    """从家庭 User 构造兼容用户投影；权限判断仍在服务端依赖完成。"""
     account = user.account
     return {
         "id": user.id,
         "name": user.name,
         "is_admin": is_platform_operator(session, account),
         "pin_must_change": bool(account.pin_must_change) if account else False,
+        "principal_type": "family_user",
+        "platform_role": "platform_operator" if is_platform_operator(session, account) else None,
         "claim_status": account.status if account else "managed",
         "profile_status": user.profile_status,
     }

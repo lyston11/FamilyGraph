@@ -37,7 +37,7 @@ class SpaceMemberOut(BaseModel):
     user_id: int
     user_name: str | None = None
     added_by: int | None
-    role: Literal["owner", "space_admin", "member", "guest"]
+    role: Literal["space_admin", "member", "guest"]
     status: Literal["pending", "active", "rejected", "withdrawn", "removed"]
     updated_at: datetime
 
@@ -64,6 +64,19 @@ class ManagerApplicationCreate(BaseModel):
     space_id: int = Field(gt=0)
 
 
+class EligibleManagerTarget(BaseModel):
+    """可申请管理员的目标 lineage 空间（服务端裁定资格，前端只渲染）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    space_id: int
+    space_name: str
+    space_kind: Literal["lineage"]
+    current_manager_user_id: int | None = None
+    current_manager_name: str | None = None
+    has_pending_application: bool = False
+
+
 class ManagerApplicationDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -79,11 +92,48 @@ class ManagerApplicationOut(BaseModel):
     applicant_name: str | None = None
     space_id: int
     space_name: str | None = None
+    space_kind: Literal["household", "lineage"] | None = None
+    current_manager_user_id: int | None = None
+    current_manager_name: str | None = None
+    transfer_consent_id: int | None = None
+    transfer_consent_status: Literal["pending", "accepted", "rejected", "expired"] | None = None
     request_kind: Literal["space_admin"]
     status: Literal["pending", "approved", "rejected"]
     decision_note: str | None = None
     created_at: datetime
     decided_at: datetime | None = None
+    system_admin_decided_by: int | None = None
+
+
+class ManagerTransferConsentDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["accept", "reject"]
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class ManagerTransferConsentOut(BaseModel):
+    """原管理员工单投影。
+
+    PRD R4：工单必须自带目标空间名称/类型和申请人标识，原管理员不需要再查一次
+    空间就能判断"申请人正在申请成为哪一个空间的管理员"。名称由服务端按
+    ``space_id`` 解析，不接受客户端自带值。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    application_id: int
+    space_id: int
+    space_name: str | None = None
+    space_kind: Literal["household", "lineage"] | None = None
+    applicant_user_id: int | None = None
+    applicant_name: str | None = None
+    current_manager_user_id: int
+    status: Literal["pending", "accepted", "rejected", "expired"]
+    requested_at: datetime
+    responded_at: datetime | None = None
+    response_reason: str | None = None
 
 
 class PositionItem(BaseModel):

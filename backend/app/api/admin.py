@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_authenticated_user
+from app.api.deps import Principal, get_db, require_authenticated_user, require_platform_principal
 from app.commands import admin as admin_commands
 from app.commands import data_rights as data_right_commands
 from app.commands import manager_applications as manager_application_commands
@@ -23,6 +23,7 @@ from app.commands.context import ActorContext
 from app.errors import raise_api_error
 from app.models.account import Account
 from app.models.audit_log import AuditLog
+from app.models.system_admin import SystemAdmin
 from app.models.user import User
 from app.models.v2_foundation import ClaimDispute, DataRightRequest, OwnerInvitation
 from app.schemas.space import ManagerApplicationDecision, ManagerApplicationOut
@@ -355,10 +356,11 @@ def resolve_claim_dispute(
 def admin_list_manager_applications(
     status: str | None = None,
     session: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: Principal = Depends(require_platform_principal),
 ) -> list[ManagerApplicationOut]:
-    """审批队列（仅申请人、申请类型、目标空间名等最小必要数据）。"""
-    _require_admin(identity, session)
+    """审批队列（仅治理所需的申请人与目标空间元数据）。"""
+    if isinstance(identity[0], User):
+        _require_admin(identity, session)
     rows = manager_application_commands.list_applications(session, status=status)
     return [manager_application_commands.serialize_application(session, row) for row in rows]
 
@@ -371,9 +373,19 @@ def decide_manager_application(
     payload: ManagerApplicationDecision,
     request: Request,
     session: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: Principal = Depends(require_platform_principal),
 ) -> ManagerApplicationOut:
-    """裁决空间管理员申请：approve 升级 member，reject 理由必填；同事务审计+事件。"""
+    """裁决申请；系统管理员批准已有管理员的申请必须先发出交接工单。"""
+    if isinstance(identity[0], SystemAdmin):
+        row = manager_application_commands.decide_manager_application_as_system_admin(
+            session,
+            application_id,
+            decision=payload.decision,
+            note=payload.note,
+            system_admin_id=identity[0].id,
+            ip=_client_ip(request),
+        )
+        return manager_application_commands.serialize_application(session, row)
     actor = _require_admin(identity, session)
     ctx = ActorContext.from_identity(actor, identity[1], ip=_client_ip(request))
     row = manager_application_commands.decide_manager_application(

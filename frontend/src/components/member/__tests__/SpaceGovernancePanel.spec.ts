@@ -57,7 +57,7 @@ function makeMember(overrides: Partial<SpaceMemberInfo> = {}): SpaceMemberInfo {
     user_id: 1,
     user_name: '空间用户',
     added_by: 1,
-    role: 'owner',
+    role: 'space_admin',
     status: 'active',
     updated_at: '2026-08-29T00:00:00',
     ...overrides,
@@ -100,11 +100,12 @@ describe('SpaceGovernancePanel', () => {
     vi.clearAllMocks()
   })
 
-  it('owner sees members, counts, invite, and transfer controls', () => {
-    seed(pinia, 'owner')
+  it('空间管理员可见成员数、邀请区与交接发起区', () => {
+    seed(pinia, 'space_admin')
     const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
 
     expect(wrapper.find('[data-test="space-governance-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="my-role-tag"]').text()).toContain('空间管理员')
     expect(wrapper.find('[data-test="space-member-count"]').text()).toBe('2')
     expect(wrapper.find('[data-test="space-pending-count"]').text()).toBe('1')
     expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(true)
@@ -112,17 +113,20 @@ describe('SpaceGovernancePanel', () => {
     wrapper.unmount()
   })
 
-  it('space_admin can invite but cannot initiate ownership transfer', () => {
+  it('交接文案说明单一管理员语义：对方接任、自己降级', () => {
+    // 每空间只有一个管理员，交接不是「多加一个管理员」；文案必须让发起人
+    // 在点下按钮前知道自己会降为普通成员。
     seed(pinia, 'space_admin')
     const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
 
-    expect(wrapper.find('[data-test="my-role-tag"]').text()).toContain('空间管理员')
-    expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
+    const text = wrapper.text()
+    expect(text).toContain('唯一管理员')
+    expect(text).toContain('降为普通成员')
+    expect(text).not.toContain('所有者')
     wrapper.unmount()
   })
 
-  it('member 可见邀请区但无所有权移交；guest 两者均不可见', () => {
+  it('member 可见邀请区但无交接入口；guest 两者均不可见', () => {
     for (const role of ['member', 'guest'] as const) {
       pinia = createPinia()
       seed(pinia, role)
@@ -134,8 +138,8 @@ describe('SpaceGovernancePanel', () => {
     }
   })
 
-  it('owner search only renders candidates outside current membership', async () => {
-    seed(pinia, 'owner')
+  it('管理员搜索只列出当前成员关系之外的候选人', async () => {
+    seed(pinia, 'space_admin')
     mockedSearch.mockResolvedValue([
       { id: 4, name: '新成员' } as never,
       { id: 2, name: '其他成员' } as never,

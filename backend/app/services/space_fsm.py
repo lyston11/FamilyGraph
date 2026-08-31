@@ -38,13 +38,29 @@ def effective_status(member: SpaceMember) -> str:
     return "withdrawn" if is_expired(member) else member.status
 
 
+def active_space_manager(session: Session, space_id: int) -> SpaceMember | None:
+    """返回目标空间唯一的 active 本空间管理员。"""
+    return session.scalar(
+        select(SpaceMember).where(
+            SpaceMember.space_id == space_id,
+            SpaceMember.role == "space_admin",
+            SpaceMember.status == "active",
+        )
+    )
+
+
+def is_space_manager(session: Session, space_id: int, user_id: int) -> bool:
+    """按 (user_id, space_id) 判断治理权限；不读取 owner_id 或全局角色。"""
+    manager = active_space_manager(session, space_id)
+    return manager is not None and manager.user_id == user_id
+
+
 def transition(
     edge_or_member: SpaceMember, action: str, actor_id: int, session: Session
 ) -> SpaceMember:
     """FSM 校验 + 迁移。action ∈ accept|reject|withdraw|expire|remove。"""
     member = edge_or_member
-    space = session.get(FamilySpace, member.space_id)
-    is_owner = space is not None and space.owner_id == actor_id
+    is_manager = is_space_manager(session, member.space_id, actor_id)
     is_self = member.user_id == actor_id
 
     if action == "accept":
@@ -59,7 +75,7 @@ def transition(
             )
         member.status = "active"
     elif action == "reject":
-        if not (is_self or is_owner):
+        if not (is_self or is_manager):
             raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "无权拒绝该邀请")
         if member.status != "pending":
             raise_api_error(
@@ -82,15 +98,11 @@ def transition(
         member.status = "withdrawn"
     elif action == "expire":
         if not is_expired(member):
-            raise_api_error(
-                409,
-                RELATION_INVALID_TRANSITION,
-                "未到过期时间",
-            )
+            raise_api_error(409, RELATION_INVALID_TRANSITION, "未到过期时间")
         member.status = "withdrawn"
     elif action == "remove":
-        if not (is_owner or is_self):
-            raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅空间所有者或本人可移出")
+        if not (is_manager or is_self):
+            raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅空间管理员或本人可移出")
         if member.status != "active":
             raise_api_error(
                 409,
@@ -98,6 +110,8 @@ def transition(
                 "仅活跃成员可被移出",
                 detail={"status": member.status},
             )
+        if member.role == "space_admin":
+            raise_api_error(409, "SPACE_MANAGER_TRANSFER_REQUIRED", "请先完成空间管理员交接")
         member.status = "removed"
     else:  # pragma: no cover
         raise_api_error(422, "VALIDATION_ERROR", f"未知动作 {action}")

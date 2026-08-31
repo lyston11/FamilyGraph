@@ -13,7 +13,7 @@ from app.schemas.auth import (
     InitializeRequest,
     InitializeResponse,
     UserOut,
-    public_user_payload,
+    public_system_admin_payload,
 )
 from app.services import bootstrap as bootstrap_service
 
@@ -31,13 +31,13 @@ def initialize(
     payload: InitializeRequest, request: Request, session: Session = Depends(get_db)
 ) -> InitializeResponse:
     """一次性创建管理员；随机 PIN 仅本次响应可见。"""
-    user, pin = bootstrap_service.initialize_admin(
+    admin, pin = bootstrap_service.initialize_admin(
         session,
         payload.name,
         ip=request.client.host if request.client else None,
     )
     session.commit()
     return InitializeResponse(
-        user=UserOut(**public_user_payload(session, user)),
+        user=UserOut(**public_system_admin_payload(admin, admin.account)),
         one_time_pin=pin,
     )

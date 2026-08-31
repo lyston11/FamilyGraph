@@ -26,6 +26,11 @@ os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="familygraph-tests-")
 # 环境变量就绪后才能导入 config（其路径/密钥在导入时读取）
 from app import config  # noqa: E402
 
+# Synthetic provider rows are useful for protocol/authorization matrices, but
+# the production profile gate is not an environment switch.  Relax it only in
+# this test process; dedicated strict-mode tests set it back to True.
+config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
+
 config.ensure_ready()
 
 import pytest  # noqa: E402
@@ -49,6 +54,19 @@ def db_session():
     session = SessionLocal()
     yield session
     session.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_synthetic_provider_gate():
+    """Keep synthetic matrix providers available without weakening production.
+
+    A few strict-profile tests temporarily monkeypatch the gate to ``True``;
+    resetting before and after every test prevents order-dependent leakage into
+    later protocol tests.
+    """
+    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
+    yield
+    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
 
 
 # 清表顺序：子表→父表（满足 FK，无需关外键）。v2 合同表追加于尾部。
@@ -94,7 +112,11 @@ _TABLES = (
     "attachments",
     "space_profile_refs",
     # 空间管理者申请引用 users/family_spaces，须先于父表删
+    "manager_transfer_consents",
     "space_manager_applications",
+    "system_admin_refresh_sessions",
+    "system_admin_accounts",
+    "system_admins",
     "profile_fact_reviews",
     "domain_events",
     "data_right_requests",
@@ -214,18 +236,66 @@ def auth_header(token_pair: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_pair['access_token']}"}
 
 
+def create_system_admin(session, *, name: str = "平台管理员", pin: str = "654321"):
+    """直建独立系统管理员主体（不占用家庭 User/Account）。
+
+    ``/api/bootstrap/initialize`` 在库里已有家庭用户时会拒绝，测试需要在任意
+    时点造后台主体，因此这里绕过 bootstrap 门禁直接落主体行。
+    """
+    from app.models.system_admin import SystemAdmin, SystemAdminAccount
+    from app.utils import security, timeutil
+
+    now = timeutil.utcnow()
+    admin = SystemAdmin(login_name=name, status="active", created_at=now)
+    admin.account = SystemAdminAccount(
+        pin_hash=security.hash_pin(pin),
+        pin_must_change=False,
+        token_version=0,
+        failed_attempts=0,
+        locked_until=None,
+        status="claimed",
+        claimed_at=now,
+    )
+    session.add(admin)
+    session.commit()
+    return admin
+
+
+def system_admin_header(client: TestClient, name: str = "平台管理员", pin: str = "654321"):
+    """登录系统主体并返回后台可用凭据。"""
+    resp = client.post("/api/auth/login", json={"name": name, "pin": pin})
+    assert resp.status_code == 200, resp.text
+    return auth_header(resp.json())
+
+
 # ---- V2.1 Agent Runtime 造数辅助（绕过浏览器 API，浏览器 API 属后续 Block）----
 
 
 def create_agent_fixture(session, *, name: str):
-    """创建 user+account+space 三件套，返回 (user, space)。"""
-    from app.models.space import FamilySpace
+    """创建 user+account+space 三件套，返回 (user, space)。
+
+    空间必须带一条 active ``space_admin`` 成员行：授权只看目标空间的 active
+    membership，``owner_id`` 不是运行时授权来源。
+    """
+    from app.models.space import FamilySpace, SpaceMember
 
     user = create_user_with_pin(session, name, "123456")
     space = FamilySpace(
         name=f"{name}-space", kind="household", owner_id=user.id, created_at=user.created_at
     )
     session.add(space)
+    session.flush()
+    session.add(
+        SpaceMember(
+            space_id=space.id,
+            user_id=user.id,
+            added_by=user.id,
+            role="space_admin",
+            status="active",
+            created_at=user.created_at,
+            updated_at=user.created_at,
+        )
+    )
     session.commit()
     return user, space
 
@@ -267,20 +337,37 @@ def create_space_member(
     role: str = "member",
     status: str = "active",
 ):
-    """直建空间成员行（浏览器 Agent API 测试满足 active 成员校验）。"""
+    """直建空间成员行（浏览器 Agent API 测试满足 active 成员校验）。
+
+    幂等：``(space_id, user_id)`` 已存在时改写角色/状态而不是再插一行。空间夹具
+    本身会落一条管理员成员行，调用方仍可用本函数把同一个人调成目标角色。
+    """
     from app.models.space import SpaceMember
     from app.utils import timeutil
 
     now = timeutil.utcnow()
-    row = SpaceMember(
-        space_id=space_id,
-        user_id=user_id,
-        role=role,
-        status=status,
-        created_at=now,
-        updated_at=now,
+    # Legacy tests may still use the pre-v2 owner spelling.  Normalize it at
+    # the fixture boundary so production models only ever persist space_admin.
+    role = "space_admin" if role == "owner" else role
+    row = (
+        session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id)
+        .first()
     )
-    session.add(row)
+    if row is None:
+        row = SpaceMember(
+            space_id=space_id,
+            user_id=user_id,
+            role=role,
+            status=status,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+    else:
+        row.role = role
+        row.status = status
+        row.updated_at = now
     session.commit()
     return row
 
@@ -305,7 +392,7 @@ def seed_space_with_owner(
             space_id=space.id,
             user_id=owner_user_id,
             added_by=owner_user_id,
-            role="owner",
+            role="space_admin",
             status="active",
             created_at=now,
             updated_at=now,

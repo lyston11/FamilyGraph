@@ -237,7 +237,7 @@ def test_delete_request_freeze_then_execute_with_tombstones(db_session) -> None:
     assert db_session.get(FamilySpace, space.id) is not None  # 空间不被级联误删
     assert (
         db_session.query(SpaceMember)
-        .filter(SpaceMember.user_id == space_owner.id, SpaceMember.role == "owner")
+        .filter(SpaceMember.user_id == space_owner.id, SpaceMember.role == "space_admin")
         .count()
         == 1
     )

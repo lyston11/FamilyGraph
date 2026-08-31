@@ -61,21 +61,23 @@ export const useSpacesStore = defineStore('spaces', {
     currentRole(): SpaceMemberInfo['role'] | null {
       return this.currentMembership?.role ?? null
     },
-    isSpaceOwner(): boolean {
-      return this.currentRole === 'owner'
-    },
+    /**
+     * 当前空间管理员：产品层唯一管理员角色，按当前 space_id 的成员关系判定。
+     * 用户在其他空间的管理员身份不影响这里。
+     */
     isSpaceAdmin(): boolean {
       return this.currentRole === 'space_admin'
     },
     canManageSpace(): boolean {
-      return this.isSpaceOwner || this.isSpaceAdmin
+      return this.isSpaceAdmin
     },
     /** 邀请授权：当前空间 active 成员（除 guest）均可邀请；受邀人仍需本人接受。 */
     canInvite(): boolean {
       return this.currentMembership !== null && this.currentRole !== 'guest'
     },
+    /** 交接由当前空间管理员发起（原 owner 移交入口，产品文案统一为管理员）。 */
     canTransferOwnership(): boolean {
-      return this.isSpaceOwner
+      return this.isSpaceAdmin
     },
     activeMembers(state): SpaceMemberInfo[] {
       return state.members.filter((m) => m.status === 'active')

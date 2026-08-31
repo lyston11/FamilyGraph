@@ -28,8 +28,15 @@ from app.models.rag import RAGChunk, RAGDocument
 from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
 from app.models.relationship_facts import RawRelationInput, SocialRelation, SourceFact
-from app.models.space import FamilySpace, SpaceManagerApplication, SpaceMember, SpaceProfileRef
+from app.models.space import (
+    FamilySpace,
+    ManagerTransferConsent,
+    SpaceManagerApplication,
+    SpaceMember,
+    SpaceProfileRef,
+)
 from app.models.steward import ActionCard, BehaviorProjection, StewardJob
+from app.models.system_admin import SystemAdmin, SystemAdminAccount, SystemAdminRefreshSession
 from app.models.term_registry import TermEntry, TermUsage
 from app.models.user import User
 from app.models.v2_foundation import (
@@ -82,10 +89,14 @@ __all__ = [
     "Relation",
     "SocialRelation",
     "SourceFact",
+    "ManagerTransferConsent",
     "SpaceManagerApplication",
     "SpaceMember",
     "SpaceProfileRef",
     "StewardJob",
+    "SystemAdmin",
+    "SystemAdminAccount",
+    "SystemAdminRefreshSession",
     "TermEntry",
     "TermUsage",
     "User",

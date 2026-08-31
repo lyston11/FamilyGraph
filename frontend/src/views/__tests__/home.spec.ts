@@ -11,7 +11,9 @@ import HomeView from '@/views/HomeView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 import type {
+  EligibleManagerTarget,
   FamilySpace,
+  ManagerTransferConsent,
   Member,
   SpaceManagerApplication,
   SpaceMemberInfo,
@@ -33,6 +35,9 @@ vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn().mockResolvedValue([]),
   submitManagerApplication: vi.fn(),
   fetchMyManagerApplications: vi.fn().mockResolvedValue([]),
+  fetchEligibleManagerTargets: vi.fn().mockResolvedValue([]),
+  fetchMyTransferConsents: vi.fn().mockResolvedValue([]),
+  respondTransferConsent: vi.fn(),
   fetchSpaceMembers: vi.fn().mockResolvedValue([]),
   fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
@@ -59,6 +64,9 @@ const mockedCreate = vi.mocked(membersApi.createMember)
 const mockedFetchSpaces = vi.mocked(spacesApi.fetchSpaces)
 const mockedFetchSpaceMembers = vi.mocked(spacesApi.fetchSpaceMembers)
 const mockedResolveMembership = vi.mocked(spacesApi.resolveMembership)
+const mockedEligibleTargets = vi.mocked(spacesApi.fetchEligibleManagerTargets)
+const mockedMyConsents = vi.mocked(spacesApi.fetchMyTransferConsents)
+const mockedRespondConsent = vi.mocked(spacesApi.respondTransferConsent)
 
 function makeSpace(overrides: Partial<FamilySpace> = {}): FamilySpace {
   return {
@@ -125,6 +133,37 @@ function makeApplication(overrides: Partial<SpaceManagerApplication> = {}): Spac
     decision_note: null,
     created_at: '2026-08-30T00:00:00',
     decided_at: null,
+    ...overrides,
+  }
+}
+
+/** 可申请目标：与当前空间无关的另一个 lineage 空间 */
+function makeTarget(overrides: Partial<EligibleManagerTarget> = {}): EligibleManagerTarget {
+  return {
+    space_id: 42,
+    space_name: '王家族谱',
+    space_kind: 'lineage',
+    current_manager_user_id: 8,
+    current_manager_name: '王大伯',
+    has_pending_application: false,
+    ...overrides,
+  }
+}
+
+function makeConsent(overrides: Partial<ManagerTransferConsent> = {}): ManagerTransferConsent {
+  return {
+    id: 77,
+    application_id: 12,
+    space_id: 42,
+    space_name: '王家族谱',
+    space_kind: 'lineage',
+    applicant_user_id: 5,
+    applicant_name: '李小妹',
+    current_manager_user_id: 1,
+    status: 'pending',
+    requested_at: '2026-08-31T00:00:00',
+    responded_at: null,
+    response_reason: null,
     ...overrides,
   }
 }
@@ -208,8 +247,8 @@ describe('HomeView', () => {
     document.body.innerHTML = ''
   })
 
-  it('邀请入口对 active 成员（owner/space_admin/member）显示', async () => {
-    for (const role of ['owner', 'space_admin', 'member'] as const) {
+  it('邀请入口对 active 成员（space_admin/member）显示', async () => {
+    for (const role of ['space_admin', 'member'] as const) {
       const { wrapper } = await mountHome(role)
       await vi.waitFor(() => expect(wrapper.find('[data-test="invite-member"]').exists()).toBe(true))
       wrapper.unmount()
@@ -347,48 +386,80 @@ describe('HomeView', () => {
     wrapper.unmount()
   })
 
-  it('member 可申请成为当前空间管理员，弹窗确认后提交并展示状态', async () => {
+  it('申请接手：提交的是所选族谱空间，而不是当前切换到的空间', async () => {
+    // 目标空间与当前空间无关（这里当前空间是 id=1 的 household，候选是 id=42）。
     const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
-    mockedSubmit.mockResolvedValue(makeApplication())
+    mockedSubmit.mockResolvedValue(makeApplication({ id: 12, space_id: 42, space_name: '王家族谱' }))
+    mockedEligibleTargets.mockResolvedValue([makeTarget()])
     const { wrapper } = await mountHome('member')
-
-    const adminEntry = wrapper.find('[data-test="apply-space-admin"]')
-    await vi.waitFor(() => expect(adminEntry.exists()).toBe(true))
-    await adminEntry.trigger('click')
-    await vi.waitFor(() => expect(document.querySelector('[data-test="apply-space-admin-dialog"]')).not.toBeNull())
-    await wrapper.findComponent(HomeView).vm.$nextTick()
-    clickInBody('[data-test="apply-space-admin-submit"]')
-
-    await vi.waitFor(() => expect(mockedSubmit).toHaveBeenCalledWith('space_admin', { spaceId: 1 }))
-    wrapper.unmount()
-  })
-
-  it('有空间的 member：可见「申请成为空间管理员」并携带当前空间提交', async () => {
-    const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
-    mockedSubmit.mockResolvedValue(
-      makeApplication({ id: 12, request_kind: 'space_admin', space_id: 1, space_name: '我们家' }),
-    )
-    const { wrapper } = await mountHome('member')
-
-    const adminEntry = wrapper.find('[data-test="apply-space-admin"]')
-    await vi.waitFor(() => expect(adminEntry.exists()).toBe(true))
-    await adminEntry.trigger('click')
-    await vi.waitFor(() => expect(document.querySelector('[data-test="apply-space-admin-dialog"]')).not.toBeNull())
-    clickInBody('[data-test="apply-space-admin-submit"]')
 
     await vi.waitFor(() =>
-      expect(mockedSubmit).toHaveBeenCalledWith('space_admin', { spaceId: 1 }),
+      expect(wrapper.find('[data-test="apply-space-admin"]').exists()).toBe(true),
     )
+    await wrapper.find('[data-test="apply-space-admin"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="apply-target-42"]')).not.toBeNull(),
+    )
+    // 卡片自带目标名称与现任管理员，申请人在提交前就知道自己在接手谁
+    expect(document.querySelector('[data-test="apply-target-42"]')?.textContent).toContain('王家族谱')
+    expect(document.querySelector('[data-test="apply-target-42"]')?.textContent).toContain('王大伯')
+
+    clickInBody('[data-test="apply-target-submit-42"]')
+    await vi.waitFor(() => expect(mockedSubmit).toHaveBeenCalledWith('space_admin', { spaceId: 42 }))
     wrapper.unmount()
   })
 
-  it('guest 不显示成为管理员入口', async () => {
+  it('已有在办申请的目标：卡片仍列出但提交按钮禁用', async () => {
+    const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
+    mockedEligibleTargets.mockResolvedValue([makeTarget({ has_pending_application: true })])
+    const { wrapper } = await mountHome('member')
+
+    await wrapper.find('[data-test="apply-space-admin"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="apply-target-42"]')).not.toBeNull(),
+    )
+    const submit = document.querySelector<HTMLButtonElement>('[data-test="apply-target-submit-42"]')
+    expect(submit?.disabled).toBe(true)
+    expect(mockedSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('服务端没有候选目标时入口不出现（资格判定不在前端）', async () => {
+    // guest 也走同一条路径：不靠本地 role 判断，靠服务端返回空候选。
+    mockedEligibleTargets.mockResolvedValue([])
     const { wrapper } = await mountHome('guest')
     await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalled())
     expect(wrapper.find('[data-test="apply-space-admin"]').exists()).toBe(false)
     wrapper.unmount()
     mockedFetchSpaces.mockResolvedValue([])
     mockedFetchSpaceMembers.mockResolvedValue([])
+  })
+
+  it('原管理员工单：同意后调用后端；谢绝缺理由时前端先拦下', async () => {
+    mockedMyConsents.mockResolvedValue([makeConsent()])
+    const { wrapper } = await mountHome('space_admin')
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-test="transfer-consent-row"]').exists()).toBe(true),
+    )
+    const row = wrapper.find('[data-test="transfer-consent-row"]')
+    expect(row.text()).toContain('李小妹')
+    expect(row.text()).toContain('王家族谱')
+    // 交接后果必须写在按钮旁边，不能只靠成功提示事后说明
+    expect(row.text()).toContain('降为普通成员')
+
+    // 谢绝需要理由：未填时不发请求
+    await wrapper.find('[data-test="consent-reject-77"]').trigger('click')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('谢绝交接需要填写理由'))
+    expect(mockedRespondConsent).not.toHaveBeenCalled()
+
+    mockedRespondConsent.mockResolvedValue(makeConsent({ status: 'accepted' }))
+    await wrapper.find('[data-test="consent-accept-77"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(mockedRespondConsent).toHaveBeenCalledWith(77, 'accept', undefined),
+    )
+    wrapper.unmount()
+    mockedMyConsents.mockResolvedValue([])
   })
 
   it('我的申请状态行：审批中空心章/未通过朱砂章并展示平台备注', async () => {
@@ -404,7 +475,7 @@ describe('HomeView', () => {
         decided_at: '2026-08-31T00:00:00',
       }),
     ])
-    const { wrapper } = await mountHome('owner')
+    const { wrapper } = await mountHome('space_admin')
 
     const rows = wrapper.findAll('[data-test="manager-application-row"]')
     await vi.waitFor(() => expect(rows.length).toBe(2))

@@ -27,15 +27,14 @@ const auth = useAuthStore()
 const spaces = useSpacesStore()
 const message = useMessage()
 
+// 对外只显示一个「空间管理员」；不再区分所有者与管理员两个等级。
 const ROLE_LABELS: Record<SpaceRole, string> = {
-  owner: '空间所有者',
   space_admin: '空间管理员',
   member: '成员',
   guest: '访客',
 }
 const ROLE_BADGE_CLASS: Record<SpaceRole, string> = {
-  owner: 'fg-badge fg-badge--accent',
-  space_admin: 'fg-badge fg-badge--proposed',
+  space_admin: 'fg-badge fg-badge--accent',
   member: 'fg-badge fg-badge--neutral',
   guest: 'fg-badge fg-badge--provisional',
 }
@@ -133,7 +132,7 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
   if (!transfer) return
   try {
     await spaces.respondTransfer(transfer.id, action)
-    message.success(action === 'accept' ? '你已成为该空间所有者' : '移交已取消')
+    message.success(action === 'accept' ? '你已成为该空间管理员' : '移交已取消')
   } catch (error) {
     message.error(error instanceof ApiError ? error.message : '操作失败')
   }
@@ -213,10 +212,10 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
       </ul>
     </template>
 
-    <h3 class="block-title">空间所有权移交</h3>
+    <h3 class="block-title">空间管理员交接</h3>
     <div v-if="pendingTransfer" class="transfer-pending" data-test="transfer-pending">
       <template v-if="pendingTransferForMe">
-        <span>「{{ spaces.currentSpace?.name }}」的所有者请求把空间移交给你。</span>
+        <span>「{{ spaces.currentSpace?.name }}」的管理员请求把空间管理权交接给你。</span>
         <div class="transfer-actions">
           <NButton type="primary" size="small" data-test="transfer-accept" @click="respondTransfer('accept')">
             接受
@@ -256,7 +255,7 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
           发起移交
         </NButton>
       </div>
-      <p class="hint">移交后你将成为空间管理员；删除档案前必须完成移交或退出所有权。</p>
+      <p class="hint">交接后对方成为该空间唯一管理员，你降为普通成员；删除档案前必须先完成交接。</p>
     </template>
   </div>
 </template>

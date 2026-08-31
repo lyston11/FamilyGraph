@@ -1,0 +1,29 @@
+{
+  "id": "system-admin-space-admin-model",
+  "name": "system-admin-space-admin-model",
+  "title": "重构系统管理员与空间唯一管理员模型",
+  "description": "将平台系统管理员与家庭用户彻底隔离；把 owner/space_admin 收敛为按空间绑定的唯一空间管理员；支持明确目标 lineage 空间的管理员申请，并要求系统管理员通知原管理员、取得原管理员同意后才可完成交接；系统后台只处理账号、成员关系、空间元数据及申请工单。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "authz",
+  "package": null,
+  "priority": "P2",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-08-31",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "product_contract": "system_admin独立后台；管理员按space_id绑定；每空间唯一管理员；一个用户可管理多个空间；lineage管理员申请必须明确目标空间并经原管理员工单同意后交接；owner与space_admin产品合并；后台仅账号/成员关系/空间元数据及最小申请工单",
+    "planning_status": "ready_for_user_review"
+  }
+}

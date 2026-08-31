@@ -6,11 +6,9 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
 import GlobalSearch from '@/components/common/GlobalSearch.vue'
-import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 import { useUiStore } from '@/stores/ui'
 
-const auth = useAuthStore()
 const spaces = useSpacesStore()
 const route = useRoute()
 const ui = useUiStore()
@@ -80,16 +78,6 @@ function onThemeSwitch(value: boolean): void {
           :aria-current="route.name === 'settings' ? 'page' : undefined"
         >
           设置
-        </RouterLink>
-        <RouterLink
-          v-if="auth.isPlatformOperator"
-          class="nav-link"
-          :to="{ name: 'admin' }"
-          active-class="nav-link--active"
-          exact-active-class="nav-link--active"
-          :aria-current="route.name === 'admin' ? 'page' : undefined"
-        >
-          平台运营后台
         </RouterLink>
         <RouterLink
           v-if="spaces.canManageSpace && spaces.currentSpace"

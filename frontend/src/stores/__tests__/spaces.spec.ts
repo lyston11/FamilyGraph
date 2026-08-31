@@ -61,16 +61,15 @@ describe('spaces store（AD-3）', () => {
         space_id: 1,
         user_id: 1,
         added_by: 1,
-        role: 'owner',
+        role: 'space_admin',
         status: 'active',
         updated_at: '2026-08-29T00:00:00',
       },
     ]
 
-    expect(store.currentMembership?.role).toBe('owner')
-    expect(store.currentRole).toBe('owner')
-    expect(store.isSpaceOwner).toBe(true)
-    expect(store.isSpaceAdmin).toBe(false)
+    expect(store.currentMembership?.role).toBe('space_admin')
+    expect(store.currentRole).toBe('space_admin')
+    expect(store.isSpaceAdmin).toBe(true)
     expect(store.canManageSpace).toBe(true)
     expect(store.canInvite).toBe(true)
     expect(store.canTransferOwnership).toBe(true)
@@ -80,7 +79,7 @@ describe('spaces store（AD-3）', () => {
     expect(store.canManageSpace).toBe(false)
   })
 
-  it('space_admin 可管理和邀请但不能发起所有权移交', () => {
+  it('普通成员可邀请但无空间治理权（管理员是唯一治理角色）', () => {
     const auth = useAuthStore()
     auth.user = {
       id: 1,
@@ -98,13 +97,13 @@ describe('spaces store（AD-3）', () => {
       space_id: 1,
       user_id: 1,
       added_by: 1,
-      role: 'space_admin',
+      role: 'member',
       status: 'active',
       updated_at: '2026-08-29T00:00:00',
     }]
 
-    expect(store.isSpaceAdmin).toBe(true)
-    expect(store.canManageSpace).toBe(true)
+    expect(store.isSpaceAdmin).toBe(false)
+    expect(store.canManageSpace).toBe(false)
     expect(store.canInvite).toBe(true)
     expect(store.canTransferOwnership).toBe(false)
   })
@@ -128,12 +127,12 @@ describe('spaces store（AD-3）', () => {
       space_id: 1,
       user_id: 1,
       added_by: 1,
-      role: 'owner' as const,
+      role: 'space_admin' as const,
       status: 'active' as const,
       updated_at: '2026-08-29T00:00:00',
     }
 
-    for (const role of ['owner', 'space_admin', 'member'] as const) {
+    for (const role of ['space_admin', 'member'] as const) {
       store.members = [{ ...baseMember, role }]
       expect(store.canInvite).toBe(true)
     }
@@ -178,7 +177,7 @@ describe('spaces store（AD-3）', () => {
         space_id: 5,
         user_id: 1,
         added_by: 1,
-        role: 'owner',
+        role: 'space_admin',
         status: 'active',
         updated_at: '2026-08-25T00:00:00',
       },
@@ -268,7 +267,7 @@ describe('spaces store 会话代际隔离（P2）', () => {
     const switchToNew = store.loadMembers(2)
     // 新空间先完成；随后旧空间的迟到响应到达
     resolveOld([
-      { id: 501, space_id: 1, user_id: 99, user_name: '旧空间成员', added_by: 1, role: 'owner', status: 'active', updated_at: '2026-08-29T00:00:00' },
+      { id: 501, space_id: 1, user_id: 99, user_name: '旧空间成员', added_by: 1, role: 'space_admin', status: 'active', updated_at: '2026-08-29T00:00:00' },
     ])
     await switchToNew
     expect(store.members).toEqual([])

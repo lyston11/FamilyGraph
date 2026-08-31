@@ -15,11 +15,14 @@ from app.commands import manager_applications as manager_application_commands
 from app.commands import spaces as space_commands
 from app.commands.context import ActorContext
 from app.models.account import Account
-from app.models.space import FamilySpace, SpaceMember
+from app.models.space import FamilySpace, ManagerTransferConsent, SpaceMember
 from app.models.user import User
 from app.schemas.space import (
+    EligibleManagerTarget,
     ManagerApplicationCreate,
     ManagerApplicationOut,
+    ManagerTransferConsentDecision,
+    ManagerTransferConsentOut,
     PositionsPayload,
     SpaceCreate,
     SpaceInviteCreate,
@@ -85,6 +88,19 @@ def submit_manager_application(
     return manager_application_commands.serialize_application(session, application)
 
 
+@router.get(
+    "/spaces/manager-applications/eligible-targets",
+    response_model=list[EligibleManagerTarget],
+)
+def list_eligible_manager_targets(
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[EligibleManagerTarget]:
+    """可申请管理员的 lineage 空间；household 不出现在结果里。"""
+    actor, _account = identity
+    return manager_application_commands.eligible_lineage_targets(session, actor.id)
+
+
 @router.get("/spaces/manager-applications/mine", response_model=list[ManagerApplicationOut])
 def list_my_manager_applications(
     session: Session = Depends(get_db),
@@ -94,6 +110,47 @@ def list_my_manager_applications(
     actor, _account = identity
     rows = manager_application_commands.applications_of(session, actor.id)
     return [manager_application_commands.serialize_application(session, row) for row in rows]
+
+
+@router.get(
+    "/spaces/manager-transfer-consents/mine",
+    response_model=list[ManagerTransferConsentOut],
+)
+def list_my_transfer_consents(
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[ManagerTransferConsentOut]:
+    actor, _account = identity
+    rows = (
+        session.query(ManagerTransferConsent)
+        .filter(ManagerTransferConsent.current_manager_user_id == actor.id)
+        .order_by(ManagerTransferConsent.id.desc())
+        .all()
+    )
+    return [manager_application_commands.serialize_consent(session, row) for row in rows]
+
+
+@router.post(
+    "/spaces/manager-transfer-consents/{consent_id}/decision",
+    response_model=ManagerTransferConsentOut,
+)
+def decide_my_transfer_consent(
+    consent_id: int,
+    payload: ManagerTransferConsentDecision,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> ManagerTransferConsentOut:
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = manager_application_commands.respond_to_transfer_consent(
+        session,
+        ctx,
+        consent_id,
+        decision=payload.decision,
+        reason=payload.reason,
+    )
+    return manager_application_commands.serialize_consent(session, row)
 
 
 @router.get("/spaces", response_model=list[SpaceOut])
