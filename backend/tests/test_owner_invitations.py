@@ -41,15 +41,20 @@ def _redeem_via_api(client, tokens, token: str):
 
 
 def test_invitation_stores_only_hash_and_returns_token_once(db_session, client, operator) -> None:
-    tokens = login(client, "平台运营", "101010").json()
-    resp = client.post("/api/admin/owner-invitations", headers=auth_header(tokens))
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
+    """签发只落 hash、明文只此一次。
 
-    row = db_session.scalars(select(OwnerInvitation).where(OwnerInvitation.id == body["id"])).one()
-    assert row.token_hash != body["token"]  # 数据库只有 hash
+    HTTP 签发入口随旧 operator 后台下线（见 notes.md 阻塞项），邀请领域合同改由
+    命令层直接验证，覆盖不降级。
+    """
+    invitation, raw_token = onboarding.create_owner_invitation(db_session, _ctx(operator))
+    db_session.commit()
+
+    row = db_session.scalars(
+        select(OwnerInvitation).where(OwnerInvitation.id == invitation.id)
+    ).one()
+    assert row.token_hash != raw_token  # 数据库只有 hash
     assert len(row.token_hash) == 64
-    assert onboarding.hash_token(body["token"]) == row.token_hash  # 可验证对应关系
+    assert onboarding.hash_token(raw_token) == row.token_hash  # 可验证对应关系
     assert row.used_at is None and row.revoked_at is None
 
 
@@ -71,7 +76,7 @@ def test_redeem_creates_lineage_space_and_owner_membership(db_session, client, o
     assert space.owner_id == redeemer.id
 
     membership = db_session.scalars(select(SpaceMember)).one()
-    assert membership.role == "owner" and membership.status == "active"
+    assert membership.role == "space_admin" and membership.status == "active"
 
     # 兑换者未获得 platform_operator 角色
     acc = db_session.get(type(redeemer.account), redeemer.account.id)
@@ -107,14 +112,11 @@ def test_redeem_single_use_replay_expired_revoked(db_session, client, operator) 
     assert expired.status_code == 404
     assert expired.json()["error"]["code"] == "OWNER_INVITATION_INVALID"
 
-    # 撤销后不可兑换；重复撤销 409
-    op_tokens = login(client, "平台运营", "101010").json()
+    # 撤销后不可兑换；重复撤销 409（撤销经命令层，HTTP 入口见 notes.md 阻塞项）
     _, token3 = onboarding.create_owner_invitation(db_session, _ctx(operator))
     db_session.commit()
-    revoke = client.post(
-        f"/api/admin/owner-invitations/{inv2.id}/revoke", headers=auth_header(op_tokens)
-    )
-    assert revoke.status_code == 200
+    revoked_row = onboarding.revoke_owner_invitation(db_session, _ctx(operator), inv2.id)
+    assert revoked_row.revoked_at is not None
 
     # 未知 token 同一防枚举码
     unknown = _redeem_via_api(client, tokens, "nonexistent-token-value-0000000000")
@@ -123,21 +125,16 @@ def test_redeem_single_use_replay_expired_revoked(db_session, client, operator) 
 
 
 def test_revoke_marks_row_and_rejects_double_revoke(db_session, client, operator) -> None:
-    op_tokens = login(client, "平台运营", "101010").json()
-    created = client.post("/api/admin/owner-invitations", headers=auth_header(op_tokens))
-    inv_id = created.json()["id"]
-    db_session.expire_all()
+    """撤销幂等边界：首次落 revoked_at，重复撤销 409。"""
+    invitation, _raw = onboarding.create_owner_invitation(db_session, _ctx(operator))
+    db_session.commit()
 
-    revoked = client.post(
-        f"/api/admin/owner-invitations/{inv_id}/revoke", headers=auth_header(op_tokens)
-    )
-    assert revoked.status_code == 200
-    assert revoked.json()["revoked_at"] is not None
+    revoked = onboarding.revoke_owner_invitation(db_session, _ctx(operator), invitation.id)
+    assert revoked.revoked_at is not None
 
-    again = client.post(
-        f"/api/admin/owner-invitations/{inv_id}/revoke", headers=auth_header(op_tokens)
-    )
-    assert again.status_code == 409
+    with pytest.raises(HTTPException) as double:
+        onboarding.revoke_owner_invitation(db_session, _ctx(operator), invitation.id)
+    assert double.value.status_code == 409
 
 
 def test_managed_account_cannot_redeem(db_session, client, operator) -> None:

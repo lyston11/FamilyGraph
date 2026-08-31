@@ -55,7 +55,7 @@ function makeMember(overrides: Partial<SpaceMemberInfo> = {}): SpaceMemberInfo {
     user_id: 1,
     user_name: '空间用户',
     added_by: 1,
-    role: 'owner',
+    role: 'space_admin',
     status: 'active',
     updated_at: '2026-08-29T00:00:00',
     ...overrides,
@@ -117,9 +117,9 @@ describe('SpaceManagementView', () => {
     document.body.innerHTML = ''
   })
 
-  it('owner sees the management overview, governance panel, and pending profile references', async () => {
+  it('空间管理员可见概览、治理面板与待确档引用', async () => {
     const pinia = createPinia()
-    const { wrapper } = await mountManagement(pinia, 'owner')
+    const { wrapper } = await mountManagement(pinia, 'space_admin')
     await vi.waitFor(() => expect(wrapper.find('[data-test="space-overview"]').exists()).toBe(true))
     await vi.waitFor(() => expect(wrapper.find('[data-test="profile-ref-section"]').exists()).toBe(true))
 
@@ -127,7 +127,7 @@ describe('SpaceManagementView', () => {
     expect(wrapper.find('h1').text()).toBe('家庭空间管理')
     expect(wrapper.find('[data-test="management-space-name"]').text()).toBe('王家空间')
     expect(wrapper.find('[data-test="management-space-kind"]').text()).toContain('家庭空间')
-    expect(wrapper.find('[data-test="management-current-role"]').text()).toContain('空间所有者')
+    expect(wrapper.find('[data-test="management-current-role"]').text()).toContain('空间管理员')
     expect(wrapper.find('[data-test="management-counts"]').text()).toBe('2 / 1')
     expect(wrapper.find('[data-test="space-governance-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="management-profile-refs"]').exists()).toBe(false)
@@ -136,14 +136,14 @@ describe('SpaceManagementView', () => {
     wrapper.unmount()
   })
 
-  it('space_admin can view the management page and invite but cannot transfer ownership', async () => {
+  it('空间管理员同时持有邀请与交接入口（唯一治理角色）', async () => {
     const pinia = createPinia()
     const { wrapper } = await mountManagement(pinia, 'space_admin')
     await vi.waitFor(() => expect(wrapper.find('[data-test="space-overview"]').exists()).toBe(true))
 
-    expect(wrapper.find('[data-test="management-current-role"]').text()).toContain('空间管理员')
+    // 不再有「能管理但不能交接」的中间等级：两个入口同时属于管理员。
     expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

@@ -34,7 +34,7 @@ from app.schemas.controlled_web import (
     WebSpaceConfigRequest,
     WebUsageOut,
 )
-from app.services import audit, controlled_web
+from app.services import audit, controlled_web, space_fsm
 from app.services.platform_roles import require_platform_operator
 from app.utils import secretbox, timeutil
 
@@ -66,8 +66,8 @@ def _space_member(db: Session, identity: tuple[User, Account], space_id: int) ->
 
 def _space_admin(db: Session, identity: tuple[User, Account], space_id: int) -> SpaceMember:
     member = _space_member(db, identity, space_id)
-    if member.role not in {"owner", "admin"}:
-        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "只有空间 owner/admin 可以修改联网策略")
+    if not space_fsm.is_space_manager(db, space_id, member.user_id):
+        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "只有当前空间管理员可以修改联网策略")
     return member
 
 

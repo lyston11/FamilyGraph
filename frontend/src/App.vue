@@ -13,10 +13,13 @@ import {
 
 import AssistantLauncher from '@/components/agent/AssistantLauncher.vue'
 import AppShell from '@/components/shell/AppShell.vue'
+import SystemAdminShell from '@/components/shell/SystemAdminShell.vue'
 import { themeOverrides } from '@/styles/naive-themes'
 import { themeCssVars, themeTokens } from '@/styles/tokens'
+import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 
+const auth = useAuthStore()
 const ui = useUiStore()
 const route = useRoute()
 
@@ -25,6 +28,7 @@ const naiveOverrides = computed<GlobalThemeOverrides>(() => themeOverrides[ui.th
 
 // 沉浸页（login/onboarding/force-change-pin/identity-setup）不套应用壳
 const isBlankChrome = computed(() => route.meta.chrome === 'blank')
+const isSystemAdmin = computed(() => auth.isSystemAdmin)
 
 // 主题 token 单一来源：L2 变量批量注入 documentElement，CSS 与 Naive UI overrides 同源
 watchEffect(() => {
@@ -40,12 +44,13 @@ watchEffect(() => {
     <NMessageProvider>
       <NDialogProvider>
         <NNotificationProvider>
-          <AppShell v-if="!isBlankChrome" />
+          <SystemAdminShell v-if="isSystemAdmin && !isBlankChrome" />
+          <AppShell v-else-if="!isBlankChrome" />
           <RouterView v-else />
         </NNotificationProvider>
       </NDialogProvider>
     </NMessageProvider>
   </NConfigProvider>
   <!-- 悬浮 Assistant 保持全局（壳外，design.md §3.1）；面板内容经 defineAsyncComponent 懒加载 -->
-  <AssistantLauncher />
+  <AssistantLauncher v-if="!isSystemAdmin" />
 </template>

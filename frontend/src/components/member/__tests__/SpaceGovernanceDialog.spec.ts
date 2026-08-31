@@ -142,25 +142,27 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     void useAuthStore(pinia)
   }
 
+  // 每空间只有一个管理员（0022 迁移后 role 收敛为 space_admin/member/guest）：
+  // 用户1 是本空间管理员，用户2 普通成员，用户3 访客。
   const allMembers = (): SpaceMemberInfo[] => [
-    makeMembership({ id: 11, user_id: 1, role: 'owner' }),
-    makeMembership({ id: 12, user_id: 2, role: 'space_admin' }),
+    makeMembership({ id: 11, user_id: 1, role: 'space_admin' }),
+    makeMembership({ id: 12, user_id: 2, role: 'member' }),
     makeMembership({ id: 13, user_id: 3, role: 'guest' }),
   ]
 
-  it('owner 视角：kind/角色徽标正确，可见邀请区与移交发起区；访客提示不出现', async () => {
+  it('管理员视角：kind/角色徽标正确，可见邀请区与交接发起区；访客提示不出现', async () => {
     seedState(1, allMembers())
     const wrapper = await mountDialog()
 
-    expect(text('[data-test="my-role-tag"]')).toContain('所有者')
+    expect(text('[data-test="my-role-tag"]')).toContain('空间管理员')
     expect(document.querySelector('[data-test="guest-hint"]')).toBeNull()
     expect(document.querySelector('[data-test="governance-invite-search"]')).not.toBeNull()
     expect(document.querySelector('[data-test="transfer-target-select"]')).not.toBeNull()
-    // 可移交候选排除自己（下拉打开后才渲染，这里仅断言非 owner 不在候选逻辑内：由后续测试覆盖）
+    // 交接候选排除自己（下拉打开后才渲染，候选顺序由后续测试覆盖）
     wrapper.unmount()
   })
 
-  it('owner 邀请成员：搜索过滤已有成员后调用 inviteToSpace', async () => {
+  it('管理员邀请成员：搜索过滤已有成员后调用 inviteToSpace', async () => {
     seedState(1, allMembers())
     mockedSearch.mockResolvedValue([
       { id: 9, name: '新家人' } as Member,
@@ -182,7 +184,7 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     wrapper.unmount()
   })
 
-  it('owner 发起移交：未选目标禁用；从下拉选择后调用 createOwnershipTransfer', async () => {
+  it('管理员发起交接：未选目标禁用；从下拉选择后调用 createOwnershipTransfer', async () => {
     seedState(1, allMembers())
     const wrapper = await mountDialog()
 
@@ -209,14 +211,14 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     wrapper.unmount()
   })
 
-  it('受让人视角：pending 移交横幅出现并可接受；space_admin 可邀请但无移交发起区', async () => {
+  it('受让人视角：pending 交接横幅出现并可接受；普通成员可邀请但无交接发起区', async () => {
     seedState(2, allMembers(), [makeTransfer()])
     const wrapper = await mountDialog()
 
-    expect(text('[data-test="my-role-tag"]')).toContain('管理员')
+    expect(text('[data-test="my-role-tag"]')).toContain('成员')
     expect(document.querySelector('[data-test="transfer-pending"]')).not.toBeNull()
     expect(document.querySelector('[data-test="transfer-accept"]')).not.toBeNull()
-    // space_admin 可邀请新成员（§0.2），但不能发起移交（仅 owner）
+    // active 成员可邀请新成员（§0.2），但交接只能由当前管理员发起
     expect(document.querySelector('[data-test="governance-invite-search"]')).not.toBeNull()
     expect(document.querySelector('[data-test="transfer-target-select"]')).toBeNull()
 
@@ -226,7 +228,7 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     wrapper.unmount()
   })
 
-  it('发起人视角：可取消自己发出的 pending 移交', async () => {
+  it('发起人视角：可取消自己发出的 pending 交接', async () => {
     seedState(1, allMembers(), [makeTransfer()])
     const wrapper = await mountDialog()
 

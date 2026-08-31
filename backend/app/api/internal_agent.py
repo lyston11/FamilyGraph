@@ -40,7 +40,7 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import AgentJob, AgentMessage, AgentRun, AgentSession
-from app.models.space import FamilySpace, SpaceMember
+from app.models.space import SpaceMember
 from app.schemas.agent import (
     ContextMessageOut,
     ContextOut,
@@ -230,12 +230,9 @@ def _authorize_run(
             SpaceMember.status == "active",
         )
     )
-    if member is None:
-        space = db.get(FamilySpace, agent_session.space_id)
-        if space is not None and account is not None and space.owner_id == account.user_id:
-            # Older pre-membership fixtures/installations did not materialize
-            # an owner row; owner_id is itself an active authority boundary.
-            member = True  # type: ignore[assignment]
+    # owner_id 不是运行时授权来源（PRD R2/R6）：授权只看目标空间的 active
+    # membership。迁移 0022 已把历史 owner 落成 active space_admin 成员行，
+    # 因此这里不再保留 owner_id fallback。
     if member is None:
         _deny(
             db,

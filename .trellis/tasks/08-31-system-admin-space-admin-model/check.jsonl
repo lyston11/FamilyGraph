@@ -1,0 +1,7 @@
+{"file":".trellis/spec/architecture.md","reason":"检查 system_admin 无家庭主体、管理员按 space_id 绑定、每空间唯一 manager 与跨空间权限隔离"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查迁移、CHECK/FK/partial unique index、事务和冲突失败语义"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查未授权主体、IDOR、防枚举和统一错误响应"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"检查后台元数据查询、审批、管理员关系变更的审计和脱敏"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行后端测试、mypy、ruff 与安全回归门禁"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"检查 SystemAdminShell 与家庭 AppShell 的路由/视图边界"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"检查主体恢复、路由守卫、store 隔离和 logout 清理"}

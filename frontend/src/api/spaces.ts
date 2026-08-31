@@ -1,7 +1,9 @@
 import type {
+  EligibleManagerTarget,
   FamilySpace,
   ManagerApplicationStatus,
   ManagerRequestKind,
+  ManagerTransferConsent,
   OwnershipTransfer,
   SpaceManagerApplication,
   SpaceMemberInfo,
@@ -21,7 +23,7 @@ export async function createSpace(name: string, kind?: 'household' | 'lineage'):
 }
 
 /**
- * 提交成为已有空间管理员的申请（需平台运营者审批）。
+ * 提交成为指定 lineage 家族空间管理员的申请（需系统管理员审批 + 原管理员同意）。
  * 邀请成员不走此流程，active member（除 guest）可直接邀请。
  */
 export async function submitManagerApplication(
@@ -32,6 +34,35 @@ export async function submitManagerApplication(
     request_kind: requestKind,
     space_id: payload.spaceId,
   })
+  return data
+}
+
+/** 可申请管理员的目标 lineage 空间；资格与目标名称均由服务端裁定 */
+export async function fetchEligibleManagerTargets(): Promise<EligibleManagerTarget[]> {
+  const { data } = await apiClient.get<EligibleManagerTarget[]>(
+    '/spaces/manager-applications/eligible-targets',
+  )
+  return data
+}
+
+/** 我作为原管理员收到的交接同意工单 */
+export async function fetchMyTransferConsents(): Promise<ManagerTransferConsent[]> {
+  const { data } = await apiClient.get<ManagerTransferConsent[]>(
+    '/spaces/manager-transfer-consents/mine',
+  )
+  return data
+}
+
+/** 原管理员处理工单：accept 后系统管理员才可完成交接；reject 终止申请 */
+export async function respondTransferConsent(
+  consentId: number,
+  decision: 'accept' | 'reject',
+  reason?: string,
+): Promise<ManagerTransferConsent> {
+  const { data } = await apiClient.post<ManagerTransferConsent>(
+    `/spaces/manager-transfer-consents/${consentId}/decision`,
+    { decision, reason: reason || null },
+  )
   return data
 }
 

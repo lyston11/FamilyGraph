@@ -19,6 +19,9 @@ def test_login_success_returns_token_pair(client, db_session) -> None:
         "pin_must_change": False,
         "claim_status": "claimed",
         "profile_status": "identity_confirmed",
+        # 主体类型由服务端权威投影，家庭用户永不带平台角色
+        "principal_type": "family_user",
+        "platform_role": None,
     }
 
 

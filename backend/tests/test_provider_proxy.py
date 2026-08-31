@@ -67,12 +67,25 @@ def _seed_provider(db_session, *, name: str, api: str = "openai-completions"):
     from app.utils import secretbox, timeutil
 
     user = __import__("conftest").create_user_with_pin(db_session, f"{name}-u", "123456")
-    from app.models.space import FamilySpace
+    from app.models.space import FamilySpace, SpaceMember
 
     space = FamilySpace(
         name=f"{name}-space", kind="household", owner_id=user.id, created_at=user.created_at
     )
     db_session.add(space)
+    db_session.flush()
+    # 运行时授权按 active membership 判定，空间必须有本空间管理员成员行。
+    db_session.add(
+        SpaceMember(
+            space_id=space.id,
+            user_id=user.id,
+            added_by=user.id,
+            role="space_admin",
+            status="active",
+            created_at=user.created_at,
+            updated_at=user.created_at,
+        )
+    )
     db_session.flush()
     provider = AgentProvider(
         name=f"{name}-p",
@@ -251,6 +264,20 @@ def test_proxy_fail_closed_when_provider_unresolved(internal_client, db_session,
         name="proxy-none-space", kind="household", owner_id=user.id, created_at=user.created_at
     )
     db_session.add(space)
+    db_session.flush()
+    from app.models.space import SpaceMember
+
+    db_session.add(
+        SpaceMember(
+            space_id=space.id,
+            user_id=user.id,
+            added_by=user.id,
+            role="space_admin",
+            status="active",
+            created_at=user.created_at,
+            updated_at=user.created_at,
+        )
+    )
     db_session.flush()
     session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
     agent_queue.enqueue_run(

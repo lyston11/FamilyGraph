@@ -8,13 +8,115 @@
 import secrets
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
 from app.models.account import Account
 from app.models.refresh_session import RefreshSession
+from app.models.system_admin import (
+    SystemAdmin,
+    SystemAdminAccount,
+    SystemAdminRefreshSession,
+)
 from app.services import audit
 from app.utils import security, timeutil
+
+
+def issue_system_admin_refresh_session(
+    session: Session, admin: SystemAdmin, account: SystemAdminAccount, rotated_from: int | None
+) -> str:
+    jti = secrets.token_urlsafe(32)
+    raw_token = security.create_refresh_token(
+        admin.id, account.token_version, jti, principal_type="system_admin"
+    )
+    session.add(
+        SystemAdminRefreshSession(
+            system_admin_id=admin.id,
+            token_hash=security.hash_token(raw_token),
+            rotated_from=rotated_from,
+            expires_at=timeutil.utcnow() + timedelta(seconds=config.REFRESH_TOKEN_TTL_SECONDS),
+        )
+    )
+    return raw_token
+
+
+def rotate_system_admin(
+    session: Session, raw_token: str, ip: str | None
+) -> tuple[SystemAdmin, SystemAdminAccount, str]:
+    try:
+        payload = security.decode_token(raw_token, security.REFRESH_TOKEN_TYPE)
+    except security.TokenDecodeError as exc:
+        raise InvalidRefreshTokenError(str(exc)) from None
+    if payload.get("principal_type") != "system_admin":
+        raise InvalidRefreshTokenError("principal type mismatch")
+    row = session.scalar(
+        select(SystemAdminRefreshSession).where(
+            SystemAdminRefreshSession.token_hash == security.hash_token(raw_token)
+        )
+    )
+    if row is None or not row.is_active:
+        if row is not None:
+            revoke_all_system_admin_active(
+                session, row.system_admin_id, ip, "refresh_reuse_detected"
+            )
+        raise RefreshReuseDetectedError("revoked system refresh token submitted")
+    admin = session.get(SystemAdmin, row.system_admin_id)
+    account = session.scalar(
+        select(SystemAdminAccount).where(SystemAdminAccount.system_admin_id == row.system_admin_id)
+    )
+    if admin is None or account is None or account.token_version != payload["ver"]:
+        raise InvalidRefreshTokenError("system token version mismatch")
+    if row.expires_at <= timeutil.utcnow():
+        raise InvalidRefreshTokenError("expired")
+    now = timeutil.utcnow()
+    row.revoked_at = now
+    new_raw = issue_system_admin_refresh_session(session, admin, account, row.id)
+    session.flush()
+    return admin, account, new_raw
+
+
+def revoke_system_admin_by_raw_token(
+    session: Session, admin_id: int, raw_token: str | None
+) -> bool:
+    if raw_token is None or not raw_token.strip():
+        return revoke_all_system_admin_active(session, admin_id, None, "logout_all")
+    row = session.scalar(
+        select(SystemAdminRefreshSession).where(
+            SystemAdminRefreshSession.token_hash == security.hash_token(raw_token.strip()),
+            SystemAdminRefreshSession.system_admin_id == admin_id,
+            SystemAdminRefreshSession.revoked_at.is_(None),
+        )
+    )
+    if row is None:
+        return False
+    row.revoked_at = timeutil.utcnow()
+    session.flush()
+    return True
+
+
+def revoke_all_system_admin_active(
+    session: Session, admin_id: int, ip: str | None, reason: str
+) -> bool:
+    rows = session.scalars(
+        select(SystemAdminRefreshSession).where(
+            SystemAdminRefreshSession.system_admin_id == admin_id,
+            SystemAdminRefreshSession.revoked_at.is_(None),
+        )
+    ).all()
+    now = timeutil.utcnow()
+    for row in rows:
+        row.revoked_at = now
+    audit.write_audit(
+        session,
+        action=reason,
+        actor_id=None,
+        target_id=admin_id,
+        ip=ip,
+        detail={"principal_type": "system_admin", "revoked_count": len(rows)},
+    )
+    session.flush()
+    return bool(rows)
 
 
 class InvalidRefreshTokenError(Exception):

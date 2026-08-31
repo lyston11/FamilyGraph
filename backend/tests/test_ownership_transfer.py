@@ -123,8 +123,10 @@ def test_accept_transfer_flips_owner_and_demotes_old_owner(db_session) -> None:
     db_session.expire_all()
     assert space.owner_id == heir.id
     roles = {m.user_id: m.role for m in db_session.scalars(select(SpaceMember)).all()}
-    assert roles[heir.id] == "owner"
-    assert roles[owner.id] == "space_admin"  # 原 owner 默认降为 space_admin
+    # 产品层只有一个空间管理员：受让人成为唯一 space_admin，原管理员降为普通成员。
+    assert roles[heir.id] == "space_admin"
+    assert roles[owner.id] == "member"
+    assert list(roles.values()).count("space_admin") == 1
 
     types = {e.type for e in db_session.scalars(select(DomainEvent)).all()}
     assert {"space.transfer.requested", "space.transfer.completed"} <= types

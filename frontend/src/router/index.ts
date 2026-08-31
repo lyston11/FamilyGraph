@@ -8,8 +8,8 @@ declare module 'vue-router' {
   interface RouteMeta {
     /** 'blank'：沉浸页（登录/引导/改 PIN/确档），App.vue 不渲染应用壳 */
     chrome?: 'blank'
-    /** 仅 platform_operator 可访问；旧 adminOnly 仅保留给迁移期类型兼容。 */
-    platformOperatorOnly?: boolean
+    /** 仅独立 system_admin 主体可访问。 */
+    systemAdminOnly?: boolean
     /** @deprecated 请使用 platformOperatorOnly；不得将其解释为空间管理员。 */
     adminOnly?: boolean
     /** 仅目标空间 active owner/space_admin 可访问。 */
@@ -60,10 +60,14 @@ const router = createRouter({
       component: () => import('@/views/StatsView.vue'),
     },
     {
+      path: '/system-admin',
+      name: 'system-admin',
+      component: () => import('@/views/SystemAdminView.vue'),
+      meta: { systemAdminOnly: true },
+    },
+    {
       path: '/admin',
-      name: 'admin',
-      component: () => import('@/views/AdminView.vue'),
-      meta: { platformOperatorOnly: true },
+      redirect: { name: 'system-admin' },
     },
     {
       path: '/spaces/:spaceId/manage',
@@ -121,8 +125,14 @@ router.beforeEach(async (to) => {
     }
   }
 
-  // 平台运营后台仅接受 platform_operator；is_admin 只是兼容投影。
-  if ((to.meta.platformOperatorOnly || to.meta.adminOnly) && !auth.isPlatformOperator) {
+  if (auth.isSystemAdmin && to.name !== 'system-admin' && to.name !== 'force-change-pin') {
+    return { name: 'system-admin' }
+  }
+  if (!auth.isSystemAdmin && (to.name === 'system-admin' || to.meta.systemAdminOnly)) {
+    return { name: 'family-space' }
+  }
+
+  if (to.meta.systemAdminOnly && !auth.isSystemAdmin) {
     return { name: 'family-space' }
   }
 

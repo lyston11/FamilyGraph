@@ -157,17 +157,33 @@ describe('router guards', () => {
     expect(useAuthStore().isLoggedIn).toBe(true)
   })
 
-  it('平台运营者硬刷新 /admin：resume 成功后保留目标路由并放行', async () => {
+  it('系统管理员硬刷新 /system-admin：不调用家庭 /me，会话保留并放行', async () => {
     localStorage.setItem('fg.refresh_token', 'stored-refresh')
     useAuthStore()
 
     const pair = makePair({ is_admin: true })
+    pair.user.principal_type = 'system_admin'
     mockedRefresh.mockResolvedValue(pair)
-    mockedFetchMe.mockResolvedValue(pair.user)
+    // 家庭 /me 对系统主体按设计 401；resume 一旦调用它就会清会话把人踢回登录页。
+    mockedFetchMe.mockRejectedValue(new Error('family endpoint rejects system admin'))
 
-    expect(await navigate('/admin')).toBe('admin')
+    expect(await navigate('/system-admin')).toBe('system-admin')
     expect(mockedRefresh).toHaveBeenCalledWith('stored-refresh')
-    expect(useAuthStore().user?.is_admin).toBe(true)
+    expect(mockedFetchMe).not.toHaveBeenCalled()
+    expect(useAuthStore().isSystemAdmin).toBe(true)
+    expect(useAuthStore().isLoggedIn).toBe(true)
+  })
+
+  it('旧 /admin 深链在系统管理员硬刷新后重定向到独立后台', async () => {
+    localStorage.setItem('fg.refresh_token', 'stored-refresh')
+    useAuthStore()
+
+    const pair = makePair({ is_admin: true })
+    pair.user.principal_type = 'system_admin'
+    mockedRefresh.mockResolvedValue(pair)
+    mockedFetchMe.mockRejectedValue(new Error('family endpoint rejects system admin'))
+
+    expect(await navigate('/admin')).toBe('system-admin')
   })
 
   it('普通用户访问 /admin：权限校验后返回家庭空间', async () => {
@@ -200,7 +216,7 @@ describe('router guards', () => {
     expect(await navigate('/spaces/7/manage')).toBe('family-space')
   })
 
-  it('owner 和 space_admin 可访问目标空间管理页', async () => {
+  it('当前空间管理员可访问目标空间管理页', async () => {
     const auth = useAuthStore()
     mockedLogin.mockResolvedValue(makePair())
     await auth.login('张三', '123456')
@@ -221,7 +237,7 @@ describe('router guards', () => {
         space_id: 7,
         user_id: 1,
         added_by: 1,
-        role: 'owner',
+        role: 'space_admin',
         status: 'active',
         updated_at: '2026-08-25T00:00:00',
       },
@@ -270,18 +286,19 @@ describe('router guards', () => {
     expect(await navigate('/spaces/7/manage')).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/spaces/7/manage')
   })
-  it('无凭据访问 /admin：进入登录页并保留 /admin redirect', async () => {
+  it('无凭据访问 /admin：进入登录页并保留独立后台 redirect', async () => {
+    // /admin 只是旧路径重定向；守卫看到的目标已是 /system-admin，回跳地址同此。
     expect(await navigate('/admin')).toBe('login')
-    expect(router.currentRoute.value.query.redirect).toBe('/admin')
+    expect(router.currentRoute.value.query.redirect).toBe('/system-admin')
   })
 
-  it('refresh 失败：/admin 进入登录页并清理失效凭据', async () => {
+  it('refresh 失败：后台深链进入登录页并清理失效凭据', async () => {
     localStorage.setItem('fg.refresh_token', 'dead-token')
     useAuthStore()
     mockedRefresh.mockRejectedValue(new Error('invalid refresh'))
 
     expect(await navigate('/admin')).toBe('login')
-    expect(router.currentRoute.value.query.redirect).toBe('/admin')
+    expect(router.currentRoute.value.query.redirect).toBe('/system-admin')
     expect(localStorage.getItem('fg.refresh_token')).toBeNull()
   })
 

@@ -65,16 +65,22 @@ def _encode(payload: dict[str, Any], ttl_seconds: int) -> str:
     return jwt.encode(claims, config.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
-def create_access_token(user_id: int, token_version: int, is_platform_operator: bool) -> str:
-    """access JWT（2h）：payload 含 {sub, ver, adm, typ}。
+def create_access_token(
+    user_id: int,
+    token_version: int,
+    is_platform_operator: bool = False,
+    principal_type: str = "family_user",
+) -> str:
+    """签发带明确主体类型的 access JWT。
 
-    v2：adm 声明 = platform_operator 角色派生（仅管理后台用，不携带家庭数据权）。
-    sub 按 RFC 7519/PyJWT 2.10 要求为字符串。"""
+    ``adm`` 仅是旧客户端兼容投影；服务端授权不得从该布尔值推断主体。
+    """
     return _encode(
         {
             "sub": str(user_id),
             "ver": token_version,
             "adm": is_platform_operator,
+            "principal_type": principal_type,
             "typ": ACCESS_TOKEN_TYPE,
             "jti": secrets.token_hex(16),
         },
@@ -82,10 +88,18 @@ def create_access_token(user_id: int, token_version: int, is_platform_operator: 
     )
 
 
-def create_refresh_token(user_id: int, token_version: int, jti: str) -> str:
-    """refresh JWT（30d）：jti 与 refresh_sessions 行对应。"""
+def create_refresh_token(
+    user_id: int, token_version: int, jti: str, principal_type: str = "family_user"
+) -> str:
+    """refresh JWT（30d）：jti 与 refresh session 行对应。"""
     return _encode(
-        {"sub": str(user_id), "ver": token_version, "typ": REFRESH_TOKEN_TYPE, "jti": jti},
+        {
+            "sub": str(user_id),
+            "ver": token_version,
+            "principal_type": principal_type,
+            "typ": REFRESH_TOKEN_TYPE,
+            "jti": jti,
+        },
         config.REFRESH_TOKEN_TTL_SECONDS,
     )
 

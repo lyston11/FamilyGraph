@@ -16,14 +16,19 @@ def test_initialize_creates_admin_with_one_time_pin(client, db_session) -> None:
     body = response.json()
     pin = body["one_time_pin"]
     assert len(pin) == 6 and pin.isdigit()
-    assert body["user"]["is_admin"] is True
+    assert body["user"]["principal_type"] == "system_admin"
     assert body["user"]["pin_must_change"] is True
     assert client.get("/api/bootstrap/status").json() == {"initialized": True}
 
-    # PIN 可登录且强制改 PIN；数据库无明文 PIN
+    # 初始化创建独立系统主体，不占用家庭 User/Account（PRD R1）
     from app.models.account import Account
+    from app.models.system_admin import SystemAdmin, SystemAdminAccount
+    from app.models.user import User
 
-    account = db_session.query(Account).filter_by(user_id=body["user"]["id"]).one()
+    assert db_session.query(User).count() == 0
+    assert db_session.query(Account).count() == 0
+    admin = db_session.query(SystemAdmin).filter_by(id=body["user"]["id"]).one()
+    account = db_session.query(SystemAdminAccount).filter_by(system_admin_id=admin.id).one()
     assert pin not in account.pin_hash
     audit_rows = db_session.query(AuditLog).filter(AuditLog.action == "bootstrap_initialized").all()
     assert len(audit_rows) == 1

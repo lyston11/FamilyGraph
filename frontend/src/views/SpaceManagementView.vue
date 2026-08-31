@@ -9,7 +9,7 @@ import { useSpacesStore } from '@/stores/spaces'
 
 /**
  * 独立家庭空间管理看板。
- * 进入路由前由 router 守卫确认目标 spaceId 是当前用户的 active owner/
+ * 进入路由前由 router 守卫确认目标 spaceId 是当前用户的 active
  * space_admin membership；视图仍按目标空间加载，避免依赖用户可篡改的 UI 状态。
  */
 const route = useRoute()
@@ -20,7 +20,7 @@ const targetSpaceId = computed(() => Number(route.params.spaceId))
 const space = computed(() => spaces.spaces.find((item) => item.id === targetSpaceId.value) ?? null)
 const hasAccess = computed(() => spaces.currentSpaceId === targetSpaceId.value && spaces.canManageSpace)
 const roleLabel = computed(() =>
-  spaces.currentRole === 'owner' ? '空间所有者' : spaces.currentRole === 'space_admin' ? '空间管理员' : '无空间管理权限',
+  spaces.currentRole === 'space_admin' ? '空间管理员' : '无空间管理权限',
 )
 const pendingCount = computed(() => spaces.members.filter((member) => member.status === 'pending').length)
 
@@ -39,7 +39,7 @@ function goFamilySpace(): void {
       <div>
         <p class="eyebrow">空间治理</p>
         <h1>家庭空间管理</h1>
-        <p class="description">仅空间所有者和空间管理员可以管理当前家庭空间的成员与移交。</p>
+        <p class="description">仅当前空间的管理员可以管理本空间的成员与交接。</p>
       </div>
       <NButton data-test="management-back" @click="goFamilySpace">返回家庭空间</NButton>
     </header>

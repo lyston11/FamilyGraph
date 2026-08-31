@@ -1,0 +1,8 @@
+{"file":".trellis/HANDOFF.md","reason":"项目权威产品目标、锁定决策、全局验收标准与非目标"}
+{"file":".trellis/spec/architecture.md","reason":"平台身份/家庭身份隔离、空间角色、可见性、申请审批、owner transfer 与唯一性边界"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Alembic 迁移、SQLite 约束、partial unique index、FK 与事务要求"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"认证授权、防枚举、统一错误结构与 fail-closed 要求"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端回归测试、IDOR、安全和质量门禁"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"系统管理员查询、管理员审批和敏感信息审计/脱敏要求"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"独立系统后台路由、shell、view 与前端分层约束"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"主体会话、敏感缓存清理、服务端状态唯一来源"}

@@ -76,8 +76,8 @@ def create_transfer(
         actor_member = space_fsm.find_membership(session, space_id, actor.id)
         if actor_member is None or space_fsm.effective_status(actor_member) != "active":
             raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
-        if space.owner_id != actor.id:
-            raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅空间所有者可发起移交")
+        if not space_fsm.is_space_manager(session, space_id, actor.id):
+            raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅当前空间管理员可发起管理员交接")
         if to_user_id == actor.id:
             raise_api_error(409, OWNER_TRANSFER_INVALID, "不能把空间移交给自己")
         target_member = space_fsm.find_membership(session, space_id, to_user_id)
@@ -187,20 +187,20 @@ def accept_transfer(session: Session, ctx: ActorContext, transfer_id: int) -> Ow
 def _apply_transfer_ownership(session: Session, transfer: OwnershipTransfer, now: datetime) -> None:
     """接受成功后的所有权翻转与双方 membership 调整（同一事务内调用）。"""
     space = session.get(FamilySpace, transfer.space_id)
-    if space is None or space.owner_id != transfer.from_user:
-        raise_api_error(409, OWNER_TRANSFER_INVALID, "空间所有权状态已变化，移交无法完成")
+    if space is None or not space_fsm.is_space_manager(session, space.id, transfer.from_user):
+        raise_api_error(409, OWNER_TRANSFER_INVALID, "空间管理员状态已变化，移交无法完成")
     heir_membership = space_fsm.find_membership(session, space.id, transfer.to_user)
     from_membership = space_fsm.find_membership(session, space.id, transfer.from_user)
     if heir_membership is None or space_fsm.effective_status(heir_membership) != "active":
         raise_api_error(409, OWNER_TRANSFER_INVALID, "受让人已不是该空间活跃成员")
 
-    space.owner_id = transfer.to_user
-    heir_membership.role = "owner"
-    heir_membership.updated_at = now
     if from_membership is not None:
-        # 原 owner 默认降为 space_admin（保留成员资格便于交接）
-        from_membership.role = "space_admin"
+        from_membership.role = "member"
         from_membership.updated_at = now
+    heir_membership.role = "space_admin"
+    heir_membership.updated_at = now
+    # owner_id remains a migration-era compatibility mirror only.
+    space.owner_id = transfer.to_user
 
 
 def cancel_transfer(session: Session, ctx: ActorContext, transfer_id: int) -> OwnershipTransfer:

@@ -80,10 +80,10 @@ describe('AppShell navigation', () => {
     wrapper.unmount()
   })
 
-  it('shows the admin entry only for administrators', async () => {
+  it('家庭应用壳不含任何平台后台入口（系统管理员走独立 shell）', async () => {
     const pinia = createPinia()
     const router = makeRouter()
-    await router.push('/admin')
+    await router.push('/')
     await router.isReady()
     const auth = useAuthStore(pinia)
     setLoggedIn(auth, true)
@@ -92,18 +92,15 @@ describe('AppShell navigation', () => {
       global: { plugins: [pinia, router] },
     })
 
-    const adminLink = wrapper.find('nav[aria-label="主导航"] a[href="/admin"]')
-    expect(adminLink.exists()).toBe(true)
-    expect(adminLink.classes()).toContain('nav-link--active')
-    expect(adminLink.attributes('aria-current')).toBe('page')
-
-    auth.user = { ...auth.user!, is_admin: false }
-    await wrapper.vm.$nextTick()
-    expect(wrapper.find('nav[aria-label="主导航"] a[href="/admin"]').exists()).toBe(false)
+    // 平台后台由 SystemAdminShell 承载；家庭导航不得出现后台链接，
+    // 即使账号带旧 is_admin 兼容投影也不例外。
+    const nav = wrapper.find('nav[aria-label="主导航"]')
+    expect(nav.find('a[href="/admin"]').exists()).toBe(false)
+    expect(nav.find('a[href="/system-admin"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('shows space management only for the current owner or space admin', async () => {
+  it('shows space management only for the current space admin', async () => {
     const pinia = createPinia()
     const router = makeRouter()
     await router.push('/')
@@ -126,7 +123,7 @@ describe('AppShell navigation', () => {
       space_id: 7,
       user_id: 1,
       added_by: 1,
-      role: 'owner',
+      role: 'space_admin',
       status: 'active',
       updated_at: '2026-08-25T00:00:00',
     }]

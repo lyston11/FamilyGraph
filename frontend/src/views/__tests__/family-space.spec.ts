@@ -98,7 +98,7 @@ async function mountFamily(spaces: FamilySpace[]) {
     space_id: spaceId,
     user_id: 1,
     added_by: 1,
-    role: 'owner',
+    role: 'space_admin',
     status: 'active',
     updated_at: '2026-08-29T00:00:00',
   }])

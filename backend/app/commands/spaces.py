@@ -41,10 +41,10 @@ def _require_active_member(session: Session, space_id: int, user_id: int) -> Spa
     return member
 
 
-def _require_owner(session: Session, space_id: int, user_id: int) -> FamilySpace:
+def _require_space_manager(session: Session, space_id: int, user_id: int) -> FamilySpace:
     space = _space_or_404(session, space_id)
-    if space.owner_id != user_id:
-        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅空间所有者可执行该操作")
+    if not space_fsm.is_space_manager(session, space_id, user_id):
+        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅当前空间管理员可执行该操作")
     return space
 
 
@@ -67,7 +67,7 @@ def create_space(
                 space_id=space.id,
                 user_id=actor.id,
                 added_by=actor.id,
-                role="owner",
+                role="space_admin",
                 status="active",
                 created_at=now,
                 updated_at=now,
@@ -102,7 +102,7 @@ def rename_space(
 ) -> FamilySpace:
     actor = load_actor(session, ctx)
     with command_transaction(session):
-        space = _require_owner(session, space_id, actor.id)
+        space = _require_space_manager(session, space_id, actor.id)
         old_name = space.name
         space.name = name.strip()
         emit(
@@ -133,6 +133,8 @@ def _require_inviter(session: Session, space_id: int, user_id: int) -> SpaceMemb
     写权限。
     """
     member = _require_active_member(session, space_id, user_id)
+    # 邀请与管理员审批是两条独立流程（architecture.md §0.7 / 权限矩阵）：active
+    # 成员（除 guest）可邀请，受邀人仍需接受。本任务不收紧该边界。
     if member.role == "guest":
         raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "访客不能邀请成员")
     return member
@@ -359,7 +361,7 @@ def create_shared_household(
                     space_id=space.id,
                     user_id=actor.id,
                     added_by=actor.id,
-                    role="owner",
+                    role="space_admin",
                     status="active",
                     created_at=now,
                     updated_at=now,

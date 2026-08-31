@@ -1,20 +1,41 @@
-"""m4b 管理员后台：权限门禁、重置 PIN 失效链、审计可见性。"""
+"""平台后台契约（任务 08-31 迁移后）。
+
+旧 `platform_operator` 家庭用户后台已被独立 `system_admin` 主体取代：
+- 账号生命周期列表由 `/api/admin/accounts` 提供（家庭 PII 仍不得出现）；
+- 家庭用户即使带旧 `is_admin` 投影也不再获得任何后台权限；
+- 重置 PIN、改档案、custody 移交属系统管理员 break-glass 家庭数据能力，
+  PRD「Out of scope」明确要求另立审计强化任务，当前无任何主体可执行，
+  对应测试保留测试体并 skip，等该任务落地后接回。
+"""
 
 from __future__ import annotations
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
+from conftest import (
+    auth_header,
+    create_system_admin,
+    create_user_with_pin,
+    login,
+    system_admin_header,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.models.audit_log import AuditLog
 from app.models.v2_foundation import DomainEvent
 
+BREAK_GLASS_PENDING = "系统管理员 break-glass 家庭数据能力按 PRD 另立任务；当前无主体可执行该端点"
+
 
 def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:
     resp = login(client, name, pin)
     assert resp.status_code == 200, resp.text
     return auth_header(resp.json())
+
+
+def _system_admin_headers(client: TestClient, db_session) -> dict[str, str]:
+    create_system_admin(db_session)
+    return system_admin_header(client)
 
 
 @pytest.fixture()
@@ -33,29 +54,28 @@ def admin_and_user(db_session):
     return admin, user
 
 
-def test_non_admin_403_everywhere(client: TestClient, admin_and_user):
+def test_family_user_cannot_reach_system_backend(client: TestClient, admin_and_user):
+    """家庭用户一律无后台权限；旧 is_admin 投影不再是授权来源（PRD R1）。"""
+    _admin, _user = admin_and_user
+    for name, pin in (("群众", "123123"), ("管长", "000000")):
+        headers = _login(client, name, pin)
+        assert client.get("/api/admin/accounts", headers=headers).status_code == 403
+        assert client.get("/api/admin/spaces", headers=headers).status_code == 403
+        assert client.get("/api/admin/manager-applications", headers=headers).status_code == 403
+
+
+def test_account_metadata_excludes_family_pii(client: TestClient, db_session, admin_and_user):
+    """账号生命周期列表只含平台元数据，不含家庭姓名/性别/出生（PRD R5）。"""
     _admin, user = admin_and_user
-    hu = _login(client, "群众", "123123")
-    assert client.get("/api/admin/users", headers=hu).status_code == 403
-    r = client.post(f"/api/admin/users/{user.id}/reset-pin", json={"confirm": True}, headers=hu)
-    assert r.status_code == 403
-    assert client.get("/api/admin/audit-logs", headers=hu).status_code == 403
+    headers = _system_admin_headers(client, db_session)
+    rows = client.get("/api/admin/accounts", headers=headers).json()
+    row = next(r for r in rows if r["subject_type"] == "family_user" and r["subject_id"] == user.id)
+    for leaked in ("name", "gender", "privacy_mode", "birth", "bio"):
+        assert leaked not in row
+    assert row["status"] == "claimed"
 
 
-def test_operator_user_list_excludes_family_pii(client: TestClient, admin_and_user):
-    """F3/R-03：普通管理列表仅平台元数据，不含家庭姓名/性别/出生。"""
-    admin, user = admin_and_user
-    ha = _login(client, "管长", "000000")
-    rows = client.get("/api/admin/users", headers=ha).json()
-    row = next(r for r in rows if r["id"] == user.id)
-    assert "name" not in row
-    assert "gender" not in row
-    assert "privacy_mode" not in row
-    assert "birth" not in row
-    assert row["claim_status"] == "claimed"
-    assert row["profile_status"] == "identity_confirmed"
-
-
+@pytest.mark.skip(reason=BREAK_GLASS_PENDING)
 def test_reset_pin_one_time_and_sessions_revoked(db_session, client: TestClient, admin_and_user):
     admin, user = admin_and_user
     ha = _login(client, "管长", "000000")
@@ -83,6 +103,7 @@ def test_reset_pin_one_time_and_sessions_revoked(db_session, client: TestClient,
     assert any(entry["action"] == "pin_reset" for entry in logs)
 
 
+@pytest.mark.skip(reason=BREAK_GLASS_PENDING)
 def test_admin_update_user_transfer_custody(db_session, client: TestClient, admin_and_user):
     _admin, user = admin_and_user
     guardian = create_user_with_pin(db_session, "新管", "456456", claim_status="claimed")
@@ -132,6 +153,7 @@ def test_admin_update_user_transfer_custody(db_session, client: TestClient, admi
     assert custody_payload["by_operator_account"] == _admin.account.id
 
 
+@pytest.mark.skip(reason=BREAK_GLASS_PENDING)
 def test_admin_update_user_requires_break_glass_note(client: TestClient, admin_and_user):
     """缺 note → schema 422；纯空白 note → 命令层 BREAK_GLASS_NOTE_REQUIRED 422。"""
     _admin, user = admin_and_user
