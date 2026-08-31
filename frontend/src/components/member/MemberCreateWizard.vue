@@ -31,6 +31,7 @@ import type { DirClass, GenderType, PrivacyMode, StructuredDate } from '@/types/
  * no-space/household/lineage] → 提交。
  * 对方确档前仅为 provisional 档案：选空间只建 space_profile_refs 最小节点引用，
  * 不是正式 SpaceMember；与创建者的关系以待确认合并请求发出，本人确档后可确认。
+ * 空间开辟沿用既有创建流程；向导允许在流程中直接创建族谱空间。
  */
 const emit = defineEmits<{ close: []; created: [{ name: string; pin: string | null }] }>()
 
@@ -53,7 +54,7 @@ const RELATION_OPTIONS: { value: DirClass; text: string }[] = [
 const relationDir = ref<DirClass | ''>('')
 const relationLabel = ref('')
 
-// ---- 空间选择（F-3）：no-space / household / lineage ----
+// ---- 空间选择（F-3）：no-space / household / lineage；族谱空间可在此直接创建 ----
 type SpaceChoice = 'none' | 'household' | 'lineage'
 const spaceChoice = ref<SpaceChoice>('none')
 const joinHouseholdSpaceId = ref<number | null>(null)

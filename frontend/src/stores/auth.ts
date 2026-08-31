@@ -29,6 +29,8 @@ export const useAuthStore = defineStore('auth', () => {
   // ---- 派生 ----
   const isLoggedIn = computed(() => accessToken.value !== null && user.value !== null)
   const mustChangePin = computed(() => user.value?.pin_must_change === true)
+  const isSystemAdmin = computed(() => user.value?.principal_type === 'system_admin')
+  const isPlatformOperator = computed(() => isSystemAdmin.value)
 
   function clearSession(): void {
     accessToken.value = null
@@ -97,9 +99,13 @@ export const useAuthStore = defineStore('auth', () => {
     if (!refreshToken.value) return null
     try {
       const pair = await refreshSession()
-      // pin_must_change=true 时 GET /me 被服务端门禁拦截（白名单外 403），
-      // 直接采用 refresh 响应自带的 user，让强制改 PIN 态在硬刷新后保持
-      if (!pair.user.pin_must_change) {
+      // GET /me 是家庭端点，系统管理员访问按设计被拒（401）。系统主体的身份
+      // 投影直接采用 refresh 响应：该响应由服务端按签名 token 查表签发，
+      // 是权威来源，不是客户端自带字段。
+      // pin_must_change=true 时 /me 也被门禁拦截（白名单外 403），同样直接采用。
+      const skipFetchMe =
+        pair.user.principal_type === 'system_admin' || pair.user.pin_must_change
+      if (!skipFetchMe) {
         user.value = await authApi.fetchMe()
       }
       return user.value
@@ -147,6 +153,8 @@ export const useAuthStore = defineStore('auth', () => {
     systemInitialized,
     isLoggedIn,
     mustChangePin,
+    isSystemAdmin,
+    isPlatformOperator,
     checkBootstrap,
     login,
     selectCandidate,

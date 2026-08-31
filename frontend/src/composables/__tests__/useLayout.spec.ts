@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   computeCanvasLayout,
+  computeGenerationLanes,
   computeListOrder,
   computeTreeLayout,
 } from '../useLayout'
@@ -66,6 +67,43 @@ describe('computeTreeLayout', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(new Set(result.positions.map((p) => p.id))).toEqual(new Set([1, 2, 3]))
+  })
+})
+
+describe('computeGenerationLanes（世代泳道底纹带，P3-3）', () => {
+  it('按树状布局行距分层：root 层为第 1 代，band 垂直居中于世代行', () => {
+    const positions = [
+      { id: 1, x: 0, y: 0 },
+      { id: 2, x: 180, y: 160 },
+      { id: 3, x: 90, y: 320 },
+    ]
+    const lanes = computeGenerationLanes(positions)
+    expect(lanes.map((l) => l.generation)).toEqual([1, 2, 3])
+    expect(lanes[0].y).toBe(-80)
+    expect(lanes[0].height).toBe(160)
+    expect(lanes[2].y).toBe(240)
+  })
+
+  it('底纹带横向覆盖最宽层并留边距（默认 padX=120）', () => {
+    const positions = [
+      { id: 1, x: 40, y: 0 },
+      { id: 2, x: 220, y: 160 },
+    ]
+    const lanes = computeGenerationLanes(positions)
+    expect(lanes[0].x).toBe(-80)
+    expect(lanes[0].width).toBe(420)
+  })
+
+  it('同代多根与隔代孤立行各成一带；空布局返回空数组', () => {
+    expect(computeGenerationLanes([])).toEqual([])
+    const positions = [
+      { id: 1, x: 0, y: 0 },
+      { id: 2, x: 200, y: 0 },
+      { id: 3, x: 100, y: 320 },
+    ]
+    const lanes = computeGenerationLanes(positions)
+    expect(lanes.map((l) => l.generation)).toEqual([1, 3])
+    expect(lanes[1].y).toBe(240)
   })
 })
 

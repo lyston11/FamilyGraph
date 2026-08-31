@@ -1,9 +1,14 @@
 """认证路由：login / login/select / refresh / logout（AD-2 全流程）。"""
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_authenticated_user
+from app.api.deps import (
+    get_db,
+    require_authenticated_principal,
+)
 from app.errors import (
     CHALLENGE_INVALID,
     INVALID_REFRESH_TOKEN,
@@ -11,6 +16,7 @@ from app.errors import (
     raise_api_error,
 )
 from app.models.account import Account
+from app.models.system_admin import SystemAdmin, SystemAdminAccount
 from app.models.user import User
 from app.schemas.auth import (
     ChallengeCandidate,
@@ -22,6 +28,7 @@ from app.schemas.auth import (
     SelectCandidateRequest,
     TokenPairResponse,
     UserOut,
+    public_system_admin_payload,
     public_user_payload,
 )
 from app.services import (
@@ -35,6 +42,7 @@ from app.services import (
     refresh_session as refresh_session_service,
 )
 from app.utils import security
+from app.utils.timeutil import utcnow
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +66,22 @@ def _token_pair_response(
     )
 
 
+def _system_token_pair_response(
+    admin: SystemAdmin, account: SystemAdminAccount, refresh_raw: str
+) -> TokenPairResponse:
+    access = security.create_access_token(
+        admin.id,
+        account.token_version,
+        is_platform_operator=True,
+        principal_type="system_admin",
+    )
+    return TokenPairResponse(
+        access_token=access,
+        refresh_token=refresh_raw,
+        user=UserOut(**public_system_admin_payload(admin, account)),
+    )
+
+
 @router.post("/login", response_model=TokenPairResponse | ChallengeResponse)
 def login(
     payload: LoginRequest,
@@ -67,6 +91,23 @@ def login(
 ) -> TokenPairResponse | ChallengeResponse:
     """名字 + PIN 登录；同名同 PIN 多命中返回 409 challenge。"""
     ip = _client_ip(request)
+    system_rows = (
+        session.query(SystemAdmin, SystemAdminAccount)
+        .join(SystemAdminAccount, SystemAdminAccount.system_admin_id == SystemAdmin.id)
+        .filter(SystemAdmin.login_name == payload.name.strip())
+        .all()
+    )
+    system_accounts = [account for _admin, account in system_rows]
+    try:
+        auth_guard.ensure_not_locked(system_accounts)  # shared lock-window logic
+    except auth_guard.AccountLockedError as locked:
+        raise_api_error(
+            429,
+            "ACCOUNT_LOCKED",
+            "失败次数过多，账户已临时锁定，请稍后再试",
+            detail={"retry_after_seconds": locked.retry_after_seconds},
+            headers={"Retry-After": str(locked.retry_after_seconds)},
+        )
     rows = (
         session.query(User, Account)
         .join(Account, Account.user_id == User.id)
@@ -74,8 +115,38 @@ def login(
         .all()
     )
     accounts = [account for _user, account in rows]
+    verified_system = [
+        (admin, account)
+        for admin, account in system_rows
+        if security.verify_pin(payload.pin, account.pin_hash)
+    ]
+    if verified_system:
+        admin, account = verified_system[0]
+        account.failed_attempts = 0
+        account.locked_until = None
+        refresh_raw = refresh_session_service.issue_system_admin_refresh_session(
+            session, admin, account, rotated_from=None
+        )
+        audit.write_audit(
+            session,
+            action="system_admin_login_succeeded",
+            actor_id=None,
+            target_id=admin.id,
+            ip=ip,
+            detail={"principal_type": "system_admin"},
+        )
+        session.commit()
+        return _system_token_pair_response(admin, account, refresh_raw)
 
-    # 锁定检查在凭据校验之前：锁定窗口内即使 PIN 正确也拒绝
+    if not verified_system and system_accounts and not accounts:
+        for account in system_accounts:
+            account.failed_attempts += 1
+            if account.failed_attempts >= 5:
+                account.locked_until = utcnow() + timedelta(minutes=15)
+        session.commit()
+
+    # The family account flow remains below. A system principal is never
+    # represented as a User or admitted by require_authenticated_user.
     try:
         auth_guard.ensure_not_locked(accounts)
     except auth_guard.AccountLockedError as locked:
@@ -181,6 +252,22 @@ def refresh_tokens(
     """轮换 refresh；重用已 revoked token 触发全会话撤销 + 审计。"""
     ip = _client_ip(request)
     try:
+        decoded = security.decode_token(payload.refresh_token, security.REFRESH_TOKEN_TYPE)
+        if decoded.get("principal_type") == "system_admin":
+            admin, system_account, new_refresh_raw = refresh_session_service.rotate_system_admin(
+                session, payload.refresh_token, ip
+            )
+            response = _system_token_pair_response(admin, system_account, new_refresh_raw)
+            session.commit()
+            return response
+    except refresh_session_service.RefreshReuseDetectedError:
+        session.commit()
+        raise_api_error(401, INVALID_REFRESH_TOKEN, "登录状态已失效，请重新登录")
+    except (refresh_session_service.InvalidRefreshTokenError, security.TokenDecodeError):
+        session.commit()
+        raise_api_error(401, INVALID_REFRESH_TOKEN, "登录状态已失效，请重新登录")
+
+    try:
         account, new_refresh_raw = refresh_session_service.rotate(
             session, payload.refresh_token, ip
         )
@@ -201,10 +288,17 @@ def logout(
     payload: LogoutRequest,
     request: Request,
     session: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: tuple[User, Account] | tuple[SystemAdmin, SystemAdminAccount] = Depends(
+        require_authenticated_principal
+    ),
 ) -> LogoutResponse:
     """登出 = 撤销对应 refresh 会话（architecture.md §2）；白名单端点。"""
-    user, _account = identity
-    refresh_session_service.revoke_by_raw_token(session, user.id, payload.refresh_token)
+    principal, _account = identity
+    if isinstance(principal, SystemAdmin):
+        refresh_session_service.revoke_system_admin_by_raw_token(
+            session, principal.id, payload.refresh_token
+        )
+    else:
+        refresh_session_service.revoke_by_raw_token(session, principal.id, payload.refresh_token)
     session.commit()
     return LogoutResponse(success=True)

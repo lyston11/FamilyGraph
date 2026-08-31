@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend lint, format, mypy and test quality gate."}
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"Agent protocol, cancellation, SSE, provider and schema verification checklist."}
+{"file":".trellis/spec/backend/controlled-web.md","reason":"Web egress, token, quota and citation regression checklist."}
+{"file":".trellis/spec/architecture.md","reason":"Final cross-layer authorization and visibility compliance review."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check shared constants/config and schema reuse before closure."}

@@ -53,9 +53,85 @@
 - 认领争议保留 evidence、状态、双方最小披露与平台人工兜底；平台人工处理需 break-glass 原因与完整审计，不因此获得日常浏览权。
 - 建档、档案修改、空间变更、关系请求、附件等 API 组合事务抽成 application/domain command，HTTP 与未来 Agent 工具共用同一授权/FSM/写入/事件/audit 短事务；外部网络调用不进入事务。
 
+### 0.7 空间管理者审批（用户确认 2026-08-30，任务 08-30-space-manager-approval）
+
+- **成为已有空间的空间管理者需要经平台运营者审批**：当前空间 active `member` 可申请由 `member` 升级为 `space_admin`；owner、已有 `space_admin`、guest 不适用。
+- **邀请与管理员审批是两条独立流程**：active member（除 guest）可以直接邀请账号，邀请只创建 pending membership，受邀人本人接受后才成为 active；邀请不需要平台运营者审批。
+- **空间创建沿用既有自由创建语义**：用户可通过 `POST /api/spaces` 创建 household/lineage 空间，自建者成为 owner + active 成员；MemberCreateWizard 也可直接创建族谱空间。共同家庭空间与 Owner Onboarding 邀请兑换路径保持不变。
+- 同一 (申请人, 目标空间, kind) 至多一条 pending（partial unique index + 命令层查重 409 `SPACE_MANAGER_APPLICATION_EXISTS`）；已裁决申请终态不可再变（重复裁决 409）。申请人须 `identity_confirmed`；guest 不能提交管理员申请。
+- **现有空间的 owner 只能通过既有 owner 移交流程（ownership_transfers FSM，现任 owner 发起）变更**；平台运营者裁决 `space_admin` 申请绝不触碰任何现有空间的 `family_spaces.owner_id`，approve 只做该空间内 active member → space_admin 一升。
+- 裁决动作（approve/reject，reject 理由必填 422）在同一短事务内完成：角色升级 + 审计（`manager_application_submitted/approved/rejected`，批准行带 `admin_action`）+ 领域事件 `space.manager_application.decided`；若审批时成员资格已变化，申请回滚为 pending。
+- 运营者队列仅展示裁决所需最小数据（申请人名、申请类型、目标空间名），不产生任何家庭数据浏览权（延续 §0.2/§0.6 边界）。
+- 实现：`backend/app/commands/manager_applications.py`、`backend/app/api/spaces.py`（用户侧提交/自查与自由建空间）、`backend/app/api/admin.py`（队列/裁决，require_platform_operator）、迁移 0021。
+
 ---
 
-## 1. 身份模型：PersonProfile / Account / ClaimState 分离 `[AD-1]`
+
+## 0.8 系统管理员与空间唯一管理员重构（2026-08-31）
+
+本节覆盖并替代本文早期将 `platform_operator` 绑定到家庭 `User` 的兼容描述：
+
+### 1. Scope / Trigger
+
+- 系统管理员是独立平台主体，不引用 `User`、`Account`、`FamilySpace` 或 `SpaceMember`；首启只创建 `system_admins` 与 `system_admin_accounts`。
+- 家庭空间管理员是空间域关系，不是用户全局属性；规范角色只有 `space_admin`。
+- 系统后台只处理账号、成员关系、管理员归属、空间元数据、申请和交接工单的最小投影。
+
+### 2. Signatures
+
+- `POST /api/bootstrap/initialize` → 一次性系统管理员登录名和 `one_time_pin`；数据库不得创建家庭主体。
+- `GET /api/admin/accounts`、`GET /api/admin/spaces`、`GET /api/admin/space-managers`、`GET /api/admin/spaces/{space_id}/members` → 仅 `require_system_admin`，使用专用 Pydantic schema。
+- `GET/POST /api/admin/manager-applications...` → 仅 `require_system_admin`；申请目标必须是已存在的 `lineage` 空间。
+- `SpaceManagerApplication(applicant_user_id, space_id, status)` → 申请人必须是目标空间 active 普通成员；目标已有管理员时先创建绑定当前管理员的 `ManagerTransferConsent`。
+- `is_space_manager(session, space_id, user_id)` → 只按目标空间 active `space_admin` 关系判断。
+
+### 3. Contracts
+
+- `SpaceMember.role` 的持久化值为 `space_admin|member|guest`；每个正常空间最多一个 active `space_admin`，创建和交接完成后必须恰好一个。
+- 旧 `owner` 只允许作为迁移/旧夹具输入，在 ORM 写入事件中归一化为 `space_admin`；不得参与授权，也不得作为 API 产品角色输出。
+- JWT 必须携带 `principal_type=system_admin|family_user`；家庭端依赖拒绝 system-admin 主体，系统后台依赖拒绝普通家庭主体。
+- 元数据响应不得包含档案日期、性别、简介、头像、附件、关系图边、私人会话/记忆或敏感披露字段。
+
+### 4. Validation & Error Matrix
+
+- 非 `lineage` 管理员申请 → `422 VALIDATION_ERROR`。
+- 目标空间不存在或申请人不是 active 成员 → `404 SPACE_NOT_FOUND`（防枚举）。
+- guest、非 member、已是目标管理员 → `403/409`，不得创建申请。
+- 系统管理员未完成首登 PIN 修改 → 仅允许 PIN/登出/刷新白名单。
+- 已有管理员但未取得明确同意 → `409`，不得交换角色；原管理员拒绝时保持原关系不变。
+- 目标空间无管理员或并发交接校验失败 → `409`，进入修复/重新核验流程，不提交零/双管理员终态。
+
+### 5. Good/Base/Bad Cases
+
+- Good: 同一用户在空间 A、B 各有一条 active `space_admin`，在空间 C 仍按 C 的 member 角色授权。
+- Base: 系统管理员登录后读取账号与空间元数据，但 `/api/me`、`/api/spaces` 返回认证失败，不进入家庭壳。
+- Bad: 用 `is_admin(user_id)`、`owner_id` 或用户在任意其他空间的管理员身份放行当前空间治理。
+
+### 6. Tests Required
+
+- 首启数据库只存在独立系统主体；系统 token 可访问 `/admin/accounts`，家庭 token 返回 403。
+- 系统 token 访问 `/me`、`/spaces` 被拒绝；元数据响应字段白名单无家庭档案字段。
+- 路由注册断言 `/admin/accounts`、`/admin/spaces`、`/admin/space-managers` 各只有一条。
+- lineage 申请、同意工单、拒绝、过期、并发交接均验证唯一 active `space_admin`。
+- Alembic 空库、合法存量和 owner/space_admin 冲突数据分别验证。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+if user.is_admin or family_spaces.owner_id == actor.id:
+    allow_space_management()
+```
+
+#### Correct
+
+```python
+if is_space_manager(session, space_id, actor.id):
+    allow_space_management()
+```
+
+
 
 > **[v2 取代]** 本节的 users.claim_status 已迁移至 accounts.status（managed|claimed + claimed_at）；is_admin 列已删除（见 §0.2/§0.3）。其余 PersonProfile/Account 分离概念不变。
 
@@ -160,6 +236,9 @@ active  ──remove──> removed(终态, owner 或本人)
 | 搜索命中 | — | — | 允许(full 详情) | 允许(摘要) | 不可命中 |
 | 统计聚合 | — | — | 计入范围 | 计入范围 | 不计入 |
 | join_request | 目标空间 owner 可见审批 | — | — | — | — |
+| 空间邀请（invite） | — | active 成员（除 guest）可邀请；受邀人需接受 | — | — | — |
+| 空间管理者申请 | 提交（identity_confirmed；guest 否）与查看本人申请 | — | — | — | — |
+| 管理者申请裁决 | platform_operator only（队列/approve/reject + audit；见 §0.7） | — | — | — | — |
 | 管理 API | is_admin only + audit | — | — | — | — |
 
 - IDOR 集成测试逐行覆盖矩阵（普通 JWT 直打 API 断言遮罩/invisible）。

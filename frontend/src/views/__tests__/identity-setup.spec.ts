@@ -60,6 +60,7 @@ async function mountView(
     routes: [
       { path: '/identity-setup', name: 'identity-setup', component: IdentitySetupView },
       { path: '/', name: 'family-space', component: { template: '<div />' } },
+      { path: '/stats', name: 'stats', component: { template: '<div />' } },
       { path: '/:pathMatch(.*)*', redirect: '/' },
     ],
   })
@@ -173,6 +174,18 @@ describe('IdentitySetupView（v2 F-1 确档向导）', () => {
     await wrapper.find('[data-test="finish-btn"]').trigger('click')
     await new Promise((resolve) => setTimeout(resolve))
     expect(router.currentRoute.value.path).toBe('/')
+    wrapper.unmount()
+  })
+
+  it('完成确档后回到安全的原始 redirect', async () => {
+    mockedFetchReviews.mockResolvedValue([])
+    const { wrapper, router } = await mountView({ profile_status: 'identity_confirmed' })
+    await router.replace({ name: 'identity-setup', query: { redirect: '/stats' } })
+    await wrapper.vm.$nextTick()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-test="finish-btn"]').exists()).toBe(true))
+    await wrapper.find('[data-test="finish-btn"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('stats'))
     wrapper.unmount()
   })
 

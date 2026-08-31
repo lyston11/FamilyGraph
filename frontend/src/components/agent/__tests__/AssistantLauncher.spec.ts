@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
+import { defineComponent, h } from 'vue'
 
 import * as agentApi from '@/api/agent'
 import AssistantLauncher from '@/components/agent/AssistantLauncher.vue'
@@ -44,6 +44,22 @@ vi.mock('@/composables/useAgentStream', () => ({
   })),
 }))
 
+// 面板打开会 ensureLoaded 行动卡列表：mock 掉避免真实 XHR（stderr 噪音源）
+vi.mock('@/api/actionCards', () => ({
+  ACTION_CARD_ERRORS: {
+    CARD_STATE_CONFLICT: 'CARD_STATE_CONFLICT',
+    CARD_EXPIRED: 'CARD_EXPIRED',
+    CARD_EXECUTE_REJECTED: 'CARD_EXECUTE_REJECTED',
+    SPACE_FORBIDDEN_ACTOR: 'SPACE_FORBIDDEN_ACTOR',
+  },
+  fetchActionCards: vi.fn().mockResolvedValue([]),
+  viewActionCard: vi.fn(),
+  dismissActionCard: vi.fn(),
+  acceptActionCard: vi.fn(),
+  executeActionCard: vi.fn(),
+  friendlyActionCardError: (code: string) => code,
+}))
+
 // jsdom 无 matchMedia：Panel 需要
 function stubMatchMedia(matches = false): void {
   vi.stubGlobal(
@@ -80,6 +96,16 @@ async function loginAndSeedSpace(pinia: Pinia, spaceId = 1): Promise<void> {
   spaces.currentSpaceId = spaceId
 }
 
+// Launcher 内嵌 Panel（经 NDrawer 渲染 ActionCardItem 链路），useMessage 需 provider 祖先
+function mountLauncher(pinia: Pinia) {
+  const Harness = defineComponent({
+    render() {
+      return h('div', [h(NMessageProvider, () => h(AssistantLauncher))])
+    },
+  })
+  return mount(Harness, { global: { plugins: [pinia] }, attachTo: document.body })
+}
+
 describe('AssistantLauncher', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -89,9 +115,8 @@ describe('AssistantLauncher', () => {
   })
 
   it('未登录 → 隐藏', () => {
-    const wrapper = mount(AssistantLauncher, {
-      global: { plugins: [ElementPlus] },
-    })
+    const pinia = createPinia()
+    const wrapper = mountLauncher(pinia)
     expect(wrapper.find('[data-test="assistant-launcher"]').exists()).toBe(false)
   })
 
@@ -99,12 +124,12 @@ describe('AssistantLauncher', () => {
     const pinia = createPinia()
     await loginAndSeedSpace(pinia)
     useAuthStore(pinia).user = makeUser({ pin_must_change: true })
-    let wrapper = mount(AssistantLauncher, { global: { plugins: [pinia, ElementPlus] } })
+    let wrapper = mountLauncher(pinia)
     expect(wrapper.find('[data-test="assistant-launcher"]').exists()).toBe(false)
     wrapper.unmount()
 
     useAuthStore(pinia).user = makeUser({ profile_status: 'provisional' })
-    wrapper = mount(AssistantLauncher, { global: { plugins: [pinia, ElementPlus] } })
+    wrapper = mountLauncher(pinia)
     expect(wrapper.find('[data-test="assistant-launcher"]').exists()).toBe(false)
   })
 
@@ -114,20 +139,14 @@ describe('AssistantLauncher', () => {
     auth.accessToken = 'tok'
     auth.user = makeUser()
     // 不放任何空间
-    let wrapper = mount(AssistantLauncher, {
-      global: { plugins: [pinia, ElementPlus] },
-      attachTo: document.body,
-    })
+    let wrapper = mountLauncher(pinia)
     let btn = wrapper.find('[data-test="assistant-launcher"]')
     expect(btn.exists()).toBe(true)
     expect(btn.attributes('disabled')).toBeDefined()
     wrapper.unmount()
 
     await loginAndSeedSpace(pinia)
-    wrapper = mount(AssistantLauncher, {
-      global: { plugins: [pinia, ElementPlus] },
-      attachTo: document.body,
-    })
+    wrapper = mountLauncher(pinia)
     btn = wrapper.find('[data-test="assistant-launcher"]')
     expect(btn.attributes('disabled')).toBeUndefined()
     expect(btn.attributes('aria-expanded')).toBe('false')
@@ -144,10 +163,7 @@ describe('AssistantLauncher', () => {
   it('切换空间：旧 scope 分区被清除且流被关闭，新 scope 装载会话（跨 scope 对抗）', async () => {
     const pinia = createPinia()
     await loginAndSeedSpace(pinia, 1)
-    const wrapper = mount(AssistantLauncher, {
-      global: { plugins: [pinia, ElementPlus] },
-      attachTo: document.body,
-    })
+    const wrapper = mountLauncher(pinia)
     await new Promise((resolve) => setTimeout(resolve))
     expect(useAgentStore(pinia).partitions.get(1)).toBeDefined()
 

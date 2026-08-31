@@ -30,7 +30,9 @@ from app.errors import (
     AGENT_EVENT_INVALID,
     AGENT_INTERNAL_FORBIDDEN,
     AGENT_JOB_NOT_FOUND,
+    AGENT_PROVIDER_PROXY_UNAVAILABLE,
     AGENT_RUN_NOT_FOUND,
+    AGENT_RUN_NOT_RUNNING,
     AGENT_TOKEN_INVALID,
     AGENT_TOKEN_SCOPE_MISMATCH,
     extract_api_error,
@@ -38,6 +40,7 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import AgentJob, AgentMessage, AgentRun, AgentSession
+from app.models.space import SpaceMember
 from app.schemas.agent import (
     ContextMessageOut,
     ContextOut,
@@ -196,11 +199,18 @@ def _authorize_run(
         raise_api_error(404, AGENT_RUN_NOT_FOUND, "Run 不存在")
     agent_session = db.get(AgentSession, run.session_id)
     assert agent_session is not None
+    job = db.get(AgentJob, run.job_id) if run.job_id is not None else None
     if (
         claims["account_id"] != agent_session.account_id
         or claims["space_id"] != agent_session.space_id
         or claims["agent_kind"] != run.kind
+        or claims["job_id"] != run.job_id
         or sorted(claims["tool_allowlist"]) != sorted(run.tool_allowlist_json or [])
+        or job is None
+        or job.run_id != run.id
+        or job.account_id != agent_session.account_id
+        or job.space_id != agent_session.space_id
+        or job.kind != run.kind
     ):
         _deny(
             db,
@@ -210,7 +220,43 @@ def _authorize_run(
             code=AGENT_TOKEN_SCOPE_MISMATCH,
             message="token scope 与执行实体不一致",
         )
+    # Membership is deliberately re-evaluated for every internal request;
+    # revoking a user invalidates an already-issued run token immediately.
+    account = db.get(Account, agent_session.account_id)
+    member = db.scalar(
+        select(SpaceMember).where(
+            SpaceMember.space_id == agent_session.space_id,
+            SpaceMember.user_id == (account.user_id if account is not None else -1),
+            SpaceMember.status == "active",
+        )
+    )
+    # owner_id 不是运行时授权来源（PRD R2/R6）：授权只看目标空间的 active
+    # membership。迁移 0022 已把历史 owner 落成 active space_admin 成员行，
+    # 因此这里不再保留 owner_id fallback。
+    if member is None:
+        _deny(
+            db,
+            request,
+            reason="active_membership_missing",
+            status_code=403,
+            code=AGENT_TOKEN_SCOPE_MISMATCH,
+            message="Run 所属空间成员资格已失效",
+        )
     return run, agent_session, claims
+
+
+def _require_active_run(db: Session, request: Request, run: AgentRun) -> None:
+    """Reject post-lease protocol writes once a Run has stopped being active."""
+    if run.status not in ("queued", "leased", "running"):
+        _deny(
+            db,
+            request,
+            reason="run_not_active",
+            status_code=409,
+            code=AGENT_RUN_NOT_RUNNING,
+            message="Run 不在活跃状态",
+            detail={"status": run.status},
+        )
 
 
 # ---- jobs ----
@@ -225,8 +271,25 @@ def lease_job(
     """sidecar 以 service token 租赁一个 queued job；无可租返回 204。"""
     _reject_user_jwt(db, request)
     _decode_or_deny(db, request, typ=agent_tokens.SERVICE_TOKEN_TYPE)
+    # The HTTP lease endpoint is exclusively for the Assistant sidecar.  The
+    # canonical Steward worker runs in the API maintenance loop and leases
+    # directly through the deterministic service; accepting ``steward`` or an
+    # omitted kind here would let any holder of the shared service secret
+    # consume the Steward queue.
+    if body.kind != "assistant":
+        _deny(
+            db,
+            request,
+            reason="steward_lease_requires_canonical_worker",
+            status_code=403,
+            code=AGENT_INTERNAL_FORBIDDEN,
+            message="Steward 作业仅可由系统维护 worker 执行",
+        )
     grant = agent_queue.lease_next(
-        db, kind=body.kind, leased_by=body.leased_by, ttl_seconds=body.lease_ttl_seconds
+        db,
+        kind=body.kind or "assistant",
+        leased_by=body.leased_by,
+        ttl_seconds=body.lease_ttl_seconds,
     )
     if grant is None:
         return Response(status_code=204)
@@ -267,17 +330,19 @@ def heartbeat_job(
             code=AGENT_TOKEN_SCOPE_MISMATCH,
             message="token 与目标 Job 不匹配",
         )
+    run, _agent_session, _claims = _authorize_run(db, request, int(claims["run_id"]))
+    _require_active_run(db, request, run)
     job = db.get(AgentJob, job_id)
     if job is None or job.run_id != claims["run_id"]:
         raise_api_error(404, AGENT_JOB_NOT_FOUND, "Job 不存在或不属于该 Run")
     ttl = body.lease_ttl_seconds if body is not None else None
     expires = agent_queue.heartbeat(db, job, ttl_seconds=ttl)
     # additive：cancel_requested 随续租下发（B2 客户端忽略未知字段，兼容）
-    run = db.get(AgentRun, claims["run_id"])
+    active_run = db.get(AgentRun, claims["run_id"])
     return HeartbeatOut(
         ok=True,
         lease_expires_at=expires,
-        cancel_requested=bool(run.cancel_requested) if run is not None else False,
+        cancel_requested=bool(active_run.cancel_requested) if active_run is not None else False,
     )
 
 
@@ -285,6 +350,7 @@ def heartbeat_job(
 
 
 @router.post("/runs/{run_id}/provider/chat/completions")
+@router.post("/runs/{run_id}/provider/responses")
 async def proxy_provider_chat_completions(
     run_id: int,
     request: Request,
@@ -298,7 +364,26 @@ async def proxy_provider_chat_completions(
     from app.services import provider_proxy
 
     run, agent_session, _claims = _authorize_run(db, request, run_id)
-    body = await request.body()
+    expected_api = (
+        "openai-responses"
+        if request.url.path.endswith("/provider/responses")
+        else "openai-completions"
+    )
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > config.AGENT_PROVIDER_PROXY_MAX_BYTES:
+                raise_api_error(413, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求体过大")
+        except ValueError:
+            raise_api_error(422, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求长度无效")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > config.AGENT_PROVIDER_PROXY_MAX_BYTES:
+            raise_api_error(413, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求体过大")
+        chunks.append(chunk)
+    body = b"".join(chunks)
     try:
         client, upstream, provider_id = await provider_proxy.stream_provider_response(
             db,
@@ -308,6 +393,7 @@ async def proxy_provider_chat_completions(
             content_type=request.headers.get("content-type"),
             accept=request.headers.get("accept"),
             user_agent=request.headers.get("user-agent"),
+            expected_api=expected_api,
         )
     except provider_proxy.ProviderProxyError as exc:
         db.commit()  # 审计先提交（拒绝路径惯例）
@@ -332,23 +418,26 @@ async def proxy_provider_chat_completions(
 
 @router.get("/runs/{run_id}/context", response_model=ContextOut)
 def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) -> ContextOut:
-    """session scope、最近消息投影与 Provider 运行期解析（含服务端解密的 base_url/api_key）。
+    """session scope、最近消息投影与 Provider 运行期解析（仅下发代理路径）。
 
-    凭据只下发给已验签的 run token 持有者（internal listener / sidecar-only 网络），
-    绝不出现在浏览器 API、SSE、领域事件或日志；浏览器 Provider 治理端点只暴露 has_secret。
+    Provider 凭据只在 ProviderGateway 内解密并注入上游 Authorization；context
+    仅返回站内代理路径和无密钥 projection，绝不出现在浏览器 API、SSE、领域事件或日志。
     """
     run, agent_session, _claims = _authorize_run(db, request, run_id)
-    limit = config.AGENT_CONTEXT_MESSAGE_LIMIT
+    _require_active_run(db, request, run)
+    # A Pi session is stateful across turns.  Project the complete durable
+    # transcript in stable id order; truncating to a recent-N window silently
+    # drops earlier user/assistant turns and can make the model contradict its
+    # own conversation.  Context/RAG blocks remain independently bounded by
+    # their service-level contracts.
     recent = list(
         db.scalars(
             select(AgentMessage)
             .where(AgentMessage.session_id == agent_session.id)
-            .order_by(AgentMessage.id.desc())
-            .limit(limit)
+            .order_by(AgentMessage.id.asc())
         )
     )
-    recent.reverse()
-    resolution = agent_provider.resolve_for_space(db, agent_session.space_id)
+    resolution = agent_provider.resolve_for_run(db, run, agent_session.space_id)
     # P1 唯一 egress：不再向 sidecar 下发解密凭据/base_url，只下发代理路径；
     # 模型流量经 POST /runs/{id}/provider/chat/completions 由服务端转发。
     proxy_base_url = (
@@ -401,13 +490,22 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
         ],
         provider=ContextProviderOut(
             provider_id=resolution.provider_id,
+            provider_name=resolution.provider_name,
             model=resolution.model,
             kind=resolution.kind,
+            api=resolution.api,
+            compat=dict(resolution.compat),
+            context_window=resolution.context_window,
+            max_tokens=resolution.max_tokens,
+            reasoning=resolution.reasoning,
+            input_modalities=list(resolution.input_modalities),
+            thinking_levels=list(resolution.thinking_levels),
             policy_result=resolution.policy_result,
             secret_ref=resolution.secret_ref,
             base_url=proxy_base_url,
             api_key=None,
         ),
+        next_event_seq=agent_events.next_seq(db, run.id),
         cancel_requested=bool(run.cancel_requested),
         context_build_id=context_build_id,
         context_blocks=context_blocks,
@@ -422,6 +520,7 @@ def append_events_endpoint(
     db: Session = Depends(get_db),
 ) -> EventAppendOut:
     run, _agent_session, _claims = _authorize_run(db, request, run_id)
+    _require_active_run(db, request, run)
     # 类型先于事务校验：未知类型不落公开流，直接审计拒绝
     for entry in body.events:
         if entry.type not in agent_events.EVENT_TYPES:

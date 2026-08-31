@@ -221,6 +221,46 @@ def resolve_term(
     return TermResolution(None, None, None)
 
 
+def resolve_term_alias(
+    session: Session, *, account_id: int, space_id: int, term: str
+) -> str | None:
+    """Reverse lookup a user/space/locale/system alias to a concept code.
+
+    Alias lookup is intentionally deterministic: the same precedence used for
+    display is applied in reverse, and ties are ordered by concept/id.  Raw
+    relation input remains append-only; this function only reads the registry.
+    """
+    cleaned = term.strip()
+    if not cleaned:
+        return None
+    locale = space_locale(session, space_id)
+    rows = list(
+        session.scalars(
+            select(TermEntry).where(
+                TermEntry.term == cleaned,
+                TermEntry.status == "active",
+                (
+                    (
+                        (TermEntry.level == TERM_LEVEL_PERSONAL)
+                        & (TermEntry.owner_account_id == account_id)
+                    )
+                    | ((TermEntry.level == TERM_LEVEL_SPACE) & (TermEntry.space_id == space_id))
+                    | ((TermEntry.level == TERM_LEVEL_LOCALE) & (TermEntry.locale == locale))
+                    | (TermEntry.level == TERM_LEVEL_SYSTEM)
+                ),
+            )
+        )
+    )
+    rank = {
+        TERM_LEVEL_PERSONAL: 0,
+        TERM_LEVEL_SPACE: 1,
+        TERM_LEVEL_LOCALE: 2,
+        TERM_LEVEL_SYSTEM: 3,
+    }
+    rows.sort(key=lambda row: (rank[row.level], row.concept_code, row.id))
+    return rows[0].concept_code if rows else None
+
+
 # ---- 个人称谓纠正（AC-KI6：DomainEvent + 立即生效，不需要记忆卡）----
 
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { NButton } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { useAgentStore } from '@/stores/agent'
@@ -14,10 +15,12 @@ import SessionList from './SessionList.vue'
 /**
  * PanelContent：桌面抽屉与移动全屏共享的消息内容层（design.md：
  * 只有容器不同，不维护两套会话逻辑）。同时承载焦点圈闭与 Esc 关闭。
+ * 顶部为助手人格标识位（design.md §2.3 Obsidian 00：Assistant 人格章，
+ * 纯视觉，不承载会话行为）。
  */
 const props = defineProps<{ open: boolean }>()
 
-const emit = defineEmits<{ escape: [] }>()
+const emit = defineEmits<{ escape: []; close: [] }>()
 
 const spaces = useSpacesStore()
 const agent = useAgentStore()
@@ -131,6 +134,29 @@ function onDraftUpdate(value: string): void {
     aria-label="家庭助手"
     @keydown.capture="onKeydown"
   >
+    <!-- 人格标识位：助手人格章 + 名称（Steward 人格经 ActionCard 呈现，不在此处） -->
+    <div class="panel-header" data-test="assistant-persona">
+      <span class="persona-mark" aria-hidden="true">家</span>
+      <div class="persona-text">
+        <span class="persona-name">家庭助手</span>
+        <span class="persona-sub">只依据已确认的档案与事实回答</span>
+      </div>
+      <button
+        type="button"
+        class="close-btn"
+        aria-label="关闭家庭助手"
+        data-test="assistant-panel-close"
+        @click="emit('close')"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
+          />
+        </svg>
+      </button>
+    </div>
+
     <ScopeBanner :space="space" />
     <div class="toolbar">
       <SessionList
@@ -142,17 +168,17 @@ function onDraftUpdate(value: string): void {
         @select="onSelectSession"
         @create="onCreateSession"
       />
-      <el-button
+      <NButton
         v-else
         size="small"
         type="primary"
-        plain
+        secondary
         data-test="new-session-btn-empty"
         :disabled="!partition || partition.sending"
         @click="onCreateSession"
       >
         开始新会话
-      </el-button>
+      </NButton>
     </div>
 
     <template v-if="partition">
@@ -183,7 +209,72 @@ function onDraftUpdate(value: string): void {
   height: 100%;
   min-height: 0;
   outline: none;
-  background: var(--el-bg-color);
+  background: var(--fg-surface-raised);
+}
+
+/* 助手人格章：主色实底方章（纸墨=朱砂印 / 清雅=青蓝章），随主题 token */
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--fg-line);
+}
+
+.persona-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--fg-radius-control);
+  background: var(--fg-accent);
+  color: var(--fg-accent-ink);
+  font-family: var(--fg-font-display);
+  font-size: 17px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.persona-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.persona-name {
+  color: var(--fg-ink);
+  font-family: var(--fg-font-display);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.persona-sub {
+  color: var(--fg-ink-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background: transparent;
+  color: var(--fg-ink-secondary);
+}
+
+.close-btn:hover {
+  background: var(--fg-surface-sunken);
+  color: var(--fg-ink);
 }
 
 .toolbar {
@@ -192,6 +283,6 @@ function onDraftUpdate(value: string): void {
   justify-content: flex-end;
   gap: 8px;
   padding: 8px 14px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--fg-line);
 }
 </style>

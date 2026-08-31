@@ -1,10 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
 import { defineComponent, h } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
-
-import ElementPlus from 'element-plus'
 
 import * as governanceApi from '@/api/governance'
 import * as membersApi from '@/api/members'
@@ -144,8 +143,8 @@ function makeMatrix(overrides?: {
   }
 }
 
-// SettingsView 主体仍是 element-plus（P5 迁移），但其引用的 ChangePinForm 已迁
-// naive-ui，setup 期 useMessage 需要 NMessageProvider 祖先；div 根保证查询稳定
+// SettingsView 全量迁 naive-ui（P5）：useMessage 需 NMessageProvider 祖先；
+// div 根保证查询稳定
 const MessageProvidedSettings = defineComponent({
   render() {
     return h('div', [h(NMessageProvider, () => h(SettingsView))])
@@ -154,6 +153,16 @@ const MessageProvidedSettings = defineComponent({
 
 async function mountSettings(pinia: Pinia) {
   const auth = useAuthStore(pinia)
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'family-space', component: { template: '<div />' } },
+      { path: '/settings', name: 'settings', component: SettingsView },
+      { path: '/memory', name: 'memory', component: { template: '<div />' } },
+    ],
+  })
+  await router.push('/settings')
+  await router.isReady()
   // setup store 的 ref 可直接赋值（先取 store 再注入，避免 state 替换不生效）
   auth.user = {
     id: 1,
@@ -164,11 +173,11 @@ async function mountSettings(pinia: Pinia) {
     profile_status: 'identity_confirmed',
   }
   const wrapper = mount(MessageProvidedSettings, {
-    global: { plugins: [pinia, ElementPlus] },
+    global: { plugins: [pinia, router] },
     attachTo: document.body,
   })
   await new Promise((resolve) => setTimeout(resolve))
-  return wrapper
+  return { wrapper, router }
 }
 
 describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
@@ -184,8 +193,16 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     mockedFetchMatrix.mockResolvedValue(makeMatrix())
   })
 
+  it('设置页返回按钮使用 family-space 命名路由', async () => {
+    const { wrapper, router } = await mountSettings(pinia)
+
+    await wrapper.find('[data-test="settings-back"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('family-space'))
+    wrapper.unmount()
+  })
+
   it('披露矩阵渲染全部类别；高敏感类别开关禁用；保存提交基础五类', async () => {
-    const wrapper = await mountSettings(pinia)
+    const { wrapper } = await mountSettings(pinia)
 
     // n-data-table：tbody 行数 = 10 个披露类别
     const rows = wrapper.findAll('[data-test="disclosure-table"] tbody tr')
@@ -230,7 +247,7 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     mockedFetchMatrix.mockResolvedValue(
       makeMatrix({ spaces: [{ space_id: 7, allowed: { dates: true } }] }),
     )
-    const wrapper = await mountSettings(pinia)
+    const { wrapper } = await mountSettings(pinia)
 
     // 矩阵同步后，空间列基础类别开关可用且反映已保存值（dates=true）
     const spaceDates = wrapper.find('[data-test="disclosure-space-7-dates"]')
@@ -255,11 +272,33 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     wrapper.unmount()
   })
 
+  it('主题切换：双预览卡点击切主题，aria-pressed 与 data-theme / localStorage 同步', async () => {
+    const { wrapper } = await mountSettings(pinia)
+
+    const paperCard = wrapper.find('[data-test="theme-card-paper"]')
+    const modernCard = wrapper.find('[data-test="theme-card-modern"]')
+    // 默认纸墨
+    expect(paperCard.attributes('aria-pressed')).toBe('true')
+    expect(modernCard.attributes('aria-pressed')).toBe('false')
+    expect(document.documentElement.dataset.theme).toBe('paper')
+
+    await modernCard.trigger('click')
+    expect(modernCard.attributes('aria-pressed')).toBe('true')
+    expect(paperCard.attributes('aria-pressed')).toBe('false')
+    expect(document.documentElement.dataset.theme).toBe('modern')
+    expect(localStorage.getItem('fg-theme')).toBe('modern')
+
+    // 切回纸墨
+    await paperCard.trigger('click')
+    expect(document.documentElement.dataset.theme).toBe('paper')
+    wrapper.unmount()
+  })
+
   it('我的数据：申请导出后历史列表出现该请求', async () => {
     const created = makeRight()
     mockedRequestExport.mockResolvedValue(created)
     mockedFetchRights.mockResolvedValue([created])
-    const wrapper = await mountSettings(pinia)
+    const { wrapper } = await mountSettings(pinia)
 
     await wrapper.find('[data-test="request-export-btn"]').trigger('click')
     await vi.waitFor(() => expect(mockedRequestExport).toHaveBeenCalled())
@@ -272,7 +311,7 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
   it('删除/注销：名字确认后创建请求并立即执行，随后清空本地会话', async () => {
     mockedRequestDeletion.mockResolvedValue(makeRight({ type: 'delete' }))
     mockedExecuteDelete.mockResolvedValue(undefined)
-    const wrapper = await mountSettings(pinia)
+    const { wrapper } = await mountSettings(pinia)
 
     await wrapper.find('[data-test="open-delete-dialog"]').trigger('click')
     await vi.waitFor(() =>

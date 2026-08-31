@@ -174,6 +174,35 @@ def append_events(
                 public_payload=entry.public_payload,
             )
         )
+        if entry.type == "message.assistant_added":
+            # Promote the public assistant projection into session history so
+            # subsequent Pi turns can restore the full conversation.  Only the
+            # bounded text/citation projection is persisted; provider-private
+            # payloads never cross this boundary.
+            payload = entry.public_payload
+            text = payload.get("text")
+            if isinstance(text, str):
+                session = db.get(AgentRun, run.id)
+                if session is not None:
+                    from app.models.agent import AgentMessage
+
+                    db.add(
+                        AgentMessage(
+                            session_id=session.session_id,
+                            role="assistant",
+                            content_json={
+                                "text": text,
+                                **(
+                                    {"web_citations": payload["web_citations"]}
+                                    if isinstance(payload.get("web_citations"), list)
+                                    else {}
+                                ),
+                            },
+                            idempotency_key=f"run:{run.id}:event:{entry.seq}",
+                            created_at=timeutil.utcnow(),
+                        )
+                    )
+                    db.flush()
         expected_next += 1
         if entry.type == "run.started":
             _promote_to_running(db, run)

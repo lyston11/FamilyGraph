@@ -6,8 +6,9 @@
  *  - custom domain tools execute exclusively through FastAPI;
  *  - the policy-guard inline extension blocks unknown tools and scans
  *    provider payloads for secret material;
- *  - providers are registered programmatically from sidecar env config
- *    (baseUrl/apiKey stay in process memory, never in payloads/logs);
+ *  - providers are registered programmatically from the backend's run-scoped
+ *    projection; the projection contains only an internal gateway URL and no
+ *    provider credential. The gateway injects the real key server-side;
  *  - session/settings managers are in-memory: no state survives the run and
  *    nothing is written to disk (crash recovery is owned by FastAPI).
  */
@@ -23,11 +24,14 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { streamSimple as openAIStreamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as openAICompletionsStreamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as openAIResponsesStreamSimple } from "@earendil-works/pi-ai/api/openai-responses";
 import type {
   Api,
   AssistantMessageEventStream,
+  AssistantMessage,
   Context,
+  Message,
   Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
@@ -35,7 +39,12 @@ import type { AgentConfig } from "./config.js";
 import { RunEventBuffer } from "./events.js";
 import { createPolicyGuard, type PolicyGuard } from "./policy.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "./prompt.js";
-import { createDomainTools, defaultToolNames, type DomainToolName } from "./tools.js";
+import {
+  createDomainTools,
+  defaultToolNames,
+  providerWireName,
+  type DomainToolName,
+} from "./tools.js";
 import type { InternalClient, RunContextProjection } from "./client.js";
 
 /** Raised when provider policy makes this run unexecutable (explainable refusal). */
@@ -61,17 +70,28 @@ export interface SessionBundle {
 
 export interface BuildSessionDeps {
   /** Test seam: override the registered provider's stream implementation. */
-  streamOverride?: (
-    model: Model<"openai-completions">,
-    context: Context,
-    options?: SimpleStreamOptions,
-  ) => AssistantMessageEventStream;
+  // The bivariant method keeps existing completions-only test doubles
+  // assignable while the runtime also supports the openai-responses adapter.
+  streamOverride?: {
+    bivarianceHack(
+      model: Model<Api>,
+      context: Context,
+      options?: SimpleStreamOptions,
+    ): AssistantMessageEventStream;
+  }["bivarianceHack"];
   agentDir?: string;
   /** Returns true when the run must stop issuing tool calls (cancel/lease lost). */
   shouldStopToolCalls?: () => boolean;
+  /** Abort signal propagated to Pi and pi-ai provider retries. */
+  signal?: AbortSignal;
 }
 
-const TOKEN_CAP_KEYS = new Set(["max_tokens", "max_completion_tokens", "maxTokens"]);
+const TOKEN_CAP_KEYS = new Set([
+  "max_tokens",
+  "max_completion_tokens",
+  "max_output_tokens",
+  "maxTokens",
+]);
 
 /**
  * Ensure any token-cap field that survives provider-body re-serialization is an
@@ -97,25 +117,33 @@ function coerceTokenCaps(value: unknown): unknown {
 }
 
 function buildModelLiteral(
-  providerId: string,
+  providerName: string,
   modelId: string,
   baseUrl: string,
-): Model<"openai-completions"> {
+  api: "openai-completions" | "openai-responses",
+  compat: Record<string, unknown>,
+  contextWindow: number,
+  maxTokens: number,
+  reasoning: boolean,
+  input: ("text" | "image")[],
+  thinkingLevels: string[],
+): Model<"openai-completions" | "openai-responses"> {
   return {
     id: modelId,
     name: modelId,
-    api: "openai-completions",
-    provider: providerId,
+    api,
+    provider: providerName,
     baseUrl,
-    reasoning: true,
-    input: ["text", "image"],
+    reasoning,
+    input: input.length > 0 ? input : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
+    contextWindow,
+    maxTokens,
+    thinkingLevelMap: Object.fromEntries(thinkingLevels.map((level) => [level, level])),
     // openai-compatible 中转（含 zhipu glm 系）：发送 max_tokens 而非
     // max_completion_tokens，避免中转 Go 网关按 string 拒绝 uint token 上限；
     // 其余 compat 交由 pi-ai 依 baseUrl 自动探测（与用户 pi 的 guga 配置一致）。
-    compat: { maxTokensField: "max_tokens" },
+    compat: compat as Model<"openai-completions">["compat"],
   };
 }
 
@@ -123,7 +151,18 @@ export function resolveProvider(
   config: AgentConfig,
   provider: RunContextProjection["provider"],
   runToken: string,
-): { entry: { kind: "openai_compatible" | "local"; baseUrl: string; apiKey: string | undefined; model: string }; modelId: string; providerId: string } {
+  expectedRunId?: string,
+): {
+  entry: {
+    kind: "openai_compatible" | "local";
+    baseUrl: string;
+    apiKey: string | undefined;
+    model: string;
+  };
+  modelId: string;
+  providerId: string;
+  providerName: string;
+} {
   if (provider === null || provider.policy_result !== "allowed") {
     // Explainable refusals for policy_result !== "allowed" are handled by the
     // worker BEFORE the model loop starts; reaching here is a wiring error.
@@ -145,20 +184,50 @@ export function resolveProvider(
       `no runtime config matches provider "${provider.provider_id}"`,
     );
   }
-  let baseUrl: string;
-  let apiKey: string | undefined;
-  if (rawBaseUrl.startsWith("/")) {
-    baseUrl = new URL(rawBaseUrl, config.internalApiBaseUrl).toString().replace(/\/$/, "");
-    apiKey = runToken;
-  } else {
-    // 兼容路径：直接下发完整 base_url（本地 Provider 场景）；api_key 仍来自 projection
-    baseUrl = rawBaseUrl;
-    apiKey = provider.api_key ?? undefined;
+  // Every provider, including local ones, uses the backend gateway. Absolute
+  // URLs and projected credentials are rejected so a compromised projection
+  // cannot create a sidecar egress escape hatch.
+  if (!rawBaseUrl.startsWith("/internal/")) {
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      "provider projection must use internal gateway",
+    );
   }
+  if (provider.api_key !== null) {
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      "provider projection must not contain credentials",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rawBaseUrl, config.internalApiBaseUrl);
+  } catch {
+    throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider gateway URL is invalid");
+  }
+  const match = parsed.pathname.match(/^\/internal\/agent\/runs\/(\d+)\/provider$/);
+  if (
+    match === null ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    (expectedRunId !== undefined && match[1] !== expectedRunId)
+  ) {
+    throw new ProviderPolicyError(
+      "PROVIDER_UNRESOLVED",
+      "provider projection is not bound to this run",
+    );
+  }
+  const baseUrl = parsed.toString().replace(/\/$/, "");
+  const apiKey = runToken;
+  const providerName = provider.provider_name || provider.provider_id || "familygraph-provider";
   return {
     entry: { kind: provider.kind, baseUrl, apiKey, model: provider.model },
     modelId: provider.model,
-    providerId: provider.provider_id || "familygraph-provider",
+    // Pi's model.provider must equal the key passed to registerProvider. Keep
+    // the numeric DB id available in the backend projection for audit, but use
+    // the stable Pi name (liu-dada) when one is supplied.
+    providerId: providerName,
+    providerName,
   };
 }
 
@@ -182,8 +251,34 @@ export async function buildRunSession(
     );
   }
 
-  const { entry, modelId, providerId } = resolveProvider(config, projection.provider, runToken);
-  const model = buildModelLiteral(providerId, modelId, entry.baseUrl);
+  const { entry, modelId, providerId, providerName } = resolveProvider(
+    config,
+    projection.provider,
+    runToken,
+    projection.run_id,
+  );
+  if (
+    projection.provider?.api !== "openai-completions" &&
+    projection.provider?.api !== "openai-responses"
+  ) {
+    throw new ProviderPolicyError("PROVIDER_UNRESOLVED", "provider protocol is unsupported");
+  }
+  const api = projection.provider.api;
+  const compat = projection.provider?.compat ?? {};
+  const model = buildModelLiteral(
+    providerName,
+    modelId,
+    entry.baseUrl,
+    api,
+    compat,
+    Number(projection.provider?.context_window ?? 272_000),
+    Number(projection.provider?.max_tokens ?? 60_000),
+    projection.provider?.reasoning ?? true,
+    (projection.provider?.input_modalities ?? ["text", "image"]).filter(
+      (value): value is "text" | "image" => value === "text" || value === "image",
+    ),
+    projection.provider?.thinking_levels ?? ["low", "medium", "high", "xhigh", "max"],
+  );
 
   // Fully offline model/auth runtime: no catalog refresh, no network probing,
   // credentials stored under an ephemeral scratch dir (never ~/.pi).
@@ -205,13 +300,10 @@ export async function buildRunSession(
     ),
   });
 
-  const guardedStreamSimple = (
-    m: Model<Api>,
-    context: Context,
-    options?: SimpleStreamOptions,
-  ) => {
+  const guardedStreamSimple = (m: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
     const guardedOptions = {
       ...options,
+      signal: deps.signal ?? options?.signal,
       // 中转型上游（如 guga）在重载荷下会间歇 503 service_busy：
       // 网关层按指数退避重试（5xx/408/409/429），不改变请求内容。
       maxRetries: config.providerStreamMaxRetries,
@@ -224,8 +316,10 @@ export async function buildRunSession(
       },
     } satisfies SimpleStreamOptions;
     return deps.streamOverride
-      ? deps.streamOverride(m as Model<"openai-completions">, context, guardedOptions)
-      : openAIStreamSimple(m as Model<"openai-completions">, context, guardedOptions);
+      ? deps.streamOverride(m, context, guardedOptions)
+      : api === "openai-responses"
+        ? openAIResponsesStreamSimple(m as Model<"openai-responses">, context, guardedOptions)
+        : openAICompletionsStreamSimple(m as Model<"openai-completions">, context, guardedOptions);
   };
 
   const registerProviderExtension: InlineExtension = {
@@ -233,10 +327,10 @@ export async function buildRunSession(
     hidden: true,
     factory: (pi) => {
       pi.registerProvider(providerId, {
-        name: `familygraph-${providerId}`,
+        name: providerName,
         baseUrl: entry.baseUrl,
         apiKey: entry.apiKey ?? "unconfigured",
-        api: "openai-completions",
+        api,
         models: [model],
         streamSimple: guardedStreamSimple,
       });
@@ -258,13 +352,16 @@ export async function buildRunSession(
   });
   await loader.reload();
 
-  const domainTools = createDomainTools((toolName: DomainToolName, call) => {
-    if (deps.shouldStopToolCalls?.()) {
-      // Cancel requested / lease lost: no further tool calls reach FastAPI.
-      throw new Error("run stop requested; tool call skipped");
-    }
-    return client.executeTool(projection.run_id, runToken, toolName, call);
-  });
+  const domainTools = createDomainTools(
+    (toolName: DomainToolName, call) => {
+      if (deps.shouldStopToolCalls?.()) {
+        // Cancel requested / lease lost: no further tool calls reach FastAPI.
+        throw new Error("run stop requested; tool call skipped");
+      }
+      return client.executeTool(projection.run_id, runToken, toolName, call, deps.signal);
+    },
+    { providerWireNames: true },
+  );
 
   const { session } = await createAgentSession({
     cwd: agentDir,
@@ -272,12 +369,56 @@ export async function buildRunSession(
     modelRuntime,
     model,
     noTools: "all",
-    tools: [...projection.tool_allowlist],
+    // Pi uses these names when constructing provider requests. Keep the
+    // server-issued allowlist canonical, but emit provider-safe wire names.
+    tools: projection.tool_allowlist.map((name) => providerWireName(name as DomainToolName)),
     customTools: domainTools,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(agentDir),
     settingsManager: SettingsManager.inMemory(),
   });
+
+  // Rehydrate the persisted transcript before the current prompt.  The latest
+  // user message is sent by worker.prompt(); older turns are assigned to the
+  // Pi agent state so provider requests contain the complete conversation.
+  const latestUserId = [...projection.messages]
+    .reverse()
+    .find(
+      (message) => message.role === "user" && typeof message.content_json["text"] === "string",
+    )?.id;
+  const zeroUsage = () => ({
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+  const history: Message[] = projection.messages
+    .filter((message) => message.id !== latestUserId)
+    .flatMap((message): Message[] => {
+      const text = message.content_json["text"];
+      if ((message.role !== "user" && message.role !== "assistant") || typeof text !== "string")
+        return [];
+      const timestamp = Date.parse(message.created_at) || Date.now();
+      if (message.role === "user") {
+        return [{ role: "user" as const, content: text, timestamp }];
+      }
+      const assistant: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        api,
+        provider: providerName,
+        model: modelId,
+        usage: zeroUsage(),
+        stopReason: "stop",
+        timestamp,
+      };
+      return [assistant];
+    });
+  if (history.length > 0) {
+    session.agent.state.messages = history as unknown as typeof session.agent.state.messages;
+  }
 
   return { session, events: new RunEventBuffer(), policyGuard };
 }

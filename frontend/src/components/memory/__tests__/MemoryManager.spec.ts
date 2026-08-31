@@ -1,7 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import ElementPlus from 'element-plus'
+import { NDialogProvider, NMessageProvider } from 'naive-ui'
+import { defineComponent, h } from 'vue'
 
 import * as memoryApi from '@/api/memory'
 import CitationList from '@/components/memory/CitationList.vue'
@@ -69,6 +70,14 @@ const savedMemory: Memory = {
   updated_at: '2026-08-26T00:00:00',
 }
 
+// MemoryManager setup 期 useMessage/useDialog：需要 provider 祖先（App 层已备好）；
+// n-modal 默认 teleport 到 body，确认弹层内的断言与点击走 document 查询
+function clickDocument(selector: string): void {
+  const target = document.querySelector(selector)
+  expect(target, selector).not.toBeNull()
+  target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
 async function mountManager(): Promise<ReturnType<typeof mount>> {
   const pinia = createPinia()
   const spaces = useSpacesStore(pinia)
@@ -82,8 +91,15 @@ async function mountManager(): Promise<ReturnType<typeof mount>> {
     member_count: 2,
   }]
   spaces.currentSpaceId = 5
-  const wrapper = mount(MemoryManager, {
-    global: { plugins: [pinia, ElementPlus] },
+  const Harness = defineComponent({
+    render() {
+      return h('div', [
+        h(NMessageProvider, () => h(NDialogProvider, () => h(MemoryManager))),
+      ])
+    },
+  })
+  const wrapper = mount(Harness, {
+    global: { plugins: [pinia] },
   })
   await vi.waitFor(() => expect(mockedCandidates).toHaveBeenCalled())
   return wrapper
@@ -111,8 +127,15 @@ describe('MemoryManager（V2.5）', () => {
   it('确认时提交用户明确选择的 scope 和保留期限', async () => {
     const wrapper = await mountManager()
     await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
-    await wrapper.find('[data-test="memory-retention-days"] input').setValue('30')
-    await wrapper.find('[data-test="confirm-memory-submit"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+    const retentionInput = document.querySelector(
+      '[data-test="memory-retention-days"] input',
+    ) as HTMLInputElement
+    expect(retentionInput).not.toBeNull()
+    retentionInput.value = '30'
+    retentionInput.dispatchEvent(new Event('input', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve))
+    clickDocument('[data-test="confirm-memory-submit"]')
 
     await vi.waitFor(() => expect(mockedConfirm).toHaveBeenCalledWith(1, {
       scope: 'private',
@@ -121,9 +144,49 @@ describe('MemoryManager（V2.5）', () => {
     wrapper.unmount()
   })
 
+  it('确认弹层完整展示原话、敏感等级与保留期限（V2.5 合同：确认前可见）', async () => {
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+
+    const dialog = document.querySelector('[data-test="confirm-memory-dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.textContent).toContain('敏感等级：普通')
+    expect(dialog?.textContent).toContain('每年春节一起包饺子。')
+    expect(dialog?.textContent).toContain('保存范围')
+    expect(dialog?.textContent).toContain('保留期限')
+    wrapper.unmount()
+  })
+
+  it('高敏感候选：共享 scope 选项置灰不可选，弹层保留可见降级文案', async () => {
+    mockedCandidates.mockResolvedValue([{ ...candidate, id: 2, sensitivity: 'high' }])
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+
+    // fail-closed 降级文案可见（type-safety.md / V2.5 合同）
+    expect(document.querySelector('[data-test="memory-sharing-warning"]')).not.toBeNull()
+
+    // 共享选项置灰：点击后选择不改变，确认仍提交 private（不做乐观放宽）
+    ;(document.querySelector('.n-base-selection') as HTMLElement).dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    )
+    await new Promise((resolve) => setTimeout(resolve))
+    const sharedOption = [...document.querySelectorAll('.n-base-select-option')].find((el) =>
+      el.textContent?.includes('家庭共享'),
+    )
+    expect(sharedOption).not.toBeUndefined()
+    sharedOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve))
+    clickDocument('[data-test="confirm-memory-submit"]')
+
+    await vi.waitFor(() => expect(mockedConfirm).toHaveBeenCalledWith(2, { scope: 'private' }))
+    wrapper.unmount()
+  })
+
   it('空间 RAG 检索只在输入后请求当前空间，并展示无结果空态', async () => {
     const wrapper = await mountManager()
-    await wrapper.find('[data-test="rag-search-input"]').setValue('春节')
+    await wrapper.find('[data-test="rag-search-input"] input').setValue('春节')
     await new Promise((resolve) => setTimeout(resolve, 300))
 
     expect(mockedSearch).toHaveBeenCalledWith(5, '春节')
@@ -146,7 +209,6 @@ describe('CitationList（来源可追溯投影）', () => {
           citation_handle: 'rag:3:r1:c7',
         }],
       },
-      global: { plugins: [ElementPlus] },
     })
 
     expect(wrapper.find('[data-test="citation-item"]').text()).toContain('确认记忆')

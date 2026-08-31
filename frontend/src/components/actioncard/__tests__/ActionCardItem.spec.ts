@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import ElementPlus from 'element-plus'
+import { NMessageProvider } from 'naive-ui'
+import { defineComponent, h } from 'vue'
 
 import { ACTION_CARD_ERRORS } from '@/api/actionCards'
 import * as actionCardsApi from '@/api/actionCards'
@@ -52,10 +52,16 @@ function makeCard(overrides: Partial<ActionCard> = {}): ActionCard {
 
 let pinia: Pinia
 
+// useMessage 需要 NMessageProvider 祖先（App 层已备好）；n-modal teleport 到 body，
+// 弹层断言与点击走 document 查询
 function mountItem(card: ActionCard) {
-  return mount(ActionCardItem, {
-    props: { card },
-    global: { plugins: [pinia, ElementPlus] },
+  const Harness = defineComponent({
+    render() {
+      return h('div', [h(NMessageProvider, () => h(ActionCardItem, { card }))])
+    },
+  })
+  return mount(Harness, {
+    global: { plugins: [pinia] },
     attachTo: document.body,
   })
 }
@@ -99,6 +105,23 @@ describe('ActionCardItem（V2.4 Block S3）', () => {
     expect(wrapper.find('[data-test="card-dismiss-btn"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="card-accept-btn"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="card-execute-btn"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('状态徽章阶沿用领域状态工具类；过期卡整体灰化', () => {
+    let wrapper = mountItem(makeCard())
+    const stateTag = wrapper.find('[data-test="card-state-tag"]')
+    expect(stateTag.classes()).toContain('fg-badge')
+    expect(stateTag.classes()).toContain('fg-badge--accent')
+    wrapper.unmount()
+
+    wrapper = mountItem(makeCard({ state: 'accepted' }))
+    expect(wrapper.find('[data-test="card-state-tag"]').classes()).toContain('fg-badge--confirmed')
+    // 过期灰化：卡片根节点带灰化态
+    const expired = mountItem(makeCard({ state: 'expired' }))
+    expect(expired.find('[data-test="action-card-item"]').classes()).toContain('is-expired')
+    expect(expired.find('[data-test="card-state-tag"]').classes()).toContain('fg-badge--provisional')
+    expired.unmount()
     wrapper.unmount()
   })
 

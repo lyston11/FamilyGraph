@@ -13,8 +13,8 @@ from starlette.responses import Response
 
 from app import config, logctx
 from app.api.action_cards import router as action_cards_router
-from app.api.admin import router as admin_router
 from app.api.admin_agent import router as admin_agent_router
+from app.api.admin_metadata import router as admin_metadata_router
 from app.api.agent import router as agent_router
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
@@ -31,6 +31,7 @@ from app.api.kinship import router as kinship_router
 from app.api.memory import router as memory_router
 from app.api.misc import router as misc_router
 from app.api.spaces import router as spaces_router
+from app.api.system_admin import router as system_admin_router
 from app.api.users import members_router
 from app.api.users import router as users_router
 from app.errors import INTERNAL_ERROR, VALIDATION_ERROR, extract_api_error, raise_api_error
@@ -134,12 +135,13 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(members_router, prefix="/api")
 app.include_router(bootstrap_router, prefix="/api")
-app.include_router(admin_router, prefix="/api")
+app.include_router(spaces_router, prefix="/api")
+app.include_router(system_admin_router, prefix="/api")
+app.include_router(admin_metadata_router, prefix="/api")
 app.include_router(connections_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(misc_router, prefix="/api")
 app.include_router(attachments_router, prefix="/api")
-app.include_router(spaces_router, prefix="/api")
 app.include_router(governance_router, prefix="/api")
 # 浏览器 Agent API（JWT；feature flag 关闭一律 503，RT-6）
 app.include_router(agent_router, prefix="/api")

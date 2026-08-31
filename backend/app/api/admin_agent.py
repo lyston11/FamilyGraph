@@ -33,7 +33,7 @@ from app.schemas.agent import (
     AgentSpaceProviderSettingsOut,
     AgentSpaceProviderSettingsRequest,
 )
-from app.services import audit
+from app.services import agent_provider, audit
 from app.services.platform_roles import require_platform_operator
 from app.utils import secretbox, timeutil
 
@@ -60,7 +60,14 @@ def _provider_out(row: AgentProvider) -> AgentProviderOut:
         id=row.id,
         name=row.name,
         kind=row.kind,
+        api=row.api,
         base_url=row.base_url,
+        compat=dict(row.compat_json or {}),
+        context_window=row.context_window,
+        max_tokens=row.max_tokens,
+        reasoning=bool(row.reasoning),
+        input_modalities=list(row.input_modalities_json or []),
+        thinking_levels=list(row.thinking_levels_json or []),
         has_secret=row.secret_ciphertext is not None,
         allowed_models=list(row.allowed_models_json or []),
         enabled=bool(row.enabled),
@@ -82,13 +89,28 @@ def register_provider(
     row = AgentProvider(
         name=body.name,
         kind=body.kind,
+        api=body.api,
         base_url=body.base_url,
+        compat_json=dict(body.compat),
+        context_window=body.context_window,
+        max_tokens=body.max_tokens,
+        reasoning=body.reasoning,
+        input_modalities_json=list(body.input_modalities),
+        thinking_levels_json=list(body.thinking_levels),
         secret_ciphertext=secretbox.encrypt_secret(body.secret) if body.secret else None,
         allowed_models_json=list(body.allowed_models),
         enabled=body.enabled,
         created_at=now,
         updated_at=now,
     )
+    profile_error = agent_provider.provider_profile_error(row)
+    if profile_error is not None:
+        raise_api_error(
+            422,
+            VALIDATION_ERROR,
+            "云 Provider 必须使用受控的 liu-dada/gpt-5.6-sol Pi profile",
+            {"reason": profile_error},
+        )
     db.add(row)
     db.commit()
     audit.write_audit(
@@ -125,8 +147,23 @@ def update_provider(
     if row is None:
         raise_api_error(404, AGENT_PROVIDER_NOT_FOUND, "Provider 不存在")
     provided = body.model_fields_set
+    if "api" in provided and body.api is not None:
+        row.api = body.api
     if "base_url" in provided:
         row.base_url = body.base_url
+    if "compat" in provided and body.compat is not None:
+        row.compat_json = dict(body.compat)
+    for field, attr in (
+        ("context_window", "context_window"),
+        ("max_tokens", "max_tokens"),
+        ("reasoning", "reasoning"),
+    ):
+        if field in provided:
+            setattr(row, attr, getattr(body, field))
+    if "input_modalities" in provided and body.input_modalities is not None:
+        row.input_modalities_json = list(body.input_modalities)
+    if "thinking_levels" in provided and body.thinking_levels is not None:
+        row.thinking_levels_json = list(body.thinking_levels)
     if "allowed_models" in provided and body.allowed_models is not None:
         row.allowed_models_json = list(body.allowed_models)
     if "enabled" in provided and body.enabled is not None:
@@ -134,6 +171,14 @@ def update_provider(
     if "secret" in provided:
         # 只写语义：非空轮换密文；空字符串表示清除本地无密钥形态
         row.secret_ciphertext = secretbox.encrypt_secret(body.secret) if body.secret else None
+    profile_error = agent_provider.provider_profile_error(row)
+    if profile_error is not None:
+        raise_api_error(
+            422,
+            VALIDATION_ERROR,
+            "云 Provider 必须使用受控的 liu-dada/gpt-5.6-sol Pi profile",
+            {"reason": profile_error},
+        )
     row.updated_at = timeutil.utcnow()
     db.commit()
     audit.write_audit(

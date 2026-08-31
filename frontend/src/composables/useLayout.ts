@@ -128,6 +128,47 @@ export function computeTreeLayout(
   }
 }
 
+/** 世代泳道底纹带（design.md §3.2 画布"谱卷"感）：树状布局 y=depth*spacing，
+ *  按出现过的世代行输出横向底纹带矩形（band 垂直居中于世代行，宽度覆盖全部节点）。 */
+export interface GenerationLane {
+  /** 1 起始世代号：root 层（depth 0）= 第 1 代 */
+  generation: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * 从布局结果推导世代泳道底纹带（纯几何换算，不依赖边数据）：
+ * - band = round(y / spacing)，与 computeTreeLayout 的 depth*160 对齐；
+ * - 底纹带 x 覆盖 min(x)-padX … max(x)+padX，孤立的配偶行同样得到自己的带。
+ */
+export function computeGenerationLanes(
+  positions: PositionedNode[],
+  options: { spacing?: number; padX?: number } = {},
+): GenerationLane[] {
+  const spacing = options.spacing ?? 160
+  const padX = options.padX ?? 120
+  if (positions.length === 0) return []
+  const bands = new Set<number>()
+  for (const p of positions) {
+    bands.add(Math.round(p.y / spacing))
+  }
+  const xs = positions.map((p) => p.x)
+  const x = Math.min(...xs) - padX
+  const width = Math.max(...xs) - Math.min(...xs) + padX * 2
+  return [...bands]
+    .sort((a, b) => a - b)
+    .map((band) => ({
+      generation: band + 1,
+      x,
+      y: band * spacing - spacing / 2,
+      width,
+      height: spacing,
+    }))
+}
+
 /** 列表布局：生辰升序（ISO 字符串序），缺生日按 id 升序兜底（Q1 默认方案） */
 export function computeListOrder<T extends { id: number; birth: { date: string | null } | null }>(
   members: T[],

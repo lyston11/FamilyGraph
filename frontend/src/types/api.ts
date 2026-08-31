@@ -11,8 +11,11 @@ export interface UserOut {
    * （backend/app/schemas/auth.py 同键注释）。仅用于 UI 隐藏 admin 入口；
    * 后端最终鉴权是 require_platform_operator，不信任此布尔。
    */
+  /** 签名会话的权威主体类型；is_admin 仅为兼容显示字段。 */
   is_admin: boolean
   pin_must_change: boolean
+  principal_type?: 'family_user' | 'system_admin'
+  platform_role?: 'platform_operator' | null
   /** 账号生命周期：managed → claimed（唯一转换点=首登认领，v2 §0.3） */
   claim_status: ClaimStatus
   /** 档案确档状态：provisional → identity_confirmed（路由守卫判定源，v2 Gap2） */
@@ -117,8 +120,14 @@ export interface ClanDisclosure {
 }
 
 export type SpaceKind = 'household' | 'lineage'
-/** 空间角色（§0.2）：owner/space_admin/member；household 可另有 guest */
-export type SpaceRole = 'owner' | 'space_admin' | 'member' | 'guest'
+/**
+ * 空间角色：产品层只有一个「空间管理员」（`space_admin`）。
+ *
+ * 旧 `owner` 已在迁移 0022 归一化为 `space_admin`，后端 `SpaceMemberOut` 不再
+ * 输出它，因此前端不保留该字面量。`guest` 仍是后端规范角色之一（无写入路径，
+ * 只在可见性收紧分支中生效）。
+ */
+export type SpaceRole = 'space_admin' | 'member' | 'guest'
 
 /** 当前主体对该档案的可用操作（resolve_relation 投影） */
 export interface MemberPermissions {
@@ -249,6 +258,64 @@ export interface SpaceMemberInfo {
   role: SpaceRole
   status: 'pending' | 'active' | 'rejected' | 'withdrawn' | 'removed'
   updated_at: string
+}
+
+// ---- 空间管理者申请（任务 08-30-space-manager-approval；与后端 schemas/space.py 对应） ----
+
+export type ManagerRequestKind = 'space_admin'
+export type ManagerApplicationStatus = 'pending' | 'approved' | 'rejected'
+
+export type ManagerTransferConsentStatus = 'pending' | 'accepted' | 'rejected' | 'expired'
+
+/** 空间管理员申请：指向申请人所在的目标 lineage 家族空间 */
+export interface SpaceManagerApplication {
+  id: number
+  applicant_user_id: number
+  /** 队列/本人列表附带的名字投影 */
+  applicant_name?: string | null
+  space_id: number
+  space_name?: string | null
+  space_kind?: SpaceKind | null
+  /** 目标空间现任唯一管理员（交接对象） */
+  current_manager_user_id?: number | null
+  current_manager_name?: string | null
+  /** 原管理员同意工单；approve 首阶段由服务端创建 */
+  transfer_consent_id?: number | null
+  transfer_consent_status?: ManagerTransferConsentStatus | null
+  request_kind: ManagerRequestKind
+  status: ManagerApplicationStatus
+  /** 平台备注（reject 必填，approve 可选） */
+  decision_note: string | null
+  created_at: string
+  decided_at: string | null
+  /** 系统管理员裁决人（家庭用户裁决路径不写该字段） */
+  system_admin_decided_by?: number | null
+}
+
+/** 可申请管理员的目标空间；资格由服务端裁定 */
+export interface EligibleManagerTarget {
+  space_id: number
+  space_name: string
+  space_kind: 'lineage'
+  current_manager_user_id: number | null
+  current_manager_name: string | null
+  has_pending_application: boolean
+}
+
+/** 原管理员交接同意工单：自带目标空间与申请人标识 */
+export interface ManagerTransferConsent {
+  id: number
+  application_id: number
+  space_id: number
+  space_name?: string | null
+  space_kind?: SpaceKind | null
+  applicant_user_id?: number | null
+  applicant_name?: string | null
+  current_manager_user_id: number
+  status: ManagerTransferConsentStatus
+  requested_at: string
+  responded_at: string | null
+  response_reason: string | null
 }
 
 // ---- v2 Foundation 治理域（与 backend/app/schemas/v2_foundation.py 一一对应） ----

@@ -525,7 +525,7 @@ def test_execute_create_household_success_and_no_lineage_merge(
         for m in db_session.query(SpaceMember).filter(SpaceMember.space_id == new_space.id).all()
     }
     assert members[jia.id].status == "active"
-    assert members[jia.id].role == "owner"
+    assert members[jia.id].role == "space_admin"
     assert members[yi.id].status == "active"
 
     # execute 前后 SourceFact 行数不变（绝不静默写 SourceFact）

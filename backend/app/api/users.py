@@ -13,20 +13,27 @@ edit/delete 判定在 services/custody.py 与命令层。platform_operator 无�
 拦截并引导移交（§0.5，RESTRICT 兑底）。
 """
 
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_authenticated_user
+from app.api.deps import get_db, require_authenticated_principal, require_authenticated_user
 from app.commands import members as member_commands
 from app.commands.context import ActorContext
 from app.errors import (
     raise_api_error,
 )
 from app.models import Account, User
+from app.models.system_admin import SystemAdmin, SystemAdminAccount
 from app.models.user import BASIC_DISCLOSURE_KEYS
-from app.schemas.auth import ChangeNameRequest, ChangePinRequest, UserOut, public_user_payload
+from app.schemas.auth import (
+    ChangeNameRequest,
+    ChangePinRequest,
+    UserOut,
+    public_system_admin_payload,
+    public_user_payload,
+)
 from app.schemas.user import (
     DisclosureMatrixOut,
     DisclosurePayload,
@@ -37,7 +44,7 @@ from app.schemas.user import (
     MemberUpdateRequest,
     member_payload,
 )
-from app.services import custody, platform_roles
+from app.services import audit, custody, platform_roles
 from app.services import disclosure as disclosure_service
 
 router = APIRouter(tags=["me"])
@@ -75,12 +82,35 @@ def change_pin(
     payload: ChangePinRequest,
     request: Request,
     session: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: tuple[User, Account] | tuple[SystemAdmin, SystemAdminAccount] = Depends(
+        require_authenticated_principal
+    ),
 ) -> UserOut:
-    """改 PIN（命令：commands.members.change_own_pin）：验旧 PIN → 新哈希 →
-    pin_must_change=false（首登认领）→ 版本+1。"""
-    user, account = identity
-    ctx = ActorContext.from_identity(user, account, ip=_client_ip(request))
+    """家庭账号与系统主体共用首登 PIN 门禁，但不共用持久化主体。"""
+    principal, account = identity
+    if isinstance(principal, SystemAdmin):
+        from app.utils import security, timeutil
+
+        if not security.verify_pin(payload.old_pin, account.pin_hash):
+            raise_api_error(401, "AUTH_INVALID_CREDENTIALS", "名字或 PIN 码错误")
+        account.pin_hash = security.hash_pin(payload.new_pin)
+        account.pin_must_change = False
+        account.status = "claimed"
+        account.claimed_at = timeutil.utcnow()
+        account.token_version += 1
+        audit.write_audit(
+            session,
+            action="system_admin_pin_changed",
+            actor_id=None,
+            target_id=principal.id,
+            ip=_client_ip(request),
+            detail={"principal_type": "system_admin"},
+        )
+        session.commit()
+        return UserOut(**public_system_admin_payload(principal, account))
+    user = principal
+    family_account = cast(Account, account)
+    ctx = ActorContext.from_identity(user, family_account, ip=_client_ip(request))
     user, _was_forced = member_commands.change_own_pin(
         session, ctx, old_pin=payload.old_pin, new_pin=payload.new_pin
     )

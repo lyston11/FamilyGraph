@@ -14,16 +14,19 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_authenticated_user
+from app.api.deps import Principal, get_db, require_authenticated_user, require_platform_principal
 from app.commands import admin as admin_commands
 from app.commands import data_rights as data_right_commands
+from app.commands import manager_applications as manager_application_commands
 from app.commands import owner_onboarding as onboarding_commands
 from app.commands.context import ActorContext
 from app.errors import raise_api_error
 from app.models.account import Account
 from app.models.audit_log import AuditLog
+from app.models.system_admin import SystemAdmin
 from app.models.user import User
 from app.models.v2_foundation import ClaimDispute, DataRightRequest, OwnerInvitation
+from app.schemas.space import ManagerApplicationDecision, ManagerApplicationOut
 from app.schemas.v2_foundation import (
     DataRightRequestOut,
     OperatorResolveCorrection,
@@ -344,6 +347,56 @@ def resolve_claim_dispute(
         "status": dispute.status,
         "resolution_note": dispute.resolution_note,
     }
+
+
+# ---- 空间管理者申请审批（任务 08-30-space-manager-approval；require_platform_operator）----
+
+
+@router.get("/manager-applications", response_model=list[ManagerApplicationOut])
+def admin_list_manager_applications(
+    status: str | None = None,
+    session: Session = Depends(get_db),
+    identity: Principal = Depends(require_platform_principal),
+) -> list[ManagerApplicationOut]:
+    """审批队列（仅治理所需的申请人与目标空间元数据）。"""
+    if isinstance(identity[0], User):
+        _require_admin(identity, session)
+    rows = manager_application_commands.list_applications(session, status=status)
+    return [manager_application_commands.serialize_application(session, row) for row in rows]
+
+
+@router.post(
+    "/manager-applications/{application_id}/decision", response_model=ManagerApplicationOut
+)
+def decide_manager_application(
+    application_id: int,
+    payload: ManagerApplicationDecision,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: Principal = Depends(require_platform_principal),
+) -> ManagerApplicationOut:
+    """裁决申请；系统管理员批准已有管理员的申请必须先发出交接工单。"""
+    if isinstance(identity[0], SystemAdmin):
+        row = manager_application_commands.decide_manager_application_as_system_admin(
+            session,
+            application_id,
+            decision=payload.decision,
+            note=payload.note,
+            system_admin_id=identity[0].id,
+            ip=_client_ip(request),
+        )
+        return manager_application_commands.serialize_application(session, row)
+    actor = _require_admin(identity, session)
+    ctx = ActorContext.from_identity(actor, identity[1], ip=_client_ip(request))
+    row = manager_application_commands.decide_manager_application(
+        session,
+        ctx,
+        application_id,
+        decision=payload.decision,
+        note=payload.note,
+        decided_by=actor.id,
+    )
+    return manager_application_commands.serialize_application(session, row)
 
 
 def _client_ip(request: Request) -> str | None:

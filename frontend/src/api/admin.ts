@@ -3,16 +3,103 @@ import type {
   DataRightRequest,
   OwnerInvitation,
   OwnerInvitationCreated,
+  SpaceManagerApplication,
 } from '@/types/api'
 
 import { apiClient } from './client'
 
+export interface AdminAccountMetadata {
+  account_id: number
+  subject_id: number
+  subject_type: string
+  status: string
+  locked_until: string | null
+  created_at: string
+}
+
+export interface AdminSpaceManagerMetadata {
+  space_id: number
+  space_name: string
+  space_kind: string
+  manager_user_id: number
+  manager_account_id: number | null
+  manager_name: string
+}
+
+export interface AdminSpaceMetadata {
+  id: number
+  name: string
+  kind: string
+  status: string
+  created_at: string
+  manager_user_id: number | null
+  manager_account_id: number | null
+  manager_name: string | null
+}
+
+export async function fetchAdminAccounts(): Promise<AdminAccountMetadata[]> {
+  const { data } = await apiClient.get<AdminAccountMetadata[]>('/admin/accounts')
+  return data
+}
+
+export async function fetchAdminSpaceManagers(): Promise<AdminSpaceManagerMetadata[]> {
+  const { data } = await apiClient.get<AdminSpaceManagerMetadata[]>('/admin/space-managers')
+  return data
+}
+
+export async function fetchAdminSpaces(): Promise<AdminSpaceMetadata[]> {
+  const { data } = await apiClient.get<AdminSpaceMetadata[]>('/admin/spaces')
+  return data
+}
+
+export interface AdminSpaceMemberMetadata {
+  user_id: number
+  account_id: number | null
+  name: string
+  role: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+/** 单个空间的成员构成（最小元数据；不含家庭内容）。未知空间返回空数组。 */
+export async function fetchAdminSpaceMembers(
+  spaceId: number,
+): Promise<AdminSpaceMemberMetadata[]> {
+  const { data } = await apiClient.get<AdminSpaceMemberMetadata[]>(
+    `/admin/spaces/${spaceId}/members`,
+  )
+  return data
+}
+
+export interface AdminTransferConsentMetadata {
+  id: number
+  application_id: number
+  space_id: number
+  space_name: string
+  space_kind: string
+  applicant_user_id: number
+  applicant_name: string
+  current_manager_user_id: number
+  current_manager_name: string
+  status: string
+  requested_at: string
+  responded_at: string | null
+  response_reason: string | null
+}
+
+/** 原管理员同意工单全量视图：系统管理员据此判断申请卡在哪一步 */
+export async function fetchAdminTransferConsents(): Promise<AdminTransferConsentMetadata[]> {
+  const { data } = await apiClient.get<AdminTransferConsentMetadata[]>(
+    '/admin/manager-transfer-consents',
+  )
+  return data
+}
+
 export interface AdminUserRow {
   id: number
   is_admin: boolean
-  /** 账号状态（managed|claimed；无凭据为 null） */
   claim_status: string | null
-  /** 档案确档状态（provisional|identity_confirmed） */
   profile_status: string | null
   locked_until: string | null
   created_at: string
@@ -128,5 +215,30 @@ export async function resolveClaimDispute(
     outcome,
     note,
   })
+  return data
+}
+
+// ---- 空间管理者申请审批（任务 08-30-space-manager-approval）----
+
+/** 审批队列（status 缺省返回全部；仅申请人/类型/目标最小数据） */
+export async function fetchManagerApplications(
+  status?: 'pending',
+): Promise<SpaceManagerApplication[]> {
+  const { data } = await apiClient.get<SpaceManagerApplication[]>('/admin/manager-applications', {
+    params: status ? { status } : {},
+  })
+  return data
+}
+
+/** 裁决：approve 效果由后端事务完成；reject 理由必填（后端兜底 422） */
+export async function decideManagerApplication(
+  applicationId: number,
+  decision: 'approve' | 'reject',
+  note?: string,
+): Promise<SpaceManagerApplication> {
+  const { data } = await apiClient.post<SpaceManagerApplication>(
+    `/admin/manager-applications/${applicationId}/decision`,
+    { decision, note: note || null },
+  )
   return data
 }

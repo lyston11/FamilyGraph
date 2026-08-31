@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.models.relation import Relation
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.models.user import User
+from app.models.v2_foundation import PlatformRoleAssignment
 from app.services.disclosure import disclosed_categories
 
 # ---- 层级 ----
@@ -118,6 +119,28 @@ class VisibilityDecision:
     @property
     def visible(self) -> bool:
         return self.level != LEVEL_NONE
+
+
+def _is_platform_operator(session: Session, actor: User) -> bool:
+    """平台角色永远不参与家庭可见性判定（architecture §0.1/§0.2）。
+
+    The account role is deliberately loaded from the server-side assignment table rather
+    than a JWT compatibility claim or ``users.is_admin`` projection.  A platform
+    operator may accidentally have a membership row; that combination must still
+    fail closed for every ordinary family-data purpose.
+    """
+    account_id = getattr(actor.account, "id", None)
+    if account_id is None:
+        return False
+    return (
+        session.scalar(
+            select(PlatformRoleAssignment.id).where(
+                PlatformRoleAssignment.account_id == account_id,
+                PlatformRoleAssignment.role == "platform_operator",
+            )
+        )
+        is not None
+    )
 
 
 def direct_structural_edge(session: Session, a: int, b: int) -> Relation | None:
@@ -279,6 +302,16 @@ def evaluate(
     """
     if purpose not in ALL_PURPOSES:  # pragma: no cover - 编程错误
         raise ValueError(f"unknown purpose: {purpose}")
+
+    # A platform_operator is a platform identity, not a family-data identity.
+    # Keep this guard before self/custody/membership/relationship precedence so a
+    # combination identity cannot enter the family visibility chain by accident.
+    if _is_platform_operator(session, actor):
+        return VisibilityDecision(
+            LEVEL_NONE,
+            {field: FIELD_CLEAR for field in PROFILE_FIELDS},
+            purpose,
+        )
 
     base_level, source = _base_level(session, actor, target, space_context)
 

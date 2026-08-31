@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 
 import { useAgentStore } from '@/stores/agent'
 import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 
-import AssistantPanel from './AssistantPanel.vue'
+// P5 体积优化（P4 移交建议）：面板（NDrawer + PanelContent/消息/行动卡链）拆独立
+// chunk 异步加载；launcher 按钮保持静态渲染、首帧立即可见（悬浮体验无回归）。
+// chunk 在挂载后即开始预取，用户点击面板时通常已就绪。
+const AssistantPanel = defineAsyncComponent(() => import('./AssistantPanel.vue'))
 
 /**
  * AssistantLauncher（PRD AS-3）：全局悬浮入口，挂载于 App.vue。
@@ -92,9 +95,11 @@ watch(open, (value) => {
   position: fixed;
   right: calc(20px + env(safe-area-inset-right));
   bottom: calc(20px + env(safe-area-inset-bottom));
+  /* 低于 n-drawer/n-modal 浮层（naive 浮层 zIndex ≥ 2000），高于壳导航（100） */
   z-index: 1500;
 }
 
+/* 朱砂/青蓝圆形按钮：主色实底 + 主题浮起阴影 */
 .launcher-btn {
   display: flex;
   align-items: center;
@@ -104,9 +109,9 @@ watch(open, (value) => {
   border-radius: 50%;
   border: none;
   cursor: pointer;
-  background: var(--el-color-primary);
-  color: #fff;
-  box-shadow: var(--el-box-shadow-light);
+  background: var(--fg-accent);
+  color: var(--fg-accent-ink);
+  box-shadow: var(--fg-shadow-raised);
   transition: transform 0.15s ease;
 }
 
@@ -115,7 +120,7 @@ watch(open, (value) => {
 }
 
 .launcher-btn:focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--fg-accent);
   outline-offset: 3px;
 }
 

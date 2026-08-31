@@ -11,6 +11,8 @@ import type { ActiveRunView, AgentMessageView, ToolSummaryView } from '@/stores/
  * MessageList（PRD AS-3）：文本气泡、进行中状态、工具使用摘要 chip。
  * 只渲染白名单投影字段；不展示内部 prompt、tool schema、原始 payload。
  * 流式新增经 aria-live=polite 非打断播报。
+ * 视觉（design.md §2.3）：助手气泡=纸面浅沉底，用户气泡=主色实底（SSE
+ * 流式气泡随主题 token，分片到达时逐步渲染）。
  */
 const props = defineProps<{
   messages: AgentMessageView[]
@@ -139,7 +141,7 @@ const items = computed(() =>
 }
 
 .empty {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 13px;
   text-align: center;
   margin-top: 32px;
@@ -168,18 +170,21 @@ const items = computed(() =>
   word-break: break-word;
 }
 
+/* 助手=纸面浅沉底 + 发丝线（纸墨如便笺，清雅如浅灰气泡）；用户=主色实底 */
 .bubble-row.assistant .bubble {
-  background: var(--el-fill-color-light);
+  background: var(--fg-surface-sunken);
+  color: var(--fg-ink);
+  border: 1px solid var(--fg-line);
 }
 
 .bubble-row.user .bubble {
-  background: var(--el-color-primary);
-  color: #fff;
+  background: var(--fg-accent);
+  color: var(--fg-accent-ink);
 }
 
 .bubble.failed {
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  background: color-mix(in srgb, var(--fg-status-disputed) 8%, var(--fg-surface-raised));
+  color: var(--fg-status-disputed);
 }
 
 .message-cards {
@@ -208,22 +213,22 @@ const items = computed(() =>
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 12px;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-regular);
-  border: 1px solid var(--el-border-color-lighter);
+  background: var(--fg-surface-sunken);
+  color: var(--fg-ink-secondary);
+  border: 1px solid var(--fg-line);
 }
 
 .tool-chip em {
   font-style: normal;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-faint);
 }
 
 .tool-chip.ok em {
-  color: var(--el-color-success);
+  color: var(--fg-status-confirmed);
 }
 
 .tool-chip.error em {
-  color: var(--el-color-danger);
+  color: var(--fg-status-disputed);
 }
 
 .thinking {
@@ -236,7 +241,7 @@ const items = computed(() =>
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--el-text-color-secondary);
+  background: var(--fg-ink-faint);
   animation: blink 1.2s infinite ease-in-out;
 }
 

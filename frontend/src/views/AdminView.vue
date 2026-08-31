@@ -1,14 +1,32 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import {
+  NAlert,
+  NButton,
+  NDataTable,
+  NForm,
+  NFormItem,
+  NInput,
+  NModal,
+  NRadio,
+  NRadioGroup,
+  NSpin,
+  useDialog,
+  useMessage,
+} from 'naive-ui'
+import type { DataTableColumns } from 'naive-ui'
+import type { TextareaHTMLAttributes } from 'vue'
 
 import {
   adminResetPin,
   createOwnerInvitation,
+  decideManagerApplication,
   fetchAdminClaimDisputes,
   fetchAdminDataRights,
   fetchAdminUsers,
   fetchAuditLogs,
+  fetchManagerApplications,
   fetchOwnerInvitations,
   resolveClaimDispute,
   resolveCorrection,
@@ -18,25 +36,33 @@ import {
   type AuditRow,
 } from '@/api/admin'
 import { ApiError } from '@/api/errors'
-import type { ClaimDispute, DataRightRequest, OwnerInvitation } from '@/types/api'
+import type { DataRightRequest, OwnerInvitation, SpaceManagerApplication } from '@/types/api'
 
 /**
  * 平台运营后台（v2 §0.2）：仅系统管理与 break-glass 数据兑底。
  * - 用户列表 / 重置 PIN / 审计时间线（原有）
  * - owner onboarding 邀请：签发（token 明文仅显示一次）/ 撤销
+ * - 空间管理者申请（08-30-space-manager-approval）：approve / reject（理由必填）+ 审计
  * - 数据权利请求：更正决议（批准→按白名单字段应用；驳回）——理由必填 + 审计
  * - 认领争议决议：理由必填 + 审计，证据原文永不覆盖
- * operator 不提供任何家庭数据浏览权：本页不展示档案敏感字段。
+ * operator 不提供任何家庭数据浏览权：本页仅展示裁决所需最小数据。
+ * P5 迁 naive-ui：n-data-table 列渲染走 h()；状态徽章与全站领域状态同源
+ * （--fg-status-* 的 fg-badge 工具类，design.md §3.4）。
  */
 
 const users = ref<AdminUserRow[]>([])
 const logs = ref<AuditRow[]>([])
 const invitations = ref<OwnerInvitation[]>([])
+const managerApps = ref<SpaceManagerApplication[]>([])
 const dataRights = ref<DataRightRequest[]>([])
 const disputes = ref<AdminClaimDisputeRow[]>([])
 const loading = ref(false)
 const oneTimePin = ref('')
 const oneTimeFor = ref('')
+
+const message = useMessage()
+const dialog = useDialog()
+const router = useRouter()
 
 // ---- owner 邀请 ----
 const issuedToken = ref('')
@@ -55,6 +81,16 @@ const disputeOutcome = ref<'resolved_claim' | 'resolved_reject'>('resolved_claim
 const disputeNote = ref('')
 const disputeSubmitting = ref(false)
 
+// ---- 空间管理者申请：approve 直接裁决 / reject 弹窗理由必填 ----
+const managerDialog = reactive({ visible: false, applicationId: 0 })
+const managerNote = ref('')
+const managerSubmitting = ref(false)
+
+// data-* 未收录进 Vue 的 HTML 属性类型，断言收窄；运行时 naive 原样透传到原生 textarea
+const correctionNoteInputProps = { 'data-test': 'correction-note-input' } as TextareaHTMLAttributes
+const disputeNoteInputProps = { 'data-test': 'dispute-note-input' } as TextareaHTMLAttributes
+const managerNoteInputProps = { 'data-test': 'manager-note-input' } as TextareaHTMLAttributes
+
 async function loadUsers() {
   users.value = await fetchAdminUsers()
 }
@@ -63,6 +99,9 @@ async function loadLogs() {
 }
 async function loadInvitations() {
   invitations.value = await fetchOwnerInvitations()
+}
+async function loadManagerApps() {
+  managerApps.value = await fetchManagerApplications()
 }
 async function loadDataRights() {
   dataRights.value = await fetchAdminDataRights()
@@ -74,37 +113,50 @@ async function loadDisputes() {
 onMounted(async () => {
   loading.value = true
   try {
-    await Promise.all([loadUsers(), loadLogs(), loadInvitations(), loadDataRights(), loadDisputes()])
+    await Promise.all([
+      loadUsers(),
+      loadLogs(),
+      loadInvitations(),
+      loadManagerApps(),
+      loadDataRights(),
+      loadDisputes(),
+    ])
   } catch {
-    ElMessage.error('加载失败（需要平台运营者身份）')
+    message.error('加载失败（需要平台运营者身份）')
   } finally {
     loading.value = false
   }
 })
 
 async function resetPin(row: AdminUserRow): Promise<void> {
-  try {
-    // 列表不含家庭姓名（R-03），确认按账号 ID + 后端 confirm 标志 + 审计兜底
-    const { ElMessageBox } = await import('element-plus')
-    await ElMessageBox.confirm(
-      `确认重置账号 #${row.id} 的登录 PIN？该账号当前所有会话将立即失效，新 PIN 仅本次显示。`,
-      '重置 PIN',
-      { confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning' },
-    )
-    const { pin } = await adminResetPin(row.id)
-    oneTimePin.value = pin
-    oneTimeFor.value = String(row.id)
-    await loadLogs()
-  } catch {
-    /* 用户取消或失败 */
-  }
+  // 列表不含家庭姓名（R-03），确认按账号 ID + 后端 confirm 标志 + 审计兜底
+  dialog.warning({
+    title: '重置 PIN',
+    content: `确认重置账号 #${row.id} 的登录 PIN？该账号当前所有会话将立即失效，新 PIN 仅本次显示。`,
+    positiveText: '确认重置',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void (async () => {
+        try {
+          const { pin } = await adminResetPin(row.id)
+          oneTimePin.value = pin
+          oneTimeFor.value = String(row.id)
+          await loadLogs()
+        } catch (error) {
+          message.error(error instanceof ApiError ? error.message : '重置失败，请稍后重试')
+        }
+      })()
+    },
+  })
 }
 
-function invitationStatus(inv: OwnerInvitation): { text: string; type: 'success' | 'info' | 'danger' | 'warning' } {
-  if (inv.used_at) return { text: '已兑换', type: 'info' }
-  if (inv.revoked_at) return { text: '已撤销', type: 'danger' }
-  if (new Date(inv.expires_at).getTime() < Date.now()) return { text: '已过期', type: 'warning' }
-  return { text: '有效', type: 'success' }
+/** 邀请状态 → 领域状态徽章（design.md §3.4：confirmed 实底 / disputed 朱砂 / 其余中性） */
+function invitationBadge(inv: OwnerInvitation): { text: string; cls: string } {
+  if (inv.used_at) return { text: '已兑换', cls: 'fg-badge fg-badge--neutral' }
+  if (inv.revoked_at) return { text: '已撤销', cls: 'fg-badge fg-badge--disputed' }
+  if (new Date(inv.expires_at).getTime() < Date.now())
+    return { text: '已过期', cls: 'fg-badge fg-badge--provisional' }
+  return { text: '有效', cls: 'fg-badge fg-badge--confirmed' }
 }
 
 async function issueInvitation(): Promise<void> {
@@ -115,7 +167,7 @@ async function issueInvitation(): Promise<void> {
     issuedExpiresAt.value = created.expires_at.replace('T', ' ').slice(0, 16)
     await loadInvitations()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '签发失败')
+    message.error(error instanceof ApiError ? error.message : '签发失败')
   } finally {
     issuing.value = false
   }
@@ -126,7 +178,7 @@ async function revokeInvitation(id: number): Promise<void> {
     await revokeOwnerInvitation(id)
     await loadInvitations()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '撤销失败')
+    message.error(error instanceof ApiError ? error.message : '撤销失败')
   }
 }
 
@@ -142,6 +194,160 @@ const DATA_RIGHT_STATUS_LABELS: Record<DataRightRequest['status'], string> = {
   rejected: '已驳回',
   expired: '已过期',
 }
+
+/** 数据权利状态徽章（与 DataRightsPanel 同一映射：进行中=proposed 空心） */
+function dataRightBadgeClass(status: DataRightRequest['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'fg-badge fg-badge--confirmed'
+    case 'rejected':
+      return 'fg-badge fg-badge--disputed'
+    case 'expired':
+      return 'fg-badge fg-badge--neutral'
+    default:
+      return 'fg-badge fg-badge--proposed'
+  }
+}
+
+const userColumns = computed<DataTableColumns<AdminUserRow>>(() => [
+  { title: 'ID', key: 'id', width: 64 },
+  {
+    title: '账号状态',
+    key: 'account_status',
+    width: 110,
+    render: (row) =>
+      row.is_admin
+        ? h('span', { class: 'fg-badge fg-badge--accent' }, '平台运营')
+        : h(
+            'span',
+            {
+              class:
+                row.claim_status === 'claimed'
+                  ? 'fg-badge fg-badge--confirmed'
+                  : 'fg-badge fg-badge--provisional',
+            },
+            row.claim_status === 'claimed' ? '已认领' : '待认领',
+          ),
+  },
+  {
+    title: '确档状态',
+    key: 'profile_status',
+    width: 110,
+    render: (row) =>
+      h(
+        'span',
+        {
+          class:
+            row.profile_status === 'identity_confirmed'
+              ? 'fg-badge fg-badge--confirmed'
+              : 'fg-badge fg-badge--provisional',
+        },
+        row.profile_status === 'identity_confirmed' ? '已确档' : '待确档',
+      ),
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 140,
+    render: (row) =>
+      h(
+        NButton,
+        {
+          size: 'tiny',
+          type: 'warning',
+          secondary: true,
+          'data-test': `reset-pin-${row.id}`,
+          onClick: () => resetPin(row),
+        },
+        { default: () => '重置 PIN' },
+      ),
+  },
+])
+
+function formatTime(value: string | null | undefined): string {
+  return value ? value.replace('T', ' ').slice(0, 16) : '—'
+}
+
+const invitationColumns = computed<DataTableColumns<OwnerInvitation>>(() => [
+  { title: 'ID', key: 'id', width: 64 },
+  { title: '创建时间', key: 'created_at', width: 160, render: (row) => formatTime(row.created_at) },
+  { title: '过期时间', key: 'expires_at', width: 160, render: (row) => formatTime(row.expires_at) },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render: (row) => {
+      const badge = invitationBadge(row)
+      return h(
+        'span',
+        { class: badge.cls, 'data-test': `invitation-status-${row.id}` },
+        badge.text,
+      )
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 100,
+    render: (row) =>
+      !row.used_at && !row.revoked_at
+        ? h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'error',
+              secondary: true,
+              'data-test': `revoke-invitation-${row.id}`,
+              onClick: () => revokeInvitation(row.id),
+            },
+            { default: () => '撤销' },
+          )
+        : null,
+  },
+])
+
+const dataRightColumns = computed<DataTableColumns<DataRightRequest>>(() => [
+  { title: 'ID', key: 'id', width: 64 },
+  {
+    title: '类型',
+    key: 'type',
+    width: 80,
+    render: (row) => DATA_RIGHT_TYPE_LABELS[row.type],
+  },
+  {
+    title: '状态',
+    key: 'status',
+    width: 90,
+    render: (row) =>
+      h(
+        'span',
+        {
+          class: dataRightBadgeClass(row.status),
+          'data-test': `dr-status-${row.id}`,
+        },
+        DATA_RIGHT_STATUS_LABELS[row.status],
+      ),
+  },
+  { title: '创建时间', key: 'created_at', width: 160, render: (row) => formatTime(row.created_at) },
+  {
+    title: '操作',
+    key: 'actions',
+    render: (row) =>
+      row.type === 'correct' && row.status === 'pending'
+        ? h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'primary',
+              secondary: true,
+              'data-test': `resolve-correction-${row.id}`,
+              onClick: () => openCorrectionDialog(row.id),
+            },
+            { default: () => '决议更正' },
+          )
+        : null,
+  },
+])
 
 /** 可决议的更正申请（break-glass 入口） */
 const resolvableCorrections = computed(() =>
@@ -160,18 +366,18 @@ async function submitCorrection(): Promise<void> {
   correctionSubmitting.value = true
   try {
     await resolveCorrection(correctionDialog.requestId, correctionApprove.value, correctionNote.value.trim())
-    ElMessage.success('已决议并留痕审计')
+    message.success('已决议并留痕审计')
     correctionDialog.visible = false
     await loadDataRights()
     await loadLogs()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '决议失败')
+    message.error(error instanceof ApiError ? error.message : '决议失败')
   } finally {
     correctionSubmitting.value = false
   }
 }
 
-const DISPUTE_STATUS_LABELS: Record<ClaimDispute['status'], string> = {
+const DISPUTE_STATUS_LABELS: Record<AdminClaimDisputeRow['status'], string> = {
   open: '待处理',
   resolved_claim: '认领成立',
   resolved_reject: '驳回',
@@ -179,6 +385,52 @@ const DISPUTE_STATUS_LABELS: Record<ClaimDispute['status'], string> = {
 }
 
 const openDisputes = computed(() => disputes.value.filter((d) => d.status === 'open'))
+
+const disputeColumns = computed<DataTableColumns<AdminClaimDisputeRow>>(() => [
+  { title: 'ID', key: 'id', width: 64 },
+  { title: '涉及档案', key: 'profile_id', width: 90 },
+  { title: '发起账号', key: 'raised_by_account_id', width: 90 },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render: (row) =>
+      h(
+        'span',
+        {
+          class:
+            row.status === 'open'
+              ? 'fg-badge fg-badge--proposed'
+              : row.status === 'resolved_claim'
+                ? 'fg-badge fg-badge--confirmed'
+                : row.status === 'resolved_reject'
+                  ? 'fg-badge fg-badge--disputed'
+                  : 'fg-badge fg-badge--neutral',
+          'data-test': `dispute-status-${row.id}`,
+        },
+        DISPUTE_STATUS_LABELS[row.status],
+      ),
+  },
+  { title: '创建时间', key: 'created_at', width: 160, render: (row) => formatTime(row.created_at) },
+  {
+    title: '操作',
+    key: 'actions',
+    render: (row) =>
+      row.status === 'open'
+        ? h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'primary',
+              secondary: true,
+              'data-test': `resolve-dispute-${row.id}`,
+              onClick: () => openDisputeDialog(row.id),
+            },
+            { default: () => '决议' },
+          )
+        : null,
+  },
+])
 
 function openDisputeDialog(disputeId: number): void {
   disputeDialog.disputeId = disputeId
@@ -192,273 +444,382 @@ async function submitDisputeResolution(): Promise<void> {
   disputeSubmitting.value = true
   try {
     await resolveClaimDispute(disputeDialog.disputeId, disputeOutcome.value, disputeNote.value.trim())
-    ElMessage.success('已决议并留痕审计')
+    message.success('已决议并留痕审计')
     disputeDialog.visible = false
     await loadDisputes()
     await loadLogs()
   } catch (error) {
-    ElMessage.error(error instanceof ApiError ? error.message : '决议失败')
+    message.error(error instanceof ApiError ? error.message : '决议失败')
   } finally {
     disputeSubmitting.value = false
+  }
+}
+
+// ---- 空间管理者申请（08-30-space-manager-approval）----
+
+const MANAGER_KIND_LABELS: Record<SpaceManagerApplication['request_kind'], string> = {
+  space_admin: '申请成为空间管理员',
+}
+
+/** 申请状态徽章：pending 空心（proposed）/ approved 实底 / rejected 朱砂 */
+function managerBadge(status: SpaceManagerApplication['status']): { text: string; cls: string } {
+  if (status === 'approved') return { text: '已通过', cls: 'fg-badge fg-badge--confirmed' }
+  if (status === 'rejected') return { text: '未通过', cls: 'fg-badge fg-badge--disputed' }
+  return { text: '审批中', cls: 'fg-badge fg-badge--proposed' }
+}
+
+/** 目标列：显示申请的空间名 */
+function managerTarget(row: SpaceManagerApplication): string {
+  return row.space_name ?? `空间 #${row.space_id}`
+}
+
+const managerAppColumns = computed<DataTableColumns<SpaceManagerApplication>>(() => [
+  { title: 'ID', key: 'id', width: 64 },
+  {
+    title: '申请人',
+    key: 'applicant_name',
+    width: 110,
+    render: (row) => row.applicant_name ?? `#${row.applicant_user_id}`,
+  },
+  {
+    title: '类型',
+    key: 'request_kind',
+    width: 120,
+    render: (row) => MANAGER_KIND_LABELS[row.request_kind],
+  },
+  {
+    title: '目标',
+    key: 'target',
+    render: (row) => managerTarget(row),
+  },
+  { title: '申请时间', key: 'created_at', width: 160, render: (row) => formatTime(row.created_at) },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render: (row) => {
+      const badge = managerBadge(row.status)
+      return h('span', { class: badge.cls, 'data-test': `manager-status-${row.id}` }, badge.text)
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 150,
+    render: (row) =>
+      row.status === 'pending'
+        ? h('span', { class: 'row-actions' }, [
+            h(
+              NButton,
+              {
+                size: 'tiny',
+                type: 'primary',
+                secondary: true,
+                'data-test': `approve-application-${row.id}`,
+                onClick: () => approveManagerApplication(row.id),
+              },
+              { default: () => '通过' },
+            ),
+            h(
+              NButton,
+              {
+                size: 'tiny',
+                type: 'error',
+                secondary: true,
+                'data-test': `reject-application-${row.id}`,
+                onClick: () => openManagerRejectDialog(row.id),
+              },
+              { default: () => '驳回' },
+            ),
+          ])
+        : null,
+  },
+])
+
+async function approveManagerApplication(applicationId: number): Promise<void> {
+  try {
+    await decideManagerApplication(applicationId, 'approve')
+    message.success('已通过并留痕审计')
+    await loadManagerApps()
+    await loadLogs()
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '裁决失败')
+  }
+}
+
+function openManagerRejectDialog(applicationId: number): void {
+  managerDialog.applicationId = applicationId
+  managerNote.value = ''
+  managerDialog.visible = true
+}
+
+async function submitManagerRejection(): Promise<void> {
+  if (!managerNote.value.trim()) return
+  managerSubmitting.value = true
+  try {
+    await decideManagerApplication(managerDialog.applicationId, 'reject', managerNote.value.trim())
+    message.success('已驳回并留痕审计')
+    managerDialog.visible = false
+    await loadManagerApps()
+    await loadLogs()
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '裁决失败')
+  } finally {
+    managerSubmitting.value = false
   }
 }
 </script>
 
 <template>
-  <main class="admin-view" v-loading="loading">
-    <h2 class="title">平台运营后台</h2>
-    <el-alert type="info" :closable="false" class="scope-hint" data-test="operator-scope-hint">
-      平台运营者仅管理系统与安全策略，无家庭数据浏览权。数据兑底操作均需填写理由并完整审计。
-    </el-alert>
+  <NSpin :show="loading">
+    <main class="admin-view">
+      <header class="title-row">
+        <NButton text data-test="admin-back" @click="router.push({ name: 'family-space' })">
+          ← 家庭空间
+        </NButton>
+        <h2 class="title">平台运营后台</h2>
+      </header>
+      <NAlert type="info" :show-icon="true" class="scope-hint" data-test="operator-scope-hint">
+        平台运营者仅管理系统与安全策略，无家庭数据浏览权。数据兑底操作均需填写理由并完整审计。
+      </NAlert>
 
-    <!-- 用户管理 -->
-    <section>
-      <h3>用户管理</h3>
-      <el-table :data="users" size="small" data-test="admin-user-table">
-        <el-table-column prop="id" label="ID" width="64" />
-        <el-table-column label="账号状态" width="110">
-          <template #default="{ row }">
-            <el-tag v-if="row.is_admin" size="small" type="danger">平台运营</el-tag>
-            <el-tag v-else size="small" :type="row.claim_status === 'claimed' ? 'success' : 'warning'">
-              {{ row.claim_status === 'claimed' ? '已认领' : '待认领' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="确档状态" width="110">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.profile_status === 'identity_confirmed' ? 'success' : 'info'">
-              {{ row.profile_status === 'identity_confirmed' ? '已确档' : '待确档' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140">
-          <template #default="{ row }">
-            <el-button size="small" type="warning" :data-test="`reset-pin-${row.id}`" @click="resetPin(row)">
-              重置 PIN
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
+      <!-- 用户管理 -->
+      <section>
+        <h3 class="section-title">用户管理</h3>
+        <NDataTable
+          size="small"
+          :columns="userColumns"
+          :data="users"
+          :row-key="(row: AdminUserRow) => row.id"
+          data-test="admin-user-table"
+        />
+      </section>
 
-    <!-- owner onboarding 邀请 -->
-    <section>
-      <h3>Owner Onboarding 邀请</h3>
-      <p class="section-desc">
-        签发短期、单次、可撤销的邀请链接。对方登录后凭 token 兑换，将获得独立族谱空间并成为其所有者。
-      </p>
-      <el-button type="primary" :loading="issuing" data-test="issue-invitation" @click="issueInvitation">
-        签发邀请
-      </el-button>
+      <!-- owner onboarding 邀请 -->
+      <section>
+        <h3 class="section-title">Owner Onboarding 邀请</h3>
+        <p class="section-desc">
+          签发短期、单次、可撤销的邀请链接。对方登录后凭 token 兑换，将获得独立族谱空间并成为其所有者。
+        </p>
+        <NButton type="primary" :loading="issuing" data-test="issue-invitation" @click="issueInvitation">
+          签发邀请
+        </NButton>
 
-      <el-dialog :model-value="issuedToken !== ''" title="邀请链接（仅显示一次）" width="460px" @update:model-value="issuedToken = ''">
-        <p>请将以下 token 转交给新空间所有者：</p>
-        <p class="big-token" data-test="issued-token">{{ issuedToken }}</p>
-        <p class="hint">有效期至 {{ issuedExpiresAt }}；服务端只存哈希，关闭后不可回看。</p>
-      </el-dialog>
-
-      <el-table :data="invitations" size="small" class="mt8" data-test="invitation-table">
-        <el-table-column prop="id" label="ID" width="64" />
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">{{ row.created_at?.replace('T', ' ').slice(0, 16) }}</template>
-        </el-table-column>
-        <el-table-column label="过期时间" width="160">
-          <template #default="{ row }">{{ row.expires_at?.replace('T', ' ').slice(0, 16) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag size="small" :type="invitationStatus(row).type" :data-test="`invitation-status-${row.id}`">
-              {{ invitationStatus(row).text }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="100">
-          <template #default="{ row }">
-            <el-button
-              v-if="!row.used_at && !row.revoked_at"
-              size="small"
-              type="danger"
-              plain
-              :data-test="`revoke-invitation-${row.id}`"
-              @click="revokeInvitation(row.id)"
-            >
-              撤销
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
-
-    <!-- 数据权利请求 -->
-    <section>
-      <h3>数据权利请求</h3>
-      <p class="section-desc">导出由系统异步生成并过期；删除由本人自助执行；更正需运营者决议（break-glass）。</p>
-      <el-table :data="dataRights" size="small" data-test="data-right-table">
-        <el-table-column prop="id" label="ID" width="64" />
-        <el-table-column label="类型" width="80">
-          <template #default="{ row }">{{ DATA_RIGHT_TYPE_LABELS[row.type as keyof typeof DATA_RIGHT_TYPE_LABELS] }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'pending' ? 'warning' : 'info'" :data-test="`dr-status-${row.id}`">
-              {{ DATA_RIGHT_STATUS_LABELS[row.status as keyof typeof DATA_RIGHT_STATUS_LABELS] }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">{{ row.created_at?.replace('T', ' ').slice(0, 16) }}</template>
-        </el-table-column>
-        <el-table-column label="操作">
-          <template #default="{ row }">
-            <el-button
-              v-if="row.type === 'correct' && row.status === 'pending'"
-              size="small"
-              type="primary"
-              plain
-              :data-test="`resolve-correction-${row.id}`"
-              @click="openCorrectionDialog(row.id)"
-            >
-              决议更正
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <p v-if="resolvableCorrections.length === 0" class="hint">当前没有待决议的更正申请。</p>
-    </section>
-
-    <!-- 认领争议 -->
-    <section>
-      <h3>认领争议</h3>
-      <p class="section-desc">证据原文保留在系统中，此处仅展示最小披露信息；决议需理由必填。</p>
-      <el-table :data="disputes" size="small" data-test="dispute-table">
-        <el-table-column prop="id" label="ID" width="64" />
-        <el-table-column prop="profile_id" label="涉及档案" width="90" />
-        <el-table-column prop="raised_by_account_id" label="发起账号" width="90" />
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'open' ? 'warning' : 'info'" :data-test="`dispute-status-${row.id}`">
-              {{ DISPUTE_STATUS_LABELS[row.status as keyof typeof DISPUTE_STATUS_LABELS] }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">{{ row.created_at?.replace('T', ' ').slice(0, 16) }}</template>
-        </el-table-column>
-        <el-table-column label="操作">
-          <template #default="{ row }">
-            <el-button
-              v-if="row.status === 'open'"
-              size="small"
-              type="primary"
-              plain
-              :data-test="`resolve-dispute-${row.id}`"
-              @click="openDisputeDialog(row.id)"
-            >
-              决议
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <p v-if="openDisputes.length === 0" class="hint">当前没有待处理的认领争议。</p>
-    </section>
-
-    <!-- 审计日志 -->
-    <section>
-      <h3>审计日志</h3>
-      <ul class="audit-list" data-test="audit-list">
-        <li v-for="log in logs.slice(0, 100)" :key="log.id" class="audit-row">
-          <span class="time">{{ log.created_at?.slice(0, 19) }}</span>
-          <span class="action">{{ log.action }}</span>
-          <span class="meta">actor=#{{ log.actor_id ?? '-' }} target=#{{ log.target_id ?? '-' }}</span>
-        </li>
-      </ul>
-    </section>
-
-    <!-- 更正决议弹窗（break-glass：理由必填） -->
-    <el-dialog
-      v-model="correctionDialog.visible"
-      title="决议资料更正申请"
-      width="420px"
-      data-test="correction-dialog"
-    >
-      <el-form label-position="top">
-        <el-form-item label="决议">
-          <el-radio-group v-model="correctionApprove" data-test="correction-approve-group">
-            <el-radio :value="true">批准（按申请字段应用更正）</el-radio>
-            <el-radio :value="false">驳回</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="处理理由（必填，写入审计）" required>
-          <el-input
-            v-model="correctionNote"
-            type="textarea"
-            :rows="3"
-            maxlength="1000"
-            placeholder="说明批准/驳回依据"
-            data-test="correction-note-input"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="correctionDialog.visible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="!correctionNote.trim()"
-          :loading="correctionSubmitting"
-          data-test="correction-submit"
-          @click="submitCorrection"
+        <NModal
+          :show="issuedToken !== ''"
+          preset="card"
+          title="邀请链接（仅显示一次）"
+          data-test="issued-token-dialog"
+          @update:show="issuedToken = ''"
         >
-          提交决议
-        </el-button>
-      </template>
-    </el-dialog>
+          <p>请将以下 token 转交给新空间所有者：</p>
+          <p class="big-token" data-test="issued-token">{{ issuedToken }}</p>
+          <p class="hint">有效期至 {{ issuedExpiresAt }}；服务端只存哈希，关闭后不可回看。</p>
+        </NModal>
 
-    <!-- 争议决议弹窗（break-glass：理由必填） -->
-    <el-dialog
-      v-model="disputeDialog.visible"
-      title="决议认领争议"
-      width="420px"
-      data-test="dispute-resolve-dialog"
-    >
-      <el-form label-position="top">
-        <el-form-item label="决议结果">
-          <el-radio-group v-model="disputeOutcome" data-test="dispute-outcome-group">
-            <el-radio value="resolved_claim">认领成立（档案归属移交申请人）</el-radio>
-            <el-radio value="resolved_reject">驳回认领</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="处理理由（必填，写入审计）" required>
-          <el-input
-            v-model="disputeNote"
-            type="textarea"
-            :rows="3"
-            maxlength="1000"
-            placeholder="依据申请人提交的证据说明结论"
-            data-test="dispute-note-input"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="disputeDialog.visible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="!disputeNote.trim()"
-          :loading="disputeSubmitting"
-          data-test="dispute-resolution-submit"
-          @click="submitDisputeResolution"
+        <NDataTable
+          class="mt8"
+          size="small"
+          :columns="invitationColumns"
+          :data="invitations"
+          :row-key="(row: OwnerInvitation) => row.id"
+          data-test="invitation-table"
+        />
+      </section>
+
+      <!-- 空间管理者申请（审批制：已有空间 member → space_admin；邀请不在此流程） -->
+      <section>
+        <h3 class="section-title">空间管理者申请</h3>
+        <p class="section-desc">
+          用户申请成为已有空间的 space_admin。通过后系统把该空间中的普通成员升级为管理员；驳回必须填写理由。邀请成员由空间成员直接发起，不需要平台审批；现有空间所有者仅经移交流程变更。
+        </p>
+        <NDataTable
+          size="small"
+          :columns="managerAppColumns"
+          :data="managerApps"
+          :row-key="(row: SpaceManagerApplication) => row.id"
+          data-test="manager-application-table"
+        />
+        <p
+          v-if="!managerApps.some((row) => row.status === 'pending')"
+          class="hint"
+          data-test="manager-apps-empty"
         >
-          提交决议
-        </el-button>
-      </template>
-    </el-dialog>
+          当前没有待审批的空间管理者申请。
+        </p>
+      </section>
 
-    <!-- 一次性 PIN 弹窗 -->
-    <el-dialog :model-value="oneTimePin !== ''" title="新 PIN（仅显示一次）" width="380px" @update:model-value="oneTimePin = ''">
-      <p>账号 #{{ oneTimeFor }} 的新 PIN：</p>
-      <p class="big-pin" data-test="one-time-admin-pin">{{ oneTimePin }}</p>
-      <p class="hint">该成员下次登录将强制修改。请立即转交并截图保存。</p>
-    </el-dialog>
-  </main>
+      <!-- 数据权利请求 -->
+      <section>
+        <h3 class="section-title">数据权利请求</h3>
+        <p class="section-desc">导出由系统异步生成并过期；删除由本人自助执行；更正需运营者决议（break-glass）。</p>
+        <NDataTable
+          size="small"
+          :columns="dataRightColumns"
+          :data="dataRights"
+          :row-key="(row: DataRightRequest) => row.id"
+          data-test="data-right-table"
+        />
+        <p v-if="resolvableCorrections.length === 0" class="hint">当前没有待决议的更正申请。</p>
+      </section>
+
+      <!-- 认领争议 -->
+      <section>
+        <h3 class="section-title">认领争议</h3>
+        <p class="section-desc">证据原文保留在系统中，此处仅展示最小披露信息；决议需理由必填。</p>
+        <NDataTable
+          size="small"
+          :columns="disputeColumns"
+          :data="disputes"
+          :row-key="(row: AdminClaimDisputeRow) => row.id"
+          data-test="dispute-table"
+        />
+        <p v-if="openDisputes.length === 0" class="hint">当前没有待处理的认领争议。</p>
+      </section>
+
+      <!-- 审计日志 -->
+      <section>
+        <h3 class="section-title">审计日志</h3>
+        <ul class="audit-list" data-test="audit-list">
+          <li v-for="log in logs.slice(0, 100)" :key="log.id" class="audit-row">
+            <span class="time">{{ log.created_at?.slice(0, 19) }}</span>
+            <span class="action">{{ log.action }}</span>
+            <span class="meta">actor=#{{ log.actor_id ?? '-' }} target=#{{ log.target_id ?? '-' }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- 更正决议弹窗（break-glass：理由必填） -->
+      <NModal
+        v-model:show="correctionDialog.visible"
+        preset="card"
+        title="决议资料更正申请"
+        data-test="correction-dialog"
+      >
+        <NForm label-placement="top" :show-feedback="false">
+          <NFormItem label="决议">
+            <NRadioGroup v-model:value="correctionApprove" data-test="correction-approve-group">
+              <NRadio :value="true">批准（按申请字段应用更正）</NRadio>
+              <NRadio :value="false">驳回</NRadio>
+            </NRadioGroup>
+          </NFormItem>
+          <NFormItem label="处理理由（必填，写入审计）" required>
+            <NInput
+              v-model:value="correctionNote"
+              type="textarea"
+              :rows="3"
+              :maxlength="1000"
+              placeholder="说明批准/驳回依据"
+              :input-props="correctionNoteInputProps"
+            />
+          </NFormItem>
+        </NForm>
+        <template #footer>
+          <div class="footer-actions">
+            <NButton @click="correctionDialog.visible = false">取消</NButton>
+            <NButton
+              type="primary"
+              :disabled="!correctionNote.trim()"
+              :loading="correctionSubmitting"
+              data-test="correction-submit"
+              @click="submitCorrection"
+            >
+              提交决议
+            </NButton>
+          </div>
+        </template>
+      </NModal>
+
+      <!-- 争议决议弹窗（break-glass：理由必填） -->
+      <NModal
+        v-model:show="disputeDialog.visible"
+        preset="card"
+        title="决议认领争议"
+        data-test="dispute-resolve-dialog"
+      >
+        <NForm label-placement="top" :show-feedback="false">
+          <NFormItem label="决议结果">
+            <NRadioGroup v-model:value="disputeOutcome" data-test="dispute-outcome-group">
+              <NRadio value="resolved_claim">认领成立（档案归属移交申请人）</NRadio>
+              <NRadio value="resolved_reject">驳回认领</NRadio>
+            </NRadioGroup>
+          </NFormItem>
+          <NFormItem label="处理理由（必填，写入审计）" required>
+            <NInput
+              v-model:value="disputeNote"
+              type="textarea"
+              :rows="3"
+              :maxlength="1000"
+              placeholder="依据申请人提交的证据说明结论"
+              :input-props="disputeNoteInputProps"
+            />
+          </NFormItem>
+        </NForm>
+        <template #footer>
+          <div class="footer-actions">
+            <NButton @click="disputeDialog.visible = false">取消</NButton>
+            <NButton
+              type="primary"
+              :disabled="!disputeNote.trim()"
+              :loading="disputeSubmitting"
+              data-test="dispute-resolution-submit"
+              @click="submitDisputeResolution"
+            >
+              提交决议
+            </NButton>
+          </div>
+        </template>
+      </NModal>
+
+      <!-- 空间管理者申请驳回弹窗（理由必填） -->
+      <NModal
+        v-model:show="managerDialog.visible"
+        preset="card"
+        title="驳回空间管理者申请"
+        data-test="manager-reject-dialog"
+      >
+        <NForm label-placement="top" :show-feedback="false">
+          <NFormItem label="驳回理由（必填，写入审计）" required>
+            <NInput
+              v-model:value="managerNote"
+              type="textarea"
+              :rows="3"
+              :maxlength="1000"
+              placeholder="说明驳回依据，申请人可在自己的申请记录中看到该备注"
+              :input-props="managerNoteInputProps"
+            />
+          </NFormItem>
+        </NForm>
+        <template #footer>
+          <div class="footer-actions">
+            <NButton @click="managerDialog.visible = false">取消</NButton>
+            <NButton
+              type="primary"
+              :disabled="!managerNote.trim()"
+              :loading="managerSubmitting"
+              data-test="manager-reject-submit"
+              @click="submitManagerRejection"
+            >
+              提交驳回
+            </NButton>
+          </div>
+        </template>
+      </NModal>
+
+      <!-- 一次性 PIN 弹窗 -->
+      <NModal
+        :show="oneTimePin !== ''"
+        preset="card"
+        title="新 PIN（仅显示一次）"
+        data-test="one-time-pin-dialog"
+        @update:show="oneTimePin = ''"
+      >
+        <p>账号 #{{ oneTimeFor }} 的新 PIN：</p>
+        <p class="big-pin" data-test="one-time-admin-pin">{{ oneTimePin }}</p>
+        <p class="hint">该成员下次登录将强制修改。请立即转交并截图保存。</p>
+      </NModal>
+    </main>
+  </NSpin>
 </template>
 
 <style scoped>
@@ -468,8 +829,19 @@ async function submitDisputeResolution(): Promise<void> {
   padding: 24px;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .title {
+  margin: 0;
+  font-family: var(--fg-font-display);
   font-size: 20px;
+  color: var(--fg-ink);
 }
 
 .scope-hint {
@@ -480,9 +852,16 @@ section {
   margin-bottom: 32px;
 }
 
+.section-title {
+  margin: 0 0 8px;
+  font-family: var(--fg-font-display);
+  font-size: 16px;
+  color: var(--fg-ink);
+}
+
 .section-desc {
   margin: 4px 0 10px;
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 13px;
 }
 
@@ -490,12 +869,14 @@ section {
   margin-top: 8px;
 }
 
+/* 一次性凭据展示：与 OnboardingView 凭证卡同一视觉语言（显示字体 + 大字距） */
 .big-pin {
+  font-family: var(--fg-font-display);
   font-size: 32px;
   font-weight: 700;
   letter-spacing: 8px;
   text-align: center;
-  color: var(--el-color-warning);
+  color: var(--fg-ink);
 }
 
 .big-token {
@@ -503,13 +884,13 @@ section {
   font-family: monospace;
   font-size: 14px;
   word-break: break-all;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
+  background: var(--fg-surface-sunken);
+  border-radius: var(--fg-radius-control);
   user-select: all;
 }
 
 .hint {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 
@@ -525,16 +906,39 @@ section {
   gap: 12px;
   font-size: 13px;
   padding: 4px 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--fg-line);
 }
 
 .time {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
   font-family: monospace;
 }
 
 .action {
   font-weight: 600;
   min-width: 180px;
+  color: var(--fg-ink);
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.row-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+</style>
+
+<style>
+/* 弹窗宽度：n-modal 根节点 teleport 到 body，以 data-test 锚定 */
+[data-test='issued-token-dialog'],
+[data-test='one-time-pin-dialog'],
+[data-test='correction-dialog'],
+[data-test='dispute-resolve-dialog'],
+[data-test='manager-reject-dialog'] {
+  width: min(460px, calc(100vw - 48px));
 }
 </style>

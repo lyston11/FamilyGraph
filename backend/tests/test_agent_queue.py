@@ -176,6 +176,24 @@ def test_heartbeat_extends_and_rejects_terminal(db_session):
     assert _error_code(exc_info.value) == "AGENT_JOB_NOT_ACTIVE"
 
 
+def test_heartbeat_does_not_extend_cancel_requested_lease(db_session):
+    """Cancellation fence prevents a healthy sidecar from keeping the lease alive."""
+    user, space = create_agent_fixture(db_session, name="hb-cancel")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    run = _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+    original_expiry = grant.job.lease_expires_at
+    run.cancel_requested = True
+    grant.job.cancel_requested = True
+    db_session.commit()
+
+    expires = agent_queue.heartbeat(db_session, grant.job, ttl_seconds=3600)
+    assert expires == original_expiry
+    assert grant.job.lease_expires_at == original_expiry
+    assert grant.run.lease_expires_at == original_expiry
+
+
 def test_reaper_returns_to_queue_then_expires_after_attempts(db_session):
     user, space = create_agent_fixture(db_session, name="reap")
     session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)

@@ -21,7 +21,7 @@ const kindLabel = computed(() => {
     <span class="dot" aria-hidden="true"></span>
     <span v-if="space" class="scope-text">
       正在询问：<strong>{{ space.name }}</strong>
-      <span class="kind-badge">{{ kindLabel }}</span>
+      <span class="fg-badge fg-badge--accent kind-badge">{{ kindLabel }}</span>
     </span>
     <span v-else class="scope-text muted">暂无可用空间</span>
   </div>
@@ -33,30 +33,29 @@ const kindLabel = computed(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  background: var(--el-fill-color-light);
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  background: var(--fg-surface-sunken);
+  border-bottom: 1px solid var(--fg-line);
   font-size: 13px;
+  color: var(--fg-ink-secondary);
 }
 
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--el-color-success);
+  background: var(--fg-status-confirmed);
   flex-shrink: 0;
+}
+
+.scope-text strong {
+  color: var(--fg-ink);
 }
 
 .kind-badge {
   margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 3px;
-  font-size: 12px;
-  line-height: 18px;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
 }
 
 .muted {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-ink-secondary);
 }
 </style>

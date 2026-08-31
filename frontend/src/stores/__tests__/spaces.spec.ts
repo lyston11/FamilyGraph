@@ -2,12 +2,15 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as spacesApi from '@/api/spaces'
+import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 import type { FamilySpace } from '@/types/api'
 
 vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn(),
   createSpace: vi.fn(),
+  submitManagerApplication: vi.fn(),
+  fetchMyManagerApplications: vi.fn().mockResolvedValue([]),
   fetchSpaceMembers: vi.fn(),
   fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
@@ -39,6 +42,109 @@ function makeSpace(overrides: Partial<FamilySpace> = {}): FamilySpace {
 }
 
 describe('spaces store（AD-3）', () => {
+  it('按 active membership 集中派生空间权限，不混用 custody/profile 状态', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      name: '所有者',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    const store = useSpacesStore()
+    store.spaces = [makeSpace()]
+    store.currentSpaceId = 1
+    store.members = [
+      {
+        id: 1,
+        space_id: 1,
+        user_id: 1,
+        added_by: 1,
+        role: 'space_admin',
+        status: 'active',
+        updated_at: '2026-08-29T00:00:00',
+      },
+    ]
+
+    expect(store.currentMembership?.role).toBe('space_admin')
+    expect(store.currentRole).toBe('space_admin')
+    expect(store.isSpaceAdmin).toBe(true)
+    expect(store.canManageSpace).toBe(true)
+    expect(store.canInvite).toBe(true)
+    expect(store.canTransferOwnership).toBe(true)
+
+    store.members[0]!.status = 'removed'
+    expect(store.currentMembership).toBeNull()
+    expect(store.canManageSpace).toBe(false)
+  })
+
+  it('普通成员可邀请但无空间治理权（管理员是唯一治理角色）', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      name: '空间管理员',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    const store = useSpacesStore()
+    store.spaces = [makeSpace()]
+    store.currentSpaceId = 1
+    store.members = [{
+      id: 1,
+      space_id: 1,
+      user_id: 1,
+      added_by: 1,
+      role: 'member',
+      status: 'active',
+      updated_at: '2026-08-29T00:00:00',
+    }]
+
+    expect(store.isSpaceAdmin).toBe(false)
+    expect(store.canManageSpace).toBe(false)
+    expect(store.canInvite).toBe(true)
+    expect(store.canTransferOwnership).toBe(false)
+  })
+
+  it('canInvite：active 成员（除 guest）均可邀请；guest 与无 active membership 不可', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      name: '空间用户',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    const store = useSpacesStore()
+    store.spaces = [makeSpace()]
+    store.currentSpaceId = 1
+
+    const baseMember = {
+      id: 1,
+      space_id: 1,
+      user_id: 1,
+      added_by: 1,
+      role: 'space_admin' as const,
+      status: 'active' as const,
+      updated_at: '2026-08-29T00:00:00',
+    }
+
+    for (const role of ['space_admin', 'member'] as const) {
+      store.members = [{ ...baseMember, role }]
+      expect(store.canInvite).toBe(true)
+    }
+
+    store.members = [{ ...baseMember, role: 'guest' }]
+    expect(store.canInvite).toBe(false)
+
+    // 无当前空间 active membership：pending 行不派生角色，不获得邀请权
+    store.members = [{ ...baseMember, role: 'member', status: 'pending' }]
+    expect(store.canInvite).toBe(false)
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
@@ -54,7 +160,7 @@ describe('spaces store（AD-3）', () => {
     expect(mockedMembers).toHaveBeenCalledWith(1)
   })
 
-  it('无任何空间 → 空列表（首页引导创建默认空间，AD-3.4）', async () => {
+  it('无任何空间 → 空列表（首页展示创建空间入口）', async () => {
     mockedFetch.mockResolvedValue([])
     const store = useSpacesStore()
     await store.load()
@@ -67,8 +173,13 @@ describe('spaces store（AD-3）', () => {
     vi.mocked(spacesApi.createSpace).mockResolvedValue(makeSpace({ id: 5, name: '我们家' }))
     mockedMembers.mockResolvedValue([
       {
-        id: 9, space_id: 5, user_id: 1, added_by: 1,
-        role: 'owner', status: 'active', updated_at: '2026-08-25T00:00:00',
+        id: 9,
+        space_id: 5,
+        user_id: 1,
+        added_by: 1,
+        role: 'space_admin',
+        status: 'active',
+        updated_at: '2026-08-25T00:00:00',
       },
     ])
     const store = useSpacesStore()
@@ -77,7 +188,6 @@ describe('spaces store（AD-3）', () => {
     expect(store.currentSpaceId).toBe(5)
     expect(store.activeMembers).toHaveLength(1)
   })
-
   it('loadMembers 同步拉取待确档最小引用；失败时置空不阻塞（AC-F2）', async () => {
     mockedFetch.mockResolvedValue([makeSpace({ id: 3, kind: 'lineage' })])
     mockedMembers.mockResolvedValue([])
@@ -157,7 +267,7 @@ describe('spaces store 会话代际隔离（P2）', () => {
     const switchToNew = store.loadMembers(2)
     // 新空间先完成；随后旧空间的迟到响应到达
     resolveOld([
-      { id: 501, space_id: 1, user_id: 99, user_name: '旧空间成员', added_by: 1, role: 'owner', status: 'active', updated_at: '2026-08-29T00:00:00' },
+      { id: 501, space_id: 1, user_id: 99, user_name: '旧空间成员', added_by: 1, role: 'space_admin', status: 'active', updated_at: '2026-08-29T00:00:00' },
     ])
     await switchToNew
     expect(store.members).toEqual([])

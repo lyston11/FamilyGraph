@@ -8,8 +8,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  canonicalToolName,
   createDomainTools,
   defaultToolNames,
+  providerWireName,
   TOOL_VERSIONS,
   type DomainToolExecutor,
 } from "../src/tools.js";
@@ -48,8 +50,8 @@ const KINSHIP_CONTRACT: Record<string, { properties: string[]; required: string[
     required: ["concept_code"],
   },
   "familygraph.record_term_usage": {
-    properties: ["concept_code", "term"],
-    required: ["concept_code", "term"],
+    properties: ["concept_code", "consent_confirmed", "term"],
+    required: ["concept_code", "consent_confirmed", "term"],
   },
 };
 
@@ -163,9 +165,13 @@ describe("V2.3 kinship tool declarations", () => {
     };
     const byName = new Map(createDomainTools(executor).map((t) => [t.name, t]));
 
-    await byName
-      .get("familygraph.resolve_free_text_relation")!
-      .execute!("tc_k1", { text: "舅爷爷" }, undefined, undefined, undefined as never);
+    await byName.get("familygraph.resolve_free_text_relation")!.execute!(
+      "tc_k1",
+      { text: "舅爷爷" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
     await byName.get("familygraph.get_term_alternatives")!.execute!(
       "tc_k2",
       { concept_code: "kin.grandparent.paternal" },
@@ -175,7 +181,7 @@ describe("V2.3 kinship tool declarations", () => {
     );
     await byName.get("familygraph.record_term_usage")!.execute!(
       "tc_k3",
-      { concept_code: "kin.parent.mother", term: "老妈" },
+      { concept_code: "kin.parent.mother", term: "老妈", consent_confirmed: true },
       undefined,
       undefined,
       undefined as never,
@@ -190,11 +196,30 @@ describe("V2.3 kinship tool declarations", () => {
     expect(seen[0]!.call.input).toEqual({ text: "舅爷爷" });
     // Optional limit left unset must not be sent.
     expect(seen[1]!.call.input).toEqual({ concept_code: "kin.grandparent.paternal" });
-    expect(seen[2]!.call.input).toEqual({ concept_code: "kin.parent.mother", term: "老妈" });
+    expect(seen[2]!.call.input).toEqual({
+      concept_code: "kin.parent.mother",
+      term: "老妈",
+      consent_confirmed: true,
+    });
   });
 });
 
 describe("domain tool executor bridge", () => {
+  it("keeps canonical contracts while exposing provider-safe wire names on request", () => {
+    const canonical = createDomainTools(stubExecutor);
+    const wire = createDomainTools(stubExecutor, { providerWireNames: true });
+    expect(canonical.map((tool) => tool.name)).toEqual(defaultToolNames());
+    expect(wire.map((tool) => tool.name)).toEqual(
+      canonical.map((tool) => providerWireName(tool.name as keyof typeof TOOL_VERSIONS)),
+    );
+    expect(wire.every((tool) => !tool.name.includes("."))).toBe(true);
+    for (const tool of canonical) {
+      const wireName = providerWireName(tool.name as keyof typeof TOOL_VERSIONS);
+      expect(canonicalToolName(wireName)).toBe(tool.name);
+      expect(canonicalToolName(tool.name)).toBe(tool.name);
+    }
+  });
+
   it("forwards tool_call_id + version + exact input through the execute endpoint", async () => {
     const seen: Array<{ tool: string; call: Record<string, unknown> }> = [];
     const executor: DomainToolExecutor = async (toolName, call) => {

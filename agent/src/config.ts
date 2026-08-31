@@ -17,8 +17,9 @@ export type ProviderKind = "openai_compatible" | "local";
 export interface ProviderEnvConfig {
   kind: ProviderKind;
   baseUrl: string | undefined;
-  apiKey: string | undefined;
   model: string | undefined;
+  /** Deprecated test-only field; never populated from process.env. */
+  apiKey?: string | undefined;
 }
 
 export interface AgentConfig {
@@ -77,8 +78,8 @@ function readProvider(
   return {
     kind,
     baseUrl: readString(env, `AGENT_PROVIDER_${prefix}_BASE_URL`),
-    apiKey: readString(env, `AGENT_PROVIDER_${prefix}_API_KEY`),
     model: readString(env, `AGENT_PROVIDER_${prefix}_MODEL`),
+    apiKey: undefined,
   };
 }
 
@@ -129,7 +130,7 @@ export function describeProviderReadiness(
   config: AgentConfig,
 ): { cloud: ProviderReadiness; local: ProviderReadiness } {
   const describe = (p: ProviderEnvConfig): ProviderReadiness => {
-    if (!p.baseUrl || !p.model) return p.apiKey ? "unknown" : "missing";
+    if (!p.baseUrl || !p.model) return "missing";
     return "configured";
   };
   return { cloud: describe(config.providers.cloud), local: describe(config.providers.local) };

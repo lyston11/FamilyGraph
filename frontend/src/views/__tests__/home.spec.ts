@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
+import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,8 +8,17 @@ import { NMessageProvider } from 'naive-ui'
 import * as membersApi from '@/api/members'
 import * as spacesApi from '@/api/spaces'
 import HomeView from '@/views/HomeView.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
-import type { FamilySpace, Member, SpaceMemberInfo } from '@/types/api'
+import type {
+  EligibleManagerTarget,
+  FamilySpace,
+  ManagerTransferConsent,
+  Member,
+  SpaceManagerApplication,
+  SpaceMemberInfo,
+  SpaceRole,
+} from '@/types/api'
 
 vi.mock('@/api/members', () => ({
   fetchMembers: vi.fn(),
@@ -24,7 +33,11 @@ vi.mock('@/api/members', () => ({
 // 空间与图 store 在 onMounted 即请求（mock 掉避免 jsdom 真实 XHR）
 vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn().mockResolvedValue([]),
-  createSpace: vi.fn(),
+  submitManagerApplication: vi.fn(),
+  fetchMyManagerApplications: vi.fn().mockResolvedValue([]),
+  fetchEligibleManagerTargets: vi.fn().mockResolvedValue([]),
+  fetchMyTransferConsents: vi.fn().mockResolvedValue([]),
+  respondTransferConsent: vi.fn(),
   fetchSpaceMembers: vi.fn().mockResolvedValue([]),
   fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
@@ -51,6 +64,9 @@ const mockedCreate = vi.mocked(membersApi.createMember)
 const mockedFetchSpaces = vi.mocked(spacesApi.fetchSpaces)
 const mockedFetchSpaceMembers = vi.mocked(spacesApi.fetchSpaceMembers)
 const mockedResolveMembership = vi.mocked(spacesApi.resolveMembership)
+const mockedEligibleTargets = vi.mocked(spacesApi.fetchEligibleManagerTargets)
+const mockedMyConsents = vi.mocked(spacesApi.fetchMyTransferConsents)
+const mockedRespondConsent = vi.mocked(spacesApi.respondTransferConsent)
 
 function makeSpace(overrides: Partial<FamilySpace> = {}): FamilySpace {
   return {
@@ -105,6 +121,53 @@ function makeMember(overrides: Partial<Member> = {}): Member {
   }
 }
 
+function makeApplication(overrides: Partial<SpaceManagerApplication> = {}): SpaceManagerApplication {
+  return {
+    id: 11,
+    applicant_user_id: 5,
+    applicant_name: '空间用户',
+    space_id: 1,
+    space_name: '我们家',
+    request_kind: 'space_admin',
+    status: 'pending',
+    decision_note: null,
+    created_at: '2026-08-30T00:00:00',
+    decided_at: null,
+    ...overrides,
+  }
+}
+
+/** 可申请目标：与当前空间无关的另一个 lineage 空间 */
+function makeTarget(overrides: Partial<EligibleManagerTarget> = {}): EligibleManagerTarget {
+  return {
+    space_id: 42,
+    space_name: '王家族谱',
+    space_kind: 'lineage',
+    current_manager_user_id: 8,
+    current_manager_name: '王大伯',
+    has_pending_application: false,
+    ...overrides,
+  }
+}
+
+function makeConsent(overrides: Partial<ManagerTransferConsent> = {}): ManagerTransferConsent {
+  return {
+    id: 77,
+    application_id: 12,
+    space_id: 42,
+    space_name: '王家族谱',
+    space_kind: 'lineage',
+    applicant_user_id: 5,
+    applicant_name: '李小妹',
+    current_manager_user_id: 1,
+    status: 'pending',
+    requested_at: '2026-08-31T00:00:00',
+    responded_at: null,
+    response_reason: null,
+    ...overrides,
+  }
+}
+
 // naive useMessage 需 NMessageProvider 祖先；div 根保证 test-utils 元素查询稳定
 const MessageProvidedHome = defineComponent({
   render() {
@@ -112,15 +175,46 @@ const MessageProvidedHome = defineComponent({
   },
 })
 
-async function mountHome(): Promise<ReturnType<typeof mount>> {
+async function mountHome(
+  role?: SpaceRole,
+): Promise<{ wrapper: ReturnType<typeof mount>; router: ReturnType<typeof createRouter> }> {
   const pinia = createPinia()
+  setActivePinia(pinia)
+  const auth = useAuthStore(pinia)
+  if (role) {
+    mockedFetch.mockResolvedValue([])
+    auth.user = {
+      id: 5,
+      name: '空间用户',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+    mockedFetchSpaces.mockResolvedValue([makeSpace()])
+    mockedFetchSpaceMembers.mockResolvedValue([
+      makeMembership({ user_id: 5, role, status: 'active' }),
+    ])
+  } else {
+    auth.user = {
+      id: 1,
+      name: '我',
+      is_admin: false,
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+  }
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/', name: 'home', component: HomeView },
+      { path: '/', name: 'family-space', component: { template: '<div />' } },
+      { path: '/home', name: 'home', component: HomeView },
       { path: '/settings', name: 'settings', component: { template: '<div />' } },
     ],
   })
+  await router.push('/home')
+  await router.isReady()
   const wrapper = mount(MessageProvidedHome, {
     global: {
       plugins: [pinia, router],
@@ -129,7 +223,7 @@ async function mountHome(): Promise<ReturnType<typeof mount>> {
   })
   await router.isReady()
   await new Promise((resolve) => setTimeout(resolve))
-  return wrapper
+  return { wrapper, router }
 }
 
 // n-modal 内容 teleport 到 body，交互统一走 document 查询
@@ -153,9 +247,37 @@ describe('HomeView', () => {
     document.body.innerHTML = ''
   })
 
+  it('邀请入口对 active 成员（space_admin/member）显示', async () => {
+    for (const role of ['space_admin', 'member'] as const) {
+      const { wrapper } = await mountHome(role)
+      await vi.waitFor(() => expect(wrapper.find('[data-test="invite-member"]').exists()).toBe(true))
+      wrapper.unmount()
+    }
+    mockedFetchSpaces.mockResolvedValue([])
+    mockedFetchSpaceMembers.mockResolvedValue([])
+  })
+
+  it('guest 不显示邀请入口', async () => {
+    const { wrapper } = await mountHome('guest')
+    await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalled())
+    expect(wrapper.find('[data-test="invite-member"]').exists()).toBe(false)
+    wrapper.unmount()
+    mockedFetchSpaces.mockResolvedValue([])
+    mockedFetchSpaceMembers.mockResolvedValue([])
+  })
+
+  it('家庭空间入口使用 family-space 命名路由', async () => {
+    mockedFetch.mockResolvedValue([])
+    const { wrapper, router } = await mountHome()
+
+    await wrapper.find('[data-test="go-family-space"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('family-space'))
+    wrapper.unmount()
+  })
+
   it('空状态给引导动作（添加第一位家人）', async () => {
     mockedFetch.mockResolvedValue([])
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     expect(wrapper.find('[data-test="empty-add"]').exists()).toBe(true)
     expect(mockedFetch).toHaveBeenCalled()
@@ -167,7 +289,7 @@ describe('HomeView', () => {
       makeMember({ claim_status: 'claimed' }),
       makeMember({ id: 3, name: '父亲', gender: 'm', claim_status: 'managed' }),
     ])
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     const cards = wrapper.findAll('[data-test="member-card"]')
     expect(cards).toHaveLength(2)
@@ -181,7 +303,7 @@ describe('HomeView', () => {
   it('建档成功 → 一次性 PIN 弹窗出现；关闭后 PIN 清空不可回看', async () => {
     mockedFetch.mockResolvedValue([makeMember()])
     mockedCreate.mockResolvedValue({ user: makeMember(), pin: '123456', replayed: false })
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     // 打开向导走完三步提交（n-modal teleport 渲染需等待）
     await wrapper.find('[data-test="open-wizard"]').trigger('click')
@@ -222,7 +344,7 @@ describe('HomeView', () => {
       makeSpace({ id: 1, name: '我们家', kind: 'household' }),
       makeSpace({ id: 2, name: '王家族谱', kind: 'lineage' }),
     ])
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     // load() 自动选中第一个空间（household）→ 触发器 render-label 显示「共同生活」
     const switcher = () => wrapper.find('[data-test="space-switcher"]')
@@ -244,7 +366,7 @@ describe('HomeView', () => {
       makeMembership({ id: 99, user_id: 5, status: 'pending' }),
     ])
     mockedResolveMembership.mockResolvedValue(makeMembership({ id: 99, status: 'active' }))
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     // 收到的邀请以独立行展示，带接受/拒绝两个动作
     await vi.waitFor(() =>
@@ -261,6 +383,107 @@ describe('HomeView', () => {
 
     await wrapper.find('[data-test="reject-invite"]').trigger('click')
     await vi.waitFor(() => expect(mockedResolveMembership).toHaveBeenCalledWith(99, 'reject'))
+    wrapper.unmount()
+  })
+
+  it('申请接手：提交的是所选族谱空间，而不是当前切换到的空间', async () => {
+    // 目标空间与当前空间无关（这里当前空间是 id=1 的 household，候选是 id=42）。
+    const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
+    mockedSubmit.mockResolvedValue(makeApplication({ id: 12, space_id: 42, space_name: '王家族谱' }))
+    mockedEligibleTargets.mockResolvedValue([makeTarget()])
+    const { wrapper } = await mountHome('member')
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-test="apply-space-admin"]').exists()).toBe(true),
+    )
+    await wrapper.find('[data-test="apply-space-admin"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="apply-target-42"]')).not.toBeNull(),
+    )
+    // 卡片自带目标名称与现任管理员，申请人在提交前就知道自己在接手谁
+    expect(document.querySelector('[data-test="apply-target-42"]')?.textContent).toContain('王家族谱')
+    expect(document.querySelector('[data-test="apply-target-42"]')?.textContent).toContain('王大伯')
+
+    clickInBody('[data-test="apply-target-submit-42"]')
+    await vi.waitFor(() => expect(mockedSubmit).toHaveBeenCalledWith('space_admin', { spaceId: 42 }))
+    wrapper.unmount()
+  })
+
+  it('已有在办申请的目标：卡片仍列出但提交按钮禁用', async () => {
+    const mockedSubmit = vi.mocked(spacesApi.submitManagerApplication)
+    mockedEligibleTargets.mockResolvedValue([makeTarget({ has_pending_application: true })])
+    const { wrapper } = await mountHome('member')
+
+    await wrapper.find('[data-test="apply-space-admin"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="apply-target-42"]')).not.toBeNull(),
+    )
+    const submit = document.querySelector<HTMLButtonElement>('[data-test="apply-target-submit-42"]')
+    expect(submit?.disabled).toBe(true)
+    expect(mockedSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('服务端没有候选目标时入口不出现（资格判定不在前端）', async () => {
+    // guest 也走同一条路径：不靠本地 role 判断，靠服务端返回空候选。
+    mockedEligibleTargets.mockResolvedValue([])
+    const { wrapper } = await mountHome('guest')
+    await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalled())
+    expect(wrapper.find('[data-test="apply-space-admin"]').exists()).toBe(false)
+    wrapper.unmount()
+    mockedFetchSpaces.mockResolvedValue([])
+    mockedFetchSpaceMembers.mockResolvedValue([])
+  })
+
+  it('原管理员工单：同意后调用后端；谢绝缺理由时前端先拦下', async () => {
+    mockedMyConsents.mockResolvedValue([makeConsent()])
+    const { wrapper } = await mountHome('space_admin')
+
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-test="transfer-consent-row"]').exists()).toBe(true),
+    )
+    const row = wrapper.find('[data-test="transfer-consent-row"]')
+    expect(row.text()).toContain('李小妹')
+    expect(row.text()).toContain('王家族谱')
+    // 交接后果必须写在按钮旁边，不能只靠成功提示事后说明
+    expect(row.text()).toContain('降为普通成员')
+
+    // 谢绝需要理由：未填时不发请求
+    await wrapper.find('[data-test="consent-reject-77"]').trigger('click')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('谢绝交接需要填写理由'))
+    expect(mockedRespondConsent).not.toHaveBeenCalled()
+
+    mockedRespondConsent.mockResolvedValue(makeConsent({ status: 'accepted' }))
+    await wrapper.find('[data-test="consent-accept-77"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(mockedRespondConsent).toHaveBeenCalledWith(77, 'accept', undefined),
+    )
+    wrapper.unmount()
+    mockedMyConsents.mockResolvedValue([])
+  })
+
+  it('我的申请状态行：审批中空心章/未通过朱砂章并展示平台备注', async () => {
+    vi.mocked(spacesApi.fetchMyManagerApplications).mockResolvedValue([
+      makeApplication({ id: 21 }),
+      makeApplication({
+        id: 22,
+        request_kind: 'space_admin',
+        space_id: 1,
+        space_name: '我们家',
+        status: 'rejected',
+        decision_note: '请先完成更多成员邀请',
+        decided_at: '2026-08-31T00:00:00',
+      }),
+    ])
+    const { wrapper } = await mountHome('space_admin')
+
+    const rows = wrapper.findAll('[data-test="manager-application-row"]')
+    await vi.waitFor(() => expect(rows.length).toBe(2))
+    expect(rows[0].text()).toContain('我们家')
+    expect(rows[0].text()).toContain('审批中')
+    expect(rows[1].text()).toContain('管理员申请')
+    expect(rows[1].text()).toContain('未通过')
+    expect(rows[1].text()).toContain('平台备注：请先完成更多成员邀请')
     wrapper.unmount()
   })
 })

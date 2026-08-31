@@ -16,6 +16,22 @@ vi.mock('@/api/auth', () => ({
   initializeAdmin: vi.fn(),
 }))
 
+vi.mock('@/api/spaces', () => ({
+  fetchSpaces: vi.fn().mockResolvedValue([]),
+  createSpace: vi.fn(),
+  fetchSpaceMembers: vi.fn().mockResolvedValue([]),
+  fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
+  inviteToSpace: vi.fn(),
+  removeOrWithdrawMembership: vi.fn(),
+  resolveMembership: vi.fn(),
+  joinByUser: vi.fn(),
+  getSpacePositions: vi.fn(),
+  putSpacePositions: vi.fn(),
+  createOwnershipTransfer: vi.fn(),
+  fetchOwnershipTransfers: vi.fn().mockResolvedValue([]),
+  respondOwnershipTransfer: vi.fn(),
+}))
+
 vi.mock('@/api/governance', () => ({
   confirmIdentity: vi.fn(),
   fetchFactReviews: vi.fn().mockResolvedValue([]),
@@ -37,6 +53,9 @@ const mockedRefresh = vi.mocked(authApi.refreshTokens)
 const mockedFetchMe = vi.mocked(authApi.fetchMe)
 const governanceApi = await import('@/api/governance')
 const mockedFactReviews = vi.mocked(governanceApi.fetchFactReviews)
+const spacesApi = await import('@/api/spaces')
+const mockedFetchSpaces = vi.mocked(spacesApi.fetchSpaces)
+const mockedFetchSpaceMembers = vi.mocked(spacesApi.fetchSpaceMembers)
 
 // 动态引入真实路由（守卫逻辑是被测对象）；路由为模块单例，跨测试需重置位置
 const { default: router } = await import('@/router')
@@ -138,15 +157,159 @@ describe('router guards', () => {
     expect(useAuthStore().isLoggedIn).toBe(true)
   })
 
-  it('resume 失败（refresh 已失效）：清空状态跳登录页', async () => {
-    localStorage.setItem('fg.refresh_token', 'dead-token')
+  it('系统管理员硬刷新 /system-admin：不调用家庭 /me，会话保留并放行', async () => {
+    localStorage.setItem('fg.refresh_token', 'stored-refresh')
     useAuthStore()
 
-    mockedRefresh.mockRejectedValue(new Error('invalid refresh'))
+    const pair = makePair({ is_admin: true })
+    pair.user.principal_type = 'system_admin'
+    mockedRefresh.mockResolvedValue(pair)
+    // 家庭 /me 对系统主体按设计 401；resume 一旦调用它就会清会话把人踢回登录页。
+    mockedFetchMe.mockRejectedValue(new Error('family endpoint rejects system admin'))
+
+    expect(await navigate('/system-admin')).toBe('system-admin')
+    expect(mockedRefresh).toHaveBeenCalledWith('stored-refresh')
+    expect(mockedFetchMe).not.toHaveBeenCalled()
+    expect(useAuthStore().isSystemAdmin).toBe(true)
+    expect(useAuthStore().isLoggedIn).toBe(true)
+  })
+
+  it('旧 /admin 深链在系统管理员硬刷新后重定向到独立后台', async () => {
+    localStorage.setItem('fg.refresh_token', 'stored-refresh')
+    useAuthStore()
+
+    const pair = makePair({ is_admin: true })
+    pair.user.principal_type = 'system_admin'
+    mockedRefresh.mockResolvedValue(pair)
+    mockedFetchMe.mockRejectedValue(new Error('family endpoint rejects system admin'))
+
+    expect(await navigate('/admin')).toBe('system-admin')
+  })
+
+  it('普通用户访问 /admin：权限校验后返回家庭空间', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ is_admin: false }))
+    await auth.login('张三', '123456')
 
     await resetToOnboarding()
-    expect(await navigate('/settings')).toBe('login')
+    expect(await navigate('/admin')).toBe('family-space')
+  })
+
+  it('平台运营者不因平台角色获得空间管理权限', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ is_admin: true }))
+    await auth.login('张三', '123456')
+    mockedFetchSpaces.mockResolvedValue([
+      {
+        id: 7,
+        name: '他人空间',
+        owner_id: 99,
+        kind: 'household',
+        created_at: '2026-08-25T00:00:00',
+        pending_count: 0,
+        member_count: 1,
+      },
+    ])
+    mockedFetchSpaceMembers.mockResolvedValue([])
+
+    await resetToOnboarding()
+    expect(await navigate('/spaces/7/manage')).toBe('family-space')
+  })
+
+  it('当前空间管理员可访问目标空间管理页', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+    mockedFetchSpaces.mockResolvedValue([
+      {
+        id: 7,
+        name: '我的空间',
+        owner_id: 1,
+        kind: 'household',
+        created_at: '2026-08-25T00:00:00',
+        pending_count: 0,
+        member_count: 2,
+      },
+    ])
+    mockedFetchSpaceMembers.mockResolvedValue([
+      {
+        id: 1,
+        space_id: 7,
+        user_id: 1,
+        added_by: 1,
+        role: 'space_admin',
+        status: 'active',
+        updated_at: '2026-08-25T00:00:00',
+      },
+    ])
+
+    await resetToOnboarding()
+    expect(await navigate('/spaces/7/manage')).toBe('space-management')
+  })
+
+  it('member、guest 和无 membership 拒绝进入空间管理页', async () => {
+    const roles = ['member', 'guest'] as const
+    for (const role of roles) {
+      const auth = useAuthStore()
+      mockedLogin.mockResolvedValue(makePair())
+      await auth.login('张三', '123456')
+      mockedFetchSpaces.mockResolvedValue([
+        {
+          id: 7,
+          name: '成员空间',
+          owner_id: 99,
+          kind: 'household',
+          created_at: '2026-08-25T00:00:00',
+          pending_count: 0,
+          member_count: 2,
+        },
+      ])
+      mockedFetchSpaceMembers.mockResolvedValue([
+        {
+          id: 1,
+          space_id: 7,
+          user_id: 1,
+          added_by: 99,
+          role,
+          status: 'active',
+          updated_at: '2026-08-25T00:00:00',
+        },
+      ])
+      await resetToOnboarding()
+      expect(await navigate('/spaces/7/manage')).toBe('family-space')
+      auth.clearSession()
+      await resetToOnboarding()
+    }
+  })
+
+  it('未登录空间管理深链保留安全 redirect', async () => {
+    expect(await navigate('/spaces/7/manage')).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/spaces/7/manage')
+  })
+  it('无凭据访问 /admin：进入登录页并保留独立后台 redirect', async () => {
+    // /admin 只是旧路径重定向；守卫看到的目标已是 /system-admin，回跳地址同此。
+    expect(await navigate('/admin')).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/system-admin')
+  })
+
+  it('refresh 失败：后台深链进入登录页并清理失效凭据', async () => {
+    localStorage.setItem('fg.refresh_token', 'dead-token')
+    useAuthStore()
+    mockedRefresh.mockRejectedValue(new Error('invalid refresh'))
+
+    expect(await navigate('/admin')).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/system-admin')
     expect(localStorage.getItem('fg.refresh_token')).toBeNull()
+  })
+
+  it('强制改 PIN 重定向保留原始 redirect', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ pin_must_change: true }))
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/settings')).toBe('force-change-pin')
+    expect(router.currentRoute.value.query.redirect).toBe('/settings')
   })
 })
 
@@ -178,6 +341,16 @@ describe('router guards: v2 identity setup（F-1，判定源 = /me profile_statu
     expect(await navigate('/settings')).toBe('identity-setup')
     // 向导自身可停留
     expect(await navigate('/identity-setup')).toBe('identity-setup')
+  })
+
+  it('profile_status=provisional：确档重定向保留原始 redirect', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair({ profile_status: 'provisional' }))
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/stats')).toBe('identity-setup')
+    expect(router.currentRoute.value.query.redirect).toBe('/stats')
   })
 
   it('profile_status=provisional 且清单拉取失败：仍拦截（不再 fail-open）', async () => {

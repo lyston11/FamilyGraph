@@ -20,7 +20,7 @@ from app.config import OWNERSHIP_TRANSFER_TTL_HOURS
 from app.db import SessionLocal
 from app.errors import extract_api_error
 from app.models.audit_log import AuditLog
-from app.models.space import FamilySpace, SpaceMember
+from app.models.space import PENDING_EXPIRY_DAYS, FamilySpace, SpaceMember
 from app.models.v2_foundation import DomainEvent, OwnershipTransfer
 from app.utils.timeutil import utcnow
 
@@ -73,6 +73,42 @@ def _make_space(db_session, owner, *, kind="household", members=()):
     return space
 
 
+def test_create_transfer_requires_active_owner_membership(db_session) -> None:
+    owner = create_user_with_pin(db_session, "移交状态owner", "101010")
+    heir = create_user_with_pin(db_session, "移交状态继承人", "202020")
+    space = _make_space(db_session, owner, members=[heir])
+    owner_member = db_session.scalar(
+        select(SpaceMember).where(SpaceMember.space_id == space.id, SpaceMember.user_id == owner.id)
+    )
+    assert owner_member is not None
+
+    for status in ("removed", "pending"):
+        owner_member.status = status
+        owner_member.updated_at = utcnow()
+        db_session.commit()
+        with pytest.raises(HTTPException) as exc_info:
+            ownership_commands.create_transfer(
+                db_session, _ctx(owner), space_id=space.id, to_user_id=heir.id
+            )
+        error = extract_api_error(exc_info.value.detail)
+        assert exc_info.value.status_code == 404
+        assert error is not None and error["code"] == "SPACE_NOT_FOUND"
+        assert db_session.scalar(select(OwnershipTransfer)) is None
+
+    # effective_status() treats an old pending membership as withdrawn, too.
+    owner_member.status = "pending"
+    owner_member.updated_at = utcnow() - timedelta(days=PENDING_EXPIRY_DAYS + 1)
+    db_session.commit()
+    with pytest.raises(HTTPException) as exc_info:
+        ownership_commands.create_transfer(
+            db_session, _ctx(owner), space_id=space.id, to_user_id=heir.id
+        )
+    error = extract_api_error(exc_info.value.detail)
+    assert exc_info.value.status_code == 404
+    assert error is not None and error["code"] == "SPACE_NOT_FOUND"
+    assert db_session.scalar(select(OwnershipTransfer)) is None
+
+
 def test_accept_transfer_flips_owner_and_demotes_old_owner(db_session) -> None:
     owner = create_user_with_pin(db_session, "老owner", "111111")
     heir = create_user_with_pin(db_session, "继承人", "222222")
@@ -87,8 +123,10 @@ def test_accept_transfer_flips_owner_and_demotes_old_owner(db_session) -> None:
     db_session.expire_all()
     assert space.owner_id == heir.id
     roles = {m.user_id: m.role for m in db_session.scalars(select(SpaceMember)).all()}
-    assert roles[heir.id] == "owner"
-    assert roles[owner.id] == "space_admin"  # 原 owner 默认降为 space_admin
+    # 产品层只有一个空间管理员：受让人成为唯一 space_admin，原管理员降为普通成员。
+    assert roles[heir.id] == "space_admin"
+    assert roles[owner.id] == "member"
+    assert list(roles.values()).count("space_admin") == 1
 
     types = {e.type for e in db_session.scalars(select(DomainEvent)).all()}
     assert {"space.transfer.requested", "space.transfer.completed"} <= types

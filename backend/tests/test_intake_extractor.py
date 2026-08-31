@@ -482,6 +482,8 @@ def test_record_term_usage_tool_output_contract(db_session: Session, _flag_on) -
     _, space = create_agent_fixture(db_session, name="用1")
     member = _person(db_session, space.id, "用甲", "m")
     session_row = create_agent_session(db_session, account_id=member.account.id, space_id=space.id)
+    session_row.term_usage_consent = True
+    db_session.commit()
     run = _assistant_run(db_session, session_row)
 
     def call() -> dict[str, Any]:
@@ -492,7 +494,7 @@ def test_record_term_usage_tool_output_contract(db_session: Session, _flag_on) -
             {"agent_kind": "assistant"},
             name=agent_tools.TOOL_RECORD_TERM_USAGE,
             version=1,
-            input_payload={"concept_code": "Um", "term": "爹地"},
+            input_payload={"concept_code": "Um", "term": "爹地", "consent_confirmed": True},
         )
 
     # 合同：demoted 反映载体行当前非 active（单人不足两人晋升门槛）

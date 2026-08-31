@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 
+import { useAuthStore } from '@/stores/auth'
 import type {
   FamilySpace,
   OwnershipTransfer,
@@ -20,7 +21,7 @@ import {
   respondOwnershipTransfer,
 } from '@/api/spaces'
 
-/** 家庭空间状态（m1c）。AD-3：空列表时由首页引导创建默认空间。 */
+/** 家庭空间状态（m1c）。空列表时由首页引导创建家庭空间。 */
 export const useSpacesStore = defineStore('spaces', {
   state: () => ({
     /**
@@ -42,13 +43,49 @@ export const useSpacesStore = defineStore('spaces', {
     currentSpace(state): FamilySpace | null {
       return state.spaces.find((s) => s.id === state.currentSpaceId) ?? state.spaces[0] ?? null
     },
+    /** 当前 active membership；不读取 custody/profile 字段，避免跨域混用。 */
+    currentMembership(state): SpaceMemberInfo | null {
+      const auth = useAuthStore()
+      const userId = auth.user?.id
+      const currentSpaceId = state.currentSpaceId
+      if (userId === undefined || currentSpaceId === null) return null
+      return (
+        state.members.find(
+          (member) =>
+            member.space_id === currentSpaceId &&
+            member.user_id === userId &&
+            member.status === 'active',
+        ) ?? null
+      )
+    },
+    currentRole(): SpaceMemberInfo['role'] | null {
+      return this.currentMembership?.role ?? null
+    },
+    /**
+     * 当前空间管理员：产品层唯一管理员角色，按当前 space_id 的成员关系判定。
+     * 用户在其他空间的管理员身份不影响这里。
+     */
+    isSpaceAdmin(): boolean {
+      return this.currentRole === 'space_admin'
+    },
+    canManageSpace(): boolean {
+      return this.isSpaceAdmin
+    },
+    /** 邀请授权：当前空间 active 成员（除 guest）均可邀请；受邀人仍需本人接受。 */
+    canInvite(): boolean {
+      return this.currentMembership !== null && this.currentRole !== 'guest'
+    },
+    /** 交接由当前空间管理员发起（原 owner 移交入口，产品文案统一为管理员）。 */
+    canTransferOwnership(): boolean {
+      return this.isSpaceAdmin
+    },
     activeMembers(state): SpaceMemberInfo[] {
       return state.members.filter((m) => m.status === 'active')
     },
     pendingForMe(state): SpaceMemberInfo[] {
       return state.members.filter((m) => m.status === 'pending')
     },
-    /** 发给我的 pending 移交（受让人视角；userId 由组件/store 动作传入比对） */
+    /** 当前空间的 pending 移交（含发起人与受让人视角） */
     pendingTransfers(state): OwnershipTransfer[] {
       return state.transfers.filter((t) => t.status === 'pending')
     },
@@ -73,6 +110,10 @@ export const useSpacesStore = defineStore('spaces', {
     async loadMembers(spaceId: number) {
       const generation = this.generation
       this.currentSpaceId = spaceId
+      // 切换或重新校验前先丢弃旧空间授权缓存；请求失败不得沿用旧 membership。
+      this.members = []
+      this.transfers = []
+      this.profileRefs = []
       const members = await fetchSpaceMembers(spaceId)
       if (generation !== this.generation || this.currentSpaceId !== spaceId) return
       this.members = members
@@ -83,13 +124,14 @@ export const useSpacesStore = defineStore('spaces', {
       if (generation !== this.generation || this.currentSpaceId !== spaceId) return
       this.profileRefs = refs
     },
-    async create(name: string) {
-      const space = await createSpace(name)
+    async create(name: string, kind: 'household' | 'lineage' = 'household') {
+      const space = await createSpace(name, kind)
       this.spaces.unshift(space)
       await this.loadMembers(space.id)
       return space
     },
     async invite(userId: number) {
+      if (!this.canInvite) throw new Error('SPACE_FORBIDDEN_ACTOR')
       const space = this.currentSpace
       if (!space) throw new Error('NO_CURRENT_SPACE')
       await inviteToSpace(space.id, userId)

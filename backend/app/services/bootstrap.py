@@ -9,18 +9,16 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.errors import BOOTSTRAP_ALREADY_INITIALIZED, raise_api_error
-from app.models.account import Account
+from app.models.system_admin import SystemAdmin, SystemAdminAccount
 from app.models.user import User
-from app.models.v2_foundation import PlatformRoleAssignment
 from app.services import audit
-from app.services.identity_fsm import PROFILE_IDENTITY_CONFIRMED
-from app.services.platform_roles import ROLE_PLATFORM_OPERATOR
 from app.utils import security, timeutil
 
 
 def has_any_user(session: Session) -> bool:
-    count = session.query(func.count(User.id)).scalar()
-    return bool(count and count > 0)
+    user_count = session.query(func.count(User.id)).scalar()
+    admin_count = session.query(func.count(SystemAdmin.id)).scalar()
+    return bool((user_count and user_count > 0) or (admin_count and admin_count > 0))
 
 
 def ensure_not_initialized(session: Session) -> None:
@@ -33,44 +31,29 @@ def ensure_not_initialized(session: Session) -> None:
         )
 
 
-def initialize_admin(session: Session, name: str, ip: str | None) -> tuple[User, str]:
-    """创建平台运营者账号，返回 (user, 明文 PIN)；PIN 仅此一次。"""
+def initialize_admin(session: Session, name: str, ip: str | None) -> tuple[SystemAdmin, str]:
+    """创建独立系统管理员主体；绝不创建家庭 User/Account。"""
     ensure_not_initialized(session)
     pin = security.generate_pin()
     now = timeutil.utcnow()
-    user = User(
-        name=name.strip(),
-        created_at=now,
-        profile_status=PROFILE_IDENTITY_CONFIRMED,
-        profile_confirmed_at=now,
-    )
-    account = Account(
+    admin = SystemAdmin(login_name=name.strip(), status="active", created_at=now)
+    admin.account = SystemAdminAccount(
         pin_hash=security.hash_pin(pin),
         pin_must_change=True,
         token_version=0,
         failed_attempts=0,
         locked_until=None,
-        # bootstrap 创建者即本人，直接置 claimed（与 v1 语义一致）
-        status="claimed",
-        claimed_at=now,
+        status="managed",
+        claimed_at=None,
     )
-    user.account = account  # relationship 回填 user_id（见 models/user.py）
-    session.add(user)
-    session.flush()  # 取得 id 供角色分配与审计引用
-    session.add(
-        PlatformRoleAssignment(
-            account_id=account.id,
-            role=ROLE_PLATFORM_OPERATOR,
-            created_by=user.id,
-            created_at=now,
-        )
-    )
+    session.add(admin)
+    session.flush()
     audit.write_audit(
         session,
         action="bootstrap_initialized",
-        actor_id=user.id,
-        target_id=user.id,
+        actor_id=None,
+        target_id=admin.id,
         ip=ip,
-        detail={"operator_name": name.strip()},
+        detail={"principal_type": "system_admin"},
     )
-    return user, pin
+    return admin, pin

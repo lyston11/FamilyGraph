@@ -195,6 +195,10 @@ def test_private_memory_event_does_not_enqueue_steward_job(db_session, monkeypat
 def test_public_rag_requires_active_space_membership(db_session):
     owner, space = create_agent_fixture(db_session, name="memory-public-owner")
     create_space_member(db_session, space.id, owner.id, role="owner")
+    member = create_user_with_pin(db_session, "memory-public-member", "234567")
+    create_space_member(db_session, space.id, member.id, role="member")
+    operator = create_user_with_pin(db_session, "memory-public-operator", "345678", is_admin=True)
+    create_space_member(db_session, space.id, operator.id, role="member")
     outsider = create_user_with_pin(db_session, "memory-public-outsider", "123456")
     db_session.commit()
 
@@ -215,6 +219,25 @@ def test_public_rag_requires_active_space_membership(db_session):
         account=owner.account,
         space_id=space.id,
         query="public document",
+    )
+    assert search_rag(
+        db_session,
+        actor=member,
+        account=member.account,
+        space_id=space.id,
+        query="public document",
+    )
+    # A platform operator can satisfy the SQL active-membership predicate, but
+    # the server-side platform role still fails the RAG visibility check.
+    assert (
+        search_rag(
+            db_session,
+            actor=operator,
+            account=operator.account,
+            space_id=space.id,
+            query="public document",
+        )
+        == []
     )
     assert (
         search_rag(

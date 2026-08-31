@@ -51,6 +51,10 @@ RELATIONSHIP_INTELLIGENCE_ENABLED: bool = os.environ.get(
 # ---- V2.1 Agent Runtime（RT-6：feature flag 总开关，默认整体关闭）----
 # 关闭时 /internal/agent/* 一律 503；开启仍要求 AGENT_SERVICE_SECRET 配置，否则 fail-closed
 AGENT_RUNTIME_ENABLED: bool = os.environ.get("AGENT_RUNTIME_ENABLED", "").lower() in ("1", "true")
+# 首版云模型 profile 门禁：生产只允许与本机 Pi 配置一致的 liu-dada/gpt-5.6-sol。
+# 该门禁不可由运行环境关闭；测试夹具如需合成 Provider，必须在进程内显式
+# monkeypatch 该常量，避免把一个部署环境变量误当成安全开关。
+AGENT_PROVIDER_STANDARD_PROFILE_ONLY: bool = True
 # sidecar 与 FastAPI 共享的 HMAC 签名密钥（service/run token）；未配置时内部协议全部拒绝
 AGENT_SERVICE_SECRET: str = os.environ.get("AGENT_SERVICE_SECRET", "")
 # service token 仅用于 lease（notes.md 两级认证）；run token 绑定 run/scope，exp 上限 600s
@@ -64,8 +68,9 @@ AGENT_MAX_ATTEMPTS: int = int(os.environ.get("AGENT_MAX_ATTEMPTS", "3"))
 AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT: int = int(
     os.environ.get("AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT", "2")
 )
-# context 端点返回的最近消息投影条数上限
-AGENT_CONTEXT_MESSAGE_LIMIT: int = int(os.environ.get("AGENT_CONTEXT_MESSAGE_LIMIT", "50"))
+# Context projection deliberately returns the complete durable transcript;
+# there is no recent-N truncation knob because truncation would break Pi
+# session rehydration and make answers depend on an arbitrary environment cap.
 # 浏览器创建 Assistant Run 的默认策略版本与消息正文上限（RT-4 content 校验）
 AGENT_POLICY_VERSION: str = os.environ.get("AGENT_POLICY_VERSION", "v2-agent-runtime-1")
 # ProviderGateway 代理（唯一 egress）：sidecar 经 internal 代理端点调用云端

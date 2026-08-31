@@ -13,6 +13,8 @@
  * run.started, turn.*, message.assistant_added and tool.execution.*.
  */
 
+import { canonicalToolName } from "./tools.js";
+
 export const EVENT_TYPES = [
   "run.started",
   "message.user_added",
@@ -123,6 +125,11 @@ function extractText(content: unknown): string {
     .join("");
 }
 
+function canonicalEventToolName(value: unknown): string {
+  const raw = String(value ?? "");
+  return canonicalToolName(raw) ?? raw;
+}
+
 /** Extract a bounded web citation from a fetch_approved_page tool result. */
 function extractWebCitation(result: unknown): WebCitationPayload | null {
   if (result === null || typeof result !== "object") return null;
@@ -180,7 +187,7 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
           type: "tool.execution.started",
           public_payload: {
             tool_call_id: String(event.toolCallId ?? ""),
-            tool_name: String(event.toolName ?? ""),
+            tool_name: canonicalEventToolName(event.toolName),
             tool_version: 1,
           },
         },
@@ -191,7 +198,7 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
           type: "tool.execution.completed",
           public_payload: {
             tool_call_id: String(event.toolCallId ?? ""),
-            tool_name: String(event.toolName ?? ""),
+            tool_name: canonicalEventToolName(event.toolName),
             // Raw tool results are never broadcast; only the error flag.
             is_error: Boolean(event.isError),
           },
@@ -213,9 +220,13 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
  * sources travel with the answer that used them.
  */
 export class RunEventBuffer {
-  private nextSeq = 1;
+  private nextSeq: number;
   private readonly pending: FgEvent[] = [];
   private webCitations: WebCitationPayload[] = [];
+
+  constructor(startSeq = 1) {
+    this.nextSeq = Number.isInteger(startSeq) && startSeq >= 0 ? startSeq : 1;
+  }
 
   push<T extends FgEventType>(type: T, public_payload: FgEventPayloadMap[T]): void {
     this.pending.push({ seq: this.nextSeq++, type, public_payload });
@@ -223,7 +234,10 @@ export class RunEventBuffer {
 
   /** Feed one session broadcast; returns count of produced events. */
   onSessionEvent(event: SessionEventLike): number {
-    if (event.type === "tool_execution_end" && event.toolName === "familygraph.fetch_approved_page") {
+    if (
+      event.type === "tool_execution_end" &&
+      canonicalEventToolName(event.toolName) === "familygraph.fetch_approved_page"
+    ) {
       const citation = extractWebCitation(event.result);
       if (citation !== null) this.webCitations.push(citation);
     }

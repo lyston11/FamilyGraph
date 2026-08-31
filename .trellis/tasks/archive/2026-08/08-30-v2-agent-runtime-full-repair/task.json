@@ -1,0 +1,31 @@
+{
+  "id": "v2-agent-runtime-full-repair",
+  "name": "v2-agent-runtime-full-repair",
+  "title": "V2 Agent Runtime Full Repair",
+  "description": "V2 Agent Runtime code, provider wire-name compatibility repair, real liu-dada/gpt-5.6-sol success/cancel E2E evidence and task-local gates are complete; task remains in_progress until parallel space-manager/frontend work restores the full-project gate.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-08-30",
+  "completedAt": "2026-08-30",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "See notes.md and implement.md for append-only implementation evidence. Do not archive until a redacted real-provider success record is captured.",
+  "meta": {
+    "provider_profile": "liu-dada/gpt-5.6-sol",
+    "provider_api": "openai-responses",
+    "local_gates": "agent 87 tests + 114 targeted backend agent tests pass; full backend/frontend currently blocked by parallel uncommitted work",
+    "release_gate": "blocked_until_parallel_backend_frontend_gate_is_green"
+  }
+}

@@ -162,7 +162,7 @@ def redeem_owner_invitation(
                 space_id=space.id,
                 user_id=redeemer.id,
                 added_by=redeemer.id,
-                role="owner",
+                role="space_admin",
                 status="active",
                 created_at=now,
                 updated_at=now,

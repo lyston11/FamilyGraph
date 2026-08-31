@@ -1,8 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import ElementPlus from 'element-plus'
-
 import AgentComposer from '@/components/agent/AgentComposer.vue'
 
 /** AgentComposer：Enter 发送 / Shift+Enter 换行 / 发送中禁用 / 取消按钮仅作用于 active run */
@@ -15,7 +13,6 @@ function mountComposer(props: Partial<InstanceType<typeof AgentComposer>['$props
       maxLength: 100,
       ...props,
     },
-    global: { plugins: [ElementPlus] },
   })
 }
 
