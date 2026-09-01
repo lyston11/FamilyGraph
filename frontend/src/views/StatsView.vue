@@ -1,133 +1,328 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { NButton, NEmpty, NSpin } from 'naive-ui'
+// 当前空间统计（PRD §2.6 / design §5.4，09-01 Phase 5）：
+// - 只消费 spaceStats store（GET /stats?space_id=，服务端授权聚合）：
+//   授权节点/关系/成员、关系分布（dir_class）、待确认事项、视图状态（6 态）、
+//   computed_at/更新时间；household 显示家庭授权聚合，lineage 显示当前
+//   PersonalFamilyView 聚合；不做跨空间总计；
+// - 不从前端节点数组推导任何统计，也不显示隐藏对象/未授权分支规模；
+// - 端点 404（BLOCKER 合同占位）→「统计服务合同未就绪」安全状态面板，
+//   绝不回退旧 /stats 无空间合同；
+// - 页面不发请求，一切经 store；旧 api/stats.ts 已删除（无消费方）。
+import { NAlert, NButton, NSpin } from 'naive-ui'
+import { computed, onMounted, watch } from 'vue'
 
-import { fetchStats, type StatsPayload } from '@/api/stats'
+import { ApiError } from '@/api/errors'
+import { useSpaceStatsStore } from '@/stores/spaceStats'
+import { useSpacesStore } from '@/stores/spaces'
+import type { DirClass, SpaceStatsStatus } from '@/types/api'
 
-/**
- * 家族统计页（m3c）：总人数/男女比例/世代分布/本月生日。范围=服务端可见性过滤。
- * 门面自绘（design.md §2.1）：数字立牌走 --fg-* token，P5 随全站迁 naive-ui。
- */
-const stats = ref<StatsPayload | null>(null)
-const loading = ref(false)
-const router = useRouter()
+const spaces = useSpacesStore()
+const spaceStats = useSpaceStatsStore()
 
-onMounted(async () => {
-  loading.value = true
-  try {
-    stats.value = await fetchStats()
-  } catch {
-    stats.value = null
-  } finally {
-    loading.value = false
-  }
-})
-
-const maxBucket = computed(() =>
-  Math.max(1, ...(stats.value?.generation_histogram.map((h) => h.count) ?? [1])),
+const spaceId = computed(() => spaces.currentSpaceId)
+const currentSpace = computed(() => spaces.currentSpace)
+const data = computed(() => (spaceId.value === null ? null : spaceStats.forSpace(spaceId.value)))
+const loading = computed(() => spaceId.value !== null && spaceStats.isLoading(spaceId.value))
+const loadError = computed(() =>
+  spaceId.value === null ? null : spaceStats.errorFor(spaceId.value),
 )
 
-const genderRows = computed(() => {
-  const g = stats.value?.by_gender
-  if (!g) return []
-  return [
-    { label: '男', count: g.m },
-    { label: '女', count: g.f },
-    { label: '不详', count: g.unknown },
-  ].filter((r) => r.count > 0)
+/** 404（BLOCKER 端点未落地）→ 合同未就绪安全态；其他错误 → 可重试错误态 */
+const contractUnready = computed(
+  () => loadError.value instanceof ApiError && loadError.value.status === 404,
+)
+
+/** 统计口径说明：household = 家庭授权聚合；lineage = 当前 PersonalFamilyView 聚合 */
+const scopeLabel = computed(() => {
+  if (data.value?.space_kind === 'household') return '家庭授权聚合'
+  if (data.value?.space_kind === 'lineage') return '当前家族视图聚合'
+  return currentSpace.value?.kind === 'household' ? '家庭授权聚合' : '当前家族视图聚合'
 })
 
-const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.count}`).join(' · '))
+/** 无数据态（6 态中的 4 个）：展示统一状态面板而非数字 */
+const NO_DATA_STATES: readonly SpaceStatsStatus[] = ['never_computed', 'queued', 'running', 'failed']
+const hasData = computed(
+  () => data.value !== null && !NO_DATA_STATES.includes(data.value.status),
+)
+
+const maxSlice = computed(() =>
+  Math.max(0, ...(data.value?.relation_distribution.map((slice) => slice.count) ?? [0])),
+)
+
+const DIR_CLASS_LABELS: Record<DirClass, string> = {
+  elder: '长辈',
+  younger: '晚辈',
+  peer: '同辈',
+  spouse: '配偶',
+}
+
+/** 6 态状态面板文案（never_computed/queued/running/failed 无数据时展示） */
+const STATUS_PANEL_TEXT: Record<SpaceStatsStatus, { title: string; text: string }> = {
+  never_computed: {
+    title: '统计尚未计算',
+    text: '该空间的统计投影还没有生成。完成建档与关系确认后，系统会自动计算授权范围内的统计。',
+  },
+  queued: {
+    title: '统计排队中',
+    text: '统计计算已排队，稍后会自动更新。',
+  },
+  running: {
+    title: '统计计算中',
+    text: '正在按当前空间授权口径计算统计，稍后自动更新。',
+  },
+  current: { title: '', text: '' },
+  stale: { title: '', text: '' },
+  failed: {
+    title: '统计计算失败',
+    text: '最近一次统计计算未成功。已按安全策略不展示可能过期的数字。',
+  },
+}
+
+function formatTime(value: string | null): string {
+  return value ? value.replace('T', ' ').slice(0, 16) : '—'
+}
+
+async function load(): Promise<void> {
+  if (spaceId.value === null) return
+  await spaceStats.load(spaceId.value).catch(() => undefined)
+}
+
+function refresh(): void {
+  void spaceStats.refresh(spaceId.value ?? 0).catch(() => undefined)
+}
+
+onMounted(() => {
+  void load()
+})
+
+watch(spaceId, () => {
+  // 只按当前空间请求：切换空间后重读新空间投影（store 已按空间清理）
+  void load()
+})
 </script>
 
 <template>
-  <NSpin :show="loading">
-    <main class="stats-view">
-        <header class="title-row">
-          <NButton text data-test="stats-back" @click="router.push({ name: 'family-space' })">
-            ← 家庭空间
-          </NButton>
-          <h2 class="title">家族统计</h2>
-        </header>
+  <main class="stats-view" data-test="stats-view">
+    <header class="view-head">
+      <div>
+        <h1 class="view-title">统计</h1>
+        <p class="view-subtitle">
+          当前空间：{{ currentSpace?.name ?? '未选择' }} · {{ scopeLabel }} ·
+          不做跨空间总计，隐藏对象与未授权分支不计入。
+        </p>
+      </div>
+      <NButton
+        size="small"
+        secondary
+        :disabled="loading"
+        data-test="stats-refresh"
+        @click="refresh"
+      >
+        刷新
+      </NButton>
+    </header>
 
-      <template v-if="stats">
-        <section class="cards" data-test="stats-cards">
-          <div class="num-card">
-            <div class="num">{{ stats.total }}</div>
-            <div class="label">总人数</div>
+    <NSpin v-if="loading && data === null" :show="true" class="loading-spin" />
+
+    <!-- 404（BLOCKER 合同占位）：统计服务合同未就绪安全态，不回退旧 /stats -->
+    <section
+      v-else-if="contractUnready"
+      class="status-panel"
+      data-test="stats-contract-unready"
+    >
+      <h2 class="status-title">统计服务合同未就绪</h2>
+      <p class="status-text">
+        空间化统计的服务端合同尚未落地或暂时不可用。已按安全策略不展示任何统计数字；
+        统计只能来自服务端授权聚合，不会由页面从节点数据推算。
+      </p>
+      <NButton size="small" data-test="stats-retry" @click="refresh">重新加载</NButton>
+    </section>
+
+    <!-- 其他错误：可解释失败态（不退化成普通空状态） -->
+    <section v-else-if="loadError !== null" class="status-panel" data-test="stats-error">
+      <h2 class="status-title">统计暂时无法加载</h2>
+      <p class="status-text">网络或服务暂时不可用，请稍后重试。</p>
+      <NButton size="small" data-test="stats-retry" @click="refresh">重新加载</NButton>
+    </section>
+
+    <template v-else-if="data !== null">
+      <!-- 视图状态（6 态）：无数据态展示统一状态面板 -->
+      <section
+        v-if="!hasData"
+        class="status-panel"
+        data-test="stats-status-panel"
+      >
+        <h2 class="status-title">{{ STATUS_PANEL_TEXT[data.status].title }}</h2>
+        <p class="status-text">{{ STATUS_PANEL_TEXT[data.status].text }}</p>
+        <p class="status-meta">
+          状态：{{ data.status }}<template v-if="data.stale_reason"> · {{ data.stale_reason }}</template>
+        </p>
+      </section>
+
+      <template v-else>
+        <!-- stale：数据 + 明确过期标注（不静默展示旧数字） -->
+        <NAlert
+          v-if="data.status === 'stale'"
+          type="warning"
+          :show-icon="true"
+          :closable="false"
+          data-test="stats-stale-alert"
+        >
+          统计可能已过期{{ data.stale_reason ? `：${data.stale_reason}` : '' }}。可刷新获取最新授权聚合。
+        </NAlert>
+
+        <!-- 授权摘要卡：服务端聚合（当前空间，无跨空间总计） -->
+        <section class="summary-cards" data-test="stats-summary">
+          <div class="summary-card">
+            <strong data-test="stat-node-count">{{ data.node_count }}</strong>
+            <span>授权节点</span>
           </div>
-          <div class="num-card">
-            <div class="num num--text">{{ genderText || '—' }}</div>
-            <div class="label">男女比例</div>
+          <div class="summary-card">
+            <strong data-test="stat-edge-count">{{ data.edge_count }}</strong>
+            <span>授权关系</span>
           </div>
-          <div class="num-card">
-            <div class="num">{{ stats.birthdays_this_month.length }}</div>
-            <div class="label">本月生日</div>
+          <div class="summary-card">
+            <strong data-test="stat-member-count">{{ data.member_count }}</strong>
+            <span>空间成员</span>
           </div>
         </section>
 
-        <section class="histogram" data-test="generation-histogram">
-          <h3 class="block-title">世代分布（按出生年份，20 岁一档）</h3>
-          <div v-for="row in stats.generation_histogram" :key="row.bucket" class="bar-row">
-            <span class="bucket">{{ row.bucket }}~{{ row.bucket + 19 }} 后</span>
-            <div class="bar-track">
-              <div class="bar" :style="{ width: `${(row.count / maxBucket) * 100}%` }" />
+        <!-- 待确认事项 -->
+        <section class="pending-section" data-test="stats-pending">
+          <h2 class="section-title">待确认事项</h2>
+          <div class="summary-cards">
+            <div class="summary-card">
+              <strong data-test="stat-pending-cards">{{ data.pending_action_cards }}</strong>
+              <span>待处理建议</span>
             </div>
-            <span class="count">{{ row.count }}</span>
+            <div class="summary-card">
+              <strong data-test="stat-pending-memberships">{{ data.pending_memberships }}</strong>
+              <span>待确认成员申请</span>
+            </div>
           </div>
-          <p v-if="stats.generation_histogram.length === 0" class="hint">
-            暂无带生日的成员数据
-          </p>
         </section>
 
-        <section class="birthdays" data-test="birthdays-list">
-          <h3 class="block-title">本月生日</h3>
-          <ul>
-            <li v-for="b in stats.birthdays_this_month" :key="b.id" class="birthday-row">
-              <span class="birthday-dot" aria-hidden="true">寿</span>
-              {{ b.name }}（{{ b.date }}）
-            </li>
-            <li v-if="stats.birthdays_this_month.length === 0" class="hint">本月没有寿星</li>
-          </ul>
+        <!-- 关系分布（dir_class，服务端口径） -->
+        <section class="distribution-section" data-test="stats-distribution">
+          <h2 class="section-title">关系分布</h2>
+          <p
+            v-if="data.relation_distribution.length === 0"
+            class="hint"
+            data-test="distribution-empty"
+          >
+            当前授权范围内暂无已确认的关系。
+          </p>
+          <div v-for="slice in data.relation_distribution" :key="slice.dir_class" class="bar-row">
+            <span class="bucket">{{ DIR_CLASS_LABELS[slice.dir_class] }}</span>
+            <div class="bar-track">
+              <div
+                class="bar"
+                :style="{ width: maxSlice === 0 ? '0%' : `${(slice.count / maxSlice) * 100}%` }"
+              />
+            </div>
+            <span class="count">{{ slice.count }}</span>
+          </div>
+        </section>
+
+        <!-- 数据版本与更新时间 -->
+        <section class="meta-section" data-test="stats-meta">
+          <span>数据版本：{{ data.view_version === null ? '—' : `v${data.view_version}` }}</span>
+          <span data-test="stats-computed-at">更新时间：{{ formatTime(data.computed_at) }}</span>
+          <span>状态：{{ data.status }}</span>
         </section>
       </template>
-      <NEmpty v-else-if="!loading" class="empty" description="统计数据加载失败" />
-    </main>
-  </NSpin>
+    </template>
+
+    <!-- 无当前空间：安全上下文提示 -->
+    <section v-else class="status-panel" data-test="stats-no-space">
+      <h2 class="status-title">未选择空间</h2>
+      <p class="status-text">统计跟随当前选中空间。请先在顶部选择一个家庭或家族空间。</p>
+    </section>
+  </main>
 </template>
 
 <style scoped>
 .stats-view {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 24px;
-}
-
-.title-row {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 20px 16px 40px;
+  box-sizing: border-box;
 }
 
-.title {
+.view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.view-title {
   margin: 0;
   font-family: var(--fg-font-display);
-  font-size: 20px;
+  font-size: 24px;
+  font-weight: 700;
   color: var(--fg-ink);
 }
 
-/* 数字立牌：纸感卡面 + 显示字体数字（design.md §2.3） */
-.cards {
+.view-subtitle {
+  margin: 4px 0 0;
+  color: var(--fg-ink-secondary);
+  font-size: 12px;
+}
+
+.loading-spin {
+  min-height: 160px;
+}
+
+.status-panel {
+  padding: 16px;
+  background-color: var(--fg-surface-raised);
+  border: 1px solid var(--fg-line);
+  border-radius: var(--fg-radius-card);
+  box-shadow: var(--fg-shadow-card);
+}
+
+.status-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--fg-ink);
+}
+
+.status-text {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--fg-ink-secondary);
+  line-height: 1.6;
+}
+
+.status-meta {
+  margin: 0;
+  color: var(--fg-ink-faint);
+  font-size: 11px;
+}
+
+.section-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--fg-ink);
+}
+
+.summary-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-  margin-bottom: 24px;
 }
 
-.num-card {
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: 16px;
   background: var(--fg-surface-raised);
   border: 1px solid var(--fg-line);
@@ -135,38 +330,19 @@ const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.co
   box-shadow: var(--fg-shadow-card);
 }
 
-.num {
+.summary-card strong {
   font-family: var(--fg-font-display);
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 700;
-  line-height: 1.3;
-  color: var(--fg-accent);
+  color: var(--fg-ink);
 }
 
-/* 文本值（男女比例串）比纯数字降一档，避免换行拥挤 */
-.num--text {
-  font-size: 18px;
-  letter-spacing: 0.02em;
-}
-
-.label {
-  margin-top: 4px;
+.summary-card span {
   color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 
-.block-title {
-  margin: 0 0 12px;
-  font-family: var(--fg-font-display);
-  font-size: 15px;
-  color: var(--fg-ink);
-}
-
-.histogram {
-  margin-bottom: 24px;
-}
-
-.bar-row {
+.distribution-section .bar-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -174,7 +350,7 @@ const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.co
 }
 
 .bucket {
-  width: 96px;
+  width: 48px;
   font-size: 13px;
   text-align: right;
   color: var(--fg-ink-secondary);
@@ -192,7 +368,6 @@ const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.co
   height: 100%;
   background: var(--fg-accent);
   border-radius: 7px;
-  transition: width 0.4s ease;
 }
 
 .count {
@@ -201,40 +376,33 @@ const genderText = computed(() => genderRows.value.map((r) => `${r.label} ${r.co
   color: var(--fg-ink);
 }
 
-.birthdays ul {
-  list-style: none;
-  padding: 0;
-}
-
-.birthday-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  font-size: 14px;
-  color: var(--fg-ink);
-  border-bottom: 1px solid var(--fg-line);
-}
-
-/* 生日行首字章：纸墨印章隐喻的轻量变体 */
-.birthday-dot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  font-size: 11px;
-  color: var(--fg-accent-ink);
-  background: var(--fg-accent);
-  border-radius: 50%;
-}
-
 .hint {
+  margin: 0;
   color: var(--fg-ink-secondary);
   font-size: 13px;
 }
 
-.empty {
-  margin: 48px 0;
+.meta-section {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding: 12px 16px;
+  color: var(--fg-ink-secondary);
+  font-size: 12px;
+  background-color: var(--fg-surface-raised);
+  border: 1px solid var(--fg-line);
+  border-radius: var(--fg-radius-card);
+}
+
+@media (max-width: 600px) {
+  .summary-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 页面为单列纵排；动作按钮补足 44px 点按目标 */
+  .stats-view :deep(.n-button--small-type) {
+    min-height: 44px;
+  }
 }
 </style>

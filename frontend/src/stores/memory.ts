@@ -144,6 +144,21 @@ export const useMemoryStore = defineStore('memory', () => {
     await refreshAfterMutation(sharedSpaceId(scope) ?? selectedSpaceId.value)
   }
 
+  /**
+   * 手动新建候选（私有记忆「新增」与检索结果「保存」共用入口）：
+   * 只创建候选（POST /memory-candidates），成功后重读服务端候选列表；
+   * 不做乐观插入，也不直接创建可检索记忆（V2.5 合同）。
+   */
+  async function createCandidate(
+    payload: memoryApi.CreateMemoryCandidatePayload,
+  ): Promise<MemoryCandidate> {
+    const created = await memoryApi.createMemoryCandidate(payload)
+    await loadCandidates().catch((reason: unknown) => {
+      error.value = toStoreError(reason)
+    })
+    return created
+  }
+
   async function dismissCandidate(candidateId: number): Promise<void> {
     await memoryApi.dismissMemoryCandidate(candidateId)
     await refreshAfterMutation()
@@ -208,6 +223,7 @@ export const useMemoryStore = defineStore('memory', () => {
     ensureMemories,
     loadForSpace,
     confirmCandidate,
+    createCandidate,
     dismissCandidate,
     revoke,
     remove,

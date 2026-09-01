@@ -12,13 +12,28 @@ import { useSpacesStore } from '@/stores/spaces'
  *   消息引用共用同一卡片组件——双入口 Chat/Inbox 同 card_id 同 store 合同）；
  * - 数据经 actionCards store 按当前空间加载；403 SPACE_FORBIDDEN_ACTOR /
  *   503（flag 关闭）时隐藏入口（降级不报错）；
- * - 切换空间关闭面板并重新加载；旧空间数据由 FamilySpaceView 的空间切换
- *   watch 调 resetForSpace 清理。
+ * - 切换空间关闭面板并重新加载；旧空间数据由 useSpaceContext 空间切换事务
+ *   调 resetForSpace 清理。
  */
 const spaces = useSpacesStore()
 const actionCards = useActionCardsStore()
 
+// 面板展开状态：内部自持（原行为不变）；外部可经 v-model:opened 受控
+// （通知页「去处理」用它打开既有 ActionCard 流程）。
+const props = defineProps<{ opened?: boolean }>()
+const emit = defineEmits<{ (event: 'update:opened', value: boolean): void }>()
 const open = ref(false)
+
+watch(
+  () => props.opened,
+  (value) => {
+    if (value !== undefined) open.value = value
+  },
+)
+
+watch(open, (value) => {
+  emit('update:opened', value)
+})
 
 const spaceId = computed(() => spaces.currentSpaceId)
 const partition = computed(() => (spaceId.value === null ? null : actionCards.partitionOf(spaceId.value)))

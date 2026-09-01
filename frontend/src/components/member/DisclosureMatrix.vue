@@ -208,6 +208,12 @@ const columns = computed<DataTableColumns<CategoryRow>>(() => {
   }
   return base
 })
+
+/** 表格总宽下限（类别 110 + 全局 84 + 逐空间 120/列）：
+ *  375px 下表格区域内部横向滚动，页面本身不横向滚动（Phase 7 响应式） */
+const tableScrollX = computed(
+  () => 194 + 120 * Math.max(1, spaces.spaces.length),
+)
 </script>
 
 <template>
@@ -218,6 +224,7 @@ const columns = computed<DataTableColumns<CategoryRow>>(() => {
     </p>
     <NDataTable
       size="small"
+      :scroll-x="tableScrollX"
       :columns="columns"
       :data="categoryRows"
       :row-key="(row: CategoryRow) => row.category"

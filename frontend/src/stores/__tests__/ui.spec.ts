@@ -42,4 +42,18 @@ describe('ui store（主题偏好）', () => {
     setActivePinia(createPinia())
     expect(useUiStore().theme).toBe('modern')
   })
+
+  it('recentHouseholdId：仅内存 UI 偏好，不持久化到 localStorage', () => {
+    const ui = useUiStore()
+    expect(ui.recentHouseholdId).toBeNull()
+
+    ui.setRecentHousehold(8)
+    expect(ui.recentHouseholdId).toBe(8)
+    // 红线（design.md §3.2）：授权事实/人员/最近空间一律不落 localStorage
+    expect(localStorage.length).toBe(0)
+
+    // 新的 store 实例（模拟新会话）不恢复该偏好
+    setActivePinia(createPinia())
+    expect(useUiStore().recentHouseholdId).toBeNull()
+  })
 })

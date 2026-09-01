@@ -1,7 +1,14 @@
 <script setup lang="ts">
+// 设置页四分区重排（design.md §5.4，09-01 Phase 5）：
+// 1) 个人资料（auth store 本人信息 + 改名）；2) 隐私与公示（DisclosureMatrix）；
+// 3) 账号与安全（ChangePinForm + 我的数据 DataRightsPanel + 登出）；
+// 4) 显示与无障碍（paper/modern 双主题切换，消费 stores/ui.setTheme）。
+// 复用现有 ChangePinForm / DisclosureMatrix / DataRightsPanel；空间管理不放进
+// 全局设置（由 AppShell 当前空间管理入口承担）；无新增授权行为。
+// ProfileDrawer 依赖旧 /users members 合同，不进入全局设置（差异记录见 notes.md）。
+import { NButton, NCard, NForm, NFormItem, NInput, useMessage } from 'naive-ui'
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NCard, NForm, NFormItem, NInput, useMessage } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
 import ChangePinForm from '@/components/common/ChangePinForm.vue'
@@ -11,13 +18,6 @@ import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { themeTokens, type ThemeName, type ThemeTokens } from '@/styles/tokens'
 
-/**
- * 设置页（v2）：改名 / 改 PIN / 登出 + 披露偏好矩阵（§0.1）+
- * 我的数据（F-5：导出/更正/删除/争议）。
- * P5：主题切换入口落位——双主题预览小卡消费 stores/ui.setTheme
- * （持久化与 data-theme 切换由 store 承担，刷新后保持，见 stores/ui.ts）。
- * 预览色取自 tokens.ts 的 L2 token（token 单一来源，不写死色值）。
- */
 const auth = useAuthStore()
 const router = useRouter()
 const message = useMessage()
@@ -44,19 +44,19 @@ async function saveName(): Promise<void> {
   }
 }
 
+/** 登出：沿用 auth store 全量清理（含敏感缓存）后回登录页 */
 async function doLogout(): Promise<void> {
   await auth.logout()
   message.success('已退出登录')
   void router.replace({ name: 'login' })
 }
 
-// ---- 主题选择（双主题预览小卡） ----
+// ---- 显示与无障碍：主题选择（双主题预览小卡，预览色取自 tokens.ts L2 token） ----
 const themeChoices: Array<{ name: ThemeName; tokens: ThemeTokens; desc: string }> = [
   { name: 'paper', tokens: themeTokens.paper, desc: '宣纸点阵 · 宋体标题 · 朱砂点睛' },
   { name: 'modern', tokens: themeTokens.modern, desc: '纯白留白 · 无衬线 · 青蓝点缀' },
 ]
 
-/** 主题缩略预览：底色 + 点阵 + 主色样，全部取自该主题 L2 token */
 function previewStyle(tokens: ThemeTokens): Record<string, string> {
   return {
     backgroundColor: tokens.vars['surface'],
@@ -77,25 +77,56 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
           <span class="card-title">设置</span>
         </div>
       </template>
-      <template #header-extra>
-        <div class="header">
-          <NButton text type="primary" data-test="go-memory" @click="router.push('/memory')">
-            记忆与知识
-          </NButton>
-          <NButton text type="error" data-test="logout-btn" @click="doLogout">退出登录</NButton>
-        </div>
-      </template>
 
-      <section class="section">
-        <h2 class="section-title">当前账号</h2>
+      <!-- 分区 1：个人资料 -->
+      <section class="section" data-test="settings-section-profile">
+        <h2 class="section-title">个人资料</h2>
         <p class="meta" data-test="current-user">
           {{ auth.user?.name }}<template v-if="auth.isPlatformOperator">（平台运营者）</template>
         </p>
+        <p class="meta" data-test="profile-status">
+          档案状态：{{ auth.user?.profile_status === 'identity_confirmed' ? '已确档' : '待确档' }}
+        </p>
+        <NForm inline :show-feedback="false" @submit.prevent="saveName">
+          <NFormItem label="修改名字" :label-props="{ for: 'settings-name-input' }">
+            <NInput
+              v-model:value="nameForm.name"
+              :input-props="{ id: 'settings-name-input' }"
+              data-test="name-input"
+            />
+          </NFormItem>
+          <NFormItem>
+            <NButton type="primary" :loading="savingName" data-test="name-save" @click="saveName">
+              保存
+            </NButton>
+          </NFormItem>
+        </NForm>
+        <p v-if="nameError" class="error" data-test="name-error">{{ nameError }}</p>
       </section>
 
-      <section class="section" data-test="theme-section">
-        <h2 class="section-title">外观主题</h2>
-        <div class="theme-cards" role="group" aria-label="选择配色主题（即时生效并记住偏好）">
+      <!-- 分区 2：隐私与公示 -->
+      <section class="section" data-test="settings-section-privacy">
+        <h2 class="section-title">隐私与公示</h2>
+        <p class="meta">控制你的资料在家族空间中的披露范围；高敏感类别始终受最小披露保护。</p>
+        <DisclosureMatrix />
+      </section>
+
+      <!-- 分区 3：账号与安全 -->
+      <section class="section" data-test="settings-section-account">
+        <h2 class="section-title">账号与安全</h2>
+        <p class="meta">定期更换 PIN 码；导出、更正与删除申请都在这里提交。</p>
+        <ChangePinForm />
+        <div class="data-rights" data-test="data-rights-section">
+          <DataRightsPanel />
+        </div>
+        <NButton text type="error" data-test="logout-btn" @click="doLogout">退出登录</NButton>
+      </section>
+
+      <!-- 分区 4：显示与无障碍 -->
+      <section class="section" data-test="settings-section-display">
+        <h2 class="section-title">显示与无障碍</h2>
+        <p class="meta">选择配色主题（即时生效并记住偏好）；双主题均遵循系统减弱动态设置。</p>
+        <div class="theme-cards" role="group" aria-label="选择配色主题（即时生效并记住偏好）" data-test="theme-section">
           <button
             v-for="t in themeChoices"
             :key="t.name"
@@ -122,48 +153,6 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
             <span class="theme-desc">{{ t.desc }}</span>
           </button>
         </div>
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">修改名字</h2>
-        <NForm inline :show-feedback="false" @submit.prevent="saveName">
-          <NFormItem label="新名字" :label-props="{ for: 'settings-name-input' }">
-            <NInput
-              v-model:value="nameForm.name"
-              :input-props="{ id: 'settings-name-input' }"
-              data-test="name-input"
-            />
-          </NFormItem>
-          <NFormItem>
-            <NButton type="primary" :loading="savingName" data-test="name-save" @click="saveName">
-              保存
-            </NButton>
-          </NFormItem>
-        </NForm>
-        <p v-if="nameError" class="error" data-test="name-error">{{ nameError }}</p>
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">修改 PIN 码</h2>
-        <ChangePinForm />
-      </section>
-
-      <section class="section" data-test="memory-entry-section">
-        <h2 class="section-title">长期知识</h2>
-        <p class="meta">管理待确认记忆、共享范围和可追溯的知识引用。</p>
-        <NButton type="primary" secondary data-test="go-memory" @click="router.push('/memory')">
-          打开记忆与知识
-        </NButton>
-      </section>
-
-      <section class="section" data-test="disclosure-section">
-        <h2 class="section-title">披露偏好</h2>
-        <DisclosureMatrix />
-      </section>
-
-      <section class="section" data-test="data-rights-section">
-        <h2 class="section-title">我的数据</h2>
-        <DataRightsPanel />
       </section>
     </NCard>
   </main>
@@ -193,12 +182,6 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
   gap: 8px;
 }
 
-.header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .section {
   margin-bottom: 28px;
 }
@@ -210,8 +193,12 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
 }
 
 .meta {
-  margin: 0;
+  margin: 0 0 12px;
   color: var(--fg-ink-secondary);
+}
+
+.data-rights {
+  margin: 16px 0;
 }
 
 /* 双主题预览小卡：选中态主色描边 + 对勾（design.md §2.3 双主题气质缩影） */
@@ -296,6 +283,19 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
 @media (max-width: 480px) {
   .theme-cards {
     grid-template-columns: 1fr;
+  }
+}
+
+/* 移动端（≤600px）：inline 表单降级为纵向堆叠（375px 单列，无横向滚动）；
+   表格类内容（披露矩阵/数据权利表）由组件内 scroll-x 承担横向滚动 */
+@media (max-width: 600px) {
+  .settings-view :deep(.n-form--inline .n-form-item) {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .settings-view :deep(.n-form--inline .n-form-item-blank) {
+    flex: 1;
   }
 }
 </style>

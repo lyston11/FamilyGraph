@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
+import { createPinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NDialogProvider, NMessageProvider } from 'naive-ui'
 import { defineComponent, h } from 'vue'
@@ -7,6 +7,7 @@ import { defineComponent, h } from 'vue'
 import * as memoryApi from '@/api/memory'
 import CitationList from '@/components/memory/CitationList.vue'
 import MemoryManager from '@/components/memory/MemoryManager.vue'
+import { useMemoryStore } from '@/stores/memory'
 import { useSpacesStore } from '@/stores/spaces'
 import type { Memory, MemoryCandidate } from '@/types/memory'
 
@@ -14,6 +15,7 @@ vi.mock('@/api/memory', () => ({
   fetchMemoryCandidates: vi.fn(),
   fetchMemories: vi.fn(),
   confirmMemoryCandidate: vi.fn(),
+  createMemoryCandidate: vi.fn(),
   dismissMemoryCandidate: vi.fn(),
   revokeMemory: vi.fn(),
   deleteMemory: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('@/api/spaces', () => ({
 const mockedCandidates = vi.mocked(memoryApi.fetchMemoryCandidates)
 const mockedMemories = vi.mocked(memoryApi.fetchMemories)
 const mockedConfirm = vi.mocked(memoryApi.confirmMemoryCandidate)
+const mockedCreateCandidate = vi.mocked(memoryApi.createMemoryCandidate)
 const mockedSearch = vi.mocked(memoryApi.searchMemory)
 
 const candidate: MemoryCandidate = {
@@ -71,15 +74,17 @@ const savedMemory: Memory = {
 }
 
 // MemoryManager setup 期 useMessage/useDialog：需要 provider 祖先（App 层已备好）；
-// n-modal 默认 teleport 到 body，确认弹层内的断言与点击走 document 查询
+// 弹层（n-modal）默认 teleport 到 body，确认弹层内的断言与点击走 document 查询
 function clickDocument(selector: string): void {
   const target = document.querySelector(selector)
   expect(target, selector).not.toBeNull()
   target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 }
 
+let pinia: Pinia
+
 async function mountManager(): Promise<ReturnType<typeof mount>> {
-  const pinia = createPinia()
+  pinia = createPinia()
   const spaces = useSpacesStore(pinia)
   spaces.spaces = [{
     id: 5,
@@ -100,34 +105,106 @@ async function mountManager(): Promise<ReturnType<typeof mount>> {
   })
   const wrapper = mount(Harness, {
     global: { plugins: [pinia] },
+    attachTo: document.body,
   })
   await vi.waitFor(() => expect(mockedCandidates).toHaveBeenCalled())
   return wrapper
 }
 
-describe('MemoryManager（V2.5）', () => {
+/** 点击 n-tabs 标签头切换面板（按标签文字定位） */
+async function switchTab(wrapper: ReturnType<typeof mount>, label: string): Promise<void> {
+  const tab = wrapper.findAll('.n-tabs-tab').find((node) => node.text().includes(label))
+  expect(tab, `tab ${label}`).not.toBeUndefined()
+  await tab!.trigger('click')
+  await new Promise((resolve) => setTimeout(resolve))
+}
+
+describe('MemoryManager（五标签，PRD §2.5 / design §5.4）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    document.body.innerHTML = ''
     mockedCandidates.mockResolvedValue([candidate])
     mockedMemories.mockResolvedValue([savedMemory])
     mockedConfirm.mockResolvedValue(savedMemory)
+    mockedCreateCandidate.mockResolvedValue(candidate)
     mockedSearch.mockResolvedValue([])
   })
 
-  it('展示候选的原话、摘要、敏感等级，并在确认前不执行记忆写入', async () => {
+  it('五标签渲染；有待确认候选时默认进入待确认（候选视觉状态 = icon+文字）', async () => {
     const wrapper = await mountManager()
 
+    const labels = wrapper.findAll('.n-tabs-tab').map((node) => node.text())
+    expect(labels.some((text) => text.includes('待确认'))).toBe(true)
+    expect(labels).toEqual([
+      expect.stringContaining('待确认'),
+      expect.stringContaining('我的私有记忆'),
+      expect.stringContaining('当前家庭共享'),
+      expect.stringContaining('当前家族共享'),
+      expect.stringContaining('检索与引用'),
+    ])
+
+    // 默认待确认：候选卡可见，且为「候选 · 未进入检索」icon+文字徽章（非仅颜色）
+    expect(wrapper.find('[data-test="candidate-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="candidate-state-badge"]').text()).toContain('候选 · 未进入检索')
     expect(wrapper.find('[data-test="candidate-card"]').text()).toContain('每年春节一起包饺子。')
     expect(wrapper.find('[data-test="candidate-card"]').text()).toContain('春节包饺子')
-    expect(wrapper.find('[data-test="candidate-card"]').text()).toContain('普通')
-    expect(mockedConfirm).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="candidate-card"]').text()).toContain('敏感等级：普通')
     wrapper.unmount()
   })
 
-  it('确认时提交用户明确选择的 scope 和保留期限', async () => {
+  it('无待确认候选时默认进入「我的私有记忆」标签', async () => {
+    mockedCandidates.mockResolvedValue([])
+    const wrapper = await mountManager()
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="private-section"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="candidate-section"]').exists()).toBe(false)
+    // 私有标签提供「新增记忆」入口（提交只能新建候选）
+    expect(wrapper.find('[data-test="add-memory"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('候选确认后重新拉取服务端候选与记忆列表（无乐观副本）', async () => {
     const wrapper = await mountManager()
     await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
     await new Promise((resolve) => setTimeout(resolve))
+
+    const candidateCallsBefore = mockedCandidates.mock.calls.length
+    const memoryCallsBefore = mockedMemories.mock.calls.length
+    clickDocument('[data-test="confirm-memory-submit"]')
+
+    await vi.waitFor(() => expect(mockedConfirm).toHaveBeenCalled())
+    await vi.waitFor(() =>
+      expect(mockedCandidates.mock.calls.length).toBeGreaterThan(candidateCallsBefore),
+    )
+    await vi.waitFor(() => expect(mockedMemories.mock.calls.length).toBeGreaterThan(memoryCallsBefore))
+    wrapper.unmount()
+  })
+
+  it('确认弹层展示原话/摘要/用途/敏感等级/隐私影响；默认 scope=private', async () => {
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+
+    const dialog = document.querySelector('[data-test="confirm-memory-dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.textContent).toContain('敏感等级：普通')
+    expect(dialog?.textContent).toContain('每年春节一起包饺子。')
+    expect(dialog?.textContent).toContain('用途：家庭活动提醒')
+    expect(dialog?.textContent).toContain('仅本人可见')
+    // 隐私影响说明确认前可见
+    expect(document.querySelector('[data-test="memory-privacy-impact"]')?.textContent).toContain('仅本人可见')
+    // 稍后处理入口存在（只能确认/拒绝/稍后处理）
+    expect(document.querySelector('[data-test="confirm-memory-later"]')).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('private 确认提交默认 scope 与保留期限；共享 scope 选项可见', async () => {
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+
     const retentionInput = document.querySelector(
       '[data-test="memory-retention-days"] input',
     ) as HTMLInputElement
@@ -144,17 +221,27 @@ describe('MemoryManager（V2.5）', () => {
     wrapper.unmount()
   })
 
-  it('确认弹层完整展示原话、敏感等级与保留期限（V2.5 合同：确认前可见）', async () => {
+  it('共享确认交互：选择家庭共享 scope 后提交携带 household:<space_id>', async () => {
     const wrapper = await mountManager()
     await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
     await new Promise((resolve) => setTimeout(resolve))
 
-    const dialog = document.querySelector('[data-test="confirm-memory-dialog"]')
-    expect(dialog).not.toBeNull()
-    expect(dialog?.textContent).toContain('敏感等级：普通')
-    expect(dialog?.textContent).toContain('每年春节一起包饺子。')
-    expect(dialog?.textContent).toContain('保存范围')
-    expect(dialog?.textContent).toContain('保留期限')
+    // 打开 scope 下拉并选择家庭共享（明确确认共享目标）
+    ;(document.querySelector('.n-base-selection') as HTMLElement).dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    )
+    await new Promise((resolve) => setTimeout(resolve))
+    const sharedOption = [...document.querySelectorAll('.n-base-select-option')].find((el) =>
+      el.textContent?.includes('家庭共享'),
+    )
+    expect(sharedOption).not.toBeUndefined()
+    sharedOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve))
+    // 共享时隐私影响说明更新为家庭共享文案
+    expect(document.querySelector('[data-test="memory-privacy-impact"]')?.textContent).toContain('家庭空间的授权成员')
+    clickDocument('[data-test="confirm-memory-submit"]')
+
+    await vi.waitFor(() => expect(mockedConfirm).toHaveBeenCalledWith(1, { scope: 'household:5' }))
     wrapper.unmount()
   })
 
@@ -184,13 +271,94 @@ describe('MemoryManager（V2.5）', () => {
     wrapper.unmount()
   })
 
-  it('空间 RAG 检索只在输入后请求当前空间，并展示无结果空态', async () => {
+  it('空间切换：组件清理旧空间共享记忆/RAG 分区并重新拉取新空间', async () => {
     const wrapper = await mountManager()
+    const memoryStore = useMemoryStore(pinia)
+    const resetSpy = vi.spyOn(memoryStore, 'resetForSpace')
+    const spacesStore = useSpacesStore(pinia)
+    mockedMemories.mockClear()
+
+    spacesStore.spaces.push({
+      id: 9,
+      name: '张氏家族',
+      owner_id: 2,
+      kind: 'lineage',
+      created_at: '2026-08-26T00:00:00',
+      pending_count: 0,
+      member_count: 3,
+    })
+    spacesStore.currentSpaceId = 9
+    await new Promise((resolve) => setTimeout(resolve))
+
+    expect(resetSpy).toHaveBeenCalledWith(5)
+    await vi.waitFor(() => expect(mockedMemories).toHaveBeenCalledWith(9))
+    wrapper.unmount()
+  })
+})
+
+describe('MemoryManager 检索与引用（只读 + 保存只能新建候选）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    document.body.innerHTML = ''
+    mockedCandidates.mockResolvedValue([])
+    mockedMemories.mockResolvedValue([])
+    mockedConfirm.mockResolvedValue(savedMemory)
+    mockedCreateCandidate.mockResolvedValue(candidate)
+    mockedSearch.mockResolvedValue([
+      {
+        chunk_id: 1,
+        document_id: 2,
+        source_type: 'memory',
+        source_id: '3',
+        text: '每年春节一起包饺子。',
+        scope: 'household:5',
+        sensitivity: 'normal',
+        revision: 1,
+        index_version: 'v1',
+        citation_handle: 'rag:3:r1:c7',
+      },
+    ])
+  })
+
+  it('检索结果只读展示 citation_handle/source/scope/revision；「保存」只新建候选', async () => {
+    const wrapper = await mountManager()
+    await switchTab(wrapper, '检索与引用')
+
     await wrapper.find('[data-test="rag-search-input"] input').setValue('春节')
     await new Promise((resolve) => setTimeout(resolve, 300))
-
     expect(mockedSearch).toHaveBeenCalledWith(5, '春节')
-    expect(wrapper.find('[data-test="rag-empty"]').exists()).toBe(true)
+
+    const result = wrapper.find('[data-test="rag-result"]')
+    expect(result.exists()).toBe(true)
+    expect(result.text()).toContain('household:5')
+    expect(result.text()).toContain('rag:3:r1:c7')
+    expect(result.text()).toContain('memory · 来源 3 · 修订 1')
+
+    // 「保存」打开共用编辑器（预填原文），提交走 POST /memory-candidates
+    await wrapper.find('[data-test="rag-save-candidate"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+    const dialog = document.querySelector('[data-test="memory-editor-dialog"]')
+    expect(dialog).not.toBeNull()
+
+    const purposeInput = document.querySelector(
+      '[data-test="memory-editor-purpose"] input',
+    ) as HTMLInputElement
+    purposeInput.value = '家庭传统记录'
+    purposeInput.dispatchEvent(new Event('input', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve))
+
+    clickDocument('[data-test="memory-editor-submit"]')
+    await vi.waitFor(() =>
+      expect(mockedCreateCandidate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          raw_quote: '每年春节一起包饺子。',
+          suggested_scope: 'private',
+          sensitivity: 'normal',
+        }),
+      ),
+    )
+    // 检索结果保存绝不直接写记忆（无绕过审计的直接发布）
+    expect(mockedConfirm).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

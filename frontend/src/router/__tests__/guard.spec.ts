@@ -391,3 +391,85 @@ describe('router guards: forced pin change across hard refresh', () => {
     expect(mockedFetchMe).not.toHaveBeenCalled()
   })
 })
+
+describe('router guards: 09-01 Phase 2 路由语义（统一家庭壳）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setActivePinia(createPinia())
+    mockedStatus.mockResolvedValue({ initialized: true })
+  })
+
+  it('旧 /home 显式重定向到 /（name home = 我的家庭）', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/home')).toBe('home')
+    expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  it('登录默认目标 name home 指向 /（我的家庭）', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/login')).toBe('home')
+    expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  it('未登录访问新路由（/notifications、/people/5）重定向登录页并保留回跳地址', async () => {
+    expect(await navigate('/notifications')).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/notifications')
+
+    expect(await navigate('/people/5')).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/people/5')
+  })
+
+  it('家庭用户直达 /system-admin：互斥守卫弹回家族默认入口', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/system-admin')).toBe('family-space')
+  })
+
+  it('家庭用户直达 /system-admin/login 占位：互斥守卫弹回家族默认入口（Phase 6）', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/system-admin/login')).toBe('family-space')
+  })
+
+  it('system_admin 访问 /system-admin/login 占位：弹回独立后台（Phase 6）', async () => {
+    const auth = useAuthStore()
+    const pair = makePair({ is_admin: true })
+    pair.user.principal_type = 'system_admin'
+    mockedLogin.mockResolvedValue(pair)
+    await auth.login('系统管理员', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/system-admin/login')).toBe('system-admin')
+  })
+
+  it('未登录访问 /system-admin/login 占位：公开可达（独立于家庭登录页，不套家庭壳）', async () => {
+    expect(await navigate('/system-admin/login')).toBe('system-admin-login')
+  })
+
+  it('system_admin 不能停留在家庭壳页面（互斥弹回系统后台）', async () => {
+    const auth = useAuthStore()
+    const pair = makePair({ is_admin: true })
+    pair.user.principal_type = 'system_admin'
+    mockedLogin.mockResolvedValue(pair)
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/settings')).toBe('system-admin')
+    expect(await navigate('/stats')).toBe('system-admin')
+  })
+})

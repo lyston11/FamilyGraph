@@ -29,14 +29,23 @@ export const useAuthStore = defineStore('auth', () => {
   // ---- 派生 ----
   const isLoggedIn = computed(() => accessToken.value !== null && user.value !== null)
   const mustChangePin = computed(() => user.value?.pin_must_change === true)
+  /**
+   * 主体判定唯一来源（Phase 6 审计结论固定）：只看服务端签名会话返回的
+   * `principal_type === 'system_admin'`（/auth/login、/auth/login/select、/auth/refresh
+   * 的 TokenPairResponse 与 GET /me；系统主体按设计不调 /me，refresh 响应即权威投影）。
+   * `is_admin` 是 v2 兼容显示字段，platform_role 是家庭端平台运营标记——两者都不参与
+   * 主体互斥判定（architecture.md §0.8：JWT 必须携带 principal_type）。
+   */
   const isSystemAdmin = computed(() => user.value?.principal_type === 'system_admin')
   const isPlatformOperator = computed(() => isSystemAdmin.value)
 
-  function clearSession(): void {
-    accessToken.value = null
-    refreshToken.value = null
-    user.value = null
-    localStorage.removeItem(REFRESH_TOKEN_KEY)
+  /**
+   * 家庭侧敏感缓存清理（不含凭据与 user 投影）：
+   * - 登出 / 401 / token 失效：clearSession 全量清空；
+   * - 登录换入 system_admin 主体（见下方 login/selectCandidate）：同样全量清空，
+   *   保证系统管理员会话与家庭会话互斥切换时家庭 stores 不残留任何 PII。
+   */
+  function clearFamilyCaches(): void {
     // 敏感缓存清理红线（state-management.md）：同步清空业务 store 的 PII
     useMembersStore().clear()
     // v2 治理缓存（确档/数据权利/争议）随会话清空，避免身份切换后残留
@@ -49,9 +58,23 @@ export const useAuthStore = defineStore('auth', () => {
     void import('@/stores/kinship').then((m) => m.useKinshipStore().clear())
     // 管家建议卡片（V2.4）随会话清空
     void import('@/stores/actionCards').then((m) => m.useActionCardsStore().clear())
+    // PersonalFamilyView 按空间缓存的授权投影随会话清空
+    void import('@/stores/personalFamilyView').then((m) => m.usePersonalFamilyViewStore().clear())
+    // HouseholdCard / 通知 / 空间统计的空间键控缓存随会话清空（09-01 Phase 1 合同层）
+    void import('@/stores/household').then((m) => m.useHouseholdCardStore().clear())
+    void import('@/stores/notifications').then((m) => m.useNotificationsStore().clear())
+    void import('@/stores/spaceStats').then((m) => m.useSpaceStatsStore().clear())
     // 延迟导入避免循环依赖：graph/spaces 依赖 auth 时经由函数内解析
     void import('@/stores/graph').then((m) => m.useGraphStore().clear())
     void import('@/stores/spaces').then((m) => m.useSpacesStore().clear())
+  }
+
+  function clearSession(): void {
+    accessToken.value = null
+    refreshToken.value = null
+    user.value = null
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+    clearFamilyCaches()
   }
 
   function applyTokenPair(pair: TokenPairResponse): void {
@@ -59,6 +82,17 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken.value = pair.refresh_token
     user.value = pair.user
     localStorage.setItem(REFRESH_TOKEN_KEY, pair.refresh_token)
+  }
+
+  /**
+   * 主体互斥的登录处理（architecture.md §0.8 / PRD §2.7）：唯一登录端点同时服务
+   * 家庭用户与系统管理员。若登录响应是 system_admin 主体，先清空全部家庭敏感
+   * store 再落 token——系统管理员进入后台壳时，家庭 stores 必须为空。
+   */
+  function ensureNoFamilyCachesForPrincipal(pair: TokenPairResponse): void {
+    if (pair.user.principal_type === 'system_admin') {
+      clearFamilyCaches()
+    }
   }
 
   // ---- 动作 ----
@@ -73,6 +107,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(name: string, pin: string): Promise<TokenPairResponse> {
     const pair = await authApi.login(name, pin)
+    ensureNoFamilyCachesForPrincipal(pair)
     applyTokenPair(pair)
     return pair
   }
@@ -82,6 +117,7 @@ export const useAuthStore = defineStore('auth', () => {
     userId: number,
   ): Promise<TokenPairResponse> {
     const pair = await authApi.selectCandidate(challengeId, userId)
+    ensureNoFamilyCachesForPrincipal(pair)
     applyTokenPair(pair)
     return pair
   }
@@ -172,6 +208,18 @@ export const useAuthStore = defineStore('auth', () => {
   }
 })
 
+/**
+ * 会话过期整页跳转。已在登录页时不再 assign：初始导航未解析窗口内 AppShell
+ * 可能发起未认证请求（401），重复 assign 会造成 /login 无限整页重载循环
+ * （09-01 走查实测：2320 次循环请求）。
+ */
+export const sessionExpiredNavigator = { assign: (url: string) => window.location.assign(url) }
+export function sessionExpiredRedirect(): void {
+  if (window.location.pathname !== '/login') {
+    sessionExpiredNavigator.assign('/login')
+  }
+}
+
 /** 应用启动接线：把 store 能力注册给 api/client（避免模块循环导入） */
 export function wireAuthInterceptors(): void {
   const store = useAuthStore()
@@ -179,6 +227,6 @@ export function wireAuthInterceptors(): void {
   registerRefreshExecutor(() => store.refreshSession())
   registerSessionExpiredHandler(() => {
     store.clearSession()
-    window.location.assign('/login')
+    sessionExpiredRedirect()
   })
 }

@@ -1,0 +1,13 @@
+{"file":".trellis/spec/architecture.md","reason":"家庭空间/家族空间双层语义、家庭用户与系统管理员主体隔离、PersonalFamilyView 和 household membership 不能互相推导。"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"页面、API、store、types、画布组件的依赖方向和实际文件命名。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"空间切换、服务端数据唯一来源、无乐观更新、401/logout 敏感缓存清理。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"PersonalFamilyView/Memory/ActionCard 的共享类型、runtime guard、masked 联合类型和 fail-closed UI。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Naive UI/token 门禁、双主题、375px、可访问性和 type/lint/test/build 验证要求。"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"确认关系、路径、称谓和 SourceFact/DerivedFact 边界，前端不得自行推导关系。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"ActionCard/Bridge/Steward 只读建议和确认流程，管理员通知权限边界。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"masked、safe 404、Memory/RAG scope 和统一错误状态的前端呈现合同。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"从授权投影到 API、store、组件的单一 payload 解码和空间切换边界。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"复用已有 AppShell、spaces/auth/memory/ActionCard 和 graph 交互组件，避免重复合同。"}
+{"file":".trellis/tasks/09-01-personal-family-view-frontend/prd.md","reason":"本子任务已收敛的家庭卡、家族树、统一壳、记忆、通知、统计、管理员和系统管理员隔离产品要求。"}
+{"file":".trellis/tasks/09-01-personal-family-view-frontend/design.md","reason":"本子任务技术边界、路由、store/API 数据流、页面结构、系统管理员隔离和测试设计。"}
+{"file":".trellis/tasks/09-01-personal-family-view-frontend/implement.md","reason":"本子任务分阶段执行、回滚点、验证命令和完成定义。"}

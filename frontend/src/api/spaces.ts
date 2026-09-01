@@ -23,6 +23,15 @@ export async function createSpace(name: string, kind?: 'household' | 'lineage'):
 }
 
 /**
+ * 空间基本设置（既有 PATCH /spaces/{space_id} 合同）：目前仅空间名一个既有字段，
+ * 不新增任何授权/成员字段（授权只由服务端 space_admin 关系判定）。
+ */
+export async function updateSpace(spaceId: number, name: string): Promise<FamilySpace> {
+  const { data } = await apiClient.patch<FamilySpace>(`/spaces/${spaceId}`, { name })
+  return data
+}
+
+/**
  * 提交成为指定 lineage 家族空间管理员的申请（需系统管理员审批 + 原管理员同意）。
  * 邀请成员不走此流程，active member（除 guest）可直接邀请。
  */

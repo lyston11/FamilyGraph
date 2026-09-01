@@ -107,6 +107,10 @@ export type VisibilityLevel =
 export interface StructuredDate {
   cal_type: CalType
   date: string | null
+  /** 闰月标记，恒描述农历那一侧：cal_type=lunar 指 date，solar 指 mirror_date */
+  is_leap_month?: boolean
+  /** 另一历的 ISO 镜像，服务端写入，请求携带的值会被覆写 */
+  mirror_date?: string | null
   original_text?: string | null
 }
 
@@ -240,6 +244,104 @@ export interface ConnectionRequestPayload {
   target_id: number
   dir_class: DirClass
   label?: string | null
+}
+
+/** 字段级遮罩哨兵（backend visibility.MASKED）；判别联合的唯一入口 */
+export interface MaskedValue {
+  __masked__: true
+}
+
+/** 受可见性控制的字段：要么明文值，要么遮罩哨兵，不存在 undefined 中间态 */
+export type Maskable<T> = T | MaskedValue
+
+export function isMasked(value: unknown): value is MaskedValue {
+  return typeof value === 'object' && value !== null && '__masked__' in value
+}
+
+/**
+ * PersonalFamilyView 节点可展示投影（backend visibility.payload_from_decision）。
+ * BASELINE_FIELDS（id/name）在任何非 none 层级恒明文，缺失即由 API 层丢弃该节点；
+ * CONTENT_FIELDS 随层级与披露收紧为 MaskedValue。
+ */
+export interface PersonalFamilyViewDisplay {
+  id: number
+  name: string
+  gender: Maskable<GenderType>
+  birth: Maskable<StructuredDate | null>
+  death: Maskable<StructuredDate | null>
+  bio: Maskable<string | null>
+  avatar_path: Maskable<string | null>
+  privacy_mode: Maskable<PrivacyMode>
+  claim_status: Maskable<ClaimStatus>
+}
+
+export interface PersonalFamilyViewNode {
+  user_id: number
+  display: PersonalFamilyViewDisplay
+  /** none 节点不会出现在载荷中；lineage_summary 只读且不可展开 */
+  visibility_level: Exclude<VisibilityLevel, 'none'>
+  inclusion_reason_code: string
+}
+
+/** 关系路径单步（backend relationship_resolver.PathStep.to_json） */
+export interface PersonalFamilyViewPathStep {
+  from: number
+  to: number
+  edge_type: string
+  subtype: string | null
+  direction: string
+  fact_id: number
+}
+
+export interface PersonalFamilyViewEdge {
+  from_user_id: number
+  to_user_id: number
+  edge_kind: string
+  path: PersonalFamilyViewPathStep[]
+  alternative_paths: PersonalFamilyViewPathStep[][]
+  path_class: string
+  concept_code: string | null
+  term: string | null
+  inclusion_reason_code: string
+}
+
+export type PersonalFamilyViewStatus =
+  | 'never_computed'
+  | 'queued'
+  | 'running'
+  | 'current'
+  | 'stale'
+  | 'failed'
+
+export interface PersonalFamilyViewData {
+  space_id: number
+  status: PersonalFamilyViewStatus
+  view_version: number
+  computed_at: string | null
+  nodes: PersonalFamilyViewNode[]
+  edges: PersonalFamilyViewEdge[]
+  truncated: boolean
+  next_cursor: string | null
+  stale_reason: string | null
+}
+
+/** 带 ETag 的安全快照：304 时复用上一份 data，不重建对象 */
+export interface PersonalFamilyViewSnapshot {
+  data: PersonalFamilyViewData
+  etag: string | null
+}
+
+export interface PersonalFamilyBridge {
+  id: number
+  lineage_space_a_id: number
+  lineage_space_b_id: number
+  anchor_a_user_id: number
+  anchor_b_user_id: number
+  status: 'pending' | 'active' | 'revoked' | 'expired' | 'rejected'
+  revision: number
+  expires_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 // ---- m1c 家庭空间域（与后端 schemas/space.py 一一对应） ----
@@ -453,4 +555,171 @@ export interface Attachment {
   description: string | null
   url_or_path: string | null
   created_at: string
+}
+
+// ---- 09-01 PersonalFamilyView 前端 Phase 1：HouseholdCard / Notification / SpaceStats ----
+// 服务端合同占位：三个端点尚未由后端任务落地，客户端合同见任务 notes.md
+// 「前端客户端合同占位（待服务端任务对齐）」；decoder 在 api/ 层 fail-closed。
+
+/**
+ * HouseholdCard 成员条目（design.md §4.2）：仅服务端确认的 active household 成员。
+ * display 与 PersonalFamilyViewDisplay 同一后端投影口径（visibility.payload_from_decision），
+ * 字段级遮罩复用 Maskable 哨兵；`none` 成员不进入投影。
+ */
+export interface HouseholdCardMember {
+  user_id: number
+  display: PersonalFamilyViewDisplay
+  /** 服务端授权的家庭内标签（如「管理员」「成员」）；前端不自行推导 */
+  household_label: string
+  /** 该成员的字段级可见性层级说明 */
+  visibility_level: Exclude<VisibilityLevel, 'none'>
+}
+
+/**
+ * 空状态/允许动作提示：由服务端按当前认证主体授权给出
+ * （空成员时的创建家庭/邀请家人入口），前端不本地判定资格。
+ */
+export interface HouseholdCardActions {
+  can_invite_members: boolean
+  can_create_household: boolean
+  /** 服务端空状态提示文案；无提示为 null */
+  empty_state_hint: string | null
+}
+
+/**
+ * HouseholdCard 投影（design.md §4.2）：household 空间的服务端授权大卡片数据。
+ * 不包含 lineage 节点数组、隐藏成员数量或其他空间资料；
+ * 成员不经 `/users`/旧 members 列表拼装，也不能从 PersonalFamilyView 路径推导。
+ */
+export interface HouseholdCardData {
+  space_id: number
+  space_kind: 'household'
+  space_name: string
+  view_version: number
+  computed_at: string | null
+  /** viewer 本人的授权 profile display */
+  viewer: PersonalFamilyViewDisplay
+  /** confirmed active household members；pending/removed/普通亲属不入列 */
+  members: HouseholdCardMember[]
+  allowed_actions: HouseholdCardActions
+}
+
+/** 带 ETag 的安全快照：304 时复用上一份 data，不重建对象（同 PersonalFamilyViewSnapshot） */
+export interface HouseholdCardSnapshot {
+  data: HouseholdCardData
+  etag: string | null
+}
+
+/** 通知种类（合同占位；决定 ActionCard 引用与跳转上下文） */
+export type NotificationKind = 'action_card' | 'space_membership' | 'bridge' | 'relation'
+
+/**
+ * 通知引用的领域对象状态：跨领域 FSM 的最小集合。
+ * 与通知已读状态（read_at）、ActionCard revision 三者严格独立：
+ * 已读操作不得变更领域状态，ActionCard 处理状态以 actionCards store 为准。
+ */
+export type NotificationDomainStatus =
+  | 'pending'
+  | 'active'
+  | 'accepted'
+  | 'rejected'
+  | 'cancelled'
+  | 'revoked'
+  | 'expired'
+  | 'withdrawn'
+  | 'removed'
+  | 'done'
+
+/** ActionCard 引用：仅卡号与 revision；卡片状态/操作一律走 actionCards store */
+export interface NotificationActionCardRef {
+  card_id: number
+  revision: number
+}
+
+/** 通知安全载荷：服务端脱敏后的最小展示字段，不含私人记忆/隐藏节点数据 */
+export interface NotificationPayload {
+  title: string
+  /** 脱敏摘要；masked 哨兵表示当前主体不可见，null 表示不适用 */
+  summary: Maskable<string> | null
+  /** 相关人物名字投影；masked 表示不可见 */
+  actor_name: Maskable<string> | null
+  /** 相关空间名（跨空间 bridge 通知可能被遮蔽） */
+  space_name: Maskable<string> | null
+}
+
+export interface NotificationItem {
+  id: number
+  space_id: number
+  kind: NotificationKind
+  payload: NotificationPayload
+  /** 通知引用的领域对象状态；已读操作不得变更该状态 */
+  domain_status: NotificationDomainStatus
+  /** ActionCard 引用；kind='action_card' 时必须存在 */
+  action_card: NotificationActionCardRef | null
+  created_at: string
+  /** 已读时间；null=未读。已读与领域状态/ActionCard revision 严格分离 */
+  read_at: string | null
+}
+
+/** 通知列表载荷：按账号 + space_id 过滤（design.md §4.4） */
+export interface NotificationsPage {
+  space_id: number
+  items: NotificationItem[]
+  /** 服务端统计的未读数，前端不从 items 推导 */
+  unread_count: number
+}
+
+/** 带 ETag 的安全快照：304 时复用上一份 data */
+export interface NotificationsSnapshot {
+  data: NotificationsPage
+  etag: string | null
+}
+
+/** POST /notifications/{id}/read 响应：仅已读确认，不含任何领域状态变更 */
+export interface NotificationReadResult {
+  id: number
+  read_at: string
+}
+
+/** POST /notifications/read-all 响应 */
+export interface NotificationReadAllResult {
+  space_id: number
+  marked_count: number
+}
+
+/** 空间化统计的视图状态机：与 PersonalFamilyView 一致 */
+export type SpaceStatsStatus = PersonalFamilyViewStatus
+
+/** 关系分布切片：dir_class 维度的服务端授权计数 */
+export interface SpaceStatsRelationSlice {
+  dir_class: DirClass
+  count: number
+}
+
+/**
+ * 空间化统计（design.md §4.4）：按 space_id 的服务端授权聚合。
+ * 隐藏对象/未授权分支不计入，前端不得从 PersonalFamilyView 节点数组推导统计。
+ */
+export interface SpaceStatsData {
+  space_id: number
+  space_kind: SpaceKind
+  status: SpaceStatsStatus
+  view_version: number | null
+  /** 授权范围内的聚合 */
+  node_count: number
+  edge_count: number
+  member_count: number
+  /** 关系分布（仅 dir_class 维度） */
+  relation_distribution: SpaceStatsRelationSlice[]
+  /** 待确认计数：待处理 ActionCard 与空间成员申请（服务端口径） */
+  pending_action_cards: number
+  pending_memberships: number
+  computed_at: string | null
+  stale_reason: string | null
+}
+
+/** 带 ETag 的安全快照：304 时复用上一份 data */
+export interface SpaceStatsSnapshot {
+  data: SpaceStatsData
+  etag: string | null
 }

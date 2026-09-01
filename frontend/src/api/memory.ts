@@ -1,14 +1,40 @@
 import { apiClient } from '@/api/client'
-import type { Memory, MemoryCandidate, MemoryCitation, MemoryScope } from '@/types/memory'
+import type { Memory, MemoryCandidate, MemoryCitation, MemoryScope, MemoryScopeKind, MemorySensitivity } from '@/types/memory'
 
 export interface ConfirmMemoryCandidatePayload {
   scope: MemoryScope
   retention_days?: number
 }
 
+/**
+ * 手动新建候选（与后端 POST /memory-candidates 的既有合同对齐）：
+ * 所有写入（含检索结果「保存」与私有记忆「新增」）都只能先创建候选，
+ * 经待确认流程明确 scope 后才成为可检索记忆（V2.5 合同：无绕过审计的直接发布）。
+ */
+export interface CreateMemoryCandidatePayload {
+  raw_quote: string
+  summary: string
+  purpose: string
+  suggested_scope: MemoryScopeKind
+  sensitivity: MemorySensitivity
+  source_span?: Record<string, unknown>
+  source_message_id?: number | null
+  source_document_ref?: string | null
+}
+
 export async function fetchMemoryCandidates(includeDecided = false): Promise<MemoryCandidate[]> {
   const { data } = await apiClient.get<MemoryCandidate[]>('/memory-candidates', {
     params: includeDecided ? { include_decided: true } : undefined,
+  })
+  return data
+}
+
+export async function createMemoryCandidate(
+  payload: CreateMemoryCandidatePayload,
+): Promise<MemoryCandidate> {
+  const { data } = await apiClient.post<MemoryCandidate>('/memory-candidates', {
+    source_span: {},
+    ...payload,
   })
   return data
 }

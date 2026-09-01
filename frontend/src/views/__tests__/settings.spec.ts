@@ -201,6 +201,35 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     wrapper.unmount()
   })
 
+  it('四分区渲染：个人资料 / 隐私与公示 / 账号与安全 / 显示与无障碍（含主题切换）', async () => {
+    const { wrapper } = await mountSettings(pinia)
+
+    expect(wrapper.find('[data-test="settings-section-profile"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-section-privacy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-section-account"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-section-display"]').exists()).toBe(true)
+
+    // 复用组件挂载：改名 / 披露矩阵 / 数据权利 / 改 PIN / 登出
+    expect(wrapper.find('[data-test="current-user"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="name-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="disclosure-table"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="request-export-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="logout-btn"]').exists()).toBe(true)
+    // 显示与无障碍：paper/modern 双主题卡
+    expect(wrapper.find('[data-test="theme-card-paper"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="theme-card-modern"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('空间管理不放进全局设置（由 AppShell 当前空间管理入口承担）', async () => {
+    const { wrapper } = await mountSettings(pinia)
+
+    expect(wrapper.find('[data-test="space-management-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="account-menu-space-management"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('空间管理')
+    wrapper.unmount()
+  })
+
   it('披露矩阵渲染全部类别；高敏感类别开关禁用；保存提交基础五类', async () => {
     const { wrapper } = await mountSettings(pinia)
 

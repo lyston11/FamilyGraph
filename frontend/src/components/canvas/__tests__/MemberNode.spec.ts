@@ -2,48 +2,48 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import MemberNode from '@/components/canvas/MemberNode.vue'
-import type { Member } from '@/types/api'
+import type { PersonalFamilyViewDisplay } from '@/types/api'
 
 /**
- * 画布成员名牌（design.md §3.2 / §5 测试策略）：
- * - 确档状态章：claimed=「已确档」实底 / 其余=「待确档」空心虚线章（身份状态机投影）；
- * - 称谓 chip 与摘要节点动作；纯展示组件不发起任何业务请求。
+ * 家族树成员名牌（09-01 design.md §5.2，PersonalFamilyView 口径）：
+ * - 纯展示：props 只收已解码 display + 可见性层级，不发请求、不读路由；
+ * - 节点状态 icon + 文字：自己强调 / self_private / household_detail / lineage_summary；
+ * - lineage_summary 无展开按钮、无家庭卡入口；masked 字段走 MaskedField 锁形章。
  * 断言走 data-test / 文本 / 行为，不依赖库内类名。
  */
 
-function makeMember(overrides: Partial<Member> = {}): Member {
+function makeDisplay(overrides: Partial<PersonalFamilyViewDisplay> = {}): PersonalFamilyViewDisplay {
   return {
     id: 7,
     name: '林晚',
-    is_admin: false,
     gender: 'f',
-    birth: null,
+    birth: { cal_type: 'solar', date: '1950-03-12' },
     death: null,
     bio: null,
     avatar_path: null,
     privacy_mode: 'handover',
-    claim_status: 'managed',
-    created_by: 1,
-    created_at: '2026-08-25T00:00:00',
-    clan_disclosure: { avatar: false, photos: false, dates: false, bio: false, attachments: false },
-    permissions: { edit: true, delete: true },
+    claim_status: 'claimed',
     ...overrides,
   }
 }
 
-function mountNode(data: {
-  member?: Member
-  viewLabel?: string | null
-  summary?: boolean
-}) {
+interface MountOptions {
+  display?: PersonalFamilyViewDisplay
+  visibilityLevel?: 'self_private' | 'household_detail' | 'lineage_summary'
+  isSelf?: boolean
+  term?: string | null
+}
+
+function mountNode({
+  display = makeDisplay(),
+  visibilityLevel = 'household_detail',
+  isSelf = false,
+  term = null,
+}: MountOptions = {}) {
   return mount(MemberNode, {
     props: {
-      id: `n-${data.member?.id ?? 0}`,
-      data: {
-        member: data.member,
-        viewLabel: data.viewLabel ?? null,
-        summary: data.summary ?? false,
-      },
+      id: `n-${display.id}`,
+      data: { display, visibilityLevel, isSelf, term },
     },
     // Handle 依赖 VueFlow 节点注册表（无画布上下文时 onMounted 取不到 node），
     // 名牌自身的渲染/交互合同与连接点无关，stub 隔离
@@ -51,57 +51,58 @@ function mountNode(data: {
   })
 }
 
-describe('MemberNode 确档状态徽章', () => {
-  it('claimed：渲染「已确档」实底徽章（fg-badge--confirmed）', () => {
-    const wrapper = mountNode({ member: makeMember({ claim_status: 'claimed' }) })
-    const stamp = wrapper.find('[data-test="identity-stamp"]')
-    expect(stamp.exists()).toBe(true)
-    expect(stamp.text()).toBe('已确档')
-    expect(stamp.classes()).toContain('fg-badge--confirmed')
-  })
-
-  it('managed（provisional 人物）：渲染「待确档」空心虚线徽章（fg-badge--provisional）', () => {
-    const wrapper = mountNode({ member: makeMember({ claim_status: 'managed' }) })
-    const stamp = wrapper.find('[data-test="identity-stamp"]')
-    expect(stamp.text()).toBe('待确档')
-    expect(stamp.classes()).toContain('fg-badge--provisional')
-  })
-})
-
-describe('MemberNode 展示与行为', () => {
-  it('渲染姓名、姓字纸牌与称谓 chip', () => {
-    const wrapper = mountNode({ member: makeMember(), viewLabel: '妈妈' })
-    expect(wrapper.find('[data-test="canvas-member-card"]').text()).toContain('林晚')
-    expect(wrapper.find('[data-test="view-label"]').text()).toBe('妈妈')
+describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
+  it('渲染已解码 display：姓名、姓字纸牌、明文生日与称谓 chip', () => {
+    const wrapper = mountNode({ term: '妈妈' })
+    const card = wrapper.find('[data-test="canvas-member-card"]')
+    expect(card.text()).toContain('林晚')
     expect(wrapper.find('.avatar').text()).toBe('林')
+    expect(wrapper.find('[data-test="view-label"]').text()).toBe('妈妈')
+    expect(wrapper.find('[data-test="node-birth"]').text()).toBe('1950-03-12')
   })
 
-  it('无 viewLabel 时不渲染称谓 chip；性别文案随 gender', () => {
-    const wrapper = mountNode({ member: makeMember({ gender: 'm' }) })
+  it('masked 生日走 MaskedField 锁形章，不显示明文', () => {
+    const wrapper = mountNode({ display: makeDisplay({ birth: { __masked__: true } }) })
+    expect(wrapper.find('[data-test="masked-field"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="node-birth"]').exists()).toBe(false)
+  })
+
+  it('无称谓时不渲染称谓 chip；无生日不渲染日期行', () => {
+    const wrapper = mountNode({ term: null, display: makeDisplay({ birth: null }) })
     expect(wrapper.find('[data-test="view-label"]').exists()).toBe(false)
-    expect(wrapper.find('.gender').text()).toBe('男')
+    expect(wrapper.find('[data-test="node-birth"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="masked-field"]').exists()).toBe(false)
   })
 
-  it('摘要节点：虚线卡 + 「申请进入 TA 的家庭空间」动作 emits join（不冒泡到 open）', async () => {
-    const wrapper = mountNode({ member: makeMember(), summary: true })
-    expect(wrapper.find('.summary-card').exists()).toBe(true)
-    await wrapper.find('[data-test="join-request-btn"]').trigger('click')
-    expect(wrapper.emitted('join')).toEqual([[7]])
-    expect(wrapper.emitted('open')).toBeUndefined()
+  it('自己节点：强调样式 + 「我」chip + self_private 徽章（icon + 文字）', () => {
+    const wrapper = mountNode({ isSelf: true, visibilityLevel: 'self_private' })
+    expect(wrapper.find('[data-test="canvas-member-card"]').classes()).toContain('is-self')
+    expect(wrapper.find('[data-test="self-chip"]').text()).toBe('我')
+    const badge = wrapper.find('[data-test="visibility-badge"]')
+    expect(badge.text()).toContain('仅本人')
+    expect(badge.find('svg').exists()).toBe(true)
   })
 
-  it('点击卡片 / 回车键 emits open（键盘可达基线）', async () => {
-    const wrapper = mountNode({ member: makeMember() })
+  it('household_detail：渲染「家庭可见」徽章', () => {
+    const wrapper = mountNode({ visibilityLevel: 'household_detail' })
+    expect(wrapper.find('[data-test="visibility-badge"]').text()).toContain('家庭可见')
+  })
+
+  it('lineage_summary：虚线摘要卡 + 「族谱摘要 · 不可展开」，无展开/家庭卡入口按钮', () => {
+    const wrapper = mountNode({ visibilityLevel: 'lineage_summary' })
+    const card = wrapper.find('[data-test="canvas-member-card"]')
+    expect(card.classes()).toContain('summary-card')
+    expect(wrapper.find('[data-test="visibility-badge"]').text()).toContain('不可展开')
+    // 红线：summary 不可展开——不提供任何展开/申请进入按钮
+    expect(wrapper.find('[data-test="join-request-btn"]').exists()).toBe(false)
+    expect(wrapper.find('button').exists()).toBe(false)
+  })
+
+  it('点击 / 回车仅 emit select(userId)——不发任何请求、不读路由', async () => {
+    const wrapper = mountNode({})
+    // 组件不引入 api/router 模块：无请求出口可言；交互只落在 select 事件
     await wrapper.find('[data-test="canvas-member-card"]').trigger('click')
     await wrapper.find('[data-test="canvas-member-card"]').trigger('keyup.enter')
-    expect(wrapper.emitted('open')).toEqual([[7], [7]])
-  })
-
-  it('成员记录未到齐时渲染占位卡，不出空壳', () => {
-    const wrapper = mountNode({})
-    const card = wrapper.find('[data-test="canvas-member-card"]')
-    expect(card.exists()).toBe(true)
-    expect(card.classes()).toContain('member-node--placeholder')
-    expect(wrapper.find('[data-test="identity-stamp"]').exists()).toBe(false)
+    expect(wrapper.emitted('select')).toEqual([[7], [7]])
   })
 })

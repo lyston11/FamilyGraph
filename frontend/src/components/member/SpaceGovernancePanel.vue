@@ -5,6 +5,7 @@ import {
   NButton,
   NDataTable,
   NInput,
+  NPopconfirm,
   NSelect,
   useMessage,
 } from 'naive-ui'
@@ -58,35 +59,88 @@ const transferOptions = computed<SelectOption[]>(() =>
 )
 const pendingCount = computed(() => spaces.members.filter((m) => m.status === 'pending').length)
 
+// 成员移除/撤回（D8 断连轨）：管理面板内仅当前空间管理员可见该操作列；
+// 命令入口是既有 spaces.leaveOrRemove（owner/admin 移除 active 或撤回 pending），
+// 操作后 store 内部重读服务端成员列表，无乐观本地行删除。
+const canRemoveMembers = computed(() => spaces.canManageSpace)
+
+function memberRemovable(member: SpaceMemberInfo): boolean {
+  return member.user_id !== myUserId.value
+}
+
+async function removeMember(member: SpaceMemberInfo): Promise<void> {
+  try {
+    await spaces.leaveOrRemove(member.id)
+    message.success(member.status === 'pending' ? '邀请已撤回' : '成员已移除')
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '操作失败，请稍后重试')
+  }
+}
+
 function memberName(member: SpaceMemberInfo): string {
   return member.user_name ?? `#${member.user_id}`
 }
 
-const memberColumns = computed<DataTableColumns<SpaceMemberInfo>>(() => [
-  { title: '名字', key: 'name', render: (row) => memberName(row) },
-  {
-    title: '角色',
-    key: 'role',
-    width: 120,
-    render: (row) => h('span', { class: ROLE_BADGE_CLASS[row.role] }, ROLE_LABELS[row.role]),
-  },
-  {
-    title: '状态',
-    key: 'status',
-    width: 84,
-    render: (row) =>
-      h(
-        'span',
-        {
-          class:
-            row.status === 'active'
-              ? 'fg-badge fg-badge--confirmed'
-              : 'fg-badge fg-badge--proposed',
-        },
-        row.status === 'active' ? '已加入' : '待确认',
-      ),
-  },
-])
+const memberColumns = computed<DataTableColumns<SpaceMemberInfo>>(() => {
+  const columns: DataTableColumns<SpaceMemberInfo> = [
+    { title: '名字', key: 'name', render: (row) => memberName(row) },
+    {
+      title: '角色',
+      key: 'role',
+      width: 120,
+      render: (row) => h('span', { class: ROLE_BADGE_CLASS[row.role] }, ROLE_LABELS[row.role]),
+    },
+    {
+      title: '状态',
+      key: 'status',
+      width: 84,
+      render: (row) =>
+        h(
+          'span',
+          {
+            class:
+              row.status === 'active'
+                ? 'fg-badge fg-badge--confirmed'
+                : 'fg-badge fg-badge--proposed',
+          },
+          row.status === 'active' ? '已加入' : '待确认',
+        ),
+    },
+  ]
+  if (canRemoveMembers.value) {
+    columns.push({
+      title: '操作',
+      key: 'actions',
+      width: 96,
+      render: (row) => {
+        if (!memberRemovable(row)) return h('span')
+        const isPending = row.status === 'pending'
+        return h(
+          NPopconfirm,
+          { trigger: 'click', positiveText: '确认', onPositiveClick: () => removeMember(row) },
+          {
+            trigger: () =>
+              h(
+                NButton,
+                {
+                  size: 'small',
+                  secondary: true,
+                  type: isPending ? 'default' : 'warning',
+                  'data-test': isPending ? `member-withdraw-${row.id}` : `member-remove-${row.id}`,
+                },
+                { default: () => (isPending ? '撤回' : '移除') },
+              ),
+            default: () =>
+              isPending
+                ? '撤回这条待确认的成员邀请？'
+                : `移除成员「${memberName(row)}」？移除后其家庭成员资格终止。`,
+          },
+        )
+      },
+    })
+  }
+  return columns
+})
 
 async function searchCandidates(): Promise<void> {
   if (!keyword.value.trim() || !spaces.canInvite) return
@@ -177,6 +231,7 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
     <h3 class="block-title">成员</h3>
     <NDataTable
       size="small"
+      :scroll-x="480"
       :columns="memberColumns"
       :data="spaces.members"
       :row-key="(row: SpaceMemberInfo) => row.id"

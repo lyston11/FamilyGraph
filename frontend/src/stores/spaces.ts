@@ -19,6 +19,7 @@ import {
   removeOrWithdrawMembership,
   resolveMembership,
   respondOwnershipTransfer,
+  updateSpace,
 } from '@/api/spaces'
 
 /** 家庭空间状态（m1c）。空列表时由首页引导创建家庭空间。 */
@@ -129,6 +130,17 @@ export const useSpacesStore = defineStore('spaces', {
       this.spaces.unshift(space)
       await this.loadMembers(space.id)
       return space
+    },
+    /**
+     * 空间基本设置（PATCH /spaces/{space_id}）：仅空间名等既有字段。
+     * 成功后用服务端响应替换列表中的同一空间（无乐观本地改名）；
+     * 授权由服务端 _require_space_manager 判定，前端不预判。
+     */
+    async rename(spaceId: number, name: string) {
+      const updated = await updateSpace(spaceId, name)
+      const index = this.spaces.findIndex((s) => s.id === updated.id)
+      if (index !== -1) this.spaces.splice(index, 1, updated)
+      return updated
     },
     async invite(userId: number) {
       if (!this.canInvite) throw new Error('SPACE_FORBIDDEN_ACTOR')

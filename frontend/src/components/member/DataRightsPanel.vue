@@ -309,6 +309,7 @@ const correctFieldOptions: SelectOption[] = [
     <h4 class="block-title">申请记录</h4>
     <NDataTable
       size="small"
+      :scroll-x="640"
       :columns="historyColumns"
       :data="governance.dataRights"
       :row-key="(row: DataRightRequest) => row.id"

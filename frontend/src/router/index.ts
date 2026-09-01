@@ -17,18 +17,42 @@ declare module 'vue-router' {
   }
 }
 
+/**
+ * 家庭用户路由表（09-01 design.md §2）：
+ * - `/`（name `home`）= 我的家庭 HouseholdCardView，登录成功默认目标；
+ * - `/family-tree`（name `family-space`）= 家族空间树 FamilyTreeView；
+ * - 旧 `/home` 显式重定向到 `/`，不再挂载旧成员混合页。
+ * route name 保持外部引用兼容：`home` 仍是登录默认目标，`family-space`
+ * 沿用为家族树入口（各视图返回链接无需改动）。
+ */
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
       path: '/',
-      name: 'family-space',
-      component: () => import('@/views/FamilySpaceView.vue'),
+      name: 'home',
+      component: () => import('@/views/HouseholdCardView.vue'),
     },
     {
+      path: '/family-tree',
+      name: 'family-space',
+      component: () => import('@/views/FamilyTreeView.vue'),
+    },
+    {
+      // 他人只读公示页：安全上下文由当前空间/快照管理，不接受 viewer/root 参数
+      path: '/people/:userId',
+      name: 'person-profile',
+      component: () => import('@/views/PersonProfileView.vue'),
+    },
+    {
+      path: '/notifications',
+      name: 'notifications',
+      component: () => import('@/views/NotificationsView.vue'),
+    },
+    {
+      // 旧首页路径：显式重定向，不再挂载旧成员混合页（HomeView 已于 Phase 3 删除，流程已抽出复用）
       path: '/home',
-      name: 'home',
-      component: () => import('@/views/HomeView.vue'),
+      redirect: { name: 'home' },
     },
     {
       path: '/login',
@@ -66,6 +90,14 @@ const router = createRouter({
       meta: { systemAdminOnly: true },
     },
     {
+      // 系统管理员登录占位（PRD §2.7）：独立于家庭登录页（blank chrome、无家庭壳），
+      // 真实登录流程由 09-01-system-admin-governance-routes 任务实现。
+      path: '/system-admin/login',
+      name: 'system-admin-login',
+      component: () => import('@/views/SystemAdminLoginView.vue'),
+      meta: { public: true, chrome: 'blank' },
+    },
+    {
       path: '/admin',
       redirect: { name: 'system-admin' },
     },
@@ -92,8 +124,10 @@ const router = createRouter({
 /**
  * 认证守卫（architecture.md §1 + state-management.md 红线）：
  * 1. 首启未初始化 → 一律进引导页（公开页除外）
- * 2. 未登录 → /login；已登录访问 /login → /
- * 3. pin_must_change=true → 白名单外强制跳改 PIN 页
+ * 2. 未登录 → /login；已登录访问 /login → /（name home，我的家庭）
+ * 3. system_admin / family_user 互斥：系统主体只能停留在系统后台，
+ *    家庭主体（含家庭壳任何页面）不得进入系统后台路由
+ * 4. pin_must_change=true → 白名单外强制跳改 PIN 页
  */
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
@@ -111,6 +145,10 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.public) {
+    // 已登录主体访问系统管理员登录占位：系统管理员回后台，家庭用户按互斥回家庭壳
+    if (auth.isLoggedIn && to.name === 'system-admin-login') {
+      return auth.isSystemAdmin ? { name: 'system-admin' } : { name: 'family-space' }
+    }
     if (auth.isLoggedIn && to.name === 'login') {
       return { name: 'home' }
     }
@@ -125,14 +163,15 @@ router.beforeEach(async (to) => {
     }
   }
 
+  // 主体互斥（design.md §6）：系统管理员 token 不能进入家庭用户壳的任何页面；
+  // 家庭用户 token 不能进入系统后台路由（含后台登录占位页）。
   if (auth.isSystemAdmin && to.name !== 'system-admin' && to.name !== 'force-change-pin') {
     return { name: 'system-admin' }
   }
-  if (!auth.isSystemAdmin && (to.name === 'system-admin' || to.meta.systemAdminOnly)) {
-    return { name: 'family-space' }
-  }
-
-  if (to.meta.systemAdminOnly && !auth.isSystemAdmin) {
+  if (
+    !auth.isSystemAdmin &&
+    (to.name === 'system-admin' || to.name === 'system-admin-login' || to.meta.systemAdminOnly)
+  ) {
     return { name: 'family-space' }
   }
 

@@ -1,0 +1,256 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { NButton } from 'naive-ui'
+
+import { factStateLabel, pathClassLabel } from '@/components/canvas/relationshipDisplay'
+import type { PersonalFamilyViewEdge, PersonalFamilyViewPathStep } from '@/types/api'
+
+/**
+ * 只读关系说明面板（09-01 design.md §5.3，FamilyTreeView 边点击入口、
+ * PersonProfileView 关系说明入口共用）：
+ *
+ * - 数据全部来自当前 PersonalFamilyView 快照的边对象 + 快照元信息
+ *   （view_version/computed_at），组件不发起请求、不做任何写操作；
+ * - 展示：称谓 term、主路径、最多 3 条替代路径（超出截断并提示）、
+ *   path_class/concept_code 安全来源摘要、事实状态与更新时间；
+ * - 遮罩/缺失安全降级：term/concept_code 缺失显示「暂无」，路径中的成员名无法
+ *   在当前快照解析时显示安全占位（不显示原始 id）；lineage_summary 目标不可
+ *   展开详情，面板自身无任何展开控件；
+ * - 「申请更正 / 查看待办」是两个只读安全跳转（PRD §2.4）：只 emit 事件由
+ *   页面导航到 /notifications（待办区），绝不产生任何 SourceFact 写操作；
+ *   Bridge pending 只在通知/待办处理，本面板不渲染 approve/reject/consent/
+ *   revoke 等 Bridge 操作控件。
+ */
+
+interface Props {
+  edge: PersonalFamilyViewEdge
+  /** 当前快照元信息（失败/陈旧标注来源） */
+  viewVersion: number
+  computedAt: string | null
+  /** 快照内 user_id → display.name 解析；解析不到返回 null（安全占位） */
+  resolveName: (userId: number) => string | null
+}
+
+const props = defineProps<Props>()
+
+const emit = defineEmits<{
+  (e: 'close'): void
+  /** 申请更正：只跳转待办区（通知/数据权利流程入口），无任何写操作 */
+  (e: 'request-correction'): void
+  /** 查看待办：跳转 /notifications 待办区 */
+  (e: 'view-todos'): void
+}>()
+
+const MAX_ALTERNATIVE_PATHS = 3
+
+const termText = computed(() => props.edge.term ?? '暂无称谓')
+
+const pathClassText = computed(() => pathClassLabel(props.edge.path_class))
+
+const factStateText = computed(() => factStateLabel(props.edge.inclusion_reason_code))
+
+/** 路径步骤链 → 人读链路「A → B → C」；名字不可解析时用安全占位（不显示原始 id） */
+function chainText(path: readonly PersonalFamilyViewPathStep[]): string {
+  if (path.length === 0) return ''
+  const parts: string[] = []
+  for (const step of path) parts.push(props.resolveName(step.from) ?? '某位成员')
+  const last = path[path.length - 1]
+  if (last) parts.push(props.resolveName(last.to) ?? '某位成员')
+  return parts.join(' → ')
+}
+
+const mainPathText = computed(() => chainText(props.edge.path))
+const alternativePathTexts = computed(() =>
+  props.edge.alternative_paths.slice(0, MAX_ALTERNATIVE_PATHS).map((path) => chainText(path)),
+)
+
+/** 服务端返回超过 3 条替代路径：截断渲染并提示（不显示总条数以外信息） */
+const hasMoreAlternatives = computed(
+  () => props.edge.alternative_paths.length > MAX_ALTERNATIVE_PATHS,
+)
+
+const computedAtText = computed(() => props.computedAt ?? '暂无更新时间')
+</script>
+
+<template>
+  <aside class="relation-panel" role="complementary" aria-label="关系说明" data-test="relation-panel">
+    <header class="panel-head">
+      <h2 class="panel-title">关系说明</h2>
+      <NButton
+        quaternary
+        size="small"
+        aria-label="关闭关系说明"
+        data-test="relation-panel-close"
+        @click="emit('close')"
+      >
+        关闭
+      </NButton>
+    </header>
+
+    <dl class="panel-body">
+      <div class="field" data-test="relation-term">
+        <dt>称谓</dt>
+        <dd>{{ termText }}</dd>
+      </div>
+
+      <div class="field" data-test="relation-path-class">
+        <dt>关系类型</dt>
+        <dd>
+          {{ pathClassText }}
+          <span v-if="edge.concept_code" class="concept-code" data-test="relation-concept-code">
+            编码 {{ edge.concept_code }}
+          </span>
+        </dd>
+      </div>
+
+      <div class="field" data-test="relation-main-path">
+        <dt>主路径</dt>
+        <dd>
+          <span v-if="mainPathText" data-test="relation-main-path-text">{{ mainPathText }}</span>
+          <span v-else class="degraded">暂无路径说明</span>
+        </dd>
+      </div>
+
+      <div class="field" data-test="relation-alt-paths">
+        <dt>替代路径（最多 3 条）</dt>
+        <dd>
+          <ol v-if="alternativePathTexts.length > 0" class="path-list">
+            <li
+              v-for="(text, pathIndex) in alternativePathTexts"
+              :key="`alt-${pathIndex}`"
+              class="path-step"
+              :data-test="`relation-alt-path-${pathIndex}`"
+            >
+              {{ text }}
+            </li>
+          </ol>
+          <span v-else class="degraded">暂无替代路径</span>
+          <span
+            v-if="hasMoreAlternatives"
+            class="degraded"
+            data-test="relation-alt-paths-truncated"
+          >
+            替代路径较多，仅显示前 {{ MAX_ALTERNATIVE_PATHS }} 条。
+          </span>
+        </dd>
+      </div>
+
+      <div class="field" data-test="relation-fact-state">
+        <dt>事实状态</dt>
+        <dd>{{ factStateText }}</dd>
+      </div>
+
+      <div class="field" data-test="relation-meta">
+        <dt>数据来源</dt>
+        <dd>仅使用服务端确认的关系事实；投影版本 v{{ viewVersion }}，更新于 {{ computedAtText }}</dd>
+      </div>
+    </dl>
+
+    <footer class="panel-actions">
+      <!-- 只读安全跳转：emit 后由页面导航到 /notifications 待办区；
+           绝不产生 SourceFact 写操作，也不渲染任何 Bridge 操作控件 -->
+      <NButton
+        size="small"
+        secondary
+        data-test="relation-correct"
+        @click="emit('request-correction')"
+      >
+        申请更正
+      </NButton>
+      <NButton size="small" secondary data-test="relation-view-todos" @click="emit('view-todos')">
+        查看待办
+      </NButton>
+    </footer>
+  </aside>
+</template>
+
+<style scoped>
+.relation-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(340px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 14px;
+  background-color: var(--fg-surface-raised);
+  border: 1px solid var(--fg-line-strong);
+  border-radius: var(--fg-radius-card);
+  box-shadow: var(--fg-shadow-raised);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-title {
+  margin: 0;
+  font-family: var(--fg-font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--fg-ink);
+}
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+.field dt {
+  margin-bottom: 2px;
+  font-size: 12px;
+  color: var(--fg-ink-secondary);
+}
+
+.field dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-ink);
+  line-height: 1.6;
+}
+
+.concept-code {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-ink-faint);
+}
+
+.path-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.path-step {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--fg-ink);
+  background-color: var(--fg-surface-sunken);
+  border: 1px solid var(--fg-line);
+  border-radius: var(--fg-radius-control);
+}
+
+.degraded {
+  color: var(--fg-ink-faint);
+  font-size: 12px;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+</style>

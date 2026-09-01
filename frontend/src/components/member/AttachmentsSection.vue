@@ -269,7 +269,8 @@ async function remove(id: number) {
 .preview-mask {
   position: fixed;
   inset: 0;
-  background: rgb(0 0 0 / 72%);
+  /* 预览遮罩：token 派生（墨色加深），不写死色值（Phase 7 颜色门禁） */
+  background: color-mix(in srgb, var(--fg-ink) 72%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;

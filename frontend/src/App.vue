@@ -26,9 +26,11 @@ const route = useRoute()
 // 两主题均为浅色：不切换 naive 内置主题，仅注入 overrides
 const naiveOverrides = computed<GlobalThemeOverrides>(() => themeOverrides[ui.theme])
 
-// 沉浸页（login/onboarding/force-change-pin/identity-setup）不套应用壳
+// 沉浸页（login/onboarding/force-change-pin/identity-setup/系统管理员登录占位）不套应用壳
 const isBlankChrome = computed(() => route.meta.chrome === 'blank')
 const isSystemAdmin = computed(() => auth.isSystemAdmin)
+// 系统管理员登录占位页属于后台边界：不渲染家庭壳的 Assistant 悬浮入口
+const isSystemAdminBoundary = computed(() => route.name === 'system-admin-login')
 
 // 主题 token 单一来源：L2 变量批量注入 documentElement，CSS 与 Naive UI overrides 同源
 watchEffect(() => {
@@ -52,5 +54,5 @@ watchEffect(() => {
     </NMessageProvider>
   </NConfigProvider>
   <!-- 悬浮 Assistant 保持全局（壳外，design.md §3.1）；面板内容经 defineAsyncComponent 懒加载 -->
-  <AssistantLauncher v-if="!isSystemAdmin" />
+  <AssistantLauncher v-if="!isSystemAdmin && !isSystemAdminBoundary" />
 </template>

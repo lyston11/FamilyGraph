@@ -21,3 +21,26 @@ cd frontend && npm run type-check && npm run lint && npm test && npm run build
 ```
 
 至少有组件或 store 测试覆盖：候选确认后服务端重载、private/household/lineage scope 标签、撤销后的引用失效、masked/blocked 错误、空间切换清理以及 Assistant 消息中的 `card_ids`/RAG citation 使用同一服务端状态。
+
+## 服务端合同未落地时的前端合同占位（BLOCKER 模式，09-01 沉淀）
+
+### Convention: BLOCKER 合同占位 = decoder + store + fixture 测试，绝不回退旧宽接口
+
+**What**：后端合同尚未落地的端点，前端按 design 冻结的载荷形状实现完整合同层：
+1. `api/<domain>.ts`：从 `unknown` 运行时解码（共享 `api/decode.ts` 原语），文件头注释标记 `BLOCKER: 服务端合同未落地` 并记录约定端点路径与载荷字段；
+2. `stores/<domain>.ts`：与其他投影 store 同款 space_id + epoch 模式；
+3. fixture 驱动的 decoder/store 窄测试（不依赖服务端）。
+
+运行时端点 404/失败时页面显示「合同未就绪」安全状态，**禁止**以下列方式拼装数据：`/users` 全局列表、旧 `/api/graph/me`、本地关系/成员归属推导、旧的无空间合同静默顶替。
+
+**Example**：`frontend/src/api/household.ts`（`GET /household-card?space_id=` 占位）、`api/notifications.ts`、`api/spaceStats.ts`；合同记录同步在任务 notes.md「前端客户端合同占位」一节，供服务端任务对齐。
+
+**Why**：合同层先行使服务端落地时前端零改动；旧接口拼装会把授权边界外的数据引入渲染层，且落地时还要二次拆除。
+
+**Wrong vs Correct**：
+```typescript
+// Wrong：用旧接口 + 前端过滤冒充新投影
+const members = (await apiClient.get('/users')).filter(isInSpace)
+// Correct：只消费已冻结的服务端投影；未落地就显示合同未就绪态
+const snapshot = await fetchHouseholdCard(spaceId) // BLOCKER 占位，404 → 合同未就绪
+```
