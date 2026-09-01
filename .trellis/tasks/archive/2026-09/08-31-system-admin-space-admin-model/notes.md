@@ -98,3 +98,14 @@ guest 不是独立产品决策，它是 commit `c79eee9`（v2 四级可见性合
   拆成 `admin_metadata` 路由下的最小元数据投影：`/admin/accounts` 只给 account_id / subject_id / subject_type / status / locked_until，不含姓名等家庭 PII；空间成员构成按 `space_id` 单独查询且只返回姓名与角色/状态。未知 `space_id` 返回空数组而不是 404，避免把端点变成家庭数据存在性探针。旧 `/admin/users`（含 break-glass 的按名字反查）未迁移，随上面的阻塞项一起归入独立任务。
 - 每空间唯一管理员约束如何在 SQLite/Alembic 和并发命令层同时保证？
   两层：迁移 0022 建部分唯一索引（`batch_alter_table`，SQLite 可用），命令层在同一个 `command_transaction` 里完成 authorize → FSM → 换人写入，冲突方拿到 IntegrityError 而不是静默覆盖。并发用例覆盖了重复提交只有一个赢家。
+
+## 收口核验（2026-09-01）
+
+- `task.py validate 08-31-system-admin-space-admin-model` 通过；`implement.jsonl` 8 项、`check.jsonl` 7 项均有效。
+- 系统管理员/空间管理员核心文件相对 `4f73146` 无未提交修改，说明本任务实现已在工作提交中落地。
+- 后端相关回归：44 passed、3 skipped、1 个已知并发测试单独排除；其余后端套件 614 passed、3 skipped、1 deselected。mypy、ruff check、ruff format --check 均通过。
+- 前端 type-check、lint、260 tests、build 均通过。
+- 已知的 `test_ownership_transfer.py::test_concurrent_double_accept_single_winner` 具有无超时 barrier 的既有死锁风险，属于先前空间治理代码，不是本任务核心改动；保留为独立后续修复项。
+- 当前工作树中的 Agent Runtime assistant-only 收口和人物身份去重/Steward 回溯审计是后续 WIP，不并入本任务收口提交；其中 `0024_agent_runtime_assistant_only.py` 已将开发数据库迁移到 head，当前开发库为空且完整性检查通过。
+- `admin.py` 旧治理路由注册、guest 概念移除、农历 `mirror_date` 修复不属于本任务已锁定范围，继续作为独立后续事项。
+
