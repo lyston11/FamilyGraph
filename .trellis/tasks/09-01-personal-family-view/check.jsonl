@@ -1,0 +1,10 @@
+{"file":".trellis/spec/architecture.md","reason":"Check projection scope, global graph non-disclosure, visibility hierarchy, admin separation, and bridge authorization against the architecture contract."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check migration-only schema changes, FK on-delete actions, constraints, indexes, transactions, concurrency, and temporary DATA_DIR migration runs."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check safe 404/enumeration behavior, masking, unified error envelope, and fail-closed handling of stale or unauthorized projection data."}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"Check confirmed-only graph traversal, SourceFact/DerivedFact separation, deterministic path selection, and relationship privacy rules."}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"Check space-scoped Steward execution, event fan-out, idempotent checkpoints, and the no-rights/no-facts boundary."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check Pinia server authority, space-switch invalidation, no optimistic updates, and sensitive cache clearing."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check backend/frontend schema alignment, runtime guards, masked states, and fail-closed rendering."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check frontend quality gates, responsive checks, theme/component restrictions, and test expectations."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace snapshot data from source facts through projection service/API/store and verify shared contract ownership and round-trip behavior."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check reuse of existing graph, resolver, visibility, Steward queue, API client, and store patterns before adding new abstractions."}

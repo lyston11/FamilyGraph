@@ -24,6 +24,12 @@ from app.models.controlled_web import (
 from app.models.derived_fact import DerivedFact
 from app.models.memory import Memory, MemoryCandidate
 from app.models.node_position import NodePosition
+from app.models.personal_family_view import (
+    PersonalFamilyBridge,
+    PersonalFamilyView,
+    PersonalFamilyViewEdge,
+    PersonalFamilyViewNode,
+)
 from app.models.rag import RAGChunk, RAGDocument
 from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
@@ -80,6 +86,10 @@ __all__ = [
     "NodePosition",
     "OwnerInvitation",
     "OwnershipTransfer",
+    "PersonalFamilyBridge",
+    "PersonalFamilyView",
+    "PersonalFamilyViewEdge",
+    "PersonalFamilyViewNode",
     "PlatformRoleAssignment",
     "ProfileFactReview",
     "RAGChunk",

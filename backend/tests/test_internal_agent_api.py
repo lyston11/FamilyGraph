@@ -105,38 +105,46 @@ def test_lease_flow_happy_path(internal_client, db_session):
     assert second.status_code == 204
 
 
-def test_lease_without_kind_returns_any_queued(internal_client, db_session):
-    """兼容旧 sidecar：省略 kind 时默认只租 Assistant 队列。"""
-    _, _, _, run = _seed(db_session, name="noskind")
+def test_lease_without_kind_is_rejected(internal_client, db_session):
+    """省略 kind 不得再隐式选择 Assistant 队列。"""
+    _seed(db_session, name="noskind")
     response = internal_client.post(
         "/internal/agent/jobs/lease",
         json={"leased_by": "sc"},
         headers=_auth(issue_service_token()),
     )
-    assert response.status_code == 200
-    assert response.json()["run_id"] == run.id
+    assert response.status_code == 422
 
 
 def test_http_lease_cannot_consume_steward_queue(internal_client, db_session):
     """Steward leasing is reserved for the in-process canonical worker."""
-    user, space = create_agent_fixture(db_session, name="steward-http")
-    session = create_agent_session(
-        db_session, account_id=user.account.id, space_id=space.id, kind="steward"
+    from app.models.steward import StewardJob
+    from app.services import steward
+
+    _, space = create_agent_fixture(db_session, name="steward-http")
+    steward_job, created = steward.enqueue_steward_job(
+        db_session, space_id=space.id, cause="source_fact", trigger_cursor=1
     )
-    agent_queue.enqueue_run(
-        db_session,
-        agent_session=session,
-        kind="steward",
-        policy_version="p1",
-        tool_allowlist=[],
+    assert created is True
+    db_session.commit()
+
+    # The generic queue sees only agent_jobs, so the canonical StewardJob stays queued.
+    response = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"leased_by": "sc"},
+        headers=_auth(issue_service_token()),
     )
-    for payload in ({"kind": "steward", "leased_by": "sc"}, {"kind": None, "leased_by": "sc"}):
-        response = internal_client.post(
-            "/internal/agent/jobs/lease",
-            json=payload,
-            headers=_auth(issue_service_token()),
-        )
-        assert response.status_code in (403, 422)
+    assert response.status_code == 422
+    persisted = db_session.get(StewardJob, steward_job.id)
+    assert persisted is not None and persisted.status == "queued"
+
+    # The old kind is no longer a valid internal protocol value.
+    response = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"kind": "steward", "leased_by": "sc"},
+        headers=_auth(issue_service_token()),
+    )
+    assert response.status_code == 422
 
 
 def test_heartbeat_scope_mismatch_fail_closed(internal_client, db_session):
@@ -389,7 +397,7 @@ def test_tool_execute_records_tool_call_id_in_audit(internal_client, db_session)
     _, _, _, run = _seed(db_session, name="tcid")
     lease_response = internal_client.post(
         "/internal/agent/jobs/lease",
-        json={"leased_by": "sc"},
+        json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
     )
     token = lease_response.json()["run_token"]
@@ -431,7 +439,7 @@ def test_tool_call_dedup_and_actor_semantics(internal_client, db_session):
     user, space, agent_session, run = _seed(db_session, name="dedup")
     lease_response = internal_client.post(
         "/internal/agent/jobs/lease",
-        json={"leased_by": "sc"},
+        json={"kind": "assistant", "leased_by": "sc"},
         headers=_auth(issue_service_token()),
     )
     token = lease_response.json()["run_token"]

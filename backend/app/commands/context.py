@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -50,14 +51,38 @@ def load_actor(session: Session, ctx: ActorContext) -> User:
     return user
 
 
+def _begin_immediate(session: Session) -> None:
+    """驱动级 ``BEGIN IMMEDIATE``：写锁前置，消除「检查 → 插入」的竞态窗口。
+
+    SQLite 只有一个写者，写锁前置后两个并发命令自然串行，后者的检查看得见
+    前者已插入的行。这是唯一性靠命令层而非唯一索引保证时的必要条件
+    （同 services/agent_queue.py 的并发约束做法）。
+
+    已在事务中时是 no-op——外层已持锁，对应领域命令以 ``commit=False`` 组合
+    进更大事务的情况。非 SQLite 连接同样 no-op，由该后端自身隔离级别负责。
+    """
+    sa_conn = session.connection()
+    raw = getattr(sa_conn.connection, "dbapi_connection", None)
+    if not isinstance(raw, sqlite3.Connection) or raw.in_transaction:
+        return
+    sa_conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+
 @contextmanager
-def command_transaction(session: Session, *, commit: bool = True) -> Iterator[Session]:
+def command_transaction(
+    session: Session, *, commit: bool = True, immediate: bool = False
+) -> Iterator[Session]:
     """单条命令 = 一个短事务：成功提交，任何异常整体回滚后原样抛出。
 
     ``commit=False`` 供一个领域命令组合进更大的应用命令事务；外层仍须
     使用本上下文管理器完成最终 commit。路由不再自行 commit；错误路径不留
     脏会话（database-guidelines 写事务红线）。
+
+    ``immediate=True`` 在事务起点取写锁，供"读取判定后再写入"的命令使用
+    （如建档去重门禁）：没有它，两个并发请求会各自通过检查然后都插入。
     """
+    if immediate:
+        _begin_immediate(session)
     try:
         yield session
         if commit:

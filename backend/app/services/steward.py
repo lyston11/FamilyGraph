@@ -58,7 +58,7 @@ from app.models.steward import (
 )
 from app.models.user import User
 from app.models.v2_foundation import DomainEvent
-from app.services import action_cards, recommendation_matrix, steward_events
+from app.services import action_cards, person_identity, recommendation_matrix, steward_events
 from app.services.action_cards import ACTION_SUPERSEDE
 from app.services.derived_facts import get_or_compute
 from app.services.disclosure import disclosed_categories
@@ -815,14 +815,46 @@ def _finding(kind: str, detail: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _detect_duplicate_persons(db: Session, visible: set[int]) -> list[dict[str, Any]]:
+    """conflict/duplicate_person_*：同一空间内同一个人的两份档案（architecture.md §0.9）。
+
+    写入门禁（commands/members.py）只能看见"当下"，而身份重复是涌现属性：档案 A
+    建立时没填生日 → 与 B 只构成不可判定的 weak；本人认领后补上生日 → 此刻才与 B
+    构成 strong。那一刻没有任何建档请求在跑，只有本审计能发现。
+
+    只报告，不改图（Steward 红线）：每份 User 都带着自己的 Account 与凭据，合并
+    需要显式的领域命令与人工确认，不能由后台作业静默决定谁被吞掉。
+    """
+    if not visible:
+        return []
+    users = list(db.scalars(select(User).where(User.id.in_(visible), User.deleted_at.is_(None))))
+    findings: list[dict[str, Any]] = []
+    for pair in person_identity.find_duplicate_pairs(users):
+        findings.append(
+            _finding(
+                "conflict",
+                {
+                    "code": (
+                        "duplicate_person_strong"
+                        if pair.strength == person_identity.STRENGTH_STRONG
+                        else "duplicate_person_weak"
+                    ),
+                    "pair": list(pair.user_ids),
+                },
+            )
+        )
+    return findings
+
+
 def _detect_findings(db: Session, space: FamilySpace, visible: set[int]) -> list[dict[str, Any]]:
     """确定性检测：
     - conflict/parent_type_clash：同一 (subject,object) 存在多种 confirmed parent 类事实；
     - conflict/parent_cycle：互为 confirmed parent（A→B 且 B→A）；
+    - conflict/duplicate_person_*：同一人两份档案（strong=同名同生日，weak=同名生日缺失）；
     - gap/sibling_missing_parents：direct_sibling 无任何共同 confirmed 父母（不虚构）。
     """
     facts = _applicable_confirmed_facts(db, space, visible)
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = _detect_duplicate_persons(db, visible)
 
     by_direction: dict[tuple[int, int], set[str]] = {}
     for fact in facts:

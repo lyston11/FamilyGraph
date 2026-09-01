@@ -3,8 +3,9 @@
 - agent_sessions：固定 account_id + space_id + agent_kind；scope 创建后不可变
   （迁移内以 BEFORE UPDATE trigger 强制，服务层无任何更新路径）。
 - agent_messages：会话消息投影；idempotency_key 非空时 (session_id, key) 部分唯一。
-- agent_runs：唯一执行记录（assistant Run 与 steward 执行共用同一 FSM 列）；
-  partial unique index 保证每 session 至多一个 active run。
+- agent_runs：唯一执行记录（本 runtime 只承载 assistant；Steward 是独立的确定性
+  子系统，见 models/steward.py 的 StewardJob）；partial unique index 保证每
+  session 至多一个 active run。
 - agent_run_events：每 Run 单调 seq，先持久化再广播（RT-4）；UNIQUE(run_id, seq)。
 - agent_jobs：durable queue 条目，与 run 1:1（jobs.run_id UNIQUE CASCADE；
   runs.job_id SET NULL 反向引用，删除方向：先删 job 再删 run 或直接删 run 级联 job）。
@@ -16,7 +17,7 @@ lease 过期由 reaper 回队（attempt+1，超 max_attempts → expired）。�
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import sqlalchemy as sa
 from sqlalchemy import (
@@ -33,14 +34,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-AGENT_KINDS = ("assistant", "steward")
+# 本 runtime 只承载 LLM 驱动的 assistant。Steward 是确定性引擎，走 StewardJob
+# 自己的表与 lease（services/steward.py），从不进入这里的 run/job 队列。
+RuntimeAgentKind = Literal["assistant"]
+RUNTIME_AGENT_KINDS: tuple[RuntimeAgentKind, ...] = ("assistant",)
 RUN_ACTIVE_STATUSES = ("queued", "leased", "running")
 RUN_TERMINAL_STATUSES = ("succeeded", "failed", "cancelled", "expired")
 RUN_STATUS_CHECK_SQL = (
     "status IN ('queued','leased','running','succeeded','failed','cancelled','expired')"
 )
 
-_AGENT_KIND_CHECK_SQL = "agent_kind IN ('assistant','steward')"
+_AGENT_KIND_CHECK_SQL = "agent_kind = 'assistant'"
 
 
 class AgentSession(Base):
@@ -56,7 +60,7 @@ class AgentSession(Base):
     space_id: Mapped[int] = mapped_column(
         ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
     )
-    agent_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    agent_kind: Mapped[RuntimeAgentKind] = mapped_column(String(16), nullable=False)
     # Explicit user confirmation is required before the Assistant can record
     # a term-usage signal; prompt text alone is never trusted as consent.
     term_usage_consent: Mapped[bool] = mapped_column(
@@ -101,11 +105,11 @@ class AgentMessage(Base):
 
 
 class AgentRun(Base):
-    """唯一执行记录；interactive 与 steward 共用 FSM 列（notes.md 裁定）。"""
+    """唯一执行记录（assistant only；Steward 不使用本表，见 models/steward.py）。"""
 
     __tablename__ = "agent_runs"
     __table_args__ = (
-        CheckConstraint("kind IN ('assistant','steward')", name="ck_agent_runs_kind"),
+        CheckConstraint("kind = 'assistant'", name="ck_agent_runs_kind"),
         CheckConstraint(RUN_STATUS_CHECK_SQL, name="ck_agent_runs_status"),
         Index(
             "uq_agent_runs_session_active",
@@ -126,7 +130,7 @@ class AgentRun(Base):
     job_id: Mapped[int | None] = mapped_column(
         ForeignKey("agent_jobs.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[RuntimeAgentKind] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     max_attempts: Mapped[int] = mapped_column(
@@ -185,14 +189,8 @@ class AgentJob(Base):
 
     __tablename__ = "agent_jobs"
     __table_args__ = (
-        CheckConstraint("kind IN ('assistant','steward')", name="ck_agent_jobs_kind"),
+        CheckConstraint("kind = 'assistant'", name="ck_agent_jobs_kind"),
         CheckConstraint(RUN_STATUS_CHECK_SQL, name="ck_agent_jobs_status"),
-        Index(
-            "uq_agent_jobs_space_active",
-            "space_id",
-            unique=True,
-            sqlite_where=sa.text("kind = 'steward' AND status IN ('queued','leased','running')"),
-        ),
         Index("ix_agent_jobs_lease_scan", "kind", "status"),
     )
 
@@ -206,7 +204,7 @@ class AgentJob(Base):
     account_id: Mapped[int | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[RuntimeAgentKind] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     max_attempts: Mapped[int] = mapped_column(

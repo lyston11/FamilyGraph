@@ -34,7 +34,7 @@ import { SidecarWorker } from "../src/worker.js";
 interface MockJob {
   job_id: number;
   run_id: number;
-  agent_kind: "assistant" | "steward";
+  agent_kind: "assistant" | "unexpected";
   /** Attempt counter, incremented by the mock at each lease like the backend. */
   attempt: number;
   tool_allowlist: string[];
@@ -300,7 +300,7 @@ function resetState(): void {
 function enqueueJob(options: {
   allowlist: string[];
   provider?: Record<string, unknown>;
-  agentKind?: "assistant" | "steward";
+  agentKind?: "assistant" | "unexpected";
 }): string {
   idCounter += 1;
   const jobId = 4000 + idCounter;
@@ -641,11 +641,11 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(JSON.stringify(events)).not.toContain("openai-completions");
   }, 30000);
 
-  it("rejects a Steward lease response at the Assistant sidecar boundary", async () => {
+  it("rejects a malformed non-assistant lease response at the sidecar boundary", async () => {
     resetState();
     enqueueJob({
       allowlist: ["familygraph.echo"],
-      agentKind: "steward",
+      agentKind: "unexpected",
     });
     const client = new InternalClient(makeConfig(port));
     await expect(client.leaseJob()).rejects.toThrow("non-assistant");

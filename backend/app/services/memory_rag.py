@@ -38,6 +38,7 @@ from app.models.user import User
 from app.services import platform_roles, visibility
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
+from app.services.policy_consumer import is_policy_consumer_kind
 from app.utils.timeutil import utcnow
 
 RAG_INDEX_VERSION = "fts5-trigram-v1"
@@ -629,7 +630,12 @@ def search_rag(
     raise_on_restricted: bool = False,
 ) -> list[RAGHit]:
     """Search with SQL scope/confirmation/status predicates before FTS results escape."""
-    _require_rag_enabled()
+    if not is_policy_consumer_kind(agent_kind):
+        raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "policy consumer 不受支持")
+    # Steward is a shared-data policy consumer only.  The SQL predicates below
+    # intentionally use is_assistant for private/public branches, so it can
+    # never read private memory or unrestricted public material.
+    is_assistant = int(agent_kind == "assistant")
     clean_query = query.strip()
     if not clean_query:
         return []
@@ -694,7 +700,7 @@ def search_rag(
             "account_id": account.id,
             "user_id": actor.id,
             "space_id": space_id,
-            "is_assistant": int(agent_kind == "assistant"),
+            "is_assistant": is_assistant,
             "limit": limit,
         },
     ).mappings()

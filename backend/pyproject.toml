@@ -21,6 +21,8 @@ dependencies = [
     "httpx==0.28.1",
     # V2 数据权利导出：成熟 AEAD envelope（AES-GCM），替代自制 XOR+HMAC
     "cryptography==44.0.2",
+    # 人物身份去重：姓名匹配键需繁简归一（纯 Python 映射表，无编译依赖）
+    "zhconv==1.4.3",
 ]
 
 [project.optional-dependencies]
@@ -57,3 +59,8 @@ extend-immutable-calls = ["fastapi.Depends"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+# zhconv 是纯映射表实现，不带 py.typed；只放宽这一个模块的存根检查。
+[[tool.mypy.overrides]]
+module = "zhconv.*"
+ignore_missing_imports = true

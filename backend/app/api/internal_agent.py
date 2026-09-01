@@ -273,21 +273,20 @@ def lease_job(
     _decode_or_deny(db, request, typ=agent_tokens.SERVICE_TOKEN_TYPE)
     # The HTTP lease endpoint is exclusively for the Assistant sidecar.  The
     # canonical Steward worker runs in the API maintenance loop and leases
-    # directly through the deterministic service; accepting ``steward`` or an
-    # omitted kind here would let any holder of the shared service secret
-    # consume the Steward queue.
+    # directly through the deterministic service; accepting another kind or an
+    # omitted kind here would let a service-token caller consume another queue.
     if body.kind != "assistant":
         _deny(
             db,
             request,
-            reason="steward_lease_requires_canonical_worker",
+            reason="non_assistant_lease_rejected",
             status_code=403,
             code=AGENT_INTERNAL_FORBIDDEN,
             message="Steward 作业仅可由系统维护 worker 执行",
         )
     grant = agent_queue.lease_next(
         db,
-        kind=body.kind or "assistant",
+        kind=body.kind,
         leased_by=body.leased_by,
         ttl_seconds=body.lease_ttl_seconds,
     )

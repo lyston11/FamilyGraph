@@ -2,7 +2,7 @@
  * V2.2 shared-contract completeness tests for the domain tool registry.
  *
  * The backend (Block C1) registers the same six read-only assistant query
- * tools plus steward_ping; these declarations must match the contract exactly
+ * tools; these declarations must match the contract exactly
  * — same names, version 1, identical input field composition, no extra fields.
  */
 
@@ -33,7 +33,6 @@ const SHARED_CONTRACT: Record<string, { properties: string[]; required: string[]
     properties: ["from_user_id", "to_user_id"],
     required: ["to_user_id"],
   },
-  "familygraph.steward_ping": { properties: [], required: [] },
 };
 
 const V2_2_TOOL_NAMES = Object.keys(SHARED_CONTRACT);
@@ -72,7 +71,7 @@ function schemaOf(toolName: string): {
 }
 
 describe("V2.2 domain tool declarations", () => {
-  it("registers the six assistant query tools and steward_ping at version 1", () => {
+  it("registers the six assistant query tools at version 1", () => {
     for (const name of V2_2_TOOL_NAMES) {
       expect(TOOL_VERSIONS[name as keyof typeof TOOL_VERSIONS]).toBe(1);
     }

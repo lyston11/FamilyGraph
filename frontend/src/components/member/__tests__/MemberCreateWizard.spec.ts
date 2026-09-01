@@ -225,6 +225,80 @@ describe('MemberCreateWizard', () => {
     wrapper.unmount()
   })
 
+  // ---- 重复建档消歧（architecture.md §0.9）----
+
+  async function submitOnce(): Promise<void> {
+    await fillInfoStep('李秀英')
+    click('[data-test="wizard-next"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-mode"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-to-confirm"]')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-step-confirm"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-submit"]')
+  }
+
+  it('强匹配：提示已有档案且不提供「仍然创建」出口（同名同生日一律拒绝）', async () => {
+    const { ApiError } = await import('@/api/errors')
+    mockedCreate.mockRejectedValue(
+      new ApiError(409, 'PERSON_DUPLICATE_IN_SPACE', '该空间已存在同一个人的档案', {
+        existing: [{ user_id: 7, name: '李秀英' }],
+        resolution: 'reference_existing',
+      }),
+    )
+    const wrapper = await mountWizard()
+    await submitOnce()
+
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-duplicate"]')).not.toBeNull(),
+    )
+    expect(document.querySelector('[data-test="wizard-duplicate"]')?.textContent).toContain(
+      '李秀英',
+    )
+    // 强匹配没有消歧出口——放行它就等于给同一个人多发一份登录凭据
+    expect(document.querySelector('[data-test="wizard-confirm-distinct"]')).toBeNull()
+    expect(wrapper.findComponent(MemberCreateWizard).emitted('created')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('弱匹配：确认「是另一个人」后带标记重放，且复用同一 Idempotency-Key', async () => {
+    const { ApiError } = await import('@/api/errors')
+    mockedCreate.mockRejectedValueOnce(
+      new ApiError(409, 'PERSON_DUPLICATE_AMBIGUOUS', '该空间已有同名档案且生日缺失', {
+        candidates: [{ user_id: 9, name: '李秀英', birth_known: false }],
+        resolution: 'reference_existing_or_confirm_distinct',
+      }),
+    )
+    mockedCreate.mockResolvedValueOnce({
+      user: makeMember({ name: '李秀英' }),
+      pin: '112233',
+      replayed: false,
+    })
+    const wrapper = await mountWizard()
+    await submitOnce()
+
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="wizard-confirm-distinct"]')).not.toBeNull(),
+    )
+    click('[data-test="wizard-confirm-distinct"]')
+
+    await vi.waitFor(() =>
+      expect(wrapper.findComponent(MemberCreateWizard).emitted('created')).toEqual([
+        [{ name: '李秀英', pin: '112233' }],
+      ]),
+    )
+    expect(mockedCreate).toHaveBeenCalledTimes(2)
+    const [firstPayload, firstKey] = mockedCreate.mock.calls[0]
+    const [secondPayload, secondKey] = mockedCreate.mock.calls[1]
+    expect(firstPayload.allow_duplicate_person).toBeUndefined()
+    expect(secondPayload.allow_duplicate_person).toBe(true)
+    // 同键重放是刻意设计：该标记不进后端 request_hash，否则会撞 payload conflict
+    expect(secondKey).toBe(firstKey)
+    wrapper.unmount()
+  })
+
   it('空间选择（F-3）：未选具体空间时拦截；可在向导中直接新建族谱空间', async () => {
     vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([
       {

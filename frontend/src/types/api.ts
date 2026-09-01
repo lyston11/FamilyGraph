@@ -166,6 +166,12 @@ export interface MemberCreatePayload {
   relation_dir_class: DirClass
   relation_label?: string | null
   relation_text?: string | null
+  /**
+   * 重复建档消歧（architecture.md §0.9）：仅在收到 PERSON_DUPLICATE_AMBIGUOUS
+   * 后由用户明确「这是另一个人」时携带。强匹配 PERSON_DUPLICATE_IN_SPACE 不受其
+   * 影响，始终拒绝。可复用同一 Idempotency-Key 重放（该标记不进 request_hash）。
+   */
+  allow_duplicate_person?: boolean
 }
 
 export interface MemberUpdatePayload {

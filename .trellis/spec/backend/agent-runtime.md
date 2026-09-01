@@ -30,7 +30,7 @@
 
 ## 4. 执行模型不变式
 
-- run+job 同事务入队；每 session 一个 active run、每账户 ≤2 assistant 并发、steward 每 space 一个 active job（partial unique index + 服务层预检）。
+- run+job 同事务入队；本 runtime 只承载 assistant：每 session 一个 active run、每账户 ≤2 assistant 并发。Steward 是独立的确定性引擎，使用 `StewardJob`/maintenance 的每空间 active job 约束，不进入 agent runtime。
 - 终态不可复活；lease 过期 reaper 收敛（回队重试→attempt 耗尽 expired；cancel_requested 直接 cancelled）。
 - 事件先持久化再广播；(run_id, seq) 单调幂等；未知 type 拒绝不落公开流。新事件类型必须先在 `agent_events.EVENT_TYPES` 注册，sidecar 映射同步。
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
@@ -81,7 +81,7 @@ ContextOut 是后端到 Pi session 的跨层安全边界，sidecar 不得用默�
 `invalid_context_projection`：
 
 - `run_id/session_id/account_id/space_id` 不是正整数；`agent_kind` 不是
-  `assistant|steward`；`status` 不在后端 Run 状态枚举中；
+  `assistant`；`status` 不在后端 Run 状态枚举中；
 - `attempt`、`next_event_seq` 不是非负整数，`policy_version` 为空或非字符串，
   `cancel_requested` 不是布尔值；
 - `messages` 不是数组，或任一消息缺少整数 `id`、字符串 `role/created_at`、对象

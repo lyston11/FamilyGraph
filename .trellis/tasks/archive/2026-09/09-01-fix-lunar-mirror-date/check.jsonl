@@ -1,0 +1,7 @@
+{"file":".trellis/spec/architecture.md","reason":"核对 §5 日期契约与 §0.9 身份口径已同步，「已知缺陷」段两条限制确实删除且未留下矛盾表述。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查未迁移前提下读取侧对缺键与旧格式 mirror_date 的容忍，历史行不产生错误判定。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查 ruff/mypy strict/pytest 全绿，签名变更的调用点无遗漏。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"检查前后端 StructuredDate 字段一一对应，无 any 逃逸与手工格式解析残留。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"检查前端四门禁通过，abs() 闰月折叠已删除。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"追踪同一天的农历与公历录入在存储、统计、身份判定三处口径一致。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"确认 canonical_birth 不再自带换算，判定口径回归单一真源。"}

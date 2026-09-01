@@ -1,7 +1,7 @@
 """AgentQueryService：V2.2 只读 Assistant 领域工具（任务 Block C1）。
 
 把 Foundation 的 VisibilityPolicy 与现有 graph/profile/search 组合成稳定、
-分页、有上限的只读工具；全部注册进 agent_tools 注册表（min_kind=assistant，
+分页、有上限的只读工具；全部注册进 agent_tools 注册表（required_kind=assistant，
 版本 @1）。合同要点：
 
 - scope 一律取 Run 注入的 session（account_id + space_id），输入 schema 拒绝

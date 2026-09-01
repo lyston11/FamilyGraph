@@ -96,6 +96,10 @@ class MemberCreateRequest(BaseModel):
     relation_dir_class: DirClass
     relation_label: str | None = Field(default=None, max_length=64)
     relation_text: str | None = Field(default=None, max_length=200)
+    # 重复建档消歧：仅在收到 PERSON_DUPLICATE_AMBIGUOUS（同名且生日缺失，不可判定）
+    # 后由用户明确「这是另一个人」时重放请求携带。强匹配（同名同生日）不受此开关
+    # 影响，始终拒绝——应改为引用既有档案。
+    allow_duplicate_person: bool = False
 
 
 class MemberUpdateRequest(BaseModel):

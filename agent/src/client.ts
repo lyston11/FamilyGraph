@@ -41,7 +41,7 @@ import { signServiceToken } from "./tokens.js";
 export interface LeasedJob {
   job_id: string;
   run_id: string;
-  agent_kind: "assistant" | "steward";
+  agent_kind: "assistant";
   attempt: number;
   tool_allowlist: string[];
   policy_version: string;
@@ -103,7 +103,7 @@ export interface RunContextBlock {
 export interface RunContextProjection {
   run_id: string;
   session_id: string;
-  agent_kind: "assistant" | "steward";
+  agent_kind: "assistant";
   account_id: string;
   space_id: string;
   status: string;
@@ -173,7 +173,7 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
     const value = raw[field];
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) invalid(field);
   }
-  if (raw["agent_kind"] !== "assistant" && raw["agent_kind"] !== "steward") {
+  if (raw["agent_kind"] !== "assistant") {
     invalid("agent_kind");
   }
   if (
@@ -199,7 +199,7 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
   if (typeof raw["cancel_requested"] !== "boolean") invalid("cancel_requested");
   const runId = raw["run_id"] as number;
   const sessionId = raw["session_id"] as number;
-  const agentKind = raw["agent_kind"] as "assistant" | "steward";
+  const agentKind = raw["agent_kind"] as "assistant";
   const accountId = raw["account_id"] as number;
   const spaceId = raw["space_id"] as number;
   const status = raw["status"] as string;
@@ -404,7 +404,7 @@ export class InternalClient {
     return {
       job_id: String(raw["job_id"]),
       run_id: String(raw["run_id"]),
-      agent_kind: raw["agent_kind"] === "steward" ? "steward" : "assistant",
+      agent_kind: "assistant",
       attempt: Number(raw["attempt"] ?? 0),
       tool_allowlist: Array.isArray(raw["tool_allowlist"])
         ? (raw["tool_allowlist"] as unknown[]).map(String)

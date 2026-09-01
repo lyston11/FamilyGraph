@@ -3,7 +3,7 @@
  *
  * The model sees only these tool declarations; every execution is proxied
  * through the FastAPI internal execute endpoint, which re-checks identity,
- * VisibilityPolicy, allowlist/min_kind and idempotency. The actual availability
+ * VisibilityPolicy, allowlist/required_kind and idempotency. The actual availability
  * per run is governed exclusively by the server-issued tool_allowlist.
  *
  * Registry contents:
@@ -13,9 +13,6 @@
  *    get_profile_summary, search_space, get_relationship_path,
  *    explain_structural_path — outputs are visibility-projected, so the model
  *    never sees masked raw values;
- *  - steward_ping: declared so steward runs can build a session (fixes the
- *    V2.1 latent mismatch); its execution still goes through the execute
- *    endpoint, where min_kind rejects it in assistant runs;
  *  - V2.3 relationship-intelligence kinship tools (shared contract with the
  *    backend registry): resolve_free_text_relation and get_term_alternatives
  *    are read-only; record_term_usage appends a single term-usage event and is
@@ -34,7 +31,6 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 export const TOOL_VERSIONS = {
   "familygraph.echo": 1,
   "familygraph.probe_scope": 1,
-  "familygraph.steward_ping": 1,
   "familygraph.get_self_context": 1,
   "familygraph.list_visible_people": 1,
   "familygraph.get_profile_summary": 1,
@@ -105,8 +101,6 @@ const EchoSchema = Type.Object({
 });
 
 const ProbeScopeSchema = Type.Object({});
-
-const StewardPingSchema = Type.Object({});
 
 const GetSelfContextSchema = Type.Object({});
 
@@ -285,16 +279,6 @@ export function createDomainTools(
     },
   };
 
-  const stewardPing: ToolDefinition<typeof StewardPingSchema> = {
-    name: "familygraph.steward_ping",
-    label: "Steward ping",
-    description:
-      "steward 运行专用的链路探针：验证 sidecar 到 FastAPI 的工具执行通路（assistant 运行中服务端会按 min_kind 拒绝调用）。只读诊断工具，无任何副作用。",
-    parameters: StewardPingSchema,
-    execute: async (toolCallId) =>
-      queryViaExecutor(executor, "familygraph.steward_ping", toolCallId, {}),
-  };
-
   const getSelfContext: ToolDefinition<typeof GetSelfContextSchema> = {
     name: "familygraph.get_self_context",
     label: "Get self context",
@@ -443,7 +427,6 @@ export function createDomainTools(
   const tools = [
     echo,
     probeScope,
-    stewardPing,
     getSelfContext,
     listVisiblePeople,
     getProfileSummary,

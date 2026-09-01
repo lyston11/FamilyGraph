@@ -3,8 +3,8 @@
 与 internal 协议（api/internal_agent.py）的信任边界：
 - 本路由只服务浏览器用户：JWT 认证、本人会话/Run 可见性（非本人一律 404 防枚举）、
   空间 active 成员校验；不暴露任何内部 token 或密钥材料；
-- steward 会话不接受浏览器创建：agent_kind 固定 assistant 且无任何 scope 更新端点
-  （DB 层另有 BEFORE UPDATE trigger 强制不可变）；
+- 浏览器创建的会话固定为 assistant，且无任何 scope 更新端点（DB 层另有
+  BEFORE UPDATE trigger 强制不可变）；
 - feature flag 关闭时全部端点 503 AGENT_RUNTIME_DISABLED（RT-6 默认整体关闭）。
 
 SSE 合同（design.md / RT-4）：
@@ -42,7 +42,6 @@ from app.errors import (
     AGENT_RUN_SESSION_BUSY,
     AGENT_RUNTIME_DISABLED,
     AGENT_SESSION_NOT_FOUND,
-    AGENT_STEWARD_SPACE_BUSY,
     IDEMPOTENCY_KEY_REQUIRED,
     IDEMPOTENCY_PAYLOAD_CONFLICT,
     PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
@@ -81,7 +80,6 @@ from app.utils import timeutil
 _IDEMPOTENCY_CONCURRENCY_CODES = (
     AGENT_RUN_SESSION_BUSY,
     AGENT_RUN_ACCOUNT_LIMIT,
-    AGENT_STEWARD_SPACE_BUSY,
 )
 
 
@@ -307,7 +305,7 @@ def create_agent_message(
         api_error = extract_api_error(exc.detail) or {}
         code = str(api_error.get("code") or "")
         if code in _IDEMPOTENCY_CONCURRENCY_CODES:
-            # 浏览器面聚合错误码；reason 保留内部细分（session/account/steward 限额）
+            # 浏览器面聚合错误码；reason 保留内部细分（session/account 限额）
             raise_api_error(409, AGENT_RUN_LIMIT, "并发 Run 超限", {"reason": code})
         raise
     if replayed:

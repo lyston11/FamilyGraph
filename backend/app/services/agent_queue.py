@@ -1,9 +1,11 @@
 """Durable queue 与 Run/Job FSM（notes.md「统一执行模型裁定」）。
 
+本队列只承载 assistant run；Steward 是独立的确定性引擎，有自己的 StewardJob 表
+和 lease（services/steward.py），不经过这里。
+
 全部并发约束在 SQLite 立即事务（BEGIN IMMEDIATE）内执行：
 - 每 session 至多一个 active run（partial unique index + 事务内预检）
-- 每账户至多 N 个并发 assistant run（事务内预检；steward 不占该额度）
-- steward 每空间至多一个 active job（partial unique index 兜底）
+- 每账户至多 N 个并发 assistant run（事务内预检）
 
 事件落库复用 services/agent_events.py（单向依赖：queue → events）。
 调用方须传入干净的 Session（无未提交变更）；本模块自行管理提交边界。
@@ -26,18 +28,19 @@ from app import config
 from app.errors import (
     AGENT_EVENT_INVALID,
     AGENT_JOB_NOT_ACTIVE,
+    AGENT_KIND_UNSUPPORTED,
     AGENT_LEASE_EXPIRED,
     AGENT_RUN_ACCOUNT_LIMIT,
     AGENT_RUN_NOT_RUNNING,
     AGENT_RUN_SESSION_BUSY,
     AGENT_RUN_TERMINAL,
-    AGENT_STEWARD_SPACE_BUSY,
     IDEMPOTENCY_PAYLOAD_CONFLICT,
     raise_api_error,
 )
 from app.models.agent import (
     RUN_ACTIVE_STATUSES,
     RUN_TERMINAL_STATUSES,
+    RUNTIME_AGENT_KINDS,
     AgentJob,
     AgentMessage,
     AgentRun,
@@ -88,6 +91,7 @@ def enqueue_run(
     interactive Run 携带触发消息时原子写入 message.user_added 事件，
     保证 SSE 重放从用户消息开始不缺序。
     """
+    _validate_kind(kind, session_kind=agent_session.agent_kind)
     attempts = max_attempts if max_attempts is not None else config.AGENT_MAX_ATTEMPTS
     with _immediate_tx(db):
         run = _create_run_and_job(
@@ -115,6 +119,7 @@ def _create_run_and_job(
     now: datetime | None = None,
 ) -> AgentRun:
     """在已持有的立即事务内并发预检并原子写入 run+job(+首个事件)。"""
+    _validate_kind(kind, session_kind=agent_session.agent_kind)
     _check_concurrency(db, agent_session=agent_session, kind=kind)
     moment = now or timeutil.utcnow()
     run = AgentRun(
@@ -232,6 +237,7 @@ def submit_user_message(
 
 def _check_concurrency(db: Session, *, agent_session: AgentSession, kind: str) -> None:
     """RT-2 并发约束预检（立即事务内，无竞态窗口）。"""
+    _validate_kind(kind, session_kind=agent_session.agent_kind)
     active = tuple(RUN_ACTIVE_STATUSES)
     same_session = db.scalar(
         select(sa.func.count(AgentRun.id)).where(
@@ -240,52 +246,52 @@ def _check_concurrency(db: Session, *, agent_session: AgentSession, kind: str) -
     )
     if same_session:
         raise_api_error(409, AGENT_RUN_SESSION_BUSY, "该会话已有执行中的 Run")
-    if kind == "assistant":
-        used = db.scalar(
-            select(sa.func.count(AgentRun.id))
-            .join(AgentSession, AgentSession.id == AgentRun.session_id)
-            .where(
-                AgentSession.account_id == agent_session.account_id,
-                AgentRun.kind == "assistant",
-                AgentRun.status.in_(active),
-            )
+    used = db.scalar(
+        select(sa.func.count(AgentRun.id))
+        .join(AgentSession, AgentSession.id == AgentRun.session_id)
+        .where(
+            AgentSession.account_id == agent_session.account_id,
+            AgentRun.kind == "assistant",
+            AgentRun.status.in_(active),
         )
-        if used is not None and used >= config.AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT:
-            raise_api_error(409, AGENT_RUN_ACCOUNT_LIMIT, "并发 Assistant Run 已达账户上限")
-    elif kind == "steward":
-        steward_active = db.scalar(
-            select(sa.func.count(AgentJob.id)).where(
-                AgentJob.space_id == agent_session.space_id,
-                AgentJob.kind == "steward",
-                AgentJob.status.in_(active),
-            )
+    )
+    if used is not None and used >= config.AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT:
+        raise_api_error(409, AGENT_RUN_ACCOUNT_LIMIT, "并发 Assistant Run 已达账户上限")
+
+
+def _validate_kind(
+    kind: str | None, *, session_kind: str | None = None, allow_none: bool = False
+) -> None:
+    """Reject unsupported runtime kinds before any queue read or write."""
+    if (
+        (kind is None and not allow_none)
+        or (kind is not None and kind not in RUNTIME_AGENT_KINDS)
+        or (
+            session_kind is not None
+            and (session_kind not in RUNTIME_AGENT_KINDS or kind is None or session_kind != kind)
         )
-        if steward_active:
-            raise_api_error(409, AGENT_STEWARD_SPACE_BUSY, "该空间已有活跃的 Steward Job")
+    ):
+        raise_api_error(
+            422,
+            AGENT_KIND_UNSUPPORTED,
+            "Agent Runtime 只支持 Assistant",
+            detail={"kind": kind, "session_kind": session_kind},
+        )
 
 
 def lease_next(
     db: Session,
     *,
-    kind: str | None,
+    kind: str,
     leased_by: str,
     ttl_seconds: int | None = None,
 ) -> LeaseGrant | None:
-    """租赁最早 queued job；attempt 在每次 lease 时 +1。
-
-    kind=None 表示任意队列：按 created_at FIFO 跨队列取任意 queued
-    （同一时刻并列时 assistant 先于 steward，仅作确定性排序）。
-    """
+    """租赁最早 queued assistant job；attempt 在每次 lease 时 +1。"""
+    _validate_kind(kind)
     ttl = ttl_seconds if ttl_seconds is not None else config.AGENT_LEASE_TTL_SECONDS
     with _immediate_tx(db):
-        stmt = select(AgentJob).where(AgentJob.status == "queued")
-        if kind is not None:
-            stmt = stmt.where(AgentJob.kind == kind)
-        job = db.scalar(
-            stmt.order_by(AgentJob.created_at.asc(), AgentJob.kind.asc(), AgentJob.id.asc()).limit(
-                1
-            )
-        )
+        stmt = select(AgentJob).where(AgentJob.status == "queued", AgentJob.kind == kind)
+        job = db.scalar(stmt.order_by(AgentJob.created_at.asc(), AgentJob.id.asc()).limit(1))
         if job is None:
             return None
         now = timeutil.utcnow()

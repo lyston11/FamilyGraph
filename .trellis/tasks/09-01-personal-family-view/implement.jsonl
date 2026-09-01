@@ -1,0 +1,12 @@
+{"file":".trellis/spec/architecture.md","reason":"PersonalFamilyView is a per-viewer/per-root/per-space authorized projection; visibility levels, global graph boundaries, bridge constraints, and Steward separation govern the design."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Defines backend api → services → models layering and the expected locations for the new projection, bridge, schema, migration, and tests."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Defines SQLite WAL, explicit foreign-key actions, CHECK/unique constraints, Alembic-only schema changes, transaction boundaries, and temporary DATA_DIR migration validation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines unified API error envelopes, fail-closed enumeration behavior, masking semantics, and the Memory/RAG/policy boundaries reused by the projection."}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"Defines SourceFact as truth, confirmed graph inputs, deterministic relationship paths, DerivedFact behavior, term precedence, and privacy red lines."}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"Defines space-scoped Steward jobs, DomainEvent scheduling, checkpoint/idempotency expectations, and prohibition on Steward creating rights or facts."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Defines frontend api/store/types/view boundaries and prohibits requests from canvas components."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Defines Pinia server-authoritative state, space-keyed invalidation, no optimistic updates, and logout/401 sensitive cache clearing."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Defines shared API types, runtime response guards, masked unions, and fail-closed UI behavior."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Defines frontend lint/type/test/build gates, responsive acceptance, and UI library/theme safety constraints."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"PersonalFamilyView crosses database, service, API, frontend store, and UI boundaries; this guide defines payload ownership and round-trip checks."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires reuse of relationship resolver, visibility primitives, Steward job infrastructure, and shared API decoders instead of duplicate contracts."}

@@ -131,7 +131,51 @@ if is_space_manager(session, space_id, actor.id):
     allow_space_management()
 ```
 
+## 0.9 同一空间人物身份唯一（2026-09-01）
 
+同一空间内不得存在同一个人的两份档案。每个 `User` 携带一个 `Account` 与一次性 PIN，
+所以重复建档等于多出一份**可登录凭据**——这是身份问题，不只是数据质量问题。
+
+**判定口径的唯一真源是 `services/person_identity.py`**：写入门禁与 Steward 回溯审计
+共用它，阈值不得在两处各写一套。
+
+- 匹配键 = 归一化姓名 + 规范公历生日。姓名归一：NFKC → 去空白与分隔符 → **繁转简**
+  （产品裁定：只留简体）→ casefold。生日归一到公历 ISO；农历自行换算，不读
+  `mirror_date`（见下"已知缺陷"）。
+- 强度三档：`strong`（同名同生日）拒绝建档，`detail` 给出既有档案 id，调用方改为
+  引用它（加 `space_profile_refs`）；`weak`（同名但任一侧生日缺失，不可判定）打断创建，
+  要求创建者显式确认"这是另一个人"；`none`（不同名，或双方生日都有且不同）放行——
+  双方生日都在且不同是同名的不同人，大家族跨辈同名常见，不得反复追问。
+- 消歧开关 `allow_duplicate_person` **只放宽 weak**。strong 不受其影响。
+- 作用域是"该空间"，同时含 `space_profile_refs`（provisional 引用）与 `space_members`
+  （已认领成员）；两个不相干家庭各有一个"李秀英 1948-03-12"必须都允许。
+
+### 为什么靠 BEGIN IMMEDIATE 而不是唯一索引
+
+身份键派生自 `users`，而空间作用域在 `space_profile_refs`/`space_members` 上（一个 user
+可属多个空间）。索引建在 `users` 上只能保证全局唯一（错的）；建在 ref 表上则键被反
+规范化，改名（三处入口）与生日编辑任一漏同步就**静默失效**。
+
+因此并发保证由 `command_transaction(immediate=True)` 提供：SQLite 单写者，写锁前置后
+"检查 → 插入"之间没有竞态窗口。键在查询时现算，不落列、不建索引；空间是几十到几百人
+量级，全扫开销可忽略。**回归用例必须覆盖并发建档恰好一个成功**——去掉写锁后它必须失败，
+否则该用例是假的。
+
+### 归一只作用于比对键
+
+`users.name` 是待本人确认的 provisional 数据（`profile_fact_reviews` 的 name 必审项），
+本人认领后有权改回自己要的写法。归一**永不覆写存储值**。
+
+### 已知缺陷与限制（不在本次修复范围）
+
+- `StructuredDate.date` 恒为 ISO，而 `lunar.lunar_to_solar` 期望 `'YYYY:M:D'`，故
+  `enrich_structured_date` 对 lunar 输入产出的 `mirror_date` **恒为 None**。
+  `person_identity.canonical_birth` 自行做正确换算绕过它。
+- 闰月无法表达：ISO 容器存不下 `lunar_to_solar` 用来标闰月的负数月份，闰月生日按平月换算。
+- zhconv 覆盖部分异体字（峯→峰、淩→凌）但不覆盖全部（喆 保持原样）；未覆盖者落到
+  weak 要求消歧，而不是被静默并成同一人。
+- 生日未知时 DB 层无法给出硬保证（否则会拦住真正的同名不同人），残留重复由 Steward
+  回溯审计报出——身份重复是**涌现属性**：后补生日才暴露的重复，写入时门禁结构上不可能捕捉。
 
 > **[v2 取代]** 本节的 users.claim_status 已迁移至 accounts.status（managed|claimed + claimed_at）；is_admin 列已删除（见 §0.2/§0.3）。其余 PersonProfile/Account 分离概念不变。
 

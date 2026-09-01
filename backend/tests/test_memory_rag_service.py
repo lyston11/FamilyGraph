@@ -6,9 +6,9 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app import config
-from app.models.agent import AgentJob
 from app.models.rag import RAGChunk
 from app.models.space import FamilySpace
+from app.models.steward import StewardJob
 from app.models.v2_foundation import DomainEvent
 from app.services import context_builder as cb
 from app.services.domain_events import emit
@@ -161,6 +161,31 @@ def test_steward_cannot_retrieve_public_rag_documents(db_session):
     )
 
 
+def test_steward_can_retrieve_current_space_shared_rag_only(db_session):
+    owner, space = create_agent_fixture(db_session, name="memory-steward-shared")
+    create_space_member(db_session, space.id, owner.id, role="owner")
+    ingest_authorized_document(
+        db_session,
+        source_type="authorized_document",
+        source_id="steward-shared-1",
+        text_value="A confirmed shared family fact.",
+        author_account_id=owner.account.id,
+        scope="household",
+        space_id=space.id,
+    )
+    db_session.commit()
+
+    hits = search_rag(
+        db_session,
+        actor=owner,
+        account=owner.account,
+        space_id=space.id,
+        query="confirmed shared family fact",
+        agent_kind="steward",
+    )
+    assert [hit.source_id for hit in hits] == ["steward-shared-1"]
+
+
 def test_private_memory_event_does_not_enqueue_steward_job(db_session, monkeypatch):
     monkeypatch.setattr(config, "STEWARD_ENABLED", True)
     owner, space = create_agent_fixture(db_session, name="memory-private-event")
@@ -184,12 +209,7 @@ def test_private_memory_event_does_not_enqueue_steward_job(db_session, monkeypat
         )
     )
     assert event is not None
-    assert (
-        db_session.scalar(
-            select(AgentJob).where(AgentJob.kind == "steward", AgentJob.space_id == space.id)
-        )
-        is None
-    )
+    assert db_session.scalar(select(StewardJob).where(StewardJob.space_id == space.id)) is None
 
 
 def test_public_rag_requires_active_space_membership(db_session):

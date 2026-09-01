@@ -1,8 +1,8 @@
 """版本化领域工具注册表与执行门禁（RT-3 / notes.md）。
 
-骨架协议工具（echo、probe_scope、steward_ping）验证「token scope → 注册表
+骨架协议工具（echo、probe_scope）验证「token scope → 注册表
 校验 → 服务层执行 → 审计」全链路；V2.2 起六个只读领域工具（AgentQueryService，
-见 services/agent_query.py）以 min_kind=assistant 注册。严格校验 fail-closed，
+见 services/agent_query.py）以 required_kind=assistant 注册。严格校验 fail-closed，
 四类拒绝码均写安全审计：
 - 未知工具        → AGENT_TOOL_UNKNOWN
 - 版本不匹配      → AGENT_TOOL_VERSION_UNSUPPORTED
@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.errors import (
+    AGENT_KIND_UNSUPPORTED,
     AGENT_TOOL_CALL_CONFLICT,
     AGENT_TOOL_CALL_IN_PROGRESS,
     KINSHIP_FLAG_DISABLED,
@@ -31,7 +32,7 @@ from app.errors import (
     raise_api_error,
 )
 from app.models.account import Account
-from app.models.agent import AgentRun, AgentSession, AgentToolCall
+from app.models.agent import RUNTIME_AGENT_KINDS, AgentRun, AgentSession, AgentToolCall
 from app.services import agent_query, audit, controlled_web, intake_extractor, terms
 from app.utils import timeutil
 
@@ -66,7 +67,7 @@ class ToolSpec:
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     error_codes: tuple[str, ...] = field(default=())
-    min_kind: str | None = None  # None = assistant/steward 均可用
+    required_kind: str | None = None  # None = 当前 Assistant runtime 均可用
     # 兼容旧调用方仍可请求的版本集合；None = 仅当前 version。
     # V2.3：两个关系工具升 @2（Relationship Intelligence 解析），保留 @1 声明，
     # sidecar 未跟进升级前继续以 @1 调用（E4 才切换）。
@@ -75,9 +76,8 @@ class ToolSpec:
 
 TOOL_ECHO = "familygraph.echo"
 TOOL_PROBE_SCOPE = "familygraph.probe_scope"
-TOOL_STEWARD_PING = "familygraph.steward_ping"
 
-# V2.3 Block E4a：Relationship Intelligence 内部工具（min_kind=assistant，@1）。
+# V2.3 Block E4a：Relationship Intelligence 内部工具（required_kind=assistant，@1）。
 # RELATIONSHIP_INTELLIGENCE_ENABLED 关闭时一律拒绝（与浏览器面 503 同一口径）。
 TOOL_RESOLVE_FREE_TEXT_RELATION = "familygraph.resolve_free_text_relation"
 TOOL_GET_TERM_ALTERNATIVES = "familygraph.get_term_alternatives"
@@ -113,7 +113,7 @@ _KINSHIP_TOOL_VERSIONS: dict[str, tuple[int, ...]] = {
 
 
 def _query_tool_specs() -> tuple[ToolSpec, ...]:
-    """六个版本化只读领域工具的注册表条目（min_kind=assistant）。"""
+    """六个版本化只读领域工具的注册表条目（required_kind=assistant）。"""
     specs = []
     for name in sorted(agent_query.QUERY_TOOL_NAMES):
         versions = _KINSHIP_TOOL_VERSIONS.get(name)
@@ -124,7 +124,7 @@ def _query_tool_specs() -> tuple[ToolSpec, ...]:
                 description=_QUERY_TOOL_DESCRIPTIONS[name],
                 input_schema=agent_query.QUERY_TOOL_SPECS_INPUT_SCHEMAS[name],
                 output_schema={"type": "object"},
-                min_kind="assistant",
+                required_kind="assistant",
                 supported_versions=versions,
             )
         )
@@ -160,19 +160,6 @@ REGISTRY: dict[str, ToolSpec] = {
             output_schema={"type": "object", "properties": {}},
         ),
         ToolSpec(
-            name=TOOL_STEWARD_PING,
-            version=1,
-            description="steward 专用探针（演示 min_kind scope 门禁）",
-            input_schema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": False,
-            },
-            output_schema={"type": "object", "properties": {}},
-            min_kind="steward",
-        ),
-        ToolSpec(
             name=TOOL_RESOLVE_FREE_TEXT_RELATION,
             version=1,
             description=(
@@ -186,7 +173,7 @@ REGISTRY: dict[str, ToolSpec] = {
                 "additionalProperties": False,
             },
             output_schema={"type": "object"},
-            min_kind="assistant",
+            required_kind="assistant",
         ),
         ToolSpec(
             name=TOOL_GET_TERM_ALTERNATIVES,
@@ -202,7 +189,7 @@ REGISTRY: dict[str, ToolSpec] = {
                 "additionalProperties": False,
             },
             output_schema={"type": "object"},
-            min_kind="assistant",
+            required_kind="assistant",
         ),
         ToolSpec(
             name=TOOL_RECORD_TERM_USAGE,
@@ -222,7 +209,7 @@ REGISTRY: dict[str, ToolSpec] = {
                 "additionalProperties": False,
             },
             output_schema={"type": "object"},
-            min_kind="assistant",
+            required_kind="assistant",
         ),
         ToolSpec(
             name=TOOL_SEARCH_WEB,
@@ -240,7 +227,7 @@ REGISTRY: dict[str, ToolSpec] = {
             },
             output_schema={"type": "object"},
             error_codes=(WEB_TOOL_DISABLED,),
-            min_kind="assistant",
+            required_kind="assistant",
         ),
         ToolSpec(
             name=TOOL_FETCH_APPROVED_PAGE,
@@ -256,7 +243,7 @@ REGISTRY: dict[str, ToolSpec] = {
             },
             output_schema={"type": "object"},
             error_codes=(WEB_TOOL_DISABLED,),
-            min_kind="assistant",
+            required_kind="assistant",
         ),
     )
 }
@@ -290,13 +277,20 @@ def default_allowlist(
     The optional database scope keeps backwards compatibility for tests and the
     protocol fixtures while ensuring a real run never advertises disabled Web tools.
     """
+    if kind not in RUNTIME_AGENT_KINDS:
+        raise ToolProtocolError(
+            422,
+            AGENT_KIND_UNSUPPORTED,
+            "Agent Runtime 只支持 Assistant",
+            {"kind": kind},
+        )
     # Web tools are opt-in by policy; exclude them from the static traversal so a
     # disabled platform/space flag never advertises them to the model.
     _web_tools = {TOOL_SEARCH_WEB, TOOL_FETCH_APPROVED_PAGE}
     allowlist = sorted(
         name
         for name, spec in REGISTRY.items()
-        if (spec.min_kind is None or spec.min_kind == kind) and name not in _web_tools
+        if (spec.required_kind is None or spec.required_kind == kind) and name not in _web_tools
     )
     if (
         kind == "assistant"
@@ -392,7 +386,7 @@ def _validate_value(schema: dict[str, Any], value: Any, *, path: str) -> None:
 
 
 def check_scope(run: AgentRun, claims: dict[str, Any], spec: ToolSpec) -> None:
-    """allowlist + min_kind 双重 scope 门禁（拒绝由 execute() 统一审计）。"""
+    """allowlist + required_kind 双重 scope 门禁（拒绝由 execute() 统一审计）。"""
     allowlist = run.tool_allowlist_json or []
     if spec.name not in allowlist:
         raise ToolProtocolError(
@@ -401,7 +395,7 @@ def check_scope(run: AgentRun, claims: dict[str, Any], spec: ToolSpec) -> None:
             "工具不在该 Run 的 allowlist 内",
             {"tool": spec.name, "reason": "not_in_allowlist"},
         )
-    if spec.min_kind is not None and claims.get("agent_kind") != spec.min_kind:
+    if spec.required_kind is not None and claims.get("agent_kind") != spec.required_kind:
         raise ToolProtocolError(
             403,
             "AGENT_TOOL_SCOPE_DENIED",
@@ -718,8 +712,6 @@ def _dispatch(
             raise ToolProtocolError(exc.status_code, exc.code, exc.message, exc.detail) from None
     if spec.name == TOOL_ECHO:
         return {"text": input_payload["text"]}
-    if spec.name == TOOL_STEWARD_PING:
-        return {"ok": True, "space_id": agent_session.space_id}
     if spec.name == TOOL_PROBE_SCOPE:
         return {
             "run_id": run.id,

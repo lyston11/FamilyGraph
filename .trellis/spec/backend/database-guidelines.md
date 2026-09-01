@@ -8,6 +8,11 @@
 - 写操作一律事务包裹（session.begin / unit of work），关系写入 = 环检测 + FSM 校验 + 插入同事务原子完成。
 - 枚举用 CHECK 约束兜底（dir_class、status 等）+ Pydantic 双重校验。
 - 防重复非终态关系：partial unique index（WHERE status IN ('pending','active')）。
+- **唯一性无法落索引时用 `BEGIN IMMEDIATE`，不要只靠 service 层 SELECT**：两个事务会各自
+  通过检查然后都插入。`command_transaction(session, immediate=True)` 在事务起点取写锁
+  （SQLite 单写者），消除"检查 → 插入"的竞态窗口；`services/agent_queue.py` 的并发约束与
+  建档去重门禁（architecture.md §0.9）都用它。这类保证必须有并发回归用例——去掉写锁后
+  用例必须失败，否则它没在守护任何东西。
 - 查询默认带索引意识：relations(from_user), relations(to_user), space_members(space_id) 必建索引。
 - 时间统一存 UTC ISO8601 文本或 datetime；生卒日期按 architecture.md 的 {cal_type,date,original_text} 结构化列存储。
 

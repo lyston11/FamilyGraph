@@ -194,7 +194,7 @@ def test_six_tools_contract_via_internal_endpoint(client, internal_client, db_se
     )
     lease = internal_client.post(
         "/internal/agent/jobs/lease",
-        json={"leased_by": "sidecar-c1"},
+        json={"kind": "assistant", "leased_by": "sidecar-c1"},
         headers=_bearer(issue_service_token()),
     )
     assert lease.status_code == 200
@@ -610,45 +610,15 @@ def test_zero_write_business_tables(db_session):
 # ---- 注册表 / 门禁集成 ----
 
 
-def test_registry_min_kind_gating(db_session):
-    """新工具 min_kind=assistant：默认白名单自动纳入；steward kind 被拒。"""
-    world = _world(db_session)
+def test_registry_required_kind_gating(db_session):
+    """所有通用 runtime 工具属于 assistant；其他 kind 不生成 allowlist。"""
+    _world(db_session)
     assistant_default = agent_tools.default_allowlist("assistant")
     for name in ALL_SIX_TOOLS:
         assert name in assistant_default
-    assert agent_query.TOOL_GET_SELF_CONTEXT not in agent_tools.default_allowlist("steward")
-
-    steward_session = create_agent_session(
-        db_session,
-        account_id=world["a"].account.id,
-        space_id=world["household"].id,
-        kind="steward",
-    )
-    agent_queue.enqueue_run(
-        db_session,
-        agent_session=steward_session,
-        kind="steward",
-        policy_version="p1",
-        tool_allowlist=[agent_query.TOOL_GET_SELF_CONTEXT],
-    )
-    grant = agent_queue.lease_next(db_session, kind="steward", leased_by="sc")
-    assert grant is not None
-    agent_events.append_events(
-        db_session,
-        grant.run,
-        [agent_events.EventEntry(seq=0, type="run.started", public_payload={})],
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        agent_tools.execute(
-            db_session,
-            grant.run,
-            steward_session,
-            {"agent_kind": "steward"},
-            name=agent_query.TOOL_GET_SELF_CONTEXT,
-            version=1,
-            input_payload={},
-        )
-    assert _error_code(exc_info) == "AGENT_TOOL_SCOPE_DENIED"
+    with pytest.raises(agent_tools.ToolProtocolError) as exc_info:
+        agent_tools.default_allowlist("steward")
+    assert exc_info.value.code == "AGENT_KIND_UNSUPPORTED"
 
     # assistant 白名单未含新工具时拒绝（not_in_allowlist 路径）
     other_user, other_space = create_agent_fixture(db_session, name="allowlist-probe")
@@ -678,7 +648,7 @@ def test_tool_call_inflight_placeholder_rejected_concurrently(internal_client, d
     )
     lease = internal_client.post(
         "/internal/agent/jobs/lease",
-        json={"leased_by": "sidecar-conc"},
+        json={"kind": "assistant", "leased_by": "sidecar-conc"},
         headers=_bearer(issue_service_token()),
     )
     assert lease.status_code == 200

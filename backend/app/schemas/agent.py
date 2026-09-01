@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
+from app.models.agent import RuntimeAgentKind as AgentKind
 
 
 class _Strict(BaseModel):
@@ -21,11 +22,11 @@ class _Strict(BaseModel):
 
 
 class LeaseRequest(_Strict):
-    # The HTTP sidecar endpoint is assistant-only.  Steward jobs are leased by
+    # The HTTP sidecar endpoint is assistant-only. Steward jobs are handled by
     # the canonical in-process maintenance worker, never by a generic service
-    # token caller.  Keeping this field required prevents an omitted kind from
-    # becoming an accidental "any queue" lease.
-    kind: Literal["assistant"] | None = "assistant"
+    # token caller. This required field prevents omitted kind from becoming an
+    # accidental queue selector.
+    kind: Literal["assistant"]
     leased_by: str = Field(min_length=1, max_length=120)
     lease_ttl_seconds: int | None = Field(default=None, ge=30, le=3600)
 
@@ -33,7 +34,7 @@ class LeaseRequest(_Strict):
 class LeaseOut(BaseModel):
     job_id: int
     run_id: int
-    agent_kind: str
+    agent_kind: AgentKind
     attempt: int
     tool_allowlist: list[str]
     policy_version: str
@@ -88,7 +89,7 @@ class ContextProviderOut(BaseModel):
 class ContextOut(BaseModel):
     run_id: int
     session_id: int
-    agent_kind: str
+    agent_kind: AgentKind
     account_id: int
     space_id: int
     status: str
@@ -174,7 +175,7 @@ class AgentSessionCreateRequest(_Strict):
 class AgentSessionOut(BaseModel):
     id: int
     space_id: int
-    agent_kind: str
+    agent_kind: AgentKind
     created_at: datetime
 
 
@@ -207,7 +208,7 @@ class AgentMessageCreatedOut(BaseModel):
 class AgentRunOut(BaseModel):
     id: int
     session_id: int
-    kind: str
+    kind: AgentKind
     status: str
     attempt: int
     max_attempts: int

@@ -1,0 +1,10 @@
+{"file":".trellis/spec/architecture.md","reason":"§5 结构化日期契约与 §0.9 身份判定口径；「已知缺陷」段登记了本任务要消除的 mirror_date 恒 None 与闰月不可表达两条。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"JSON 列演进与向后兼容口径；本任务不写迁移，需据此确认新增键对历史行安全。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端 ruff/mypy strict/pytest 门禁定义，决定签名变更后的验证标准。"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"services/schemas/api 分层归属，确认换算只能有 services/lunar.py 单一出口。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"schema 校验失败到 422 的统一错误口径，用于闰月与 cal_type 矛盾输入。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"前端 StructuredDate 类型与后端 schema 人工同步的规则，新增两字段需遵守。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint/type-check/test/build 四门禁，wizard 与展示组件改动的验收标准。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"MemberCreateWizard/ProfileDrawer/MaskedField 的组件约定，闰月展示与预填改动需对齐。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"本改动跨 schema、服务、API、迁移、前端类型五层，用于确认 payload 归属与往返检查。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"要求消除 person_identity 里的第二套换算实现，复用 services/lunar.py 而非平行逻辑。"}

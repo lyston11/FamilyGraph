@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from conftest import create_agent_fixture, create_agent_message, create_agent_session
 from fastapi import HTTPException
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent
@@ -69,32 +69,18 @@ def test_account_assistant_run_cap_two(db_session):
     assert _error_code(exc_info.value) == "AGENT_RUN_ACCOUNT_LIMIT"
 
 
-def test_steward_runs_do_not_consume_assistant_quota(db_session):
-    owner, space = create_agent_fixture(db_session, name="quota")
-    steward_session = create_agent_session(
-        db_session, account_id=owner.account.id, space_id=space.id, kind="steward"
-    )
-    _enqueue(db_session, steward_session, kind="steward")
-    assistant_session = create_agent_session(
-        db_session, account_id=owner.account.id, space_id=space.id
-    )
-    run = _enqueue(db_session, assistant_session)
-    assert run.kind == "assistant"
+def test_unsupported_kind_is_rejected_before_queue_write(db_session):
+    owner, space = create_agent_fixture(db_session, name="kind")
+    session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
 
-
-def test_steward_space_single_active_job(db_session):
-    owner_a, space = create_agent_fixture(db_session, name="sa")
-    owner_b, _ = create_agent_fixture(db_session, name="sb")
-    st_a = create_agent_session(
-        db_session, account_id=owner_a.account.id, space_id=space.id, kind="steward"
-    )
-    st_b = create_agent_session(
-        db_session, account_id=owner_b.account.id, space_id=space.id, kind="steward"
-    )
-    _enqueue(db_session, st_a, kind="steward")
     with pytest.raises(HTTPException) as exc_info:
-        _enqueue(db_session, st_b, kind="steward")
-    assert _error_code(exc_info.value) == "AGENT_STEWARD_SPACE_BUSY"
+        _enqueue(db_session, session, kind="steward")
+
+    assert _error_code(exc_info.value) == "AGENT_KIND_UNSUPPORTED"
+    assert db_session.scalar(select(AgentRun).where(AgentRun.session_id == session.id)) is None
+    with pytest.raises(HTTPException) as exc_info:
+        agent_queue.lease_next(db_session, kind="steward", leased_by="sc")
+    assert _error_code(exc_info.value) == "AGENT_KIND_UNSUPPORTED"
 
 
 def test_lease_fifo_attempt_and_leased_by(db_session):
@@ -106,58 +92,17 @@ def test_lease_fifo_attempt_and_leased_by(db_session):
     assert grant.job.status == "leased"
     assert grant.job.attempt == 1 and grant.job.leased_by == "sidecar-a"
     assert grant.run.status == "leased" and grant.run.attempt == 1
-    # 无更多可租
     assert agent_queue.lease_next(db_session, kind="assistant", leased_by="sidecar-b") is None
 
 
-def test_lease_without_kind_fifo_across_queues(db_session):
-    """kind=None：跨队列按 created_at FIFO 取任意 queued（不限定 kind）。"""
-    owner_a, space_a = create_agent_fixture(db_session, name="nk-a")
-    owner_b, space_b = create_agent_fixture(db_session, name="nk-b")
-    assistant_session = create_agent_session(
-        db_session, account_id=owner_a.account.id, space_id=space_a.id
-    )
-    steward_session = create_agent_session(
-        db_session, account_id=owner_b.account.id, space_id=space_b.id, kind="steward"
-    )
-    steward_run = _enqueue(db_session, steward_session, kind="steward")
-    assistant_run = _enqueue(db_session, assistant_session)
+def test_lease_without_kind_is_rejected_before_queue_read(db_session):
+    owner, space = create_agent_fixture(db_session, name="missing-kind")
+    session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
+    _enqueue(db_session, session)
 
-    grant = agent_queue.lease_next(db_session, kind=None, leased_by="sc")
-    assert grant is not None
-    assert grant.job.kind == "steward" and grant.job.run_id == steward_run.id
-
-    grant = agent_queue.lease_next(db_session, kind=None, leased_by="sc")
-    assert grant is not None
-    assert grant.job.kind == "assistant" and grant.job.run_id == assistant_run.id
-    assert agent_queue.lease_next(db_session, kind=None, leased_by="sc") is None
-
-
-def test_lease_without_kind_assistant_first_on_created_at_tie(db_session):
-    """kind=None 且 created_at 并列：assistant 先于 steward（仅作确定性排序）。"""
-    owner_a, space_a = create_agent_fixture(db_session, name="tie-a")
-    owner_b, space_b = create_agent_fixture(db_session, name="tie-b")
-    assistant_session = create_agent_session(
-        db_session, account_id=owner_a.account.id, space_id=space_a.id
-    )
-    steward_session = create_agent_session(
-        db_session, account_id=owner_b.account.id, space_id=space_b.id, kind="steward"
-    )
-    steward_run = _enqueue(db_session, steward_session, kind="steward")  # 更早入队、id 更小
-    assistant_run = _enqueue(db_session, assistant_session)
-
-    moment = timeutil.utcnow()
-    db_session.execute(
-        update(AgentJob)
-        .where(AgentJob.id.in_([steward_run.job_id, assistant_run.job_id]))
-        .values(created_at=moment)
-    )
-    db_session.commit()
-    db_session.expire_all()
-
-    grant = agent_queue.lease_next(db_session, kind=None, leased_by="sc")
-    assert grant is not None
-    assert grant.job.kind == "assistant"
+    with pytest.raises(HTTPException) as exc_info:
+        agent_queue.lease_next(db_session, kind=None, leased_by="sc")
+    assert _error_code(exc_info.value) == "AGENT_KIND_UNSUPPORTED"
 
 
 def test_heartbeat_extends_and_rejects_terminal(db_session):
@@ -312,11 +257,10 @@ def test_session_scope_immutable_by_trigger(db_session):
         )
 
 
-def test_enqueue_invalid_kind_rejected_by_check_constraint(db_session):
-    """非法 kind 由 CHECK 兑底拒绝（未知枚举 fail-closed，非业务错误结构）。"""
-    from sqlalchemy.exc import IntegrityError
-
+def test_enqueue_invalid_kind_rejected_before_check_constraint(db_session):
+    """非法 kind 在服务层先被拒绝，避免绕过并发检查进入队列。"""
     user, space = create_agent_fixture(db_session, name="kindchk")
     session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
-    with pytest.raises(IntegrityError):
+    with pytest.raises(HTTPException) as exc_info:
         _enqueue(db_session, session, kind="wizard")
+    assert _error_code(exc_info.value) == "AGENT_KIND_UNSUPPORTED"

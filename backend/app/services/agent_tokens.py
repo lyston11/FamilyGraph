@@ -17,6 +17,7 @@ from typing import Any
 import jwt
 
 from app import config
+from app.models.agent import RUNTIME_AGENT_KINDS
 
 SERVICE_TOKEN_TYPE = "agent_service"
 RUN_TOKEN_TYPE = "agent_run"
@@ -73,6 +74,8 @@ def issue_run_token(
     ttl_seconds: int | None = None,
 ) -> str:
     """run token：绑定执行实体与 scope；exp 上限 600s（design.md 合同）。"""
+    if agent_kind not in RUNTIME_AGENT_KINDS:
+        raise AgentTokenError("invalid agent_kind")
     ttl = min(
         ttl_seconds if ttl_seconds is not None else config.AGENT_RUN_TOKEN_TTL_SECONDS,
         config.AGENT_RUN_TOKEN_TTL_SECONDS_MAX,
@@ -121,6 +124,6 @@ def decode_run_token(raw_token: str) -> dict[str, Any]:
     for key in ("run_id", "job_id", "account_id", "space_id"):
         if not isinstance(payload[key], int):
             raise AgentTokenError("invalid scope claim type")
-    if payload["agent_kind"] not in ("assistant", "steward"):
+    if payload["agent_kind"] not in RUNTIME_AGENT_KINDS:
         raise AgentTokenError("invalid agent_kind")
     return payload

@@ -1,0 +1,8 @@
+{"file":".trellis/spec/architecture.md","reason":"全局双 Agent、空间/可见性、PersonalFamilyView 与数据边界权威架构；实现时只修改本任务直接相关段落。"}
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"generic Assistant Runtime、internal 协议、token、queue、sidecar、工具和 Compose E2E 权威执行规范。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"StewardJob、空间级运行、shared-only 输入、ActionCard 和不得写 SourceFact/成员资格的边界。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Assistant/Steward consumer 的 private/shared scope、RAG 授权和 ContextBuild fail-closed 边界。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite 表重建、Alembic、临时 DATA_DIR、FK/trigger/index 和迁移安全约束。"}
+{"file":".trellis/tasks/archive/2026-08/08-26-v2-1-agent-runtime/design.md","reason":"原始 generic Runtime 与 Steward kind 历史设计，供迁移兼容和遗留入口审查。"}
+{"file":".trellis/tasks/archive/2026-08/08-26-v2-4-steward-action-card/design.md","reason":"StewardJob 独立运行链路、确定性引擎和 generic Runtime 分离的设计来源。"}
+{"file":".trellis/tasks/archive/2026-08/08-26-v2-5-memory-rag-policy/design.md","reason":"Steward shared-only knowledge consumer 与 Assistant private/public 检索边界的设计来源。"}

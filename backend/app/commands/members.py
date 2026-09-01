@@ -23,6 +23,8 @@ from app.errors import (
     DISCLOSURE_SCOPE_REQUIRES_SELF,
     IDEMPOTENCY_PAYLOAD_CONFLICT,
     OWNER_TRANSFER_REQUIRED,
+    PERSON_DUPLICATE_AMBIGUOUS,
+    PERSON_DUPLICATE_IN_SPACE,
     SPACE_NOT_FOUND,
     UNIFIED_CREDENTIAL_MESSAGE,
     USER_NOT_FOUND,
@@ -33,7 +35,7 @@ from app.models import Account, User
 from app.models.attachment import Attachment
 from app.models.space import FamilySpace, SpaceProfileRef
 from app.models.v2_foundation import MemberCreationRequest, ProfileFactReview
-from app.services import audit, custody, identity_fsm, relation_fsm, source_facts
+from app.services import audit, custody, identity_fsm, person_identity, relation_fsm, source_facts
 from app.services import disclosure as disclosure_service
 from app.services.domain_events import emit
 from app.utils import security, timeutil
@@ -89,6 +91,55 @@ def _seed_fact_reviews(session: Session, member: User) -> None:
         )
 
 
+def _guard_duplicate_person(
+    session: Session,
+    *,
+    space_id: int,
+    name: str,
+    birth: dict[str, Any] | None,
+    allow_duplicate_person: bool,
+) -> None:
+    """同一空间不得出现同一人的两份档案（判定口径见 services/person_identity）。
+
+    重复建档等于多出一份可登录凭据（每个 User 携带一个 Account 与一次性 PIN），
+    所以强匹配一律拒绝，并在 detail 里给出既有档案 id——调用方应改为引用它
+    （加 SpaceProfileRef）而不是新建。
+
+    并发保证由调用方的立即事务提供：写锁前置后，检查与插入之间无竞态窗口。
+    """
+    candidates = person_identity.find_duplicate_candidates(
+        session, space_id=space_id, name=name, birth=birth
+    )
+    if not candidates:
+        return
+    strong = [c for c in candidates if c.strength == person_identity.STRENGTH_STRONG]
+    if strong:
+        raise_api_error(
+            409,
+            PERSON_DUPLICATE_IN_SPACE,
+            "该空间已存在同一个人的档案，请引用现有档案而不是新建",
+            detail={
+                "space_id": space_id,
+                "existing": [{"user_id": c.user_id, "name": c.name} for c in strong],
+                "resolution": "reference_existing",
+            },
+        )
+    if not allow_duplicate_person:
+        raise_api_error(
+            409,
+            PERSON_DUPLICATE_AMBIGUOUS,
+            "该空间已有同名档案且生日缺失，无法判定是否同一人，请确认",
+            detail={
+                "space_id": space_id,
+                "candidates": [
+                    {"user_id": c.user_id, "name": c.name, "birth_known": c.birth_key is not None}
+                    for c in candidates
+                ],
+                "resolution": "reference_existing_or_confirm_distinct",
+            },
+        )
+
+
 def _create_member_core(
     session: Session,
     ctx: ActorContext,
@@ -100,12 +151,30 @@ def _create_member_core(
     bio: str | None = None,
     privacy_mode: str = "handover",
     space_membership_space_id: int | None = None,
+    allow_duplicate_person: bool = False,
 ) -> tuple[User, str]:
     """建房核心（F-1/F-3）：provisional 档案 + managed 账号 + 一次性 PIN + 空间引用
     + 确档清单。不管理事务，由调用方包在自己的 command_transaction 内。
+
+    ``allow_duplicate_person`` 只放宽**弱**匹配（同名但生日缺失，不可判定）：
+    创建者显式确认"这是另一个人"后放行。强匹配（同名同生日）不受此开关影响，
+    始终拒绝——那不是需要人来消歧的情况。
     """
     actor = load_actor(session, ctx)
     now = timeutil.utcnow()
+    # 空间校验前置于建行：去重门禁必须在 User/Account 落库之前判定。
+    space: FamilySpace | None = None
+    if space_membership_space_id is not None:
+        space = session.get(FamilySpace, space_membership_space_id)
+        if space is None or not space_fsm_is_active(session, space.id, actor.id):
+            raise_api_error(404, SPACE_NOT_FOUND, "目标家庭空间不存在或无权操作")
+        _guard_duplicate_person(
+            session,
+            space_id=space.id,
+            name=name,
+            birth=birth,
+            allow_duplicate_person=allow_duplicate_person,
+        )
     pin = security.generate_pin()
     member = User(
         name=name.strip(),
@@ -131,10 +200,7 @@ def _create_member_core(
     session.flush()  # 取得 id 供空间引用/清单/审计引用
 
     space_id: int | None = None
-    if space_membership_space_id is not None:
-        space = session.get(FamilySpace, space_membership_space_id)
-        if space is None or not space_fsm_is_active(session, space.id, actor.id):
-            raise_api_error(404, SPACE_NOT_FOUND, "目标家庭空间不存在或无权操作")
+    if space is not None:
         space_id = space.id
         session.add(
             SpaceProfileRef(
@@ -178,13 +244,14 @@ def create_member(
     bio: str | None = None,
     privacy_mode: str = "handover",
     space_membership_space_id: int | None = None,
+    allow_duplicate_person: bool = False,
 ) -> tuple[User, str]:
     """低层建房（内部/测试用）：仅 user+account+PIN，无关系。
 
     公开「名字+关系必填」语义由 create_managed_member（POST /users）强制。
     返回 (member, 明文 PIN)；PIN 仅本次响应可见（A3/AD-1）。
     """
-    with command_transaction(session):
+    with command_transaction(session, immediate=True):
         return _create_member_core(
             session,
             ctx,
@@ -195,6 +262,7 @@ def create_member(
             bio=bio,
             privacy_mode=privacy_mode,
             space_membership_space_id=space_membership_space_id,
+            allow_duplicate_person=allow_duplicate_person,
         )
 
 
@@ -214,6 +282,7 @@ def create_managed_member(
     space_membership_space_id: int | None = None,
     relation_label: str | None = None,
     relation_text: str | None = None,
+    allow_duplicate_person: bool = False,
 ) -> tuple[User, str | None, bool]:
     """F-1 原子建档：provisional 档案 + managed 账号 +（AD-4 新建例外）直接 active
     关系 + 关系原文 + proposed SourceFact + 空间引用 + 事件/审计 + 幂等台账，
@@ -234,7 +303,7 @@ def create_managed_member(
         return _replay_member_creation(session, prior, request_hash)
 
     try:
-        with command_transaction(session):
+        with command_transaction(session, immediate=True):
             member, pin = _create_member_core(
                 session,
                 ctx,
@@ -245,6 +314,7 @@ def create_managed_member(
                 bio=bio,
                 privacy_mode=privacy_mode,
                 space_membership_space_id=space_membership_space_id,
+                allow_duplicate_person=allow_duplicate_person,
             )
 
             # AD-4 新建账号例外：managed 新档由代管人创建 → relation 直接 active

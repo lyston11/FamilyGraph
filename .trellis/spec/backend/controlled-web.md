@@ -8,7 +8,7 @@
 - Agent sidecar 永不直接打开 socket：所有 egress 发生在 FastAPI 域网关（`services/controlled_web.py`），sidecar 通过 internal tool dispatch 调用。
 - **双侧工具声明**：sidecar `agent/src/tools.ts` 必须注册 `search_web`/`fetch_approved_page`（与后端 `agent_tools.py` 同名同 schema）；否则后端披露后 `buildRunSession` 的 fail-closed 检查会拒绝整个 run。
 - 外部网页内容永远是 `trust=external` 的不可信资料，**不能**成为 SourceFact、Memory 或工具指令；用户若要沉淀须另行走 MemoryCandidate 确认流程。
-- Steward 不拥有 Web 工具：web 工具 `min_kind="assistant"`，steward 的 `default_allowlist("steward")` 与 `check_scope` 双重门禁排除它们（AC-W6）。
+- Web 工具只属于 assistant runtime；Steward 是独立确定性引擎，不进入 `default_allowlist`、`check_scope` 或 sidecar 工具协议（AC-W6）。
 
 ## 双层开关与工具披露
 

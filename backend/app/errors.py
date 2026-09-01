@@ -50,6 +50,13 @@ VALIDATION_ERROR = "VALIDATION_ERROR"
 DISCLOSURE_SCOPE_REQUIRES_SELF = "DISCLOSURE_SCOPE_REQUIRES_SELF"  # v2：逐空间披露仅本人可改
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
+# ---- 人物身份去重（同一空间不得出现同一人的两份档案）----
+# 一个 User 携带一个 Account 与一次性 PIN，重复建档等于多出一份可登录凭据。
+# 强匹配：同名同生日，拒绝并给出引用路径
+PERSON_DUPLICATE_IN_SPACE = "PERSON_DUPLICATE_IN_SPACE"
+# 弱匹配：同名但生日缺失，需创建者显式消歧
+PERSON_DUPLICATE_AMBIGUOUS = "PERSON_DUPLICATE_AMBIGUOUS"
+
 # ---- V2.2 只读 Assistant 领域工具 ----
 FG_PROFILE_NOT_AVAILABLE = "FG_PROFILE_NOT_AVAILABLE"  # 档案不可见/不存在统一拒绝（防枚举）
 
@@ -96,15 +103,15 @@ AGENT_TOKEN_SCOPE_MISMATCH = "AGENT_TOKEN_SCOPE_MISMATCH"  # token claims 与 DB
 AGENT_RUN_NOT_FOUND = "AGENT_RUN_NOT_FOUND"  # run 不存在或 token 不指向它
 AGENT_JOB_NOT_FOUND = "AGENT_JOB_NOT_FOUND"  # job 不存在或 token 不指向它
 AGENT_JOB_NOT_ACTIVE = "AGENT_JOB_NOT_ACTIVE"  # heartbeat 目标不在 leased/running
+AGENT_KIND_UNSUPPORTED = "AGENT_KIND_UNSUPPORTED"  # runtime 只承载 assistant
 AGENT_RUN_SESSION_BUSY = "AGENT_RUN_SESSION_BUSY"  # 每 session 同时一个 active Run（RT-2）
 AGENT_RUN_ACCOUNT_LIMIT = "AGENT_RUN_ACCOUNT_LIMIT"  # 每账户 ≤2 并发 Assistant Run（RT-2）
-AGENT_STEWARD_SPACE_BUSY = "AGENT_STEWARD_SPACE_BUSY"  # steward 每空间一个 active Job（RT-2）
 AGENT_RUN_TERMINAL = "AGENT_RUN_TERMINAL"  # 终态不可复活（settle/cancel 再入）
 AGENT_RUN_NOT_RUNNING = "AGENT_RUN_NOT_RUNNING"  # 工具执行/settle 要求 running 态
 AGENT_TOOL_UNKNOWN = "AGENT_TOOL_UNKNOWN"  # 工具注册表未知名（RT-3）
 AGENT_TOOL_VERSION_UNSUPPORTED = "AGENT_TOOL_VERSION_UNSUPPORTED"  # 版本不匹配
 AGENT_TOOL_SCHEMA_INVALID = "AGENT_TOOL_SCHEMA_INVALID"  # 额外字段/类型/必填缺失
-AGENT_TOOL_SCOPE_DENIED = "AGENT_TOOL_SCOPE_DENIED"  # allowlist/min_kind scope 不匹配
+AGENT_TOOL_SCOPE_DENIED = "AGENT_TOOL_SCOPE_DENIED"  # allowlist/required_kind scope 不匹配
 AGENT_TOOL_CALL_CONFLICT = "AGENT_TOOL_CALL_CONFLICT"  # 同 (run_id, tool_call_id) 不同工具/版本
 AGENT_TOOL_CALL_IN_PROGRESS = (
     "AGENT_TOOL_CALL_IN_PROGRESS"  # 同 tool_call_id 并发执行中（P1 去重窗口收口）

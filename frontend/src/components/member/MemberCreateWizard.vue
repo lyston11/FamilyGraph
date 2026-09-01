@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
+  NAlert,
   NButton,
   NCheckbox,
   NDatePicker,
@@ -43,6 +44,21 @@ const step = ref(0)
 const submitting = ref(false)
 const errorMessage = ref('')
 const idempotencyKey = ref('')
+
+// ---- 重复建档消歧（architecture.md §0.9）----
+// 强匹配（同名同生日）后端一律拒绝，只能改为引用既有档案，前端不给"仍然创建"的出口。
+// 弱匹配（同名但生日缺失，不可判定）才由用户确认"这是另一个人"，确认后复用同一
+// Idempotency-Key 重放——该标记刻意不进 request_hash，所以同键重放不会撞 payload conflict。
+type DuplicateCandidate = { user_id: number; name: string; birth_known?: boolean }
+const duplicatePrompt = ref<{ kind: 'strong' | 'weak'; candidates: DuplicateCandidate[] } | null>(
+  null,
+)
+
+function readCandidates(detail: unknown, key: 'existing' | 'candidates'): DuplicateCandidate[] {
+  if (typeof detail !== 'object' || detail === null) return []
+  const raw = (detail as Record<string, unknown>)[key]
+  return Array.isArray(raw) ? (raw as DuplicateCandidate[]) : []
+}
 
 // ---- 关系（F-1 必填）：TA 是我的 ___；以合并请求发出，对方确档后可确认 ----
 const RELATION_OPTIONS: { value: DirClass; text: string }[] = [
@@ -192,9 +208,10 @@ async function createLineageSpace(): Promise<void> {
   }
 }
 
-async function submit(): Promise<void> {
+async function submit(allowDuplicatePerson = false): Promise<void> {
   submitting.value = true
   errorMessage.value = ''
+  if (!allowDuplicatePerson) duplicatePrompt.value = null
   try {
     const result = await members.create(
       {
@@ -210,16 +227,42 @@ async function submit(): Promise<void> {
           chosenSpaceId.value !== null ? { space_id: chosenSpaceId.value } : null,
         relation_dir_class: relationDir.value as DirClass,
         relation_label: relationLabel.value.trim() || null,
+        ...(allowDuplicatePerson ? { allow_duplicate_person: true } : {}),
       },
       ensureIdempotencyKey(),
     )
     // 档案 + 关系已原子提交；重放时不再回放一次性 PIN（仅首次可见）
+    duplicatePrompt.value = null
     emit('created', { name: result.user.name, pin: result.pin })
   } catch (error) {
-    errorMessage.value = error instanceof ApiError ? error.message : '建档失败，请稍后重试'
+    if (error instanceof ApiError && error.code === 'PERSON_DUPLICATE_IN_SPACE') {
+      duplicatePrompt.value = {
+        kind: 'strong',
+        candidates: readCandidates(error.detail, 'existing'),
+      }
+      errorMessage.value = error.message
+    } else if (error instanceof ApiError && error.code === 'PERSON_DUPLICATE_AMBIGUOUS') {
+      duplicatePrompt.value = {
+        kind: 'weak',
+        candidates: readCandidates(error.detail, 'candidates'),
+      }
+      errorMessage.value = error.message
+    } else {
+      errorMessage.value = error instanceof ApiError ? error.message : '建档失败，请稍后重试'
+    }
   } finally {
     submitting.value = false
   }
+}
+
+// 两个零参包装：绝不把 MouseEvent 透传进 submit 的布尔参数，否则事件对象会被
+// 当作真值，静默绕过弱匹配门禁。
+function submitNew(): void {
+  void submit(false)
+}
+
+function confirmDistinctPerson(): void {
+  void submit(true)
 }
 
 function ensureIdempotencyKey(): string {
@@ -491,6 +534,37 @@ const lineageOptions = computed<SelectOption[]>(() =>
 
     <p v-if="errorMessage" class="error" data-test="wizard-error">{{ errorMessage }}</p>
 
+    <!-- 重复建档：强匹配只能引用既有档案；弱匹配才允许用户确认「是另一个人」 -->
+    <NAlert
+      v-if="duplicatePrompt"
+      :type="duplicatePrompt.kind === 'strong' ? 'error' : 'warning'"
+      :title="duplicatePrompt.kind === 'strong' ? '该空间已有这个人' : '该空间已有同名的人'"
+      data-test="wizard-duplicate"
+    >
+      <p class="duplicate-names">
+        已有档案：{{ duplicatePrompt.candidates.map((c) => c.name).join('、') || '（无法显示）' }}
+      </p>
+      <p v-if="duplicatePrompt.kind === 'strong'">
+        姓名与生日都相同，视为同一个人。请回到家谱中找到这位家人，不要重复建档——
+        重复建档会为同一个人多发一份登录凭据。
+      </p>
+      <template v-else>
+        <p>
+          同名但生日缺失，无法判断是否同一个人。如果这确实是另一位家人，请确认后继续；
+          如果是同一个人，请返回家谱找到 TA。
+        </p>
+        <NButton
+          size="small"
+          type="warning"
+          :loading="submitting"
+          data-test="wizard-confirm-distinct"
+          @click="confirmDistinctPerson"
+        >
+          确认这是另一个人，继续创建
+        </NButton>
+      </template>
+    </NAlert>
+
     <template #footer>
       <div class="footer-actions">
         <NButton v-if="step > 0" data-test="wizard-prev" @click="goInfo">上一步</NButton>
@@ -516,7 +590,7 @@ const lineageOptions = computed<SelectOption[]>(() =>
           type="primary"
           :loading="submitting"
           data-test="wizard-submit"
-          @click="submit"
+          @click="submitNew"
         >
           创建档案并生成 PIN
         </NButton>

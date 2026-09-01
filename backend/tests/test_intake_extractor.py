@@ -9,7 +9,7 @@
   UPDATE 既有行；
 - parse API 合同：active 成员 201、非成员 403 SPACE_FORBIDDEN_ACTOR、flag
   关闭 503 KINSHIP_FLAG_DISABLED、text 空/>80 字 422；
-- agent_tools 注册表形状：三工具 version=1/min_kind=assistant，
+- agent_tools 注册表形状：三工具 version=1/required_kind=assistant，
   record_term_usage 输出合同，get_term_alternatives limit 默认 5 与 1..10 钳位；
 - golden 确定性：相同 facts 相同输入两次解析输出一致（除 raw_text_id 自增）。
 """
@@ -445,11 +445,11 @@ def _assistant_run(session: Session, session_row):
 
 
 def test_kinship_tools_registry_shape() -> None:
-    """三工具 version=1、min_kind=assistant、无兼容版本集声明。"""
+    """三工具 version=1、required_kind=assistant、无兼容版本集声明。"""
     for name in _KINSHIP_TOOL_NAMES:
         spec = agent_tools.resolve_tool(name, 1)
         assert spec.version == 1
-        assert spec.min_kind == "assistant"
+        assert spec.required_kind == "assistant"
         assert spec.supported_versions is None
 
 

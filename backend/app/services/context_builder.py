@@ -18,6 +18,7 @@ from app.errors import POLICY_CONTEXT_INVALID, POLICY_LOCAL_REQUIRED, raise_api_
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.user import User
 from app.services.memory_rag import RAGHit, query_hash, search_rag
+from app.services.policy_consumer import is_policy_consumer_kind
 from app.utils.timeutil import utcnow
 
 
@@ -92,8 +93,14 @@ class ContextBuilder:
     ) -> BuiltContext:
         if token_budget < 1 or token_budget > 32_000:
             raise_api_error(422, POLICY_CONTEXT_INVALID, "token_budget 超出范围")
-        if agent_kind not in ("assistant", "steward"):
-            raise_api_error(422, POLICY_CONTEXT_INVALID, "agent kind 不受支持")
+        if not is_policy_consumer_kind(agent_kind):
+            raise_api_error(422, POLICY_CONTEXT_INVALID, "policy consumer 不受支持")
+        if agent_kind == "steward" and run_id is not None:
+            raise_api_error(
+                422,
+                POLICY_CONTEXT_INVALID,
+                "Steward consumer 不得伪造 generic AgentRun",
+            )
         # Prefetched input is mandatory for a context hook.  DB-backed prefetch
         # is available only on this builder/service boundary.
         if prefetched is None:
@@ -134,9 +141,6 @@ class ContextBuilder:
         for _rank, source in enumerate(sources):
             if source.trust != "untrusted_data":
                 excluded.append({"source_id": source.source_id, "reason": "invalid_trust"})
-                continue
-            if agent_kind == "steward" and source.scope == "private":
-                excluded.append({"source_id": source.source_id, "reason": "private_for_steward"})
                 continue
             if source.sensitivity == "local_required" and provider_kind != "local":
                 excluded.append({"source_id": source.source_id, "reason": "local_required"})

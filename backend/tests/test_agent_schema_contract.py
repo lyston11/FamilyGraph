@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+import pytest
+from pydantic import BaseModel, ValidationError
 
 from app.schemas import agent
 
@@ -77,6 +78,11 @@ def test_internal_input_models_fail_closed_on_extra_fields() -> None:
     ]
     for model in strict_inputs:
         assert model.model_config.get("extra") == "forbid", f"{model.__name__} 未 fail-closed"
+
+
+def test_lease_kind_is_required() -> None:
+    with pytest.raises(ValidationError):
+        agent.LeaseRequest(leased_by="sidecar")
 
 
 def test_lease_out_field_contract() -> None:

@@ -73,13 +73,25 @@ def test_token_type_confusion_rejected():
     run_raw = issue_run_token(
         run_id=1,
         job_id=1,
-        agent_kind="steward",
+        agent_kind="assistant",
         account_id=1,
         space_id=1,
-        tool_allowlist=["familygraph.steward_ping"],
+        tool_allowlist=["familygraph.echo"],
     )
     with pytest.raises(AgentTokenError):
         decode_service_token(run_raw)
+
+
+def test_unsupported_run_kind_rejected_at_issue_boundary():
+    with pytest.raises(AgentTokenError):
+        issue_run_token(
+            run_id=1,
+            job_id=1,
+            agent_kind="steward",
+            account_id=1,
+            space_id=1,
+            tool_allowlist=[],
+        )
 
 
 def test_missing_shared_secret_fails_closed(monkeypatch):

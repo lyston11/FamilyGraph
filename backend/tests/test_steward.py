@@ -1088,3 +1088,117 @@ def test_steward_disabled_rejects_enqueue(monkeypatch: pytest.MonkeyPatch, db_se
         )
     assert _err_code(exc_info.value) == "STEWARD_DISABLED"
     assert exc_info.value.status_code == 503
+
+
+# ---- 8. 人物身份重复回溯审计（architecture.md §0.9）----
+
+_DUP_SOLAR = {"cal_type": "solar", "date": "1948-03-12"}
+_DUP_SOLAR_OTHER = {"cal_type": "solar", "date": "1950-01-01"}
+
+
+def _dup_conflicts(session: Session) -> list[DomainEvent]:
+    return [
+        e
+        for e in _events(session, "steward.")
+        if e.type == "steward.conflict_detected"
+        and str(e.payload["detail"].get("code", "")).startswith("duplicate_person_")
+    ]
+
+
+def test_audit_reports_strong_duplicate_without_touching_the_graph(db_session) -> None:
+    """同一空间两份同名同生日档案 → 报 strong 冲突，且不合并、不删档。"""
+    space = _space(db_session, "dup-strong", kind="lineage")
+    first = _person(db_session, space.id, "李秀英", gender="f")
+    second = _person(db_session, space.id, "李秀英", gender="f")
+    first.birth = dict(_DUP_SOLAR)
+    second.birth = dict(_DUP_SOLAR)
+    db_session.commit()
+
+    cursor = emit_event(
+        db_session, event_type="profile.created", aggregate_type="profile", aggregate_id=second.id
+    )
+    db_session.commit()
+    _run_job(db_session, space, cursor.id)
+
+    events = _dup_conflicts(db_session)
+    assert len(events) == 1
+    assert events[0].payload["detail"]["code"] == "duplicate_person_strong"
+    assert events[0].payload["detail"]["pair"] == sorted([first.id, second.id])
+    # 只报告：两份档案与各自账号都还在（合并需显式领域命令 + 人工确认）
+    db_session.expire_all()
+    assert db_session.get(User, first.id) is not None
+    assert db_session.get(User, second.id) is not None
+
+
+def test_audit_catches_duplicate_that_only_emerges_after_birth_is_filled_in(db_session) -> None:
+    """涌现场景：建档时无生日只构成 weak；事后补上生日才成 strong。
+
+    这是要 Steward 这个引擎的核心理由——补生日的那一刻没有任何建档请求在跑，
+    写入门禁结构上不可能看见它。
+    """
+    space = _space(db_session, "dup-emergent", kind="lineage")
+    first = _person(db_session, space.id, "王秀兰", gender="f")
+    second = _person(db_session, space.id, "王秀兰", gender="f")
+    first.birth = dict(_DUP_SOLAR)
+    second.birth = None  # 建档时不知道生日
+    db_session.commit()
+
+    cursor = emit_event(
+        db_session, event_type="profile.created", aggregate_type="profile", aggregate_id=second.id
+    )
+    db_session.commit()
+    _run_job(db_session, space, cursor.id)
+    codes = [e.payload["detail"]["code"] for e in _dup_conflicts(db_session)]
+    assert codes == ["duplicate_person_weak"]
+
+    # 本人认领后补上生日 → 同一对档案升级为 strong
+    second.birth = dict(_DUP_SOLAR)
+    db_session.commit()
+    later = emit_event(
+        db_session, event_type="profile.updated", aggregate_type="profile", aggregate_id=second.id
+    )
+    db_session.commit()
+    _run_job(db_session, space, later.id)
+
+    codes = sorted(e.payload["detail"]["code"] for e in _dup_conflicts(db_session))
+    assert codes == ["duplicate_person_strong", "duplicate_person_weak"]
+
+
+def test_audit_signature_dedupe_does_not_re_report(db_session) -> None:
+    """同一重复配对重复跑作业只报一次（finding 签名幂等）。"""
+    space = _space(db_session, "dup-idem", kind="lineage")
+    first = _person(db_session, space.id, "赵桂芳", gender="f")
+    second = _person(db_session, space.id, "赵桂芳", gender="f")
+    first.birth = dict(_DUP_SOLAR)
+    second.birth = dict(_DUP_SOLAR)
+    db_session.commit()
+
+    for _ in range(2):
+        cursor = emit_event(
+            db_session,
+            event_type="profile.updated",
+            aggregate_type="profile",
+            aggregate_id=second.id,
+        )
+        db_session.commit()
+        _run_job(db_session, space, cursor.id)
+
+    assert len(_dup_conflicts(db_session)) == 1
+
+
+def test_audit_ignores_same_name_different_birth(db_session) -> None:
+    """双方生日都在且不同 → 同名不同人，不报冲突（大家族跨辈同名常见）。"""
+    space = _space(db_session, "dup-namesake", kind="lineage")
+    first = _person(db_session, space.id, "陈志强")
+    second = _person(db_session, space.id, "陈志强")
+    first.birth = dict(_DUP_SOLAR)
+    second.birth = dict(_DUP_SOLAR_OTHER)
+    db_session.commit()
+
+    cursor = emit_event(
+        db_session, event_type="profile.created", aggregate_type="profile", aggregate_id=second.id
+    )
+    db_session.commit()
+    _run_job(db_session, space, cursor.id)
+
+    assert _dup_conflicts(db_session) == []

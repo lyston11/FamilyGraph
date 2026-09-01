@@ -205,6 +205,10 @@ def create_member(
         relation_text=payload.relation_text,
         idempotency_key=key,
         request_hash=request_hash,
+        # 刻意不进 request_hash：它只决定"是否允许创建"，不改变被创建的内容。
+        # 进哈希会让"先收 409、再带确认重试"复用同一 Idempotency-Key 时撞上
+        # IDEMPOTENCY_PAYLOAD_CONFLICT，把预期的消歧流程堵死。
+        allow_duplicate_person=payload.allow_duplicate_person,
     )
     return MemberCreateResponse(
         user=_member_out(session, member, actor), pin=pin, replayed=replayed
