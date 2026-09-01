@@ -545,3 +545,24 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: PersonalFamilyView 前端整体落地（Phase 1-7 + 双主题走查 + P0 修复）
+
+**Date**: 2026-09-02
+**Task**: PersonalFamilyView 前端整体落地（Phase 1-7 + 双主题走查 + P0 修复）
+**Branch**: `main`
+
+### Summary
+
+完成 09-01-personal-family-view-frontend 全部七个 Phase：统一家庭壳/路由重构、家庭卡与家族树切换到 PersonalFamilyView 授权投影、只读公示页与关系说明、记忆五标签/通知/空间化统计/设置/空间管理、系统管理员边界占位；household-card/notifications/spaceStats 为 BLOCKER 合同占位（decoder+store+fixture 测试）。375px 双主题隔离环境真实走查：发现并修复 /login 无限重载 P0（壳初始导航窗口未认证请求 + 会话过期跳转循环）与公示页覆盖当前空间上下文 P1，补回归测试。四项门禁全绿（468 测试），trellis-check pass，spec 更新（空间键控 store、壳引导 gotcha、BLOCKER 合同占位模式）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a67010a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
