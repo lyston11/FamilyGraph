@@ -13,7 +13,7 @@ import type { Member } from '@/types/api'
  *
  * - 走既有邀请流程：按名字前缀搜索已有账号 → `POST /spaces/{id}/members`
  *   （spaces store.invite），受邀人本人接受后才 active，绝不静默拉人入空间；
- * - 授权（active member 除 guest）由 spaces store 的 canInvite 判定，本组件
+ * - 授权（active member）由 spaces store 的 canInvite 判定，本组件
  *   不做本地角色推断；调用方也应在打开入口前用同一 getter 控制可见性；
  * - 打开时聚焦搜索，关闭即清空候选与关键字（不留内存态）。
  */

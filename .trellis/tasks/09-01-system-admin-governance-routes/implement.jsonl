@@ -1,1 +1,4 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/architecture.md", "reason": "独立system_admin主体、JWT principal_type、治理最小权限和break-glass边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "系统管理员主体表、会话和审计的数据库约束"}
+{"file": ".trellis/tasks/09-01-system-admin-governance-routes/research/governance-boundary.md", "reason": "当前系统管理员后端基线、前端占位缺口和旧admin.py安全边界"}

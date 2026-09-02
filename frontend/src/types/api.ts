@@ -125,13 +125,12 @@ export interface ClanDisclosure {
 
 export type SpaceKind = 'household' | 'lineage'
 /**
- * 空间角色：产品层只有一个「空间管理员」（`space_admin`）。
+ * 空间角色：产品层只有一个「空间管理员」（`space_admin`）和普通成员（`member`）。
  *
  * 旧 `owner` 已在迁移 0022 归一化为 `space_admin`，后端 `SpaceMemberOut` 不再
- * 输出它，因此前端不保留该字面量。`guest` 仍是后端规范角色之一（无写入路径，
- * 只在可见性收紧分支中生效）。
+ * 输出它，因此前端不保留该字面量。
  */
-export type SpaceRole = 'space_admin' | 'member' | 'guest'
+export type SpaceRole = 'space_admin' | 'member'
 
 /** 当前主体对该档案的可用操作（resolve_relation 投影） */
 export interface MemberPermissions {

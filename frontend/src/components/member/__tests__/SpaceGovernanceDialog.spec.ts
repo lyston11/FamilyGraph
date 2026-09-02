@@ -142,20 +142,18 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     void useAuthStore(pinia)
   }
 
-  // 每空间只有一个管理员（0022 迁移后 role 收敛为 space_admin/member/guest）：
-  // 用户1 是本空间管理员，用户2 普通成员，用户3 访客。
+  // 每空间只有一个管理员；其余用户为普通成员。
   const allMembers = (): SpaceMemberInfo[] => [
     makeMembership({ id: 11, user_id: 1, role: 'space_admin' }),
     makeMembership({ id: 12, user_id: 2, role: 'member' }),
-    makeMembership({ id: 13, user_id: 3, role: 'guest' }),
+    makeMembership({ id: 13, user_id: 3, role: 'member' }),
   ]
 
-  it('管理员视角：kind/角色徽标正确，可见邀请区与交接发起区；访客提示不出现', async () => {
+  it('管理员视角：kind/角色徽标正确，可见邀请区与交接发起区', async () => {
     seedState(1, allMembers())
     const wrapper = await mountDialog()
 
     expect(text('[data-test="my-role-tag"]')).toContain('空间管理员')
-    expect(document.querySelector('[data-test="guest-hint"]')).toBeNull()
     expect(document.querySelector('[data-test="governance-invite-search"]')).not.toBeNull()
     expect(document.querySelector('[data-test="transfer-target-select"]')).not.toBeNull()
     // 交接候选排除自己（下拉打开后才渲染，候选顺序由后续测试覆盖）
@@ -238,17 +236,6 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     mockedRespondTransfer.mockResolvedValue(makeTransfer({ status: 'cancelled', decided_at: 'x' }))
     click('[data-test="transfer-cancel"]')
     await vi.waitFor(() => expect(mockedRespondTransfer).toHaveBeenCalledWith(50, 'cancel'))
-    wrapper.unmount()
-  })
-
-  it('访客视角：显示最小信息提示且无邀请区', async () => {
-    seedState(3, allMembers())
-    const wrapper = await mountDialog()
-
-    expect(document.querySelector('[data-test="guest-hint"]')).not.toBeNull()
-    expect(text('[data-test="my-role-tag"]')).toContain('访客')
-    expect(document.querySelector('[data-test="governance-invite-search"]')).toBeNull()
-    expect(document.querySelector('[data-test="transfer-target-select"]')).toBeNull()
     wrapper.unmount()
   })
 })

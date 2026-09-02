@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref } from 'vue'
 import {
-  NAlert,
   NButton,
   NDataTable,
   NInput,
@@ -32,12 +31,10 @@ const message = useMessage()
 const ROLE_LABELS: Record<SpaceRole, string> = {
   space_admin: '空间管理员',
   member: '成员',
-  guest: '访客',
 }
 const ROLE_BADGE_CLASS: Record<SpaceRole, string> = {
   space_admin: 'fg-badge fg-badge--accent',
   member: 'fg-badge fg-badge--neutral',
-  guest: 'fg-badge fg-badge--provisional',
 }
 
 const keyword = ref('')
@@ -218,16 +215,6 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
       </span>
     </div>
 
-    <NAlert
-      v-if="myRole === 'guest'"
-      type="info"
-      :show-icon="true"
-      class="guest-hint"
-      data-test="guest-hint"
-    >
-      你以访客身份参与此空间，仅可见最小化信息，不获得家庭详情。
-    </NAlert>
-
     <h3 class="block-title">成员</h3>
     <NDataTable
       size="small"
@@ -322,7 +309,6 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
 .summary-label { color: var(--fg-ink-secondary); font-size: 12px; }
 .summary-item strong { color: var(--fg-ink); font-size: 20px; }
 .badges { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-.guest-hint { margin-bottom: 12px; }
 .block-title { margin: 16px 0 8px; font-size: 14px; color: var(--fg-ink); }
 .invite-row, .transfer-row { display: flex; gap: 8px; }
 .invite-input, .transfer-select { flex: 1; }

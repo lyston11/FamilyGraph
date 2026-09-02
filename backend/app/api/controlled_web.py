@@ -59,7 +59,7 @@ def _space_member(db: Session, identity: tuple[User, Account], space_id: int) ->
             SpaceMember.status == "active",
         )
     )
-    if member is None or member.role == "guest":
+    if member is None:
         raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "当前账号无权访问该空间")
     return member
 

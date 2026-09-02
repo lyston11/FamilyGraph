@@ -202,21 +202,67 @@ const computedAtText = computed(() => props.computedAt ?? '暂无更新时间')
 .panel-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   margin: 0;
 }
 
+.field {
+  padding: 12px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-surface-sunken) 80%, transparent) 0%,
+    color-mix(in srgb, var(--fg-surface-sunken) 60%, transparent) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--fg-line) 70%, transparent);
+  border-radius: var(--fg-radius-control);
+  transition: all 0.3s ease;
+  animation: fadeInUp 0.4s ease backwards;
+}
+
+.field:nth-child(1) { animation-delay: 0.05s; }
+.field:nth-child(2) { animation-delay: 0.1s; }
+.field:nth-child(3) { animation-delay: 0.15s; }
+.field:nth-child(4) { animation-delay: 0.2s; }
+.field:nth-child(5) { animation-delay: 0.25s; }
+.field:nth-child(6) { animation-delay: 0.3s; }
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.field:hover {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-surface-sunken) 90%, transparent) 0%,
+    color-mix(in srgb, var(--fg-surface-sunken) 70%, transparent) 100%
+  );
+  border-color: color-mix(in srgb, var(--fg-line-strong) 80%, transparent);
+  transform: translateX(2px);
+}
+
 .field dt {
-  margin-bottom: 2px;
-  font-size: 12px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   color: var(--fg-ink-secondary);
+  opacity: 0.8;
 }
 
 .field dd {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--fg-ink);
   line-height: 1.6;
+  font-weight: 500;
 }
 
 .concept-code {
@@ -231,16 +277,49 @@ const computedAtText = computed(() => props.computedAt ?? '暂无更新时间')
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .path-step {
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
   color: var(--fg-ink);
-  background-color: var(--fg-surface-sunken);
-  border: 1px solid var(--fg-line);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fg-accent) 8%, transparent) 0%,
+    transparent 100%
+  );
+  border-left: 3px solid var(--fg-accent);
   border-radius: var(--fg-radius-control);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.path-step::before {
+  content: '→';
+  position: absolute;
+  left: 8px;
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: all 0.3s ease;
+  color: var(--fg-accent);
+  font-weight: bold;
+}
+
+.path-step:hover {
+  padding-left: 24px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fg-accent) 12%, transparent) 0%,
+    transparent 100%
+  );
+  border-left-width: 4px;
+}
+
+.path-step:hover::before {
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .degraded {
@@ -252,5 +331,27 @@ const computedAtText = computed(() => props.computedAt ?? '暂无更新时间')
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--fg-line) 50%, transparent);
+}
+
+/* 动效降级支持 */
+@media (prefers-reduced-motion: reduce) {
+  .relation-panel,
+  .field,
+  .path-step {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .field:hover,
+  .path-step:hover {
+    transform: none;
+  }
+
+  .path-step::before {
+    display: none;
+  }
 }
 </style>

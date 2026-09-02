@@ -228,7 +228,7 @@ def list_space_profile_refs(
     """待确档最小节点引用（AC-F2 可观测性）：仅 {profile_id, name, added_at}。
 
     provisional 人物不是 SpaceMember，只以 space_profile_refs 最小引用存在；
-    本端点让空间成员能看到这些“待确档”条目。授权：该空间 active 成员（含 guest）；
+    本端点让空间成员能看到这些“待确档”条目。授权：该空间 active 成员；
     其余与不存在同一 404（防枚举）。字段投影恒为最小集，不随可见性放宽。
     """
     actor, _account = identity

@@ -4,7 +4,7 @@
 
 层级（优先序自高到低）：
     self_private       本人
-    household_detail   同 household 空间双方 active 且均非 guest；代管创建者映射此层
+    household_detail   同 household 空间双方 active；代管创建者映射此层
     lineage_summary    同 lineage 空间 active / space_profile_refs 最小引用 /
                        直系结构边（跨 household 不再自动 full）/ pending 最小互见
     none               其余（路由层转 404，防枚举）
@@ -187,9 +187,8 @@ def _shared_space_kinds(
 ) -> tuple[bool, bool]:
     """返回 (可给 household_detail, 可给 lineage_summary)。
 
-    共同空间双方 active 为前提；household 且双方均非 guest → household_detail；
-    lineage 空间，或 household 中涉及 guest（guest 不获得 household_detail）
-    → 仅 lineage_summary 最小互见。
+    共同空间双方 active 为前提；household → household_detail；
+    lineage → 仅 lineage_summary 最小互见。
     """
     mine = _active_memberships(session, actor_id, space_context)
     theirs = _active_memberships(session, target_id, space_context)
@@ -197,8 +196,7 @@ def _shared_space_kinds(
     household = lineage = False
     for space_id in shared:
         kinds = session.scalar(select(FamilySpace.kind).where(FamilySpace.id == space_id))
-        guest_involved = "guest" in (mine[space_id].role, theirs[space_id].role)
-        if kinds == "household" and not guest_involved:
+        if kinds == "household":
             household = True
         else:
             lineage = True

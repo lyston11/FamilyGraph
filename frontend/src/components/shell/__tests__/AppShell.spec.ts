@@ -177,12 +177,12 @@ describe('AppShell navigation（统一家庭壳）', () => {
     wrapper.unmount()
   })
 
-  it('普通成员和访客不显示空间管理或任何平台后台入口', async () => {
+  it('普通成员不显示空间管理或任何平台后台入口', async () => {
     const { wrapper, pinia } = await mountShell()
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [makeSpace({ owner_id: 9 })]
     spaces.currentSpaceId = 7
-    spaces.members = [makeMember({ role: 'guest', added_by: 9 })]
+    spaces.members = [makeMember({ role: 'member', added_by: 9 })]
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-test="space-management-link"]').exists()).toBe(false)

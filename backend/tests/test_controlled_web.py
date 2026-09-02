@@ -279,12 +279,37 @@ def test_search_denied_for_non_member(db_session, monkeypatch):
     assert exc.value.code == WEB_SPACE_DISABLED
 
 
-def test_search_denied_for_guest_member(db_session, monkeypatch):
+def test_search_allowed_for_active_member(db_session, monkeypatch):
     monkeypatch.setattr(config, "CONTROLLED_WEB_ENABLED", True)
-    owner, space = create_agent_fixture(db_session, name="web-owner7")
+    owner, space = create_agent_fixture(db_session, name="web-member-owner")
     create_space_member(db_session, space.id, owner.id, role="owner")
-    guest = create_user_with_pin(db_session, "web-guest", "123456")
-    create_space_member(db_session, space.id, guest.id, role="guest", status="active")
+    member = create_user_with_pin(db_session, "web-active-member", "123456")
+    create_space_member(db_session, space.id, member.id, role="member")
+    _enable_platform(db_session)
+    _enable_space(db_session, space_id=space.id)
+    db_session.commit()
+    _patch_dns(monkeypatch)
+    _patch_provider_search(monkeypatch)
+
+    result = controlled_web.search_web(
+        db_session,
+        account_id=member.account.id,
+        space_id=space.id,
+        run_id=None,
+        query="genealogy",
+        use_case="research",
+        limit=5,
+    )
+
+    assert len(result["results"]) == 1
+
+
+def test_search_denied_for_pending_member(db_session, monkeypatch):
+    monkeypatch.setattr(config, "CONTROLLED_WEB_ENABLED", True)
+    owner, space = create_agent_fixture(db_session, name="web-pending-owner")
+    create_space_member(db_session, space.id, owner.id, role="owner")
+    member = create_user_with_pin(db_session, "web-pending-member", "123456")
+    create_space_member(db_session, space.id, member.id, role="member", status="pending")
     _enable_platform(db_session)
     _enable_space(db_session, space_id=space.id)
     db_session.commit()
@@ -292,13 +317,14 @@ def test_search_denied_for_guest_member(db_session, monkeypatch):
     with pytest.raises(WebGatewayError) as exc:
         controlled_web.search_web(
             db_session,
-            account_id=guest.account.id,
+            account_id=member.account.id,
             space_id=space.id,
             run_id=None,
-            query="q",
+            query="genealogy",
             use_case="research",
             limit=5,
         )
+
     assert exc.value.code == WEB_SPACE_DISABLED
 
 

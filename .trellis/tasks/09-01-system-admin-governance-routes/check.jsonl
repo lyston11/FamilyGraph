@@ -1,1 +1,4 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/architecture.md", "reason": "用于检查主体隔离、治理字段白名单和旧break-glass不回归"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "用于检查主体会话、审计和数据库约束"}
+{"file": ".trellis/tasks/09-01-system-admin-governance-routes/research/governance-boundary.md", "reason": "用于检查登录、会话回跳、最小权限和旧admin路由未注册"}

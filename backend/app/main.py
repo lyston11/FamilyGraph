@@ -26,10 +26,12 @@ from app.api.deps import close_request_db, require_pin_changed
 from app.api.governance import router as governance_router
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
+from app.api.household_card import router as household_card_router
 from app.api.internal_agent import router as internal_agent_router
 from app.api.kinship import router as kinship_router
 from app.api.memory import router as memory_router
 from app.api.misc import router as misc_router
+from app.api.notifications import router as notifications_router
 from app.api.personal_family_view import router as personal_family_view_router
 from app.api.spaces import router as spaces_router
 from app.api.system_admin import router as system_admin_router
@@ -153,6 +155,9 @@ app.include_router(action_cards_router, prefix="/api")
 # V2.5 Memory cards and scope-filtered RAG
 app.include_router(memory_router, prefix="/api")
 app.include_router(personal_family_view_router, prefix="/api")
+# PersonalFamilyView 遗留授权投影闭环（household card / notifications）
+app.include_router(household_card_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
 # V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）
 app.include_router(controlled_web_router, prefix="/api")
 app.include_router(controlled_web_admin_router, prefix="/api")

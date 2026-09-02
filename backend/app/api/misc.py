@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,8 @@ from app.api.deps import get_db, require_authenticated_user
 from app.models.account import Account
 from app.models.relation import Relation
 from app.models.user import User
+from app.schemas.space_stats import SpaceStatsOut
+from app.services import family_projection, space_stats
 from app.services.lunar import lunar_to_solar, solar_to_lunar
 from app.services.visibility import (
     FIELD_CLEAR,
@@ -23,6 +25,8 @@ from app.services.visibility import (
 from app.utils.timeutil import utcnow
 
 router = APIRouter(tags=["misc"])
+
+_SPACE_STATS_CONTRACT_VERSION = "space-stats-v1"
 
 
 @router.get("/lunar/mirror")
@@ -52,13 +56,35 @@ def lunar_mirror(
 # ---- m3c 统计 ----
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=None)
 def stats(
+    response: Response,
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
-) -> dict[str, Any]:
-    """可见范围内家族统计（矩阵：可见者计入，其余不计入）。"""
-    actor, _account = identity
+    space_id: int | None = Query(default=None),
+    if_none_match: str | None = Header(default=None),
+) -> dict[str, Any] | Response:
+    """统计入口。
+
+    - 无 ``space_id``：旧无空间统计合同（可见范围内 total/gender/generation/
+      birthdays），为既有调用方原样保留，语义不变；
+    - 有 ``space_id``：新的空间限定授权聚合合同（SpaceStatsOut，design.md §4），
+      由 PersonalFamilyView 投影服务端聚合，支持 ETag/304；两合同互不回退。
+    """
+    actor, account = identity
+    if space_id is None:
+        return _legacy_stats(session, actor)
+    return _space_stats(
+        session,
+        account=account,
+        space_id=space_id,
+        if_none_match=if_none_match,
+        response=response,
+    )
+
+
+def _legacy_stats(session: Session, actor: User) -> dict[str, Any]:
+    """可见范围内家族统计（矩阵：可见者计入，其余不计入）——旧合同保持不变。"""
     visible = visible_user_ids(session, actor)
     users = session.query(User).filter(User.id.in_(visible)).all() if visible else []
 
@@ -103,6 +129,26 @@ def stats(
         "generation_histogram": [{"bucket": k, "count": v} for k, v in sorted(generation.items())],
         "birthdays_this_month": birthdays,
     }
+
+
+def _space_stats(
+    session: Session,
+    *,
+    account: Account,
+    space_id: int,
+    if_none_match: str | None,
+    response: Response,
+) -> dict[str, Any] | Response:
+    """空间限定授权聚合（SpaceStatsOut）；先授权复核，后 ETag 比较。"""
+    family_projection.require_pfv_enabled()
+    payload = space_stats.space_stats_payload(session, account=account, space_id=space_id)
+    etag = family_projection.etag_for_json(
+        _SPACE_STATS_CONTRACT_VERSION, SpaceStatsOut.model_validate(payload).model_dump_json()
+    )
+    if if_none_match == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
+    return SpaceStatsOut.model_validate(payload)
 
 
 # ---- m3d 搜索 ----

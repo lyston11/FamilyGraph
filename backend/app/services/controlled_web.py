@@ -310,7 +310,7 @@ def _get_policy(db: Session, space_id: int, use_case: str) -> WebPolicy:
 
 
 def _require_member(db: Session, account_id: int, space_id: int) -> None:
-    """Require a non-guest active member without trusting a profile id from the caller."""
+    """Require an active member without trusting a profile id from the caller."""
     from app.models.account import Account
 
     account = db.get(Account, account_id)
@@ -323,7 +323,7 @@ def _require_member(db: Session, account_id: int, space_id: int) -> None:
             SpaceMember.status == "active",
         )
     )
-    if member is None or member.role == "guest":
+    if member is None:
         raise WebGatewayError(403, WEB_SPACE_DISABLED, "当前账号不是该空间的有效成员")
 
 

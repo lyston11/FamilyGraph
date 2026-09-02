@@ -6,7 +6,7 @@ import pytest
 from conftest import auth_header, create_space_member, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
-from app.models.space import FamilySpace, SpaceMember
+from app.models.space import FamilySpace
 from app.utils.timeutil import utcnow
 
 
@@ -36,30 +36,6 @@ def test_active_member_can_invite(client: TestClient, db_session, role: str) -> 
 
     assert response.status_code == 201, response.text
     assert response.json()["status"] == "pending"
-
-
-def test_guest_cannot_invite_member(client: TestClient, db_session) -> None:
-    """guest 是最小可见角色，不获得邀请权。"""
-    owner = create_user_with_pin(db_session, "guest-owner", "333333")
-    actor = create_user_with_pin(db_session, "guest-actor", "444444")
-    target = create_user_with_pin(db_session, "guest-target", "555555")
-    now = utcnow()
-    space = FamilySpace(name="guest-space", owner_id=owner.id, kind="household", created_at=now)
-    db_session.add(space)
-    db_session.flush()
-    create_space_member(db_session, space.id, owner.id, role="owner")
-    create_space_member(db_session, space.id, actor.id, role="guest")
-    db_session.commit()
-
-    response = client.post(
-        f"/api/spaces/{space.id}/members",
-        headers=_login(client, actor.name, "444444"),
-        json={"user_id": target.id},
-    )
-
-    assert response.status_code == 403, response.text
-    assert response.json()["error"]["code"] == "SPACE_FORBIDDEN_ACTOR"
-    assert db_session.query(SpaceMember).filter(SpaceMember.user_id == target.id).count() == 0
 
 
 def test_platform_operator_cannot_invite_into_family_space(client: TestClient, db_session) -> None:

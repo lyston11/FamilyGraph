@@ -108,7 +108,7 @@ describe('spaces store（AD-3）', () => {
     expect(store.canTransferOwnership).toBe(false)
   })
 
-  it('canInvite：active 成员（除 guest）均可邀请；guest 与无 active membership 不可', () => {
+  it('canInvite：所有 active 成员均可邀请；无 active membership 不可', () => {
     const auth = useAuthStore()
     auth.user = {
       id: 1,
@@ -136,9 +136,6 @@ describe('spaces store（AD-3）', () => {
       store.members = [{ ...baseMember, role }]
       expect(store.canInvite).toBe(true)
     }
-
-    store.members = [{ ...baseMember, role: 'guest' }]
-    expect(store.canInvite).toBe(false)
 
     // 无当前空间 active membership：pending 行不派生角色，不获得邀请权
     store.members = [{ ...baseMember, role: 'member', status: 'pending' }]

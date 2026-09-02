@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/architecture.md", "reason": "用于检查授权投影不泄露none节点、隐藏对象和系统管理员家庭权限"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "用于检查迁移、事务、索引和通知已读命令数据库约束"}
+{"file": ".trellis/tasks/09-02-personal-family-view-followup/research/current-contract-gaps.md", "reason": "用于按冻结API合同检查服务端实现"}
+{"file": ".trellis/tasks/09-02-personal-family-view-followup/research/authorization-and-cache-boundaries.md", "reason": "用于检查撤权、ETag和前端缓存竞态"}

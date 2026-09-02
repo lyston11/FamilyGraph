@@ -1,7 +1,7 @@
 """GET /spaces/{id}/profile-refs（AC-F2 可观测性，v2 D4 Gap1）。
 
 断言：仅 active 引用、最小字段集 {profile_id, name, added_at}；
-授权=该空间 active 成员（含 guest）；pending/无关用户与不存在同一 404。
+授权=该空间 active 成员；pending/无关用户与不存在同一 404。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def ref_scene(db_session):
-    """宗族空间：owner 甲 + active 成员 乙 + guest 丙 + pending 丁 + 无关 庚；引用先祖。"""
+    """宗族空间：owner 甲 + active 成员乙、丙 + pending 丁 + 无关庚；引用先祖。"""
     from app.models.space import FamilySpace, SpaceProfileRef
     from app.utils.timeutil import utcnow
 
@@ -48,7 +48,7 @@ def ref_scene(db_session):
             space_id=lineage.id,
             user_id=bing.id,
             added_by=jia.id,
-            role="guest",
+            role="member",
             status="active",
             created_at=now,
             updated_at=now,
@@ -117,7 +117,7 @@ def test_active_member_reads_minimal_ref_fields(client, ref_scene) -> None:
     assert row["name"] == "先祖"
 
 
-def test_guest_and_regular_member_also_read(client, ref_scene) -> None:
+def test_regular_members_also_read(client, ref_scene) -> None:
     space_id = ref_scene["space"].id
     for name, pin in (("乙", "222222"), ("丙", "333333")):
         h = _h(client, name, pin)

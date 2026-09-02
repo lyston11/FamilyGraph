@@ -34,9 +34,69 @@
 ## 系统管理员与空间管理员约束（2026-08-31）
 
 - `system_admins`/`system_admin_accounts` 是独立主体表；禁止用 `users.is_admin` 或 `platform_role_assignments` 作为运行时家庭/后台主体判定。
-- `space_members` 规范角色只有 `space_admin|member|guest`，并以 partial unique index `space_id WHERE role='space_admin' AND status='active'` 保证每空间最多一个 active 管理员；创建/交接命令保证正常终态恰好一个。
+- `space_members` 规范角色只有 `space_admin|member`，并以 CHECK 约束拒绝其他值、以 partial unique index `space_id WHERE role='space_admin' AND status='active'` 保证每空间最多一个 active 管理员；创建/交接命令保证正常终态恰好一个。角色收窄迁移必须先验证不存在待处置的历史角色行，再重建 SQLite 约束；不得在迁移中静默转换或删除成员关系。
 - `owner_id` 仅为迁移期兼容镜像，不能参与授权；旧 `owner` 输入必须在写入边界归一化为 `space_admin`。
 - 系统后台查询使用显式列和专用 schema；家庭端点必须使用 `require_authenticated_user`，拒绝 `system_admin` 主体。
+
+## Scenario: 收窄空间角色枚举（2026-09-02）
+
+### 1. Scope / Trigger
+
+当产品删除 `SpaceMember.role` 的角色值时，数据库 CHECK、ORM 常量、Pydantic schema、后端授权分支和前端共享类型必须在同一任务中收敛；禁止只删 UI 选项或应用层分支。
+
+### 2. Signatures
+
+- DB：`space_members.role VARCHAR(16) CHECK(role IN ('space_admin','member'))`。
+- ORM：`SPACE_MEMBER_ROLES = ("space_admin", "member")`。
+- API：`SpaceMemberOut.role: Literal["space_admin", "member"]`。
+- 迁移：`0026_remove_guest_role.upgrade()` 收紧 CHECK；`downgrade()` 仅恢复旧三值结构。
+
+### 3. Contracts
+
+- active `space_admin` 与 active `member` 均属于有效空间成员；邀请、household 可见性和 controlled-web 不再存在第三种角色特判。
+- 角色收窄迁移只改变 schema，不自动转换或删除成员关系。
+- SQLite 重建 `space_members` 时必须保留 `id/space_id/user_id/added_by/role/status/created_at/updated_at`、`uq_space_member_pair`、成员查询索引、active 管理员 partial unique index，以及 `CASCADE/CASCADE/SET NULL` 三条 FK 删除动作。
+
+### 4. Validation & Error Matrix
+
+- upgrade 前发现 `role` 不在新枚举中 → 迁移抛出 `RuntimeError` 并在重建表前中止，原 schema 和数据保持不变。
+- upgrade 后写入已删除角色 → SQLite `IntegrityError`。
+- 非 active membership（pending/rejected/withdrawn/removed）→ 仍按非有效成员拒绝，不因角色枚举变少而放宽。
+- downgrade → 恢复旧 CHECK 结构；不创建、不恢复任何历史成员行。
+
+### 5. Good/Base/Bad Cases
+
+- Good：无已删除角色数据时 upgrade 成功，普通 active `member` 可使用成员能力，guest 写入被 CHECK 拒绝。
+- Base：downgrade 后旧三值 CHECK 可再次接受 guest，仅作为结构回滚能力。
+- Bad：迁移中把未知角色静默升级为 member 或直接删除成员关系；这会在未经产品决策时改变访问权。
+
+### 6. Tests Required
+
+- 迁移测试：含 guest 行时 upgrade 抛错且 `sqlite_master` 中旧表结构仍存在。
+- 迁移测试：无 guest 行时 upgrade/downgrade 成功，并断言索引集合、`PRAGMA foreign_key_list` 删除动作和角色 CHECK。
+- 授权测试：普通 active `member` 的邀请、household 可见性和 controlled-web 正向通过；pending/non-member 负向拒绝。
+- 跨层门禁：后端 pytest/Ruff/mypy 与前端 type-check/lint/test/build 全部通过，并对非历史代码执行 guest 残留搜索。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```sql
+-- 静默改变已有用户的访问权，且应用代码与 DB 合同可能漂移。
+UPDATE space_members SET role = 'member' WHERE role = 'guest';
+```
+
+#### Correct
+
+```python
+guest_count = connection.scalar(
+    text("SELECT COUNT(*) FROM space_members WHERE role = 'guest'")
+)
+if guest_count:
+    raise RuntimeError("role migration requires an explicit data decision")
+# 确认无待处置行后再重建 SQLite CHECK，并恢复所有索引/FK。
+```
+
 ## SQLite 读事务升级与并发用例陷阱（2026-09-02）
 
 来源：修复 `accept_transfer` 双接受并发死锁（09-01-ownership-transfer-test-deadlock）。

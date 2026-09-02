@@ -381,10 +381,9 @@ describe('SpaceManagementView 非管理员安全拒绝态（双保险）', () =>
     document.body.innerHTML = ''
   })
 
-  it('member / guest / 平台运营标记（家庭主体）均渲染拒绝态且无分区与管理面板', async () => {
+  it('member / 平台运营标记（家庭主体）均渲染拒绝态且无分区与管理面板', async () => {
     const cases: Array<{ role: SpaceMemberInfo['role']; userOverrides?: Record<string, unknown> }> = [
       { role: 'member' },
-      { role: 'guest' },
       { role: 'member', userOverrides: { is_admin: true } },
     ]
     for (const testCase of cases) {

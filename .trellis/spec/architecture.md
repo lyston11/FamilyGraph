@@ -13,9 +13,9 @@
 
 - 可见性层级统一为 `self_private | household_detail | lineage_summary | none`，由 `visibility.evaluate(actor, target, space_context, purpose)` 单点输出 level 与字段级 mask；调用方不得自行拼装可见性规则。
 - **v1「直系结构边自动 full」（QU1=B）与 full/summary/invisible 三级作废**。直系结构边（elder/younger/spouse active）在无共同空间时最多授予 `lineage_summary`；peer 边本身不再授予任何可见性。
-- Household active member（非 guest）可见家庭详情，但凭据、私人会话/记忆、未公开关系、健康、住址等高敏感字段一律排除。
+- Household active member 可见家庭详情，但凭据、私人会话/记忆、未公开关系、健康、住址等高敏感字段一律排除。
 - Lineage 只见必要字段与本人公开类别：显式 `disclosure_preferences`（全局偏好可被逐空间覆盖，默认不公开）只扩展字段投影，不单独授予可见性。
-- pending 成员/请求两端点、guest、provisional 人物只见对应最小化信息（baseline 字段）。
+- pending 成员/请求两端点、provisional 人物只见对应最小化信息（baseline 字段）。
 - 未成年人默认最小披露 overlay：精确生日、住址、学校、联系方式、私人描述等对任何非本人主体遮蔽，不因 household、lineage、Agent 或 operator 身份自动开放。
 - purpose（profile/graph/search/statistics/export/agent/rag）只能收紧不得放宽：agent/rag/search/statistics 投影不得超过 profile API 口径。
 - 代管创建者（created_by）保有查看权，映射为 `household_detail` 层级；编辑权仍由 custody 判定。
@@ -24,7 +24,7 @@
 ### 0.2 平台角色与空间角色分离 **[v2 取代 users.is_admin 全局数据权]**
 
 - `platform_operator` 存于 `platform_role_assignments`，仅管理系统代码、Provider、工具白名单和安全策略；**默认且默认之外也无家庭数据读取权**，普通管理后台数据兜底操作走 break-glass 审计（后续任务）。users.is_admin 列已删除。
-- 空间角色为 `space_owner(space_members.role='owner')`、`space_admin`、`member`；household 空间可另有 `guest`，guest 不获得 household_detail。
+- 空间角色为 `space_admin`、`member`；旧 `owner` 只作为迁移兼容输入归一化为 `space_admin`，不参与授权或 API 输出。
 
 ### 0.3 三条独立单向状态机 **[v2 扩展 §1 ClaimState]**
 
@@ -55,10 +55,10 @@
 
 ### 0.7 空间管理者审批（用户确认 2026-08-30，任务 08-30-space-manager-approval）
 
-- **成为已有空间的空间管理者需要经平台运营者审批**：当前空间 active `member` 可申请由 `member` 升级为 `space_admin`；owner、已有 `space_admin`、guest 不适用。
-- **邀请与管理员审批是两条独立流程**：active member（除 guest）可以直接邀请账号，邀请只创建 pending membership，受邀人本人接受后才成为 active；邀请不需要平台运营者审批。
+- **成为已有空间的空间管理者需要经平台运营者审批**：当前空间 active `member` 可申请由 `member` 升级为 `space_admin`；已有 `space_admin` 不适用。
+- **邀请与管理员审批是两条独立流程**：active member 可以直接邀请账号，邀请只创建 pending membership，受邀人本人接受后才成为 active；邀请不需要平台运营者审批。
 - **空间创建沿用既有自由创建语义**：用户可通过 `POST /api/spaces` 创建 household/lineage 空间，自建者成为 owner + active 成员；MemberCreateWizard 也可直接创建族谱空间。共同家庭空间与 Owner Onboarding 邀请兑换路径保持不变。
-- 同一 (申请人, 目标空间, kind) 至多一条 pending（partial unique index + 命令层查重 409 `SPACE_MANAGER_APPLICATION_EXISTS`）；已裁决申请终态不可再变（重复裁决 409）。申请人须 `identity_confirmed`；guest 不能提交管理员申请。
+- 同一 (申请人, 目标空间, kind) 至多一条 pending（partial unique index + 命令层查重 409 `SPACE_MANAGER_APPLICATION_EXISTS`）；已裁决申请终态不可再变（重复裁决 409）。申请人须 `identity_confirmed` 且是目标空间 active `member`。
 - **现有空间的 owner 只能通过既有 owner 移交流程（ownership_transfers FSM，现任 owner 发起）变更**；平台运营者裁决 `space_admin` 申请绝不触碰任何现有空间的 `family_spaces.owner_id`，approve 只做该空间内 active member → space_admin 一升。
 - 裁决动作（approve/reject，reject 理由必填 422）在同一短事务内完成：角色升级 + 审计（`manager_application_submitted/approved/rejected`，批准行带 `admin_action`）+ 领域事件 `space.manager_application.decided`；若审批时成员资格已变化，申请回滚为 pending。
 - 运营者队列仅展示裁决所需最小数据（申请人名、申请类型、目标空间名），不产生任何家庭数据浏览权（延续 §0.2/§0.6 边界）。
@@ -87,7 +87,7 @@
 
 ### 3. Contracts
 
-- `SpaceMember.role` 的持久化值为 `space_admin|member|guest`；每个正常空间最多一个 active `space_admin`，创建和交接完成后必须恰好一个。
+- `SpaceMember.role` 的持久化值为 `space_admin|member`；每个正常空间最多一个 active `space_admin`，创建和交接完成后必须恰好一个。
 - 旧 `owner` 只允许作为迁移/旧夹具输入，在 ORM 写入事件中归一化为 `space_admin`；不得参与授权，也不得作为 API 产品角色输出。
 - JWT 必须携带 `principal_type=system_admin|family_user`；家庭端依赖拒绝 system-admin 主体，系统后台依赖拒绝普通家庭主体。
 - 元数据响应不得包含档案日期、性别、简介、头像、附件、关系图边、私人会话/记忆或敏感披露字段。
@@ -96,7 +96,7 @@
 
 - 非 `lineage` 管理员申请 → `422 VALIDATION_ERROR`。
 - 目标空间不存在或申请人不是 active 成员 → `404 SPACE_NOT_FOUND`（防枚举）。
-- guest、非 member、已是目标管理员 → `403/409`，不得创建申请。
+- 非 member、已是目标管理员 → `403/409`，不得创建申请。
 - 系统管理员未完成首登 PIN 修改 → 仅允许 PIN/登出/刷新白名单。
 - 已有管理员但未取得明确同意 → `409`，不得交换角色；原管理员拒绝时保持原关系不变。
 - 目标空间无管理员或并发交接校验失败 → `409`，进入修复/重新核验流程，不提交零/双管理员终态。
@@ -276,8 +276,8 @@ active  ──remove──> removed(终态, owner 或本人)
 | 搜索命中 | — | — | 允许(full 详情) | 允许(摘要) | 不可命中 |
 | 统计聚合 | — | — | 计入范围 | 计入范围 | 不计入 |
 | join_request | 目标空间 owner 可见审批 | — | — | — | — |
-| 空间邀请（invite） | — | active 成员（除 guest）可邀请；受邀人需接受 | — | — | — |
-| 空间管理者申请 | 提交（identity_confirmed；guest 否）与查看本人申请 | — | — | — | — |
+| 空间邀请（invite） | — | active 成员可邀请；受邀人需接受 | — | — | — |
+| 空间管理者申请 | 提交（identity_confirmed active member）与查看本人申请 | — | — | — | — |
 | 管理者申请裁决 | platform_operator only（队列/approve/reject + audit；见 §0.7） | — | — | — | — |
 | 管理 API | is_admin only + audit | — | — | — | — |
 

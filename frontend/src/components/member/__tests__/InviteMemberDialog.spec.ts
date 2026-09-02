@@ -159,10 +159,10 @@ describe('InviteMemberDialog', () => {
     wrapper.unmount()
   })
 
-  it('空间 store 判定不可邀请（guest）时不搜索也不邀请', async () => {
+  it('空间 store 判定无 active membership 时不搜索也不邀请', async () => {
     const wrapper = await mountDialog()
     const spaces = useSpacesStore()
-    spaces.members = [makeMembership({ role: 'guest' })]
+    spaces.members = [makeMembership({ status: 'pending' })]
     await flushPromises()
 
     await searchKeyword('母')

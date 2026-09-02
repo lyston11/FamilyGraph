@@ -3,7 +3,7 @@
 v2 语义：
 - family_spaces.kind = household | lineage；owner FK 为 RESTRICT：
   删除 owner 前必须移交/显式终止，禁止 FK 级联静默删空间。
-- space_members.role = space_admin|member|guest；owner_id 仅兼容镜像，不参与授权。
+- space_members.role = space_admin|member；owner_id 仅兼容镜像，不参与授权。
 - space_profile_refs：创建他人选择空间时只建最小节点引用；
   provisional 人物不是 SpaceMember。
 """
@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 SPACE_MEMBER_STATUSES = ("pending", "active", "rejected", "withdrawn", "removed")
-SPACE_MEMBER_ROLES = ("space_admin", "member", "guest")
+SPACE_MEMBER_ROLES = ("space_admin", "member")
 PENDING_EXPIRY_DAYS = 30
 
 # 空间管理者申请（平台运营者审批制，任务 08-30-space-manager-approval）
@@ -60,7 +60,7 @@ class SpaceMember(Base):
     __tablename__ = "space_members"
     __table_args__ = (
         UniqueConstraint("space_id", "user_id", name="uq_space_member_pair"),
-        CheckConstraint("role IN ('space_admin','member','guest')", name="ck_sm_role"),
+        CheckConstraint("role IN ('space_admin','member')", name="ck_sm_role"),
         Index(
             "uq_space_active_admin",
             "space_id",
@@ -140,7 +140,7 @@ class SpaceManagerApplication(Base):
     """空间管理者申请（平台运营者审批制，任务 08-30-space-manager-approval）。
 
     request_kind 只有 ``space_admin``：申请人成为目标空间的 space_admin。
-    申请人须为该空间 active member；owner/space_admin/guest 不适用。
+    申请人须为该空间 active member；owner/space_admin 不适用。
 
     裁决语义：approve/reject 由 platform_operator 在管理端做出（reject 理由必填）；
     裁决终态不可再变（重复裁决 409）。现有空间 owner 只经 ownership_transfers

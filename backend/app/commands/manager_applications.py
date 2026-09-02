@@ -2,7 +2,7 @@
 
 合同（PRD 用户确认 2026-08-30，记录于 spec/architecture.md §0.7）：
 - 只有成为已有空间的管理者需要审批：active member 申请 member → space_admin；
-- 拉人、邀请不需要审批，active member（除 guest）可邀请，受邀人仍需接受；
+- 拉人、邀请不需要审批，active member 可邀请，受邀人仍需接受；
 - 新空间开辟和 Owner Invitation 保持既有语义；现有空间 owner 仅经 ownership_transfers FSM 变更。
 - 每条命令单短事务：授权 → 校验 → 写入 → domain_events → audit。
 """
@@ -50,18 +50,6 @@ def _application_or_404(session: Session, application_id: int) -> SpaceManagerAp
     return application
 
 
-def _reject_guest_only(session: Session, user_id: int) -> None:
-    """guest 不能提交管理者申请（guest 是最小可见角色，无治理升级通道）。
-
-    无任何 active 成员资格的用户不属于 guest；管理员申请必须指定其已有的 active member 资格。
-    仅当其全部 active 成员资格均为 guest 时拒绝。
-    """
-    memberships = session.query(SpaceMember).filter(SpaceMember.user_id == user_id).all()
-    active = [m for m in memberships if space_fsm.effective_status(m) == "active"]
-    if active and all(m.role == "guest" for m in active):
-        raise_api_error(403, VALIDATION_ERROR, "访客身份不能提交管理者申请")
-
-
 def submit_manager_application(
     session: Session,
     ctx: ActorContext,
@@ -76,7 +64,6 @@ def submit_manager_application(
             raise_api_error(422, VALIDATION_ERROR, "未知的申请类型")
         if actor.profile_status != "identity_confirmed":
             raise_api_error(403, VALIDATION_ERROR, "请先完成身份确认后再提交申请")
-        _reject_guest_only(session, actor.id)
 
         space = session.get(FamilySpace, space_id)
         if space is None:

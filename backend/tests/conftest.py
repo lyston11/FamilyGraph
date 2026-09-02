@@ -96,6 +96,8 @@ _TABLES = (
     "web_space_configs",
     "web_platform_configs",
     # v2.4 steward 块：action_cards/steward_jobs 引用 accounts/users/spaces，先于父表删
+    # notifications 引用 action_cards/space_members（CASCADE），先于其父表删
+    "notifications",
     "behavior_projections",
     "steward_jobs",
     "action_cards",

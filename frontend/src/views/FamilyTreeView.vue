@@ -375,31 +375,89 @@ function resolveName(userId: number): string | null {
 .family-tree-view {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px 16px 24px;
+  gap: 16px;
+  padding: 24px 20px 28px;
   box-sizing: border-box;
   height: 100%;
   min-height: 0;
+  animation: fadeIn 0.5s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .view-head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid color-mix(in srgb, var(--fg-accent) 15%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fg-accent) 6%, transparent) 0%,
+    transparent 60%
+  );
+  margin: -8px -8px 0 -8px;
+  padding: 8px 8px 12px 8px;
+  border-radius: var(--fg-radius-control);
 }
 
 .view-title {
   margin: 0;
   font-family: var(--fg-font-display);
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--fg-ink);
+  background: linear-gradient(135deg, var(--fg-accent) 0%, color-mix(in srgb, var(--fg-accent) 70%, var(--fg-ink) 30%) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: slideInLeft 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .space-name {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--fg-ink-secondary);
+  padding: 2px 12px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 10%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 6%, transparent) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--fg-accent) 20%, transparent);
+  border-radius: 999px;
+  animation: fadeInRight 0.6s ease;
+  animation-delay: 0.2s;
+  animation-fill-mode: backwards;
+}
+
+@keyframes fadeInRight {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .context-panel,
@@ -407,33 +465,56 @@ function resolveName(userId: number): string | null {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
-  padding: 18px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-card);
-  max-width: 560px;
+  gap: 16px;
+  padding: 24px;
+  background: linear-gradient(
+    135deg,
+    var(--fg-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 97%, var(--fg-accent) 3%) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--fg-line-strong) 80%, transparent);
+  border-radius: calc(var(--fg-radius-card) * 1.2);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
+    var(--fg-shadow-card);
+  max-width: 600px;
+  animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .context-switch {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .status-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
+  font-family: var(--fg-font-display);
   color: var(--fg-ink);
+  background: linear-gradient(135deg, var(--fg-accent) 0%, var(--fg-ink) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .status-text {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--fg-ink-secondary);
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .loading-spin {
@@ -443,8 +524,41 @@ function resolveName(userId: number): string | null {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
+  padding: 12px 16px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-surface-raised) 85%, transparent) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 90%, transparent) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in srgb, var(--fg-line-strong) 60%, transparent);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
+    0 4px 16px color-mix(in srgb, var(--fg-ink) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 100%, transparent);
+  animation: slideDown 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 降级方案：不支持 backdrop-filter 时使用不透明背景 */
+@supports not (backdrop-filter: blur(12px)) {
+  .toolbar {
+    background: var(--fg-surface-raised);
+  }
 }
 
 .legend {
@@ -453,69 +567,151 @@ function resolveName(userId: number): string | null {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  font-size: 12px;
+  gap: 10px;
+  font-size: 13px;
   color: var(--fg-ink);
 }
 
 .legend li {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--fg-radius-control);
+  transition: all 0.3s ease;
 }
 
-/* 画布容器：不铺自绘底色——壳的静态点阵透出即为画布底纹，
-   避免双层背景（design.md §7） */
+.legend li:hover {
+  background: color-mix(in srgb, var(--fg-accent) 6%, transparent);
+  transform: translateX(4px);
+}
+
+/* 画布容器：现代化边框和深度感 */
 .canvas-section {
   position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 420px;
+  min-height: 460px;
+  animation: fadeInUp 0.6s ease;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .canvas-wrap {
   position: relative;
   flex: 1;
-  min-height: 400px;
-  border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-card);
+  min-height: 440px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-surface-sunken) 30%, transparent) 0%,
+    transparent 100%
+  );
+  border: 2px solid var(--fg-line-strong);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
   overflow: hidden;
+  box-shadow:
+    inset 0 2px 8px color-mix(in srgb, var(--fg-ink) 5%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 10%, transparent),
+    var(--fg-shadow-card);
 }
 
-/* 边样式：结构样式来自 @vue-flow/core/dist/style.css 之外的部分 token 自绘 */
+/* 中心聚焦效果：径向渐变遮罩，中心清晰，边缘模糊 */
+.canvas-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 50%,
+    transparent 0%,
+    transparent 40%,
+    color-mix(in srgb, var(--fg-surface) 15%, transparent) 70%,
+    color-mix(in srgb, var(--fg-surface) 35%, transparent) 90%,
+    color-mix(in srgb, var(--fg-surface) 45%, transparent) 100%
+  );
+  z-index: 1;
+  transition: opacity 0.5s ease;
+}
+
+/* 悬停画布时减弱聚焦效果，让用户看清周围 */
+.canvas-wrap:hover::after {
+  opacity: 0.5;
+}
+
+/* 确保画布内容在遮罩层下方 */
+.canvas-wrap :deep(.vue-flow) {
+  position: relative;
+  z-index: 0;
+}
+
+/* 边样式：现代化连线 */
 .canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) {
   stroke: var(--fg-ink-secondary);
-  stroke-width: 1.5;
+  stroke-width: 2;
+  transition: all 0.3s ease;
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--fg-ink) 10%, transparent));
 }
 
-/* Controls 重样式：结构样式来自 @vue-flow/core/dist/style.css 之外的部分全部 token 自绘 */
+.canvas-wrap :deep(.fg-view-edge:hover .vue-flow__edge-path) {
+  stroke: var(--fg-accent);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 2px 4px color-mix(in srgb, var(--fg-accent) 30%, transparent));
+}
+
+/* Controls 现代化样式 */
 .canvas-wrap :deep(.vue-flow__controls) {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 16px;
+  left: 16px;
   z-index: 5;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-control);
-  box-shadow: var(--fg-shadow-card);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-surface-raised) 90%, transparent) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 95%, transparent) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in srgb, var(--fg-line-strong) 60%, transparent);
+  border-radius: calc(var(--fg-radius-control) * 1.5);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
+    0 4px 12px color-mix(in srgb, var(--fg-ink) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 100%, transparent);
+}
+
+/* 降级方案：不支持 backdrop-filter 时使用不透明背景 */
+@supports not (backdrop-filter: blur(12px)) {
+  .canvas-wrap :deep(.vue-flow__controls) {
+    background: var(--fg-surface-raised);
+  }
 }
 
 .canvas-wrap :deep(.vue-flow__controls-button) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: none;
-  border-bottom: 1px solid var(--fg-line);
-  background-color: var(--fg-surface-raised);
+  border-bottom: 1px solid color-mix(in srgb, var(--fg-line) 50%, transparent);
+  background-color: transparent;
   color: var(--fg-ink-secondary);
   cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .canvas-wrap :deep(.vue-flow__controls-button:last-child) {
@@ -523,28 +719,64 @@ function resolveName(userId: number): string | null {
 }
 
 .canvas-wrap :deep(.vue-flow__controls-button:hover) {
-  background-color: var(--fg-accent-soft);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 12%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 8%, transparent) 100%
+  );
   color: var(--fg-accent);
+  transform: scale(1.08);
+}
+
+.canvas-wrap :deep(.vue-flow__controls-button:active) {
+  transform: scale(0.95);
 }
 
 .canvas-wrap :deep(.vue-flow__controls-button:disabled) {
   color: var(--fg-ink-faint);
   cursor: default;
+  opacity: 0.4;
+}
+
+.canvas-wrap :deep(.vue-flow__controls-button:disabled:hover) {
+  background: transparent;
+  transform: none;
 }
 
 .canvas-wrap :deep(.vue-flow__controls-button svg) {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+  transition: transform 0.3s ease;
+}
+
+.canvas-wrap :deep(.vue-flow__controls-button:hover svg) {
+  transform: scale(1.1);
 }
 
 /* 移动端（≤768px）：工具栏收敛为紧凑单行（可横向滑动，仅工具不恢复列表布局）；
    触控画布双指缩放/拖拽平移由 VueFlow 的 zoom-on-pinch/pan-on-drag 提供，
    适应画布/回到自己/重新加载按钮补足 44px 点按目标 */
 @media (max-width: 768px) {
+  .family-tree-view {
+    padding: 16px 12px 20px;
+    gap: 12px;
+  }
+
+  .view-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .view-title {
+    font-size: 22px;
+  }
+
   .toolbar {
     flex-wrap: nowrap;
     overflow-x: auto;
-    padding-bottom: 2px;
+    padding: 10px 12px;
+    padding-bottom: 12px;
   }
 
   .toolbar > * {
@@ -554,6 +786,42 @@ function resolveName(userId: number): string | null {
   .toolbar :deep(.n-button--small-type),
   .toolbar :deep(.n-radio-button) {
     min-height: 44px;
+  }
+
+  .canvas-wrap {
+    min-height: 360px;
+  }
+
+  .status-panel,
+  .context-panel {
+    padding: 18px;
+  }
+}
+
+/* 动效降级支持 */
+@media (prefers-reduced-motion: reduce) {
+  .family-tree-view,
+  .view-title,
+  .space-name,
+  .status-panel,
+  .context-panel,
+  .toolbar,
+  .canvas-section,
+  .legend li {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .canvas-wrap :deep(.vue-flow__controls-button),
+  .canvas-wrap :deep(.vue-flow__controls-button svg),
+  .canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) {
+    transition: none !important;
+  }
+
+  .canvas-wrap :deep(.vue-flow__controls-button:hover),
+  .canvas-wrap :deep(.vue-flow__controls-button:active),
+  .legend li:hover {
+    transform: none;
   }
 }
 </style>

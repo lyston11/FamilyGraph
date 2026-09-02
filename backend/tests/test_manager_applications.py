@@ -214,7 +214,7 @@ def test_duplicate_pending_rejected_but_resubmit_after_reject(
     assert resubmit.json()["status"] == "pending"
 
 
-def test_unconfirmed_and_guest_rejected(db_session, client) -> None:
+def test_unconfirmed_applicant_rejected(db_session, client) -> None:
     unconfirmed = create_user_with_pin(
         db_session, "未确档者", "404040", profile_status="provisional"
     )
@@ -224,11 +224,6 @@ def test_unconfirmed_and_guest_rejected(db_session, client) -> None:
     r = _submit(client, _login_header(client, "未确档者", "404040"), space_id=space.id)
     assert r.status_code == 403
     assert "身份确认" in r.json()["error"]["message"]
-
-    guest = create_user_with_pin(db_session, "访客", "606060")
-    create_space_member(db_session, space.id, guest.id, role="guest", status="active")
-    rg = _submit(client, _login_header(client, "访客", "606060"), space_id=space.id)
-    assert rg.status_code == 403
 
 
 def test_target_eligibility_gates(db_session, client, applicant) -> None:

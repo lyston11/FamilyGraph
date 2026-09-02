@@ -33,7 +33,7 @@ export async function updateSpace(spaceId: number, name: string): Promise<Family
 
 /**
  * 提交成为指定 lineage 家族空间管理员的申请（需系统管理员审批 + 原管理员同意）。
- * 邀请成员不走此流程，active member（除 guest）可直接邀请。
+ * 邀请成员不走此流程，active member 可直接邀请。
  */
 export async function submitManagerApplication(
   requestKind: ManagerRequestKind,

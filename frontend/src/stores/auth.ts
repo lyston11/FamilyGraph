@@ -95,6 +95,21 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /**
+   * 系统管理员登录会话落位（SAR-F1，09-01-system-admin-governance-routes）：
+   * 仅接受 `principal_type === 'system_admin'` 的登录响应。家庭主体 / 未知主体
+   * 不得建立系统管理员会话——丢弃凭据并清理任何临时 auth 状态（含残留
+   * refresh token），调用方（登录页）负责展示统一拒绝文案。
+   */
+  function applySystemAdminSession(pair: TokenPairResponse): void {
+    if (pair.user?.principal_type !== 'system_admin') {
+      clearSession()
+      throw new Error('登录响应主体不是 system_admin，已拒绝建立系统管理员会话')
+    }
+    clearFamilyCaches()
+    applyTokenPair(pair)
+  }
+
   // ---- 动作 ----
   async function checkBootstrap(): Promise<boolean> {
     if (!bootstrapChecked.value) {
@@ -194,6 +209,7 @@ export const useAuthStore = defineStore('auth', () => {
     checkBootstrap,
     login,
     selectCandidate,
+    applySystemAdminSession,
     refreshSession,
     resume,
     logout,
@@ -209,14 +225,20 @@ export const useAuthStore = defineStore('auth', () => {
 })
 
 /**
- * 会话过期整页跳转。已在登录页时不再 assign：初始导航未解析窗口内 AppShell
- * 可能发起未认证请求（401），重复 assign 会造成 /login 无限整页重载循环
+ * 会话过期整页跳转（主体感知，SAR-F2）：system_admin 会话失效回
+ * `/system-admin/login`，family_user 回 `/login`——系统管理员 token 过期
+ * 绝不降级为家庭登录入口，反之亦然。principal 由调用方在 clearSession
+ * 之前从 auth store 快照（clearSession 后 user 已为 null，无法再读）。
+ *
+ * 已在目标登录页时不再 assign：初始导航未解析窗口内 AppShell 可能发起
+ * 未认证请求（401），重复 assign 会造成登录页无限整页重载循环
  * （09-01 走查实测：2320 次循环请求）。
  */
 export const sessionExpiredNavigator = { assign: (url: string) => window.location.assign(url) }
-export function sessionExpiredRedirect(): void {
-  if (window.location.pathname !== '/login') {
-    sessionExpiredNavigator.assign('/login')
+export function sessionExpiredRedirect(wasSystemAdmin = false): void {
+  const target = wasSystemAdmin ? '/system-admin/login' : '/login'
+  if (window.location.pathname !== target) {
+    sessionExpiredNavigator.assign(target)
   }
 }
 
@@ -226,7 +248,9 @@ export function wireAuthInterceptors(): void {
   registerTokenReader(() => store.accessToken)
   registerRefreshExecutor(() => store.refreshSession())
   registerSessionExpiredHandler(() => {
+    // 主体快照必须先于 clearSession 读取：清空后 principal_type 不可再判定
+    const wasSystemAdmin = store.isSystemAdmin
     store.clearSession()
-    sessionExpiredRedirect()
+    sessionExpiredRedirect(wasSystemAdmin)
   })
 }

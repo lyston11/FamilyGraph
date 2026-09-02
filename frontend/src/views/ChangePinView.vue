@@ -3,16 +3,34 @@ import { useRoute, useRouter } from 'vue-router'
 
 import ChangePinForm from '@/components/common/ChangePinForm.vue'
 import { getSafeInternalRedirect } from '@/router/redirect'
+import { useAuthStore } from '@/stores/auth'
 
 /**
  * 首登强制改 PIN 页（沉浸页，meta.chrome='blank'；pin_must_change=true 时的唯一可停留页面）。
- * 改毕服务端使全部会话失效 → 回登录页。白名单路由逻辑在守卫内，本页不感知。
+ * 改毕服务端使全部会话失效（token_version+1）→ 按主体回对应登录入口。
+ * 白名单路由逻辑在守卫内，本页不感知。
  */
 const router = useRouter()
 const route = useRoute()
+const auth = useAuthStore()
+
+// 主体快照（SAR-F2）：changePin 成功后 store 会清空会话（user 归 null），
+// 届时无法再读 principal_type，因此在挂载时（守卫已确保会话有效）记录主体。
+// 导航按快照判定，不得通过页面名猜主体。
+const wasSystemAdmin = auth.isSystemAdmin
 
 function onChanged(): void {
   const redirect = getSafeInternalRedirect(route.query.redirect)
+  if (wasSystemAdmin) {
+    // system_admin：旧会话已随 token_version 失效，回系统管理员登录入口重新登录，
+    // 绝不进入家庭 /login
+    void router.replace({
+      name: 'system-admin-login',
+      query: redirect ? { redirect } : undefined,
+    })
+    return
+  }
+  // family_user：维持既有回家庭登录页路径
   void router.replace({
     name: 'login',
     query: redirect ? { redirect } : undefined,

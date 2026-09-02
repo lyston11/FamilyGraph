@@ -24,6 +24,7 @@ from app.models.controlled_web import (
 from app.models.derived_fact import DerivedFact
 from app.models.memory import Memory, MemoryCandidate
 from app.models.node_position import NodePosition
+from app.models.notification import Notification
 from app.models.personal_family_view import (
     PersonalFamilyBridge,
     PersonalFamilyView,
@@ -84,6 +85,7 @@ __all__ = [
     "Memory",
     "MemoryCandidate",
     "NodePosition",
+    "Notification",
     "OwnerInvitation",
     "OwnershipTransfer",
     "PersonalFamilyBridge",

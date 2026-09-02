@@ -299,6 +299,10 @@ def create_card(
     )
     session.add(card)
     session.flush()
+    # 通知投影：真实出卡事件 → 收件人通知（同事务；一卡至多一条）
+    from app.services import notifications as notifications_service
+
+    notifications_service.record_action_card_notification(session, card)
     for row in stale_active:
         transition_card(
             session,

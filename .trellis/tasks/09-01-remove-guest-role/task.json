@@ -3,7 +3,7 @@
   "name": "remove-guest-role",
   "title": "移除 guest 空间角色",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

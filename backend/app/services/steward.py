@@ -998,12 +998,10 @@ def _creation_choices_for(db: Session, space: FamilySpace, fact: SourceFact) -> 
     return frozenset(choices)
 
 
-def _active_member_ids(db: Session, space: FamilySpace, *, include_guest: bool) -> set[int]:
+def _active_member_ids(db: Session, space: FamilySpace) -> set[int]:
     stmt = select(SpaceMember.user_id).where(
         SpaceMember.space_id == space.id, SpaceMember.status == "active"
     )
-    if not include_guest:
-        stmt = stmt.where(SpaceMember.role != "guest")
     return {int(uid) for uid in db.scalars(stmt)}
 
 
@@ -1019,7 +1017,7 @@ def _pair_inputs(db: Session, space: FamilySpace, fact: SourceFact) -> Recommend
     subject = db.get(User, fact.subject_user_id)
     obj = db.get(User, fact.object_user_id)
     assert subject is not None and obj is not None
-    members = _active_member_ids(db, space, include_guest=False)
+    members = _active_member_ids(db, space)
     share_household = False
     lineage_possible = False
     if space.kind == "household":

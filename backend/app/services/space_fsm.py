@@ -138,7 +138,8 @@ def invite(
 ) -> tuple[SpaceMember, bool]:
     """邀请已有账号进空间：幂等；已 active 幂等返回；重复 pending 返回既有行。
 
-    返回 (member, created)。
+    返回 (member, created)。pending 行真实创建/复活时同事务生成空间成员通知：
+    邀请通知受邀人，本人申请通知空间管理员（services/notifications 自然映射）。
     """
     existing = find_membership(session, space.id, user_id)
     if existing is not None:
@@ -152,6 +153,7 @@ def invite(
         existing.added_by = added_by
         existing.updated_at = _now()
         session.flush()
+        _record_membership_notification(session, space=space, member=existing)
         return existing, True
 
     member = SpaceMember(
@@ -165,7 +167,17 @@ def invite(
     )
     session.add(member)
     session.flush()
+    _record_membership_notification(session, space=space, member=member)
     return member, True
+
+
+def _record_membership_notification(
+    session: Session, *, space: FamilySpace, member: SpaceMember
+) -> None:
+    # 延迟导入避免 space_fsm ↔ notifications 循环依赖
+    from app.services import notifications as notifications_service
+
+    notifications_service.record_membership_request_notification(session, space=space, member=member)
 
 
 def relation_ids_between_active(session: Session, user_a: int, user_b: int) -> list[Relation]:

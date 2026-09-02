@@ -2,8 +2,7 @@
 
 fixture 人物：
     甲：household「甲家」owner；lineage「宗族」active 成员
-    乙：甲家 active member（非 guest）
-    丙：甲家 active guest
+    乙、丙：甲家 active member
     丁：甲家 pending 成员
     戊：宗族 active 成员（与甲同 lineage，无共同 household）
     己：与乙有 active elder 边但无任何共同空间（直系跨 household）
@@ -92,7 +91,7 @@ def matrix(db_session):
     db_session.flush()
     member(h1, jia, role="owner")
     member(h1, yi)
-    member(h1, bing, role="guest")
+    member(h1, bing)
     member(h1, xiaoming)
     member(h1, ding, status="pending")
 
@@ -172,17 +171,17 @@ def test_direct_edge_cross_household_no_longer_full(db_session, client, matrix):
     assert body["bio"] == MASKED
 
 
-def test_guest_does_not_get_household_detail(db_session, client, matrix):
+def test_household_members_get_detail_both_ways(db_session, client, matrix):
     hb = _h(client, "丙", "333333")
     r = client.get(f"/api/users/{matrix['乙'].id}", headers=hb)
     assert r.status_code == 200
-    assert r.json()["birth"] == MASKED
+    assert r.json()["birth"]["date"] == "1950-01-01"
 
-    # 反向：成员看 guest 同样不构成 household_detail
+    # 反向：普通 active 成员之间同样获得 household_detail。
     hy = _h(client, "乙", "222222")
     r2 = client.get(f"/api/users/{matrix['丙'].id}", headers=hy)
     assert r2.status_code == 200
-    assert r2.json()["gender"] == MASKED
+    assert r2.json()["gender"] == "unknown"
 
 
 def test_pending_membership_minimal_visibility_both_ways(db_session, client, matrix):

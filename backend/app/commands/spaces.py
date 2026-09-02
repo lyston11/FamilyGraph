@@ -1,6 +1,6 @@
 """空间命令（创建/改名/邀请/响应/退出移除/加入申请/位置保存）。
 
-授权单点：owner/active 成员判定经 services.space_fsm；guest 与 provisional
+授权单点：owner/active 成员判定经 services.space_fsm；provisional
 引用不因本层产生任何 household_detail 权利（可见性仍由 visibility.py 判定）。
 """
 
@@ -126,18 +126,12 @@ def rename_space(
 
 
 def _require_inviter(session: Session, space_id: int, user_id: int) -> SpaceMember:
-    """空间邀请由当前 active 成员（除 guest）发起，受邀人仍需本人接受。
+    """空间邀请由当前 active 成员发起，受邀人仍需本人接受。
 
-    这是共享领域命令层的授权边界，不能依赖前端按钮隐藏；guest 是最小可见
-    角色不获得邀请权；platform_operator 也不会因平台角色获得任何家庭空间
-    写权限。
+    这是共享领域命令层的授权边界，不能依赖前端按钮隐藏；
+    platform_operator 也不会因平台角色获得任何家庭空间写权限。
     """
-    member = _require_active_member(session, space_id, user_id)
-    # 邀请与管理员审批是两条独立流程（architecture.md §0.7 / 权限矩阵）：active
-    # 成员（除 guest）可邀请，受邀人仍需接受。本任务不收紧该边界。
-    if member.role == "guest":
-        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "访客不能邀请成员")
-    return member
+    return _require_active_member(session, space_id, user_id)
 
 
 def invite_member(

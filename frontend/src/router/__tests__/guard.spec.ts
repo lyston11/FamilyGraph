@@ -248,8 +248,8 @@ describe('router guards', () => {
     expect(await navigate('/spaces/7/manage')).toBe('space-management')
   })
 
-  it('member、guest 和无 membership 拒绝进入空间管理页', async () => {
-    const roles = ['member', 'guest'] as const
+  it('member 和无 membership 拒绝进入空间管理页', async () => {
+    const roles = ['member'] as const
     for (const role of roles) {
       const auth = useAuthStore()
       mockedLogin.mockResolvedValue(makePair())
@@ -456,6 +456,18 @@ describe('router guards: 09-01 Phase 2 路由语义（统一家庭壳）', () =>
 
     await resetToOnboarding()
     expect(await navigate('/system-admin/login')).toBe('system-admin')
+  })
+
+  it('system_admin 首登必改 PIN 访问 /system-admin/login：经后台路由进入改 PIN 页（SAR-F1/F2）', async () => {
+    const auth = useAuthStore()
+    const pair = makePair({ is_admin: true, pin_must_change: true })
+    pair.user.principal_type = 'system_admin'
+    mockedLogin.mockResolvedValue(pair)
+    await auth.login('系统管理员', '123456')
+
+    await resetToOnboarding()
+    // 已登录系统主体访问登录页 → 后台 → pin_must_change 白名单 → 改 PIN 页
+    expect(await navigate('/system-admin/login')).toBe('force-change-pin')
   })
 
   it('未登录访问 /system-admin/login 占位：公开可达（独立于家庭登录页，不套家庭壳）', async () => {

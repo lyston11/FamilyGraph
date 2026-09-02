@@ -1,8 +1,0 @@
-{"file":".trellis/spec/architecture.md","reason":"检查双 Agent 口径、Steward 正式身份、PersonalFamilyView 延期和权限边界未被弱化。"}
-{"file":".trellis/spec/backend/agent-runtime.md","reason":"检查 Assistant-only generic Runtime、internal schema、token、tool、sidecar 与 E2E 要求一致。"}
-{"file":".trellis/spec/backend/steward-action-card.md","reason":"检查 StewardJob/maintenance/space policy 仍为 canonical，且没有 generic AgentJob 第二入口。"}
-{"file":".trellis/spec/backend/error-handling.md","reason":"检查 Steward 只能读当前空间 confirmed/authorized shared 数据，private/other-space 仍拒绝。"}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查 0024 的 SQLite DDL 重建、FK/trigger/index 保真、临时 DATA_DIR 和 rollback。"}
-{"file":".trellis/tasks/09-01-agent-runtime-assistant-only/prd.md","reason":"逐条核对 AC-1..AC-10 与最终双 Agent 产品决定。"}
-{"file":".trellis/tasks/09-01-agent-runtime-assistant-only/design.md","reason":"检查 RuntimeAgentKind/PolicyConsumerKind 分层、迁移、兼容、WIP 归属和风险控制。"}
-{"file":".trellis/tasks/09-01-agent-runtime-assistant-only/implement.md","reason":"检查执行顺序、定向/全量/Compose 验证、rollback 和完成定义。"}

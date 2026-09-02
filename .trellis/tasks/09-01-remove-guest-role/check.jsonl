@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/architecture.md","reason":"复核运行时角色、授权矩阵和文档是否完全移除 guest 语义"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"复核迁移后的角色约束、索引和外键合同"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行并解释后端全量质量门禁"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"复核前端角色类型与 API schema 一致"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"执行前端 lint、类型、测试和构建门禁"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"通过全局搜索复核角色常量和分支没有遗漏或重复合同"}

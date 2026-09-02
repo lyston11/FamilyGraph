@@ -126,19 +126,16 @@ describe('SpaceGovernancePanel', () => {
     wrapper.unmount()
   })
 
-  it('member 可见邀请区但无交接入口；guest 两者均不可见', () => {
-    for (const role of ['member', 'guest'] as const) {
-      pinia = createPinia()
-      seed(pinia, role)
-      const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
-      // 邀请区随 canInvite 对 active member 放开；guest 仍隐藏
-      expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(role === 'member')
-      expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
-      // 成员移除/撤回操作列仅当前空间管理员可见
-      expect(wrapper.find('[data-test^="member-remove-"]').exists()).toBe(false)
-      expect(wrapper.find('[data-test^="member-withdraw-"]').exists()).toBe(false)
-      wrapper.unmount()
-    }
+  it('member 可见邀请区但无交接入口', () => {
+    const role = 'member' as const
+    pinia = createPinia()
+    seed(pinia, role)
+    const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
+    expect(wrapper.find('[data-test="governance-invite-search"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="transfer-target-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="member-remove-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="member-withdraw-"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('管理员搜索只列出当前成员关系之外的候选人', async () => {

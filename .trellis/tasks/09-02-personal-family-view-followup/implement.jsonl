@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/architecture.md", "reason": "PersonalFamilyView授权、可见性、状态机、推荐边界和系统主体隔离的权威合同"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "投影/通知迁移、事务、索引、ETag版本和SQLite写入约束"}
+{"file": ".trellis/tasks/09-02-personal-family-view-followup/research/current-contract-gaps.md", "reason": "前端已冻结合同与当前后端household/stats/notifications缺口"}
+{"file": ".trellis/tasks/09-02-personal-family-view-followup/research/authorization-and-cache-boundaries.md", "reason": "撤权、字段遮罩、ETag、空间切换和缓存失效边界"}

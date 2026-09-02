@@ -37,7 +37,7 @@ class SpaceMemberOut(BaseModel):
     user_id: int
     user_name: str | None = None
     added_by: int | None
-    role: Literal["space_admin", "member", "guest"]
+    role: Literal["space_admin", "member"]
     status: Literal["pending", "active", "rejected", "withdrawn", "removed"]
     updated_at: datetime
 

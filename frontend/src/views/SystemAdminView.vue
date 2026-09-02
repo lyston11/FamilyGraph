@@ -135,7 +135,6 @@ async function toggleSpaceMembers(spaceId: number): Promise<void> {
 function roleLabel(role: string): string {
   if (role === 'space_admin') return '空间管理员'
   if (role === 'member') return '成员'
-  if (role === 'guest') return '访客'
   return role
 }
 

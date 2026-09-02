@@ -20,3 +20,17 @@ export function getSafeInternalRedirect(value: unknown): string | undefined {
     return undefined
   }
 }
+
+/**
+ * 系统管理员登录流程专用回跳白名单（SAR-F1）：只接受站内已知的
+ * system-admin 路由，登录页不信任响应/查询参数中的任意 URL。
+ * 系统主体不得进入家庭壳，因此家庭路由不在白名单内。
+ */
+const SYSTEM_ADMIN_REDIRECT_PATHS: ReadonlySet<string> = new Set(['/system-admin'])
+
+export function getSafeSystemAdminRedirect(value: unknown): string | undefined {
+  const internal = getSafeInternalRedirect(value)
+  return internal !== undefined && SYSTEM_ADMIN_REDIRECT_PATHS.has(internal)
+    ? internal
+    : undefined
+}
