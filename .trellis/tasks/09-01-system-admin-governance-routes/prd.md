@@ -42,15 +42,15 @@
 
 ## Acceptance Criteria
 
-- [ ] `/system-admin/login` 不再是占位页，可以提交登录并正确处理 system_admin/family_user 两种主体。
-- [ ] family_user 凭据不会建立 system-admin 会话或进入后台。
-- [ ] system_admin 首登改 PIN 后不会被送到家庭 `/login`，旧 token 按 token_version 失效。
-- [ ] 两种主体的 refresh、logout 和 session expired 导航均正确隔离。
-- [ ] SystemAdminShell 可登出且不包含家庭壳或家庭数据入口。
-- [ ] 治理 API principal、权限、最小字段和未知空间防枚举测试通过。
-- [ ] `backend/app/api/admin.py` 保持未注册；没有新增家庭 PIN 重置、档案修改或其他 break-glass 能力。
-- [ ] 后端定向测试、Ruff、mypy，以及前端 type-check、lint、test、build 通过。
-- [ ] 当前 `SystemAdminView.vue` 的 guest 删除 WIP 未被覆盖或回退。
+- [x] `/system-admin/login` 不再是占位页，可以提交登录并正确处理 system_admin/family_user 两种主体。
+- [x] family_user 凭据不会建立 system-admin 会话或进入后台。
+- [x] system_admin 首登改 PIN 后不会被送到家庭 `/login`，旧 token 按 token_version 失效。
+- [x] 两种主体的 refresh、logout 和 session expired 导航均正确隔离。
+- [x] SystemAdminShell 可登出且不包含家庭壳或家庭数据入口。
+- [x] 治理 API principal、权限、最小字段和未知空间防枚举测试通过。
+- [x] `backend/app/api/admin.py` 保持未注册；没有新增家庭 PIN 重置、档案修改或其他 break-glass 能力。
+- [x] 后端定向测试、Ruff、mypy，以及前端 type-check、lint、test、build 通过。
+- [x] 当前 `SystemAdminView.vue` 的 guest 删除 WIP 未被覆盖或回退。
 
 ## Constraints
 

@@ -36,3 +36,12 @@ cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 - 防时序枚举的 dummy bcrypt 校验：假哈希 cost 必须与 `config.BCRYPT_ROUNDS` 同源，硬编码 rounds 会产生可测时序差。
 - `DATABASE_URL` 由 `DATA_DIR` 派生而非独立环境变量；临时库验证请设 `DATA_DIR`。
 - 结构化日志 user_id 经 `logctx` 注入，认证成功后必须回填，否则恒为 null。
+
+## 系统管理员治理边界回归（09-01 system-admin-governance-routes 沉淀）
+
+后台治理路由（system_admin/admin_metadata 等）的安全回归测试必须同时覆盖四类断言，参考 `tests/test_system_admin_boundary.py`：
+
+- **主体互斥矩阵**：system-admin token 通过；family_user token / 无 token / 错误或未知 `principal_type` 一律 403/401；反向隔离——`/api/me`、`/api/spaces` 等家庭端点拒绝 system_admin 与伪造 token。
+- **字段白名单用精确集合断言**：治理响应 schema 逐字段断言允许集合（不是「包含」断言），确保不泄露 birth/gender/bio/avatar/附件/关系图边/私人 Memory/Session/disclosure/pin_hash。新增治理字段必须同步更新白名单测试。
+- **防存在性枚举**：未知 space_id 与真实 space_id 的成员查询必须返回不可区分的安全空结果，而不是 404。
+- **旧 break-glass 路由不回归**：`backend/app/api/admin.py`（家庭 PIN 重置/资料修改/custody transfer/claim dispute/data-rights）保持不注册；`test_legacy_break_glass_admin_routes_are_not_registered` 用 FastAPI app route registration 断言这些路径不存在。家庭 break-glass 迁移必须另立任务，禁止为「补齐后台」挂载旧 router。

@@ -34,3 +34,27 @@
 **What**：`useSpaceContext.ensureDefaultSpace()` 只在登录完成 / 硬刷新（无会话空间上下文）时调用一次。
 
 **Why**：页面（如 PersonProfileView）在会话内到达时重跑默认选择，会把上下文改回「最近 household」，覆盖用户所在的 lineage 上下文 → 目标被误判不可见（走查实测 P1）。会话内到达的页面必须沿用 `spaces.currentSpaceId`；上下文为空才兜底选择，且选择结果与页面语义不符时走安全不可见/空态，不导航回滚。
+
+## 主体感知会话与系统管理员隔离（09-01 system-admin-governance-routes 前端沉淀）
+
+### Convention: 登录视图写会话前必须硬校验 principal_type
+
+**What**：任何登录视图（家庭 `/login`、系统管理员 `/system-admin/login`）拿到 `/api/auth/login` 响应后，必须先硬校验 `principal_type` 与视图主体一致，才允许调用 auth store 写会话；不一致一律走统一拒绝文案并清理临时状态（`applySystemAdminSession` 对非 `system_admin` 抛错并清状态，见 `stores/auth.ts`）。
+
+**Why**：family_user 凭据建立 system-admin 会话（或反向）等于把两个权限域打通；统一文案且不区分「账号不存在/凭据错误/主体类型」防账号枚举。409 名称歧义（同名家庭账号）也必须按家庭凭据拒绝，不得登入后台。
+
+**Example**：`SystemAdminLoginView.vue` — `pair.user?.principal_type !== 'system_admin'` → 拒绝；提交中/成功态禁止重复提交；redirect 只接受 `getSafeSystemAdminRedirect` 白名单（仅 `/system-admin` 前缀），不信登录响应里的任意 URL。
+
+### Convention: 会话回跳按主体分流，主体快照必须在清会话前取
+
+**What**：
+- `sessionExpiredRedirect(wasSystemAdmin)`：system_admin → `/system-admin/login`，family_user → `/login`；
+- `ChangePinView`：挂载时快照 principal，完成后 system_admin 回 system-admin 入口，family_user 维持家庭 `/login`。
+
+**Why**：system-admin token 过期被送到家庭 `/login` 会让后台主体误入家庭权限域；反向同理。`clearSession` 之后主体已不可读——所以回跳函数接收主体参数、调用方先快照，这是实测踩过的时序点。refresh 永不改变 principal_type，system-admin token 失效不得降级到家庭登录。
+
+### Convention: SystemAdminShell 零家庭依赖
+
+**What**：系统后台壳不得 import 任何家庭 store（spaces/graph/…）或家庭数据 API；导航只含治理入口；登出走 `auth.logout()`（按主体撤销对应 refresh session 并清系统管理员缓存）后回 `/system-admin/login`。
+
+**Tests**：`SystemAdminShell.spec.ts` 对壳源码做静态断言（无家庭 store/API import）+ 行为断言（无家庭导航、登出跳转）；`auth.spec.ts` 覆盖两种主体的 refresh/logout/session-expired 分流；`guard.spec.ts` 覆盖路由互斥（family_user 进不了后台，system_admin 访问登录页被弹走）。

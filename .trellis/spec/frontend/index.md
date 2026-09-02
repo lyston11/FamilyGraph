@@ -7,7 +7,7 @@
 | [Directory Structure](./directory-structure.md) | 目录布局与分层规则 | Initial draft |
 | [Component Guidelines](./component-guidelines.md) | 组件约定/naive-ui 迁移差异/token 红线/领域状态徽章/浮层层级 | v1 |
 | [Composables Guidelines](./hook-guidelines.md) | useLayout/useVisibility/useChallenge | Initial draft |
-| [State Management](./state-management.md) | Pinia store 划分/缓存失效/敏感清理红线 | Initial draft |
+| [State Management](./state-management.md) | Pinia store 划分/缓存失效/敏感清理红线/主体感知会话与系统管理员隔离 | Initial draft |
 | [ActionCard](./action-card.md) | ActionCard 类型、按空间 store、Inbox/Assistant 共享渲染、两步确认与错误降级 | V2.4 |
 | [Type Safety](./type-safety.md) | strict TS/运行时校验/遮罩类型判别 | Initial draft |
 | [Quality Guidelines](./quality-guidelines.md) | 门禁命令/禁止模式/主题与组件库门禁/移动端与性能基线 | v1 |
