@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import timedelta
 
 import pytest
@@ -18,9 +19,10 @@ from app.commands import ownership as ownership_commands
 from app.commands.context import ActorContext
 from app.config import OWNERSHIP_TRANSFER_TTL_HOURS
 from app.db import SessionLocal
-from app.errors import extract_api_error
+from app.errors import OWNER_TRANSFER_INVALID, extract_api_error
 from app.models.audit_log import AuditLog
 from app.models.space import PENDING_EXPIRY_DAYS, FamilySpace, SpaceMember
+from app.models.user import User
 from app.models.v2_foundation import DomainEvent, OwnershipTransfer
 from app.utils.timeutil import utcnow
 
@@ -218,8 +220,17 @@ def test_stale_pending_transfer_expires_lazily(db_session) -> None:
     assert expired_rows[0].actor_id is None
 
 
+# barrier/join 一律带超时：worker 若在会合前死掉，超时让用例失败而不是挂死
+# 整套全量 pytest。与 tests/test_person_dedupe.py 的并发建档用例共用同一口径。
+_SYNC_TIMEOUT = 10.0
+
+
 def test_concurrent_double_accept_single_winner(db_session) -> None:
-    """并发双接受：恰好一个成功，owner 只翻转一次。"""
+    """并发双接受：恰好一个成功，owner 只翻转一次。
+
+    worker 只捕获标量 ID 与同步原语，不跨线程共享 ORM 实例或主线程 Session；
+    每个 worker 独立 Session 加载数据，异常全部记录而不是静默退出。
+    """
     owner = create_user_with_pin(db_session, "并发owner", "909090")
     heir = create_user_with_pin(db_session, "并发继承", "919191")
     space = _make_space(db_session, owner, members=[heir])
@@ -227,37 +238,74 @@ def test_concurrent_double_accept_single_winner(db_session) -> None:
         db_session, _ctx(owner), space_id=space.id, to_user_id=heir.id
     )
     db_session.commit()
-    db_session.expire_all()
 
-    results: list[str] = []
-    barrier = __import__("threading").Barrier(2)
+    # 主线程只提取标量输入；worker 闭包不得捕获 heir/transfer/db_session
+    transfer_id = transfer.id
+    heir_id = heir.id
+    heir_account_id = heir.account.id
+    space_id = space.id
+
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    lock = threading.Lock()
 
     def worker() -> None:
         session = SessionLocal()
         try:
-            user = session.query(type(heir)).filter_by(id=heir.id).one()
+            user = session.get(User, heir_id)
+            assert user is not None and user.account.id == heir_account_id
             ctx = ActorContext(
                 user_id=user.id, account_id=user.account.id, account_status=user.account.status
             )
-            barrier.wait()
-            ownership_commands.accept_transfer(session, ctx, transfer.id)
-            results.append("won")
+            barrier.wait(timeout=_SYNC_TIMEOUT)
+            ownership_commands.accept_transfer(session, ctx, transfer_id)
+            result = "won"
         except HTTPException as exc:
-            results.append(str(exc.status_code))
+            payload = extract_api_error(exc.detail)
+            code = str(payload["code"]) if payload else "-"
+            result = f"{exc.status_code}:{code}"
+        except Exception as exc:  # noqa: BLE001 - 任何其他异常都要可见而不是静默
+            result = f"error:{type(exc).__name__}:{exc}"
         finally:
             session.close()
+        with lock:
+            outcomes.append(result)
 
-    t1 = __import__("threading").Thread(target=worker)
-    t2 = __import__("threading").Thread(target=worker)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=_SYNC_TIMEOUT)
+        assert not thread.is_alive(), f"交接线程超时未结束（疑似死锁）；已记录结果 {outcomes}"
 
-    assert sorted(results) == ["409", "won"]
+    assert sorted(outcomes) == sorted(["won", f"409:{OWNER_TRANSFER_INVALID}"]), outcomes
+
+    # 终态复核一律从主线程重新查询，不读 worker 侧 ORM 对象
     db_session.expire_all()
-    assert space.owner_id == heir.id
+    accepted = db_session.scalars(
+        select(OwnershipTransfer).where(OwnershipTransfer.status == "accepted")
+    ).all()
+    assert len(accepted) == 1 and accepted[0].id == transfer_id
+
+    active_admins = db_session.scalars(
+        select(SpaceMember).where(
+            SpaceMember.space_id == space_id,
+            SpaceMember.role == "space_admin",
+            SpaceMember.status == "active",
+        )
+    ).all()
+    assert len(active_admins) == 1 and active_admins[0].user_id == heir_id
+
+    space_row = db_session.get(FamilySpace, space_id)
+    assert space_row is not None and space_row.owner_id == heir_id
     assert db_session.query(FamilySpace).filter(FamilySpace.owner_id == owner.id).count() == 0
+    # owner 只翻转一次：原管理员降为普通成员，且全体角色中恰有一个 space_admin
+    from_membership = db_session.scalar(
+        select(SpaceMember).where(SpaceMember.space_id == space_id, SpaceMember.user_id == owner.id)
+    )
+    assert from_membership is not None and from_membership.role == "member"
+    roles = [m.role for m in db_session.scalars(select(SpaceMember)).all()]
+    assert roles.count("space_admin") == 1
 
 
 def test_delete_owner_blocked_with_guidance_space_survives(db_session) -> None:

@@ -127,12 +127,15 @@ def accept_transfer(session: Session, ctx: ActorContext, transfer_id: int) -> Ow
     """受让人接受：原子消费 pending → 复验资格 → 变更所有权与双方角色。
 
     惰性过期在同一事务内持久化后再返回错误（expired 终态不随失败回滚）。
+    immediate=True：SQLite 写锁前置——actor 加载、transfer 状态检查与条件
+    UPDATE 都在同一立即事务内，授权读取与裁决写入之间没有读事务升级窗口；
+    并发双接受由数据库串行化裁决出唯一赢家，不依赖进程级锁。
     """
-    actor = load_actor(session, ctx)
     now = utcnow()
     expired_now = False
     won = False
-    with command_transaction(session):
+    with command_transaction(session, immediate=True):
+        actor = load_actor(session, ctx)
         transfer = session.get(OwnershipTransfer, transfer_id)
         if transfer is None or transfer.to_user != actor.id:
             # 非受让人与不存在同一 404（防枚举）
