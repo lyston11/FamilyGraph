@@ -566,3 +566,25 @@ pi-ai 重试（AGENT_PROVIDER_STREAM_MAX_RETRIES=5，间歇 503 必需）。
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: 修复管理员交接并发测试死锁（09-01-ownership-transfer-test-deadlock）
+
+**Date**: 2026-09-02
+**Task**: 修复管理员交接并发测试死锁（09-01-ownership-transfer-test-deadlock）
+**Branch**: `main`
+
+### Summary
+
+accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）；并发双接受测试改造为 test_person_dedupe 模式（标量 ID、独立 SessionLocal、_SYNC_TIMEOUT、异常可见、主线程重查断言）；20/20 定向重复通过，全量 pytest 626 passed/0 failed，ruff/mypy 绿；确认无永久 deselect。Spec 新增「SQLite 读事务升级与并发用例陷阱」小节（pysqlite 快照语义、BEGIN IMMEDIATE 真实价值、并发用例防挂死）；database-guidelines.md 因混有 remove-guest-role WIP 采用了部分暂存。仓库级 ruff 红点均为 notifications 等并行 WIP 未跟踪文件，不属本任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4cb0d4b` | (see git log) |
+| `ca83745` | (see git log) |
+
+### Status
+
+[OK] **Completed**
