@@ -609,3 +609,24 @@ accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: 完成 09-01-system-admin-governance-routes 验收与收尾
+
+**Date**: 2026-09-03
+**Task**: 完成 09-01-system-admin-governance-routes 验收与收尾
+**Branch**: `main`
+
+### Summary
+
+系统管理员治理路由任务收尾：审计确认全部实现（登录页主体硬校验、principal 感知 PIN/会话回跳、SystemAdminShell 登出、治理 API 边界回归测试）已由用户随 aabb80f 提交；trellis-check 验收 ACCEPT（9/9 验收项通过，后端定向 29 passed/前端 490 passed，type-check/lint/build/ruff/mypy 全绿）；沉淀前端主体感知会话约定与后端治理边界回归测试规范；归档任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `31cd4e7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
