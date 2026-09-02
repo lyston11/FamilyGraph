@@ -37,3 +37,11 @@
 - `space_members` 规范角色只有 `space_admin|member|guest`，并以 partial unique index `space_id WHERE role='space_admin' AND status='active'` 保证每空间最多一个 active 管理员；创建/交接命令保证正常终态恰好一个。
 - `owner_id` 仅为迁移期兼容镜像，不能参与授权；旧 `owner` 输入必须在写入边界归一化为 `space_admin`。
 - 系统后台查询使用显式列和专用 schema；家庭端点必须使用 `require_authenticated_user`，拒绝 `system_admin` 主体。
+## SQLite 读事务升级与并发用例陷阱（2026-09-02）
+
+来源：修复 `accept_transfer` 双接受并发死锁（09-01-ownership-transfer-test-deadlock）。
+
+- pysqlite legacy autocommit 模式下 SELECT 不持有持久快照：条件 UPDATE（CAS）总是对最新已提交状态求值。所以"条件 UPDATE 单独使用"天然单赢家；`BEGIN IMMEDIATE` 对 CAS 本身的正确性不是必需的。
+- `BEGIN IMMEDIATE` 的真正价值是覆盖**跨读取的多步 check-then-act 窗口**——授权读取 → 资格复核 → 多表写入（如 `commands/ownership.py::accept_transfer` 的 load_actor + transfer 检查 + 条件更新 + 角色翻转）。不要因为 CAS 单独看是安全的就省掉它。
+- 不能用"去掉写锁后 outcome 测试仍通过"来否定写锁约束：仅含条件 UPDATE 的竞态，结果断言在 pysqlite 上测不出锁缺失。写锁守护的是读阶段窗口，第三方并发者（如并发移除成员资格）只能靠它挡住。
+- 并发回归用例自身禁止无限等待，否则一次竞态会把全量 pytest 挂死：`barrier.wait`/`thread.join` 必须带统一超时（参照 `tests/test_person_dedupe.py` 的 `_SYNC_TIMEOUT` 模式）；worker 闭包只捕获标量 ID 和独立 `SessionLocal`，禁止跨线程共享 ORM 实例或 Session；worker 必须捕获 `HTTPException` 与普通 `Exception` 并写入受 `Lock` 保护的结果列表，最终断言从主线程 Session 重查数据库。

@@ -1,1 +1,4 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/architecture.md", "reason": "用于检查移交后唯一管理员和FSM不变量"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "用于检查立即事务和SQLite锁处理"}
+{"file": ".trellis/tasks/09-01-ownership-transfer-test-deadlock/research/concurrency-evidence.md", "reason": "用于检查线程安全、有限等待和全量测试恢复"}

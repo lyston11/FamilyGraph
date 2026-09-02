@@ -3,7 +3,7 @@
   "name": "ownership-transfer-test-deadlock",
   "title": "修复管理员交接并发测试死锁",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
