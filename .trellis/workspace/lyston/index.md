@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
-- **Last Active**: 2026-09-02
+- **Total Sessions**: 11
+- **Last Active**: 2026-09-03
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~590 | Active |
+| `journal-1.md` | ~611 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-09-03 | 完成 PersonalFamilyView 遗留投影闭环任务（通知测试+门禁收口） | `896d32c` | `main` |
 | 10 | 2026-09-02 | 修复管理员交接并发测试死锁（09-01-ownership-transfer-test-deadlock） | `4cb0d4b`, `ca83745` | `main` |
 | 9 | 2026-09-02 | PersonalFamilyView 前端整体落地（Phase 1-7 + 双主题走查 + P0 修复） | `a67010a` | `main` |
 | 8 | 2026-09-01 | 收口系统管理员与空间唯一管理员任务 | `4f73146` | `main` |

@@ -588,3 +588,24 @@ accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: 完成 PersonalFamilyView 遗留投影闭环任务（通知测试+门禁收口）
+
+**Date**: 2026-09-03
+**Task**: 完成 PersonalFamilyView 遗留投影闭环任务（通知测试+门禁收口）
+**Branch**: `main`
+
+### Summary
+
+补齐 09-02-personal-family-view-followup 缺口：aabb80f 已含 household card/space stats/notifications 服务端实现，本次新增 notifications 9 例与 space_stats 9 例合同测试（收件人隔离、masked 哨兵、已读只改 read_at、ETag/304 授权先于缓存、fail-closed 引用校验、撤权即时隐藏），修正 mypy 返回注解并 ruff 收口；pytest 全量 659 passed 无 deselect、前端 490 tests/build 通过、0027 迁移 up/down/up 验证；trellis-check 8 项全 PASS 后提交并归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `896d32c` | (see git log) |
+
+### Status
+
+[OK] **Completed**
