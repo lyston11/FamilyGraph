@@ -33,14 +33,10 @@ _NO_STALE_REASON = "projection_not_current"
 def _dir_class_for_path(path: list[dict[str, Any]]) -> str:
     """主路径 → dir_class：代数差（上辈步 − 下辈步）判长幼，同代含配偶归 spouse。"""
     up = sum(
-        1
-        for step in path
-        if step.get("edge_type") == "parent" and step.get("direction") == "up"
+        1 for step in path if step.get("edge_type") == "parent" and step.get("direction") == "up"
     )
     down = sum(
-        1
-        for step in path
-        if step.get("edge_type") == "parent" and step.get("direction") == "down"
+        1 for step in path if step.get("edge_type") == "parent" and step.get("direction") == "down"
     )
     has_spouse = any(step.get("edge_type") in ("spouse", "partner") for step in path)
     net = up - down

@@ -63,7 +63,7 @@ def stats(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
     space_id: int | None = Query(default=None),
     if_none_match: str | None = Header(default=None),
-) -> dict[str, Any] | Response:
+) -> dict[str, Any] | SpaceStatsOut | Response:
     """统计入口。
 
     - 无 ``space_id``：旧无空间统计合同（可见范围内 total/gender/generation/
@@ -138,7 +138,7 @@ def _space_stats(
     space_id: int,
     if_none_match: str | None,
     response: Response,
-) -> dict[str, Any] | Response:
+) -> SpaceStatsOut | Response:
     """空间限定授权聚合（SpaceStatsOut）；先授权复核，后 ETag 比较。"""
     family_projection.require_pfv_enabled()
     payload = space_stats.space_stats_payload(session, account=account, space_id=space_id)

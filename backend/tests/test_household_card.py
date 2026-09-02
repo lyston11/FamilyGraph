@@ -49,7 +49,9 @@ def test_household_card_happy_path_fields(client, db_session) -> None:
     create_space_member(db_session, space.id, member.id)
 
     resp = client.get(
-        "/api/household-card", params={"space_id": space.id}, headers=_login_header(client, "hc-admin")
+        "/api/household-card",
+        params={"space_id": space.id},
+        headers=_login_header(client, "hc-admin"),
     )
     assert resp.status_code == 200, resp.text
     payload = resp.json()
@@ -71,8 +73,17 @@ def test_household_card_happy_path_fields(client, db_session) -> None:
     assert row["visibility_level"] == "household_detail"
     assert row["display"]["id"] == member.id
     assert row["display"]["name"] == member.name
-    assert {"id", "name", "gender", "birth", "death", "bio", "avatar_path",
-            "privacy_mode", "claim_status"} <= set(row["display"].keys())
+    assert {
+        "id",
+        "name",
+        "gender",
+        "birth",
+        "death",
+        "bio",
+        "avatar_path",
+        "privacy_mode",
+        "claim_status",
+    } <= set(row["display"].keys())
 
     # allowed_actions：active 成员可邀请；identity_confirmed 可建共同家庭
     actions = payload["allowed_actions"]
@@ -89,7 +100,9 @@ def test_household_card_admin_label_and_empty_state(client, db_session) -> None:
 
     # 从普通成员视角读卡：管理员出现在成员列表且标签为「管理员」
     resp = client.get(
-        "/api/household-card", params={"space_id": space.id}, headers=_login_header(client, "hc-label-member")
+        "/api/household-card",
+        params={"space_id": space.id},
+        headers=_login_header(client, "hc-label-member"),
     )
     assert resp.status_code == 200, resp.text
     payload = resp.json()
@@ -163,7 +176,12 @@ def test_household_card_revoked_membership_hidden_on_next_read(client, db_sessio
     member = create_user_with_pin(db_session, "hc-revoke-member", "123456")
     create_space_member(db_session, space.id, member.id)
     headers = _login_header(client, "hc-revoke-member")
-    assert client.get("/api/household-card", params={"space_id": space.id}, headers=headers).status_code == 200
+    assert (
+        client.get(
+            "/api/household-card", params={"space_id": space.id}, headers=headers
+        ).status_code
+        == 200
+    )
 
     row = (
         db_session.query(SpaceMember)
@@ -238,7 +256,9 @@ def test_household_card_disabled_flag_503(client, db_session, monkeypatch) -> No
     _admin, space = create_agent_fixture(db_session, name="hc-flag")
     monkeypatch.setattr(config, "PERSONAL_FAMILY_VIEW_ENABLED", False)
     resp = client.get(
-        "/api/household-card", params={"space_id": space.id}, headers=_login_header(client, "hc-flag")
+        "/api/household-card",
+        params={"space_id": space.id},
+        headers=_login_header(client, "hc-flag"),
     )
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "PERSONAL_FAMILY_VIEW_DISABLED"

@@ -34,9 +34,7 @@ def upgrade() -> None:
             name="ck_notifications_action_card_ref",
         ),
         sa.ForeignKeyConstraint(["space_id"], ["family_spaces.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["recipient_account_id"], ["accounts.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["recipient_account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["action_card_id"], ["action_cards.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["space_member_id"], ["space_members.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["actor_user_id"], ["users.id"], ondelete="SET NULL"),

@@ -98,7 +98,9 @@ def record_action_card_notification(session: Session, card: ActionCard) -> None:
     )
 
 
-def record_membership_request_notification(session: Session, *, space: FamilySpace, member: SpaceMember) -> None:
+def record_membership_request_notification(
+    session: Session, *, space: FamilySpace, member: SpaceMember
+) -> None:
     """空间成员 pending 行创建时的自然映射：
     - 邀请（user != added_by）→ 通知受邀人；
     - 本人申请加入（user == added_by）→ 通知空间当前 active 管理员。
@@ -186,9 +188,7 @@ def _project_item(
     }
 
 
-def list_notifications_page(
-    session: Session, *, account: Account, space_id: int
-) -> dict[str, Any]:
+def list_notifications_page(session: Session, *, account: Account, space_id: int) -> dict[str, Any]:
     """按当前收件人 + 空间过滤并投影；授权复核失败安全 404。"""
     space, viewer = authorized_space_or_404(session, account=account, space_id=space_id)
     rows = session.scalars(

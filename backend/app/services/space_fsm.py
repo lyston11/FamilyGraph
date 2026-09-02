@@ -177,7 +177,9 @@ def _record_membership_notification(
     # 延迟导入避免 space_fsm ↔ notifications 循环依赖
     from app.services import notifications as notifications_service
 
-    notifications_service.record_membership_request_notification(session, space=space, member=member)
+    notifications_service.record_membership_request_notification(
+        session, space=space, member=member
+    )
 
 
 def relation_ids_between_active(session: Session, user_a: int, user_b: int) -> list[Relation]:

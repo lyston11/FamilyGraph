@@ -79,7 +79,7 @@ def _actor_or_404(session: Session, account: Account) -> User:
 
 def etag_for_json(contract_version: str, payload_json: str) -> str:
     """由合同版本与最终序列化载荷派生强 ETag（带引号的 HTTP 形态）。"""
-    digest = hashlib.sha256(f"{contract_version}:{payload_json}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{contract_version}:{payload_json}".encode()).hexdigest()
     return f'"{digest}"'
 
 

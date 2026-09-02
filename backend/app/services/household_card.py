@@ -63,9 +63,7 @@ def household_card_payload(session: Session, *, account: Account, space_id: int)
         members.append(
             {
                 "user_id": row.user_id,
-                "display": jsonable_encoder(
-                    visibility.payload_from_decision(decision, target)
-                ),
+                "display": jsonable_encoder(visibility.payload_from_decision(decision, target)),
                 "household_label": LABEL_ADMIN if row.role == "space_admin" else LABEL_MEMBER,
                 "visibility_level": decision.level,
             }
@@ -77,9 +75,7 @@ def household_card_payload(session: Session, *, account: Account, space_id: int)
         "space_name": space.name,
         "view_version": view.view_version,
         "computed_at": view.computed_at,
-        "viewer": jsonable_encoder(
-            visibility.payload_from_decision(viewer_decision, actor)
-        ),
+        "viewer": jsonable_encoder(visibility.payload_from_decision(viewer_decision, actor)),
         "members": members,
         "allowed_actions": {
             # 邀请是 active 成员权限（commands.spaces._require_inviter），
