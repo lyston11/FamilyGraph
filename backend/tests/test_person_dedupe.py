@@ -27,6 +27,13 @@ _SOLAR = {"cal_type": "solar", "date": "1948-03-12"}
 _SOLAR_OTHER = {"cal_type": "solar", "date": "1950-01-01"}
 # 农历 1948-03-12 == 公历 1948-04-20（canonical_birth 自行换算）
 _LUNAR_SAME_DAY = {"cal_type": "lunar", "date": "1948-03-12"}
+# 已 enrich 的农历行：mirror_date 由服务端写入，canonical_birth 应直接读它
+_LUNAR_ENRICHED = {
+    "cal_type": "lunar",
+    "date": "1948-03-12",
+    "is_leap_month": False,
+    "mirror_date": "1948-04-20",
+}
 _SOLAR_OF_LUNAR = {"cal_type": "solar", "date": "1948-04-20"}
 
 
@@ -81,11 +88,21 @@ def test_name_key_normalization(left: str, right: str, same: bool) -> None:
 
 
 def test_canonical_birth_converts_lunar_to_solar() -> None:
-    """农历自行换算：enrich_structured_date 对 lunar 产出的 mirror_date 恒为 None。"""
+    """农历读 mirror_date，缺失时回落现算，两条路径都得到同一公历键。"""
     assert pid.canonical_birth(_SOLAR) == "1948-03-12"
-    assert pid.canonical_birth(_LUNAR_SAME_DAY) == "1948-04-20"
+    assert pid.canonical_birth(_LUNAR_SAME_DAY) == "1948-04-20"  # 历史行：无 mirror_date
+    assert pid.canonical_birth(_LUNAR_ENRICHED) == "1948-04-20"  # 已 enrich：读 mirror_date
     assert pid.canonical_birth({"cal_type": "none"}) is None
     assert pid.canonical_birth(None) is None
+
+
+def test_canonical_birth_distinguishes_leap_month() -> None:
+    """闰二月十五与平二月十五是不同的两天，比对键必须区分。"""
+    leap = {"cal_type": "lunar", "date": "2023-02-15", "is_leap_month": True}
+    plain = {"cal_type": "lunar", "date": "2023-02-15"}
+    assert pid.canonical_birth(leap) == "2023-04-05"
+    assert pid.canonical_birth(plain) == "2023-03-06"
+    assert pid.canonical_birth(leap) != pid.canonical_birth(plain)
 
 
 @pytest.mark.parametrize(

@@ -140,8 +140,8 @@ if is_space_manager(session, space_id, actor.id):
 共用它，阈值不得在两处各写一套。
 
 - 匹配键 = 归一化姓名 + 规范公历生日。姓名归一：NFKC → 去空白与分隔符 → **繁转简**
-  （产品裁定：只留简体）→ casefold。生日归一到公历 ISO；农历自行换算，不读
-  `mirror_date`（见下"已知缺陷"）。
+  （产品裁定：只留简体）→ casefold。生日归一到公历 ISO：农历行读 `mirror_date`，
+  缺失（历史行）时才现算——换算口径的唯一真源是 `services/lunar.py`。
 - 强度三档：`strong`（同名同生日）拒绝建档，`detail` 给出既有档案 id，调用方改为
   引用它（加 `space_profile_refs`）；`weak`（同名但任一侧生日缺失，不可判定）打断创建，
   要求创建者显式确认"这是另一个人"；`none`（不同名，或双方生日都有且不同）放行——
@@ -168,10 +168,6 @@ if is_space_manager(session, space_id, actor.id):
 
 ### 已知缺陷与限制（不在本次修复范围）
 
-- `StructuredDate.date` 恒为 ISO，而 `lunar.lunar_to_solar` 期望 `'YYYY:M:D'`，故
-  `enrich_structured_date` 对 lunar 输入产出的 `mirror_date` **恒为 None**。
-  `person_identity.canonical_birth` 自行做正确换算绕过它。
-- 闰月无法表达：ISO 容器存不下 `lunar_to_solar` 用来标闰月的负数月份，闰月生日按平月换算。
 - zhconv 覆盖部分异体字（峯→峰、淩→凌）但不覆盖全部（喆 保持原样）；未覆盖者落到
   weak 要求消歧，而不是被静默并成同一人。
 - 生日未知时 DB 层无法给出硬保证（否则会拦住真正的同名不同人），残留重复由 Steward
@@ -775,3 +771,12 @@ B
 - 未成年人分级隐私：**v2 待定**。v1 依赖 U5 基线 + 家庭信任模型，写入 HANDOFF 默认假设。
 - 敏感缓存清理：logout 清空 Pinia state + localStorage(JWT) + 内存中的图数据；路由守卫兜底。
 - 数据导出/更正：v1 提供管理员协助通道（admin 数据修正后台），自助导出列 v2。
+
+## 11. PersonalFamilyView 与跨族谱 Bridge（2026-09-01）
+
+- PersonalFamilyView 按 `viewer_account + root_user + space` 建立可重建授权投影；它不是 SourceFact、Relation、SpaceMember 或公共图真源。
+- 视图只消费 confirmed 结构事实和当前 VisibilityPolicy；同空间无确认路径的人不进入个人树，SocialRelation 不入图，`none` 节点完全省略。
+- 跨 LineageSpace 连接必须使用显式 bridge。bridge 绑定两侧空间与 anchor，只有两位相关用户本人双向同意后 active；空间管理员只接收通知，不具备审批、否决、修改或撤销权。未认领账号不能代签。
+- active bridge 只在当前 viewer 是 anchor 时作为跨空间边进入图遍历，并允许沿另一侧 anchor 可达的 confirmed 结构路径计算；跨空间节点只能使用最小 `lineage_summary` 字段。
+- 关系事实、成员/引用、bridge consent/revoke 和权限收紧事件将相关投影标为 stale；读取时再次校验当前成员资格、bridge 状态和字段级可见性，撤权后不得返回旧节点。
+- Steward 在 space-scoped job 中重建受影响投影；Assistant、platform_operator 和空间管理员均不能借此扩大读取权或直接写入 SourceFact。

@@ -30,6 +30,7 @@ from app.api.internal_agent import router as internal_agent_router
 from app.api.kinship import router as kinship_router
 from app.api.memory import router as memory_router
 from app.api.misc import router as misc_router
+from app.api.personal_family_view import router as personal_family_view_router
 from app.api.spaces import router as spaces_router
 from app.api.system_admin import router as system_admin_router
 from app.api.users import members_router
@@ -151,6 +152,7 @@ app.include_router(kinship_router, prefix="/api")
 app.include_router(action_cards_router, prefix="/api")
 # V2.5 Memory cards and scope-filtered RAG
 app.include_router(memory_router, prefix="/api")
+app.include_router(personal_family_view_router, prefix="/api")
 # V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）
 app.include_router(controlled_web_router, prefix="/api")
 app.include_router(controlled_web_admin_router, prefix="/api")

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.models.personal_family_view import PersonalFamilyBridge
 from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember, SpaceProfileRef
 from app.models.user import User
@@ -39,6 +40,7 @@ EDGE_PARENT = "parent"
 EDGE_SPOUSE = "spouse"
 EDGE_PARTNER = "partner"
 EDGE_SIBLING = "sibling"
+EDGE_BRIDGE = "bridge"
 
 # parent 类 fact_type → step.subtype（biological/adoptive/step/guardian）
 _SUBTYPE_BY_FACT_TYPE = {
@@ -49,7 +51,7 @@ _SUBTYPE_BY_FACT_TYPE = {
 }
 
 # 遍历与主路径排序的确定性依据：邻接表按键排序，同键按 (to_id, edge_type, fact_id)
-_EDGE_ORDER = {EDGE_PARENT: 0, EDGE_SIBLING: 1, EDGE_SPOUSE: 2, EDGE_PARTNER: 3}
+_EDGE_ORDER = {EDGE_PARENT: 0, EDGE_SIBLING: 1, EDGE_SPOUSE: 2, EDGE_PARTNER: 3, EDGE_BRIDGE: 4}
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,7 @@ class RelationshipGraph:
     node_genders: dict[int, str]
     adjacency: dict[int, list[GraphEdge]]
     snapshot_hash: str
+    bridge_user_ids: frozenset[int] = frozenset()
 
 
 def _visible_node_ids(session: Session, *, viewer_user_id: int, space_id: int) -> set[int]:
@@ -119,10 +122,40 @@ def _visible_node_ids(session: Session, *, viewer_user_id: int, space_id: int) -
 def load_graph(session: Session, *, viewer_user_id: int, space_id: int) -> RelationshipGraph:
     """构建并返回当前空间口径的关系图快照（含 snapshot_hash 指纹）。"""
     visible = _visible_node_ids(session, viewer_user_id=viewer_user_id, space_id=space_id)
+    bridge_user_ids: set[int] = set()
+    bridge_space_ids: set[int] = set()
+    active_bridges = session.scalars(
+        select(PersonalFamilyBridge).where(
+            PersonalFamilyBridge.status == "active",
+            or_(
+                (PersonalFamilyBridge.lineage_space_a_id == space_id)
+                & (PersonalFamilyBridge.anchor_a_user_id == viewer_user_id),
+                (PersonalFamilyBridge.lineage_space_b_id == space_id)
+                & (PersonalFamilyBridge.anchor_b_user_id == viewer_user_id),
+            ),
+        )
+    ).all()
+    for bridge in active_bridges:
+        if bridge.lineage_space_a_id == space_id:
+            other_space_id = bridge.lineage_space_b_id
+            other_anchor_id = bridge.anchor_b_user_id
+        else:
+            other_space_id = bridge.lineage_space_a_id
+            other_anchor_id = bridge.anchor_a_user_id
+        bridge_space_ids.add(other_space_id)
+        bridge_user_ids.add(other_anchor_id)
+        bridge_member_ids = session.scalars(
+            select(SpaceMember.user_id).where(
+                SpaceMember.space_id == other_space_id, SpaceMember.status == "active"
+            )
+        ).all()
+        bridge_user_ids.update(bridge_member_ids)
+    visible.update(bridge_user_ids)
 
+    authorized_space_ids = {space_id, *bridge_space_ids}
     stmt = select(SourceFact).where(
         SourceFact.state == FACT_CONFIRMED,
-        or_(SourceFact.space_id == space_id, SourceFact.space_id.is_(None)),
+        or_(SourceFact.space_id.is_(None), SourceFact.space_id.in_(authorized_space_ids)),
     )
     participating: list[SourceFact] = []
     for row in session.scalars(stmt):
@@ -164,16 +197,31 @@ def load_graph(session: Session, *, viewer_user_id: int, space_id: int) -> Relat
                 GraphEdge(subject_id, EDGE_SIBLING, None, "sym", fact.id)
             )
 
+    for bridge in active_bridges:
+        other_anchor_id = (
+            bridge.anchor_b_user_id
+            if bridge.lineage_space_a_id == space_id
+            else bridge.anchor_a_user_id
+        )
+        adjacency.setdefault(viewer_user_id, []).append(
+            GraphEdge(other_anchor_id, EDGE_BRIDGE, None, "sym", 0)
+        )
+
     for edges in adjacency.values():
         edges.sort(key=lambda edge: (edge.to_id, _EDGE_ORDER[edge.edge_type], edge.fact_id))
 
     digest = hashlib.sha256()
     for fact in participating:
         digest.update(f"{fact.id}:{fact.revision}:{fact.fact_type}\n".encode())
+    for bridge in active_bridges:
+        digest.update(
+            f"bridge:{bridge.id}:{bridge.revision}:{bridge.lineage_space_a_id}:{bridge.lineage_space_b_id}\n".encode()
+        )
     return RelationshipGraph(
         viewer_user_id=viewer_user_id,
         space_id=space_id,
         node_genders=genders,
         adjacency=adjacency,
         snapshot_hash=digest.hexdigest(),
+        bridge_user_ids=frozenset(bridge_user_ids),
     )

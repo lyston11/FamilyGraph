@@ -17,6 +17,18 @@ from app.utils.timeutil import utcnow
 _INTERNAL_STEWARD_EVENT_PREFIXES = ("card.", "steward.")
 
 
+def _invalidate_personal_family_view(event: DomainEvent, session: Session) -> None:
+    for space_id in [event.space_id, *(event.payload or {}).get("space_ids", [])]:
+        if not isinstance(space_id, int):
+            continue
+        if event.type.startswith(
+            ("source_fact.", "space_member.", "space_profile_ref.", "personal_family_bridge.")
+        ):
+            from app.services.personal_family_view import invalidate_space_views
+
+            invalidate_space_views(session, space_id=space_id)
+
+
 def _schedule_steward_job(event: DomainEvent, session: Session) -> None:
     """在领域事件所属事务内登记 Steward 水位，避免提交后丢触发。"""
     if event.space_id is None and (
@@ -64,5 +76,6 @@ def emit(
     )
     session.add(event)
     _apply_rag_invalidation(event, session)
+    _invalidate_personal_family_view(event, session)
     _schedule_steward_job(event, session)
     return event

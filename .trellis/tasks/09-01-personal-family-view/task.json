@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "09-01-personal-family-view-frontend"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",

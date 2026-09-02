@@ -25,9 +25,21 @@ const text = computed(() => {
   if (v === null || v === undefined) return "不详"
   if (typeof v === "string") return v
   if (typeof v === "object") {
-    // 结构化日期：优先人读文本，其次 mirror，最后 ISO
-    const d = v as { date?: string | null; mirror_date?: string | null }
-    return d.date ?? d.mirror_date ?? "不详"
+    // 结构化日期：优先人读原文，其次 date（带历别与闰月标注），最后镜像
+    const d = v as {
+      cal_type?: string | null
+      date?: string | null
+      is_leap_month?: boolean
+      mirror_date?: string | null
+      original_text?: string | null
+    }
+    if (d.original_text) return d.original_text
+    if (d.date) {
+      const prefix = d.cal_type === "lunar" ? "农历 " : d.cal_type === "solar" ? "公历 " : ""
+      const leap = d.cal_type === "lunar" && d.is_leap_month ? "闰月 " : ""
+      return `${prefix}${leap}${d.date}`
+    }
+    return d.mirror_date ?? "不详"
   }
   return String(v)
 })

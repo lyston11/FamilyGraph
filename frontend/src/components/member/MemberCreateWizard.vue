@@ -20,7 +20,7 @@ import {
 } from 'naive-ui'
 import type { SelectOption } from 'naive-ui'
 
-import { fetchLunarMirror } from '@/api/lunar'
+import { fetchLunarMirror, type LunarMirror } from '@/api/lunar'
 import { ApiError } from '@/api/errors'
 import { createSpace } from '@/api/spaces'
 import { useMembersStore } from '@/stores/members'
@@ -114,6 +114,7 @@ const form = reactive({
   birthCalType: 'solar' as StructuredDate['cal_type'],
   birthDate: '',
   birthMirror: '' as string | null,
+  birthIsLeapMonth: false,
   deathEnabled: false,
   deathCalType: 'solar' as StructuredDate['cal_type'],
   deathDate: '',
@@ -124,8 +125,12 @@ const form = reactive({
 /** m3b：历别切换自动换算互填（后端 lunar-python 单一实现，避免前端双写） */
 type SolarOrLunar = 'solar' | 'lunar'
 
-async function fetchMirror(calType: SolarOrLunar, date: string): Promise<string | null> {
-  return await fetchLunarMirror(calType, date).catch(() => null)
+async function fetchMirror(
+  calType: SolarOrLunar,
+  date: string,
+  isLeapMonth: boolean,
+): Promise<LunarMirror | null> {
+  return await fetchLunarMirror(calType, date, isLeapMonth).catch(() => null)
 }
 
 let prevBirthCal: SolarOrLunar | 'none' = 'solar'
@@ -145,25 +150,27 @@ async function onBirthCalChange(newType: StructuredDate['cal_type'], oldType?: S
     // 双历间切换：用旧历日期的镜像作为新历预填（可撤销——再次切回即还原）
     const dateStr = String(form.birthDate || '')
     if (!dateStr) return
-    const mirror = await fetchMirror(oldType, dateStr)
-    if (mirror) {
-      const [y, rest] = [mirror.split(':')[0], mirror.split(':').slice(1).join('-')]
-      const normalized = rest.startsWith('-')
-        ? `${y}-${String(Math.abs(Number(rest.split('-')[0]))).padStart(2, '0')}-${rest.split('-')[1]}`
-        : `${y}-${rest}`
-      form.birthDate = normalized
-      form.birthMirror = mirror
+    const result = await fetchMirror(oldType, dateStr, form.birthIsLeapMonth)
+    if (result?.mirror) {
+      // 镜像已是 ISO，直接预填；闰月标记恒描述农历那一侧，故切换后沿用同一值
+      form.birthDate = result.mirror
+      form.birthMirror = dateStr
+      form.birthIsLeapMonth = result.is_leap_month
     }
   }
 }
 
 const canNextFromInfo = computed(() => form.name.trim().length > 0 && relationDir.value !== '')
 
-function buildStructuredDate(calType: StructuredDate['cal_type'], raw: string): StructuredDate | null {
+function buildStructuredDate(
+  calType: StructuredDate['cal_type'],
+  raw: string,
+  isLeapMonth = false,
+): StructuredDate | null {
   if (calType === 'none') {
     return { cal_type: 'none', date: null }
   }
-  return { cal_type: calType, date: raw || null }
+  return { cal_type: calType, date: raw || null, is_leap_month: isLeapMonth }
 }
 
 function goInfo(): void {
@@ -217,7 +224,7 @@ async function submit(allowDuplicatePerson = false): Promise<void> {
       {
         name: form.name.trim(),
         gender: form.gender,
-        birth: buildStructuredDate(form.birthCalType, form.birthDate),
+        birth: buildStructuredDate(form.birthCalType, form.birthDate, form.birthIsLeapMonth),
         death: form.deathEnabled
           ? buildStructuredDate(form.deathCalType, form.deathDate)
           : null,
@@ -279,6 +286,8 @@ function reset(): void {
   form.gender = 'unknown'
   form.birthCalType = 'solar'
   form.birthDate = ''
+  form.birthIsLeapMonth = false
+  form.birthMirror = ''
   form.deathEnabled = false
   form.deathCalType = 'solar'
   form.deathDate = ''
@@ -387,8 +396,14 @@ const lineageOptions = computed<SelectOption[]>(() =>
             data-test="wizard-birth-date"
             @update:formatted-value="(v: string | null) => (form.birthDate = v ?? '')"
           />
+          <NCheckbox
+            v-if="form.birthCalType === 'lunar'"
+            v-model:checked="form.birthIsLeapMonth"
+            data-test="wizard-birth-leap"
+          >
+            闰月
+          </NCheckbox>
         </div>
-        <!-- 历别换算（公⇄农历自动互补）由 m1d 接入，此处先记录录入原文 -->
       </NFormItem>
       <NFormItem label="去世">
         <div class="date-row">

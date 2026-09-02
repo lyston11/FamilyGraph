@@ -22,7 +22,9 @@ def upgrade() -> None:
         sa.Column("view_version", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("input_hash", sa.String(length=64), nullable=True),
         sa.Column("policy_version", sa.String(length=64), nullable=False, server_default="v1"),
-        sa.Column("computation_version", sa.String(length=64), nullable=False, server_default="pfv-v1"),
+        sa.Column(
+            "computation_version", sa.String(length=64), nullable=False, server_default="pfv-v1"
+        ),
         sa.Column("computed_at", sa.DateTime(), nullable=True),
         sa.Column("invalidated_at", sa.DateTime(), nullable=True),
         sa.Column("failed_reason", sa.Text(), nullable=True),
@@ -44,7 +46,11 @@ def upgrade() -> None:
         unique=True,
     )
     op.create_index("ix_pfv_space_status", "personal_family_views", ["space_id", "status"])
-    op.create_index("ix_pfv_viewer_space", "personal_family_views", ["viewer_account_id", "space_id"])
+    op.create_index(
+        "ix_pfv_viewer_space",
+        "personal_family_views",
+        ["viewer_account_id", "space_id"],
+    )
 
     op.create_table(
         "personal_family_view_nodes",
@@ -128,7 +134,9 @@ def upgrade() -> None:
             "status IN ('pending','active','revoked','expired','rejected')",
             name="ck_pfb_status",
         ),
-        sa.CheckConstraint("lineage_space_a_id <> lineage_space_b_id", name="ck_pfb_distinct_spaces"),
+        sa.CheckConstraint(
+            "lineage_space_a_id <> lineage_space_b_id", name="ck_pfb_distinct_spaces"
+        ),
         sa.CheckConstraint("anchor_a_user_id <> anchor_b_user_id", name="ck_pfb_distinct_anchors"),
         sa.ForeignKeyConstraint(["lineage_space_a_id"], ["family_spaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["lineage_space_b_id"], ["family_spaces.id"], ondelete="CASCADE"),

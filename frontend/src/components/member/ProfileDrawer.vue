@@ -183,8 +183,10 @@ function calPrefix(calType: StructuredDate['cal_type'] | undefined): string {
 
 function formatDate(value: StructuredDate | null): string {
   if (!value) return '不详'
-  const prefix = calPrefix(value.cal_type)
-  return value.date ? `${prefix}${value.date}` : '不详'
+  if (!value.date) return '不详'
+  // 闰月标记恒描述农历那一侧，仅在展示农历日期时附加
+  const leap = value.cal_type === 'lunar' && value.is_leap_month ? '闰月 ' : ''
+  return `${calPrefix(value.cal_type)}${leap}${value.date}`
 }
 
 const calOptions = [

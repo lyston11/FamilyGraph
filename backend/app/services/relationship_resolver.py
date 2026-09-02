@@ -187,7 +187,7 @@ def _path_sort_key(path: tuple[PathStep, ...]) -> tuple[Any, ...]:
 
 _SUBTYPE_LETTER = {"adoptive": "a", "step": "s", "guardian": "g"}
 _GENDER_LETTER = {"m": "m", "f": "f"}
-_SYM_LETTER = {"sibling": "B", "spouse": "S", "partner": "P"}
+_SYM_LETTER = {"sibling": "B", "spouse": "S", "partner": "P", "bridge": "X"}
 
 
 def _step_token(step: PathStep, genders: dict[int, str]) -> str:
@@ -224,6 +224,8 @@ def path_class_for_path(
         return PATH_CLASS_STEP_ADOPTIVE
     if "guardian" in subtypes:
         return PATH_CLASS_GUARDIAN
+    if any(step.edge_type == "bridge" for step in path):
+        return "cross_space"
     if any(step.edge_type in ("spouse", "partner") for step in path):
         return PATH_CLASS_AFFINAL
     if any(step.edge_type == "sibling" for step in path):
@@ -275,7 +277,9 @@ def _step_role(step: PathStep, genders: dict[int, str]) -> str:
         ("partner", ""): "伴侣",
         ("sibling", "m"): "兄弟",
         ("sibling", "f"): "姐妹",
-        ("sibling", ""): "兄弟姐妹",
+        ("bridge", ""): "跨空间连接",
+        ("bridge", "m"): "跨空间连接",
+        ("bridge", "f"): "跨空间连接",
     }.get((step.edge_type, suffix), "亲属")
 
 

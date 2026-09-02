@@ -79,9 +79,7 @@ class PersonalFamilyViewNode(Base):
     view_id: Mapped[int] = mapped_column(
         ForeignKey("personal_family_views.id", ondelete="CASCADE"), nullable=False
     )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     display_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     visibility_level: Mapped[str] = mapped_column(String(20), nullable=False)
     inclusion_reason_code: Mapped[str] = mapped_column(String(64), nullable=False)

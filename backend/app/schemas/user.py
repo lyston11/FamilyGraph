@@ -23,10 +23,17 @@ ClaimStatus = Literal["managed", "claimed"]
 
 
 class StructuredDate(BaseModel):
-    """生卒结构化值（D7）：cal_type + YYYY-MM-DD + 原文备注。"""
+    """生卒结构化值（D7）：cal_type + YYYY-MM-DD + 闰月标记 + 镜像历 + 原文备注。
+
+    ``is_leap_month`` 恒描述农历那一侧（cal_type=lunar 时指 date，solar 时指
+    mirror_date）；``mirror_date`` 由服务端 ``enrich_structured_date`` 覆写，
+    请求携带的值不可信。农历 date 的月份恒为 1..12 正数，闰月只由该标记表达。
+    """
 
     cal_type: CalType = "none"
     date: str | None = None
+    is_leap_month: bool = False
+    mirror_date: str | None = None
     original_text: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
@@ -34,6 +41,8 @@ class StructuredDate(BaseModel):
         if self.cal_type == "none":
             if self.date is not None:
                 raise ValueError("cal_type 为 none 时不得携带 date")
+            if self.is_leap_month:
+                raise ValueError("cal_type 为 none 时不得标记闰月")
             return self
         if not self.date:
             raise ValueError("cal_type 为 solar/lunar 时 date 必填")

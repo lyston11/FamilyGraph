@@ -684,6 +684,7 @@ def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str,
         "cards_superseded": 0,
         "findings_emitted": 0,
         "cards_expired": 0,
+        "personal_family_views_rebuilt": 0,
     }
     visible = _space_visible_user_ids(db, space)
     floor = _completed_cursor_floor(db, job)
@@ -692,6 +693,9 @@ def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str,
     touched = _consume_window(db, space, floor=floor, upper=job.trigger_cursor)
     stats["events_consumed"] = len(touched.events)
     stats["derived_recomputed"] = _rebuild_space_derived(db, space, visible)
+    from app.services.personal_family_view import rebuild_space_views
+
+    stats["personal_family_views_rebuilt"] = rebuild_space_views(db, space_id=space.id)
 
     # 2. 冲突/缺失检测（只报告）
     findings = _detect_findings(db, space, visible)

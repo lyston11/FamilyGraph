@@ -29,11 +29,24 @@ router = APIRouter(tags=["misc"])
 def lunar_mirror(
     cal_type: str = Query(pattern="^(solar|lunar)$"),
     date: str = Query(min_length=8, max_length=10),
+    is_leap_month: bool = Query(default=False),
     _identity: tuple[User, Account] = Depends(require_authenticated_user),
-) -> dict[str, str | None]:
-    """公农历互转预览（m3b 前端历别切换自动互填）。"""
-    mirror = solar_to_lunar(date) if cal_type == "solar" else lunar_to_solar(date)
-    return {"mirror": mirror}
+) -> dict[str, str | bool | None]:
+    """公农历互转预览（m3b 前端历别切换自动互填）。
+
+    响应的 is_leap_month 恒描述农历那一侧：公历入时来自换算结果（镜像可能落在闰月），
+    农历入时回显入参。
+    """
+    if cal_type == "solar":
+        converted = solar_to_lunar(date)
+        if converted is None:
+            return {"mirror": None, "is_leap_month": False}
+        mirror, mirror_is_leap = converted
+        return {"mirror": mirror, "is_leap_month": mirror_is_leap}
+    return {
+        "mirror": lunar_to_solar(date, is_leap_month=is_leap_month),
+        "is_leap_month": is_leap_month,
+    }
 
 
 # ---- m3c 统计 ----
@@ -68,7 +81,11 @@ def stats(
         if not birth_clear:
             continue
         birth = u.birth if isinstance(u.birth, dict) else {}
-        date_str = birth.get("date") or birth.get("mirror_date")
+        # 分桶口径恒为公历：农历行取 mirror_date，绝不把农历 date 当公历解析。
+        # 历史农历行（mirror_date 未回填）落到 None 而被跳过，优于错误分桶。
+        date_str = (
+            birth.get("mirror_date") if birth.get("cal_type") == "lunar" else birth.get("date")
+        )
         if date_str:
             try:
                 month = int(str(date_str).split("-")[1].lstrip("0") or 0)

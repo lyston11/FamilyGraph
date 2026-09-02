@@ -118,4 +118,9 @@
 - 主路径复用现有 `relationship_resolver` 的确定性排序，最多 3 条替代路径，用户不能手动钉死正式事实路径。
 - 浏览器只收到安全枚举型排除理由；不可见目标不返回身份、空间、路径或存在性信息。
 - 首版使用当前账号固定 viewer/root 的 PersonalFamilyView 专用 GET API，返回一致性快照、版本、状态和投影内容。
-- 撤权下一次读取立即生效；普通事实变化异步、幂等、可见失败、最终收敛，不承诺固定秒级 SLA。
+
+## 2026-09-01 · 实现进度
+
+已实现 PersonalFamilyView/Node/Edge 与显式跨族谱 Bridge 的 ORM、Alembic 0025、schema、浏览器 API、前端 API/runtime guard/Pinia store。active bridge 已接入关系图：仅当前 viewer 为 anchor 时建立跨空间边，沿另一侧 confirmed 结构路径计算；跨空间节点使用最小 lineage_summary 投影。DomainEvent 会标记受影响视图 stale，Steward 空间作业负责重建。
+
+已验证：PersonalFamilyView/Bridge/Resolver/Steward 定向测试 68 passed；后端全量（排除已知 ownership-transfer deadlock）619 passed、3 skipped、1 deselected；backend ruff/mypy、frontend type-check/lint/test/build、Alembic upgrade→downgrade→upgrade 均通过。

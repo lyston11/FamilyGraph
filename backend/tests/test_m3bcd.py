@@ -68,11 +68,17 @@ def three_families(db_session):
 def test_lunar_mirror_endpoint(client: TestClient, three_families):
     h = _login(client, "甲", "111111")
     r = client.get("/api/lunar/mirror?cal_type=solar&date=2023-04-05", headers=h)
-    assert r.status_code == 200 and r.json()["mirror"] == "2023:-2:15"
+    assert r.status_code == 200
+    assert r.json()["mirror"] == "2023-02-15" and r.json()["is_leap_month"] is True
     r2 = client.get(
-        "/api/lunar/mirror?cal_type=lunar&date=2023:-2:15".replace("--2", "-2"), headers=h
+        "/api/lunar/mirror?cal_type=lunar&date=2023-02-15&is_leap_month=true", headers=h
     )
     assert r2.status_code == 200
+    assert r2.json()["mirror"] == "2023-04-05" and r2.json()["is_leap_month"] is True
+
+    r3 = client.get("/api/lunar/mirror?cal_type=lunar&date=2023-02-15", headers=h)
+    assert r3.status_code == 200
+    assert r3.json()["mirror"] == "2023-03-06" and r3.json()["is_leap_month"] is False
 
 
 # ---- m3c 统计 ----

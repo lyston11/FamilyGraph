@@ -71,13 +71,12 @@ def normalize_person_name(name: str | None) -> str:
 def canonical_birth(birth: Any) -> str | None:
     """生日 → 可比对的公历 ISO 键；无法定位到某一天时返回 None。
 
-    农历自行换算而不读 ``mirror_date``：``StructuredDate.date`` 恒为 ISO，而
-    ``lunar.lunar_to_solar`` 期望 ``'YYYY:M:D'``，故 ``enrich_structured_date``
-    对 lunar 输入产出的 ``mirror_date`` 恒为 None（既有缺陷）。这里做正确换算，
-    使农历与公历录入的同一天能够匹配。
+    农历读 ``mirror_date``（服务端 ``enrich_structured_date`` 写入的公历镜像），
+    保持换算口径单一真源。历史行的 ``mirror_date`` 可能缺失（未回填），此时回落
+    调用 ``lunar_to_solar`` 现算，故农历与公历录入的同一天始终能匹配。
 
-    闰月无法表达：ISO 容器存不下 ``lunar_to_solar`` 用来标闰月的负数月份，
-    故闰月生日会被当作平月换算。这是数据模型的既有限制。
+    闰月经 ``is_leap_month`` 表达，闰二月十五与平二月十五换算出不同公历日，
+    因此比对键天然区分二者。
     """
     if not isinstance(birth, dict):
         return None
@@ -87,14 +86,10 @@ def canonical_birth(birth: Any) -> str | None:
         return None
     if cal_type == "solar":
         return raw
-    parts = raw.split("-")
-    if len(parts) != 3:
-        return None
-    try:
-        year, month, day = (int(part) for part in parts)
-    except ValueError:
-        return None
-    return lunar_to_solar(f"{year}:{month}:{day}")
+    mirror = birth.get("mirror_date")
+    if isinstance(mirror, str) and mirror:
+        return mirror
+    return lunar_to_solar(raw, is_leap_month=bool(birth.get("is_leap_month")))
 
 
 def match_strength(

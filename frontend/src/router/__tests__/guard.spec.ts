@@ -102,6 +102,7 @@ describe('router guards', () => {
 
   it('首启未初始化：一律重定向到引导页', async () => {
     mockedStatus.mockResolvedValue({ initialized: false })
+    await resetToOnboarding()
 
     expect(await navigate('/')).toBe('onboarding')
     expect(await navigate('/login')).toBe('onboarding')
