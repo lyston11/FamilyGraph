@@ -630,3 +630,24 @@ accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 完成并归档空间角色与个人家族视图任务
+
+**Date**: 2026-09-03
+**Task**: 完成并归档空间角色与个人家族视图任务
+**Branch**: `main`
+
+### Summary
+
+完成 remove-guest-role 的迁移边界、两值角色 schema 与后台类型收敛，补充 SQLite 约束/连接状态回归测试和数据库规范；后端 pytest 666 passed/3 skipped、前端 490 tests passed、mypy/lint/type-check/build/Alembic 验证通过。归档 remove-guest-role 与已完成的 personal-family-view。后端仍有与本任务无关的既有 Ruff 问题。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5473de1` | (see git log) |
+
+### Status
+
+[OK] **Completed**

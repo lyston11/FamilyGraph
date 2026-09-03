@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-09-03
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~632 | Active |
+| `journal-1.md` | ~653 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-09-03 | 完成并归档空间角色与个人家族视图任务 | `5473de1` | `main` |
 | 12 | 2026-09-03 | 完成 09-01-system-admin-governance-routes 验收与收尾 | `31cd4e7` | `main` |
 | 11 | 2026-09-03 | 完成 PersonalFamilyView 遗留投影闭环任务（通知测试+门禁收口） | `896d32c` | `main` |
 | 10 | 2026-09-02 | 修复管理员交接并发测试死锁（09-01-ownership-transfer-test-deadlock） | `4cb0d4b`, `ca83745` | `main` |
