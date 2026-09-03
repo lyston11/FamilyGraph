@@ -1,8 +1,10 @@
-"""成员档案命令（建档/档案修改/披露开关/删除）——HTTP 与未来 Agent 共用（AC-F7）。
+"""成员档案命令（建档/档案修改/披露开关/删除/重复合并）——HTTP 与未来 Agent 共用（AC-F7）。
 
 每条命令一个短事务：授权（custody/space_fsm）→ 校验 → 写入 → domain_events → audit。
 建档（F-1/F-3）：provisional 档案 + managed 账号；选空间只建 space_profile_refs
 最小节点引用，provisional 人物不是 SpaceMember。确档清单项随建档播种。
+合并（merge_duplicate_profile）：残留重复档案的显式处置命令——把 retired 的身份
+承载行改指向 survivor 后删除 retired（§0.9 判定口径 + R2 处置闭环）。
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from app.errors import (
     CONFIRM_NAME_MISMATCH,
     DISCLOSURE_SCOPE_REQUIRES_SELF,
     IDEMPOTENCY_PAYLOAD_CONFLICT,
+    IDENTITY_INVALID_TRANSITION,
     OWNER_TRANSFER_REQUIRED,
     PERSON_DUPLICATE_AMBIGUOUS,
     PERSON_DUPLICATE_IN_SPACE,
@@ -33,7 +36,8 @@ from app.errors import (
 )
 from app.models import Account, User
 from app.models.attachment import Attachment
-from app.models.space import FamilySpace, SpaceProfileRef
+from app.models.relation import Relation
+from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.models.v2_foundation import MemberCreationRequest, ProfileFactReview
 from app.services import audit, custody, identity_fsm, person_identity, relation_fsm, source_facts
 from app.services import disclosure as disclosure_service
@@ -48,6 +52,16 @@ class DeletedProfile:
     profile_id: int
     snapshot: dict[str, Any]
     purge_image_paths: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MergedProfile:
+    """合并命令结果：already_merged=True 表示 retired 已不存在（重放幂等分支）。"""
+
+    survivor_id: int
+    retired_id: int
+    moved: dict[str, int] = field(default_factory=dict)
+    already_merged: bool = False
 
 
 def _enrich(value: Any) -> Any:
@@ -646,6 +660,24 @@ def delete_profile_core(
         "account_status": target.account.status,
         "created_by": target.created_by,
     }
+    # profile.deleted 的失效合同需要空间范围：refs/members 行随删除级联消失，
+    # 必须在删除前收集 active 空间写入 payload.space_ids（domain_events 监听逐空间标 stale）。
+    affected_space_ids = sorted(
+        {
+            *session.scalars(
+                select(SpaceProfileRef.space_id).where(
+                    SpaceProfileRef.user_id == target.id,
+                    SpaceProfileRef.status == "active",
+                )
+            ),
+            *session.scalars(
+                select(SpaceMember.space_id).where(
+                    SpaceMember.user_id == target.id,
+                    SpaceMember.status == "active",
+                )
+            ),
+        }
+    )
     # Publish before the profile is flushed away so the RAG invalidation can
     # still find documents owned by this profile. The event payload is a
     # deletion-safe snapshot and does not use a foreign key to the user.
@@ -658,6 +690,7 @@ def delete_profile_core(
             "snapshot_name": snapshot["name"],
             "deleted_by": ctx.user_id,
             "deleted_by_account": ctx.account_id,
+            "space_ids": affected_space_ids,
         },
     )
     session.delete(target)  # flush 时级联删除账号等子行，audit 行保留（无 FK）
@@ -718,6 +751,294 @@ def delete_member(
                 "snapshot": result.snapshot,
                 "actor_id": actor.id,
                 "self_deleted": actor.id == result.profile_id,
+            },
+        )
+    return result
+
+
+# ---- 残留重复档案的合并处置（09-01 人物身份去重，design §2.1）----
+
+
+def _active_identity_space_ids(session: Session, *user_ids: int) -> list[int]:
+    """两侧 active refs/members 覆盖的空间集合（profile.* 失效与审计的触达范围）。"""
+    ids: set[int] = set()
+    for user_id in user_ids:
+        ids.update(
+            session.scalars(
+                select(SpaceProfileRef.space_id).where(
+                    SpaceProfileRef.user_id == user_id,
+                    SpaceProfileRef.status == "active",
+                )
+            )
+        )
+        ids.update(
+            session.scalars(
+                select(SpaceMember.space_id).where(
+                    SpaceMember.user_id == user_id,
+                    SpaceMember.status == "active",
+                )
+            )
+        )
+    return sorted(ids)
+
+
+def merge_duplicate_profile(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    space_id: int,
+    survivor_id: int,
+    retired_id: int,
+    confirm_same_person: bool = False,
+) -> MergedProfile:
+    """把空间内一对确认同一人的重复档案合并为唯一人物（survivor），处置 retired。
+
+    判定口径复用 services/person_identity（第三个调用方：建档门禁、回溯审计、合并
+    复核）。单事务（``command_transaction(immediate=True)``，与建档门禁同一并发合同）
+    内按序执行：授权双向 custody → 状态门（双方 managed）→ 重复复核（none 拒绝、
+    confirm 缺失拒绝）→ owner 义务预检 → 迁移改指向 → 吊销会话 → 删除 retired →
+    ``profile.merged`` 事件 + audit 快照。
+
+    - claimed 档案不可合并：认领本人与合并代管是两条不可混用的身份路径，引导走
+      claim_dispute 人工兜底。
+    - 合并不覆写 survivor 字段（归一永不覆写存储值；字段搬运不是本任务范围）。
+    - retired 不存在时幂等成功（already_merged=True，防重放，不重复写事件）。
+    """
+    from app.commands.ownership import assert_no_owner_obligations
+
+    if survivor_id == retired_id:
+        raise_api_error(422, VALIDATION_ERROR, "survivor 与 retired 不能是同一份档案")
+
+    actor = load_actor(session, ctx)
+    with command_transaction(session, immediate=True):
+        survivor = session.get(User, survivor_id)
+        if survivor is None:
+            raise_api_error(404, USER_NOT_FOUND, "资源不存在")
+        custody.assert_can_edit(actor, survivor)
+
+        retired = session.get(User, retired_id)
+        if retired is None:
+            # 幂等重放：retired 已被合并/删除 → 幂等成功，不重复写事件（design §5）
+            return MergedProfile(
+                survivor_id=survivor_id,
+                retired_id=retired_id,
+                moved={"space_profile_refs": 0, "source_facts": 0, "attachments": 0},
+                already_merged=True,
+            )
+        custody.assert_can_edit(actor, retired)
+
+        in_space = session.scalar(
+            select(SpaceProfileRef.id).where(
+                SpaceProfileRef.space_id == space_id,
+                SpaceProfileRef.user_id == survivor.id,
+                SpaceProfileRef.status == "active",
+            )
+        ) or session.scalar(
+            select(SpaceMember.id).where(
+                SpaceMember.space_id == space_id,
+                SpaceMember.user_id == survivor.id,
+                SpaceMember.status == "active",
+            )
+        )
+        retired_in_space = session.scalar(
+            select(SpaceProfileRef.id).where(
+                SpaceProfileRef.space_id == space_id,
+                SpaceProfileRef.user_id == retired.id,
+                SpaceProfileRef.status == "active",
+            )
+        ) or session.scalar(
+            select(SpaceMember.id).where(
+                SpaceMember.space_id == space_id,
+                SpaceMember.user_id == retired.id,
+                SpaceMember.status == "active",
+            )
+        )
+        if in_space is None or retired_in_space is None:
+            raise_api_error(404, USER_NOT_FOUND, "资源不存在")
+
+        # 状态门：合并只适用于双方均 managed（未认领）；任一 claimed 走 claim_dispute
+        for role, row in (("survivor", survivor), ("retired", retired)):
+            if row.account.status != "managed":
+                raise_api_error(
+                    409,
+                    IDENTITY_INVALID_TRANSITION,
+                    "已认领档案不能合并，请走认领争议（claim dispute）人工兜底",
+                    detail={
+                        "role": role,
+                        "user_id": row.id,
+                        "status": row.account.status,
+                        "resolution": "claim_dispute",
+                    },
+                )
+
+        # 重复复核：none（同名不同人）一律拒绝；strong/weak 均要求显式确认
+        strength = person_identity.match_strength(
+            name_key=person_identity.normalize_person_name(survivor.name),
+            birth_key=person_identity.canonical_birth(survivor.birth),
+            other_name_key=person_identity.normalize_person_name(retired.name),
+            other_birth_key=person_identity.canonical_birth(retired.birth),
+        )
+        if strength == person_identity.STRENGTH_NONE:
+            raise_api_error(
+                409,
+                VALIDATION_ERROR,
+                "两份档案的姓名或生日不同，不是同一人，拒绝合并",
+                detail={"survivor_id": survivor.id, "retired_id": retired.id},
+            )
+        if not confirm_same_person:
+            raise_api_error(
+                409,
+                PERSON_DUPLICATE_AMBIGUOUS,
+                "合并是两步确认操作，请显式确认两份档案是同一人",
+                detail={
+                    "survivor_id": survivor.id,
+                    "retired_id": retired.id,
+                    "match_strength": strength,
+                    "resolution": "confirm_same_person",
+                },
+            )
+
+        # owner 义务预检（managed 档案不应持有空间；防御性兜底，同 delete_profile_core）
+        assert_no_owner_obligations(session, ctx, retired.id)
+
+        # ---- 迁移改指向清单预分类（只读；计数进 profile.merged payload）----
+        space_ids = _active_identity_space_ids(session, survivor.id, retired.id)
+
+        # provisional 空间引用是身份承载行，CASCADE 会静默丢失 → 改指向 survivor；
+        # uq_space_profile_ref_pair 唯一：survivor 在该空间已有引用（重复对的常态）时，
+        # 该空间身份槽位已由 survivor 占据，retired 的重复引用随之删除。
+        survivor_ref_space_ids = set(
+            session.scalars(
+                select(SpaceProfileRef.space_id).where(SpaceProfileRef.user_id == survivor.id)
+            )
+        )
+        retired_refs = list(
+            session.scalars(
+                select(SpaceProfileRef).where(
+                    SpaceProfileRef.user_id == retired.id,
+                    SpaceProfileRef.status == "active",
+                )
+            )
+        )
+        refs_to_repoint = [
+            ref for ref in retired_refs if ref.space_id not in survivor_ref_space_ids
+        ]
+        refs_to_drop = [ref for ref in retired_refs if ref.space_id in survivor_ref_space_ids]
+
+        # 档案照片随档案保留：user_id（照片归属）与 uploaded_by（上传者=self 时
+        # NO ACTION 会阻塞删除）都改指向 survivor。
+        attachments_to_move = list(
+            session.query(Attachment).filter(Attachment.user_id == retired.id).all()
+        )
+
+        facts_to_repoint, facts_colliding = source_facts.classify_facts_for_identity_merge(
+            session, retired_user_id=retired.id, survivor_user_id=survivor.id
+        )
+
+        moved = {
+            "space_profile_refs": len(refs_to_repoint),
+            "source_facts": len(facts_to_repoint),
+            "attachments": len(attachments_to_move),
+        }
+        retired_snapshot = {
+            "id": retired.id,
+            "name": retired.name,
+            "gender": retired.gender,
+            "birth": retired.birth,
+            "death": retired.death,
+            "bio": retired.bio,
+            "privacy_mode": retired.privacy_mode,
+            "profile_status": retired.profile_status,
+            "account_status": retired.account.status,
+            "created_by": retired.created_by,
+        }
+
+        # profile.merged（跨空间聚合事件，space_id=None；空间范围在 payload.space_ids）。
+        # 事件先行：source_fact.revised 的 payload 需携带 merged 事件 id（design §2.3）。
+        merged_event = emit(
+            session,
+            event_type="profile.merged",
+            aggregate_type="profile",
+            aggregate_id=survivor.id,
+            payload={
+                "survivor_id": survivor.id,
+                "retired_id": retired.id,
+                "space_ids": space_ids,
+                "moved": moved,
+            },
+            actor_account_id=ctx.account_id,
+        )
+
+        # ---- 迁移改指向（先改指向再删除，CASCADE 只兜底非身份承载行）----
+        for ref in refs_to_repoint:
+            ref.user_id = survivor.id
+        for ref in refs_to_drop:
+            session.delete(ref)
+        for attachment in attachments_to_move:
+            attachment.user_id = survivor.id
+            if attachment.uploaded_by == retired.id:
+                attachment.uploaded_by = survivor.id
+        for fact in facts_to_repoint:
+            source_facts.repoint_fact_for_identity_merge(
+                session,
+                fact,
+                retired_user_id=retired.id,
+                survivor_user_id=survivor.id,
+                merged_event_id=merged_event.id,
+                actor_account_id=ctx.account_id,
+            )
+        for fact in facts_colliding:
+            # 碰撞行不能直接改指向（自环/撞 uq_source_facts_active）：confirmed/disputed
+            # 走 FSM revoke 留事件痕迹（行随后随 retired CASCADE 消失）；proposed 留给 CASCADE。
+            if fact.state in (source_facts.FACT_CONFIRMED, source_facts.FACT_DISPUTED):
+                source_facts.transition_source_fact(
+                    session, fact, source_facts.ACTION_REVOKE, actor_account_id=ctx.account_id
+                )
+
+        legacy_relations = session.scalars(
+            select(Relation).where(Relation.created_by == retired.id)
+        ).all()
+        for relation in legacy_relations:
+            relation.created_by = survivor.id
+
+        # 吊销 retired 活跃会话（managed 但可能存在未完成首登的 refresh session）
+        from app.services import refresh_session as refresh_session_service
+
+        refresh_session_service.revoke_all_active(
+            session, retired.id, ip=ctx.ip, reason="identity_merge"
+        )
+
+        session.delete(retired)  # flush 时级联删除账号/残留碰撞行等子行，audit 行保留（无 FK）
+        try:
+            session.flush()
+        except Exception:
+            # v2 §0.5 兜底：义务预检与 owner_id RESTRICT 之间的竞态窗口
+            session.rollback()
+            raise_api_error(
+                409,
+                OWNER_TRANSFER_REQUIRED,
+                "该档案是家庭空间所有者，请先完成 owner 移交后再删除",
+            )
+
+        result = MergedProfile(
+            survivor_id=survivor.id,
+            retired_id=retired.id,
+            moved=moved,
+            already_merged=False,
+        )
+        audit.write_audit(
+            session,
+            action="profile_merged",
+            actor_id=actor.id,
+            target_id=survivor.id,
+            ip=ctx.ip,
+            detail={
+                "survivor_id": result.survivor_id,
+                "retired_id": result.retired_id,
+                "retired_snapshot": retired_snapshot,
+                "space_ids": space_ids,
+                "moved": moved,
+                "merged_event_id": merged_event.id,
             },
         )
     return result

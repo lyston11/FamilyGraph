@@ -333,7 +333,13 @@ def schedule_steward_job_for_event(session: Session, event: DomainEvent) -> None
     if event.id is None:  # pragma: no cover - autoincrement after flush
         return
     if event.space_id is None:
-        space_ids = list(session.scalars(select(FamilySpace.id)))
+        payload_space_ids = (event.payload or {}).get("space_ids")
+        if event.type.startswith("profile.") and isinstance(payload_space_ids, list):
+            space_ids = sorted(
+                {space_id for space_id in payload_space_ids if isinstance(space_id, int)}
+            )
+        else:
+            space_ids = list(session.scalars(select(FamilySpace.id)))
     else:
         space_ids = [event.space_id]
     cause = _cause_for_event(event.type)

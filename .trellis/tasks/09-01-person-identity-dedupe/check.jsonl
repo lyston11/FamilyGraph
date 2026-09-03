@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/architecture.md","reason":"验收对照：§0.9 身份唯一口径回归、§11 PFV stale 合同、删除级联与 owner 保护；检查失效接入与合并命令是否偏离权威合同。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查合并命令是否使用 BEGIN IMMEDIATE 立即事务、FK 改指向是否与 on-delete 行为自洽、无迁移声明是否属实。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查错误码/防枚举/detail 字段白名单；只读查询不得泄漏家庭敏感字段。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"检查 finding 签名幂等未被破坏、事件 append-only、无卡片合同越界改动。"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"检查 source_fact 指向迁移走 revision+1 + source_fact.revised 事件，DerivedFact 失效路径正确。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查门禁命令（pytest/mypy/ruff）与测试覆盖是否达标准。"}
+{"file":".trellis/tasks/09-01-person-identity-dedupe/prd.md","reason":"逐条核对 AC-1..AC-10 与 Out of scope 边界（claimed 走 dispute、不做字段搬运、不动 space_member 前缀）。"}
+{"file":".trellis/tasks/09-01-person-identity-dedupe/design.md","reason":"核对实现与 §2 迁移清单、§3 事件 payload、§5 错误矩阵一致。"}

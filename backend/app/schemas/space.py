@@ -144,3 +144,32 @@ class PositionItem(BaseModel):
 
 class PositionsPayload(BaseModel):
     items: list[PositionItem]
+
+
+# ---- 同一空间重复人物处置（任务 09-01-person-identity-dedupe）----
+
+
+class DuplicatePairOut(BaseModel):
+    """疑似重复对的最小元数据：只含 id/姓名/生日有无，不含 bio/关系/附件等敏感字段。"""
+
+    user_ids: list[int]
+    strength: Literal["strong", "weak"]
+    names: list[str]
+    birth_known_flags: list[bool]
+
+
+class DuplicatePeopleMergeRequest(BaseModel):
+    """合并是显式两步确认操作：confirm_same_person 必须显式传 true。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    survivor_user_id: int = Field(gt=0)
+    retired_user_id: int = Field(gt=0)
+    confirm_same_person: bool = False
+
+
+class DuplicatePeopleMergeOut(BaseModel):
+    survivor_user_id: int
+    retired_user_id: int
+    moved: dict[str, int]
+    already_merged: bool

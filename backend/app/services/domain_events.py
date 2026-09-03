@@ -21,8 +21,17 @@ def _invalidate_personal_family_view(event: DomainEvent, session: Session) -> No
     for space_id in [event.space_id, *(event.payload or {}).get("space_ids", [])]:
         if not isinstance(space_id, int):
             continue
+        # profile.*（created/updated/deleted/merged）：人物档案变化改变可见集合与
+        # 重复判定，合并/删除经 payload.space_ids 逐空间失效（09-01 身份去重任务接入；
+        # space_member. 等既有前缀合同不动，归 personal-family-view-followup 收口）。
         if event.type.startswith(
-            ("source_fact.", "space_member.", "space_profile_ref.", "personal_family_bridge.")
+            (
+                "source_fact.",
+                "space_member.",
+                "space_profile_ref.",
+                "personal_family_bridge.",
+                "profile.",
+            )
         ):
             from app.services.personal_family_view import invalidate_space_views
 

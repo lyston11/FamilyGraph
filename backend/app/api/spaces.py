@@ -6,18 +6,24 @@ schema 解析 + 认证 + 命令调用 + 序列化；读路径保持原状。
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_authenticated_user
 from app.commands import manager_applications as manager_application_commands
+from app.commands import members as member_commands
 from app.commands import spaces as space_commands
 from app.commands.context import ActorContext
 from app.models.account import Account
 from app.models.space import FamilySpace, ManagerTransferConsent, SpaceMember
 from app.models.user import User
 from app.schemas.space import (
+    DuplicatePairOut,
+    DuplicatePeopleMergeOut,
+    DuplicatePeopleMergeRequest,
     EligibleManagerTarget,
     ManagerApplicationCreate,
     ManagerApplicationOut,
@@ -368,3 +374,100 @@ def put_positions(
     actor, account = identity
     ctx = ActorContext.from_identity(actor, account)
     return space_commands.save_positions(session, ctx, space_id, payload.items)
+
+
+# ---- 同一空间重复人物处置（任务 09-01-person-identity-dedupe）----
+
+
+def _duplicate_pairs_for_actor(
+    session: Session, space: FamilySpace, actor: User
+) -> list[DuplicatePairOut]:
+    """空间可见集合内的疑似重复对，只返回操作者对双方都有 custody 编辑权的对。
+
+    判定口径唯一真源 services/person_identity（find_duplicate_pairs）；合并授权是
+    双向 custody（与 merge 命令同一标准），不构成可处置对的不展示（最小披露）。
+    """
+    from app.services import person_identity
+    from app.services.custody import resolve_relation
+    from app.services.steward import _space_visible_user_ids
+
+    visible_ids = _space_visible_user_ids(session, space)
+    if len(visible_ids) < 2:
+        return []
+    users = session.query(User).filter(User.id.in_(visible_ids), User.deleted_at.is_(None)).all()
+    outs: list[DuplicatePairOut] = []
+    for pair in person_identity.find_duplicate_pairs(users):
+        if pair.strength not in (
+            person_identity.STRENGTH_STRONG,
+            person_identity.STRENGTH_WEAK,
+        ):
+            continue
+        left, right = session.get(User, pair.user_ids[0]), session.get(User, pair.user_ids[1])
+        if left is None or right is None:
+            continue
+        if not (resolve_relation(actor, left).edit and resolve_relation(actor, right).edit):
+            continue
+        outs.append(
+            DuplicatePairOut(
+                user_ids=list(pair.user_ids),
+                strength=cast(Literal["strong", "weak"], pair.strength),
+                names=[left.name, right.name],
+                birth_known_flags=[
+                    person_identity.canonical_birth(left.birth) is not None,
+                    person_identity.canonical_birth(right.birth) is not None,
+                ],
+            )
+        )
+    return outs
+
+
+@router.get("/spaces/{space_id}/duplicate-people", response_model=list[DuplicatePairOut])
+def list_duplicate_people(
+    space_id: int,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[DuplicatePairOut]:
+    """当前空间内按 person_identity 复核过的疑似重复对（处置入口的发现面）。
+
+    授权：空间 active 成员，且只返回操作者对双方都有 custody 编辑权的对；
+    非成员与不存在统一 404（防枚举）。字段白名单：{user_ids, strength, names,
+    birth_known_flags}，不含家庭档案敏感字段；Steward 事件仍负责异步告警，
+    本端点不重复。
+    """
+    actor, _account = identity
+    _require_active_member(session, space_id, actor.id)
+    space = session.get(FamilySpace, space_id)
+    assert space is not None  # 成员行 FK 保证空间存在
+    return _duplicate_pairs_for_actor(session, space, actor)
+
+
+@router.post("/spaces/{space_id}/duplicate-people/merge", response_model=DuplicatePeopleMergeOut)
+def merge_duplicate_people(
+    space_id: int,
+    payload: DuplicatePeopleMergeRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> DuplicatePeopleMergeOut:
+    """合并确认同一人的重复档案（显式两步确认；命令：commands.members.merge_duplicate_profile）。
+
+    授权：操作者对两个档案 custody 编辑权双向通过 + 空间 active 成员；空间管理员
+    不因此获得额外合并权。状态门/复核门/幂等语义见命令层，错误走统一 envelope。
+    """
+    actor, account = identity
+    _require_active_member(session, space_id, actor.id)
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    result = member_commands.merge_duplicate_profile(
+        session,
+        ctx,
+        space_id=space_id,
+        survivor_id=payload.survivor_user_id,
+        retired_id=payload.retired_user_id,
+        confirm_same_person=payload.confirm_same_person,
+    )
+    return DuplicatePeopleMergeOut(
+        survivor_user_id=result.survivor_id,
+        retired_user_id=result.retired_id,
+        moved=result.moved,
+        already_merged=result.already_merged,
+    )

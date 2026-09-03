@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.errors import (
@@ -300,6 +300,95 @@ def revise_source_fact(
         session, event_type=EVENT_REVISED, fact=fact, actor_account_id=actor_account_id
     )
     return fact
+
+
+# ---- 身份合并指向迁移（09-01 人物身份去重；design §2.3）----
+
+
+def classify_facts_for_identity_merge(
+    session: Session, *, retired_user_id: int, survivor_user_id: int
+) -> tuple[list[SourceFact], list[SourceFact]]:
+    """合并前把指向 retired 的事实分为 (可直接改指向的行, 需 FSM revoke 的碰撞行)。
+
+    直接 UPDATE 不是总能成立，否则合并会在 flush 时撞数据库约束：
+    - ck_sf_no_self：retired↔survivor 之间的事实改指向后两端相同（自环）；
+    - uq_source_facts_active：survivor 侧已有同 (type, subject, object, space) 的
+      非 revoked 行——重复档案的常见形态是两侧各有一条指向同一父母的 confirmed 事实。
+    碰撞行中 confirmed/disputed 由调用方走 FSM revoke（事件合同照常落事件）；
+    proposed 无 revoke 转换，留给 retired 行删除时的 FK CASCADE（非结构真源）。
+    """
+    facts = list(
+        session.scalars(
+            select(SourceFact).where(
+                SourceFact.state != FACT_REVOKED,
+                or_(
+                    SourceFact.subject_user_id == retired_user_id,
+                    SourceFact.object_user_id == retired_user_id,
+                ),
+            )
+        )
+    )
+    repointable: list[SourceFact] = []
+    colliding: list[SourceFact] = []
+    for fact in facts:
+        new_subject = (
+            survivor_user_id if fact.subject_user_id == retired_user_id else fact.subject_user_id
+        )
+        new_object = (
+            survivor_user_id if fact.object_user_id == retired_user_id else fact.object_user_id
+        )
+        if new_subject == new_object:
+            colliding.append(fact)
+            continue
+        duplicate = _find_active_duplicate(
+            session,
+            fact_type=fact.fact_type,
+            subject_user_id=new_subject,
+            object_user_id=new_object,
+            space_id=fact.space_id,
+        )
+        if duplicate is not None and duplicate.id != fact.id:
+            colliding.append(fact)
+            continue
+        repointable.append(fact)
+    return repointable, colliding
+
+
+def repoint_fact_for_identity_merge(
+    session: Session,
+    fact: SourceFact,
+    *,
+    retired_user_id: int,
+    survivor_user_id: int,
+    merged_event_id: int,
+    actor_account_id: int | None = None,
+) -> DomainEvent:
+    """指向 survivor 的迁移：UPDATE 两端 + revision+1 + source_fact.revised。
+
+    指向变化不是事实内容变化：不经过 revise_source_fact（其签名只承载原文修订），
+    直接改指向并复用 _emit_fact_event 发 EVENT_REVISED，payload 标注
+    ``identity_merge=true`` 与 ``merged_event_id``，不绕过事件合同。DerivedFact
+    缓存由既有 source_fact.* 失效路径清两端，无需新代码。
+    """
+    if fact.subject_user_id == retired_user_id:
+        fact.subject_user_id = survivor_user_id
+    if fact.object_user_id == retired_user_id:
+        fact.object_user_id = survivor_user_id
+    fact.revision += 1
+    fact.updated_at = utcnow()
+    session.flush()
+    payload = _fact_payload(fact)
+    payload["identity_merge"] = True
+    payload["merged_event_id"] = merged_event_id
+    return emit_domain_event(
+        session,
+        event_type=EVENT_REVISED,
+        aggregate_type=AGGREGATE_TYPE,
+        aggregate_id=fact.id,
+        payload=payload,
+        space_id=fact.space_id,
+        actor_account_id=actor_account_id,
+    )
 
 
 def _structural_fact_mapping(

@@ -1,1 +1,10 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/architecture.md","reason":"§0.9 同一空间人物身份唯一是判定口径的权威合同（归一/强度/消歧开关/BEGIN IMMEDIATE 理由/已知缺陷）；§11 规定人物与成员事件必须把 PersonalFamilyView 标 stale，是本任务失效接入的合同依据。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite WAL/BEGIN IMMEDIATE 写锁合同、FK on-delete 约束与迁移纪律；合并命令的事务边界与迁移改指向清单必须遵守。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"统一错误 envelope、409/404 语义与防枚举文案；合并错误矩阵（claimed 拒绝、none 拒绝、confirm 缺失、幂等 404）按此实现。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"StewardJob 空间单活/checkpoint/finding 签名幂等合同与 append-only 事件纪律；审计收敛（AC-7）依赖该语义。"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"SourceFact 是唯一关系真源、revision+1 与 source_fact.revised 事件合同；合并时指向迁移不得绕过该合同。"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"commands/services/api/schemas 分层与单向依赖；合并命令、只读端点、失效接入的落位。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"backend 质量门禁命令与测试门槛；implement.md 验证命令以此为据。"}
+{"file":".trellis/tasks/09-01-personal-family-view/prd.md","reason":"上游任务需求：Dependencies 对唯一人物真源的承诺、R9/AC-11 失效重算、Scenario E（共同人物连接两棵树、不复制第二个人物）、AC-12 可解释输出。"}
+{"file":".trellis/tasks/09-01-personal-family-view/design.md","reason":"§4 规定 profile identity merge/split 必须触发对应空间视图失效；§3.4 原子重建与幂等口径，是本任务失效接入与回归的对照。"}
+{"file":".trellis/tasks/09-02-personal-family-view-followup/prd.md","reason":"相邻 in_progress 任务：拥有 PFV 失效回归面；space.membership.changed 前缀失配缺陷归其收口，本任务只追加 profile. 前缀，需协调 domain_events.py 的先后合入。"}
