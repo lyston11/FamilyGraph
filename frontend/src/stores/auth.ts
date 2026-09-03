@@ -58,6 +58,9 @@ export const useAuthStore = defineStore('auth', () => {
     void import('@/stores/kinship').then((m) => m.useKinshipStore().clear())
     // 管家建议卡片（V2.4）随会话清空
     void import('@/stores/actionCards').then((m) => m.useActionCardsStore().clear())
+    // 亲属推荐按空间缓存的只读候选随会话清空
+    void import('@/stores/familyRecommendations')
+      .then((m) => m.useFamilyRecommendationsStore().clear())
     // PersonalFamilyView 按空间缓存的授权投影随会话清空
     void import('@/stores/personalFamilyView').then((m) => m.usePersonalFamilyViewStore().clear())
     // HouseholdCard / 通知 / 空间统计的空间键控缓存随会话清空（09-01 Phase 1 合同层）

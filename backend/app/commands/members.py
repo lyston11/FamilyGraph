@@ -516,6 +516,14 @@ def change_own_pin(
         if was_forced and actor.account.status == "managed":
             # 首登强制改 PIN 完成 = 认领完成（v2：managed→claimed 唯一转换点）
             identity_fsm.claim_account(session, actor.account)
+            emit(
+                session,
+                event_type="account.claimed",
+                aggregate_type="account",
+                aggregate_id=actor.account.id,
+                payload={"user_id": actor.id, "via": "pin_change"},
+                actor_account_id=ctx.account_id,
+            )
         refresh_session_service.revoke_all_active(session, actor.id, ip=None, reason="pin_change")
         audit.write_audit(
             session,

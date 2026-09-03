@@ -312,6 +312,27 @@ export type PersonalFamilyViewStatus =
   | 'stale'
   | 'failed'
 
+export interface FamilyRecommendationItem {
+  category: string
+  target_user_id: number
+  display: Record<string, unknown>
+  reason_code: string
+  term?: string | null
+  concept_code?: string | null
+  path_class?: string | null
+  path_summary?: string[] | null
+  proposed_fact_type?: string | null
+}
+
+export interface FamilyRecommendationsData {
+  space_id: number
+  view_status: string
+  view_version: number
+  generated_from_view_version: number
+  items: FamilyRecommendationItem[]
+  truncated: boolean
+}
+
 export interface PersonalFamilyViewData {
   space_id: number
   status: PersonalFamilyViewStatus

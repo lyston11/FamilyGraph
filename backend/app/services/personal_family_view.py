@@ -188,6 +188,23 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
     return view
 
 
+def get_current_view(
+    session: Session, *, account: Account, space_id: int
+) -> PersonalFamilyView | None:
+    """Read an existing projection without materializing or rebuilding it."""
+    if session.get(FamilySpace, space_id) is None or not _active_space_member(
+        session, space_id=space_id, user_id=account.user_id
+    ):
+        raise_api_error(404, PERSONAL_FAMILY_VIEW_NOT_FOUND, "个人家族视图不存在")
+    return session.scalar(
+        select(PersonalFamilyView).where(
+            PersonalFamilyView.viewer_account_id == account.id,
+            PersonalFamilyView.root_user_id == account.user_id,
+            PersonalFamilyView.space_id == space_id,
+        )
+    )
+
+
 def get_view(session: Session, *, account: Account, space_id: int) -> PersonalFamilyView:
     """Return a current projection only after rechecking current authorization."""
     view = _view_for_actor(session, account=account, space_id=space_id)
@@ -198,6 +215,22 @@ def get_view(session: Session, *, account: Account, space_id: int) -> PersonalFa
 
 def view_payload(session: Session, *, account: Account, space_id: int) -> dict[str, Any]:
     view = get_view(session, account=account, space_id=space_id)
+    return _view_payload_for_view(session, account=account, space_id=space_id, view=view)
+
+
+def current_view_payload(
+    session: Session, *, account: Account, space_id: int
+) -> dict[str, Any] | None:
+    """Read and authorize an existing projection without creating one."""
+    view = get_current_view(session, account=account, space_id=space_id)
+    if view is None:
+        return None
+    return _view_payload_for_view(session, account=account, space_id=space_id, view=view)
+
+
+def _view_payload_for_view(
+    session: Session, *, account: Account, space_id: int, view: PersonalFamilyView
+) -> dict[str, Any]:
     nodes = session.scalars(
         select(PersonalFamilyViewNode)
         .where(PersonalFamilyViewNode.view_id == view.id)
@@ -322,7 +355,9 @@ def rebuild_space_views(session: Session, *, space_id: int) -> int:
 
 
 __all__ = [
+    "current_view_payload",
     "etag_for",
+    "get_current_view",
     "get_view",
     "invalidate_space_views",
     "rebuild_space_views",

@@ -43,7 +43,7 @@ def claim_and_confirm_own_identity(session: Session, ctx: ActorContext) -> dict[
                 event_type="account.claimed",
                 aggregate_type="account",
                 aggregate_id=actor.account.id,
-                payload={"user_id": actor.id},
+                payload={"user_id": actor.id, "via": "claim_and_confirm"},
                 actor_account_id=ctx.account_id,
             )
         if actor.profile_status == identity_fsm.PROFILE_PROVISIONAL:

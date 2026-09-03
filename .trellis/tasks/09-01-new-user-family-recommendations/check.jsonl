@@ -1,1 +1,10 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/architecture.md","reason":"验收对照：认领状态机不越权联动、推荐不创造权利（R8 延续）、PFV 只读消费与 stale 合同。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"检查 fan-out 特判是否破坏空间单活/幂等、BehaviorProjection 前缀白名单遵守、冷却语义与 STEWARD_COOLDOWN_DAYS 一致。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"检查安全 404 防枚举、stale/failed 空集语义、错误 envelope。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"backend 门禁命令与测试门槛。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"检查推荐 store 的空间缓存/epoch/清理/非乐观纪律。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"检查 decoder/guard 与后端 schema 一一对应、masked fail-closed。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"frontend 门禁命令与组件/主题红线。"}
+{"file":".trellis/tasks/09-01-new-user-family-recommendations/prd.md","reason":"逐条核对 AC-1..AC-10 与 Out of scope（不做 ActionCard 化、不做其他触发点）。"}
+{"file":".trellis/tasks/09-01-new-user-family-recommendations/design.md","reason":"核对实现与 §2 fan-out 收窄、§3 派生过滤、§4 API 合同一致。"}
+{"file":".trellis/tasks/09-01-personal-family-view/prd.md","reason":"AC-15 合同测试对照：推荐只消费 current 视图、不反向提升树归属或权限。"}

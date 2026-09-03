@@ -1,1 +1,14 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/architecture.md","reason":"§0.3 三条独立状态机（managed→claimed 唯一转换点、claim 不自动确认 Profile 之外的本任务边界）、§11 PersonalFamilyView 只读消费与 stale 合同、推荐不创造权利的红线。"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"StewardJob 空间单活/lease/checkpoint、schedule_steward_job_for_event fan-out 合同、BehaviorProjection 键前缀白名单与冷却语义；触发 fan-out 收窄与 dismissed 键落位依据。"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"SourceFact proposed/confirmed 状态与确认流；待确认线索只汇聚不新建确认机制；concept_code/称谓字段复用口径。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"统一 envelope、无权空间安全 404 防枚举、stale/failed 不冒充 current 的错误语义。"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"新服务/api/schemas 落位与单向依赖；前端 api/store/types 分层对应。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"backend 质量门禁命令与测试门槛。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Pinia 服务端权威状态：按空间缓存、epoch 迟到响应丢弃、401/logout 敏感清理、非乐观更新——推荐 store 必须遵守。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"共享类型 + runtime guard 与后端 Pydantic 一一对应、masked 判别、fail-closed UI。"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"前端 api/stores/types/views 落位；画布组件不得直接请求 API。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"最小展示组件的组件约定、token/主题红线、领域状态徽章。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"frontend 门禁命令（type-check/lint/test/build）与响应式基线。"}
+{"file":".trellis/tasks/09-01-personal-family-view/prd.md","reason":"上游合同：R10 推荐依赖个人视图但与视图分离、AC-15 只读消费；AC-6 spouse/partner 路径排除的语义来源。"}
+{"file":".trellis/tasks/09-01-personal-family-view/design.md","reason":"§3 视图计算与授权复核、§5 API 合同（安全 404/状态暴露）——推荐端点复用同一纪律。"}
+{"file":".trellis/tasks/09-02-personal-family-view-followup/prd.md","reason":"相邻 in_progress 任务：PFV-F4 状态/撤权回归与本任务状态语义测试共享口径；推荐边界回归在其范围有对照条目。"}

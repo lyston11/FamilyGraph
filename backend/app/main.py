@@ -23,6 +23,7 @@ from app.api.connections import router as connections_router
 from app.api.controlled_web import admin_router as controlled_web_admin_router
 from app.api.controlled_web import router as controlled_web_router
 from app.api.deps import close_request_db, require_pin_changed
+from app.api.family_recommendations import router as family_recommendations_router
 from app.api.governance import router as governance_router
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
@@ -156,6 +157,7 @@ app.include_router(action_cards_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(personal_family_view_router, prefix="/api")
 # PersonalFamilyView 遗留授权投影闭环（household card / notifications）
+app.include_router(family_recommendations_router, prefix="/api")
 app.include_router(household_card_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 # V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）

@@ -81,7 +81,12 @@ _ACTION_TO_KIND: dict[str, str] = {
 }
 
 # 行为投影键白名单前缀（红线：泛行为监控字段一律拒绝）
-PROJECTION_KEY_PREFIXES = ("card_cooldown:", "correction_preference:", "term_usage:")
+PROJECTION_KEY_PREFIXES = (
+    "card_cooldown:",
+    "correction_preference:",
+    "term_usage:",
+    "kinship_recommendation_dismissed:",
+)
 
 
 @contextmanager
@@ -338,6 +343,27 @@ def schedule_steward_job_for_event(session: Session, event: DomainEvent) -> None
             space_ids = sorted(
                 {space_id for space_id in payload_space_ids if isinstance(space_id, int)}
             )
+        elif event.type == "account.claimed":
+            user_id = (event.payload or {}).get("user_id")
+            if isinstance(user_id, int):
+                space_ids = sorted(
+                    {
+                        *session.scalars(
+                            select(SpaceMember.space_id).where(
+                                SpaceMember.user_id == user_id,
+                                SpaceMember.status == "active",
+                            )
+                        ).all(),
+                        *session.scalars(
+                            select(SpaceProfileRef.space_id).where(
+                                SpaceProfileRef.user_id == user_id,
+                                SpaceProfileRef.status == "active",
+                            )
+                        ).all(),
+                    }
+                )
+            else:
+                space_ids = []
         else:
             space_ids = list(session.scalars(select(FamilySpace.id)))
     else:
