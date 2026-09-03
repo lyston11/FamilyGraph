@@ -105,3 +105,8 @@ if guest_count:
 - `BEGIN IMMEDIATE` 的真正价值是覆盖**跨读取的多步 check-then-act 窗口**——授权读取 → 资格复核 → 多表写入（如 `commands/ownership.py::accept_transfer` 的 load_actor + transfer 检查 + 条件更新 + 角色翻转）。不要因为 CAS 单独看是安全的就省掉它。
 - 不能用"去掉写锁后 outcome 测试仍通过"来否定写锁约束：仅含条件 UPDATE 的竞态，结果断言在 pysqlite 上测不出锁缺失。写锁守护的是读阶段窗口，第三方并发者（如并发移除成员资格）只能靠它挡住。
 - 并发回归用例自身禁止无限等待，否则一次竞态会把全量 pytest 挂死：`barrier.wait`/`thread.join` 必须带统一超时（参照 `tests/test_person_dedupe.py` 的 `_SYNC_TIMEOUT` 模式）；worker 闭包只捕获标量 ID 和独立 `SessionLocal`，禁止跨线程共享 ORM 实例或 Session；worker 必须捕获 `HTTPException` 与普通 `Exception` 并写入受 `Lock` 保护的结果列表，最终断言从主线程 Session 重查数据库。
+
+## SQLite 迁移连接状态边界（2026-09-03）
+
+- Alembic 迁移重建 SQLite 表时，不得在迁移函数内无条件切换连接级 `PRAGMA foreign_keys`。该设置在已有事务中可能被 SQLite 忽略，迁移结束后还可能改变调用方连接的预期状态；迁移应直接依赖项目启动时已经配置好的外键开关，并通过显式 FK 定义保持删除动作。
+- 迁移回归必须覆盖连接原本 `foreign_keys=ON` 与 `OFF` 两种状态，确认 upgrade/downgrade 不会替调用方改变该状态；同时断言重建后的索引、唯一约束和每条 FK 的 `ON DELETE` 行为。

@@ -65,6 +65,26 @@ def _run(module: ModuleType, connection, direction: str) -> None:
     getattr(module, direction)()
 
 
+def _assert_space_member_structure(connection) -> None:
+    indexes = {item["name"] for item in inspect(connection).get_indexes("space_members")}
+    assert indexes == {
+        "ix_space_members_space",
+        "ix_space_members_user",
+        "uq_space_active_admin",
+    }
+    unique_constraints = {
+        item["name"]: tuple(item["column_names"])
+        for item in inspect(connection).get_unique_constraints("space_members")
+    }
+    assert unique_constraints == {"uq_space_member_pair": ("space_id", "user_id")}
+    foreign_keys = connection.exec_driver_sql("PRAGMA foreign_key_list(space_members)").mappings()
+    assert {(fk["table"], fk["on_delete"]) for fk in foreign_keys} == {
+        ("family_spaces", "CASCADE"),
+        ("users", "CASCADE"),
+        ("users", "SET NULL"),
+    }
+
+
 def test_upgrade_rejects_guest_rows_without_mutating_schema(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'guest.db'}")
     module = _load_migration()
@@ -83,6 +103,25 @@ def test_upgrade_rejects_guest_rows_without_mutating_schema(tmp_path: Path) -> N
         )
 
 
+def test_upgrade_rejects_any_unsupported_role_without_mutating_schema(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'unsupported-role.db'}")
+    module = _load_migration()
+    with engine.begin() as connection:
+        _create_schema(connection, role_check="role IS NOT NULL")
+        connection.execute(
+            text(
+                "INSERT INTO space_members VALUES "
+                "(1,1,2,1,'legacy','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+            )
+        )
+        with pytest.raises(RuntimeError, match="unsupported.*legacy"):
+            _run(module, connection, "upgrade")
+        assert connection.scalar(text("SELECT role FROM space_members WHERE id=1")) == "legacy"
+        assert "role IS NOT NULL" in connection.scalar(
+            text("SELECT sql FROM sqlite_master WHERE type='table' AND name='space_members'")
+        )
+
+
 def test_upgrade_and_downgrade_role_constraint_preserve_structure(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'roles.db'}")
     module = _load_migration()
@@ -96,31 +135,42 @@ def test_upgrade_and_downgrade_role_constraint_preserve_structure(tmp_path: Path
             )
         )
         _run(module, connection, "upgrade")
+        assert connection.scalar(text("PRAGMA foreign_keys")) == 1
 
         with pytest.raises(IntegrityError):
             connection.exec_driver_sql(
                 "INSERT INTO space_members VALUES "
                 "(3,1,3,1,'guest','removed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
             )
-        indexes = {item["name"] for item in inspect(connection).get_indexes("space_members")}
-        expected_indexes = {
-            "ix_space_members_space",
-            "ix_space_members_user",
-            "uq_space_active_admin",
-        }
-        assert expected_indexes <= indexes
-        foreign_keys = connection.exec_driver_sql(
-            "PRAGMA foreign_key_list(space_members)"
-        ).mappings()
-        assert {(fk["table"], fk["on_delete"]) for fk in foreign_keys} == {
-            ("family_spaces", "CASCADE"),
-            ("users", "CASCADE"),
-            ("users", "SET NULL"),
-        }
+        _assert_space_member_structure(connection)
 
         _run(module, connection, "downgrade")
+        assert connection.scalar(text("PRAGMA foreign_keys")) == 1
+        _assert_space_member_structure(connection)
         connection.exec_driver_sql(
             "INSERT INTO space_members VALUES "
             "(3,1,3,1,'guest','removed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
         )
         assert connection.scalar(text("SELECT role FROM space_members WHERE id=3")) == "guest"
+
+
+def test_rebuild_preserves_connection_foreign_key_setting(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'foreign-keys.db'}")
+    module = _load_migration()
+    with engine.connect() as connection:
+        _create_schema(connection, role_check="role IN ('space_admin','member','guest')")
+        connection.execute(
+            text(
+                "INSERT INTO space_members VALUES "
+                "(1,1,2,1,'member','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.commit()
+        connection.execute(text("PRAGMA foreign_keys=OFF"))
+        assert connection.scalar(text("PRAGMA foreign_keys")) == 0
+
+        _run(module, connection, "upgrade")
+        assert connection.scalar(text("PRAGMA foreign_keys")) == 0
+
+        _run(module, connection, "downgrade")
+        assert connection.scalar(text("PRAGMA foreign_keys")) == 0

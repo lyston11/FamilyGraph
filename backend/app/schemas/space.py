@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+SpaceRole = Literal["space_admin", "member"]
+
 
 class SpaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
@@ -37,7 +39,7 @@ class SpaceMemberOut(BaseModel):
     user_id: int
     user_name: str | None = None
     added_by: int | None
-    role: Literal["space_admin", "member"]
+    role: SpaceRole
     status: Literal["pending", "active", "rejected", "withdrawn", "removed"]
     updated_at: datetime
 

@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.space import SpaceRole
+
 
 class AdminAccountMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -46,7 +48,7 @@ class SpaceMemberMetadata(BaseModel):
     user_id: int
     account_id: int | None
     name: str
-    role: str
+    role: SpaceRole
     status: str
     created_at: datetime
     updated_at: datetime

@@ -16,7 +16,7 @@ import {
   type AdminSpaceMetadata,
   type AdminTransferConsentMetadata,
 } from '@/api/admin'
-import type { SpaceManagerApplication } from '@/types/api'
+import type { SpaceManagerApplication, SpaceRole } from '@/types/api'
 
 /**
  * 系统管理员后台（PRD R5）。
@@ -132,10 +132,8 @@ async function toggleSpaceMembers(spaceId: number): Promise<void> {
   }
 }
 
-function roleLabel(role: string): string {
-  if (role === 'space_admin') return '空间管理员'
-  if (role === 'member') return '成员'
-  return role
+function roleLabel(role: SpaceRole): string {
+  return role === 'space_admin' ? '空间管理员' : '成员'
 }
 
 function kindLabel(kind: string): string {

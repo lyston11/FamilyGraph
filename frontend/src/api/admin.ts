@@ -4,6 +4,7 @@ import type {
   OwnerInvitation,
   OwnerInvitationCreated,
   SpaceManagerApplication,
+  SpaceRole,
 } from '@/types/api'
 
 import { apiClient } from './client'
@@ -56,7 +57,7 @@ export interface AdminSpaceMemberMetadata {
   user_id: number
   account_id: number | null
   name: string
-  role: string
+  role: SpaceRole
   status: string
   created_at: string
   updated_at: string

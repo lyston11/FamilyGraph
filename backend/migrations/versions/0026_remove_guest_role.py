@@ -13,7 +13,6 @@ depends_on: str | Sequence[str] | None = None
 
 def _rebuild_space_members(role_check: str) -> None:
     conn = op.get_bind()
-    conn.execute(sa.text("PRAGMA foreign_keys=OFF"))
     conn.execute(
         sa.text(
             "CREATE TABLE space_members_new ("
@@ -38,7 +37,6 @@ def _rebuild_space_members(role_check: str) -> None:
     )
     conn.execute(sa.text("DROP TABLE space_members"))
     conn.execute(sa.text("ALTER TABLE space_members_new RENAME TO space_members"))
-    conn.execute(sa.text("PRAGMA foreign_keys=ON"))
     op.create_index("ix_space_members_space", "space_members", ["space_id"])
     op.create_index("ix_space_members_user", "space_members", ["user_id"])
     op.create_index(
@@ -52,13 +50,27 @@ def _rebuild_space_members(role_check: str) -> None:
 
 def upgrade() -> None:
     conn = op.get_bind()
-    guest_count = conn.execute(
-        sa.text("SELECT COUNT(*) FROM space_members WHERE role = 'guest'")
-    ).scalar_one()
-    if guest_count:
+    invalid_roles = conn.execute(
+        sa.text(
+            "SELECT role, COUNT(*) AS row_count FROM space_members "
+            "WHERE role IS NULL OR role NOT IN ('space_admin','member') "
+            "GROUP BY role ORDER BY role"
+        )
+    ).all()
+    if invalid_roles:
+        guest_count = next(
+            (int(row.row_count) for row in invalid_roles if row.role == "guest"),
+            0,
+        )
+        if guest_count == sum(int(row.row_count) for row in invalid_roles) and guest_count:
+            raise RuntimeError(
+                "0026_remove_guest_role aborted: space_members contains "
+                f"{guest_count} guest row(s); migrate data and re-review before upgrading"
+            )
+        details = ", ".join(f"{row.role!r}: {row.row_count}" for row in invalid_roles)
         raise RuntimeError(
-            "0026_remove_guest_role aborted: space_members contains "
-            f"{guest_count} guest row(s); migrate data and re-review before upgrading"
+            "0026_remove_guest_role aborted: space_members contains unsupported "
+            f"role row(s) ({details}); migrate data and re-review before upgrading"
         )
     _rebuild_space_members("role IN ('space_admin','member')")
 
