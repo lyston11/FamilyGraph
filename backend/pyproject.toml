@@ -54,7 +54,7 @@ select = ["E", "F", "W", "I", "B", "UP"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI 惯用写法：Depends() 出现在参数默认值
-extend-immutable-calls = ["fastapi.Depends"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Header"]
 
 [tool.mypy]
 python_version = "3.12"

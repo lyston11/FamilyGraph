@@ -1,6 +1,7 @@
 """ORM 模型汇总：Alembic env.py 挂载 target_metadata 与测试建表使用。"""
 
 from app.models.account import Account
+from app.models.admin_access import AdminAccessAudit, AdminAccessSession
 from app.models.agent import (
     AgentJob,
     AgentMessage,
@@ -61,6 +62,8 @@ from app.models.v2_foundation import (
 __all__ = [
     "Account",
     "ActionCard",
+    "AdminAccessAudit",
+    "AdminAccessSession",
     "AgentJob",
     "AgentMessage",
     "AgentProvider",

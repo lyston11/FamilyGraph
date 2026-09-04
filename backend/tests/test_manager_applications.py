@@ -8,10 +8,10 @@
   工单 accepted 后再次 approve 才在同一事务内交换唯一 space_admin；
 - 交换后原管理员降为普通 member，空间内恰好一个 active space_admin。
 
-09-04 隔离说明：治理 HTTP 路由（/api/admin/manager-applications 等）已从
-家庭 listener 移除、尚未在 admin_app 挂载（读模型属子任务 2）。平台侧裁决
-断言改走命令层 `decide_manager_application_as_system_admin`；8000 上这些
-路径退化为与随机未知路径一致的普通 404。
+09-04 隔离说明：治理 HTTP 面恢复在 admin_app 的 /admin-api/v1（子任务 2）：
+approve/reject 是后台唯一业务写端点，二次确认字段 confirm 必填，reject 理由
+必填；家庭 listener 上这些路径保持与随机未知路径一致的普通 404。命令层断言
+保留作回归，路由层断言覆盖 HTTP 合同（RM-F5）。
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from app.commands import manager_applications as manager_application_commands
 from app.commands.context import ActorContext
 from app.db import SessionLocal
 from app.models.account import Account
+from app.models.admin_access import AdminAccessAudit
 from app.models.audit_log import AuditLog
 from app.models.space import (
     FamilySpace,
@@ -639,3 +640,212 @@ def test_domain_event_emitted_on_decision(db_session, client, applicant, sysadmi
     _decide(db_session, sysadmin, submitted.json()["id"], decision="reject", note="记录事件")
     event_types = set(db_session.scalars(select(DomainEvent.type)).all())
     assert "space.manager_application.decided" in event_types
+
+
+# ---- 平台侧：HTTP 裁决面（/admin-api/v1，8002，子任务 2 恢复）----
+
+
+@pytest.fixture()
+def admin_v1_headers(admin_client: TestClient, db_session) -> dict[str, str]:
+    from conftest import admin_session_headers
+
+    create_system_admin(db_session)
+    return admin_session_headers(admin_client)
+
+
+def _http_approve(
+    admin_client: TestClient, headers: dict[str, str], application_id: int, **extra: object
+):
+    body: dict[str, object] = {"confirm": True, **extra}
+    return admin_client.post(
+        f"/admin-api/v1/manager-applications/{application_id}/approve",
+        json=body,
+        headers=headers,
+    )
+
+
+def _http_reject(
+    admin_client: TestClient, headers: dict[str, str], application_id: int, **extra: object
+):
+    body: dict[str, object] = {"confirm": True, **extra}
+    return admin_client.post(
+        f"/admin-api/v1/manager-applications/{application_id}/reject",
+        json=body,
+        headers=headers,
+    )
+
+
+def test_http_decision_requires_confirm_and_reject_note(
+    admin_client: TestClient, db_session, client, applicant, admin_v1_headers
+) -> None:
+    manager = create_user_with_pin(db_session, "HTTP空间主", "616263")
+    space = _seed_lineage(db_session, manager, name="HTTP家族")
+    create_space_member(db_session, space.id, applicant.id)
+    submitted = _submit(client, _login_header(client, "申请人", "202020"), space_id=space.id)
+    application_id = submitted.json()["id"]
+
+    # 二次确认字段缺失 / 显式 false → 422
+    assert (
+        admin_client.post(
+            f"/admin-api/v1/manager-applications/{application_id}/approve",
+            json={"note": None},
+            headers=admin_v1_headers,
+        ).status_code
+        == 422
+    )
+    no_confirm = admin_client.post(
+        f"/admin-api/v1/manager-applications/{application_id}/reject",
+        json={"note": "理由"},
+        headers=admin_v1_headers,
+    )
+    assert no_confirm.status_code == 422
+    false_confirm = admin_client.post(
+        f"/admin-api/v1/manager-applications/{application_id}/approve",
+        json={"confirm": False},
+        headers=admin_v1_headers,
+    )
+    assert false_confirm.status_code == 422
+
+    # reject 理由必填非空（HTTP 面语义与命令层一致）
+    missing_note = _http_reject(admin_client, admin_v1_headers, application_id)
+    assert missing_note.status_code == 422
+    blank_note = _http_reject(admin_client, admin_v1_headers, application_id, note="   ")
+    assert blank_note.status_code == 422
+    assert blank_note.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    # 不存在申请统一 404
+    missing = _http_approve(admin_client, admin_v1_headers, 424242)
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "SPACE_MANAGER_APPLICATION_NOT_FOUND"
+
+
+def test_http_approve_two_phase_swaps_single_manager(
+    admin_client: TestClient, db_session, client, applicant, admin_v1_headers
+) -> None:
+    """HTTP 面完整闭环：approve→工单→原管理员同意→最终 approve 交换唯一管理员。"""
+    manager = create_user_with_pin(db_session, "HTTP家族主人", "717273")
+    space = _seed_lineage(db_session, manager, name="HTTP大家族")
+    create_space_member(db_session, space.id, applicant.id)
+    submitted = _submit(client, _login_header(client, "申请人", "202020"), space_id=space.id)
+    application_id = submitted.json()["id"]
+
+    prepared = _http_approve(admin_client, admin_v1_headers, application_id)
+    assert prepared.status_code == 200, prepared.text
+    row = prepared.json()
+    assert set(row) == {
+        "id",
+        "applicant_user_id",
+        "applicant_name",
+        "space_id",
+        "space_name",
+        "space_kind",
+        "request_kind",
+        "status",
+        "decision_note",
+        "transfer_consent_id",
+        "transfer_consent_status",
+        "created_at",
+        "decided_at",
+        "system_admin_decided_by",
+    }
+    assert row["status"] == "pending"
+    assert row["space_name"] == "HTTP大家族"
+    assert row["transfer_consent_status"] == "pending"
+    # 首次 approve 只发工单：还不是终态裁决，裁决人列暂为空
+    assert row["system_admin_decided_by"] is None
+    assert _roles(db_session, space.id) == {manager.id: "space_admin", applicant.id: "member"}
+
+    # 工单未同意前再次 approve → 409
+    early = _http_approve(admin_client, admin_v1_headers, application_id)
+    assert early.status_code == 409
+
+    manager_headers = _login_header(client, "HTTP家族主人", "717273")
+    tickets = client.get(
+        "/api/spaces/manager-transfer-consents/mine", headers=manager_headers
+    ).json()
+    ticket = tickets[0]
+    accepted = _respond_consent(client, manager_headers, ticket["id"], decision="accept")
+    assert accepted.status_code == 200, accepted.text
+
+    final = _http_approve(admin_client, admin_v1_headers, application_id, note="资质已核验")
+    assert final.status_code == 200
+    assert final.json()["status"] == "approved"
+    assert final.json()["decision_note"] == "资质已核验"
+
+    roles = _roles(db_session, space.id)
+    assert roles == {applicant.id: "space_admin", manager.id: "member"}
+    assert list(roles.values()).count("space_admin") == 1
+
+    # 终态不可改判（重复裁决 409，两个端点同样语义）
+    again = _http_reject(admin_client, admin_v1_headers, application_id, note="事后改判")
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "SPACE_MANAGER_APPLICATION_DECIDED"
+
+    # 独立 admin 审计与裁决同事务落库
+    admin_actions = set(
+        db_session.scalars(
+            select(AdminAccessAudit.action).where(
+                AdminAccessAudit.action.like("manager_application%")
+            )
+        ).all()
+    )
+    assert admin_actions == {
+        "manager_application_consent_requested",
+        "manager_application_approved",
+    }
+
+
+def test_http_reject_keeps_current_manager_and_audits(
+    admin_client: TestClient, db_session, client, applicant, admin_v1_headers
+) -> None:
+    manager = create_user_with_pin(db_session, "HTTP驳回主", "818283")
+    space = _seed_lineage(db_session, manager, name="HTTP驳回家族")
+    create_space_member(db_session, space.id, applicant.id)
+    submitted = _submit(client, _login_header(client, "申请人", "202020"), space_id=space.id)
+    application_id = submitted.json()["id"]
+
+    rejected = _http_reject(admin_client, admin_v1_headers, application_id, note="成员资格尚未稳定")
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+    assert _roles(db_session, space.id) == {manager.id: "space_admin", applicant.id: "member"}
+
+    audit_row = (
+        db_session.query(AdminAccessAudit)
+        .filter(AdminAccessAudit.action == "manager_application_rejected")
+        .one()
+    )
+    assert audit_row.system_admin_id == _admin_id(db_session)
+    assert audit_row.target_type == "space"
+    assert audit_row.target_id == space.id
+    assert audit_row.filters_json["applicant_user_id"] == applicant.id
+
+
+def _admin_id(db_session) -> int:  # type: ignore[no-untyped-def]
+    """admin_v1_headers 夹具创建的唯一管理员主体。"""
+    from app.models.system_admin import SystemAdmin
+
+    return db_session.query(SystemAdmin).filter_by(username="admin").one().id
+
+
+def test_http_decision_routes_absent_from_admin_listener_for_family_tokens(
+    admin_client: TestClient, db_session, client, applicant
+) -> None:
+    """admin token 在 8000 401（既有隔离）；家庭用户在 8002 无凭据 401。"""
+    create_user_with_pin(db_session, "孤立申请者", "919293")
+    headers = _login_header(client, "孤立申请者", "919293")
+    # 8000 上治理路径仍是普通 404（既有测试覆盖 body 一致性），这里验证 8002 认证
+    assert (
+        admin_client.post(
+            "/admin-api/v1/manager-applications/1/approve", json={"confirm": True}
+        ).status_code
+        == 401
+    )
+    family_token = headers["Authorization"]
+    assert (
+        admin_client.post(
+            "/admin-api/v1/manager-applications/1/approve",
+            json={"confirm": True},
+            headers={"Authorization": family_token},
+        ).status_code
+        == 401
+    )

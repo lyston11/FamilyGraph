@@ -459,8 +459,13 @@ def decide_manager_application_as_system_admin(
     note: str | None,
     system_admin_id: int,
     ip: str | None,
+    endpoint: str = "/admin-api/v1/manager-applications",
 ) -> SpaceManagerApplication:
-    """系统主体裁决入口；不构造或查询家庭 User 作为操作人。"""
+    """系统主体裁决入口；不构造或查询家庭 User 作为操作人。
+
+    独立 admin 审计（admin_access_audits）与状态/consent/唯一管理员/领域事件
+    在同一事务内写入（RM-F5）。
+    """
     with command_transaction(session):
         application = _application_or_404(session, application_id)
         if application.status != "pending":
@@ -523,6 +528,16 @@ def decide_manager_application_as_system_admin(
                         "target_space_name": space.name,
                     },
                 )
+                _admin_decision_audit(
+                    session,
+                    action="manager_application_consent_requested",
+                    application=application,
+                    endpoint=endpoint,
+                    system_admin_id=system_admin_id,
+                    note=note,
+                    ip=ip,
+                    decision=decision,
+                )
                 return application
             if consent.status != "accepted" or consent.current_manager_user_id != manager.user_id:
                 raise_api_error(409, VALIDATION_ERROR, "等待当前空间管理员明确同意后再批准")
@@ -570,4 +585,47 @@ def decide_manager_application_as_system_admin(
                 "admin_action": True,
             },
         )
+        _admin_decision_audit(
+            session,
+            action="manager_application_approved"
+            if decision == "approve"
+            else "manager_application_rejected",
+            application=application,
+            endpoint=endpoint,
+            system_admin_id=system_admin_id,
+            note=trimmed_note,
+            ip=ip,
+            decision=decision,
+        )
     return application
+
+
+def _admin_decision_audit(
+    session: Session,
+    *,
+    action: str,
+    application: SpaceManagerApplication,
+    endpoint: str,
+    system_admin_id: int,
+    note: str | None,
+    ip: str | None,
+    decision: str,
+) -> None:
+    """审批写例外的独立 admin 审计行（与领域事务同提交）。
+
+    filters 只落 applicant_user_id；决策理由（note）是自由文本，按脱敏红线
+    （admin_sanitizer 键黑名单含 note）整体不写入审计表，理由正文仅保留在
+    申请行 decision_note 与家庭 audit_log（RM-F4：审计不含私人文本）。
+    """
+    from app.services import admin_audit
+
+    admin_audit.record_access(
+        session,
+        action=action,
+        endpoint=f"{endpoint}/{application.id}/{'approve' if decision == 'approve' else 'reject'}",
+        system_admin_id=system_admin_id,
+        target_type="space",
+        target_id=application.space_id,
+        filters={"applicant_user_id": application.applicant_user_id, "note": note},
+        ip=ip,
+    )

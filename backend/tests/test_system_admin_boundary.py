@@ -38,6 +38,29 @@ ADMIN_AUTH_ROUTES = {
     "/admin-api/health",
 }
 
+# 09-04 子任务 2：/admin-api/v1 只读模型 + 访问会话 + 审批唯一写例外。
+# 写端点只有 access-sessions（签发会话）与 manager-applications approve/reject。
+ADMIN_V1_ROUTES = {
+    "/admin-api/v1/overview",
+    "/admin-api/v1/space-admins",
+    "/admin-api/v1/space-admins/{admin_user_id}/spaces",
+    "/admin-api/v1/spaces/{space_id}",
+    "/admin-api/v1/spaces/{space_id}/members",
+    "/admin-api/v1/spaces/{space_id}/relations",
+    "/admin-api/v1/spaces/{space_id}/facts",
+    "/admin-api/v1/users/{user_id}/profile",
+    "/admin-api/v1/users/{user_id}/avatar/thumbnail",
+    "/admin-api/v1/users/{user_id}/attachments",
+    "/admin-api/v1/operations/queue",
+    "/admin-api/v1/operations/notifications",
+    "/admin-api/v1/agent/runs",
+    "/admin-api/v1/agent/jobs",
+    "/admin-api/v1/audit/access",
+    "/admin-api/v1/access-sessions",
+    "/admin-api/v1/manager-applications/{application_id}/approve",
+    "/admin-api/v1/manager-applications/{application_id}/reject",
+}
+
 LEGACY_BREAK_GLASS_PATHS = {
     "/api/admin/users",
     "/api/admin/users/lookup",
@@ -92,16 +115,34 @@ def test_family_app_registers_no_admin_routes() -> None:
 
 
 def test_admin_app_registers_only_admin_api_routes() -> None:
-    """8002 只含 /admin-api 认证面七条路由：无家庭 /api 路由、无旧 admin.py。"""
+    """8002 业务路由 == 认证面七条 + /admin-api/v1 只读模型路由，无其他任何路由。
+
+    写端点仅限 access-sessions 与 manager-applications approve/reject；
+    家庭 /api 路由与旧 admin.py 不得出现在 admin listener。
+    """
     registered = {getattr(route, "path", "") for route in admin_app.routes}
     assert ADMIN_AUTH_ROUTES <= registered
+    assert ADMIN_V1_ROUTES <= registered
     framework_routes = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
-    business = registered - ADMIN_AUTH_ROUTES - framework_routes
+    business = registered - ADMIN_AUTH_ROUTES - ADMIN_V1_ROUTES - framework_routes
     assert not any(
         path.startswith("/api/") or path.startswith("/admin") for path in business
     ), sorted(business)
     # 家庭面路由不得反向出现在 admin listener
     assert not any(path.startswith("/api/") for path in registered)
+    # 审批之外无任何写能力：v1 路由面只有上面列出的两个 POST 写端点
+    writes = {
+        route.path
+        for route in admin_app.routes
+        if getattr(route, "methods", None)
+        and route.methods - {"GET", "HEAD", "OPTIONS"}
+        and getattr(route, "path", "").startswith("/admin-api/v1")
+    }
+    assert writes == {
+        "/admin-api/v1/access-sessions",
+        "/admin-api/v1/manager-applications/{application_id}/approve",
+        "/admin-api/v1/manager-applications/{application_id}/reject",
+    }
 
 
 def test_legacy_break_glass_admin_routes_not_registered_anywhere() -> None:

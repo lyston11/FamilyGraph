@@ -9,6 +9,7 @@ me/username 生效，password/logout/refresh 属白名单（design §6）。
 from typing import cast
 
 from fastapi import Request
+from sqlalchemy.orm import Session
 
 from app import logctx
 from app.api.deps import get_db
@@ -18,7 +19,13 @@ from app.errors import (
     ADMIN_UNAUTHORIZED,
     raise_api_error,
 )
+from app.models.admin_access import AdminAccessSession
 from app.models.system_admin import SystemAdmin, SystemAdminAccount
+from app.services import admin_audit
+from app.services.admin_access_sessions import (
+    ACCESS_SESSION_HEADER,
+    resolve_session,
+)
 from app.services.admin_auth import load_account
 from app.utils import admin_security, security
 
@@ -70,7 +77,12 @@ def require_admin_principal(request: Request) -> AdminPrincipal:
 
 
 def require_admin_ready(request: Request) -> AdminPrincipal:
-    """首登改密门禁：password_must_change=true 时白名单外一律 403（SF-F5）。"""
+    """admin 业务路由统一门禁：无效令牌 401；首登未改密白名单外一律 403。
+
+    09-04 子任务 2 起 /admin-api/v1 全部路由经本依赖进入（替代旧
+    require_system_admin）：password_must_change=true 时除密码/refresh/logout
+    白名单外不可触达任何业务读端点（design §6 / spec §12.4）。
+    """
     admin, account = require_admin_principal(request)
     if account.password_must_change:
         raise_api_error(
@@ -81,12 +93,50 @@ def require_admin_ready(request: Request) -> AdminPrincipal:
     return admin, account
 
 
-def require_system_admin(request: Request) -> AdminPrincipal:
-    """后台业务路由的治理依赖（子任务 2 挂载到 admin_app 时使用）。
+def enforce_access_session(
+    request: Request,
+    session: Session,
+    identity: AdminPrincipal,
+    *,
+    target_type: str,
+    target_id: int,
+    endpoint: str,
+) -> AdminAccessSession:
+    """敏感详情票据门禁（RM-F3）：无效/错目标/过期/撤销统一 403 并审计拒绝。
 
-    与家庭可见性链完全无关：非管理员主体（含 family token）一律 403。
+    每次成功使用同样写审计（access_session.used / access_session.denied）；
+    审计提交后异常原样抛出，响应与随机失败不可区分。
     """
-    resolved = resolve_admin_principal(request)
-    if resolved is None:
-        raise_api_error(403, "FORBIDDEN_SYSTEM_ADMIN_ONLY", "仅系统管理员可执行该操作")
-    return resolved
+    admin, _account = identity
+    raw_token = request.headers.get(ACCESS_SESSION_HEADER)
+    try:
+        session_row = resolve_session(
+            session,
+            raw_token,
+            target_type=target_type,
+            target_id=target_id,
+            system_admin_id=admin.id,
+        )
+    except Exception:
+        admin_audit.record_access(
+            session,
+            action="access_session.denied",
+            endpoint=endpoint,
+            system_admin_id=admin.id,
+            target_type=target_type,
+            target_id=target_id,
+            ip=request.client.host if request.client else None,
+        )
+        session.commit()
+        raise
+    admin_audit.record_access(
+        session,
+        action="access_session.used",
+        endpoint=endpoint,
+        system_admin_id=admin.id,
+        session_row=session_row,
+        target_type=target_type,
+        target_id=target_id,
+        ip=request.client.host if request.client else None,
+    )
+    return session_row

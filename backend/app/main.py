@@ -9,9 +9,9 @@ Listener 拓扑（09-04 起三 listener，见 app.serve）：
 """
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +24,8 @@ from app import config, logctx
 from app.api.action_cards import router as action_cards_router
 from app.api.admin_agent import router as admin_agent_router
 from app.api.admin_auth import router as admin_auth_router
+from app.api.admin_governance import router as admin_governance_router
+from app.api.admin_read import router as admin_read_router
 from app.api.agent import router as agent_router
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
@@ -117,13 +119,30 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+def _serializable_validation_errors(
+    errors: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """pydantic errors() 的 ctx 可能携带不可 JSON 序列化的异常对象（如自定义
+    validator 抛出的 ValueError）；统一转字符串，保证 422 响应壳可序列化。"""
+    safe: list[dict[str, Any]] = []
+    for err in errors:
+        item = dict(err)
+        ctx = item.get("ctx")
+        if isinstance(ctx, dict):
+            item["ctx"] = {key: str(value) for key, value in ctx.items()}
+        safe.append(item)
+    return safe
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content=_error_envelope(VALIDATION_ERROR, "请求参数不合法", detail=exc.errors()),
+        content=_error_envelope(
+            VALIDATION_ERROR, "请求参数不合法", detail=_serializable_validation_errors(exc.errors())
+        ),
     )
 
 
@@ -228,3 +247,7 @@ admin_app.add_exception_handler(RequestValidationError, validation_exception_han
 admin_app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
 admin_app.include_router(admin_auth_router)
 admin_app.include_router(health_router, prefix="/admin-api")
+# 09-04 子任务 2：/admin-api/v1 只读模型 + 访问会话 + 审批唯一写例外。
+# 独立签发域与 require_admin_ready 门禁；与家庭 listener 无共享 router。
+admin_app.include_router(admin_read_router)
+admin_app.include_router(admin_governance_router)

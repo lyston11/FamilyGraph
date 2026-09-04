@@ -135,6 +135,9 @@ _TABLES = (
     # 空间管理者申请引用 users/family_spaces，须先于父表删
     "manager_transfer_consents",
     "space_manager_applications",
+    # 09-04 子任务 2：审计行 SET NULL 引用 sessions/system_admins，先于其父表删
+    "admin_access_audits",
+    "admin_access_sessions",
     "system_admin_refresh_sessions",
     "system_admin_accounts",
     "system_admins",
