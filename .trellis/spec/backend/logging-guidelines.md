@@ -3,6 +3,7 @@
 - 结构化日志（python logging + JSON formatter），字段：ts, level, logger, msg, user_id(若有), request_id。
 - 中间件注入 request_id（uuid4），贯穿单次请求全部日志行。
 - **脱敏红线**：PIN（任何形式）、JWT、pin_hash、challenge_token、refresh token 永不入日志；姓名/生卒等 PII 只允许出现在 audit_log 表，不进应用日志。
+- **管理员凭据红线（09-04 沉淀）**：admin 初始密码/恢复密码（含 0600 凭据文件内容）、admin password_hash、`ADMIN_JWT_*` 配置值、admin access/refresh token 永不入应用日志、审计正文或 HTTP 响应；凭据文件删除失败只记无明文的安全告警（`admin_credential_file_delete_failed`）。bootstrap/恢复路径有专测 grep 日志断言（`test_no_pin_or_token_leaks_in_logs`）。
 - audit_log（数据库表，非文件）：login_failed(≥3 次)、pin_change/reset、admin 全部操作、档案删除、关系断连。仅 admin API 可读。
 - 级别约定：ERROR=未预期异常/DATA_LOSS 风险；WARNING=限流触发/FSM 非法尝试/孤儿文件清扫；INFO=登录成功/建档/空间变更；DEBUG 默认关闭。
 - 上传图片删除失败记 WARNING 并进入清扫清单，不阻塞主流程。

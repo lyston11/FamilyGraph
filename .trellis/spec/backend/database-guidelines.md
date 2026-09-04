@@ -38,6 +38,11 @@
 - `owner_id` 仅为迁移期兼容镜像，不能参与授权；旧 `owner` 输入必须在写入边界归一化为 `space_admin`。
 - 系统后台查询使用显式列和专用 schema；家庭端点必须使用 `require_authenticated_user`，拒绝 `system_admin` 主体。
 
+## 管理员密码凭据 Schema（2026-09-04，0028）
+
+- `system_admins` 唯一登录标识是 `username`（唯一索引）；`system_admin_accounts` 持有 `password_hash/password_must_change/password_version/failed_attempts/locked_until/status`。PIN 语义（`pin_hash/pin_must_change`）已从管理员侧删除，家庭 `Account` 的 PIN 不受影响。
+- 迁移 0028 对含旧行数据的库 fail-closed（RuntimeError 中止 upgrade，schema 不变）；禁止把旧管理员 PIN 静默转换为密码哈希。downgrade 必须按 0022 原结构逐约束重建（约束名对齐），并通过 upgrade/downgrade 循环测试。
+
 ## Scenario: 收窄空间角色枚举（2026-09-02）
 
 ### 1. Scope / Trigger

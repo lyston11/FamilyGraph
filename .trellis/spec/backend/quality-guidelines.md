@@ -45,3 +45,13 @@ cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 - **字段白名单用精确集合断言**：治理响应 schema 逐字段断言允许集合（不是「包含」断言），确保不泄露 birth/gender/bio/avatar/附件/关系图边/私人 Memory/Session/disclosure/pin_hash。新增治理字段必须同步更新白名单测试。
 - **防存在性枚举**：未知 space_id 与真实 space_id 的成员查询必须返回不可区分的安全空结果，而不是 404。
 - **旧 break-glass 路由不回归**：`backend/app/api/admin.py`（家庭 PIN 重置/资料修改/custody transfer/claim dispute/data-rights）保持不注册；`test_legacy_break_glass_admin_routes_are_not_registered` 用 FastAPI app route registration 断言这些路径不存在。家庭 break-glass 迁移必须另立任务，禁止为「补齐后台」挂载旧 router。
+
+## 独立系统管理员认证与 Listener 隔离回归（09-04-system-admin-auth-api-isolation 沉淀）
+
+系统管理员后台已迁移到独立 `admin_app`（8002，`/admin-api/*`，用户名+密码认证），上述四类断言继续适用于 admin 路由面，并新增以下必测项（参考 `tests/test_system_admin_boundary.py`、`tests/test_bootstrap_api.py`）：
+
+- **双 listener 路由注册断言**：family app 无 admin 业务路由、OpenAPI 无后台路径；admin app 恰好只有 `/admin-api/auth/*` 七条；旧 `admin.py` 的 break-glass 路径在两个 listener 均不存在。
+- **普通 404 一致性**：`/admin-api/*` 在 8000 的响应必须与随机未知路径逐字节一致（同 catch-all 处理器）；不允许 403/重定向/自定义错误页。
+- **交叉签发域拒绝**：family token→8002 与 admin token→8000 双向 401；admin JWT 依赖独立 `ADMIN_JWT_SECRET/ISSUER/AUDIENCE`，claim 版本字段与家庭刻意不同名（`token_version` vs 家庭 `ver`）。
+- **凭据文件生命周期**：空库 bootstrap 生成唯一 `admin`、`DATA_DIR/bootstrap/admin-credentials` 权限 0600、日志 grep 无明文、首登改密后删除、删除失败回置 `password_must_change` 并审计；lifespan→preflight 接线有测试。
+- **会话撤销触发器矩阵**：改密/改用户名/锁定/运维恢复每个分支都断言 `password_version+1` 且 refresh session 全撤销；refresh 轮换断言新行 `expires_at` 与原会话一致（绝对有效期、轮换不续期）。
