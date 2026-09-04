@@ -1,14 +1,16 @@
-"""日志脱敏断言测试（implement.md #9）：含 PIN 的请求遍历后，日志无凭据痕迹。
+"""日志脱敏断言测试（implement.md #9）：含凭据的请求遍历后，日志无凭据痕迹。
 
-红线（logging-guidelines.md）：PIN（任何形式）、JWT、pin_hash、challenge、
-refresh token 永不入日志；姓名/生卒等 PII 只允许进 audit_log 表。
+红线（logging-guidelines.md）：PIN（任何形式）、密码、JWT、pin_hash、
+challenge、refresh token 永不入日志；姓名/生卒等 PII 只允许进 audit_log 表。
+09-04：管理员初始密码只落 0600 bootstrap 文件，同样不得出现在日志。
 """
 
 import logging
 
-from conftest import auth_header, create_user_with_pin, login
+from conftest import admin_header, admin_login, auth_header, create_user_with_pin, login
 
 from app.logctx import JsonFormatter
+from app.services import admin_bootstrap
 
 SECRET_PIN = "741258"
 
@@ -19,10 +21,25 @@ def _formatted_log_lines(caplog) -> list[str]:
     return [formatter.format(record) for record in caplog.records]
 
 
-def test_no_pin_or_token_leaks_in_logs(client, db_session, caplog) -> None:
+def test_no_pin_or_token_leaks_in_logs(client, admin_client, db_session, caplog) -> None:
     with caplog.at_level(logging.DEBUG):
-        body = client.post("/api/bootstrap/initialize", json={"name": "族长"}).json()
-        admin_pin = body["one_time_pin"]
+        # 管理员 bootstrap：随机密码只落 0600 文件；随后的登录/改密不得入日志
+        admin_bootstrap.run_startup_preflight(db_session)
+        credentials_path = admin_bootstrap.credentials_file_path()
+        admin_password = (
+            credentials_path.read_text(encoding="utf-8")
+            .split("password: ", 1)[1]
+            .strip()
+            .splitlines()[0]
+        )
+        admin_pair = admin_login(admin_client, password=admin_password).json()
+        admin_changed = admin_client.put(
+            "/admin-api/auth/password",
+            json={"current_password": admin_password, "new_password": "NewStrong-9zZx"},
+            headers=admin_header(admin_pair),
+        )
+        assert admin_changed.status_code == 200
+        admin_new_password = "NewStrong-9zZx"
 
         create_user_with_pin(db_session, "张三", SECRET_PIN)
         tokens = login(client, "张三", SECRET_PIN).json()
@@ -64,7 +81,8 @@ def test_no_pin_or_token_leaks_in_logs(client, db_session, caplog) -> None:
 
     secrets_never_logged = [
         SECRET_PIN,
-        admin_pin,
+        admin_password,
+        admin_new_password,
         "000000",
         "998877",
         tokens["access_token"],
@@ -72,6 +90,8 @@ def test_no_pin_or_token_leaks_in_logs(client, db_session, caplog) -> None:
         tokens["access_token"].split(".")[1],  # JWT payload 段
         fresh["access_token"],
         fresh["refresh_token"],
+        admin_pair["access_token"],
+        admin_pair["refresh_token"],
     ]
     for secret in secrets_never_logged:
         assert secret not in log_text, f"凭据泄露到日志: {secret[:12]}..."

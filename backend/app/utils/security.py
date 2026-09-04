@@ -17,6 +17,9 @@ from app import config
 # 泄露账号存在性。cost 必须与真实哈希一致（config.BCRYPT_ROUNDS），否则统一文案
 # 可被时序差绕过。
 _DUMMY_PIN_HASH = bcrypt.hashpw(b"000000", bcrypt.gensalt(rounds=config.BCRYPT_ROUNDS))
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(
+    b"familygraph-dummy-password", bcrypt.gensalt(rounds=config.BCRYPT_ROUNDS)
+)
 
 PIN_LENGTH = 6
 JWT_ALGORITHM = "HS256"
@@ -46,6 +49,35 @@ def verify_pin(pin: str, pin_hash: str) -> bool:
 def verify_dummy_pin(pin: str) -> None:
     """对不存在的用户名执行等价开销的空校验（防时序枚举）。"""
     bcrypt.checkpw(pin.encode("utf-8"), _DUMMY_PIN_HASH)
+
+
+# ---- 管理员强密码原语（09-04 SF-F2：与 PIN 同一 bcrypt 设施，语义独立）----
+
+
+def hash_password(password: str) -> str:
+    """管理员密码 bcrypt 哈希；数据库永不存明文/可逆密码。"""
+    return hash_pin(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except ValueError:
+        return False
+
+
+def verify_dummy_password(password: str) -> None:
+    """对不存在的管理员用户名执行等价开销的空校验（防时序枚举）。
+
+    假哈希 cost 与 config.BCRYPT_ROUNDS 同源（quality-guidelines.md：硬编码
+    rounds 会产生可测时序差）。
+    """
+    bcrypt.checkpw(password.encode("utf-8"), _DUMMY_PASSWORD_HASH)
+
+
+def generate_strong_password() -> str:
+    """CSPRNG 随机强密码（bootstrap/恢复一次性交付，只落 0600 文件）。"""
+    return secrets.token_urlsafe(config.ADMIN_BOOTSTRAP_PASSWORD_BYTES)
 
 
 def hash_token(token: str) -> str:

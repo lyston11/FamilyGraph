@@ -1,4 +1,12 @@
-"""FastAPI 入口：启动校验、全局依赖、统一错误结构、路由挂载。"""
+"""FastAPI 入口：启动校验、全局依赖、统一错误结构、路由挂载。
+
+Listener 拓扑（09-04 起三 listener，见 app.serve）：
+- app（:8000 公开家庭 API）：只服务家庭用户（名字 + PIN）；对 /admin-api/*、
+  /internal/* 等后台路径返回与随机未知路径一致的普通 404；
+- admin_app（:8002 /admin-api）：系统管理员独立认证面（用户名 + 强密码），
+  与家庭 app 共享 engine/lifespan，但不共享任何 router 或签发域；
+- internal_app（:8001 /internal/agent）：内部 Agent 协议。
+"""
 
 import logging
 from collections.abc import AsyncIterator
@@ -8,13 +16,14 @@ from typing import NoReturn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app import config, logctx
 from app.api.action_cards import router as action_cards_router
 from app.api.admin_agent import router as admin_agent_router
-from app.api.admin_metadata import router as admin_metadata_router
+from app.api.admin_auth import router as admin_auth_router
 from app.api.agent import router as agent_router
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
@@ -35,7 +44,6 @@ from app.api.misc import router as misc_router
 from app.api.notifications import router as notifications_router
 from app.api.personal_family_view import router as personal_family_view_router
 from app.api.spaces import router as spaces_router
-from app.api.system_admin import router as system_admin_router
 from app.api.users import members_router
 from app.api.users import router as users_router
 from app.errors import INTERNAL_ERROR, VALIDATION_ERROR, extract_api_error, raise_api_error
@@ -45,16 +53,21 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    # SECRET_KEY 缺失时在此抛错，uvicorn 拒绝完成启动（m0a design：配置校验）
+    # SECRET_KEY/ADMIN_JWT_* 缺失时在此抛错，uvicorn 拒绝完成启动（m0a design：配置校验）
     config.ensure_ready()
     if config.AUTH_LOCKOUT_DISABLED:
         # 生产禁用锁定需二次确认：留 WARNING 日志线索（design.md 回滚形态）
         logger.warning("AUTH_LOCKOUT_DISABLED=true：登录锁定已关闭，仅允许开发态使用")
     logctx.setup_logging()
-    # 后台维护循环（agent reaper / steward canonical job 泵）：
-    # serve.py 双 listener 共享 lifespan，start 内部进程级单例防重复启动。
-    from app.services import maintenance
+    # 部署自动 bootstrap（SF-F3）：旧 PIN 结构 fail-closed + 唯一 admin 账号 + 0600 凭据文件。
+    # 三个 listener 共享 lifespan，服务内部进程级单例防重复执行。
+    from app.db import SessionLocal
+    from app.services import admin_bootstrap, maintenance
 
+    with SessionLocal() as bootstrap_session:
+        admin_bootstrap.run_startup_preflight(bootstrap_session)
+    # 后台维护循环（agent reaper / steward canonical job 泵）：
+    # serve.py 多 listener 共享 lifespan，start 内部进程级单例防重复启动。
     maintenance.start_maintenance_loop()
     try:
         yield
@@ -133,15 +146,13 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
 
 
-# ---- 路由挂载 ----
+# ---- 路由挂载（家庭公开面：无任何后台语义）----
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(members_router, prefix="/api")
 app.include_router(bootstrap_router, prefix="/api")
 app.include_router(spaces_router, prefix="/api")
-app.include_router(system_admin_router, prefix="/api")
-app.include_router(admin_metadata_router, prefix="/api")
 app.include_router(connections_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(misc_router, prefix="/api")
@@ -183,6 +194,22 @@ async def internal_route_rejected(rest: str) -> NoReturn:
     raise_api_error(404, "NOT_FOUND", "资源不存在")
 
 
+@app.api_route(
+    "/admin-api/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+    response_model=None,
+)
+async def admin_api_route_rejected(rest: str) -> NoReturn:
+    """公开 listener 上不存在后台 API：与随机未知路径同为普通 404（无后台语义）。
+
+    刻意抛 Starlette 的 HTTPException（而非带 error 外壳的业务错误）——与
+    未匹配路由走同一条 FastAPI 默认处理路径，家庭端无法从响应体区分
+    「后台存在但被隔离」与「路径不存在」（SF-F1）。
+    """
+    raise StarletteHTTPException(status_code=404, detail="Not Found")
+
+
 # ---- internal app：独立 listener，与公开 app 共享中间件/错误外壳合同 ----
 internal_app = FastAPI(title="FamilyGraph Internal Agent API", lifespan=lifespan)
 internal_app.middleware("http")(request_context_middleware)
@@ -190,3 +217,14 @@ internal_app.add_exception_handler(Exception, unhandled_exception_handler)
 internal_app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 internal_app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
 internal_app.include_router(internal_agent_router, prefix="/internal/agent")
+
+# ---- admin app：系统管理员独立 listener（:8002 /admin-api，见 app.serve）----
+# 与家庭 app 共享 engine/lifespan（bootstrap/维护循环单次执行），但不共享任何
+# router、JWT 签发域或错误文案；家庭 app 对 /admin-api/* 返回普通 404。
+admin_app = FastAPI(title="FamilyGraph Admin API", lifespan=lifespan)
+admin_app.middleware("http")(request_context_middleware)
+admin_app.add_exception_handler(Exception, unhandled_exception_handler)
+admin_app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+admin_app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
+admin_app.include_router(admin_auth_router)
+admin_app.include_router(health_router, prefix="/admin-api")

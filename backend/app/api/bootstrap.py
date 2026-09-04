@@ -1,43 +1,24 @@
-"""首启引导路由：GET /bootstrap/status、POST /bootstrap/initialize。
+"""首启引导路由：GET /bootstrap/status（家庭面最小合同）。
 
-无任何用户时允许一次性创建管理员；凭据仅在本次响应返回，不可回看
-（锁定决策 A4 + 待定 Q3 默认方案）。
+09-04 起：系统管理员不再经网页初始化（POST /bootstrap/initialize 已移除），
+改由部署启动 preflight 自动创建唯一 admin 账号并交付 0600 凭据文件
+（services/admin_bootstrap，SF-F3）。status 只反映家庭用户是否存在，
+不暴露任何系统主体信息。
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.schemas.auth import (
-    BootstrapStatusResponse,
-    InitializeRequest,
-    InitializeResponse,
-    UserOut,
-    public_system_admin_payload,
-)
-from app.services import bootstrap as bootstrap_service
+from app.models.user import User
+from app.schemas.auth import BootstrapStatusResponse
 
 router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
 
 
 @router.get("/status", response_model=BootstrapStatusResponse)
 def status(session: Session = Depends(get_db)) -> BootstrapStatusResponse:
-    """公开端点：前端据此决定进入登录页还是首启引导页。"""
-    return BootstrapStatusResponse(initialized=bootstrap_service.has_any_user(session))
-
-
-@router.post("/initialize", response_model=InitializeResponse)
-def initialize(
-    payload: InitializeRequest, request: Request, session: Session = Depends(get_db)
-) -> InitializeResponse:
-    """一次性创建管理员；随机 PIN 仅本次响应可见。"""
-    admin, pin = bootstrap_service.initialize_admin(
-        session,
-        payload.name,
-        ip=request.client.host if request.client else None,
-    )
-    session.commit()
-    return InitializeResponse(
-        user=UserOut(**public_system_admin_payload(admin, admin.account)),
-        one_time_pin=pin,
-    )
+    """公开端点：只统计家庭 User，不探测系统管理员存在性。"""
+    user_count = session.query(func.count(User.id)).scalar()
+    return BootstrapStatusResponse(initialized=bool(user_count and user_count > 0))

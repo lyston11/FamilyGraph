@@ -188,6 +188,17 @@ SPACE_MANAGER_APPLICATION_NOTE_REQUIRED = "SPACE_MANAGER_APPLICATION_NOTE_REQUIR
 # 防枚举统一文案（error-handling.md 红线）
 UNIFIED_CREDENTIAL_MESSAGE = "名字或 PIN 码错误"
 
+# ---- 09-04 系统管理员独立认证域（/admin-api，8002）----
+ADMIN_INVALID_CREDENTIALS = "ADMIN_INVALID_CREDENTIALS"  # 管理员登录失败统一文案（防枚举）
+ADMIN_UNAUTHORIZED = "ADMIN_UNAUTHORIZED"  # 管理员令牌缺失/无效/跨域
+ADMIN_PASSWORD_CHANGE_REQUIRED = "ADMIN_PASSWORD_CHANGE_REQUIRED"  # 首登未改密码白名单外拒绝
+ADMIN_PASSWORD_TOO_WEAK = "ADMIN_PASSWORD_TOO_WEAK"  # 新密码不满足强度策略
+ADMIN_USERNAME_TAKEN = "ADMIN_USERNAME_TAKEN"  # 目标用户名已被占用
+# 管理员统一错误文案：不区分用户名不存在/密码错误/锁定（防枚举，design §6）
+ADMIN_CREDENTIAL_MESSAGE = "用户名或密码错误"
+# 管理员会话失效统一文案：无 token / 跨域 token / 过期 / 版本失效同一路径
+ADMIN_SESSION_MESSAGE = "管理员认证失败，请重新登录"
+
 
 def raise_api_error(
     status_code: int,

@@ -12,16 +12,14 @@ def test_login_success_returns_token_pair(client, db_session) -> None:
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {"access_token", "refresh_token", "token_type", "user"}
+    # 09-04 SF-F6：家庭认证响应不含 is_admin/platform_role 等后台身份枚举
     assert body["user"] == {
         "id": body["user"]["id"],
         "name": "张三",
-        "is_admin": False,
         "pin_must_change": False,
         "claim_status": "claimed",
         "profile_status": "identity_confirmed",
-        # 主体类型由服务端权威投影，家庭用户永不带平台角色
         "principal_type": "family_user",
-        "platform_role": None,
     }
 
 

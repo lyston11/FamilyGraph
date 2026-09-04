@@ -12,12 +12,32 @@ DATA_DIR: Path = Path(os.environ.get("DATA_DIR", "./data"))
 DB_PATH: Path = DATA_DIR / "db" / "app.db"
 UPLOADS_DIR: Path = DATA_DIR / "uploads"
 BACKUPS_DIR: Path = DATA_DIR / "backups"
+# 部署 bootstrap 凭据文件目录（0600 一次性交付；SF-F3）
+BOOTSTRAP_DIR: Path = DATA_DIR / "bootstrap"
 
 DATABASE_URL: str = f"sqlite:///{DB_PATH}"
 
 # Token TTL（AD-2：access 2h / refresh 30d）；m0b 认证实现消费
 ACCESS_TOKEN_TTL_SECONDS: int = 2 * 60 * 60
 REFRESH_TOKEN_TTL_SECONDS: int = 30 * 24 * 60 * 60
+
+# ---- 09-04 独立 Admin API listener 与管理员 JWT 签发域（SF-F1/SF-F4）----
+# admin listener 默认 127.0.0.1 fail-closed：compose 部署显式绑定 admin 内部网络接口。
+ADMIN_API_PORT: int = int(os.environ.get("ADMIN_API_PORT", "8002"))
+ADMIN_API_HOST: str = os.environ.get("ADMIN_API_HOST", "127.0.0.1")
+# 管理员 access 短效（15 分钟）；refresh 轮换但受绝对有效期约束（轮换不续期）
+ADMIN_ACCESS_TOKEN_TTL_SECONDS: int = int(os.environ.get("ADMIN_ACCESS_TOKEN_TTL_SECONDS", "900"))
+ADMIN_REFRESH_TOKEN_TTL_SECONDS: int = int(
+    os.environ.get("ADMIN_REFRESH_TOKEN_TTL_SECONDS", str(12 * 60 * 60))
+)
+# 独立签发域：只从环境变量读取，缺失/过弱/与家庭 SECRET_KEY 相同即拒绝启动，
+# 绝不回退默认值（SF-F4；校验见 ensure_ready/ensure_admin_ready）。
+ADMIN_JWT_SECRET: str = os.environ.get("ADMIN_JWT_SECRET", "")
+ADMIN_JWT_ISSUER: str = os.environ.get("ADMIN_JWT_ISSUER", "")
+ADMIN_JWT_AUDIENCE: str = os.environ.get("ADMIN_JWT_AUDIENCE", "")
+ADMIN_JWT_SECRET_MIN_LENGTH: int = 32
+# bootstrap 初始密码长度（secrets.token_urlsafe 字节数 → ~24 可见字符）
+ADMIN_BOOTSTRAP_PASSWORD_BYTES: int = 18
 
 # ---- m0b 认证限流参数（design.md 回滚形态：集中在 config，可经 env 热调）----
 AUTH_MAX_FAILED_ATTEMPTS: int = int(os.environ.get("AUTH_MAX_FAILED_ATTEMPTS", "5"))
@@ -141,8 +161,8 @@ CONTROLLED_WEB_READ_TIMEOUT_SECONDS: float = float(
 
 
 def ensure_data_dirs() -> None:
-    """确保数据卷目录存在（db/uploads/backups），幂等。"""
-    for directory in (DB_PATH.parent, UPLOADS_DIR, BACKUPS_DIR):
+    """确保数据卷目录存在（db/uploads/backups/bootstrap），幂等。"""
+    for directory in (DB_PATH.parent, UPLOADS_DIR, BACKUPS_DIR, BOOTSTRAP_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -178,6 +198,32 @@ def _reject_weak_default_secrets() -> None:
         )
 
 
+def ensure_admin_ready() -> None:
+    """管理员 JWT 签发域校验（SF-F4：缺失/过弱一律 fail-closed，无开发逃逸）。
+
+    与家庭 SECRET_KEY 不同，ADMIN_* 不接受 DEV_ALLOW_WEAK_SECRETS 放行：
+    管理员令牌与家庭令牌的签发域隔离是本任务的安全底线，弱配置等价于
+    两个 listener 共享密钥。issuer/audience 也必须显式提供且互不相同。
+    """
+    if not ADMIN_JWT_SECRET.strip():
+        raise RuntimeError(
+            "ADMIN_JWT_SECRET 未设置：请通过环境变量提供管理员 JWT 签名密钥"
+            "（拒绝以默认值或家庭 SECRET_KEY 启动）"
+        )
+    if len(ADMIN_JWT_SECRET.strip()) < ADMIN_JWT_SECRET_MIN_LENGTH:
+        raise RuntimeError(
+            f"ADMIN_JWT_SECRET 过弱：长度不得少于 {ADMIN_JWT_SECRET_MIN_LENGTH} 个字符"
+        )
+    if ADMIN_JWT_SECRET.strip() == SECRET_KEY.strip():
+        raise RuntimeError("ADMIN_JWT_SECRET 不得与家庭 SECRET_KEY 相同：签发域必须隔离")
+    if not ADMIN_JWT_ISSUER.strip() or not ADMIN_JWT_AUDIENCE.strip():
+        raise RuntimeError(
+            "ADMIN_JWT_ISSUER / ADMIN_JWT_AUDIENCE 未设置：管理员 JWT 必须显式声明签发域"
+        )
+    if ADMIN_JWT_ISSUER.strip() == ADMIN_JWT_AUDIENCE.strip():
+        raise RuntimeError("ADMIN_JWT_ISSUER 与 ADMIN_JWT_AUDIENCE 不得相同")
+
+
 def ensure_ready() -> None:
     """启动前校验：SECRET_KEY 必须由环境提供且非弱默认，否则拒绝启动。"""
     if not SECRET_KEY.strip():
@@ -185,4 +231,5 @@ def ensure_ready() -> None:
             "SECRET_KEY 未设置：请通过环境变量提供会话签名密钥（拒绝以弱默认值启动）"
         )
     _reject_weak_default_secrets()
+    ensure_admin_ready()
     ensure_data_dirs()

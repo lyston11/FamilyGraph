@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_system_admin
+from app.api.admin_deps import require_system_admin
+from app.api.deps import get_db
 from app.models import (
     Account,
     FamilySpace,

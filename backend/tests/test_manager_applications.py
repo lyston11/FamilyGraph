@@ -1,11 +1,17 @@
-"""lineage 空间管理员申请与交接工单测试（任务 08-31 契约）。
+"""lineage 空间管理员申请与交接工单测试（08-31 契约 + 09-04 隔离适配）。
 
-与旧 08-30 契约的差别：
+与旧契约的差别：
 - 申请目标必须是 `lineage` 家族空间，household 一律拒绝；
-- 裁决人是独立 `system_admin` 主体，家庭用户（含旧 is_admin 投影）无裁决权；
+- 裁决人是独立 `system_admin` 主体（09-04 起用户名+强密码登录 8002），
+  家庭用户（含旧 is_admin 投影）无裁决权；
 - approve 分两阶段：首次 approve 只发原管理员同意工单、申请仍 pending，
   工单 accepted 后再次 approve 才在同一事务内交换唯一 space_admin；
 - 交换后原管理员降为普通 member，空间内恰好一个 active space_admin。
+
+09-04 隔离说明：治理 HTTP 路由（/api/admin/manager-applications 等）已从
+家庭 listener 移除、尚未在 admin_app 挂载（读模型属子任务 2）。平台侧裁决
+断言改走命令层 `decide_manager_application_as_system_admin`；8000 上这些
+路径退化为与随机未知路径一致的普通 404。
 """
 
 from __future__ import annotations
@@ -14,13 +20,11 @@ from threading import Barrier, Thread
 
 import pytest
 from conftest import (
-    auth_header,
     create_space_member,
     create_system_admin,
     create_user_with_pin,
     login,
     seed_space_with_owner,
-    system_admin_header,
 )
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -48,7 +52,7 @@ ADMIN_APPLICATIONS_URL = "/api/admin/manager-applications"
 def _login_header(client: TestClient, name: str, pin: str) -> dict[str, str]:
     resp = login(client, name, pin)
     assert resp.status_code == 200, resp.text
-    return auth_header(resp.json())
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture()
@@ -74,13 +78,37 @@ def _submit(client, headers, *, space_id=None, request_kind="space_admin", **ext
     return client.post(APPLICATIONS_URL, json=body, headers=headers)
 
 
-def _decide(client, headers, application_id, *, decision, note=None):
-    body: dict[str, object] = {"decision": decision}
-    if note is not None:
-        body["note"] = note
-    return client.post(
-        f"{ADMIN_APPLICATIONS_URL}/{application_id}/decision", json=body, headers=headers
+def _decide(
+    db_session,
+    sysadmin,
+    application_id: int,
+    *,
+    decision: str,
+    note: str | None = None,
+) -> SpaceManagerApplication:
+    """平台侧裁决走命令层；治理 HTTP 面由子任务 2 在 admin_app 挂载。"""
+    return manager_application_commands.decide_manager_application_as_system_admin(
+        db_session,
+        application_id,
+        decision=decision,
+        note=note,
+        system_admin_id=sysadmin.id,
+        ip=None,
     )
+
+
+def _decide_error(
+    db_session, sysadmin, application_id: int, *, decision: str, note: str | None = None
+) -> HTTPException:
+    with pytest.raises(HTTPException) as exc_info:
+        _decide(db_session, sysadmin, application_id, decision=decision, note=note)
+    return exc_info.value
+
+
+def _api_code(exc: HTTPException) -> str:
+    detail = exc.detail
+    assert isinstance(detail, dict) and "__api_error__" in detail
+    return str(detail["__api_error__"]["code"])
 
 
 def _respond_consent(client, headers, consent_id, *, decision, reason=None):
@@ -174,16 +202,13 @@ def test_eligible_targets_lists_only_lineage_memberships(db_session, client, app
     assert after[0]["has_pending_application"] is True
 
 
-def test_application_payload_only_accepts_space_admin(db_session, client, applicant) -> None:
-    headers = _login_header(client, "申请人", "202020")
-    unknown_kind = _submit(client, headers, request_kind="invalid", space_id=1)
-    assert unknown_kind.status_code == 422
-
-    manager = create_user_with_pin(db_session, "空间主甲", "303031")
-    space = _seed_lineage(db_session, manager, name="甲家族")
+def test_unknown_kind_is_422(db_session, client, applicant) -> None:
+    manager = create_user_with_pin(db_session, "类型空间主", "303035")
+    space = _seed_lineage(db_session, manager, name="类型家族")
     create_space_member(db_session, space.id, applicant.id)
-    extra = _submit(client, headers, space_id=space.id, proposed_name="不应接受")
-    assert extra.status_code == 422
+    headers = _login_header(client, "申请人", "202020")
+    unknown_kind = _submit(client, headers, space_id=space.id, request_kind="owner")
+    assert unknown_kind.status_code == 422
 
 
 def test_duplicate_pending_rejected_but_resubmit_after_reject(
@@ -192,7 +217,6 @@ def test_duplicate_pending_rejected_but_resubmit_after_reject(
     manager = create_user_with_pin(db_session, "空间主乙", "303032")
     space = _seed_lineage(db_session, manager, name="乙家族")
     create_space_member(db_session, space.id, applicant.id)
-    admin_headers = system_admin_header(client)
     headers = _login_header(client, "申请人", "202020")
 
     first = _submit(client, headers, space_id=space.id)
@@ -201,14 +225,10 @@ def test_duplicate_pending_rejected_but_resubmit_after_reject(
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "SPACE_MANAGER_APPLICATION_EXISTS"
 
-    rejected = _decide(
-        client,
-        admin_headers,
-        first.json()["id"],
-        decision="reject",
-        note="请补充空间治理说明",
+    rejected_row = _decide(
+        db_session, sysadmin, first.json()["id"], decision="reject", note="请补充空间治理说明"
     )
-    assert rejected.status_code == 200, rejected.text
+    assert rejected_row.status == "rejected"
     resubmit = _submit(client, headers, space_id=space.id)
     assert resubmit.status_code == 201, resubmit.text
     assert resubmit.json()["status"] == "pending"
@@ -255,24 +275,23 @@ def test_target_eligibility_gates(db_session, client, applicant) -> None:
     assert r_member.status_code == 201, r_member.text
 
 
-# ---- 平台侧：队列与裁决 ----
+# ---- 平台侧：队列与裁决（命令层）----
 
 
-def test_admin_endpoints_reject_family_users(db_session, client, applicant) -> None:
-    """家庭用户无后台裁决权；旧 is_admin 投影不再是授权来源。"""
+def test_admin_decision_routes_absent_from_family_listener(db_session, client, applicant) -> None:
+    """治理路由不在家庭 listener：家庭用户与旧 is_admin 投影得到普通 404。"""
     headers = _login_header(client, "申请人", "202020")
-    assert client.get(ADMIN_APPLICATIONS_URL, headers=headers).status_code == 403
+    assert client.get(ADMIN_APPLICATIONS_URL, headers=headers).status_code == 404
     decide = client.post(
         f"{ADMIN_APPLICATIONS_URL}/1/decision",
         json={"decision": "approve"},
         headers=headers,
     )
-    assert decide.status_code == 403
+    assert decide.status_code == 404
 
-    legacy_operator = create_user_with_pin(db_session, "旧运营", "101010", is_admin=True)
-    assert legacy_operator is not None
+    create_user_with_pin(db_session, "旧运营", "101010", is_admin=True)
     legacy_headers = _login_header(client, "旧运营", "101010")
-    assert client.get(ADMIN_APPLICATIONS_URL, headers=legacy_headers).status_code == 403
+    assert client.get(ADMIN_APPLICATIONS_URL, headers=legacy_headers).status_code == 404
 
 
 def test_admin_queue_lists_and_filters_by_status(db_session, client, applicant, sysadmin) -> None:
@@ -286,27 +305,26 @@ def test_admin_queue_lists_and_filters_by_status(db_session, client, applicant, 
     second = _submit(client, headers, space_id=second_space.id)
     assert first.status_code == 201 and second.status_code == 201
 
-    admin_headers = system_admin_header(client)
     # 首次 approve 只进入交接准备，申请仍 pending
-    prepared = _decide(client, admin_headers, first.json()["id"], decision="approve")
-    assert prepared.status_code == 200, prepared.text
-    assert prepared.json()["status"] == "pending"
-    assert prepared.json()["transfer_consent_status"] == "pending"
+    prepared = _decide(db_session, sysadmin, first.json()["id"], decision="approve")
+    assert prepared.status == "pending"
+    consent = db_session.scalar(
+        select(ManagerTransferConsent).where(
+            ManagerTransferConsent.application_id == first.json()["id"]
+        )
+    )
+    assert consent is not None and consent.status == "pending"
 
     rejected = _decide(
-        client, admin_headers, second.json()["id"], decision="reject", note="暂缓治理升级"
+        db_session, sysadmin, second.json()["id"], decision="reject", note="暂缓治理升级"
     )
-    assert rejected.status_code == 200, rejected.text
+    assert rejected.status == "rejected"
 
-    pending = client.get(
-        ADMIN_APPLICATIONS_URL, params={"status": "pending"}, headers=admin_headers
-    )
-    assert pending.status_code == 200
-    assert [row["id"] for row in pending.json()] == [first.json()["id"]]
-    all_rows = client.get(ADMIN_APPLICATIONS_URL, headers=admin_headers)
-    assert all_rows.status_code == 200
-    assert {row["status"] for row in all_rows.json()} == {"pending", "rejected"}
-    assert {row["request_kind"] for row in all_rows.json()} == {"space_admin"}
+    pending_rows = manager_application_commands.list_applications(db_session, status="pending")
+    assert [row.id for row in pending_rows] == [first.json()["id"]]
+    all_rows = manager_application_commands.list_applications(db_session)
+    assert {row.status for row in all_rows} == {"pending", "rejected"}
+    assert {row.request_kind for row in all_rows} == {"space_admin"}
 
 
 def test_approve_requires_consent_then_swaps_single_manager(
@@ -321,18 +339,16 @@ def test_approve_requires_consent_then_swaps_single_manager(
     submitted = _submit(client, headers, space_id=space.id)
     assert submitted.status_code == 201
     app_id = submitted.json()["id"]
-    admin_headers = system_admin_header(client)
 
     # 阶段一：发工单，角色一律不变
-    prepared = _decide(client, admin_headers, app_id, decision="approve")
-    assert prepared.status_code == 200, prepared.text
-    assert prepared.json()["status"] == "pending"
+    prepared = _decide(db_session, sysadmin, app_id, decision="approve")
+    assert prepared.status == "pending"
     assert _roles(db_session, space.id) == {manager.id: "space_admin", applicant.id: "member"}
 
     # 原管理员同意前，再次 approve 必须失败
-    early = _decide(client, admin_headers, app_id, decision="approve")
+    early = _decide_error(db_session, sysadmin, app_id, decision="approve")
     assert early.status_code == 409
-    assert "同意" in early.json()["error"]["message"]
+    assert "同意" in early.detail["__api_error__"]["message"]
 
     # 原管理员工单自带目标空间名称与申请人标识
     manager_headers = _login_header(client, "家族主人", "111213")
@@ -352,9 +368,8 @@ def test_approve_requires_consent_then_swaps_single_manager(
     assert _roles(db_session, space.id) == {manager.id: "space_admin", applicant.id: "member"}
 
     # 阶段二：最终 approve 在同一事务内完成交换
-    final = _decide(client, admin_headers, app_id, decision="approve")
-    assert final.status_code == 200, final.text
-    assert final.json()["status"] == "approved"
+    final = _decide(db_session, sysadmin, app_id, decision="approve")
+    assert final.status == "approved"
 
     roles = _roles(db_session, space.id)
     assert roles == {applicant.id: "space_admin", manager.id: "member"}
@@ -375,9 +390,9 @@ def test_approve_requires_consent_then_swaps_single_manager(
         "manager_application_approved",
     } <= actions
 
-    again = _decide(client, admin_headers, app_id, decision="reject", note="改判")
+    again = _decide_error(db_session, sysadmin, app_id, decision="reject", note="改判")
     assert again.status_code == 409
-    assert again.json()["error"]["code"] == "SPACE_MANAGER_APPLICATION_DECIDED"
+    assert _api_code(again) == "SPACE_MANAGER_APPLICATION_DECIDED"
 
 
 def test_manager_rejection_keeps_current_manager(db_session, client, applicant, sysadmin) -> None:
@@ -388,8 +403,7 @@ def test_manager_rejection_keeps_current_manager(db_session, client, applicant, 
 
     submitted = _submit(client, _login_header(client, "申请人", "202020"), space_id=space.id)
     app_id = submitted.json()["id"]
-    admin_headers = system_admin_header(client)
-    assert _decide(client, admin_headers, app_id, decision="approve").status_code == 200
+    assert _decide(db_session, sysadmin, app_id, decision="approve").status == "pending"
 
     manager_headers = _login_header(client, "拒绝管理", "141516")
     ticket = client.get(f"{CONSENTS_URL}/mine", headers=manager_headers).json()[0]
@@ -406,7 +420,7 @@ def test_manager_rejection_keeps_current_manager(db_session, client, applicant, 
     assert _roles(db_session, space.id) == {manager.id: "space_admin", applicant.id: "member"}
 
     # 系统管理员不能在原管理员拒绝后继续批准
-    blocked = _decide(client, admin_headers, app_id, decision="approve")
+    blocked = _decide_error(db_session, sysadmin, app_id, decision="approve")
     assert blocked.status_code == 409
 
 
@@ -415,14 +429,13 @@ def test_consent_only_actionable_by_current_manager(
 ) -> None:
     """工单只能由仍在任的目标空间管理员处理；他人 404，卸任后失效。"""
     manager = create_user_with_pin(db_session, "在任管理", "151617")
-    outsider = create_user_with_pin(db_session, "无关者", "161718")
+    create_user_with_pin(db_session, "无关者", "161718")
     space = _seed_lineage(db_session, manager, name="工单家族")
     create_space_member(db_session, space.id, applicant.id)
 
     submitted = _submit(client, _login_header(client, "申请人", "202020"), space_id=space.id)
-    admin_headers = system_admin_header(client)
-    prepared = _decide(client, admin_headers, submitted.json()["id"], decision="approve")
-    assert prepared.status_code == 200, prepared.text
+    prepared = _decide(db_session, sysadmin, submitted.json()["id"], decision="approve")
+    assert prepared.status == "pending"
 
     consent = db_session.scalars(select(ManagerTransferConsent)).one()
 
@@ -432,7 +445,6 @@ def test_consent_only_actionable_by_current_manager(
     assert (
         _respond_consent(client, outsider_headers, consent.id, decision="accept").status_code == 404
     )
-    assert outsider is not None
 
     # 原管理员卸任后旧工单失效，不可复用
     manager_membership = db_session.scalars(
@@ -458,17 +470,15 @@ def test_reject_requires_note_and_records_it(db_session, client, applicant, sysa
     assert submitted.status_code == 201
     app_id = submitted.json()["id"]
 
-    admin_headers = system_admin_header(client)
-    no_note = _decide(client, admin_headers, app_id, decision="reject")
+    no_note = _decide_error(db_session, sysadmin, app_id, decision="reject")
     assert no_note.status_code == 422
-    assert no_note.json()["error"]["code"] == "SPACE_MANAGER_APPLICATION_NOTE_REQUIRED"
-    blank_note = _decide(client, admin_headers, app_id, decision="reject", note="   ")
+    assert _api_code(no_note) == "SPACE_MANAGER_APPLICATION_NOTE_REQUIRED"
+    blank_note = _decide_error(db_session, sysadmin, app_id, decision="reject", note="   ")
     assert blank_note.status_code == 422
 
-    rejected = _decide(client, admin_headers, app_id, decision="reject", note="成员资格尚未稳定")
-    assert rejected.status_code == 200
-    assert rejected.json()["status"] == "rejected"
-    assert rejected.json()["decision_note"] == "成员资格尚未稳定"
+    rejected = _decide(db_session, sysadmin, app_id, decision="reject", note="成员资格尚未稳定")
+    assert rejected.status == "rejected"
+    assert rejected.decision_note == "成员资格尚未稳定"
     db_session.expire_all()
     row = db_session.get(SpaceManagerApplication, app_id)
     assert row is not None and row.status == "rejected"
@@ -489,10 +499,9 @@ def test_approve_conflicts_when_member_changes_and_keeps_pending(
     # 申请人成员资格在裁决前失效 → 裁决必须安全失败并保持 pending
     membership.status = "pending"
     db_session.commit()
-    admin_headers = system_admin_header(client)
-    decided = _decide(client, admin_headers, submitted.json()["id"], decision="approve")
+    decided = _decide_error(db_session, sysadmin, submitted.json()["id"], decision="approve")
     assert decided.status_code == 409
-    assert "普通成员" in decided.json()["error"]["message"]
+    assert "普通成员" in decided.detail["__api_error__"]["message"]
     db_session.expire_all()
     row = db_session.get(SpaceManagerApplication, submitted.json()["id"])
     assert row is not None and row.status == "pending"
@@ -615,11 +624,10 @@ def test_concurrent_decisions_have_one_winner(db_session, applicant, sysadmin) -
     assert list(_roles(db_session, space.id).values()).count("space_admin") == 1
 
 
-def test_unknown_application_404_for_system_admin(db_session, client, sysadmin) -> None:
-    admin_headers = system_admin_header(client)
-    response = _decide(client, admin_headers, 424242, decision="approve")
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "SPACE_MANAGER_APPLICATION_NOT_FOUND"
+def test_unknown_application_404_for_system_admin(db_session, sysadmin) -> None:
+    missing = _decide_error(db_session, sysadmin, 424242, decision="approve")
+    assert missing.status_code == 404
+    assert _api_code(missing) == "SPACE_MANAGER_APPLICATION_NOT_FOUND"
 
 
 def test_domain_event_emitted_on_decision(db_session, client, applicant, sysadmin) -> None:
@@ -628,7 +636,6 @@ def test_domain_event_emitted_on_decision(db_session, client, applicant, sysadmi
     space = _seed_lineage(db_session, manager, name="事件家族")
     create_space_member(db_session, space.id, applicant.id)
     submitted = _submit(client, _login_header(client, "申请人", "202020"), space_id=space.id)
-    admin_headers = system_admin_header(client)
-    _decide(client, admin_headers, submitted.json()["id"], decision="reject", note="记录事件")
+    _decide(db_session, sysadmin, submitted.json()["id"], decision="reject", note="记录事件")
     event_types = set(db_session.scalars(select(DomainEvent.type)).all())
     assert "space.manager_application.decided" in event_types

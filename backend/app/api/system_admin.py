@@ -9,7 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_system_admin
+from app.api.admin_deps import require_system_admin
+from app.api.deps import get_db
 from app.commands import manager_applications
 from app.models.system_admin import SystemAdmin, SystemAdminAccount
 from app.schemas.space import ManagerApplicationDecision, ManagerApplicationOut

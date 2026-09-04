@@ -1,8 +1,8 @@
-"""平台后台契约（任务 08-31 迁移后）。
+"""平台后台合同（09-04 隔离后）。
 
-旧 `platform_operator` 家庭用户后台已被独立 `system_admin` 主体取代：
-- 账号生命周期列表由 `/api/admin/accounts` 提供（家庭 PII 仍不得出现）；
-- 家庭用户即使带旧 `is_admin` 投影也不再获得任何后台权限；
+- 家庭 listener 不再注册任何 /api/admin/* 治理路由：家庭用户（含旧 is_admin
+  投影）与系统管理员在 8000 上看到的都是与随机未知路径一致的普通 404；
+- 系统管理员只能经 8002 /admin-api（用户名 + 强密码）认证；
 - 重置 PIN、改档案、custody 移交属系统管理员 break-glass 家庭数据能力，
   PRD「Out of scope」明确要求另立审计强化任务，当前无任何主体可执行，
   对应测试保留测试体并 skip，等该任务落地后接回。
@@ -12,103 +12,97 @@ from __future__ import annotations
 
 import pytest
 from conftest import (
-    auth_header,
+    admin_session_headers,
     create_system_admin,
     create_user_with_pin,
     login,
-    system_admin_header,
 )
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 
-from app.models.audit_log import AuditLog
-from app.models.v2_foundation import DomainEvent
+from app.main import admin_app, app
 
 BREAK_GLASS_PENDING = "系统管理员 break-glass 家庭数据能力按 PRD 另立任务；当前无主体可执行该端点"
 
 
-def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:
-    resp = login(client, name, pin)
-    assert resp.status_code == 200, resp.text
-    return auth_header(resp.json())
+def test_family_user_cannot_reach_system_backend(client: TestClient, db_session) -> None:
+    """家庭用户访问后台路径得到与随机路径一致的 404；旧 is_admin 投影不再是授权来源。"""
+    create_user_with_pin(db_session, "群众", "123123", claim_status="claimed")
+    create_user_with_pin(db_session, "旧运营", "456456", claim_status="claimed", is_admin=True)
+
+    for name, pin in (("群众", "123123"), ("旧运营", "456456")):
+        tokens = login(client, name, pin)
+        assert tokens.status_code == 200, tokens.text
+        headers = {"Authorization": f"Bearer {tokens.json()['access_token']}"}
+        for path in (
+            "/api/admin/accounts",
+            "/api/admin/spaces",
+            "/api/admin/manager-applications",
+            "/api/admin/users",
+        ):
+            response = client.get(path, headers=headers)
+            assert response.status_code == 404, path
+            random_unknown = client.get("/no-such-family-path", headers=headers)
+            assert response.json() == random_unknown.json(), path
 
 
-def _system_admin_headers(client: TestClient, db_session) -> dict[str, str]:
+def test_system_admin_authenticates_only_via_admin_listener(
+    client: TestClient, admin_client: TestClient, db_session
+) -> None:
+    """系统管理员在 8002 用户名+密码登录可用；家庭登录对管理员用户名统一拒绝。"""
     create_system_admin(db_session)
-    return system_admin_header(client)
+    headers = admin_session_headers(admin_client)
+    assert admin_client.get("/admin-api/auth/me", headers=headers).status_code == 200
+
+    # 家庭 listener 不存在管理员登录通道：任何 name+pin 组合都是普通家庭失败
+    family_attempt = client.post("/api/auth/login", json={"name": "admin", "pin": "123456"})
+    assert family_attempt.status_code == 401
+    assert family_attempt.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
 
 
-@pytest.fixture()
-def admin_and_user(db_session):
-    admin = create_user_with_pin(
-        db_session, "管长", "000000", is_admin=True, claim_status="claimed"
-    )
-    user = create_user_with_pin(
-        db_session,
-        "群众",
-        "123123",
-        claim_status="claimed",
-        birth={"cal_type": "solar", "date": "1980-08-08"},
-    )
-    db_session.commit()
-    return admin, user
-
-
-def test_family_user_cannot_reach_system_backend(client: TestClient, admin_and_user):
-    """家庭用户一律无后台权限；旧 is_admin 投影不再是授权来源（PRD R1）。"""
-    _admin, _user = admin_and_user
-    for name, pin in (("群众", "123123"), ("管长", "000000")):
-        headers = _login(client, name, pin)
-        assert client.get("/api/admin/accounts", headers=headers).status_code == 403
-        assert client.get("/api/admin/spaces", headers=headers).status_code == 403
-        assert client.get("/api/admin/manager-applications", headers=headers).status_code == 403
-
-
-def test_account_metadata_excludes_family_pii(client: TestClient, db_session, admin_and_user):
-    """账号生命周期列表只含平台元数据，不含家庭姓名/性别/出生（PRD R5）。"""
-    _admin, user = admin_and_user
-    headers = _system_admin_headers(client, db_session)
-    rows = client.get("/api/admin/accounts", headers=headers).json()
-    row = next(r for r in rows if r["subject_type"] == "family_user" and r["subject_id"] == user.id)
-    for leaked in ("name", "gender", "privacy_mode", "birth", "bio"):
-        assert leaked not in row
-    assert row["status"] == "claimed"
+def test_admin_business_routes_absent_from_both_listeners() -> None:
+    """admin metadata / manager applications 治理路由在两个 listener 都未注册（子任务 2 接管）。"""
+    for target in (app, admin_app):
+        registered = {getattr(route, "path", "") for route in target.routes}
+        for path in (
+            "/api/admin/accounts",
+            "/api/admin/spaces",
+            "/api/admin/space-managers",
+            "/api/admin/spaces/{space_id}/members",
+            "/api/admin/manager-applications",
+            "/api/admin/manager-transfer-consents",
+            "/admin-api/accounts",
+            "/admin-api/spaces",
+        ):
+            assert path not in registered, f"{target.title}: {path}"
 
 
 @pytest.mark.skip(reason=BREAK_GLASS_PENDING)
-def test_reset_pin_one_time_and_sessions_revoked(db_session, client: TestClient, admin_and_user):
-    admin, user = admin_and_user
-    ha = _login(client, "管长", "000000")
-
-    # 群众先登录拿 access
+def test_reset_pin_one_time_and_sessions_revoked(db_session, client: TestClient) -> None:
+    """旧 break-glass 合同占位：等审计强化任务落地后接回（对应 admin.py 永不注册）。"""
+    user = create_user_with_pin(db_session, "群众", "123123", claim_status="claimed")
     old_tokens = login(client, "群众", "123123").json()
-    old_header = auth_header(old_tokens)
+    old_header = {"Authorization": f"Bearer {old_tokens['access_token']}"}
     assert client.get("/api/me", headers=old_header).status_code == 200
 
-    # 管理员重置
-    r = client.post(f"/api/admin/users/{user.id}/reset-pin", json={"confirm": True}, headers=ha)
+    r = client.post(f"/api/admin/users/{user.id}/reset-pin", json={"confirm": True})
     assert r.status_code == 200, r.text
     new_pin = r.json()["pin"]
 
-    # 旧 access 即刻失效（token_version+1）
     assert client.get("/api/me", headers=old_header).status_code == 401
 
-    # 新 PIN 可登录且强制改 PIN
     fresh = login(client, "群众", new_pin)
     assert fresh.status_code == 200
     assert fresh.json()["user"]["pin_must_change"] is True
 
-    # 审计留痕
-    logs = client.get("/api/admin/audit-logs", headers=ha).json()
+    logs = client.get("/api/admin/audit-logs").json()
     assert any(entry["action"] == "pin_reset" for entry in logs)
 
 
 @pytest.mark.skip(reason=BREAK_GLASS_PENDING)
-def test_admin_update_user_transfer_custody(db_session, client: TestClient, admin_and_user):
-    _admin, user = admin_and_user
+def test_admin_update_user_transfer_custody(db_session, client: TestClient) -> None:
+    """旧 break-glass 合同占位：等审计强化任务落地后接回。"""
+    user = create_user_with_pin(db_session, "群众", "123123", claim_status="claimed")
     guardian = create_user_with_pin(db_session, "新管", "456456", claim_status="claimed")
-    ha = _login(client, "管长", "000000")
-    db_session.commit()
 
     r = client.patch(
         f"/api/admin/users/{user.id}",
@@ -118,55 +112,25 @@ def test_admin_update_user_transfer_custody(db_session, client: TestClient, admi
             "transfer_custody_to": guardian.id,
             "note": "工单#42 数据兑底更正",
         },
-        headers=ha,
     )
     assert r.status_code == 200, r.text
-    # 响应形状保持兼容：id + 变更字段键
     assert r.json() == {
         "id": user.id,
         "name": "改名群众",
         "privacy_mode": "perpetual",
         "transferred_to": guardian.id,
     }
-    db_session.expire_all()
-    # v2：operator 无家庭数据读取权 → 成员 API 404；改名结果经 break-glass 检索核实
-    member_view = client.get(f"/api/users/{user.id}", headers=_login(client, "管长", "000000"))
-    assert member_view.status_code == 404
-    admin_rows = client.get("/api/admin/users/lookup", params={"name": "改名"}, headers=ha).json()
-    row = next(r for r in admin_rows if r["id"] == user.id)
-    assert row["name"] == "改名群众"
-
-    # break-glass 审计：理由入库且完整（changes + operator 账号）
-    audit_row = db_session.query(AuditLog).filter(AuditLog.action == "admin_user_updated").one()
-    assert audit_row.target_id == user.id
-    assert audit_row.detail["note"] == "工单#42 数据兑底更正"
-    assert audit_row.detail["break_glass"] is True
-    assert audit_row.detail["operator_account"] == _admin.account.id
-
-    # 领域事件同事务落库：档案更新 + custody 主体变更（F-5）
-    events = {e.type: e for e in db_session.scalars(select(DomainEvent)).all()}
-    assert {"profile.updated", "profile.custody.transferred"} <= set(events)
-    updated_payload = events["profile.updated"].payload
-    assert sorted(updated_payload["fields"]) == ["name", "privacy_mode"]
-    custody_payload = events["profile.custody.transferred"].payload
-    assert custody_payload["to_user"] == guardian.id
-    assert custody_payload["by_operator_account"] == _admin.account.id
 
 
 @pytest.mark.skip(reason=BREAK_GLASS_PENDING)
-def test_admin_update_user_requires_break_glass_note(client: TestClient, admin_and_user):
-    """缺 note → schema 422；纯空白 note → 命令层 BREAK_GLASS_NOTE_REQUIRED 422。"""
-    _admin, user = admin_and_user
-    ha = _login(client, "管长", "000000")
+def test_admin_update_user_requires_break_glass_note(db_session, client: TestClient) -> None:
+    """旧 break-glass 合同占位：缺 note → 422（等审计强化任务接回）。"""
+    user = create_user_with_pin(db_session, "群众", "123123", claim_status="claimed")
     url = f"/api/admin/users/{user.id}"
 
-    missing = client.patch(url, json={"name": "改名"}, headers=ha)
+    missing = client.patch(url, json={"name": "改名"})
     assert missing.status_code == 422
 
-    blank = client.patch(url, json={"name": "改名", "note": "   "}, headers=ha)
+    blank = client.patch(url, json={"name": "改名", "note": "   "})
     assert blank.status_code == 422
     assert blank.json()["error"]["code"] == "BREAK_GLASS_NOTE_REQUIRED"
-
-    # 失败路径不落任何修改（break-glass 检索不得命中新名字）
-    rows = client.get("/api/admin/users/lookup", params={"name": "改名"}, headers=ha).json()
-    assert all(r["id"] != user.id for r in rows)

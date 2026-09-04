@@ -1,7 +1,7 @@
 """测试全局准备与 m0b 公共夹具。
 
 环境变量必须在任何 app 模块导入前注入；夹具提供迁移建库、表清空、
-客户端与造数辅助（管理员后台属 m4b 非目标，造数绕过 API）。
+客户端与造数辅助（家庭主体绕过 API 造数；管理员主体按 09-04 密码合同造数）。
 """
 
 import os
@@ -11,6 +11,10 @@ import tempfile
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 # bcrypt cost 降级：套件速度（生产默认 12）
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
+# 09-04 管理员独立签发域：测试显式提供（缺失/过弱在 config.ensure_ready 拒启）
+os.environ.setdefault("ADMIN_JWT_SECRET", "test-admin-jwt-secret-0123456789abcdef")
+os.environ.setdefault("ADMIN_JWT_ISSUER", "familygraph-admin-test")
+os.environ.setdefault("ADMIN_JWT_AUDIENCE", "familygraph-admin-web-test")
 # V2.1 Agent Runtime：测试默认开启 feature flag 并配置共享密钥（生产默认关闭/必配）
 os.environ.setdefault("AGENT_SERVICE_SECRET", "test-agent-service-secret")
 os.environ.setdefault("AGENT_RUNTIME_ENABLED", "1")
@@ -67,6 +71,21 @@ def _reset_synthetic_provider_gate():
     config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
     yield
     config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_admin_bootstrap_state():
+    """09-04：每测试重置 bootstrap 单例并清理一次性凭据文件（测试彼此隔离）。"""
+    import contextlib
+
+    from app.services import admin_bootstrap
+
+    admin_bootstrap._BOOTSTRAP_DONE = False
+    yield
+    admin_bootstrap._BOOTSTRAP_DONE = False
+    for name in (admin_bootstrap.CREDENTIALS_FILENAME, "admin-recovery"):
+        with contextlib.suppress(OSError):
+            (config.BOOTSTRAP_DIR / name).unlink()
 
 
 # 清表顺序：子表→父表（满足 FK，无需关外键）。v2 合同表追加于尾部。
@@ -164,6 +183,14 @@ def internal_client() -> TestClient:
     return TestClient(internal_app)
 
 
+@pytest.fixture()
+def admin_client() -> TestClient:
+    """09-04 系统管理员独立 listener（:8002 /admin-api）。"""
+    from app.main import admin_app
+
+    return TestClient(admin_app)
+
+
 def create_user_with_pin(
     session,
     name: str,
@@ -238,36 +265,64 @@ def auth_header(token_pair: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_pair['access_token']}"}
 
 
-def create_system_admin(session, *, name: str = "平台管理员", pin: str = "654321"):
-    """直建独立系统管理员主体（不占用家庭 User/Account）。
+def create_system_admin(
+    session,
+    *,
+    username: str = "admin",
+    password: str = "FixtureAdmin-2026x",
+    password_must_change: bool = False,
+    admin_status: str = "active",
+):
+    """直建独立系统管理员主体（09-04 密码合同：username + password_hash）。
 
-    ``/api/bootstrap/initialize`` 在库里已有家庭用户时会拒绝，测试需要在任意
-    时点造后台主体，因此这里绕过 bootstrap 门禁直接落主体行。
+    默认 password_must_change=False 便于直达治理流程；首登强制改密场景显式传
+    password_must_change=True。绝不占用家庭 User/Account。
     """
     from app.models.system_admin import SystemAdmin, SystemAdminAccount
     from app.utils import security, timeutil
 
     now = timeutil.utcnow()
-    admin = SystemAdmin(login_name=name, status="active", created_at=now)
+    admin = SystemAdmin(username=username, status=admin_status, created_at=now, updated_at=now)
     admin.account = SystemAdminAccount(
-        pin_hash=security.hash_pin(pin),
-        pin_must_change=False,
-        token_version=0,
+        password_hash=security.hash_password(password),
+        password_must_change=password_must_change,
+        password_version=0,
         failed_attempts=0,
         locked_until=None,
-        status="claimed",
-        claimed_at=now,
+        status="managed" if password_must_change else "claimed",
+        claimed_at=None if password_must_change else now,
+        created_at=now,
+        updated_at=now,
     )
     session.add(admin)
     session.commit()
     return admin
 
 
-def system_admin_header(client: TestClient, name: str = "平台管理员", pin: str = "654321"):
-    """登录系统主体并返回后台可用凭据。"""
-    resp = client.post("/api/auth/login", json={"name": name, "pin": pin})
+def admin_login(
+    admin_client: TestClient,
+    username: str = "admin",
+    password: str = "FixtureAdmin-2026x",
+):
+    """8002 管理员登录（username + password）。"""
+    return admin_client.post(
+        "/admin-api/auth/login", json={"username": username, "password": password}
+    )
+
+
+def admin_header(token_pair: dict) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token_pair['access_token']}"}
+
+
+def admin_session_headers(
+    admin_client: TestClient,
+    username: str = "admin",
+    password: str = "FixtureAdmin-2026x",
+) -> dict[str, str]:
+    """登录管理员并返回 8002 可用凭据头。"""
+    resp = admin_login(admin_client, username, password)
     assert resp.status_code == 200, resp.text
-    return auth_header(resp.json())
+    return admin_header(resp.json())
 
 
 # ---- V2.1 Agent Runtime 造数辅助（绕过浏览器 API，浏览器 API 属后续 Block）----

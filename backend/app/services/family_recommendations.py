@@ -66,9 +66,7 @@ def recommendations_payload(session: Session, *, account: Account, space_id: int
     }
     if view.status != "current":
         return base
-    payload = personal_family_view.current_view_payload(
-        session, account=account, space_id=space_id
-    )
+    payload = personal_family_view.current_view_payload(session, account=account, space_id=space_id)
     if payload is None:
         return base
     nodes = {int(node["user_id"]): node for node in payload["nodes"]}
@@ -109,9 +107,7 @@ def recommendations_payload(session: Session, *, account: Account, space_id: int
         )
     ).all():
         pending_target_id = (
-            fact.object_user_id
-            if fact.subject_user_id == actor.id
-            else fact.subject_user_id
+            fact.object_user_id if fact.subject_user_id == actor.id else fact.subject_user_id
         )
         if pending_target_id == actor.id or _cooldown_active(
             session,
