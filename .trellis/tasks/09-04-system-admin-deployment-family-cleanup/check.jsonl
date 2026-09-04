@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture.md", "reason": "校验部署拓扑与网络隔离符合架构合同"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验路由矩阵与 OpenAPI 隔离测试"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验家庭 dist 禁止字符串与依赖图断言"}
+{"file": ".trellis/tasks/09-04-system-admin-deployment-family-cleanup/research/current-deployment-baseline.md", "reason": "对照部署基线确认清理完整"}

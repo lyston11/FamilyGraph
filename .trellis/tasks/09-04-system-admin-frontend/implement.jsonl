@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "后台前端独立 origin/存储/只访问 /admin-api 的架构合同"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "主体感知会话与系统管理员隔离的 store 约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "admin API 类型与 schema 对齐的类型安全约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端测试、可达性与构建门禁约定"}
+{"file": ".trellis/tasks/09-04-system-admin-frontend/research/current-frontend-boundary.md", "reason": "当前家庭前端中后台代码的耦合点清单"}

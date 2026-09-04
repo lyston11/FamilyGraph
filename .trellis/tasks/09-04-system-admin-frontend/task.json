@@ -1,0 +1,32 @@
+{
+  "id": "system-admin-frontend",
+  "name": "system-admin-frontend",
+  "title": "独立系统管理员前端应用",
+  "description": "新建独立 system-admin-frontend/ 应用（Vite+Vue3+Pinia，dev 5174、生产 127.0.0.1:8081）：只访问 /admin-api，独立 auth store 与存储 key，导航以管理员→空间为主线，敏感详情先创建 30 分钟访问会话（票据仅内存），审批是唯一写 UI。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": "frontend-admin-app",
+  "package": "frontend",
+  "priority": "P2",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-04",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-04-isolated-system-admin-platform",
+  "relatedFiles": [
+    "frontend/src/stores/auth.ts",
+    "frontend/src/api/client.ts",
+    "frontend/src/router/index.ts",
+    "frontend/package.json",
+    "frontend/vite.config.ts"
+  ],
+  "notes": "不 import 家庭 frontend/ 的任何代码；不出现附件下载、批量导出、PIN 重置、档案修改入口；Agent 监控 5 秒轮询、页面不可见暂停；family token 不能建立后台会话。",
+  "meta": {}
+}

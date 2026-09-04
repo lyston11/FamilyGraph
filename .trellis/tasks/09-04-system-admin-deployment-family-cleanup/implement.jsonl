@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture.md", "reason": "双前端双 API 部署拓扑与网络隔离架构合同"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "8000/8002 路由矩阵与 OpenAPI 隔离断言约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "家庭 bundle 禁止字符串扫描与构建门禁约定"}
+{"file": ".trellis/tasks/09-04-system-admin-deployment-family-cleanup/research/current-deployment-baseline.md", "reason": "当前 Compose/Nginx/Dockerfile 与家庭端后台痕迹基线"}

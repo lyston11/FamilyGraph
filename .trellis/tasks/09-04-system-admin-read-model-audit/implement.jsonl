@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "admin 读模型独立 schema、不进家庭 visibility 链的架构合同"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "admin_access_sessions/admin_access_audits 新表与 Alembic 约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "统一 403/404/409 语义与防存在性枚举约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "字段白名单精确集合断言与治理边界测试约定"}
+{"file": ".trellis/tasks/09-04-system-admin-read-model-audit/research/current-read-models.md", "reason": "现有 admin_metadata/system_admin 读模型与相关模型字段基线"}

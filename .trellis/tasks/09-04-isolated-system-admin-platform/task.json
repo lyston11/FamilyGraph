@@ -1,0 +1,37 @@
+{
+  "id": "isolated-system-admin-platform",
+  "name": "isolated-system-admin-platform",
+  "title": "独立系统管理员后台与全业务监控平台",
+  "description": "父任务：建立与家庭用户端完全隔离的系统管理员平台——双前端、双 API listener、独立 JWT 签发域、全业务只读监控、访问会话与审计、审批唯一写例外。负责跨子任务合同与最终集成验收。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": "platform-orchestration",
+  "package": null,
+  "priority": "P2",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-04",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-04-system-admin-auth-api-isolation",
+    "09-04-system-admin-read-model-audit",
+    "09-04-system-admin-frontend",
+    "09-04-system-admin-deployment-family-cleanup"
+  ],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/main.py",
+    "backend/app/serve.py",
+    "backend/app/api/deps.py",
+    "frontend/src/stores/auth.ts",
+    "docker-compose.yml"
+  ],
+  "notes": "旧单 SPA 设计被推翻：家庭 bundle/路由/OpenAPI 不得出现后台痕迹。子任务顺序 1 auth-api-isolation → 2 read-model-audit → 3 frontend → 4 deployment-family-cleanup。审批是唯一业务写例外；不注册旧 admin.py；不伪造电话/邮箱/地址字段。",
+  "meta": {}
+}

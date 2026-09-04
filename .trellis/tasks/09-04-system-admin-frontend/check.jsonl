@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验后台前端测试与构建门禁"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "校验独立 admin auth store、票据仅内存、session expired 行为"}
+{"file": ".trellis/spec/architecture.md", "reason": "校验未 import 家庭 frontend、仅访问 /admin-api"}
+{"file": ".trellis/tasks/09-04-system-admin-frontend/research/current-frontend-boundary.md", "reason": "对照耦合点清单确认全部解耦"}

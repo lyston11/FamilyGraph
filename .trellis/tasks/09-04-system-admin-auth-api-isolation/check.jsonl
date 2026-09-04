@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "校验 8000/8002 路由与 JWT 域隔离是否符合架构合同"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验认证错误统一文案与防枚举实现"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "校验凭据/密码不落日志"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验交叉拒绝矩阵、路由注册与家庭回归测试覆盖"}
+{"file": ".trellis/tasks/09-04-system-admin-auth-api-isolation/research/current-auth-listener.md", "reason": "对照认证/listener 基线确认改造完整"}
