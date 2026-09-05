@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.commands import members as member_commands
 from app.commands.context import ActorContext, command_transaction
 from app.db import SessionLocal
-from app.errors import INVITE_CODE_FORBIDDEN, SPACE_NOT_FOUND
+from app.errors import SPACE_NOT_FOUND
 from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.space import SpaceMember
@@ -207,15 +207,25 @@ def test_invite_code_consume_race_respects_stranger_upper_bound(db_session) -> N
 # ---- 4. 建码资格与参数校验 ----
 
 
-def test_invite_code_create_requires_identity_confirmed(db_session) -> None:
+def test_invite_code_create_provisional_can_create_for_own_space(db_session) -> None:
+    """决策 13 修订：provisional（身份未确认）同样可建码——为自己所在空间
+    建家庭码、建陌生人码均成功，不再有身份确认门槛。"""
     provisional = _make_member(db_session, "未确档人", profile_status="provisional")
     space = seed_space_with_owner(db_session, provisional.id, name="未确档空间")
-    with pytest.raises(HTTPException) as exc:
-        invite_codes.create_code(
+
+    with command_transaction(db_session):
+        household = invite_codes.create_code(
             session=db_session, creator=provisional, kind="household", space_id=space.id
         )
-    assert exc.value.status_code == 403
-    assert _api_error_code(exc.value) == INVITE_CODE_FORBIDDEN
+    assert household.max_uses == 1
+    assert household.space_id == space.id
+    assert household.used_count == 0
+
+    with command_transaction(db_session):
+        stranger = invite_codes.create_code(
+            session=db_session, creator=provisional, kind="stranger"
+        )
+    assert stranger.space_id is None
 
 
 def test_invite_code_create_household_requires_active_member(db_session) -> None:
@@ -226,6 +236,15 @@ def test_invite_code_create_household_requires_active_member(db_session) -> None
     with pytest.raises(HTTPException) as exc:
         invite_codes.create_code(
             session=db_session, creator=outsider, kind="household", space_id=space.id
+        )
+    assert exc.value.status_code == 404
+    assert _api_error_code(exc.value) == SPACE_NOT_FOUND
+
+    # provisional 非成员同样 404：身份门槛已撤销，空间成员资格门不变（防枚举）
+    provisional_outsider = _make_member(db_session, "未确档外人", profile_status="provisional")
+    with pytest.raises(HTTPException) as exc:
+        invite_codes.create_code(
+            session=db_session, creator=provisional_outsider, kind="household", space_id=space.id
         )
     assert exc.value.status_code == 404
     assert _api_error_code(exc.value) == SPACE_NOT_FOUND
@@ -241,9 +260,12 @@ def test_invite_code_create_household_requires_active_member(db_session) -> None
     assert code.expires_at - code.created_at == timedelta(days=7)
 
 
-def test_invite_code_create_stranger_requires_any_active_membership(db_session) -> None:
+def test_invite_code_create_stranger_allows_any_account(db_session) -> None:
+    """决策 13 修订：陌生人码纯归因（持码者得自己的独立空间，无数据暴露面），
+    零空间账号与 provisional 账号均可创建——不再要求存在于任一 active 空间。"""
     member = _make_member(db_session, "有空间人")
     loner = _make_member(db_session, "无空间人")
+    provisional_loner = _make_member(db_session, "无空间未确档人", profile_status="provisional")
     seed_space_with_owner(db_session, member.id, name="有空间人的空间")
 
     with command_transaction(db_session):
@@ -251,9 +273,15 @@ def test_invite_code_create_stranger_requires_any_active_membership(db_session) 
     assert code.space_id is None
     assert code.max_uses is None  # NULL=不限次
 
-    with pytest.raises(HTTPException) as exc:
-        invite_codes.create_code(session=db_session, creator=loner, kind="stranger")
-    assert exc.value.status_code == 403
+    with command_transaction(db_session):
+        loner_code = invite_codes.create_code(session=db_session, creator=loner, kind="stranger")
+    assert loner_code.space_id is None
+
+    with command_transaction(db_session):
+        provisional_code = invite_codes.create_code(
+            session=db_session, creator=provisional_loner, kind="stranger"
+        )
+    assert provisional_code.space_id is None
 
 
 def test_invite_code_create_rejects_bad_params(db_session) -> None:

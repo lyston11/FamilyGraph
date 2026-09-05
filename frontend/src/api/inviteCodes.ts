@@ -4,8 +4,8 @@ import { apiClient } from './client'
 
 /**
  * 邀请码 client（09-05 Chunk C 合同；字段与 backend/app/schemas/invite_code.py 一一对应）。
- * 错误为统一外壳：INVITE_CODE_INVALID（400 字段级文案）/ INVITE_CODE_FORBIDDEN（403，
- * provisional 或非空间成员）/ INVITE_CODE_STATE_CONFLICT（409 已撤销）/ 409 已是成员。
+ * 错误为统一外壳：INVITE_CODE_INVALID（400 字段级文案）/ SPACE_NOT_FOUND（404，
+ * household/lineage 非所在空间成员）/ INVITE_CODE_STATE_CONFLICT（409 已撤销）/ 409 已是成员。
  */
 
 /** 我的码列表（创建者视角；明文码随行，渲染 …/register?code=XXX） */

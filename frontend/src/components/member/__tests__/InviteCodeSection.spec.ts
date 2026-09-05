@@ -16,7 +16,8 @@ import type { Binding, FamilySpace, InviteCode } from '@/types/api'
 /**
  * 09-05 Chunk E 前端测试：设置页「邀请码」区块——
  * 码列表渲染/撤销/复制链接、创建三类码（含空间选择与陌生人码上限）、
- * 填码加入（后端文案原样呈现）、绑定确认（PIN 复验）与 provisional 权限态。
+ * 填码加入（后端文案原样呈现）、绑定确认（PIN 复验）；
+ * 决策 13 修订：provisional 用户建码表单可见可用，无空间时只能建陌生人码。
  */
 
 vi.mock('@/api/inviteCodes', () => ({
@@ -265,27 +266,49 @@ describe('InviteCodeSection：创建三类码', () => {
     wrapper.unmount()
   })
 
-  it('provisional 用户：建码入口隐藏并提示；不预取空间列表（后端 403 兜底）', async () => {
-    const pinia = createPinia()
-    const auth = useAuthStore(pinia)
-    auth.user = {
-      id: 1,
-      name: '张三',
-      pin_must_change: false,
-      claim_status: 'claimed',
-      profile_status: 'provisional',
-    }
+  it('provisional 用户：建码表单可见可用，空间列表正常预取（决策 13 修订）', async () => {
     mockedFetchCodes.mockResolvedValue([])
     mockedFetchBindings.mockResolvedValue([])
-    const wrapper = mount(MessageProvided, {
-      global: { plugins: [pinia] },
-      attachTo: document.body,
-    })
+    mockedFetchSpaces.mockResolvedValue([makeSpace()])
+    const { wrapper } = await mountSection('provisional')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="invite-create-disabled"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="invite-create-submit"]').exists()).toBe(false)
-    expect(mockedFetchSpaces).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="invite-create-disabled"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="invite-create-submit"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="invite-create-space"]').exists()).toBe(true)
+    expect(mockedFetchSpaces).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('无空间时：家庭/家族码空间选择器为空并提示先建空间，陌生人码仍可直接创建', async () => {
+    mockedFetchSpaces.mockResolvedValue([])
+    const { wrapper } = await mountSection()
+    await flushPromises()
+
+    // 默认 household：空间选择器无选项，展示中性提示（不涉身份确认）
+    expect(wrapper.find('[data-test="invite-create-no-spaces"]').text()).toBe(
+      '创建空间后可生成家庭/家族邀请码',
+    )
+
+    // 切到陌生人码：提示消失，可不选空间直接创建
+    const radios = wrapper.findAll('[data-test="invite-create-kind"] .n-radio')
+    const strangerRadio = radios.find((radio) => radio.text().includes('陌生人码'))
+    expect(strangerRadio).toBeDefined()
+    await strangerRadio!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="invite-create-no-spaces"]').exists()).toBe(false)
+
+    mockedCreateCode.mockResolvedValue(
+      makeCode({ id: 11, code: 'LON2CODE', kind: 'stranger', space_id: null, space_name: null }),
+    )
+    await wrapper.find('[data-test="invite-create-submit"]').trigger('click')
+    await flushPromises()
+    expect(mockedCreateCode).toHaveBeenCalledWith({
+      kind: 'stranger',
+      space_id: null,
+      max_uses: null,
+      ttl_days: 7,
+    })
     wrapper.unmount()
   })
 })

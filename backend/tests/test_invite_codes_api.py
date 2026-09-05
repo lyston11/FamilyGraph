@@ -1,8 +1,9 @@
-"""邀请码管理 API 集成测试（09-05 Chunk C，implement.md C3）。
+"""邀请码管理 API 集成测试（09-05 Chunk C，implement.md C3；决策 13 修订）。
 
-覆盖：provisional 建码 403、active 成员建码/列表、空间管理员撤销他人码、
+覆盖：provisional 建码成功（201，无身份确认门槛）、active 成员建码/列表、
+provisional 非成员空间 404、零空间账号建陌生人码、空间管理员撤销他人码、
 创建者撤销、未授权 404、过期/用尽/撤销后的字段级拒绝文案、设置页填码
-（与注册同语义）与陌生人码登录态兑换 400。
+（与注册同语义，provisional 兑换成功）与陌生人码登录态兑换 400。
 """
 
 from datetime import timedelta
@@ -41,20 +42,65 @@ def _headers(client: TestClient, name: str, pin: str = "123456") -> dict[str, st
 # ---- 建码资格 ----
 
 
-def test_invite_code_provisional_user_cannot_create(db_session, client) -> None:
-    """决策 13：provisional 不可建码（即便已是空间 active 成员）。"""
+def test_invite_code_provisional_user_can_create(db_session, client) -> None:
+    """决策 13 修订：provisional（身份未确认）可建码——为自己空间建家庭码 201，
+    建陌生人码同样 201，不再有身份确认门槛。"""
     provisional = create_user_with_pin(
         db_session, "未确档成员", "123456", profile_status="provisional"
     )
-    seed_space_with_owner(db_session, provisional.id, name="未确档成员空间")
+    space = seed_space_with_owner(db_session, provisional.id, name="未确档成员空间")
 
-    response = client.post(
+    created = client.post(
+        "/api/invite-codes",
+        headers=_headers(client, "未确档成员"),
+        json={"kind": "household", "space_id": space.id},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["kind"] == "household"
+    assert body["space_id"] == space.id
+    assert body["space_name"] == "未确档成员空间"
+    assert body["max_uses"] == 1
+
+    stranger = client.post(
         "/api/invite-codes",
         headers=_headers(client, "未确档成员"),
         json={"kind": "stranger"},
     )
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "INVITE_CODE_FORBIDDEN"
+    assert stranger.status_code == 201, stranger.text
+    assert stranger.json()["kind"] == "stranger"
+    assert stranger.json()["space_id"] is None
+
+
+def test_invite_code_provisional_non_member_space_404(db_session, client) -> None:
+    """provisional 为非成员空间建码仍 404：身份门槛已撤销，空间成员资格门不变。"""
+    create_user_with_pin(db_session, "未确档外人", "123456", profile_status="provisional")
+    owner = create_user_with_pin(db_session, "他空间主人", "123456")
+    space = seed_space_with_owner(db_session, owner.id, name="他人空间")
+
+    response = client.post(
+        "/api/invite-codes",
+        headers=_headers(client, "未确档外人"),
+        json={"kind": "household", "space_id": space.id},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "SPACE_NOT_FOUND"
+
+
+def test_invite_code_zero_space_account_creates_stranger_code(db_session, client) -> None:
+    """决策 13 修订：零空间已登录账号可建陌生人码（纯归因，不再要求
+    存在于任一 active 空间）。"""
+    create_user_with_pin(db_session, "零空间人", "123456")
+
+    response = client.post(
+        "/api/invite-codes",
+        headers=_headers(client, "零空间人"),
+        json={"kind": "stranger"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["kind"] == "stranger"
+    assert body["space_id"] is None
 
 
 def test_invite_code_active_member_creates_and_lists(db_session, client) -> None:
@@ -274,6 +320,37 @@ def test_invite_code_redeem_household_code_activates_membership(db_session, clie
     assert '"scene": "redeem"' in redeemed.detail_json
     accepted = db_session.query(AuditLog).filter(AuditLog.action == "space_invite_accepted").one()
     assert accepted.target_id == joiner.id
+
+
+def test_invite_code_redeem_allows_provisional_user(db_session, client) -> None:
+    """接受码无身份门槛（决策 8 + 决策 13 修订）：provisional 用户在设置页
+    兑换家庭码成功，走同一 pending→accept 状态机当场 active。"""
+    creator = create_user_with_pin(db_session, "未确档兑码邀请人", "123456")
+    provisional = create_user_with_pin(
+        db_session, "未确档兑码人", "123456", profile_status="provisional"
+    )
+    space = seed_space_with_owner(db_session, creator.id, name="未确档兑码空间")
+    code = registration_commands.create_my_invite_code(
+        db_session, _ctx(creator), kind="household", space_id=space.id
+    )
+
+    response = client.post(
+        "/api/me/invite-codes/redeem",
+        headers=_headers(client, "未确档兑码人"),
+        json={"code": code.code},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["space_id"] == space.id
+
+    member = (
+        db_session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space.id, SpaceMember.user_id == provisional.id)
+        .one()
+    )
+    assert member.status == "active"  # 同一状态机，无身份门槛
+    assert member.added_by == creator.id
+    db_session.expire(code, ["used_count"])
+    assert code.used_count == 1
 
 
 def test_invite_code_redeem_stranger_code_rejected(db_session, client) -> None:

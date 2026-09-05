@@ -209,7 +209,7 @@ accounts（登录凭据，与档案 1:0..1）
 - 配置：`REGISTRATION_ENABLED`（默认 True）经 `GET /api/bootstrap/status` 加法字段 `registration_enabled` 投影。
 
 ### 3. Contracts
-- 注册初始态：`Account(status='claimed', pin_must_change=False)`（自选 PIN 无需强制改）+ `User(profile_status='provisional')`。provisional 能力边界：可建自己的空间（§215/AD-3），**不可建码、不可邀请**。
+- 注册初始态：`Account(status='claimed', pin_must_change=False)`（自选 PIN 无需强制改）+ `User(profile_status='provisional')`。能力边界（决策 13 修订 2026-09-05，用户拍板撤销 provisional 建码限制）：**每个已登录账号都可建码与邀请**——household/lineage 码须为该空间 active 成员，stranger 码任何账号可建（纯归因）；接受码无身份门槛；身份确认（identity_confirmed）影响的是推荐资格与空间管理员申请等能力，不影响码域。
 - 码语义：household/lineage 码一次性，加入**只走 SpaceMember FSM**（`space_fsm.invite`(pending) → `transition("accept")`，`added_by`=码创建者，审计 `space_invite_accepted`+`invite_code_redeemed`）；stranger 码多人次可设上限，仅归因（audit `invite_code_redeemed`，scene=register）——持码注册者经 `create_space(commit=False)` 得自己独立 household 空间（创建者即 space_admin，符合 §0.8 唯一管理员不变量），与码创建者**零** SpaceMember/可见性关系。设置页兑换与注册时填码同一 `join_space_with_code` 路径（scene=redeem）。
 - 并流绑定：建档撞名判定作用域 = 建档既有查重门禁口径（非全局用户名匹配，§0.9 同名不同人必须放行）；目标资格 = `Account.claimed` 且 `created_by IS NULL`。确认 = 本人 + PIN 复验（登录侧 auth_guard 同源失败计数）+ `confirm_profile_identity`，人物并回仅迁身份承载行（refs/members/边/附件/事实），不覆写存储值；拒绝/取消即删除撞名人物。
 - 删除联动：删除用户时 `delete_profile_core` 调用 `auto_revoke_for_creator_delete` 自动撤销其全部未撤销码（audit `invite_code_auto_revoked_on_delete`，自删场景 actor_id=None）；码行经 0032 `creator_id SET NULL` 保留使用计数与撤销历史，归因由 audit_log 快照承载。

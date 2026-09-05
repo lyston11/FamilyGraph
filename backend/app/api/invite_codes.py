@@ -73,7 +73,10 @@ def create_code(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> InviteCodeOut:
-    """创建码：household/lineage 须为该空间 active 成员；stranger 任意 active 成员。"""
+    """创建码：household/lineage 须为该空间 active 成员；stranger 任意已登录账号。
+
+    无身份确认门槛（PRD 决策 13 修订）；资格判定在码原语内完成。
+    """
     code = registration_commands.create_my_invite_code(
         session,
         _ctx(request, identity),

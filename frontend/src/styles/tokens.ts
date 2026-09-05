@@ -55,6 +55,14 @@ export const fgVarNames = [
   'glass-surface-raised',
   'glass-border',
   'glass-glow',
+  // 家族树专用星空画布：深色底/节点对比/星点与光晕
+  'canvas-surface',
+  'canvas-surface-raised',
+  'canvas-ink',
+  'canvas-muted',
+  'canvas-line',
+  'canvas-star',
+  'canvas-glow',
 ] as const
 
 export type FgVarName = (typeof fgVarNames)[number]
@@ -135,10 +143,10 @@ export interface ThemeTokens {
 }
 
 const paperPalette: PaperPalette = {
-  paperBase: '#f7f4ed',
-  paperRaised: '#fdfbf6',
-  paperSunken: '#eee8da',
-  paperDot: '#d8d1bc',
+  paperBase: '#f4f5f3',
+  paperRaised: '#fcfdfb',
+  paperSunken: '#e9eee9',
+  paperDot: '#ccd6cf',
   ink: '#2b2b26',
   inkSoft: '#5c594c',
   inkFaint: '#8f8b7b',
@@ -150,8 +158,8 @@ const paperPalette: PaperPalette = {
   // 调深自 #a8752c：小字文本对宣纸底 / 8% 软底须 ≥4.5:1（WCAG AA，2026-08-29 实测 5.39 / 4.86）
   ochre: '#8c5f1d',
   seal: '#6f6a59',
-  lineHairline: '#ddd4bf',
-  lineStrong: '#c8bda0',
+  lineHairline: '#dce2dc',
+  lineStrong: '#bbc7bd',
 }
 
 const modernPalette: ModernPalette = {
@@ -212,10 +220,17 @@ export const paperTokens: ThemeTokens = {
     'radius-control': '3px',
     'shadow-card': '0 1px 2px rgba(43, 43, 38, 0.06)',
     'shadow-raised': '0 2px 10px rgba(43, 43, 38, 0.12)',
-    'glass-surface': 'rgba(253, 251, 246, 0.72)',
-    'glass-surface-raised': 'rgba(253, 251, 246, 0.88)',
-    'glass-border': 'rgba(200, 189, 160, 0.35)',
+    'glass-surface': 'rgba(252, 253, 251, 0.78)',
+    'glass-surface-raised': 'rgba(252, 253, 251, 0.94)',
+    'glass-border': 'rgba(207, 220, 210, 0.55)',
     'glass-glow': 'rgba(192, 57, 43, 0.12)',
+    'canvas-surface': '#111819',
+    'canvas-surface-raised': '#202c2b',
+    'canvas-ink': '#f3f7ff',
+    'canvas-muted': '#a8bad4',
+    'canvas-line': 'rgba(168, 186, 216, 0.32)',
+    'canvas-star': 'rgba(237, 245, 255, 0.78)',
+    'canvas-glow': 'rgba(114, 164, 224, 0.28)',
   },
 }
 
@@ -249,14 +264,21 @@ export const modernTokens: ThemeTokens = {
     'dot-gap': '24px',
     // 无衬线标题：引用 tokens.css 的静态正文栈，避免第二份字体字面量
     'font-display': 'var(--fg-font-body)',
-    'radius-card': '12px',
+    'radius-card': '8px',
     'radius-control': '8px',
     'shadow-card': '0 1px 3px rgba(31, 35, 41, 0.08), 0 1px 2px rgba(31, 35, 41, 0.04)',
     'shadow-raised': '0 8px 24px rgba(31, 35, 41, 0.12)',
     'glass-surface': 'rgba(255, 255, 255, 0.65)',
-    'glass-surface-raised': 'rgba(255, 255, 255, 0.82)',
+    'glass-surface-raised': 'rgba(255, 255, 255, 0.94)',
     'glass-border': 'rgba(207, 212, 220, 0.45)',
     'glass-glow': 'rgba(47, 111, 179, 0.15)',
+    'canvas-surface': '#11171b',
+    'canvas-surface-raised': '#202c32',
+    'canvas-ink': '#f4f8ff',
+    'canvas-muted': '#a9bfd7',
+    'canvas-line': 'rgba(166, 198, 227, 0.34)',
+    'canvas-star': 'rgba(237, 248, 255, 0.82)',
+    'canvas-glow': 'rgba(68, 183, 190, 0.3)',
   },
 }
 

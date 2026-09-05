@@ -22,7 +22,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import (
-    INVITE_CODE_FORBIDDEN,
     INVITE_CODE_INVALID,
     INVITE_CODE_STATE_CONFLICT,
     SPACE_NOT_FOUND,
@@ -32,7 +31,7 @@ from app.errors import (
 from app.models.invite_code import INVITE_CODE_KINDS, InviteCode
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
-from app.services import audit, identity_fsm, space_fsm
+from app.services import audit, space_fsm
 from app.services.domain_events import emit
 from app.utils.timeutil import utcnow
 
@@ -200,17 +199,17 @@ def create_code(
     ttl_days: int | None = None,
     ip: str | None = None,
 ) -> InviteCode:
-    """建码原语 + 资格判定（PRD 决策 11/13）：仅 identity_confirmed 的 active 成员。
+    """建码原语 + 资格判定（PRD 决策 11/13 修订）：每个已登录账号都可建码。
 
-    - household/lineage：须为该空间 active 成员，max_uses 恒为 1；
-    - stranger：任意 active 成员（至少存在于一个空间），可设使用上限（NULL=不限）；
-    - provisional（未完成身份确认）不可建码。
+    - household/lineage：须为该空间 active 成员（无成员资格 404 防枚举），
+      max_uses 恒为 1；
+    - stranger：任意已登录账号可建（纯归因码，持码者得自己的独立空间，
+      无数据暴露面），可设使用上限（NULL=不限）；
+    - 不设身份确认门槛（决策 13 修订：provisional 同样可建码，接受侧本就无门槛）。
     事务由调用方拥有；码唯一性 = 命名唯一约束兜底 + 写锁前置查重。
     """
     if kind not in INVITE_CODE_KINDS:
         raise_api_error(422, VALIDATION_ERROR, f"未知邀请码类型 {kind}")
-    if creator.profile_status != identity_fsm.PROFILE_IDENTITY_CONFIRMED:
-        raise_api_error(403, INVITE_CODE_FORBIDDEN, "完成身份确认后才能创建邀请码")
 
     if kind in ("household", "lineage"):
         if space_id is None:
@@ -225,13 +224,6 @@ def create_code(
             raise_api_error(422, VALIDATION_ERROR, "陌生人码不绑定空间")
         if max_uses is not None and max_uses < 1:
             raise_api_error(422, VALIDATION_ERROR, "使用上限必须为正整数")
-        has_active_membership = session.scalar(
-            select(SpaceMember.id)
-            .where(SpaceMember.user_id == creator.id, SpaceMember.status == "active")
-            .limit(1)
-        )
-        if has_active_membership is None:
-            raise_api_error(403, INVITE_CODE_FORBIDDEN, "仅空间成员可创建邀请码")
 
     now = utcnow()
     effective_max_uses = 1 if kind in ("household", "lineage") else max_uses

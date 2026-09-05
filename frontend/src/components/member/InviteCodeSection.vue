@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * 设置页「邀请码」区块（09-05 决策 11/13/14）：
+ * 设置页「邀请码」区块（09-05 决策 11/13/14；决策 13 修订：每个用户都可建码）：
  * 1) 我的码列表（kind 徽标 / 使用次数 / 有效期 / 状态）+ 撤销 + 复制分享链接；
  * 2) 创建三类码（家庭/家族码须选择所在空间；陌生人码可设次数上限）；
  * 3) 填码加入（household/lineage；后端 409 已是成员 / 400 陌生人码等文案原样呈现）；
  * 4) 我的待确认绑定（GET /bindings → 确认需输 PIN → confirm/reject，决策 16）。
  *
- * 权限态：建码资格由服务端裁定（provisional 403）；前端对 provisional 用户
- * 隐藏建码表单并提示（auth.user.profile_status 判定，与守卫同源）。
+ * 权限态：建码资格由服务端裁定（household/lineage 须为该空间 active 成员），
+ * 所有登录用户可见建码表单；尚无空间时空间选择器为空，只能先建陌生人码，
+ * 给出中性提示（不涉及身份确认）。
  * 所有错误文案原样呈现后端 message（error-handling.md），不做二次改写。
  */
 import { computed, onMounted, ref, watch } from 'vue'
@@ -33,16 +34,11 @@ import {
   revokeInviteCode,
 } from '@/api/inviteCodes'
 import { confirmBinding, fetchMyBindings, rejectBinding } from '@/api/bindings'
-import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
 import type { Binding, FamilySpace, InviteCode, InviteCodeKindFull } from '@/types/api'
 
-const auth = useAuthStore()
 const spacesStore = useSpacesStore()
 const message = useMessage()
-
-// ---- 建码资格：与路由守卫同源（provisional → identity_confirmed） ----
-const canCreateCodes = computed(() => auth.user?.profile_status === 'identity_confirmed')
 
 // ---- 我的码列表 ----
 const codes = ref<InviteCode[] | null>(null)
@@ -247,16 +243,14 @@ onMounted(() => {
   void loadBindings().catch(() => {
     bindings.value = []
   })
-  // 空间选择器数据：仅建码表单需要；provisional 用户跳过
-  if (canCreateCodes.value) {
-    void fetchSpaces()
-      .then((list) => {
-        mySpaces.value = list
-      })
-      .catch(() => {
-        mySpaces.value = []
-      })
-  }
+  // 空间选择器数据：建码表单需要（所有登录用户都可见建码 UI）
+  void fetchSpaces()
+    .then((list) => {
+      mySpaces.value = list
+    })
+    .catch(() => {
+      mySpaces.value = []
+    })
 })
 </script>
 
@@ -316,61 +310,64 @@ onMounted(() => {
       </table>
     </div>
 
-    <!-- 建码入口：provisional 隐藏并提示（后端同样 403 兜底） -->
+    <!-- 建码入口：所有登录用户可用（决策 13 修订） -->
     <div class="block" data-test="invite-create-block">
       <h3 class="block-title">创建邀请码</h3>
-      <p v-if="!canCreateCodes" class="empty" data-test="invite-create-disabled">
-        完成身份确认后才能创建邀请码
+      <NForm inline :show-feedback="false" @submit.prevent="submitCreate">
+        <NFormItem label="类型">
+          <NRadioGroup v-model:value="createForm.kind" data-test="invite-create-kind">
+            <NRadio value="household">家庭码</NRadio>
+            <NRadio value="lineage">家族码</NRadio>
+            <NRadio value="stranger">陌生人码</NRadio>
+          </NRadioGroup>
+        </NFormItem>
+        <NFormItem v-if="createForm.kind !== 'stranger'" label="所在空间">
+          <NSelect
+            v-model:value="createForm.spaceId"
+            :options="spaceOptions"
+            placeholder="选择空间"
+            class="space-select"
+            data-test="invite-create-space"
+          />
+        </NFormItem>
+        <NFormItem v-if="createForm.kind === 'stranger'" label="使用上限">
+          <NInputNumber
+            v-model:value="createForm.maxUses"
+            :min="1"
+            placeholder="不限"
+            class="uses-input"
+            data-test="invite-create-max-uses"
+          />
+        </NFormItem>
+        <NFormItem label="有效期">
+          <NSelect
+            v-model:value="createForm.ttlDays"
+            :options="ttlOptions"
+            class="ttl-select"
+            data-test="invite-create-ttl"
+          />
+        </NFormItem>
+        <NFormItem>
+          <NButton
+            type="primary"
+            :loading="creating"
+            data-test="invite-create-submit"
+            @click="submitCreate"
+          >
+            创建
+          </NButton>
+        </NFormItem>
+      </NForm>
+      <!-- 结构性约束的自然呈现：无空间时只能建陌生人码（中性提示，不涉身份确认） -->
+      <p
+        v-if="createForm.kind !== 'stranger' && mySpaces.length === 0"
+        class="meta-hint"
+        data-test="invite-create-no-spaces"
+      >
+        创建空间后可生成家庭/家族邀请码
       </p>
-      <template v-else>
-        <NForm inline :show-feedback="false" @submit.prevent="submitCreate">
-          <NFormItem label="类型">
-            <NRadioGroup v-model:value="createForm.kind" data-test="invite-create-kind">
-              <NRadio value="household">家庭码</NRadio>
-              <NRadio value="lineage">家族码</NRadio>
-              <NRadio value="stranger">陌生人码</NRadio>
-            </NRadioGroup>
-          </NFormItem>
-          <NFormItem v-if="createForm.kind !== 'stranger'" label="所在空间">
-            <NSelect
-              v-model:value="createForm.spaceId"
-              :options="spaceOptions"
-              placeholder="选择空间"
-              class="space-select"
-              data-test="invite-create-space"
-            />
-          </NFormItem>
-          <NFormItem v-if="createForm.kind === 'stranger'" label="使用上限">
-            <NInputNumber
-              v-model:value="createForm.maxUses"
-              :min="1"
-              placeholder="不限"
-              class="uses-input"
-              data-test="invite-create-max-uses"
-            />
-          </NFormItem>
-          <NFormItem label="有效期">
-            <NSelect
-              v-model:value="createForm.ttlDays"
-              :options="ttlOptions"
-              class="ttl-select"
-              data-test="invite-create-ttl"
-            />
-          </NFormItem>
-          <NFormItem>
-            <NButton
-              type="primary"
-              :loading="creating"
-              data-test="invite-create-submit"
-              @click="submitCreate"
-            >
-              创建
-            </NButton>
-          </NFormItem>
-        </NForm>
-        <p v-if="createError" class="error" data-test="invite-create-error">{{ createError }}</p>
-        <p class="meta-hint">家庭/家族码一次性有效；陌生人码供新家庭注册时归因使用。</p>
-      </template>
+      <p v-if="createError" class="error" data-test="invite-create-error">{{ createError }}</p>
+      <p class="meta-hint">家庭/家族码一次性有效；陌生人码供新家庭注册时归因使用。</p>
     </div>
 
     <!-- 填码加入（家庭/家族码） -->
