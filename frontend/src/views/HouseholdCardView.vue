@@ -116,21 +116,21 @@ const selfStatus = computed(() =>
 
 <template>
   <main class="household-card-view" data-test="household-card-view">
-    <!-- 左上角固定退出按钮：返回当前上下文关联的家族树 -->
+    <!-- 左上角固定退出按钮：返回当前上下文关联的家族树（水晶圆形 FAB，PRD §2.3） -->
     <div class="exit-row">
-      <NButton
-        quaternary
-        size="small"
-        class="exit-button"
+      <button
+        type="button"
+        class="fg-fab-btn fg-fab-btn--accent exit-button"
         data-test="exit-to-family-tree"
+        aria-label="退出到家族树"
+        title="退出到家族树"
         @click="exitToFamilyTree"
       >
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M14 5H8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6" />
           <path d="m13 8 4 4-4 4M17 12H9" />
         </svg>
-        退出到家族树
-      </NButton>
+      </button>
     </div>
 
     <NAlert
@@ -339,7 +339,7 @@ const selfStatus = computed(() =>
           </section>
         </div>
 
-        <!-- 家庭状态区：成员数、待办入口、进入家族树 -->
+        <!-- 家庭状态区：成员数与数据版本（操作收敛至底部圆形 FAB Dock，PRD §2.2） -->
         <section class="family-status" data-test="family-status">
           <div class="status-item">
             <span class="status-label">家庭成员</span>
@@ -349,15 +349,52 @@ const selfStatus = computed(() =>
             <span class="status-label">数据版本</span>
             <strong data-test="household-version">v{{ card.view_version }}</strong>
           </div>
-          <div class="status-actions">
-            <NButton size="small" secondary data-test="go-notifications" @click="goToNotifications">
-              待办与通知
-            </NButton>
-            <NButton size="small" secondary data-test="go-family-tree" @click="exitToFamilyTree">
-              进入家族树
-            </NButton>
-          </div>
         </section>
+
+        <!-- 底部居中悬浮圆形操作 Dock：主要功能操作收敛入口（PRD §2.2） -->
+        <nav class="fab-dock" data-test="household-fab-dock" aria-label="家庭卡操作">
+          <button
+            type="button"
+            class="fg-fab-btn"
+            data-test="go-edit-profile"
+            aria-label="编辑资料"
+            title="编辑资料"
+            @click="goToSettings"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="fg-fab-btn"
+            data-test="go-notifications"
+            aria-label="待办与通知"
+            title="待办与通知"
+            @click="goToNotifications"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="fg-fab-btn fg-fab-btn--accent"
+            data-test="go-family-tree"
+            aria-label="进入家族树"
+            title="进入家族树"
+            @click="exitToFamilyTree"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="5" r="2.2" />
+              <circle cx="5" cy="19" r="2.2" />
+              <circle cx="19" cy="19" r="2.2" />
+              <path d="M12 7.2v4.3M6.7 17.2 10.4 12M17.3 17.2 13.6 12" />
+            </svg>
+          </button>
+        </nav>
       </template>
     </template>
 
@@ -378,7 +415,8 @@ const selfStatus = computed(() =>
   gap: 14px;
   max-width: 1080px;
   margin: 0 auto;
-  padding: 20px 16px 40px;
+  /* 底部为悬浮 FAB Dock 预留空间，避免遮挡家庭状态区 */
+  padding: 20px 16px 96px;
   box-sizing: border-box;
 }
 
@@ -386,9 +424,37 @@ const selfStatus = computed(() =>
   display: flex;
 }
 
+/* 退出至家族树：醒目水晶圆形返回按钮（PRD §2.3）；min-height 契约 = 44px 点按目标 */
 .exit-button {
-  /* 主要导航动作：44px 点按目标（Phase 7 门禁） */
   min-height: 44px;
+  box-shadow:
+    0 4px 16px var(--fg-glass-glow),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 35%, transparent),
+    inset 0 1px 0 0 color-mix(in srgb, var(--fg-surface-raised) 35%, transparent);
+}
+
+/* 底部居中悬浮圆形操作 Dock：胶囊毛玻璃 + 圆形按钮群（PRD §2.2） */
+.fab-dock {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: 999px;
+  box-shadow:
+    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 12%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
+    inset 0 1px 0 0 color-mix(in srgb, var(--fg-surface-raised) 25%, transparent);
+  /* 自绘悬浮件层级：高于壳导航（100），低于 naive 浮层（≥2000）与悬浮入口（1500） */
+  z-index: 900;
+  max-width: calc(100vw - 32px);
 }
 
 .context-alert {
@@ -405,10 +471,25 @@ const selfStatus = computed(() =>
 .card-title {
   margin: 0;
   font-family: var(--fg-font-display);
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--fg-ink);
+  background: linear-gradient(135deg, var(--fg-accent) 0%, color-mix(in srgb, var(--fg-accent) 70%, var(--fg-ink) 30%) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: titleSlideIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes titleSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .context-panel {
@@ -431,11 +512,38 @@ const selfStatus = computed(() =>
 .status-panel,
 .self-card,
 .members-card {
-  padding: 16px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-card);
+  padding: 24px;
+  background: var(--fg-glass-surface);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  box-shadow:
+    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 8%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 10%, transparent),
+    inset 0 1px 0 0 color-mix(in srgb, var(--fg-surface-raised) 25%, transparent);
+  animation: cardSlideIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes cardSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.self-card {
+  animation-delay: 0.1s;
+  animation-fill-mode: backwards;
+}
+
+.members-card {
+  animation-delay: 0.2s;
+  animation-fill-mode: backwards;
 }
 
 .status-title {
@@ -485,9 +593,10 @@ const selfStatus = computed(() =>
 
 .self-name {
   font-family: var(--fg-font-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--fg-ink);
+  letter-spacing: 0.01em;
 }
 
 .avatar {
@@ -501,8 +610,22 @@ const selfStatus = computed(() =>
   font-size: 24px;
   font-weight: 700;
   color: var(--fg-accent);
-  background-color: var(--fg-accent-soft);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 12%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 8%, transparent) 100%
+  );
+  border: 2px solid color-mix(in srgb, var(--fg-accent) 20%, transparent);
   border-radius: var(--fg-radius-control);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--fg-accent) 15%, transparent);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.member-card:hover .avatar,
+.member-row:hover .avatar {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--fg-accent) 25%, transparent);
+  border-color: color-mix(in srgb, var(--fg-accent) 35%, transparent);
 }
 
 .avatar--small {
@@ -540,9 +663,11 @@ const selfStatus = computed(() =>
 
 .section-title {
   margin: 0;
-  font-size: 15px;
+  font-family: var(--fg-font-display);
+  font-size: 16px;
   font-weight: 700;
   color: var(--fg-ink);
+  letter-spacing: 0.02em;
 }
 
 .members-empty {
@@ -566,42 +691,141 @@ const selfStatus = computed(() =>
   flex-wrap: wrap;
 }
 
-/* 成员网格：小卡片 */
+/* 成员网格：小卡片 + 中心聚焦效果 */
 .member-grid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 10px;
   max-height: 460px;
   overflow-y: auto;
-  padding-right: 2px;
+  padding: 20px;
+  padding-right: 22px;
+  border-radius: var(--fg-radius-card);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-surface-sunken) 20%, transparent) 0%,
+    transparent 100%
+  );
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-accent) 25%, transparent) transparent;
+}
+
+/* 中心聚焦遮罩：径向渐变，中心清晰，边缘模糊淡出 */
+.member-grid::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 65% 60% at 50% 50%,
+    transparent 0%,
+    transparent 30%,
+    color-mix(in srgb, var(--fg-surface-raised) 20%, transparent) 55%,
+    color-mix(in srgb, var(--fg-surface-raised) 40%, transparent) 75%,
+    color-mix(in srgb, var(--fg-surface-raised) 60%, transparent) 90%,
+    color-mix(in srgb, var(--fg-surface-raised) 75%, transparent) 100%
+  );
+  z-index: 1;
+  border-radius: var(--fg-radius-card);
+  transition: opacity 0.4s ease;
+}
+
+/* 悬停或聚焦网格时减弱遮罩，让用户看清周围卡片 */
+.member-grid:hover::before,
+.member-grid:focus-within::before {
+  opacity: 0.4;
+}
+
+/* 滚动时也减弱遮罩 */
+.member-grid:active::before {
+  opacity: 0.5;
 }
 
 .member-card {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 12px;
+  gap: 8px;
+  padding: 14px;
   font: inherit;
   text-align: left;
-  background-color: var(--fg-surface-raised);
+  background: linear-gradient(
+    135deg,
+    var(--fg-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 97%, var(--fg-accent) 3%) 100%
+  );
   border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-card);
+  border-radius: calc(var(--fg-radius-card) * 1.2);
   box-shadow: var(--fg-shadow-card);
   cursor: pointer;
   min-height: 44px;
   transition:
-    box-shadow 0.2s,
-    border-color 0.2s;
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-color 0.3s ease,
+    background 0.3s ease;
+  animation: cardFadeIn 0.4s ease backwards;
 }
 
-.member-card:hover {
+@keyframes cardFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* 为每张卡片添加延迟动画，营造依次出现的效果 */
+.member-card:nth-child(1) { animation-delay: 0.05s; }
+.member-card:nth-child(2) { animation-delay: 0.1s; }
+.member-card:nth-child(3) { animation-delay: 0.15s; }
+.member-card:nth-child(4) { animation-delay: 0.2s; }
+.member-card:nth-child(5) { animation-delay: 0.25s; }
+.member-card:nth-child(6) { animation-delay: 0.3s; }
+.member-card:nth-child(7) { animation-delay: 0.35s; }
+.member-card:nth-child(8) { animation-delay: 0.4s; }
+
+.member-card:hover,
+.member-card:focus-visible {
+  transform: scale(1.05) translateY(-4px);
+  z-index: 10;
   border-color: var(--fg-accent);
-  box-shadow: var(--fg-shadow-raised);
+  background: linear-gradient(
+    135deg,
+    var(--fg-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 94%, var(--fg-accent) 6%) 100%
+  );
+  box-shadow:
+    0 0 0 1px var(--fg-accent),
+    0 8px 24px color-mix(in srgb, var(--fg-accent) 20%, transparent),
+    var(--fg-shadow-raised);
 }
 
 .member-card.is-self {
   border-color: var(--fg-accent);
+  background: linear-gradient(
+    135deg,
+    var(--fg-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 92%, var(--fg-accent) 8%) 100%
+  );
+  box-shadow:
+    0 0 0 2px var(--fg-accent),
+    0 0 16px color-mix(in srgb, var(--fg-accent) 25%, transparent),
+    var(--fg-shadow-card);
+}
+
+.member-card.is-self:hover {
+  transform: scale(1.08) translateY(-6px);
+  box-shadow:
+    0 0 0 2px var(--fg-accent),
+    0 0 24px color-mix(in srgb, var(--fg-accent) 35%, transparent),
+    var(--fg-shadow-raised);
 }
 
 /* 成员列表 */
@@ -611,43 +835,105 @@ const selfStatus = computed(() =>
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   max-height: 460px;
   overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-accent) 25%, transparent) transparent;
 }
 
 .member-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background-color: var(--fg-surface-raised);
+  gap: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(
+    135deg,
+    var(--fg-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 98%, var(--fg-accent) 2%) 100%
+  );
   border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-card);
+  border-radius: calc(var(--fg-radius-card) * 1.2);
   box-shadow: var(--fg-shadow-card);
   cursor: pointer;
   min-height: 44px;
   box-sizing: border-box;
+  transition:
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.3s ease,
+    border-color 0.3s ease,
+    background 0.3s ease;
+  animation: rowSlideIn 0.4s ease backwards;
 }
 
-.member-row:hover {
+@keyframes rowSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.member-row:nth-child(1) { animation-delay: 0.05s; }
+.member-row:nth-child(2) { animation-delay: 0.1s; }
+.member-row:nth-child(3) { animation-delay: 0.15s; }
+.member-row:nth-child(4) { animation-delay: 0.2s; }
+.member-row:nth-child(5) { animation-delay: 0.25s; }
+.member-row:nth-child(6) { animation-delay: 0.3s; }
+.member-row:nth-child(7) { animation-delay: 0.35s; }
+.member-row:nth-child(8) { animation-delay: 0.4s; }
+
+.member-row:hover,
+.member-row:focus-visible {
+  transform: translateX(4px);
   border-color: var(--fg-accent);
+  background: linear-gradient(
+    135deg,
+    var(--fg-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-surface-raised) 95%, var(--fg-accent) 5%) 100%
+  );
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 50%, transparent),
+    var(--fg-shadow-raised);
 }
 
 .member-name {
   font-family: var(--fg-font-display);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--fg-ink);
+  letter-spacing: 0.01em;
 }
 
 .member-label {
-  padding: 1px 8px;
+  padding: 2px 10px;
   font-size: 12px;
+  font-weight: 600;
   color: var(--fg-accent);
-  background-color: var(--fg-accent-soft);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 10%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 6%, transparent) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--fg-accent) 20%, transparent);
   border-radius: 999px;
   white-space: nowrap;
+  transition: all 0.3s ease;
+}
+
+.member-card:hover .member-label,
+.member-row:hover .member-label {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 15%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 10%, transparent) 100%
+  );
+  border-color: color-mix(in srgb, var(--fg-accent) 30%, transparent);
+  transform: translateY(-1px);
 }
 
 .member-meta {
@@ -663,37 +949,61 @@ const selfStatus = computed(() =>
 .family-status {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   flex-wrap: wrap;
-  padding: 14px 16px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-card);
+  padding: 18px 24px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  box-shadow:
+    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 8%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 12%, transparent),
+    inset 0 1px 0 0 color-mix(in srgb, var(--fg-surface-raised) 25%, transparent);
+  animation: cardSlideIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation-delay: 0.3s;
+  animation-fill-mode: backwards;
 }
 
 .status-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 72px;
+  gap: 4px;
+  min-width: 80px;
+  padding: 8px 12px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 6%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 3%, transparent) 100%
+  );
+  border-radius: var(--fg-radius-control);
+  transition: all 0.3s ease;
+}
+
+.status-item:hover {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 10%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 5%, transparent) 100%
+  );
+  transform: translateY(-2px);
 }
 
 .status-label {
   font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   color: var(--fg-ink-secondary);
+  opacity: 0.8;
 }
 
 .status-item strong {
-  font-size: 18px;
-  color: var(--fg-ink);
-}
-
-.status-actions {
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-  flex-wrap: wrap;
+  font-size: 20px;
+  font-weight: 700;
+  font-family: var(--fg-font-display);
+  color: var(--fg-accent);
 }
 
 /* 移动端：上下堆叠（本人资料在上、成员区在下，DOM 顺序即堆叠顺序）；
@@ -701,10 +1011,6 @@ const selfStatus = computed(() =>
 @media (max-width: 768px) {
   .card-columns {
     grid-template-columns: 1fr;
-  }
-
-  .status-actions {
-    margin-left: 0;
   }
 
   /* 紧凑按钮/视图切换在移动端补足 44px 点按目标（抽查门禁） */

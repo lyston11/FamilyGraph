@@ -184,6 +184,15 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
 
 .section {
   margin-bottom: 28px;
+  padding: 24px;
+  background: var(--fg-glass-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  box-shadow:
+    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
 }
 
 .section-title {

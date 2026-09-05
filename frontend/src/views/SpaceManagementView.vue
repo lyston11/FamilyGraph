@@ -298,14 +298,39 @@ h1 { margin: 0 0 8px; color: var(--fg-ink); font-family: var(--fg-font-display);
 
 .management-content { min-width: 0; flex: 1; }
 .section-card {
-  padding: 20px; background: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line); border-radius: var(--fg-radius-card); box-shadow: var(--fg-shadow-card);
+  padding: 24px;
+  background: var(--fg-glass-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  box-shadow:
+    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
 }
 .section-title { margin: 0 0 6px; font-size: 17px; color: var(--fg-ink); }
 .section-hint { margin: 0 0 12px; color: var(--fg-ink-secondary); font-size: 12px; line-height: 1.6; }
 
 .space-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.space-overview > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 14px; background: var(--fg-surface-raised); border: 1px solid var(--fg-line); border-radius: var(--fg-radius-card); }
+.space-overview > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.2);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.space-overview > div:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--fg-accent) 40%, var(--fg-glass-border));
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--fg-ink) 8%, transparent), 0 0 12px var(--fg-glass-glow);
+}
 .label { color: var(--fg-ink-secondary); font-size: 12px; }
 .space-overview strong { color: var(--fg-ink); font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inline-action { margin-left: 8px; }

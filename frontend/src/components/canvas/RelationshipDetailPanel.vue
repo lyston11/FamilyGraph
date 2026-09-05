@@ -178,10 +178,23 @@ const computedAtText = computed(() => props.computedAt ?? '暂无更新时间')
   overflow: auto;
   box-sizing: border-box;
   padding: 14px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-raised);
+  /* 透明微光抽屉质感（PRD §2.5）：毛玻璃透出星空底 + 发丝高光描边 */
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.2);
+  box-shadow:
+    var(--fg-shadow-raised),
+    0 0 24px var(--fg-glass-glow),
+    inset 0 1px 0 0 color-mix(in srgb, var(--fg-surface-raised) 30%, transparent);
+}
+
+/* 降级方案：不支持 backdrop-filter 时使用不透明背景 */
+@supports not (backdrop-filter: blur(12px)) {
+  .relation-panel {
+    background: var(--fg-surface-raised);
+  }
 }
 
 .panel-head {

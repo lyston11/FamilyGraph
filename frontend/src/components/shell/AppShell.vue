@@ -555,9 +555,13 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
   min-height: 56px;
   padding: 8px 20px;
   box-sizing: border-box;
-  background-color: var(--fg-surface-raised);
-  border-bottom: 1px solid var(--fg-line);
-  box-shadow: var(--fg-shadow-card);
+  background-color: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--fg-glass-border);
+  box-shadow:
+    0 4px 20px color-mix(in srgb, var(--fg-ink) 4%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--fg-surface-raised) 15%, transparent);
 }
 
 .shell-brand--topbar {
@@ -674,14 +678,24 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
   position: relative;
   min-width: 0;
   flex: 1;
+  background-color: var(--fg-surface);
   background-image:
-    radial-gradient(color-mix(in srgb, var(--fg-ink) 16%, transparent) 1px, transparent 1.4px),
-    radial-gradient(color-mix(in srgb, var(--fg-ink) 7%, transparent) 1px, transparent 1.4px);
+    radial-gradient(ellipse 80% 50% at 50% -10%, color-mix(in srgb, var(--fg-accent) 10%, transparent), transparent 70%),
+    radial-gradient(ellipse 60% 40% at 85% 95%, color-mix(in srgb, var(--fg-info) 8%, transparent), transparent 60%),
+    radial-gradient(color-mix(in srgb, var(--fg-ink) 22%, transparent) 1.5px, transparent 1.8px),
+    radial-gradient(color-mix(in srgb, var(--fg-accent) 18%, transparent) 1.2px, transparent 1.5px),
+    radial-gradient(color-mix(in srgb, var(--fg-ink) 8%, transparent) 1px, transparent 1.4px);
   background-size:
-    168px 168px,
+    100% 100%,
+    100% 100%,
+    240px 240px,
+    180px 180px,
     28px 28px;
   background-position:
-    24px 16px,
+    0 0,
+    0 0,
+    48px 36px,
+    110px 90px,
     0 0;
 }
 

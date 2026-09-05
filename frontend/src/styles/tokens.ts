@@ -50,6 +50,11 @@ export const fgVarNames = [
   // 阴影：卡片静置 / 浮起
   'shadow-card',
   'shadow-raised',
+  // 玻璃态与光晕（Cosmic Glass）
+  'glass-surface',
+  'glass-surface-raised',
+  'glass-border',
+  'glass-glow',
 ] as const
 
 export type FgVarName = (typeof fgVarNames)[number]
@@ -207,6 +212,10 @@ export const paperTokens: ThemeTokens = {
     'radius-control': '3px',
     'shadow-card': '0 1px 2px rgba(43, 43, 38, 0.06)',
     'shadow-raised': '0 2px 10px rgba(43, 43, 38, 0.12)',
+    'glass-surface': 'rgba(253, 251, 246, 0.72)',
+    'glass-surface-raised': 'rgba(253, 251, 246, 0.88)',
+    'glass-border': 'rgba(200, 189, 160, 0.35)',
+    'glass-glow': 'rgba(192, 57, 43, 0.12)',
   },
 }
 
@@ -244,6 +253,10 @@ export const modernTokens: ThemeTokens = {
     'radius-control': '8px',
     'shadow-card': '0 1px 3px rgba(31, 35, 41, 0.08), 0 1px 2px rgba(31, 35, 41, 0.04)',
     'shadow-raised': '0 8px 24px rgba(31, 35, 41, 0.12)',
+    'glass-surface': 'rgba(255, 255, 255, 0.65)',
+    'glass-surface-raised': 'rgba(255, 255, 255, 0.82)',
+    'glass-border': 'rgba(207, 212, 220, 0.45)',
+    'glass-glow': 'rgba(47, 111, 179, 0.15)',
   },
 }
 

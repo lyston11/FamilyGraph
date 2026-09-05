@@ -207,12 +207,21 @@ async function reload(): Promise<void> {
   await loadView(true)
 }
 
+/** 返回家庭卡（PRD §2.5 底部操作）：切换到最近/第一个可用家庭空间；无可用空间时不动作 */
+async function backToHousehold(): Promise<void> {
+  const target = householdSpaces.value[0]
+  if (!target) return
+  await spaceContext.switchSpace(target.id)
+}
+
 watch([positionedNodes, viewMode], () => {
   if (!hasRenderableNodes.value) return
   setTimeout(fitToMembers, 30)
 })
 
 const lineageSpaces = computed(() => spaces.spaces.filter((space) => space.kind === 'lineage'))
+
+const householdSpaces = computed(() => spaces.spaces.filter((space) => space.kind === 'household'))
 
 /** 快照内 user_id → 名字（面板路径显示用）；不可解析返回 null（安全占位） */
 function resolveName(userId: number): string | null {
@@ -301,7 +310,8 @@ function resolveName(userId: number): string | null {
           位成员。
         </NAlert>
 
-        <!-- 工具栏：树状（默认）/自由画布、适应画布、回到自己、重新加载、图例 -->
+        <!-- 工具栏：树状（默认）/自由画布、适应画布、回到自己、重新加载、图例、返回家庭卡
+             （操作收敛为居中悬浮胶囊 Dock 内的圆形小按钮，PRD §2.5） -->
         <div class="toolbar" data-test="canvas-toolbar">
           <NRadioGroup
             v-model:value="viewMode"
@@ -313,12 +323,62 @@ function resolveName(userId: number): string | null {
             <NRadioButton value="tree">树状</NRadioButton>
             <NRadioButton value="canvas">自由画布</NRadioButton>
           </NRadioGroup>
-          <NButton size="small" secondary data-test="fit-canvas" @click="fitToMembers">适应画布</NButton>
-          <NButton size="small" secondary data-test="focus-self" @click="focusSelf">回到自己</NButton>
-          <NButton size="small" secondary data-test="reload-view" @click="reload">重新加载</NButton>
+          <button
+            type="button"
+            class="fg-fab-btn"
+            data-test="fit-canvas"
+            aria-label="适应画布"
+            title="适应画布"
+            @click="fitToMembers"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+              <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="fg-fab-btn"
+            data-test="focus-self"
+            aria-label="回到自己"
+            title="回到自己"
+            @click="focusSelf"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="7" />
+              <circle cx="12" cy="12" r="2.5" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="fg-fab-btn"
+            data-test="reload-view"
+            aria-label="重新加载"
+            title="重新加载"
+            @click="reload"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
+          </button>
           <NPopover trigger="click" placement="bottom-end">
             <template #trigger>
-              <NButton size="small" secondary data-test="legend-trigger">图例</NButton>
+              <button
+                type="button"
+                class="fg-fab-btn"
+                data-test="legend-trigger"
+                aria-label="图例"
+                title="图例"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M8 6h13M8 12h13M8 18h13" />
+                  <path d="M3 6h.01M3 12h.01M3 18h.01" />
+                </svg>
+              </button>
             </template>
             <ul class="legend" data-test="canvas-legend">
               <li><span class="fg-badge fg-badge--accent">我</span> 当前主体（点击回到家庭卡）</li>
@@ -328,6 +388,20 @@ function resolveName(userId: number): string | null {
               <li><span class="fg-badge fg-badge--provisional">已隐藏</span> masked 字段以锁形章表达</li>
             </ul>
           </NPopover>
+          <button
+            v-if="householdSpaces.length > 0"
+            type="button"
+            class="fg-fab-btn fg-fab-btn--accent"
+            data-test="back-to-household"
+            aria-label="返回家庭卡"
+            title="返回家庭卡"
+            @click="backToHousehold"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <path d="M9 21v-8h6v8" />
+            </svg>
+          </button>
         </div>
 
         <!-- 画布：静态星空/点阵由壳背景提供，这里只画结构 -->
@@ -521,26 +595,24 @@ function resolveName(userId: number): string | null {
   min-height: 160px;
 }
 
+/* 工具栏：底部居中悬浮胶囊毛玻璃 + 现代操作组 */
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
-  padding: 12px 16px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--fg-surface-raised) 85%, transparent) 0%,
-    color-mix(in srgb, var(--fg-surface-raised) 90%, transparent) 100%
-  );
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--fg-line-strong) 60%, transparent);
-  border-radius: calc(var(--fg-radius-card) * 1.5);
+  padding: 10px 20px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: 999px;
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
-    0 4px 16px color-mix(in srgb, var(--fg-ink) 8%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 100%, transparent);
+    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 10%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 30%, transparent);
   animation: slideDown 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  width: fit-content;
 }
 
 @keyframes slideDown {
@@ -610,19 +682,27 @@ function resolveName(userId: number): string | null {
 .canvas-wrap {
   position: relative;
   flex: 1;
-  min-height: 440px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--fg-surface-sunken) 30%, transparent) 0%,
-    transparent 100%
-  );
-  border: 2px solid var(--fg-line-strong);
-  border-radius: calc(var(--fg-radius-card) * 1.5);
+  min-height: 480px;
+  background-color: var(--fg-surface);
+  background-image:
+    radial-gradient(ellipse 90% 70% at 50% -10%, color-mix(in srgb, var(--fg-accent) 12%, transparent), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 85% 95%, color-mix(in srgb, var(--fg-info) 10%, transparent), transparent 60%),
+    radial-gradient(circle 1.8px at 28px 36px, var(--fg-dot) 100%, transparent),
+    radial-gradient(circle 1.2px at 160px 140px, color-mix(in srgb, var(--fg-dot) 75%, transparent) 100%, transparent),
+    radial-gradient(circle 1.5px at 290px 80px, var(--fg-dot) 100%, transparent);
+  background-size:
+    100% 100%,
+    100% 100%,
+    260px 260px,
+    190px 190px,
+    340px 340px;
+  border: 1.5px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.8);
   overflow: hidden;
   box-shadow:
-    inset 0 2px 8px color-mix(in srgb, var(--fg-ink) 5%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--fg-accent) 10%, transparent),
-    var(--fg-shadow-card);
+    inset 0 2px 16px color-mix(in srgb, var(--fg-ink) 6%, transparent),
+    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 8%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 10%, transparent);
 }
 
 /* 中心聚焦效果：径向渐变遮罩，中心清晰，边缘模糊 */
@@ -755,7 +835,7 @@ function resolveName(userId: number): string | null {
 
 /* 移动端（≤768px）：工具栏收敛为紧凑单行（可横向滑动，仅工具不恢复列表布局）；
    触控画布双指缩放/拖拽平移由 VueFlow 的 zoom-on-pinch/pan-on-drag 提供，
-   适应画布/回到自己/重新加载按钮补足 44px 点按目标 */
+   圆形 FAB 自带 44px 点按目标，布局切换 radio 补足 44px */
 @media (max-width: 768px) {
   .family-tree-view {
     padding: 16px 12px 20px;

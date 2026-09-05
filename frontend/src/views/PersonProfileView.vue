@@ -424,11 +424,15 @@ function retry(): void {
 .identity-card,
 .fields-card,
 .relations-card {
-  padding: 16px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-card);
+  padding: 20px 24px;
+  background: var(--fg-glass-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  box-shadow:
+    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
 }
 
 .status-title {

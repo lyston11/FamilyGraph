@@ -457,11 +457,24 @@ h2 {
 }
 
 .candidate-card {
-  padding: 15px;
-  border: 1px solid var(--fg-line);
-  border-radius: var(--fg-radius-card);
-  background: var(--fg-surface-raised);
-  box-shadow: var(--fg-shadow-card);
+  padding: 16px 20px;
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.5);
+  background: var(--fg-glass-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  box-shadow:
+    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.candidate-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--fg-accent) 30%, var(--fg-glass-border));
+  box-shadow:
+    0 8px 30px color-mix(in srgb, var(--fg-ink) 10%, transparent),
+    0 0 16px var(--fg-glass-glow);
 }
 
 /* 候选 = proposed 左缘线（与正式记忆、检索结果视觉分离的一部分） */

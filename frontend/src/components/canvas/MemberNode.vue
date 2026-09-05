@@ -99,34 +99,50 @@ function select(): void {
 
 <style scoped>
 /* 名牌/立牌：纸墨=直角纸面 + 发丝线 + 悬停微浮起；清雅=白底大圆角柔和阴影（token 驱动） */
+/* 家族树星宿节点：晶莹剔透星体质感 + 毛玻璃浮动 + 环绕光环 */
 .member-node {
   position: relative;
-  min-width: 150px;
-  padding: 10px 14px 14px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-card);
+  min-width: 154px;
+  padding: 12px 16px 14px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.6);
+  box-shadow:
+    0 8px 24px color-mix(in srgb, var(--fg-ink) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 30%, transparent);
   cursor: pointer;
-  transition:
-    box-shadow 0.2s,
-    border-color 0.2s;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .member-node:hover,
 .member-node:focus-visible {
+  transform: translateY(-4px) scale(1.03);
   border-color: var(--fg-accent);
-  box-shadow: var(--fg-shadow-raised);
+  box-shadow:
+    0 12px 32px color-mix(in srgb, var(--fg-ink) 14%, transparent),
+    0 0 20px var(--fg-glass-glow),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 40%, transparent);
 }
 
-/* 自己强调：主色描边（表达当前主体，不改变权限） */
+/* 自己强调：星环光晕环绕 */
 .member-node.is-self {
   border-color: var(--fg-accent);
-  box-shadow: 0 0 0 1px var(--fg-accent), var(--fg-shadow-card);
+  background: linear-gradient(
+    135deg,
+    var(--fg-glass-surface-raised) 0%,
+    color-mix(in srgb, var(--fg-glass-surface-raised) 85%, var(--fg-accent) 15%) 100%
+  );
+  box-shadow:
+    0 0 0 1.5px var(--fg-accent),
+    0 0 20px var(--fg-glass-glow),
+    0 8px 24px color-mix(in srgb, var(--fg-ink) 10%, transparent);
 }
 
 .member-node.summary-card {
   border-style: dashed;
+  opacity: 0.85;
 }
 
 /* 连接点：定位尺寸由 @vue-flow/core/dist/style.css 提供，这里只着色（不引 theme-default 配色） */
@@ -143,24 +159,32 @@ function select(): void {
   gap: 8px;
 }
 
-/* 姓字纸牌头像位：主色柔底 + 标题字体 */
+/* 姓字纸牌头像位：圆形晶体 + 星芒微光 */
 .avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
   font-family: var(--fg-font-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--fg-accent);
-  background-color: var(--fg-accent-soft);
-  border-radius: var(--fg-radius-control);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--fg-accent) 15%, transparent) 0%,
+    color-mix(in srgb, var(--fg-accent) 8%, transparent) 100%
+  );
+  border: 1.5px solid color-mix(in srgb, var(--fg-accent) 30%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--fg-accent) 20%, transparent);
+  transition: all 0.3s ease;
 }
 
-[data-theme='modern'] .avatar {
-  border-radius: 999px;
+.member-node:hover .avatar {
+  transform: scale(1.1);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--fg-accent) 40%, transparent);
 }
 
 .name {

@@ -201,18 +201,41 @@ async function confirmCandidate(): Promise<void> {
   min-height: 100vh;
   padding: 24px;
   box-sizing: border-box;
+  background-color: var(--fg-surface);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% 20%, color-mix(in srgb, var(--fg-accent) 12%, transparent), transparent 70%),
+    radial-gradient(circle 1.8px at 28px 36px, var(--fg-dot) 100%, transparent),
+    radial-gradient(circle 1.2px at 160px 140px, color-mix(in srgb, var(--fg-dot) 75%, transparent) 100%, transparent);
+  background-size: 100% 100%, 260px 260px, 190px 190px;
 }
 
-/* 名牌卡：纸墨=宣纸浮牌 + 证书双线框；清雅=白底大圆角 + 柔和阴影（观感差异由 token 驱动） */
+/* 名牌卡：高级星空悬浮透明水晶磨砂卡片 */
 .plate {
   position: relative;
-  width: min(400px, 100%);
-  padding: 36px 36px 32px;
-  background-color: var(--fg-surface-raised);
-  border: 1px solid var(--fg-line-strong);
-  border-radius: var(--fg-radius-card);
-  box-shadow: var(--fg-shadow-raised);
+  width: min(420px, 100%);
+  padding: 40px 36px 36px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: calc(var(--fg-radius-card) * 1.8);
+  box-shadow:
+    0 16px 48px color-mix(in srgb, var(--fg-ink) 12%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--fg-accent) 15%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 30%, transparent);
   box-sizing: border-box;
+  animation: plateSlideIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes plateSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* 纸墨：证书式内嵌发丝线；清雅不渲染双框 */
