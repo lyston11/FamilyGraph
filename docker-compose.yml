@@ -58,6 +58,9 @@ services:
       STEWARD_ENABLED: ${STEWARD_ENABLED:-0}
       STEWARD_WORKER_ENABLED: ${STEWARD_WORKER_ENABLED:-0}
       MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-5}
+      DEV_SEED_DEMO_DATA: ${DEV_SEED_DEMO_DATA:-0}
+      # 09-01 个人家族视图（家庭卡/家族树投影端点）功能开关
+      PERSONAL_FAMILY_VIEW_ENABLED: ${PERSONAL_FAMILY_VIEW_ENABLED:-0}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷；
       # /data/bootstrap/admin-credentials（0600 初始凭据）也在此卷
@@ -173,10 +176,12 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
-  # admin：admin-web ↔ api 专用；internal:true，宿主/公网/家庭 web 均不可路由，
-  # 8002 admin listener 只在该网络接口监听
+  # admin：admin-web ↔ api 专用。注意：Docker 对 internal 网络会丢弃已发布
+  # 端口（admin-web 的 127.0.0.1:8081 发布因此无法生效），故此处不能设
+  # internal:true。隔离边界由两点维持：8002 admin listener 只绑定 api 在
+  # 本网络的静态 IP（172.29.0.10，不发布宿主端口，家庭 web/宿主/公网均
+  # 不可直达）；admin-web 仅发布宿主回环 127.0.0.1:8081。
   admin:
-    internal: true
     ipam:
       config:
         - subnet: 172.29.0.0/24

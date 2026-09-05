@@ -63,11 +63,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logctx.setup_logging()
     # 部署自动 bootstrap（SF-F3）：旧 PIN 结构 fail-closed + 唯一 admin 账号 + 0600 凭据文件。
     # 三个 listener 共享 lifespan，服务内部进程级单例防重复执行。
+    from app import dev_seed
     from app.db import SessionLocal
     from app.services import admin_bootstrap, maintenance
 
     with SessionLocal() as bootstrap_session:
         admin_bootstrap.run_startup_preflight(bootstrap_session)
+        # 09-05 dev 演示数据种子：先管理员后演示数据；env 门控 + 空库门控，
+        # 任一不满足零写入（默认 DEV_SEED_DEMO_DATA=0 时完全跳过）。
+        dev_seed.maybe_seed_demo_data(bootstrap_session)
     # 后台维护循环（agent reaper / steward canonical job 泵）：
     # serve.py 多 listener 共享 lifespan，start 内部进程级单例防重复启动。
     maintenance.start_maintenance_loop()

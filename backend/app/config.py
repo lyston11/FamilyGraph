@@ -39,6 +39,14 @@ ADMIN_JWT_SECRET_MIN_LENGTH: int = 32
 # bootstrap 初始密码长度（secrets.token_urlsafe 字节数 → ~24 可见字符）
 ADMIN_BOOTSTRAP_PASSWORD_BYTES: int = 18
 
+)
+)
+
+# ---- 09-05 dev 演示数据种子（空库自动播种；默认关闭）----
+# 仅显式 "1" 开启；开启时仍要求 users 表为空才播种（双重门控见 app/dev_seed.py），
+# 非空库一律跳过且零写入。演示 PIN 统一 123456（公开 dev 演示值，PRD 红线允许日志）。
+DEV_SEED_DEMO_DATA: str = os.environ.get("DEV_SEED_DEMO_DATA", "0")
+
 # ---- m0b 认证限流参数（design.md 回滚形态：集中在 config，可经 env 热调）----
 AUTH_MAX_FAILED_ATTEMPTS: int = int(os.environ.get("AUTH_MAX_FAILED_ATTEMPTS", "5"))
 AUTH_LOCK_MINUTES: int = int(os.environ.get("AUTH_LOCK_MINUTES", "15"))
