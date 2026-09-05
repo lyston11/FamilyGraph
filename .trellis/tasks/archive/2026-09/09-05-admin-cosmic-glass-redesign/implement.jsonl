@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "token 红线与星空玻璃体系约定（含后台 --ag-* 平行 token 段）"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "门禁命令、颜色红线、reduced-motion 与 375px 基线"}
