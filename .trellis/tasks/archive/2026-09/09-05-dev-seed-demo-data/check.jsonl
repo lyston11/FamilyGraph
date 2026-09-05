@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验门禁与禁止模式"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验 reset/播种的事务与备份红线"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "校验日志红线"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "backend 门禁命令与禁止模式"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite/WAL/事务/备份红线，reset 与播种必须遵守"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "结构化日志与敏感信息红线"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "分层与单向依赖（dev_seed 落点）"}
