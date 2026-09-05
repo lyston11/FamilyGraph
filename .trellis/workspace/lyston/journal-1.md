@@ -715,3 +715,24 @@ accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: 家庭端五项体验修复：导航/资料编辑/家族树/披露策略
+
+**Date**: 2026-09-05
+**Task**: 家庭端五项体验修复：导航/资料编辑/家族树/披露策略
+**Branch**: `main`
+
+### Summary
+
+grilling 五轮对齐后落地 09-05-family-profile-nav-disclosure：R1 上下文感知返回（router state fgBackTo，家庭卡/家族树双来源）；R2 设置页基础资料表单（PATCH /members，性别/生卒/简介，StructuredDate⇄时间戳转换）；R3 种子补 lineage 王氏家族（双空间模型不动）；R4 高敏感披露放开（本人强确认+未成年 422+审计——后端主体由并行任务 a8926eb 入库，本任务补测试断言修正与门禁复核）；R5 披露矩阵前端放开+强确认 Modal；R6 种子基础五类披露开放（成员互见）；R7 docs 同步。关键架构发现：个人资料页在 household 上下文走通用授权 PFV 快照（同一安全合同），补上 09-01 遗留的家庭投影缺口；亲子成环检测全局生效，跨空间不可重复落亲子事实（全局事实 space_id=NULL 双空间共享）。浏览器端到端全流程实测通过（含王小虎未成年遮蔽）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `866cdd0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
