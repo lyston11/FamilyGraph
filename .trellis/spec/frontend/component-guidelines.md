@@ -31,11 +31,21 @@
 
 红线：
 
-1. **组件禁止写死色值**（hex/rgb/hsl/named color），只写 `var(--fg-*)` 或既有变量的 `color-mix()` 派生。
+1. **组件禁止写死色值**（hex/rgb/hsl/named color），只写 `var(--fg-*)` 或既有变量的 `color-mix()` 派生。阴影/高光同样适用：暗影用 `color-mix(in srgb, var(--fg-ink) N%, transparent)`，玻璃内高光用 `color-mix(in srgb, var(--fg-surface-raised) N%, transparent)`，不得出现 `rgba(0,0,0,…)`/`rgba(255,255,255,…)` 字面量（tokens.css 工具类与组件一视同仁）。
 2. 新颜色只能进 tokens.ts（L1+L2 双主题同步补齐），再由 naive-themes.ts 显式派生给 naive 组件；禁止在组件或 naive-themes.ts 直接造色。
 3. **组件不判断主题**：主题联动靠 CSS 变量自动生效；仅当某主题需要结构性差异（如清雅头像圆角）时才用 `[data-theme='modern']` 局部覆盖选择器，保持克制。
 4. 领域状态视觉语义复用既有工具类与 token，不另起炉灶：`.fg-badge--{confirmed,proposed,disputed,provisional,neutral,accent}` + `--fg-status-*`（confirmed 实底/墨点，proposed 空心，disputed 朱砂警示，provisional 虚线"待确档"）。连线语义同阶（实线/虚线/朱砂虚线）。
 5. 主题运行时：`stores/ui.ts`（`fg-theme` localStorage + `data-theme`）；App.vue watchEffect 把 L2 token 批量注入 root。新主题值改 tokens.ts 即可全站生效，不要在其他地方再 setProperty。
+
+## 星空玻璃视觉体系（09-04 起生效）
+
+- **玻璃 token**：`tokens.ts` 双主题提供 `glass-surface` / `glass-surface-raised` / `glass-border` / `glass-glow`（注入为 `--fg-glass-*`）。玻璃面一律 `background: var(--fg-glass-*)` + `backdrop-filter: blur(16~20px) saturate(160~180%)`，并必须给出 `@supports not (backdrop-filter: blur(12px))` 的不透明降级。
+- **共享工具类**（tokens.css，优先复用而不是在组件里重写玻璃 CSS）：
+  - `.fg-glass-card`：通用磨砂玻璃卡（含 hover 光晕）；
+  - `.fg-fab-btn` / `.fg-fab-btn--accent`：44px 圆形浮动按钮（自带 hover 上浮光晕），accent 变体为主色实底。
+- **圆形 FAB Dock 约定**：页面级操作收敛用底部居中悬浮胶囊容器（`border-radius: 999px` 毛玻璃）；每个 FAB 必须有 `aria-label` + `title`；44px 触控热区来自按钮本体而非媒体查询补丁；页面容器为 Dock 预留底部 padding 防遮挡。自绘悬浮件 z-index 预算：页面 Dock ≈900 < 壳外悬浮入口（AssistantLauncher 1500）< naive 浮层（≥2000）。
+- **源级测试契约**：responsive-375.spec 对受控文件断言「无 v-html / element-plus / 写死色值」；新增页面或把玻璃样式写进受控文件时，颜色必须走 token 派生，否则测试失败即红线命中。
+- **系统后台前端（system-admin-frontend）平行体系**：后台不共享家庭端 token，其颜色单一来源是 `src/styles/main.css` 的 `:root { --ag-* }`；星空玻璃变量（`--ag-glass-bg/-strong/-border`、`--ag-glow`、`--ag-nebula/-alt`、`--ag-star/-dim`）只在该处定义，后台组件/视图同样禁止写死色值。后台保持零家庭依赖（不 import 家庭端 store/组件/API/token），玻璃通透度与动效较家庭端克制。
 
 ## 测试约定（naive-ui 下）
 
