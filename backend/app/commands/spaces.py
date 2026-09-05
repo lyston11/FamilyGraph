@@ -54,11 +54,16 @@ def create_space(
     *,
     name: str,
     kind: str = "household",
+    commit: bool = True,
 ) -> FamilySpace:
-    """创建空间：owner 即 active 成员（自建即同意）。"""
+    """创建空间：owner 即 active 成员（自建即同意）。
+
+    ``commit=False`` 供上层应用命令（如注册命令的陌生人码分支）把空间创建
+    合并进同一个短事务，与 create_shared_household 的组合惯例一致。
+    """
     actor = load_actor(session, ctx)
     now = utcnow()
-    with command_transaction(session):
+    with command_transaction(session, commit=commit):
         space = FamilySpace(name=name.strip(), owner_id=actor.id, kind=kind, created_at=now)
         session.add(space)
         session.flush()

@@ -54,13 +54,14 @@ class StructuredDate(BaseModel):
 
 
 class DisclosurePayload(BaseModel):
-    """披露开关载荷（v2 §0.1）。
+    """披露开关载荷（v2 §0.1；09-05 高敏感策略放开）。
 
     - 基础五类必填（整体替换语义，缺键/多键均 422）；
     - space_id 选填：提供时写入该空间的逐空间覆盖行，且仅档案本人可调
       （commands.members.update_disclosure 强制 self）；
-    - 高敏感类别类型恒为 Literal[False] | None：传 true 直接产生 literal_error
-      → 422 —— 键存在是为了让未来任务无法静默放宽合同，false 为不可变更默认。
+    - 高敏感类别（health/address/school/contact/private_notes）选填布尔：本人可
+      显式开启（09-05 用户决策）；未成年人档案的高敏感开启请求在服务层整体 422
+      （DISCLOSURE_MINOR_FORBIDDEN），默认仍为关闭；None = 本次不修改该类别。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -71,12 +72,12 @@ class DisclosurePayload(BaseModel):
     bio: bool
     attachments: bool
     space_id: int | None = Field(default=None, gt=0)
-    # 高敏感类别：合同上只能为 false（Literal[False] 使 true 在校验层即被拒）
-    health: Literal[False] | None = None
-    address: Literal[False] | None = None
-    school: Literal[False] | None = None
-    contact: Literal[False] | None = None
-    private_notes: Literal[False] | None = None
+    # 高敏感类别：本人可显式开启；is_minor 档案传 true 由服务层整体拒绝（422）
+    health: bool | None = None
+    address: bool | None = None
+    school: bool | None = None
+    contact: bool | None = None
+    private_notes: bool | None = None
 
 
 class SpaceMembershipInline(BaseModel):
@@ -168,11 +169,18 @@ class MemberOut(BaseModel):
 
 
 class MemberCreateResponse(BaseModel):
-    """建档响应：PIN 明文仅此一次（replayed=True 时 pin 为 null，不回放初始 PIN）。"""
+    """建档响应：PIN 明文仅此一次（replayed=True 时 pin 为 null，不回放初始 PIN）。
+
+    撞名转绑定（09-05 决策 16）：bound_to_existing=True 表示目标用户名已注册，
+    未建 managed 账号、已创建 pending 绑定请求（binding_id 供发起人撤回）。
+    响应不携带被绑定方任何数据——发起人界面仅见「已注册，已发送绑定邀请」。
+    """
 
     user: MemberOut
     pin: str | None = Field(default=None, pattern=r"^\d{6}$")
     replayed: bool = False
+    bound_to_existing: bool = False
+    binding_id: int | None = Field(default=None, gt=0)
 
 
 def structured_date_payload(value: Any) -> dict[str, Any] | None:

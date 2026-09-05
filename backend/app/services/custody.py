@@ -32,8 +32,9 @@ def resolve_relation(actor: User, target: User) -> RelationAccess:
         if target.privacy_mode == "perpetual":
             # D5：创建者永久编辑权，认领不失权
             return RelationAccess(VIEW_FULL, True, True)
-        if target.account.status == "managed":
-            # handover 未 claimed：创建者代管
+        if target.account is None or target.account.status == "managed":
+            # handover 未 claimed：创建者代管。无 Account 的行（09-05 撞名绑定中的
+            # provisional 人物，决策 16）从未可登录，按未认领同一语义由创建者代管。
             return RelationAccess(VIEW_FULL, True, True)
         # handover 已 claimed：编辑权移交本人，创建者退只读
         return RelationAccess(VIEW_FULL, False, False)

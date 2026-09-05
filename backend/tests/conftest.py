@@ -147,6 +147,8 @@ _TABLES = (
     "claim_disputes",
     "ownership_transfers",
     "owner_invitations",
+    "invite_codes",
+    "account_bindings",
     "disclosure_preferences",
     "platform_role_assignments",
     "space_members",
@@ -169,6 +171,16 @@ def _clean_tables(db_session):
     for table in _TABLES:
         db_session.execute(text(f"DELETE FROM {table}"))
     db_session.commit()
+
+
+@pytest.fixture(autouse=True)
+def _reset_registration_rate_limiter():
+    """注册端点限流是进程内状态：每测试前后清空，避免用例间串味（09-05）。"""
+    from app.services import rate_limit
+
+    rate_limit.registration_limiter.reset()
+    yield
+    rate_limit.registration_limiter.reset()
 
 
 @pytest.fixture()

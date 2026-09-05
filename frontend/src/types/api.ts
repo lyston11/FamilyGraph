@@ -40,6 +40,11 @@ export interface ChallengeCandidate {
 
 export interface BootstrapStatusResponse {
   initialized: boolean
+  /**
+   * REGISTRATION_ENABLED 运行时投影（09-05 决策 2）：前端据此显隐注册入口，
+   * 不使用任何 VITE_ 构建期变量（运行时信号优于构建期 env）。
+   */
+  registration_enabled: boolean
 }
 
 /** 统一错误外壳 */
@@ -112,6 +117,18 @@ export interface ClanDisclosure {
   dates: boolean
   bio: boolean
   attachments: boolean
+}
+
+/**
+ * 披露开关载荷（09-05 高敏感策略放开）：基础五类必填（整体替换语义），
+ * 高敏感五类选填——省略 = 本次不修改该类别（后端 exclude_unset 语义）。
+ */
+export interface DisclosureFlags extends ClanDisclosure {
+  health?: boolean
+  address?: boolean
+  school?: boolean
+  contact?: boolean
+  private_notes?: boolean
 }
 
 export type SpaceKind = 'household' | 'lineage'
@@ -524,7 +541,7 @@ export const DISCLOSURE_CATEGORIES = [
 ] as const
 
 export type DisclosureCategory = (typeof DISCLOSURE_CATEGORIES)[number]
-/** 高敏感类别：仅显式授权投影可见，UI 中恒为占位（接口后续任务提供） */
+/** 高敏感类别：默认关闭，本人可显式开启（需二次确认）；未成年人档案始终最小披露 */
 export const HIGH_RISK_DISCLOSURE_CATEGORIES: readonly DisclosureCategory[] = [
   'health',
   'address',
@@ -733,4 +750,50 @@ export interface SpaceStatsData {
 export interface SpaceStatsSnapshot {
   data: SpaceStatsData
   etag: string | null
+}
+
+// ---- 09-05 注册与邀请码域（与 backend/app/schemas/invite_code.py 一一对应） ----
+
+/** 码类型：家庭空间码 / 家族空间码 / 陌生人拉新码（决策 7） */
+export type InviteCodeKindFull = 'household' | 'lineage' | 'stranger'
+
+/** 我的码投影：创建者可见明文码（分享渲染为 …/register?code=XXX，决策 12/14） */
+export interface InviteCode {
+  id: number
+  code: string
+  kind: InviteCodeKindFull
+  /** household/lineage 必有；stranger 恒 null */
+  space_id: number | null
+  /** 列表端点附带的空间名投影 */
+  space_name: string | null
+  /** 陌生人码可设上限；null=不限次；家庭/家族码恒 1 */
+  max_uses: number | null
+  used_count: number
+  expires_at: string
+  revoked_at: string | null
+  created_at: string
+}
+
+export interface CreateInviteCodePayload {
+  kind: InviteCodeKindFull
+  /** household/lineage 必填（选择所在空间）；stranger 不带 */
+  space_id?: number | null
+  /** 陌生人码使用上限；null/缺省=不限次 */
+  max_uses?: number | null
+  /** 有效期天数；缺省=7（决策 11） */
+  ttl_days?: number | null
+}
+
+// ---- 09-05 并流绑定域（与 backend/app/schemas/binding.py 一一对应；决策 16） ----
+
+export type BindingStatus = 'pending' | 'confirmed' | 'rejected' | 'cancelled'
+
+/** 被绑定人视角投影：仅「这是我」判断所需最小字段（发起人名 + 建档人物名） */
+export interface Binding {
+  id: number
+  initiator_name: string | null
+  person_name: string | null
+  status: BindingStatus
+  created_at: string
+  resolved_at: string | null
 }

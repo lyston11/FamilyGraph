@@ -1,17 +1,21 @@
-"""家庭认证路由：login / login/select / refresh / logout（AD-2 全流程）。
+"""家庭认证路由：register / login / login/select / refresh / logout（AD-2 全流程）。
 
 09-04 起家庭 listener 只服务家庭用户（名字 + PIN）：系统管理员登录迁往
 独立 admin_app 的 /admin-api/auth/*（用户名 + 强密码），本路由不再查询或
 签发任何系统主体，响应 schema 不含后台身份枚举。
+09-05 起新增自助注册（家庭前端唯一注册入口；系统后台零注册面不变）。
 """
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import config
 from app.api.deps import (
     get_db,
     require_authenticated_user,
 )
+from app.commands import registration as registration_commands
 from app.errors import (
     CHALLENGE_INVALID,
     INVALID_REFRESH_TOKEN,
@@ -27,6 +31,7 @@ from app.schemas.auth import (
     LogoutRequest,
     LogoutResponse,
     RefreshRequest,
+    RegisterRequest,
     SelectCandidateRequest,
     TokenPairResponse,
     UserOut,
@@ -35,6 +40,7 @@ from app.schemas.auth import (
 from app.services import (
     audit,
     auth_guard,
+    rate_limit,
 )
 from app.services import (
     challenge as challenge_service,
@@ -59,6 +65,50 @@ def _token_pair_response(
         access_token=access,
         refresh_token=refresh_raw,
         user=UserOut(**public_user_payload(user)),
+    )
+
+
+def _registration_enabled_gate() -> None:
+    """REGISTRATION_ENABLED=false：与未注册路由同形 404（design.md §4）。
+
+    刻意抛 Starlette 的 HTTPException（与未知路径同一条默认处理路径），并在
+    body 校验前短路——关闭状态下畸形请求同样 404，不给「功能存在但关闭」的
+    任何探测信号。
+    """
+    if not config.REGISTRATION_ENABLED:
+        raise StarletteHTTPException(status_code=404)
+
+
+@router.post(
+    "/register",
+    response_model=TokenPairResponse,
+    dependencies=[Depends(_registration_enabled_gate)],
+)
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> TokenPairResponse:
+    """自助注册（PRD 决策 1-6）：IP 滑窗限流 → 用户名查重（防枚举）→ 建号 → 码分支。
+
+    单事务命令：User(provisional) + Account(claimed, 无强制改密) + 码分支 +
+    refresh 会话；响应即登录态。开关校验在依赖中先于本处理器完成（404）。
+    """
+    ip = _client_ip(request)
+    rate_limit.check_registration_rate_limit(ip)
+    result = registration_commands.register_user(
+        session,
+        username=payload.name,
+        pin=payload.pin,
+        invite_code=payload.code,
+        ip=ip,
+    )
+    return TokenPairResponse(
+        access_token=security.create_access_token(
+            result.user.id, result.user.account.token_version
+        ),
+        refresh_token=result.refresh_token,
+        user=UserOut(**public_user_payload(result.user)),
     )
 
 

@@ -29,6 +29,7 @@ from app.api.admin_read import router as admin_read_router
 from app.api.agent import router as agent_router
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
+from app.api.bindings import router as bindings_router
 from app.api.bootstrap import router as bootstrap_router
 from app.api.connections import router as connections_router
 from app.api.controlled_web import admin_router as controlled_web_admin_router
@@ -40,6 +41,7 @@ from app.api.graph import router as graph_router
 from app.api.health import router as health_router
 from app.api.household_card import router as household_card_router
 from app.api.internal_agent import router as internal_agent_router
+from app.api.invite_codes import router as invite_codes_router
 from app.api.kinship import router as kinship_router
 from app.api.memory import router as memory_router
 from app.api.misc import router as misc_router
@@ -181,6 +183,10 @@ app.include_router(graph_router, prefix="/api")
 app.include_router(misc_router, prefix="/api")
 app.include_router(attachments_router, prefix="/api")
 app.include_router(governance_router, prefix="/api")
+# 09-05 注册与邀请码（家庭 listener 专属；admin listener 不挂任何本组路由）
+app.include_router(invite_codes_router, prefix="/api")
+# 09-05 并流绑定（决策 16：建档撞名 → 绑定请求确认流）
+app.include_router(bindings_router, prefix="/api")
 # 浏览器 Agent API（JWT；feature flag 关闭一律 503，RT-6）
 app.include_router(agent_router, prefix="/api")
 # V2.3 关系智能（TermRegistry/resolve；RELATIONSHIP_INTELLIGENCE_ENABLED 默认关，503）

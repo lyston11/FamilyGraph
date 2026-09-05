@@ -101,7 +101,12 @@ function goToNotifications(): void {
 function openMember(member: HouseholdCardMember): void {
   // 点击自己的节点不进入公示页（design.md §2）：本人资料已在左栏
   if (member.user_id === auth.user?.id) return
-  void router.push({ name: 'person-profile', params: { userId: String(member.user_id) } })
+  // fgBackTo：资料页返回按钮的上下文来源（PRD R1）
+  void router.push({
+    name: 'person-profile',
+    params: { userId: String(member.user_id) },
+    state: { fgBackTo: 'home' },
+  })
 }
 
 function genderText(value: HouseholdCardMember['display']['gender']): string | null {

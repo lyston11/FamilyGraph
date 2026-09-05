@@ -36,6 +36,8 @@ PIN_GATE_PUBLIC: set[tuple[str, str]] = {
     ("GET", "/api/health"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/login/select"),
+    # 09-05 自助注册：公开端点；开关关时该路由返回普通 404，不泄露门禁存在
+    ("POST", "/api/auth/register"),
     ("GET", "/api/bootstrap/status"),
 }
 

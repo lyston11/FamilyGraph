@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
+import { createPinia, type Pinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { NMessageProvider } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
 import * as authApi from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 import LoginView from '@/views/LoginView.vue'
 import type { TokenPairResponse } from '@/types/api'
 
@@ -250,6 +251,57 @@ describe('LoginView', () => {
       expect(wrapper.find('[data-test="login-error"]').text()).toContain('重新登录'),
     )
     expect(localStorage.getItem('fg.refresh_token')).toBeNull()
+    wrapper.unmount()
+  })
+})
+
+describe('LoginView 注册入口（09-05 决策 19）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    document.body.innerHTML = ''
+  })
+
+  async function mountLogin(pinia: Pinia) {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: LoginView },
+        { path: '/register', name: 'register', component: { template: '<div />' } },
+      ],
+    })
+    await router.push({ name: 'login' })
+    await router.isReady()
+    const wrapper = mount(
+      defineComponent({
+        render() {
+          return h('div', [h(NMessageProvider, () => h(LoginView))])
+        },
+      }),
+      { global: { plugins: [pinia, router] }, attachTo: document.body },
+    )
+    await new Promise((resolve) => setTimeout(resolve))
+    return { wrapper, router }
+  }
+
+  it('注册开关开：显示注册入口，点击跳转 /register', async () => {
+    const { wrapper, router } = await mountLogin(createPinia())
+
+    const entry = wrapper.find('[data-test="login-to-register"]')
+    expect(entry.exists()).toBe(true)
+    await entry.trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('register'))
+    wrapper.unmount()
+  })
+
+  it('注册开关关（registration_enabled=false）：入口隐藏', async () => {
+    const pinia = createPinia()
+    const auth = useAuthStore(pinia)
+    auth.registrationEnabled = false
+    const { wrapper } = await mountLogin(pinia)
+
+    expect(wrapper.find('[data-test="register-entry"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

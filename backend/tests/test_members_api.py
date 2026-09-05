@@ -39,8 +39,12 @@ def test_create_member_issues_one_time_pin_and_audit(client, db_session) -> None
     response = _create_member(client, auth_header(tokens))
     assert response.status_code == 201
     body = response.json()
-    assert set(body) == {"user", "pin", "replayed"}
+    # 09-05 并流绑定（决策 16）：响应增加 bound_to_existing/binding_id，
+    # 普通建档恒为 False/None（撞名转绑定分支见 test_bindings.py）
+    assert set(body) == {"user", "pin", "replayed", "bound_to_existing", "binding_id"}
     assert body["replayed"] is False
+    assert body["bound_to_existing"] is False
+    assert body["binding_id"] is None
     assert len(body["pin"]) == 6 and body["pin"].isdigit()
 
     user_payload = body["user"]

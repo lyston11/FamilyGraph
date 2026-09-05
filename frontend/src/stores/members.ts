@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 
 import * as membersApi from '@/api/members'
 import type {
-  ClanDisclosure,
+  DisclosureFlags,
   Member,
   MemberCreatePayload,
   MemberCreateResponse,
@@ -65,7 +65,7 @@ export const useMembersStore = defineStore('members', () => {
 
   async function setDisclosure(
     id: number,
-    disclosure: ClanDisclosure,
+    disclosure: DisclosureFlags,
     spaceId?: number,
   ): Promise<Member> {
     // 全局与逐空间共用端点；scopeId 仅在提供时透传，保持全局调用形状不变

@@ -2,9 +2,18 @@
 /**
  * 首启引导页（沉浸页，meta.chrome='blank'）：数据库尚无任何家庭账号时显示。
  * 09-04 起系统初始化由部署方完成，家庭端不再提供任何创建/初始化表单；
- * 家庭账号开通流程另立任务（父任务 out of scope）。本页只做静态说明，
- * 不暴露任何其他产品面信息。
+ * 本页保持静态说明性质，不暴露任何其他产品面信息。
+ * 09-05 决策 17（冷启动）：零账号文案从「通过开通渠道获取账号」改为注册引导——
+ * 首个注册者即第一个用户；注册开关关闭时隐藏注册入口，仅保留登录指引。
  */
+import { computed } from 'vue'
+import { useRouter } from 'vue-router'
+
+import { useAuthStore } from '@/stores/auth'
+
+const router = useRouter()
+const auth = useAuthStore()
+const canRegister = computed(() => auth.registrationEnabled)
 </script>
 
 <template>
@@ -15,11 +24,30 @@
       </div>
 
       <h1 class="title">欢迎使用 FamilyGraph</h1>
-      <p class="desc">系统尚未开通任何家庭账号。请通过你的开通渠道获取账号信息后再来登录。</p>
+      <p v-if="canRegister" class="desc" data-test="onboarding-desc">
+        系统尚未开通任何家庭账号。你可以注册第一个账号，从建立你的家庭档案开始。
+      </p>
+      <p v-else class="desc" data-test="onboarding-desc">系统尚未开通任何家庭账号。</p>
 
-      <button class="login-btn" type="button" data-test="onboarding-to-login" @click="() => $router.replace({ name: 'login' })">
-        前往登录
-      </button>
+      <div class="actions">
+        <button
+          v-if="canRegister"
+          class="register-btn"
+          type="button"
+          data-test="onboarding-to-register"
+          @click="() => router.push({ name: 'register' })"
+        >
+          注册新账号
+        </button>
+        <button
+          class="login-btn"
+          type="button"
+          data-test="onboarding-to-login"
+          @click="() => router.replace({ name: 'login' })"
+        >
+          前往登录
+        </button>
+      </div>
     </section>
   </main>
 </template>
@@ -95,7 +123,33 @@
   color: var(--fg-ink-secondary);
 }
 
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.register-btn {
+  width: 100%;
+  max-width: 240px;
+  padding: 10px 24px;
+  border: 1px solid var(--fg-accent);
+  border-radius: var(--fg-radius-control);
+  background-color: var(--fg-accent);
+  color: var(--fg-accent-ink);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.register-btn:hover {
+  background-color: var(--fg-accent-hover);
+  border-color: var(--fg-accent-hover);
+}
+
 .login-btn {
+  width: 100%;
+  max-width: 240px;
   padding: 10px 24px;
   border: 1px solid var(--fg-line-strong);
   border-radius: var(--fg-radius-control);

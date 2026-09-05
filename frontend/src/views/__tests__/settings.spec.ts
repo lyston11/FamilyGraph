@@ -156,7 +156,8 @@ async function mountSettings(pinia: Pinia) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/', name: 'family-space', component: { template: '<div />' } },
+      { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/family-tree', name: 'family-space', component: { template: '<div />' } },
       { path: '/settings', name: 'settings', component: SettingsView },
       { path: '/memory', name: 'memory', component: { template: '<div />' } },
     ],
@@ -192,11 +193,11 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     mockedFetchMatrix.mockResolvedValue(makeMatrix())
   })
 
-  it('设置页返回按钮使用 family-space 命名路由', async () => {
+  it('设置页返回按钮回家庭卡（route home；修复文案/目标不一致）', async () => {
     const { wrapper, router } = await mountSettings(pinia)
 
     await wrapper.find('[data-test="settings-back"]').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('family-space'))
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('home'))
     wrapper.unmount()
   })
 
@@ -229,15 +230,15 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     wrapper.unmount()
   })
 
-  it('披露矩阵渲染全部类别；高敏感类别开关禁用；保存提交基础五类', async () => {
+  it('披露矩阵渲染全部类别；高敏感类别可开启（09-05 放开）；保存提交全类别', async () => {
     const { wrapper } = await mountSettings(pinia)
 
     // n-data-table：tbody 行数 = 10 个披露类别
     const rows = wrapper.findAll('[data-test="disclosure-table"] tbody tr')
     expect(rows.length).toBe(10)
 
-    // 高敏感类别（health 等）禁用
-    expect(wrapper.find('[data-test="disclosure-switch-disabled"]').exists()).toBe(true)
+    // 高敏感类别（health 等）开关存在且启用（09-05 放开；未成年人矩阵内另行禁用）
+    expect(wrapper.find('[data-test="disclosure-switch-health"]').exists()).toBe(true)
     // 基础类别可切换（n-switch 无原生 input，交互走根元素 click）
     const avatarSwitch = wrapper.find('[data-test="disclosure-switch-avatar"]')
     expect(avatarSwitch.exists()).toBe(true)
@@ -254,12 +255,17 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
         dates: false,
         bio: false,
         attachments: false,
+        health: false,
+        address: false,
+        school: false,
+        contact: false,
+        private_notes: false,
       }),
     )
     wrapper.unmount()
   })
 
-  it('逐空间披露：基础五类可切换并携带 space_id 保存；高敏感恒禁用', async () => {
+  it('逐空间披露：基础五类可切换并携带 space_id 保存；高敏感可开启（09-05 放开）', async () => {
     const spacesApi = await import('@/api/spaces')
     vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([
       {
@@ -282,8 +288,8 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     expect(spaceDates.exists()).toBe(true)
     await vi.waitFor(() => expect(spaceDates.attributes('aria-checked')).toBe('true'))
 
-    // 高敏感单元格禁用（独立 data-test 哨兵）
-    expect(wrapper.find('[data-test="disclosure-space-disabled-7"]').exists()).toBe(true)
+    // 高敏感单元格启用（09-05 放开；开启走强确认 Modal）
+    expect(wrapper.find('[data-test="disclosure-space-7-health"]').exists()).toBe(true)
 
     // 在该空间开放 avatar（全局未开）→ 保存时携带 space_id=7
     await wrapper.find('[data-test="disclosure-space-7-avatar"]').trigger('click')
@@ -293,10 +299,47 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     await vi.waitFor(() =>
       expect(mockedUpdateDisclosure).toHaveBeenCalledWith(
         1,
-        { avatar: true, photos: false, dates: true, bio: false, attachments: false },
+        {
+          avatar: true,
+          photos: false,
+          dates: true,
+          bio: false,
+          attachments: false,
+          health: false,
+          address: false,
+          school: false,
+          contact: false,
+          private_notes: false,
+        },
         7,
       ),
     )
+    wrapper.unmount()
+  })
+
+  it('高敏感开启强确认：点击开关先弹 Modal，确认后才写入草稿并随保存提交', async () => {
+    const { wrapper } = await mountSettings(pinia)
+
+    // 点击 health 开关（false → true）：先弹强确认，草稿未变
+    await wrapper.find('[data-test="disclosure-switch-health"]').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve))
+    const dialog = document.querySelector('[data-test="disclosure-high-risk-confirm"]')
+    expect(dialog).not.toBeNull()
+
+    // 确认开启 → 草稿更新 → 保存携带 health: true
+    const buttons = Array.from(dialog!.querySelectorAll('button'))
+    const positive = buttons.find((button) => button.textContent?.includes('确认开启'))
+    expect(positive).toBeDefined()
+    positive!.click()
+    await new Promise((resolve) => setTimeout(resolve))
+    await new Promise((resolve) => setTimeout(resolve))
+
+    mockedUpdateDisclosure.mockResolvedValue(makeSelfMember())
+    await wrapper.find('[data-test="disclosure-save"]').trigger('click')
+    await vi.waitFor(() => {
+      const call = mockedUpdateDisclosure.mock.calls.at(-1)
+      expect(call?.[1]).toMatchObject({ health: true })
+    })
     wrapper.unmount()
   })
 

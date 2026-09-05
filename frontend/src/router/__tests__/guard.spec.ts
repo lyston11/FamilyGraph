@@ -95,11 +95,11 @@ describe('router guards', () => {
     vi.clearAllMocks()
     localStorage.clear()
     setActivePinia(createPinia())
-    mockedStatus.mockResolvedValue({ initialized: true })
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: true })
   })
 
   it('首启未初始化：一律重定向到引导页', async () => {
-    mockedStatus.mockResolvedValue({ initialized: false })
+    mockedStatus.mockResolvedValue({ initialized: false, registration_enabled: true })
     await resetToOnboarding()
 
     expect(await navigate('/')).toBe('onboarding')
@@ -258,7 +258,7 @@ describe('router guards: v2 identity setup（F-1，判定源 = /me profile_statu
     vi.clearAllMocks()
     localStorage.clear()
     setActivePinia(createPinia())
-    mockedStatus.mockResolvedValue({ initialized: true })
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: true })
     mockedFactReviews.mockResolvedValue([])
   })
 
@@ -317,7 +317,7 @@ describe('router guards: forced pin change across hard refresh', () => {
     vi.clearAllMocks()
     localStorage.clear()
     setActivePinia(createPinia())
-    mockedStatus.mockResolvedValue({ initialized: true })
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: true })
   })
 
   it('强制改 PIN 用户硬刷新：经 resume 恢复后仍被守卫送回改 PIN 页，不调 fetchMe', async () => {
@@ -337,7 +337,7 @@ describe('router guards: 09-01 Phase 2 路由语义（统一家庭壳）', () =>
     vi.clearAllMocks()
     localStorage.clear()
     setActivePinia(createPinia())
-    mockedStatus.mockResolvedValue({ initialized: true })
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: true })
   })
 
   it('旧 /home 显式重定向到 /（name home = 我的家庭）', async () => {
@@ -370,5 +370,41 @@ describe('router guards: 09-01 Phase 2 路由语义（统一家庭壳）', () =>
 
   it('未登录访问未注册深链：直接普通 404（公开页，不带家庭壳）', async () => {
     expect(await navigate('/system-admin/login')).toBe('not-found')
+  })
+})
+
+describe('router guards: /register 自助注册（09-05）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setActivePinia(createPinia())
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: true })
+  })
+
+  it('注册开关开：guest 可达 /register', async () => {
+    await resetToOnboarding()
+    expect(await navigate('/register')).toBe('register')
+    expect(router.currentRoute.value.path).toBe('/register')
+  })
+
+  it('注册开关关：/register 与未注册深链同形呈现 404，URL 保留', async () => {
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: false })
+    await resetToOnboarding()
+    expect(await navigate('/register')).toBe('not-found')
+    expect(router.currentRoute.value.path).toBe('/register')
+  })
+
+  it('已登录访问 /register：弹回首页（防误覆盖当前会话）', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/register')).toBe('home')
+  })
+
+  it('开关关且未初始化：/register 一律先进引导页（首启判定优先）', async () => {
+    mockedStatus.mockResolvedValue({ initialized: false, registration_enabled: false })
+    expect(await navigate('/register')).toBe('onboarding')
   })
 })

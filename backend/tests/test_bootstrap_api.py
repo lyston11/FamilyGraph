@@ -24,7 +24,21 @@ from app.utils import security
 
 
 def test_status_false_when_empty(client) -> None:
-    assert client.get("/api/bootstrap/status").json() == {"initialized": False}
+    assert client.get("/api/bootstrap/status").json() == {
+        "initialized": False,
+        "registration_enabled": True,
+    }
+
+
+def test_status_projects_registration_enabled(client, monkeypatch) -> None:
+    """registration_enabled 是 REGISTRATION_ENABLED 的运行时投影（09-05 决策 2）。"""
+    monkeypatch.setattr(config, "REGISTRATION_ENABLED", False)
+    assert client.get("/api/bootstrap/status").json() == {
+        "initialized": False,
+        "registration_enabled": False,
+    }
+    monkeypatch.setattr(config, "REGISTRATION_ENABLED", True)
+    assert client.get("/api/bootstrap/status").json()["registration_enabled"] is True
 
 
 def test_initialize_endpoint_removed(client) -> None:
@@ -37,9 +51,15 @@ def test_initialize_endpoint_removed(client) -> None:
 def test_status_does_not_probe_system_admin(client, db_session) -> None:
     """仅存在系统管理员（无家庭 User）时 status 仍为未初始化：不泄露后台存在性。"""
     create_system_admin(db_session)
-    assert client.get("/api/bootstrap/status").json() == {"initialized": False}
+    assert client.get("/api/bootstrap/status").json() == {
+        "initialized": False,
+        "registration_enabled": True,
+    }
     create_user_with_pin(db_session, "家庭用户", "123456")
-    assert client.get("/api/bootstrap/status").json() == {"initialized": True}
+    assert client.get("/api/bootstrap/status").json() == {
+        "initialized": True,
+        "registration_enabled": True,
+    }
 
 
 def test_preflight_creates_single_admin_with_0600_file(db_session) -> None:

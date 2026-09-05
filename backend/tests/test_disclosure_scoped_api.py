@@ -1,7 +1,9 @@
-"""逐空间披露偏好（v2 D4 Gap3，spec/architecture.md §0.1）。
+"""逐空间披露偏好（v2 D4 Gap3 + 09-05 高敏感策略放开）。
 
-断言：PUT 携带 space_id 写逐空间覆盖行且仅本人可调；高敏感类别恒拒绝
-true（422）；GET 返回合并矩阵；逐空间行双向覆盖全局行（false 收紧全局 true）。
+断言：PUT 携带 space_id 写逐空间覆盖行且仅本人可调；基础五类全局/逐空间
+正常读写；09-05 起高敏感类别本人可显式开启（成年人 200 + 审计留痕），未成年
+人（is_minor）对高敏感开启请求整体 422（DISCLOSURE_MINOR_FORBIDDEN）；默认
+仍为关闭；GET 返回合并矩阵；逐空间行双向覆盖全局行（false 收紧全局 true）。
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
 BASIC_FALSE = {"avatar": False, "photos": False, "dates": False, "bio": False, "attachments": False}
+
+_MINOR_BIRTH = {"cal_type": "solar", "date": "2018-04-25"}
 
 
 @pytest.fixture()
@@ -134,20 +138,78 @@ def test_space_scope_rejected_for_non_self_editor(client, scope_scene) -> None:
 
 
 @pytest.mark.parametrize("with_space", [False, True])
-@pytest.mark.parametrize("category", ["health", "address", "school", "contact", "private_notes"])
-def test_high_sensitive_true_always_422(
-    client, scope_scene, category: str, with_space: bool
+def test_adult_self_can_enable_high_sensitive(
+    client, db_session, scope_scene, with_space: bool
 ) -> None:
-    """高敏感类别任何 scope 下 true 一律 422（合同不可静默放宽）。"""
+    """09-05 放开：成年人本人可显式开启高敏感类别（全局与逐空间），落行 + 审计。"""
     h = _h(client, "本人", "111111")
-    body = {**BASIC_FALSE, category: True}
+    space_id = scope_scene["space"].id
+    body = {**BASIC_FALSE, "health": True}
     if with_space:
-        body["space_id"] = scope_scene["space"].id
+        body["space_id"] = space_id
     r = client.put(f"/api/users/{scope_scene['self'].id}/disclosure", json=body, headers=h)
-    assert r.status_code == 422
+    assert r.status_code == 200, r.text
+
+    from app.models.audit_log import AuditLog
+    from app.services.disclosure import all_disclosure_flags, disclosed_categories
+
+    # 空间级开启写的是 space 覆盖行（all_disclosure_flags 只读 global 行），
+    # 合并视图以 disclosed_categories 为准
+    if with_space:
+        assert disclosed_categories(db_session, scope_scene["self"], space_id) >= {"health"}
+    else:
+        assert disclosed_categories(db_session, scope_scene["self"], None) >= {"health"}
+        assert all_disclosure_flags(db_session, scope_scene["self"])["health"] is True
+
+    audit_row = (
+        db_session.query(AuditLog).filter(AuditLog.action == "disclosure_high_risk_changed").one()
+    )
+    assert audit_row.detail["categories"] == ["health"]
+    assert audit_row.detail["allowed"] == {"health": True}
+    assert audit_row.detail["scope"] == ("space" if with_space else "global")
+    if with_space:
+        assert audit_row.detail["space_id"] == space_id
+    # 审计只含类别与目标值，不含任何内容文本
+    assert "raw" not in audit_row.detail
+
+
+def test_minor_high_sensitive_true_rejected_422(client, db_session, scope_scene) -> None:
+    """红线：未成年人（is_minor）对高敏感开启请求整体 422，不落任何 true 行。"""
+    minor = create_user_with_pin(
+        db_session, "未成年", "555555", claim_status="claimed", birth=_MINOR_BIRTH
+    )
+    db_session.commit()
+    h = _h(client, "未成年", "555555")
+    for body in (
+        {**BASIC_FALSE, "health": True},
+        {**BASIC_FALSE, "private_notes": True, "contact": True, "space_id": scope_scene["space"].id},
+    ):
+        r = client.put(f"/api/users/{minor.id}/disclosure", json=body, headers=h)
+        assert r.status_code == 422
+        assert r.json()["error"]["code"] == "DISCLOSURE_MINOR_FORBIDDEN"
+
+    from app.services.disclosure import all_disclosure_flags
+
+    assert all(v is False for v in all_disclosure_flags(db_session, minor).values())
+
+
+def test_minor_high_sensitive_false_accepted(client, db_session, scope_scene) -> None:
+    """未成年人显式 false 不触发守卫（最小披露默认不变）。"""
+    minor = create_user_with_pin(
+        db_session, "未成年", "555555", claim_status="claimed", birth=_MINOR_BIRTH
+    )
+    db_session.commit()
+    h = _h(client, "未成年", "555555")
+    r = client.put(
+        f"/api/users/{minor.id}/disclosure",
+        json={**BASIC_FALSE, "health": False},
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
 
 
 def test_high_sensitive_false_accepted_and_never_stored(client, db_session, scope_scene) -> None:
+    """无既有行时显式 false 不落行（false 语义由缺省表达）。"""
     h = _h(client, "本人", "111111")
     body = {**BASIC_FALSE, "health": False}
     r = client.put(f"/api/users/{scope_scene['self'].id}/disclosure", json=body, headers=h)
@@ -161,6 +223,33 @@ def test_high_sensitive_false_accepted_and_never_stored(client, db_session, scop
         .all()
     )
     assert all(row.category not in ("health",) for row in rows)
+
+
+def test_high_sensitive_turn_off_writes_audit(db_session, client, scope_scene) -> None:
+    """开启→关闭同样属于高敏感披露变更，审计记目标值 False。"""
+    from app.models.audit_log import AuditLog
+
+    h = _h(client, "本人", "111111")
+    r = client.put(
+        f"/api/users/{scope_scene['self'].id}/disclosure",
+        json={**BASIC_FALSE, "address": True},
+        headers=h,
+    )
+    assert r.status_code == 200
+    r = client.put(
+        f"/api/users/{scope_scene['self'].id}/disclosure",
+        json={**BASIC_FALSE, "address": False},
+        headers=h,
+    )
+    assert r.status_code == 200
+
+    rows = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "disclosure_high_risk_changed")
+        .order_by(AuditLog.id)
+        .all()
+    )
+    assert [row.detail["allowed"]["address"] for row in rows] == [True, False]
 
 
 def test_unknown_space_404(client, scope_scene) -> None:

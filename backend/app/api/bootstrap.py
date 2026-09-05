@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app import config
 from app.api.deps import get_db
 from app.models.user import User
 from app.schemas.auth import BootstrapStatusResponse
@@ -19,6 +20,13 @@ router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
 
 @router.get("/status", response_model=BootstrapStatusResponse)
 def status(session: Session = Depends(get_db)) -> BootstrapStatusResponse:
-    """公开端点：只统计家庭 User，不探测系统管理员存在性。"""
+    """公开端点：只统计家庭 User，不探测系统管理员存在性。
+
+    registration_enabled 是 REGISTRATION_ENABLED 的运行时投影（决策 2）：
+    前端据此显隐注册入口，开关关时注册路由与端点同形下线。
+    """
     user_count = session.query(func.count(User.id)).scalar()
-    return BootstrapStatusResponse(initialized=bool(user_count and user_count > 0))
+    return BootstrapStatusResponse(
+        initialized=bool(user_count and user_count > 0),
+        registration_enabled=config.REGISTRATION_ENABLED,
+    )

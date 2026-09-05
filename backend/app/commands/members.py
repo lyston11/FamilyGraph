@@ -35,6 +35,7 @@ from app.errors import (
     raise_api_error,
 )
 from app.models import Account, User
+from app.models.account_binding import AccountBinding
 from app.models.attachment import Attachment
 from app.models.relation import Relation
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
@@ -62,6 +63,26 @@ class MergedProfile:
     retired_id: int
     moved: dict[str, int] = field(default_factory=dict)
     already_merged: bool = False
+
+
+@dataclass(frozen=True)
+class ManagedMemberOutcome:
+    """建档命令结果（POST /users 命令层）。
+
+    - 新建 managed：pin 为一次性明文 PIN，仅本次响应可见；
+    - 撞名转绑定（决策 16）：不建 managed 账号，pin=None，binding_id 指向新建的
+      pending 绑定请求（响应以 bound_to_existing 标记，不含被绑定方任何数据）；
+    - 幂等重放：replayed=True，不回放初始 PIN。
+    """
+
+    member: User
+    pin: str | None
+    replayed: bool
+    binding_id: int | None = None
+
+    @property
+    def bound_to_existing(self) -> bool:
+        return self.binding_id is not None
 
 
 def _enrich(value: Any) -> Any:
@@ -152,6 +173,131 @@ def _guard_duplicate_person(
                 "resolution": "reference_existing_or_confirm_distinct",
             },
         )
+
+
+def _account_status_of(session: Session, user_id: int) -> str | None:
+    return session.scalar(select(Account.status).where(Account.user_id == user_id))
+
+
+def _is_self_registered_claimed(session: Session, user_id: int) -> bool:
+    """自注册账号判定（决策 16 绑定分支的目标资格）。
+
+    自助注册（commands/registration.py）的初始态 = Account claimed 且
+    ``users.created_by IS NULL``；建档产生的账号恒有代管人（created_by 非空）。
+    无 Account 的行（绑定中 provisional 人物）返回 False，维持既有 409 门禁。
+    创建者被删除后 created_by 置 NULL 的 claimed 档案同样视为可绑定对象——
+    它已是本人持有的真实凭据，「本人确认后并回」的语义仍然成立。
+    """
+    if _account_status_of(session, user_id) != identity_fsm.ACCOUNT_CLAIMED:
+        return False
+    return session.scalar(select(User.created_by).where(User.id == user_id)) is None
+
+
+def _find_self_registered_binding_target(
+    session: Session,
+    *,
+    space_id: int,
+    name: str,
+    birth: dict[str, Any] | None,
+    actor_id: int,
+    allow_duplicate_person: bool,
+) -> person_identity.DuplicateCandidate | None:
+    """建档撞名并流判定（决策 16）：查重命中 claimed 自注册账号 → 转绑定请求。
+
+    判定口径与既有门禁 ``_guard_duplicate_person`` 同源（person_identity 单点）：
+
+    - 存在强匹配候选且**并非全部**为自注册 claimed → None（既有 409 门禁原样生效，
+      managed 重复档案仍被硬拦）；
+    - 强匹配候选全部为自注册 claimed → 返回首个候选（``allow_duplicate_person``
+      不放宽强匹配，与 §0.9 一致）；
+    - 弱匹配：创建者已显式消歧（allow=True）→ None（既有放行路径）；
+      未消歧且存在自注册 claimed 弱候选 → 返回首个候选——是否同一人交由本人
+      确认/拒绝裁决，确认前不向发起人泄露该候选任何数据。
+
+    只在建档命令选空间时调用（查重门禁本就是空间作用域）；无空间建档维持现状。
+    """
+    candidates = person_identity.find_duplicate_candidates(
+        session, space_id=space_id, name=name, birth=birth, exclude_user_id=actor_id
+    )
+    if not candidates:
+        return None
+    strong = [c for c in candidates if c.strength == person_identity.STRENGTH_STRONG]
+    if strong:
+        if all(_is_self_registered_claimed(session, c.user_id) for c in strong):
+            return strong[0]
+        return None
+    if allow_duplicate_person:
+        return None
+    weak_self_registered = [
+        c
+        for c in candidates
+        if c.strength == person_identity.STRENGTH_WEAK
+        and _is_self_registered_claimed(session, c.user_id)
+    ]
+    return weak_self_registered[0] if weak_self_registered else None
+
+
+def _create_binding_person(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    name: str,
+    gender: str,
+    birth: dict[str, Any] | None,
+    death: dict[str, Any] | None,
+    bio: str | None,
+    privacy_mode: str,
+    space: FamilySpace | None,
+) -> User:
+    """撞名绑定分支的 provisional 人物：**不建 managed 账号**（决策 16 / design §4）。
+
+    人物行承载建档录入的数据，但不配发 Account/PIN——它注定并回被绑定人的既有
+    user，提前配发只会多出一份可登录凭据（§0.9：重复建档 = 多出一份凭据）。
+    无凭据人物不参与登录（登录 join accounts 天然不可见），确认前仅占空间人物
+    身份槽位（SpaceProfileRef）。不做重复门禁：调用方已裁决走绑定分支。
+    """
+    now = timeutil.utcnow()
+    person = User(
+        name=name.strip(),
+        created_at=now,
+        gender=gender,
+        birth=_enrich(birth),
+        death=_enrich(death),
+        bio=bio,
+        privacy_mode=privacy_mode,
+        created_by=ctx.user_id,
+        profile_status="provisional",
+    )
+    session.add(person)
+    session.flush()  # 取得 id 供空间引用/绑定行/关系边引用
+    if space is not None:
+        session.add(
+            SpaceProfileRef(
+                space_id=space.id,
+                user_id=person.id,
+                added_by=ctx.user_id,
+                status="active",
+                created_at=now,
+            )
+        )
+    emit(
+        session,
+        event_type="profile.created",
+        aggregate_type="profile",
+        aggregate_id=person.id,
+        payload={"name": person.name, "created_by": ctx.user_id, "binding_pending": True},
+        space_id=space.id if space is not None else None,
+        actor_account_id=ctx.account_id,
+    )
+    audit.write_audit(
+        session,
+        action="profile_created",
+        actor_id=ctx.user_id,
+        target_id=person.id,
+        ip=ctx.ip,
+        detail={"name": person.name, "privacy_mode": privacy_mode, "binding_pending": True},
+    )
+    return person
 
 
 def _create_member_core(
@@ -297,13 +443,19 @@ def create_managed_member(
     relation_label: str | None = None,
     relation_text: str | None = None,
     allow_duplicate_person: bool = False,
-) -> tuple[User, str | None, bool]:
+) -> ManagedMemberOutcome:
     """F-1 原子建档：provisional 档案 + managed 账号 +（AD-4 新建例外）直接 active
     关系 + 关系原文 + proposed SourceFact + 空间引用 + 事件/审计 + 幂等台账，
     任一步失败整体回滚。
 
-    返回 (member, pin, replayed)。新建时返回一次性 PIN；同幂等键重放返回原
-    档案但不回放 PIN（replayed=True, pin=None）—— 初始 PIN 只出现一次。
+    撞名并流（决策 16 / design §4）：目标空间查重命中已存在的 claimed 自注册账号
+    时**不建 managed 账号**，改创建 account_bindings(pending)——建档录入成为无凭据
+    provisional 人物，关系边保持 pending（目标为已存在账号不走 AD-4 新建例外），
+    被绑定人本人以 PIN + 「这是我」确认后并回（commands/bindings.py）。
+    发起人响应只见 bound_to_existing 标记，全程不泄露被绑定方任何数据。
+
+    返回 ManagedMemberOutcome：新建时 pin 为一次性 PIN（仅本次响应可见）；同幂等键
+    重放返回原档案但不回放 PIN（replayed=True, pin=None）。
     """
     actor = load_actor(session, ctx)
     key = idempotency_key.strip()
@@ -318,6 +470,116 @@ def create_managed_member(
 
     try:
         with command_transaction(session, immediate=True):
+            # ---- 撞名并流判定（决策 16）：先于任何建档写入，与门禁同一立即事务 ----
+            binding_space: FamilySpace | None = None
+            binding_candidate: person_identity.DuplicateCandidate | None = None
+            if space_membership_space_id is not None:
+                binding_space = session.get(FamilySpace, space_membership_space_id)
+                if binding_space is None or not space_fsm_is_active(
+                    session, binding_space.id, actor.id
+                ):
+                    raise_api_error(404, SPACE_NOT_FOUND, "目标家庭空间不存在或无权操作")
+                binding_candidate = _find_self_registered_binding_target(
+                    session,
+                    space_id=binding_space.id,
+                    name=name,
+                    birth=birth,
+                    actor_id=actor.id,
+                    allow_duplicate_person=allow_duplicate_person,
+                )
+
+            if binding_candidate is not None and binding_space is not None:
+                binding_target = session.get(User, binding_candidate.user_id)
+                if binding_target is None:  # 理论不可达：候选来自真实行
+                    raise_api_error(409, PERSON_DUPLICATE_IN_SPACE, "该空间已存在同一个人的档案")
+                person = _create_binding_person(
+                    session,
+                    ctx,
+                    name=name,
+                    gender=gender,
+                    birth=birth,
+                    death=death,
+                    bio=bio,
+                    privacy_mode=privacy_mode,
+                    space=binding_space,
+                )
+                # 目标为已存在/claimed 账号 → pending 合并确认流（AD-4）；
+                # 确认时随人物并回改指向 target 后由本人 accept（commands/bindings.py）
+                edge = relation_fsm.create_relation(
+                    session,
+                    from_user=actor.id,
+                    to_user=person.id,
+                    dir_class=relation_dir_class,
+                    label=relation_label,
+                    status="pending",
+                )
+                emit(
+                    session,
+                    event_type="relation.created",
+                    aggregate_type="relation",
+                    aggregate_id=edge.id,
+                    payload={
+                        "from_user": edge.from_user,
+                        "to_user": edge.to_user,
+                        "dir_class": edge.dir_class,
+                        "status": edge.status,
+                    },
+                    actor_account_id=ctx.account_id,
+                )
+                # 关系原文 append-only（有则保存）；proposed SourceFact 随确认并回改指向
+                binding_raw_text_id: int | None = None
+                if relation_text is not None and relation_text.strip():
+                    raw = source_facts.create_raw_relation_input(
+                        session,
+                        author_account_id=ctx.account_id,
+                        text=relation_text,
+                        context={"dir_class": relation_dir_class, "label": relation_label},
+                    )
+                    binding_raw_text_id = raw.id
+                source_facts.create_structural_edge_proposal(
+                    session,
+                    from_user=actor.id,
+                    to_user=person.id,
+                    dir_class=relation_dir_class,
+                    raw_text_id=binding_raw_text_id,
+                    asserted_by_account_id=ctx.account_id,
+                )
+                binding = AccountBinding(
+                    initiator_id=actor.id,
+                    target_id=binding_target.id,
+                    person_id=person.id,
+                    status="pending",
+                    created_at=timeutil.utcnow(),
+                )
+                session.add(binding)
+                session.flush()
+                audit.write_audit(
+                    session,
+                    action="account_binding_created",
+                    actor_id=actor.id,
+                    target_id=binding.id,
+                    ip=ctx.ip,
+                    detail={
+                        "person_id": person.id,
+                        "target_id": binding_target.id,
+                        "space_id": binding_space.id,
+                        "match_strength": binding_candidate.strength,
+                    },
+                )
+                session.add(
+                    MemberCreationRequest(
+                        actor_user_id=actor.id,
+                        idempotency_key=key,
+                        request_hash=request_hash,
+                        member_user_id=person.id,
+                        relation_id=edge.id,
+                        created_at=timeutil.utcnow(),
+                    )
+                )
+                return ManagedMemberOutcome(
+                    member=person, pin=None, replayed=False, binding_id=binding.id
+                )
+
             member, pin = _create_member_core(
                 session,
                 ctx,
@@ -393,6 +655,7 @@ def create_managed_member(
                     created_at=timeutil.utcnow(),
                 )
             )
+            return ManagedMemberOutcome(member=member, pin=pin, replayed=False)
     except IntegrityError:
         # 并发窗口：同 key 由另一请求先提交 → 唯一约束冲突，按重放裁决
         session.rollback()
@@ -400,7 +663,6 @@ def create_managed_member(
         if prior is not None:
             return _replay_member_creation(session, prior, request_hash)
         raise
-    return member, pin, False
 
 
 def _find_member_creation(
@@ -416,13 +678,20 @@ def _find_member_creation(
 
 def _replay_member_creation(
     session: Session, prior: MemberCreationRequest, request_hash: str
-) -> tuple[User, str | None, bool]:
+) -> ManagedMemberOutcome:
     if prior.request_hash != request_hash:
         raise_api_error(409, IDEMPOTENCY_PAYLOAD_CONFLICT, "相同请求键但请求内容不同")
     member = session.get(User, prior.member_user_id)
     if member is None:
         raise_api_error(409, VALIDATION_ERROR, "幂等请求对应的档案已不存在")
-    return member, None, True
+    # 撞名绑定建档重放：找回原绑定行以保持 bound_to_existing 标记（绑定行终态保留）
+    binding_id = session.scalar(
+        select(AccountBinding.id)
+        .where(AccountBinding.person_id == member.id)
+        .order_by(AccountBinding.id.desc())
+        .limit(1)
+    )
+    return ManagedMemberOutcome(member=member, pin=None, replayed=True, binding_id=binding_id)
 
 
 def canonical_member_request_hash(
@@ -586,8 +855,13 @@ def update_disclosure(
     *,
     space_id: int | None = None,
 ) -> User:
-    """披露开关整体替换（基础五类）；修改权：全局=档案编辑权主体，
-    逐空间覆盖（space_id 非空）仅档案本人（v2 Gap3：防止代管人代设空间披露）。"""
+    """披露开关整体替换（基础五类 + 高敏感五类）；修改权：全局=档案编辑权主体，
+    逐空间覆盖（space_id 非空）仅档案本人（v2 Gap3：防止代管人代设空间披露）。
+
+    09-05 高敏感策略放开：health/address/school/contact/private_notes 由本人显式
+    开启（未成年人开启请求在服务层整体 422）；命中高敏感且值变化时追加
+    disclosure_high_risk_changed 审计行（detail 只含类别名与目标值，无内容文本）。
+    """
     actor = load_actor(session, ctx)
     with command_transaction(session):
         target = session.get(User, target_id)
@@ -604,10 +878,12 @@ def update_disclosure(
             space = session.get(FamilySpace, space_id)
             if space is None:
                 raise_api_error(404, SPACE_NOT_FOUND, "目标家庭空间不存在")
-            disclosure_service.set_space_disclosure(session, target, space_id, flags)
+            changed_high_risk = disclosure_service.set_space_disclosure(
+                session, target, space_id, flags
+            )
             scope_payload.update(scope="space", space_id=space_id)
         else:
-            disclosure_service.set_basic_disclosure(session, target, flags)
+            changed_high_risk = disclosure_service.set_basic_disclosure(session, target, flags)
             scope_payload["scope"] = "global"
         emit(
             session,
@@ -626,6 +902,24 @@ def update_disclosure(
             ip=ctx.ip,
             detail=dict(scope_payload),
         )
+        if changed_high_risk:
+            audit.write_audit(
+                session,
+                action="disclosure_high_risk_changed",
+                actor_id=actor.id,
+                target_id=target.id,
+                ip=ctx.ip,
+                detail={
+                    "scope": scope_payload["scope"],
+                    **(
+                        {"space_id": space_id}
+                        if scope_payload["scope"] == "space"
+                        else {}
+                    ),
+                    "categories": sorted(changed_high_risk),
+                    "allowed": {category: bool(flags[category]) for category in changed_high_risk},
+                },
+            )
     return target
 
 
@@ -665,7 +959,8 @@ def delete_profile_core(
         "bio": target.bio,
         "privacy_mode": target.privacy_mode,
         "profile_status": target.profile_status,
-        "account_status": target.account.status,
+        # 撞名绑定中的 provisional 人物无 Account（决策 16）：快照记 None
+        "account_status": target.account.status if target.account is not None else None,
         "created_by": target.created_by,
     }
     # profile.deleted 的失效合同需要空间范围：refs/members 行随删除级联消失，
@@ -864,9 +1159,12 @@ def merge_duplicate_profile(
         if in_space is None or retired_in_space is None:
             raise_api_error(404, USER_NOT_FOUND, "资源不存在")
 
-        # 状态门：合并只适用于双方均 managed（未认领）；任一 claimed 走 claim_dispute
+        # 状态门：合并只适用于双方均 managed（未认领）；任一 claimed 走 claim_dispute。
+        # 无 Account 的行（撞名绑定中的 provisional 人物）同样拒绝：其身份处置权
+        # 属于绑定确认流（commands/bindings.py），不得经合并路径旁路。
         for role, row in (("survivor", survivor), ("retired", retired)):
-            if row.account.status != "managed":
+            status = row.account.status if row.account is not None else None
+            if status != "managed":
                 raise_api_error(
                     409,
                     IDENTITY_INVALID_TRANSITION,
@@ -874,7 +1172,7 @@ def merge_duplicate_profile(
                     detail={
                         "role": role,
                         "user_id": row.id,
-                        "status": row.account.status,
+                        "status": status,
                         "resolution": "claim_dispute",
                     },
                 )
@@ -957,7 +1255,7 @@ def merge_duplicate_profile(
             "bio": retired.bio,
             "privacy_mode": retired.privacy_mode,
             "profile_status": retired.profile_status,
-            "account_status": retired.account.status,
+            "account_status": retired.account.status if retired.account is not None else None,
             "created_by": retired.created_by,
         }
 

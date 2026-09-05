@@ -3,10 +3,12 @@
 自动播种（app.main lifespan 在 admin bootstrap 之后调用，进程级单次）：
 - 双重门控：``DEV_SEED_DEMO_DATA=1``（默认 "0" 关闭）且 ``users`` 表为空；
   任一不满足只跳过并记日志，绝不变更已有数据（PRD 红线 1）；
-- 演示数据集「王德海家」：6 名可登录成员（PIN 统一 123456，公开 dev 演示值）、
-  spouse/elder 结构边及其 confirmed SourceFact 映射；全部经 SQLAlchemy 模型与
-  既有 security / source_facts 设施写入，不使用裸 SQL，不创建/修改
-  system_admins（admin bootstrap 的专属职责，09-04 合同）。
+- 演示数据集「王德海家」：6 名可登录成员（PIN 统一 123456，公开 dev 演示值，含
+  结构化出生日期——王小虎为未成年人，演示未成年保护 overlay）、spouse/elder
+  结构边及其 confirmed SourceFact 映射（household + lineage 双空间各一份，
+  家族卡与家族树均可投影渲染）、基础五类披露全局开放（高敏感保持关闭）；
+  全部经 SQLAlchemy 模型与既有 security / source_facts / disclosure 设施写入，
+  不使用裸 SQL，不创建/修改 system_admins（admin bootstrap 的专属职责，09-04 合同）。
 
 一次性清库（运维）：``python -m app.dev_seed --reset``
 - 先备份当前 db 到 ``/data/backups/pre-reset-<时间戳>.db``，再删除
@@ -39,7 +41,8 @@ from app.commands.context import command_transaction
 from app.models.account import Account
 from app.models.relation import Relation
 from app.models.space import FamilySpace, SpaceMember
-from app.models.user import User
+from app.models.user import BASIC_DISCLOSURE_KEYS, User
+from app.services import disclosure as disclosure_service
 from app.services import source_facts as sf_service
 from app.utils import security, timeutil
 
@@ -48,9 +51,10 @@ logger = logging.getLogger(__name__)
 # 进程级防重入（与 services/admin_bootstrap._BOOTSTRAP_DONE 同款语义）
 _SEED_DONE = False
 
-# ---- 演示数据集常量（PRD 2.2）----
+# ---- 演示数据集常量（PRD 2.2 + 09-05 family-profile-nav-disclosure R3/R6）----
 
 _SEED_SPACE_NAME = "王德海家"
+_SEED_LINEAGE_SPACE_NAME = "王氏家族"
 _SEED_PIN = "123456"  # 公开 dev 演示值（PRD 红线 4：允许出现在日志）
 _SEED_OWNER_NAME = "王德海"
 # (姓名, 性别)；gender 枚举见 app.schemas.user.GenderType（m/f/unknown）
@@ -62,6 +66,15 @@ _SEED_MEMBERS: tuple[tuple[str, str], ...] = (
     ("王远山", "m"),
     ("王小虎", "m"),
 )
+# 结构化出生日期（solar）；王小虎 2018 年生 = 未成年人（演示 minor 保护 overlay）
+_SEED_BIRTHS: dict[str, tuple[int, int, int]] = {
+    "王远山": (1940, 5, 12),
+    "王德海": (1965, 3, 8),
+    "周秀英": (1967, 7, 19),
+    "王建军": (1990, 11, 2),
+    "王小雨": (1993, 4, 25),
+    "王小虎": (2018, 9, 14),
+}
 # v1 结构边 (from_name, to_name, dir_class)，方向语义同 Relation 模型 docstring
 _SEED_EDGES: tuple[tuple[str, str, str], ...] = (
     ("王德海", "周秀英", "spouse"),
@@ -94,14 +107,15 @@ def maybe_seed_demo_data(session: Session) -> bool:
                 user_count,
             )
             return False
-        space_id = _seed_demo_family(session)
+        household_id, lineage_id = _seed_demo_family(session)
     _SEED_DONE = True
     # 摘要日志：仅计数 / space_id / 公开演示 PIN；姓名等 PII 不进应用日志
     # （logging-guidelines；演示集本身固定，可按 space_id 查库核对）
     logger.info(
-        "dev seed completed: space_id=%d members=%d relations=%d source_facts=%d; "
-        "demo PIN=%s (public dev value)",
-        space_id,
+        "dev seed completed: household_id=%d lineage_id=%d members=%d relations=%d "
+        "source_facts=%d(×2 spaces); demo PIN=%s (public dev value)",
+        household_id,
+        lineage_id,
         len(_SEED_MEMBERS),
         len(_SEED_EDGES),
         len(_SEED_EDGES),
@@ -112,14 +126,16 @@ def maybe_seed_demo_data(session: Session) -> bool:
 
 def _seed_demo_user(session: Session, *, name: str, gender: str, now: datetime) -> User:
     """单个演示成员；形态契约与 tests/conftest.py create_user_with_pin 保持同步
-    （claimed + identity_confirmed + pin_must_change=False，家庭端 PIN 统一）。"""
+    （claimed + identity_confirmed + pin_must_change=False，家庭端 PIN 统一；
+    birth 用 solar 结构化日期——王小虎为未成年人，演示 minor 保护 overlay）。"""
+    y, m, d = _SEED_BIRTHS[name]
     user = User(
         name=name,
         created_at=now,
         gender=gender,
         privacy_mode="handover",
         created_by=None,
-        birth=None,
+        birth={"cal_type": "solar", "date": f"{y:04d}-{m:02d}-{d:02d}", "is_leap_month": False},
         bio=None,
         profile_status="identity_confirmed",
         profile_confirmed_at=now,
@@ -189,12 +205,13 @@ def _map_structural_edge(edge: Relation) -> tuple[str, int, int]:
     raise ValueError(f"不可映射的 dir_class: {edge.dir_class}")
 
 
-def _seed_demo_family(session: Session) -> int:
-    """在当前事务内写入演示家庭，返回空间 id（调用方负责 command_transaction/commit）。
+def _seed_demo_family(session: Session) -> tuple[int, int]:
+    """在当前事务内写入演示家庭，返回 (household_id, lineage_id)（调用方负责事务/提交）。
 
-    写入顺序 User+Account → FamilySpace+SpaceMember → Relation → confirmed
-    SourceFact（带 space_id，家庭卡/PersonalFamilyView 可投影渲染），全部走
-    模型约束与 source_facts 服务（含 parent 成环检测），无裸 SQL。
+    写入顺序 User+Account → 双空间（household 王德海家 / lineage 王氏家族）+成员行 →
+    Relation → confirmed SourceFact（每个空间各投影一份，家庭卡与家族树均可渲染）→
+    基础五类披露全局开放（成员互见；高敏感保持关闭，R6）。全部走模型约束与
+    source_facts / disclosure 服务（含 parent 成环检测），无裸 SQL。
     """
     now = timeutil.utcnow()
     users = {
@@ -204,20 +221,33 @@ def _seed_demo_family(session: Session) -> int:
     session.flush()  # 取得 users.id 供空间/成员/关系引用
 
     owner = users[_SEED_OWNER_NAME]
-    space = FamilySpace(name=_SEED_SPACE_NAME, kind="household", owner_id=owner.id, created_at=now)
-    session.add(space)
+
+    # household 空间（家庭卡）+ lineage 空间（家族树）：双空间模型（PRD R3）
+    household = FamilySpace(
+        name=_SEED_SPACE_NAME, kind="household", owner_id=owner.id, created_at=now
+    )
+    lineage = FamilySpace(
+        name=_SEED_LINEAGE_SPACE_NAME, kind="lineage", owner_id=owner.id, created_at=now
+    )
+    session.add_all([household, lineage])
     session.flush()
-    for name, _gender in _SEED_MEMBERS:
-        _seed_space_member(
-            session,
-            space_id=space.id,
-            user_id=users[name].id,
-            added_by=owner.id,
-            role="space_admin" if name == _SEED_OWNER_NAME else "member",
-            now=now,
-        )
+    for space in (household, lineage):
+        for name, _gender in _SEED_MEMBERS:
+            _seed_space_member(
+                session,
+                space_id=space.id,
+                user_id=users[name].id,
+                added_by=owner.id,
+                role="space_admin" if name == _SEED_OWNER_NAME else "member",
+                now=now,
+            )
     session.flush()
 
+    # 结构边 + confirmed SourceFact：**全局事实（space_id=NULL）**。
+    # 成环检测（source_facts._ancestors_within）不按空间隔离，同一亲子事实落两份
+    # 会被判环；且 load_graph 对全局事实全空间可见——一份事实即可同时喂饱
+    # 家庭卡（household 投影）与家族树（lineage 投影），语义上也更贴近
+    # 「血缘关系是全局事实，空间只是可见范围」的领域模型。
     for from_name, to_name, dir_class in _SEED_EDGES:
         edge = _seed_relation(
             session,
@@ -232,11 +262,18 @@ def _seed_demo_family(session: Session) -> int:
             fact_type=fact_type,
             subject_user_id=subject_id,
             object_user_id=object_id,
-            space_id=space.id,
+            space_id=None,
             provenance="connection_accept",
             state=sf_service.FACT_CONFIRMED,
         )
-    return space.id
+
+    # 基础五类披露全局开放（R6 成员互见）：经 disclosure 服务正常路径写入；
+    # 高敏感类别不写（默认关闭，Q4=b 仅为"可开"）
+    for user in users.values():
+        disclosure_service.set_basic_disclosure(
+            session, user, {key: True for key in BASIC_DISCLOSURE_KEYS}
+        )
+    return household.id, lineage.id
 
 
 def reset_database() -> Path | None:

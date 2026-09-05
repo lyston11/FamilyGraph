@@ -165,7 +165,12 @@ function onNodeSelect(userId: number): void {
     void router.push({ name: 'home' })
     return
   }
-  void router.push({ name: 'person-profile', params: { userId: String(userId) } })
+  // fgBackTo：资料页返回按钮的上下文来源（PRD R1）
+  void router.push({
+    name: 'person-profile',
+    params: { userId: String(userId) },
+    state: { fgBackTo: 'family-space' },
+  })
 }
 
 function openRelationshipPanel(edgeKey: string): void {

@@ -39,7 +39,15 @@ ADMIN_JWT_SECRET_MIN_LENGTH: int = 32
 # bootstrap 初始密码长度（secrets.token_urlsafe 字节数 → ~24 可见字符）
 ADMIN_BOOTSTRAP_PASSWORD_BYTES: int = 18
 
+# ---- 09-05 家庭账号开通与注册（PRD 决策 2/6；design.md §3/§4）----
+# 部署开关：默认开；关闭时注册端点与未知路径同形 404（不给探测信号），等于整体回滚开关
+REGISTRATION_ENABLED: bool = os.environ.get("REGISTRATION_ENABLED", "1").lower() in ("1", "true")
+# 注册端点 IP 滑窗限流（进程内；compose 单 API 进程无横向扩容，多实例再落共享存储）
+REGISTRATION_RATE_LIMIT_MAX_ATTEMPTS: int = int(
+    os.environ.get("REGISTRATION_RATE_LIMIT_MAX_ATTEMPTS", "10")
 )
+REGISTRATION_RATE_LIMIT_WINDOW_SECONDS: int = int(
+    os.environ.get("REGISTRATION_RATE_LIMIT_WINDOW_SECONDS", "900")
 )
 
 # ---- 09-05 dev 演示数据种子（空库自动播种；默认关闭）----

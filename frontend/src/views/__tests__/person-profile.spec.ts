@@ -438,16 +438,29 @@ describe('PersonProfileView 跳转与重定向', () => {
     expect(mockedFetchView).not.toHaveBeenCalled()
   })
 
-  it('返回家族树：路由到 family-space 且保持同一 lineage 空间上下文', async () => {
+  it('返回按钮默认回家庭卡（无 state 兜底；PRD R1）', async () => {
     const { wrapper, router, pinia } = await mountProfile({
       data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)] }),
     })
 
     await wrapper.find('[data-test="back-to-family-tree"]').trigger('click')
     await flushPromises()
-    expect(router.currentRoute.value.name).toBe('family-space')
+    expect(router.currentRoute.value.name).toBe('home')
     // 空间上下文由 spaces store 会话态决定：未发生空间切换
     expect(useSpacesStore(pinia).currentSpaceId).toBe(9)
+  })
+
+  it('返回按钮感知来源 state：家族树进入（fgBackTo）时回家族树', async () => {
+    const { wrapper, router } = await mountProfile({
+      data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)] }),
+    })
+    // 模拟从家族树进入：直接向当前 history 条目注入 fgBackTo
+    // （对同路由重复 push 会被 vue-router 去重，state 不落盘）
+    history.replaceState({ ...history.state, fgBackTo: 'family-space' }, '')
+
+    await wrapper.find('[data-test="back-to-family-tree"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('family-space')
   })
 
   it('已有相关 ActionCard：只提供「查看待办」跳转 → /notifications', async () => {

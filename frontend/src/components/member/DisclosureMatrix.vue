@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from 'vue'
-import { NButton, NDataTable, NSwitch, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NDataTable, NModal, NSwitch, NTooltip, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
@@ -17,11 +17,12 @@ import {
 } from '@/types/api'
 
 /**
- * 披露偏好矩阵（v2 §0.1 / Gap3）：类别 ×（全局 / 每空间）。
+ * 披露偏好矩阵（v2 §0.1 / Gap3；09-05 高敏感策略放开）：
  * - 基础五类：全局与逐空间覆盖均可自助开关（逐空间仅档案本人可改，后端强制）；
- * - 高敏感类别（health/address/school/contact/private_notes）：恒禁用 —— 合同上
- *   只能为 false，任何层级不得自动开放；
- * - 默认全关；全局 false 由缺省表达，逐空间行显式落盘以支持双向覆盖。
+ * - 高敏感类别（health/address/school/contact/private_notes）：默认关闭，本人可
+ *   开启且必须经强确认 Modal（后果知情）；未成年人本人矩阵中开关禁用（后端
+ *   对高敏感开启请求整体 422，双保险）；
+ * - 保存为整体替换语义：基础五类必填 + 高敏感全量随草稿提交。
  */
 const auth = useAuthStore()
 const members = useMembersStore()
@@ -82,6 +83,46 @@ function isHighRisk(category: DisclosureCategory): boolean {
   return HIGH_RISK_DISCLOSURE_CATEGORIES.includes(category)
 }
 
+/** 本人是否未成年人（由结构化出生日期推导；与后端 is_minor 同语义，无法解析按成年） */
+const isMinorSelf = computed<boolean>(() => {
+  const self = members.members.find((m) => m.id === auth.user?.id)
+  const date = self?.birth?.date
+  if (!date) return false
+  const year = Number(date.slice(0, 4))
+  if (!Number.isFinite(year)) return false
+  const now = new Date()
+  let age = now.getFullYear() - year
+  const month = Number(date.slice(5, 7))
+  const day = Number(date.slice(8, 10))
+  if (
+    now.getMonth() + 1 < month ||
+    (now.getMonth() + 1 === month && now.getDate() < (Number.isFinite(day) ? day : 1))
+  ) {
+    age -= 1
+  }
+  return age < 18
+})
+
+const MINOR_HINT = '未成年人档案始终按最小披露遮蔽，不可开启高敏感类别'
+
+/** 高敏感强确认：记录待应用动作，确认后落草稿（关闭操作不需要确认） */
+const confirmState = reactive({
+  show: false,
+  categoryLabel: '',
+  apply: null as (() => void) | null,
+})
+
+function requestHighRiskEnable(apply: () => void, categoryLabel: string): void {
+  confirmState.apply = apply
+  confirmState.categoryLabel = categoryLabel
+  confirmState.show = true
+}
+
+function confirmHighRiskEnable(): void {
+  confirmState.apply?.()
+  confirmState.show = false
+}
+
 function spaceDraft(spaceId: number): Record<DisclosureCategory, boolean> {
   if (!draftBySpace[spaceId]) draftBySpace[spaceId] = emptyFlags()
   return draftBySpace[spaceId]
@@ -90,8 +131,8 @@ function spaceDraft(spaceId: number): Record<DisclosureCategory, boolean> {
 function spaceChanged(spaceId: number): boolean {
   const baseline = savedBySpace.get(spaceId)
   if (!baseline) {
-    // 尚无已保存覆盖：任一 true 即为变更
-    return DISCLOSURE_CATEGORIES.some((c) => !isHighRisk(c) && spaceDraft(spaceId)[c])
+    // 尚无已保存覆盖：任一 true 即为变更（含高敏感——09-05 起可开放）
+    return DISCLOSURE_CATEGORIES.some((c) => spaceDraft(spaceId)[c])
   }
   return DISCLOSURE_CATEGORIES.some((c) => spaceDraft(spaceId)[c] !== baseline[c])
 }
@@ -101,10 +142,10 @@ async function save(): Promise<void> {
   if (!selfId) return
   saving.value = true
   try {
-    await members.setDisclosure(selfId, fiveFlags(draftGlobal))
+    await members.setDisclosure(selfId, { ...draftGlobal })
     for (const space of spaces.spaces) {
       if (spaceChanged(space.id)) {
-        await members.setDisclosure(selfId, fiveFlags(spaceDraft(space.id)), space.id)
+        await members.setDisclosure(selfId, { ...spaceDraft(space.id) }, space.id)
       }
     }
     message.success('披露偏好已更新')
@@ -115,26 +156,14 @@ async function save(): Promise<void> {
   }
 }
 
-function fiveFlags(source: Record<DisclosureCategory, boolean>) {
-  return {
-    avatar: source.avatar,
-    photos: source.photos,
-    dates: source.dates,
-    bio: source.bio,
-    attachments: source.attachments,
-  }
-}
-
-const HIGH_RISK_HINT = '高敏感类别：合同恒不公开，任何层级不得自动开放'
-
-/** 单元格开关：高敏感=禁用 + 提示；基础类=可切换（值直连草稿） */
+/** 单元格开关：基础类直连草稿；高敏感=开启需强确认（未成年人禁用） */
 function renderSwitch(
   category: DisclosureCategory,
   getValue: () => boolean,
   setValue: (value: boolean) => void,
   dataTest: string,
 ): ReturnType<typeof h> {
-  if (isHighRisk(category)) {
+  if (isHighRisk(category) && isMinorSelf.value) {
     return h(
       NTooltip,
       { trigger: 'hover', placement: 'top' },
@@ -143,15 +172,22 @@ function renderSwitch(
           h(NSwitch, {
             value: false,
             disabled: true,
-            'data-test': dataTest,
+            'data-test': `${dataTest}-minor-locked`,
           }),
-        default: () => HIGH_RISK_HINT,
+        default: () => MINOR_HINT,
       },
     )
   }
   return h(NSwitch, {
     value: getValue(),
-    'onUpdate:value': (value: boolean) => setValue(value),
+    'onUpdate:value': (value: boolean) => {
+      if (isHighRisk(category) && value) {
+        // 开启高敏感：强确认后才落草稿（关闭不弹）
+        requestHighRiskEnable(() => setValue(true), DISCLOSURE_CATEGORY_LABELS[category])
+        return
+      }
+      setValue(value)
+    },
     'data-test': dataTest,
   })
 }
@@ -182,9 +218,7 @@ const columns = computed<DataTableColumns<CategoryRow>>(() => {
           (value) => {
             draftGlobal[row.category] = value
           },
-          isHighRisk(row.category)
-            ? 'disclosure-switch-disabled'
-            : `disclosure-switch-${row.category}`,
+          `disclosure-switch-${row.category}`,
         ),
     },
   ]
@@ -200,9 +234,7 @@ const columns = computed<DataTableColumns<CategoryRow>>(() => {
           (value) => {
             spaceDraft(space.id)[row.category] = value
           },
-          isHighRisk(row.category)
-            ? `disclosure-space-disabled-${space.id}`
-            : `disclosure-space-${space.id}-${row.category}`,
+          `disclosure-space-${space.id}-${row.category}`,
         ),
     })
   }
@@ -220,7 +252,7 @@ const tableScrollX = computed(
   <section class="disclosure-matrix" data-test="disclosure-matrix">
     <p class="desc">
       对非同空间且无直系关系的族人，名字与称谓始终可见；以下内容按开关决定是否公开。默认全部不公开；
-      高敏感类别与健康、住址等信息不因任何身份自动开放。未成年人档案始终按最小披露遮蔽。
+      高敏感类别默认关闭，本人可开启（需二次确认）；未成年人档案始终按最小披露遮蔽。
     </p>
     <NDataTable
       size="small"
@@ -231,11 +263,29 @@ const tableScrollX = computed(
       data-test="disclosure-table"
     />
     <div class="actions">
-      <span class="hint">基础五类可按空间覆盖全局偏好{{ spaces.spaces.length ? '；高敏感类别恒不公开' : '' }}。</span>
+      <span class="hint">基础五类可按空间覆盖全局偏好；高敏感类别开启需二次确认，可随时关闭。</span>
       <NButton type="primary" :loading="saving" data-test="disclosure-save" @click="save">
         保存披露偏好
       </NButton>
     </div>
+
+    <!-- 高敏感开启强确认（PRD R5）：teleport 到 body，断言走 document 查询 -->
+    <NModal
+      v-model:show="confirmState.show"
+      preset="dialog"
+      type="warning"
+      title="开启高敏感信息披露？"
+      positive-text="确认开启"
+      negative-text="取消"
+      data-test="disclosure-high-risk-confirm"
+      @positive-click="confirmHighRiskEnable"
+    >
+      <p>
+        确认开启「{{ confirmState.categoryLabel }}」？开启后，对应可见范围内的家庭成员将能看到
+        这类信息；你可随时回到本页关闭。
+      </p>
+      <p>未成年人档案始终按最小披露遮蔽，不受此设置影响。</p>
+    </NModal>
   </section>
 </template>
 

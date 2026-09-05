@@ -1,6 +1,7 @@
 """ORM 模型汇总：Alembic env.py 挂载 target_metadata 与测试建表使用。"""
 
 from app.models.account import Account
+from app.models.account_binding import AccountBinding
 from app.models.admin_access import AdminAccessAudit, AdminAccessSession
 from app.models.agent import (
     AgentJob,
@@ -23,6 +24,7 @@ from app.models.controlled_web import (
     WebSpaceConfig,
 )
 from app.models.derived_fact import DerivedFact
+from app.models.invite_code import InviteCode
 from app.models.memory import Memory, MemoryCandidate
 from app.models.node_position import NodePosition
 from app.models.notification import Notification
@@ -61,6 +63,7 @@ from app.models.v2_foundation import (
 
 __all__ = [
     "Account",
+    "AccountBinding",
     "ActionCard",
     "AdminAccessAudit",
     "AdminAccessSession",
@@ -76,6 +79,7 @@ __all__ = [
     "AuthChallenge",
     "Base",
     "BehaviorProjection",
+    "InviteCode",
     "ClaimDispute",
     "ContextBuild",
     "ContextBuildItem",

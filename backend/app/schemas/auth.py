@@ -60,6 +60,19 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
 
 
+class RegisterRequest(BaseModel):
+    """自助注册请求（09-05 决策 3：用户名 + 自选 PIN + 显示名 + 可选邀请码）。
+
+    用户名即 users.name（本系统登录名与档案名同字段）；display_name 为 design.md
+    §4 端点签名兼容入参，当前单名字数据模型下不单独持久化（显示名 = 用户名）。
+    """
+
+    name: str = Field(min_length=1, max_length=100)
+    pin: str = Field(pattern=PIN_PATTERN)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    code: str | None = Field(default=None, min_length=8, max_length=12)
+
+
 class LogoutRequest(BaseModel):
     refresh_token: str | None = None
 
@@ -79,6 +92,9 @@ class ChangePinRequest(BaseModel):
 
 class BootstrapStatusResponse(BaseModel):
     initialized: bool
+    # 09-05 决策 2：注册开关投影（REGISTRATION_ENABLED）。运行时信号优于构建期
+    # env——前端经本端点感知开关，隐藏注册入口，不使用任何 VITE_ 变量。
+    registration_enabled: bool
 
 
 def public_user_payload(user: Any) -> dict[str, Any]:

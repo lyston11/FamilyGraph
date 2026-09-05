@@ -265,9 +265,27 @@ function goNotifications(): void {
   void router.push({ name: 'notifications' })
 }
 
-/** 返回家族树：只导航，空间上下文仍由 spaces store 会话态决定 */
-function backToFamilyTree(): void {
-  void router.push({ name: 'family-space' })
+/**
+ * 上下文感知返回（09-05 PRD R1）：进入方经 router state 携 `fgBackTo`
+ * （家庭卡='home' / 家族树='family-space'）；state 缺失（直达/刷新）兜底家庭卡。
+ */
+type ProfileBackTarget = 'home' | 'family-space'
+
+/** 点击时读取（history.state 非响应式）；route.fullPath 仅用于标签重算 */
+function currentBackTarget(): ProfileBackTarget {
+  const fromState = (history.state as Record<string, unknown> | null)?.fgBackTo
+  return fromState === 'family-space' ? 'family-space' : 'home'
+}
+
+const backTarget = computed<ProfileBackTarget>(() => {
+  void route.fullPath
+  return currentBackTarget()
+})
+
+const backLabel = computed(() => (backTarget.value === 'family-space' ? '返回家族树' : '返回家庭卡'))
+
+function goBack(): void {
+  void router.push({ name: currentBackTarget() })
 }
 
 function retry(): void {
@@ -277,14 +295,14 @@ function retry(): void {
 
 <template>
   <main class="person-profile-view" data-test="person-profile-view">
-    <!-- 顶部返回：保持同一 lineage 空间上下文（不切空间、不写 URL） -->
+    <!-- 顶部返回：回进入来源（家庭卡/家族树），state 缺失兜底家庭卡 -->
     <div class="back-row">
-      <NButton quaternary size="small" class="back-button" data-test="back-to-family-tree" @click="backToFamilyTree">
+      <NButton quaternary size="small" class="back-button" data-test="back-to-family-tree" @click="goBack">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M14 5H8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6" />
           <path d="m13 8 4 4-4 4M17 12H9" />
         </svg>
-        返回家族树
+        {{ backLabel }}
       </NButton>
     </div>
 

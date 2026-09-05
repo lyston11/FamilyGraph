@@ -1,22 +1,36 @@
 <script setup lang="ts">
-// 设置页四分区重排（design.md §5.4，09-01 Phase 5）：
+// 设置页五分区（09-01 Phase 5 四分区 + 09-05 新增邀请码分区）：
 // 1) 个人资料（auth store 本人信息 + 改名）；2) 隐私与公示（DisclosureMatrix）；
-// 3) 账号与安全（ChangePinForm + 我的数据 DataRightsPanel + 登出）；
-// 4) 显示与无障碍（paper/modern 双主题切换，消费 stores/ui.setTheme）。
+// 3) 邀请码（InviteCodeSection：我的码/创建三类/撤销/复制链接/填码加入/绑定确认）；
+// 4) 账号与安全（ChangePinForm + 我的数据 DataRightsPanel + 登出）；
+// 5) 显示与无障碍（paper/modern 双主题切换，消费 stores/ui.setTheme）。
 // 复用现有 ChangePinForm / DisclosureMatrix / DataRightsPanel；空间管理不放进
 // 全局设置（由 AppShell 当前空间管理入口承担）；无新增授权行为。
 // ProfileDrawer 依赖旧 /users members 合同，不进入全局设置（差异记录见 notes.md）。
-import { NButton, NCard, NForm, NFormItem, NInput, useMessage } from 'naive-ui'
-import { reactive, ref } from 'vue'
+import {
+  NButton,
+  NCard,
+  NDatePicker,
+  NForm,
+  NFormItem,
+  NInput,
+  NRadio,
+  NRadioGroup,
+  useMessage,
+} from 'naive-ui'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/errors'
+import { fetchMember, updateMember } from '@/api/members'
 import ChangePinForm from '@/components/common/ChangePinForm.vue'
 import DataRightsPanel from '@/components/member/DataRightsPanel.vue'
 import DisclosureMatrix from '@/components/member/DisclosureMatrix.vue'
+import InviteCodeSection from '@/components/member/InviteCodeSection.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { themeTokens, type ThemeName, type ThemeTokens } from '@/styles/tokens'
+import type { GenderType, StructuredDate } from '@/types/api'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -41,6 +55,71 @@ async function saveName(): Promise<void> {
     nameError.value = error instanceof ApiError ? error.message : '保存失败，请稍后重试'
   } finally {
     savingName.value = false
+  }
+}
+
+// ---- 基础资料编辑（09-05 PRD R2）：PATCH /members/{self}，本人自助 ----
+const genderOptions: Array<{ value: GenderType; label: string }> = [
+  { value: 'm', label: '男' },
+  { value: 'f', label: '女' },
+  { value: 'unknown', label: '不详' },
+]
+
+const profileForm = reactive({
+  gender: 'unknown' as GenderType,
+  birthTs: null as number | null,
+  deathTs: null as number | null,
+  bio: '',
+})
+const savingProfile = ref(false)
+
+/** StructuredDate.date('YYYY-MM-DD') ⇄ NDatePicker 时间戳（本地时区日界足够） */
+function structuredToTs(sd: StructuredDate | null): number | null {
+  if (!sd?.date) return null
+  const [y, m, d] = sd.date.split('-').map(Number)
+  if (!y || !m || !d) return null
+  return new Date(y, m - 1, d).getTime()
+}
+
+function tsToStructured(ts: number | null): StructuredDate | null {
+  if (ts === null) return null
+  const dt = new Date(ts)
+  const month = String(dt.getMonth() + 1).padStart(2, '0')
+  const day = String(dt.getDate()).padStart(2, '0')
+  return { cal_type: 'solar', date: `${dt.getFullYear()}-${month}-${day}` }
+}
+
+onMounted(async () => {
+  const selfId = auth.user?.id
+  if (!selfId) return
+  try {
+    const member = await fetchMember(selfId)
+    profileForm.gender = member.gender ?? 'unknown'
+    profileForm.birthTs = structuredToTs(member.birth)
+    profileForm.deathTs = structuredToTs(member.death)
+    profileForm.bio = member.bio ?? ''
+  } catch {
+    // 资料回填失败不打断设置页；保存时仍可提交
+  }
+})
+
+async function saveProfile(): Promise<void> {
+  const selfId = auth.user?.id
+  if (!selfId) return
+  savingProfile.value = true
+  try {
+    const bio = profileForm.bio.trim()
+    await updateMember(selfId, {
+      gender: profileForm.gender,
+      birth: tsToStructured(profileForm.birthTs),
+      death: tsToStructured(profileForm.deathTs),
+      bio: bio === '' ? null : bio,
+    })
+    message.success('资料已更新')
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
+  } finally {
+    savingProfile.value = false
   }
 }
 
@@ -71,8 +150,8 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
     <NCard class="card" data-test="settings-card">
       <template #header>
         <div class="title-row">
-          <NButton text data-test="settings-back" @click="router.push({ name: 'family-space' })">
-            ← 家庭空间
+          <NButton text data-test="settings-back" @click="router.push({ name: 'home' })">
+            ← 返回我的家庭
           </NButton>
           <span class="card-title">设置</span>
         </div>
@@ -102,6 +181,55 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
           </NFormItem>
         </NForm>
         <p v-if="nameError" class="error" data-test="name-error">{{ nameError }}</p>
+
+        <!-- 基础资料编辑（09-05 PRD R2）：PATCH /members/{self} -->
+        <NForm label-placement="top" class="profile-form" @submit.prevent="saveProfile">
+          <NFormItem label="性别" data-test="profile-gender-item">
+            <NRadioGroup v-model:value="profileForm.gender" data-test="profile-gender">
+              <NRadio v-for="option in genderOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </NRadio>
+            </NRadioGroup>
+          </NFormItem>
+          <NFormItem label="出生日期" data-test="profile-birth-item">
+            <NDatePicker
+              v-model:value="profileForm.birthTs"
+              type="date"
+              clearable
+              placeholder="选择出生日期"
+              data-test="profile-birth"
+            />
+          </NFormItem>
+          <NFormItem label="逝世日期（可选）" data-test="profile-death-item">
+            <NDatePicker
+              v-model:value="profileForm.deathTs"
+              type="date"
+              clearable
+              placeholder="选择逝世日期"
+              data-test="profile-death"
+            />
+          </NFormItem>
+          <NFormItem label="简介" data-test="profile-bio-item">
+            <NInput
+              v-model:value="profileForm.bio"
+              type="textarea"
+              :maxlength="2000"
+              show-count
+              placeholder="介绍一下自己（对空间内成员按你的披露设置可见）"
+              data-test="profile-bio"
+            />
+          </NFormItem>
+          <NFormItem>
+            <NButton
+              type="primary"
+              :loading="savingProfile"
+              data-test="profile-save"
+              @click="saveProfile"
+            >
+              保存资料
+            </NButton>
+          </NFormItem>
+        </NForm>
       </section>
 
       <!-- 分区 2：隐私与公示 -->
@@ -111,7 +239,14 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
         <DisclosureMatrix />
       </section>
 
-      <!-- 分区 3：账号与安全 -->
+      <!-- 分区 3：邀请码（09-05 决策 14；provisional 用户由区块内提示，后端 403 兜底） -->
+      <section class="section" data-test="settings-section-invite">
+        <h2 class="section-title">邀请码</h2>
+        <p class="meta">创建邀请码分享给家人朋友；或凭收到的邀请码加入已有空间。</p>
+        <InviteCodeSection />
+      </section>
+
+      <!-- 分区 4：账号与安全 -->
       <section class="section" data-test="settings-section-account">
         <h2 class="section-title">账号与安全</h2>
         <p class="meta">定期更换 PIN 码；导出、更正与删除申请都在这里提交。</p>
@@ -122,7 +257,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
         <NButton text type="error" data-test="logout-btn" @click="doLogout">退出登录</NButton>
       </section>
 
-      <!-- 分区 4：显示与无障碍 -->
+      <!-- 分区 5：显示与无障碍 -->
       <section class="section" data-test="settings-section-display">
         <h2 class="section-title">显示与无障碍</h2>
         <p class="meta">选择配色主题（即时生效并记住偏好）；双主题均遵循系统减弱动态设置。</p>

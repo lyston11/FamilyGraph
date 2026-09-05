@@ -14,13 +14,14 @@ import type { TokenPairResponse } from '@/types/api'
 
 vi.mock('@/api/auth', () => ({
   login: vi.fn(),
+  register: vi.fn(),
   selectCandidate: vi.fn(),
   refreshTokens: vi.fn(),
   logout: vi.fn().mockResolvedValue(undefined),
   fetchMe: vi.fn(),
   changePin: vi.fn(),
   changeName: vi.fn(),
-  fetchBootstrapStatus: vi.fn().mockResolvedValue({ initialized: true }),
+  fetchBootstrapStatus: vi.fn().mockResolvedValue({ initialized: true, registration_enabled: true }),
 }))
 
 // 捕获 wireAuthInterceptors 注册的会话失效回调（避免为触发真实 axios 401 拦截器），
@@ -39,6 +40,7 @@ vi.mock('@/api/client', () => {
 
 const mockedLogin = vi.mocked(authApi.login)
 const mockedLogout = vi.mocked(authApi.logout)
+const mockedRegister = vi.mocked(authApi.register)
 
 const { useAuthStore } = await import('@/stores/auth')
 const { useSpacesStore } = await import('@/stores/spaces')
@@ -132,6 +134,51 @@ describe('auth store: 家庭主体登录与缓存清理', () => {
     const spaces = useSpacesStore()
     expect(spaces.spaces).toEqual([])
     expect(spaces.currentSpaceId).toBeNull()
+  })
+})
+
+describe('auth store: 注册（09-05）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('注册成功：token 落地与 login 同路径（applyTokenPair），refresh token 持久化', async () => {
+    const auth = useAuthStore()
+    // 自助注册初始态：Account claimed（自设 PIN 无强制改密）、Profile provisional
+    mockedRegister.mockResolvedValue(makePair(makeUser({ profile_status: 'provisional' })))
+
+    const pair = await auth.register('李四', '654321', 'AB2D3F5H')
+    await flushPromises()
+
+    expect(mockedRegister).toHaveBeenCalledWith({ name: '李四', pin: '654321', code: 'AB2D3F5H' })
+    expect(pair.user.profile_status).toBe('provisional')
+    expect(auth.isLoggedIn).toBe(true)
+    expect(auth.accessToken).toBe('access-abc')
+    expect(localStorage.getItem('fg.refresh_token')).toBe('refresh-xyz')
+    expect(auth.mustChangePin).toBe(false)
+  })
+
+  it('注册成功不带邀请码：code 透传 undefined', async () => {
+    const auth = useAuthStore()
+    mockedRegister.mockResolvedValue(makePair(makeUser({ profile_status: 'provisional' })))
+
+    await auth.register('王五', '123456')
+    await flushPromises()
+
+    expect(mockedRegister).toHaveBeenCalledWith({ name: '王五', pin: '123456', code: undefined })
+    expect(auth.isLoggedIn).toBe(true)
+  })
+
+  it('checkBootstrap 投影注册开关：registration_enabled=false 落入 store', async () => {
+    const auth = useAuthStore()
+    const mockedStatus = vi.mocked(authApi.fetchBootstrapStatus)
+    mockedStatus.mockResolvedValue({ initialized: true, registration_enabled: false })
+
+    await auth.checkBootstrap()
+
+    expect(auth.registrationEnabled).toBe(false)
   })
 })
 

@@ -1,7 +1,8 @@
-"""dev 种子模块合同（09-05 dev-seed-demo-data）：门控、数据集形态、红线。
+"""dev 种子模块合同（09-05 dev-seed-demo-data + family-profile-nav-disclosure R3/R6）。
 
 - DEV_SEED_DEMO_DATA 未开启（默认 "0"）→ maybe_seed_demo_data 零写入；
-- env=1 + 空库 → 6 用户/1 空间/6 成员行/5 关系/confirmed SourceFact，
+- env=1 + 空库 → 6 用户（含出生日期）/2 空间（household+lineage）/12 成员行/
+  5 关系/10 confirmed SourceFact（双空间各投影）/基础五类披露全局开放，
   PIN 123456 校验通过；重复调用（_SEED_DONE 或非空库）幂等跳过；
 - env=1 + 非空库 → 跳过且既有数据零变动；
 - 种子不创建/修改 system_admins（admin bootstrap 专属职责，09-04 合同）；
@@ -21,6 +22,7 @@ from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
 from app.models.system_admin import SystemAdmin, SystemAdminAccount
 from app.models.user import User
+from app.models.v2_foundation import DisclosurePreference
 from app.services import admin_bootstrap
 from app.utils import security
 
@@ -60,21 +62,31 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         assert user.account.pin_must_change is False
         assert user.account.pin_hash != "123456"
         assert security.verify_pin("123456", user.account.pin_hash)
+        # R3：结构化出生日期（solar）；王小虎 2018 = 未成年人
+        assert user.birth is not None and user.birth.get("cal_type") == "solar"
+        assert user.birth.get("date")
+    assert by_name["王远山"].birth["date"] == "1940-05-12"
+    assert by_name["王小虎"].birth["date"] == "2018-09-14"
 
     spaces = db_session.query(FamilySpace).all()
-    assert len(spaces) == 1
-    space = spaces[0]
-    assert space.name == "王德海家"
-    assert space.kind == "household"
-    assert space.owner_id == by_name["王德海"].id
+    assert len(spaces) == 2
+    by_kind = {space.kind: space for space in spaces}
+    household = by_kind["household"]
+    lineage = by_kind["lineage"]
+    assert household.name == "王德海家"
+    assert lineage.name == "王氏家族"
+    assert {space.owner_id for space in spaces} == {by_name["王德海"].id}
 
-    members = db_session.query(SpaceMember).filter_by(space_id=space.id).all()
-    assert len(members) == 6
-    assert all(member.status == "active" for member in members)
-    admin_rows = [member for member in members if member.role == "space_admin"]
-    assert len(admin_rows) == 1
-    assert admin_rows[0].user_id == by_name["王德海"].id
-    assert sum(1 for member in members if member.role == "member") == 5
+    # 每个空间 6 名成员（王德海 space_admin，其余 member）
+    for space in (household, lineage):
+        members = db_session.query(SpaceMember).filter_by(space_id=space.id).all()
+        assert len(members) == 6
+        assert all(member.status == "active" for member in members)
+        admin_rows = [member for member in members if member.role == "space_admin"]
+        assert len(admin_rows) == 1
+        assert admin_rows[0].user_id == by_name["王德海"].id
+        assert sum(1 for member in members if member.role == "member") == 5
+    assert db_session.query(SpaceMember).count() == 12
 
     relations = db_session.query(Relation).all()
     assert len(relations) == 5
@@ -94,21 +106,31 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     }
 
     facts = db_session.query(SourceFact).all()
-    assert len(facts) == 5
+    assert len(facts) == 5  # 全局事实（space_id=NULL），双空间共享投影
     assert {fact.state for fact in facts} == {"confirmed"}
     assert {fact.fact_type for fact in facts} == {"spouse", "biological_parent"}
-    assert all(fact.space_id == space.id for fact in facts)
-    # 方向映射（seed_structural_edge_to_fact 同款）三代结构：王远山 是 王德海 父亲，
-    # 王德海/周秀英 是 王建军/王小雨 父母，王建军 是 王小虎 父亲
-    fact_pairs = {
+    assert {fact.space_id for fact in facts} == {None}
+    pairs = {
         (fact.fact_type, by_id[fact.subject_user_id], by_id[fact.object_user_id]) for fact in facts
     }
-    assert fact_pairs == {
+    assert pairs == {
         ("spouse", "王德海", "周秀英"),
         ("biological_parent", "王远山", "王德海"),
         ("biological_parent", "王德海", "王建军"),
         ("biological_parent", "王德海", "王小雨"),
         ("biological_parent", "王建军", "王小虎"),
+    }
+
+    # R6：基础五类披露全局开放（成员互见）；高敏感五类保持关闭（Q4=b 仅为可开）
+    prefs = db_session.query(DisclosurePreference).all()
+    assert len(prefs) == 6 * 5  # 6 用户 × 基础五类
+    assert all(pref.scope == "global" and pref.allowed for pref in prefs)
+    assert {pref.category for pref in prefs} == {
+        "avatar",
+        "photos",
+        "dates",
+        "bio",
+        "attachments",
     }
 
     # 幂等（路径一）：_SEED_DONE 单例跳过

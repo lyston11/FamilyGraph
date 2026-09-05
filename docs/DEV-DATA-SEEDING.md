@@ -80,13 +80,19 @@ docker exec familygraph-api-1 cat /data/bootstrap/admin-credentials   # 一次�
 
 之后首次登录后台强制改密，凭据文件自动删除；若再遗忘走 §3 的 `admin_recovery`。
 
-## 5. 演示数据集（王德海家）
+## 5. 演示数据集（王德海家 + 王氏家族）
 
-- 空间：`王德海家`（household），王德海为 owner/space_admin，其余 5 人 member；
-- 成员（全部 claimed + identity_confirmed，PIN `123456`）：
-  王德海、周秀英（妻）、王建军（子）、王小雨（女）、王远山（父）、王小虎（孙）；
-- 关系以 confirmed SourceFact 落库（spouse ×1 + biological_parent ×4），家族树
-  投影呈三代结构，称谓正确（你的妻子/儿子/女儿/父亲、你的儿子的儿子）；
+- 双空间：`王德海家`（household，家庭卡）+ `王氏家族`（lineage，家族树），
+  王德海均为 owner/space_admin，其余 5 人 member——家庭卡与家族树全流程可演示；
+- 成员（全部 claimed + identity_confirmed，PIN `123456`，含 solar 结构化出生日期）：
+  王远山 1940（父）、王德海 1965、周秀英 1967（妻）、王建军 1990（子）、
+  王小雨 1993（女）、王小虎 2018（孙，**未成年人**——演示 minor 保护 overlay）；
+- 关系以**全局** confirmed SourceFact 落库（space_id=NULL，双空间共享投影；
+  spouse ×1 + biological_parent ×4），家族树呈三代结构，称谓正确；
+  注意：亲子成环检测是全局的，同一亲子事实不可按空间重复落行；
+- 披露默认：基础五类（头像/相册/生卒/简介/链接附件）全局开放（成员互见有资料）；
+  高敏感五类（健康/住址/学校/联系方式/私人描述）保持关闭——09-05 起本人可开启
+  （需二次确认，未成年人被 422 拒绝）；
 - 形态契约与 `backend/tests/conftest.py` 造数助手保持同步（改动须两侧同步）；
 - 数据卫生约定：E2E/联调不要向真实部署库写入管理员行或测试账号——历史上
   `e2e-liu-*` 残留行曾阻塞 0028 迁移并让 bootstrap 被跳过（见 §4）。

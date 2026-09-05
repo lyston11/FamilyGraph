@@ -148,6 +148,19 @@ async function confirmCandidate(): Promise<void> {
         >
           登录
         </NButton>
+
+        <!-- 注册入口（09-05 决策 19）：开关关闭时隐藏（运行时投影 registrationEnabled） -->
+        <p v-if="auth.registrationEnabled" class="register-entry" data-test="register-entry">
+          还没有账号？
+          <NButton
+            text
+            type="primary"
+            data-test="login-to-register"
+            @click="router.push({ name: 'register' })"
+          >
+            注册新账号
+          </NButton>
+        </p>
       </NForm>
     </section>
 
@@ -309,6 +322,13 @@ async function confirmCandidate(): Promise<void> {
 
 .submit {
   margin-top: 8px;
+}
+
+.register-entry {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--fg-ink-secondary);
 }
 
 .hint {

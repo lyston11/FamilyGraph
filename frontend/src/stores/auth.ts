@@ -27,6 +27,12 @@ export const useAuthStore = defineStore('auth', () => {
   /** 引导状态是否已确认（避免每次路由跳转都请求 /bootstrap/status） */
   const bootstrapChecked = ref(false)
   const systemInitialized = ref(false)
+  /**
+   * 注册开关（09-05 决策 2）：REGISTRATION_ENABLED 的运行时投影，随
+   * /bootstrap/status 一次性取得。默认 true：开关是部署级常量，会话内不反转；
+   * 投影缺失（部署偏斜/旧 fixture）按可用处理，关闭由后端端点 404 兜底。
+   */
+  const registrationEnabled = ref(true)
 
   // ---- 派生 ----
   const isLoggedIn = computed(() => accessToken.value !== null && user.value !== null)
@@ -83,6 +89,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!bootstrapChecked.value) {
       const status = await authApi.fetchBootstrapStatus()
       systemInitialized.value = status.initialized
+      registrationEnabled.value = status.registration_enabled ?? true
       bootstrapChecked.value = true
     }
     return systemInitialized.value
@@ -90,6 +97,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(name: string, pin: string): Promise<TokenPairResponse> {
     const pair = await authApi.login(name, pin)
+    applyTokenPair(pair)
+    return pair
+  }
+
+  /**
+   * 自助注册（09-05）：token 落地与 login 走同一条 applyTokenPair 路径——
+   * 响应即登录态；新用户 profile_status=provisional 由路由守卫引导确档。
+   */
+  async function register(name: string, pin: string, code?: string): Promise<TokenPairResponse> {
+    const pair = await authApi.register({ name, pin, code })
     applyTokenPair(pair)
     return pair
   }
@@ -157,10 +174,12 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     bootstrapChecked,
     systemInitialized,
+    registrationEnabled,
     isLoggedIn,
     mustChangePin,
     checkBootstrap,
     login,
+    register,
     selectCandidate,
     refreshSession,
     resume,

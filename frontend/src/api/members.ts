@@ -1,5 +1,5 @@
 import type {
-  ClanDisclosure,
+  DisclosureFlags,
   DisclosureMatrix,
   Member,
   MemberCreatePayload,
@@ -37,10 +37,10 @@ export async function updateMember(id: number, patch: MemberUpdatePayload): Prom
   return data
 }
 
-/** AD-9 披露开关整体替换（基础五类）；携带 spaceId 时为逐空间覆盖（仅本人） */
+/** AD-9 披露开关整体替换（基础五类必填 + 高敏感选填）；携带 spaceId 时为逐空间覆盖（仅本人） */
 export async function updateDisclosure(
   id: number,
-  disclosure: ClanDisclosure,
+  disclosure: DisclosureFlags,
   spaceId?: number,
 ): Promise<Member> {
   const body = spaceId === undefined ? disclosure : { ...disclosure, space_id: spaceId }

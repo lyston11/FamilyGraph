@@ -59,6 +59,14 @@ const router = createRouter({
       meta: { public: true, chrome: 'blank' },
     },
     {
+      // 自助注册（09-05）：guest 可达；开关关闭时守卫将其呈现为与未注册
+      // 深链同形的普通 404（见 beforeEach 内注释）。meta.public 使未登录可达。
+      path: '/register',
+      name: 'register',
+      component: () => import('@/views/RegisterView.vue'),
+      meta: { public: true, chrome: 'blank' },
+    },
+    {
       path: '/onboarding',
       name: 'onboarding',
       component: () => import('@/views/OnboardingView.vue'),
@@ -127,8 +135,18 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.public) {
-    if (auth.isLoggedIn && to.name === 'login') {
+    if (auth.isLoggedIn && (to.name === 'login' || to.name === 'register')) {
+      // 已登录者访问登录/注册页一律弹回首页：注册成功会覆盖当前会话，
+      // 已登录状态下不应出现「再注册一个号」的入口。
       return { name: 'home' }
+    }
+    if (to.name === 'register' && !auth.registrationEnabled) {
+      // REGISTRATION_ENABLED=false：/register 与未注册深链同形呈现普通 404
+      // （NotFoundView，URL 保留）。理由：与后端注册端点「关闭→与未知路径逐字节
+      // 一致的 404」同口径，不给「功能存在但已关闭」的探测信号；重定向登录页则
+      // 会在 URL/行为上暴露一条被禁用的路由。pathMatch 复用 catch-all 参数形态，
+      // 使 404 呈现与真实未注册深链完全一致。
+      return { name: 'not-found', params: { pathMatch: to.path.substring(1).split('/') } }
     }
     return true
   }

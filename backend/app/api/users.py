@@ -25,7 +25,7 @@ from app.errors import (
     raise_api_error,
 )
 from app.models import Account, User
-from app.models.user import BASIC_DISCLOSURE_KEYS
+from app.models.user import DISCLOSURE_KEYS
 from app.schemas.auth import (
     ChangeNameRequest,
     ChangePinRequest,
@@ -128,6 +128,7 @@ def list_related_members(
 def create_member(
     payload: MemberCreateRequest,
     request: Request,
+    response: Response,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
@@ -138,6 +139,9 @@ def create_member(
     关系 + 关系原文 + proposed SourceFact + 可选空间最小引用 + 事件/审计。
     幂等：同 (actor, Idempotency-Key) 同内容重放返回原档案（pin=null, replayed=true），
     不同内容 409 IDEMPOTENCY_PAYLOAD_CONFLICT。
+    撞名并流（09-05 决策 16）：查重命中已存在的 claimed 自注册账号时不建 managed
+    账号，改建 pending 绑定请求——响应 bound_to_existing=true + binding_id，
+    不携带被绑定方任何数据。
     """
     actor, _account = identity
     key = idempotency_key.strip() if idempotency_key else ""
@@ -162,7 +166,7 @@ def create_member(
         relation_label=payload.relation_label,
         relation_text=payload.relation_text,
     )
-    member, pin, replayed = member_commands.create_managed_member(
+    outcome = member_commands.create_managed_member(
         session,
         ctx,
         name=payload.name,
@@ -184,8 +188,16 @@ def create_member(
         # IDEMPOTENCY_PAYLOAD_CONFLICT，把预期的消歧流程堵死。
         allow_duplicate_person=payload.allow_duplicate_person,
     )
+    if outcome.bound_to_existing:
+        # design.md §4：撞名转绑定分支返回 200（非建档成功语义），发起人界面转
+        # 「已注册，已发送绑定邀请」态；响应不含被绑定方任何数据。
+        response.status_code = 200
     return MemberCreateResponse(
-        user=_member_out(session, member, actor), pin=pin, replayed=replayed
+        user=_member_out(session, outcome.member, actor),
+        pin=outcome.pin,
+        replayed=outcome.replayed,
+        bound_to_existing=outcome.bound_to_existing,
+        binding_id=outcome.binding_id,
     )
 
 
@@ -281,11 +293,15 @@ def update_disclosure(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemberOut:
-    """基础五类披露开关整体替换（命令：commands.members.update_disclosure）；
-    全局修改权 = 该档案编辑权主体；携带 space_id 时为逐空间覆盖且仅本人可改。"""
+    """披露开关整体替换（命令：commands.members.update_disclosure）；全局修改权 =
+    该档案编辑权主体；携带 space_id 时为逐空间覆盖且仅本人可改。09-05 起高敏感
+    五类（health/address/school/contact/private_notes）同路径可落行：仅未显式
+    提供的键不修改；未成年人对高敏感开启请求由服务层整体 422。"""
     actor, _account = identity
     ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
-    flags = payload.model_dump(include=set(BASIC_DISCLOSURE_KEYS))
+    flags = payload.model_dump(
+        include=set(DISCLOSURE_KEYS), exclude_unset=True, exclude_none=True
+    )
     target = member_commands.update_disclosure(
         session, ctx, user_id, flags, space_id=payload.space_id
     )
