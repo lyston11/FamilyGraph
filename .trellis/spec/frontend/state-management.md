@@ -35,26 +35,20 @@
 
 **Why**：页面（如 PersonProfileView）在会话内到达时重跑默认选择，会把上下文改回「最近 household」，覆盖用户所在的 lineage 上下文 → 目标被误判不可见（走查实测 P1）。会话内到达的页面必须沿用 `spaces.currentSpaceId`；上下文为空才兜底选择，且选择结果与页面语义不符时走安全不可见/空态，不导航回滚。
 
-## 主体感知会话与系统管理员隔离（09-01 system-admin-governance-routes 前端沉淀）
+## 家庭端单主体会话与独立后台隔离（09-04 取代 09-01 的同 SPA 双主体条款）
 
-### Convention: 登录视图写会话前必须硬校验 principal_type
+### Convention: 家庭 auth store 只有 family_user 主体
 
-**What**：任何登录视图（家庭 `/login`、系统管理员 `/system-admin/login`）拿到 `/api/auth/login` 响应后，必须先硬校验 `principal_type` 与视图主体一致，才允许调用 auth store 写会话；不一致一律走统一拒绝文案并清理临时状态（`applySystemAdminSession` 对非 `system_admin` 抛错并清状态，见 `stores/auth.ts`）。
+**What**：`frontend/src/stores/auth.ts` 不包含任何后台主体分支（无 `isSystemAdmin`/`applySystemAdminSession`/`principal_type==='system_admin'` 判定）；`UserOut` 类型不声明 `is_admin`/`platform_role`，`principal_type` 收窄为 `'family_user'`。`sessionExpiredRedirect()` 无参（恒回家庭 `/login`）；`ChangePinView` 完成后回 `/login`；未注册深链（含 `/system-admin`、`/admin`、`/admin-api/*`）统一进入 `NotFoundView` 普通 404——不跳转、不提示其他产品面。
 
-**Why**：family_user 凭据建立 system-admin 会话（或反向）等于把两个权限域打通；统一文案且不区分「账号不存在/凭据错误/主体类型」防账号枚举。409 名称歧义（同名家庭账号）也必须按家庭凭据拒绝，不得登入后台。
+**Why**：09-04 起系统管理员是独立前端应用（`system-admin-frontend/`）+ 独立 API listener（8002 `/admin-api`）+ 独立 JWT 签发域与浏览器存储。家庭 bundle、路由表、类型里出现任何后台主体模型都构成产品边界泄漏（dist 禁止字符串扫描红线）。
 
-**Example**：`SystemAdminLoginView.vue` — `pair.user?.principal_type !== 'system_admin'` → 拒绝；提交中/成功态禁止重复提交；redirect 只接受 `getSafeSystemAdminRedirect` 白名单（仅 `/system-admin` 前缀），不信登录响应里的任意 URL。
+**Tests**：`auth.spec.ts`（家庭主体登录/登出/会话过期全链）、`guard.spec.ts`（未注册深链普通 404、无后台路由）、`system-admin-frontend/tests/module-boundary.spec.ts`（后台不 import 家庭代码、仅访问 `/admin-api`、票据仅内存）。
 
-### Convention: 会话回跳按主体分流，主体快照必须在清会话前取
+### Convention: 后台前端与家庭前端的会话隔离
 
-**What**：
-- `sessionExpiredRedirect(wasSystemAdmin)`：system_admin → `/system-admin/login`，family_user → `/login`；
-- `ChangePinView`：挂载时快照 principal，完成后 system_admin 回 system-admin 入口，family_user 维持家庭 `/login`。
+**What**：后台前端使用独立 refresh key（`fg.admin.refresh_token`，绝不与家庭 `fg.refresh_token` 共用）、独立 axios 实例（baseURL `/admin-api`）、独立 router/store；access token 与敏感访问票据只存内存，不写 localStorage/sessionStorage；登录响应硬校验 `AdminSessionOut` 白名单字段后才落会话；`password_must_change` 守卫只放行改密页。
 
-**Why**：system-admin token 过期被送到家庭 `/login` 会让后台主体误入家庭权限域；反向同理。`clearSession` 之后主体已不可读——所以回跳函数接收主体参数、调用方先快照，这是实测踩过的时序点。refresh 永不改变 principal_type，system-admin token 失效不得降级到家庭登录。
+**Why**：两个权限域共享任何存储 key 或代码路径，等于把 token 交叉使用面重新打开；后端已按 issuer/audience 物理互拒，前端隔离保证用户永远不会走到那一步。
 
-### Convention: SystemAdminShell 零家庭依赖
-
-**What**：系统后台壳不得 import 任何家庭 store（spaces/graph/…）或家庭数据 API；导航只含治理入口；登出走 `auth.logout()`（按主体撤销对应 refresh session 并清系统管理员缓存）后回 `/system-admin/login`。
-
-**Tests**：`SystemAdminShell.spec.ts` 对壳源码做静态断言（无家庭 store/API import）+ 行为断言（无家庭导航、登出跳转）；`auth.spec.ts` 覆盖两种主体的 refresh/logout/session-expired 分流；`guard.spec.ts` 覆盖路由互斥（family_user 进不了后台，system_admin 访问登录页被弹走）。
+**Tests**：`system-admin-frontend/tests/auth.store.spec.ts`（独立 key、内存 token、硬校验）、`access-session.store.spec.ts`（票据 TTL/单目标/不持久化）、`router.guard.spec.ts`（未登录/首改密/过期分流）。
