@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "校验组件约定与测试契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验门禁"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验 backend 门禁"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "校验审计红线"}

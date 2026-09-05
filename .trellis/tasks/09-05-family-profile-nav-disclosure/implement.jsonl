@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "naive-ui 约定/token 红线/测试约定（modal document 查询、datePicker 空值映射）"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "frontend 门禁与源级契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "backend 门禁"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "审计与日志红线（高敏感披露变更审计）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "事务红线"}
