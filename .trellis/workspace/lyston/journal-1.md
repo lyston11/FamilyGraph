@@ -694,3 +694,24 @@ accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: dev-seed 种子模块上线：清库重播种与空库自动播种机制
+
+**Date**: 2026-09-05
+**Task**: dev-seed 种子模块上线：清库重播种与空库自动播种机制
+**Branch**: `main`
+
+### Summary
+
+落地 09-05-dev-seed-demo-data：app/dev_seed.py（双重门控播种 + --reset 清库 CLI）、三代结构演示家庭（王德海家 6 成员/PIN 123456/5 条 confirmed 关系事实）、compose 透传 DEV_SEED_DEMO_DATA 与 PERSONAL_FAMILY_VIEW_ENABLED。trellis-implement/trellis-check 双代理流程，谱系方向经检查代理独立推导修正（修正 PRD 箭头写法与 v1 边语义相反的口径）。部署：清库（备份 full-reset-20260905-062327.db 于数据卷）→ 重启 → bootstrap 生成新 admin + 凭据文件 → 播种 6 用户。端到端验证：admin 登录 200、王德海/123456 登录 200、家庭卡 5 成员、家族树 6 节点 5 边称谓正确。混合文件（config.py/main.py 含并行任务 WIP）经选择性暂存仅提交本任务 hunk。遗留：全量 pytest 有 1 个失败属并行任务 binding 改动；.env 的 DEV_SEED_DEMO_DATA=1 为 dev 专用，生产部署保持缺省关闭。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b5bd4ac` | (see git log) |
+
+### Status
+
+[OK] **Completed**
