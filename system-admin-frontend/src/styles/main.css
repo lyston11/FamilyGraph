@@ -1,0 +1,445 @@
+/*
+ * 系统管理后台样式（独立于家庭前端 tokens）。
+ * 颜色一律走本文件的 --ag-* 变量，组件内不写死色值。
+ */
+
+:root {
+  --ag-bg: #f3f5f8;
+  --ag-surface: #ffffff;
+  --ag-border: #d9dee6;
+  --ag-text: #1f2733;
+  --ag-text-secondary: #5b6675;
+  --ag-primary: #2f5ea8;
+  --ag-primary-soft: #e8eef8;
+  --ag-danger: #b3362c;
+  --ag-danger-soft: #f9e9e7;
+  --ag-warning: #8a6116;
+  --ag-warning-soft: #faf3e2;
+  --ag-success: #2e7d4f;
+  --ag-success-soft: #e6f3ec;
+  --ag-radius: 8px;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    system-ui,
+    sans-serif;
+  font-size: 14px;
+  color: var(--ag-text);
+  background: var(--ag-bg);
+}
+
+/* ---- 布局壳 ---- */
+
+.admin-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  background: var(--ag-surface);
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.admin-brand {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.admin-nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.admin-nav a {
+  padding: 6px 12px;
+  border-radius: var(--ag-radius);
+  color: var(--ag-text-secondary);
+  text-decoration: none;
+}
+
+.admin-nav a.router-link-active {
+  background: var(--ag-primary-soft);
+  color: var(--ag-primary);
+  font-weight: 500;
+}
+
+.admin-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+/* ---- 通用卡片 / 面板 ---- */
+
+.ag-card {
+  background: var(--ag-surface);
+  border: 1px solid var(--ag-border);
+  border-radius: var(--ag-radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.ag-page-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.ag-page-subtitle {
+  color: var(--ag-text-secondary);
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+
+.ag-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.ag-breadcrumb {
+  font-size: 13px;
+  color: var(--ag-text-secondary);
+  margin-bottom: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ag-breadcrumb a {
+  color: var(--ag-primary);
+  text-decoration: none;
+}
+
+/* ---- 表格（桌面）与卡片（移动端）双渲染 ---- */
+
+.ag-table-wrap {
+  overflow-x: auto;
+}
+
+.ag-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ag-table th,
+.ag-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ag-border);
+  white-space: nowrap;
+}
+
+.ag-cards {
+  display: flex;
+  gap: 10px;
+  flex-direction: column;
+}
+
+.ag-card-row {
+  border: 1px solid var(--ag-border);
+  border-radius: var(--ag-radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ag-card-row .ag-card-row-title {
+  font-weight: 600;
+}
+
+.ag-card-row .ag-card-row-meta {
+  color: var(--ag-text-secondary);
+  font-size: 12px;
+}
+
+/* 375px/移动端：表格保留（容器内部横向滚动，不产生页面级横向滚动），
+   卡片列表同样可见；绝不整体隐藏数据区。 */
+@media (max-width: 768px) {
+  .ag-table th,
+  .ag-table td {
+    padding: 6px 8px;
+  }
+}
+
+/* ---- 状态与反馈 ---- */
+
+.ag-state {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--ag-text-secondary);
+}
+
+.ag-state-error {
+  color: var(--ag-danger);
+}
+
+.ag-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--ag-bg);
+  color: var(--ag-text-secondary);
+}
+
+.ag-tag-anomaly {
+  background: var(--ag-danger-soft);
+  color: var(--ag-danger);
+}
+
+.ag-tag-healthy {
+  background: var(--ag-success-soft);
+  color: var(--ag-success);
+}
+
+.ag-tag-warning {
+  background: var(--ag-warning-soft);
+  color: var(--ag-warning);
+}
+
+.ag-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ag-metric {
+  background: var(--ag-surface);
+  border: 1px solid var(--ag-border);
+  border-radius: var(--ag-radius);
+  padding: 12px 14px;
+}
+
+.ag-metric .ag-metric-value {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.ag-metric .ag-metric-label {
+  color: var(--ag-text-secondary);
+  font-size: 12px;
+}
+
+/* ---- 认证页 ---- */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--ag-surface);
+  border: 1px solid var(--ag-border);
+  border-radius: var(--ag-radius);
+  padding: 28px 24px;
+}
+
+.auth-card h1 {
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.auth-card .auth-sub {
+  color: var(--ag-text-secondary);
+  font-size: 13px;
+  margin: 0 0 18px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.form-field > label {
+  font-size: 13px;
+  color: var(--ag-text-secondary);
+}
+
+.form-error {
+  color: var(--ag-danger);
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.form-success {
+  color: var(--ag-success);
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* ---- 敏感面板 ---- */
+
+.sensitive-notice {
+  background: var(--ag-warning-soft);
+  color: var(--ag-warning);
+  border-radius: var(--ag-radius);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+/* ---- 键盘可达性 ---- */
+
+:focus-visible {
+  outline: 2px solid var(--ag-primary);
+  outline-offset: 2px;
+}
+
+/* ---- 通用工具类（组件内不写内联布局样式） ---- */
+
+.ag-btn-primary {
+  background: var(--ag-primary-soft);
+  color: var(--ag-primary);
+}
+
+.ag-btn-danger {
+  background: var(--ag-danger-soft);
+  color: var(--ag-danger);
+}
+
+.ag-btn-block {
+  width: 100%;
+  padding: 8px 0;
+}
+
+.ag-inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ag-filter-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ag-heading-sm {
+  font-size: 15px;
+}
+
+.ag-heading-section {
+  font-size: 14px;
+  margin: 16px 0 8px;
+}
+
+.ag-heading-modal {
+  font-size: 16px;
+}
+
+.ag-m-0 {
+  margin: 0;
+}
+
+.ag-mt-12 {
+  margin-top: 12px;
+}
+
+.ag-sub-flush {
+  margin-bottom: 8px;
+}
+
+.ag-modal-card {
+  max-width: 440px;
+  margin: 0 16px;
+}
+
+.ag-modal-card-lg {
+  max-width: 460px;
+  margin: 0 16px;
+}
+
+.ag-toolbar-flush {
+  margin-bottom: 0;
+}
+
+.ag-actions-center {
+  justify-content: center;
+}
+
+.ag-error-line {
+  margin: 0 0 8px;
+}
+
+.ag-anomaly-list {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.ag-profile-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.9;
+}
+
+.ag-profile-name {
+  font-weight: 600;
+}
+
+.ag-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.ag-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ag-metric-danger {
+  color: var(--ag-danger);
+}
+
+/* tab 激活态由 aria-selected 驱动，无需组件内联样式 */
+.ag-tab[aria-selected='true'] {
+  background: var(--ag-primary-soft);
+  color: var(--ag-primary);
+}
