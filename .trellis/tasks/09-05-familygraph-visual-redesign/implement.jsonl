@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"玻璃 token、Naive UI、可访问性和组件样式约定"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端颜色红线、375px、构建和测试门禁"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"双前端边界和家庭端/后台模块隔离"}

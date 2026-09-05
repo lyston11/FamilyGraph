@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-09-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~738 | Active |
+| `journal-1.md` | ~761 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-09-05 | 家庭端自助注册与邀请码体系（grilling 三轮 + 全量实现 + 验收 + 修订） | `a8926eb`, `b40eee3`, `e133b56` | `main` |
 | 17 | 2026-09-05 | 家庭端五项体验修复：导航/资料编辑/家族树/披露策略 | `866cdd0` | `main` |
 | 16 | 2026-09-05 | dev-seed 种子模块上线：清库重播种与空库自动播种机制 | `b5bd4ac` | `main` |
 | 15 | 2026-09-05 | 后台星空玻璃深度重构（09-05-admin-cosmic-glass-redesign） | `5fb5b58` | `main` |

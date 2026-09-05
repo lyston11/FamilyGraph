@@ -736,3 +736,26 @@ grilling 五轮对齐后落地 09-05-family-profile-nav-disclosure：R1 上下�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 家庭端自助注册与邀请码体系（grilling 三轮 + 全量实现 + 验收 + 修订）
+
+**Date**: 2026-09-05
+**Task**: 家庭端自助注册与邀请码体系（grilling 三轮 + 全量实现 + 验收 + 修订）
+**Branch**: `main`
+
+### Summary
+
+从『只有登录没有注册』的 grilling 拷问收敛出 19 条决策：家庭前端开放自助注册（REGISTRATION_ENABLED 默认开、关闭同形 404）、邀请码三类型（household/lineage 一次性复用 pending→accept 唯一路径；stranger 纯归因零连接）、并流绑定 account_bindings（本人 PIN+identity_fsm 确认、§0.9 无残留）。实现经 trellis-implement 三批 + trellis-check 验收 ACCEPT-WITH-P2；F3 compose 隔离冒烟 13 步全 PASS（暴露并按用户拍板修订决策 13：撤销 provisional 建码限制）；P2 修复含迁移 0032（creator_id SET NULL + 删除自动撤销，消除伪装 409）与 0030/0031 迁移回归测试。规范 architecture.md 新增 §0.10。管理员语义确认：逐空间角色，同空间双管理员数据层不可达。全量门禁：后端 794 passed、前端 482 passed、mypy strict、type-check、lint 全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a8926eb` | (see git log) |
+| `b40eee3` | (see git log) |
+| `e133b56` | (see git log) |
+
+### Status
+
+[OK] **Completed**
