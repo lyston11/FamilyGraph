@@ -2,6 +2,8 @@
 
 现代家谱协作 Web 平台：以每个人为第一人称维护家庭空间，家庭空间相连自然涌现家族视图。
 
+系统架构与设计总览见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；可执行合同（API 签名、错误矩阵、测试清单）见 `.trellis/spec/architecture.md`。
+
 技术栈：Vue 3 + Vite + TypeScript（前端）｜FastAPI + SQLAlchemy + SQLite(WAL)（后端）｜Docker Compose（部署）。
 
 ## 仓库布局
@@ -187,7 +189,7 @@ docker compose exec api python -m app.admin_recovery
 | Memory/RAG | `MEMORY_ENABLED` / `RAG_ENABLED` | `0` | 关闭时无候选/检索，工具路径保留 |
 | 受控联网 | `CONTROLLED_WEB_ENABLED` | `0` | 平台总开关；空间还需 owner/admin 单独 opt-in |
 
-**紧急 kill switch**：任何 Web 安全问题先全局关闭——设 `CONTROLLED_WEB_ENABLED=0` 重启 api，或经管理后台把平台配置 `enabled` 置 false。移除工具披露即可，不影响本地 Assistant/Steward 和 v1 家谱功能。
+**紧急 kill switch**：任何 Web 安全问题先全局关闭——设 `CONTROLLED_WEB_ENABLED=0` 重启 api，或经平台运营 API（platform_operator 专属）把平台配置 `enabled` 置 false。移除工具披露即可，不影响本地 Assistant/Steward 和 v1 家谱功能。
 
 部署故障：停止 agent 容器（`docker compose stop agent`），api/web 继续提供家谱功能；in-flight Run 由 FastAPI lease reaper 自动回收。
 
@@ -225,13 +227,13 @@ sidecar crash 或网络断开后，`agent_runs` 表中 `leased`/`running` 状态
 **Agent Provider（LLM）**：
 
 1. 在新 Provider 生成新 API key。
-2. 经管理后台 `PATCH /api/admin/agent/providers/{id}` 更新 `secret` 字段（后端用 `secretbox` 加密落库，旧值不可回显）。
+2. 经平台运营 API（platform_operator 专属）`PATCH /api/admin/agent/providers/{id}` 更新 `secret` 字段（后端用 `secretbox` 加密落库，旧值不可回显）。
 3. Agent sidecar 无需重启；ProviderGateway 从后端数据库在下一次 Run 读取新密钥。
 4. 旧 key 在 Provider 侧立即吊销；已有 Run 若配置版本发生变化会 fail-closed，由新 Run 使用新配置。
 
 **受控联网 search provider**：
 
-1. 经管理后台 `PUT /api/admin/web/platform` 更新 `provider_secret`（加密落库）。
+1. 经平台运营 API（platform_operator 专属）`PUT /api/admin/web/platform` 更新 `provider_secret`（加密落库）。
 2. 旧值不可回显；轮换后立即生效，新请求用新 key 解密。
 
 **会话密钥**：`SECRET_KEY` 更换即全部旧 JWT 与 secretbox 密文失效——所有用户需重新登录，已加密的 Provider secret 需重新配置。轮换 `SECRET_KEY` 需在维护窗口进行并通知用户。
