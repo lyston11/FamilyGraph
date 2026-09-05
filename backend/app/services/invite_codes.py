@@ -155,6 +155,10 @@ def join_space_with_code(
     space = session.get(FamilySpace, code.space_id)
     if space is None:  # 理论不可达：码随空间 CASCADE 删除，残留码按无效处理
         raise_api_error(400, INVITE_CODE_INVALID, MESSAGE_INVALID)
+    if code.creator_id is None:
+        # 理论不可达（0032）：创建者删除时其码已被 delete_profile_core 自动撤销，
+        # 可用码必有创建者；数据异常时按无效码拒绝，不让 NULL 归因进入成员行。
+        raise_api_error(400, INVITE_CODE_INVALID, MESSAGE_INVALID)
     member, _created = space_fsm.invite(
         session, space=space, user_id=user.id, added_by=code.creator_id
     )
@@ -301,6 +305,45 @@ def revoke_code(
         detail={"kind": code.kind, "by_space_manager": not is_creator},
     )
     return code
+
+
+def auto_revoke_for_creator_delete(
+    session: Session,
+    *,
+    creator_id: int,
+    actor_id: int | None,
+    ip: str | None,
+) -> list[int]:
+    """主体删除前的码处置（delete_profile_core 专用，09-05 P2-2）：自动撤销未撤销码。
+
+    码是临时分享凭据：创建者注销/被删除时自动撤销，避免遗留仍可兑换的凭据，
+    无数据损失也不阻断删除流程；audit 事件 ``invite_code_auto_revoked_on_delete``
+    记录码 id 清单（码行本身随 0032 SET NULL 保留使用计数/撤销历史）。已核销或
+    已撤销的码不动。事务由调用方（删除命令）拥有。
+    """
+    codes = list(
+        session.scalars(
+            select(InviteCode).where(
+                InviteCode.creator_id == creator_id,
+                InviteCode.revoked_at.is_(None),
+            )
+        )
+    )
+    if not codes:
+        return []
+    now = utcnow()
+    for code in codes:
+        code.revoked_at = now
+    session.flush()
+    audit.write_audit(
+        session,
+        action="invite_code_auto_revoked_on_delete",
+        actor_id=actor_id,
+        target_id=creator_id,
+        ip=ip,
+        detail={"code_ids": [code.id for code in codes], "count": len(codes)},
+    )
+    return [code.id for code in codes]
 
 
 def list_for_creator(session: Session, creator_id: int) -> list[InviteCode]:

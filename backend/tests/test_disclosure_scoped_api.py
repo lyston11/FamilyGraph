@@ -182,7 +182,12 @@ def test_minor_high_sensitive_true_rejected_422(client, db_session, scope_scene)
     h = _h(client, "未成年", "555555")
     for body in (
         {**BASIC_FALSE, "health": True},
-        {**BASIC_FALSE, "private_notes": True, "contact": True, "space_id": scope_scene["space"].id},
+        {
+            **BASIC_FALSE,
+            "private_notes": True,
+            "contact": True,
+            "space_id": scope_scene["space"].id,
+        },
     ):
         r = client.put(f"/api/users/{minor.id}/disclosure", json=body, headers=h)
         assert r.status_code == 422

@@ -286,14 +286,16 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
   })
 
-  it('会话内当前空间是 household：安全不可见且不加载投影（家庭投影查询属后续合同）', async () => {
+  it('会话内当前空间是 household：走通用授权快照渲染资料（09-05 R1；家庭卡点成员卡可见）', async () => {
     const { wrapper } = await mountProfile(
       { data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
       { userId: '2', currentSpaceId: 5, spaces: [makeLineageSpace(), makeHouseholdSpace()] },
     )
 
-    expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(true)
-    expect(mockedFetchView).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="profile-name"]').exists()).toBe(true)
+    // 返回按钮面向家庭卡（进入来源）
+    expect(wrapper.text()).toContain('返回家庭卡')
   })
 
   it('快照加载失败（网络等）→ 安全失败状态：重试仍走 PFV 端点，不显示空间名', async () => {
@@ -321,15 +323,14 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
     expect(wrapper.text()).not.toContain('李家族谱')
   })
 
-  it('当前空间不是 lineage：安全不可见，且不为该上下文加载投影', async () => {
-    const { wrapper } = await mountProfile(undefined, {
-      userId: '2',
-      currentSpaceId: 5,
-      spaces: [makeHouseholdSpace()],
-    })
+  it('当前空间是 household（无 lineage 空间）：同样经授权快照渲染（09-05 R1）', async () => {
+    const { wrapper } = await mountProfile(
+      { data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
+      { userId: '2', currentSpaceId: 5, spaces: [makeHouseholdSpace()] },
+    )
 
-    expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(true)
-    expect(mockedFetchView).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="profile-name"]').exists()).toBe(true)
   })
 
   it('硬刷新直达（无会话空间上下文）：经空间上下文协调建立 lineage 后正常渲染', async () => {

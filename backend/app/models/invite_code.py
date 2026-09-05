@@ -7,8 +7,10 @@
 - 码以明文存储（创建者可在设置页查看并分享 …/register?code=XXX）；
   唯一约束 uq_invite_codes_code 兜底，生成与查重由服务层原子完成。
 
-creator_id 为 RESTRICT：邀请码是授信对象，随创建者静默级联会掩盖撤销历史；
-创建者删除前须先撤销其码（与 family_spaces.owner_id RESTRICT 同一 §0.5 哲学）。
+creator_id 为 SET NULL（nullable，0032）：创建者删除不掩盖撤销历史——码行（含
+使用计数/撤销状态）保留，仅清除人物指针（与 account_bindings.person_id SET NULL
+同一哲学）；未撤销码在删除前由 delete_profile_core 自动撤销并写 audit
+（invite_code_auto_revoked_on_delete），不会遗留仍可兑换的分享凭据。
 """
 
 from __future__ import annotations
@@ -58,8 +60,9 @@ class InviteCode(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(12), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
-    creator_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    # 创建者删除后码行保留、指针置空（0032 SET NULL）；归因历史由 audit_log 快照承载
+    creator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     # household/lineage 必填、stranger 必须 NULL（ck_invite_code_space_pair）
     space_id: Mapped[int | None] = mapped_column(

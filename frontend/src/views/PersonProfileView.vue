@@ -115,15 +115,17 @@ async function ensureProfile(): Promise<void> {
   }
   // 空间上下文：会话内到达（家族树/家庭卡）沿用当前空间，绝不重跑默认选择——
   // ensureDefaultSpace 会把上下文改回最近 household，导致从 lineage 树进入时
-  // 目标意外「不可见」（走查实测）。仅硬刷新直达（无上下文）时兜底选择一次；
-  // 选择结果为 household 时按合同安全不可见（家庭投影查询属后续合同）。
+  // 目标意外「不可见」（走查实测）。仅硬刷新直达（无上下文）时兜底选择一次。
+  // 09-05 R1 扩展：household 上下文同样走通用授权快照（/personal-family-view 按
+  // active 成员资格授权，与 lineage 同一安全合同）——家庭卡点成员卡现在能看到
+  // 对方资料；其余未知 kind 仍安全不可见。
   if (spaces.currentSpaceId === null) {
     const kind = await spaceContext.ensureDefaultSpace().catch(() => 'none' as const)
-    if (kind !== 'lineage' || spaceId.value === null) {
+    if (kind === 'none' || spaceId.value === null) {
       phase.value = 'unavailable'
       return
     }
-  } else if (spaces.currentSpace?.kind !== 'lineage') {
+  } else if (spaces.currentSpace?.kind !== 'lineage' && spaces.currentSpace?.kind !== 'household') {
     phase.value = 'unavailable'
     return
   }

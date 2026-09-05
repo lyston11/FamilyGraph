@@ -299,9 +299,7 @@ def update_disclosure(
     提供的键不修改；未成年人对高敏感开启请求由服务层整体 422。"""
     actor, _account = identity
     ctx = ActorContext.from_identity(actor, _account, ip=_client_ip(request))
-    flags = payload.model_dump(
-        include=set(DISCLOSURE_KEYS), exclude_unset=True, exclude_none=True
-    )
+    flags = payload.model_dump(include=set(DISCLOSURE_KEYS), exclude_unset=True, exclude_none=True)
     target = member_commands.update_disclosure(
         session, ctx, user_id, flags, space_id=payload.space_id
     )

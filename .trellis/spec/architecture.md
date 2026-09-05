@@ -205,13 +205,14 @@ accounts（登录凭据，与档案 1:0..1）
 - `POST /api/auth/register`（公开）：`{username, pin, display_name(接收不持久化，单名模型并入 users.name), invite_code?}` → token pair。命令层 `commands/registration.py::register_user`（单立即事务）。
 - `GET|POST /api/invite-codes`、`DELETE /api/invite-codes/{id}`、`POST /api/me/invite-codes/redeem`；码原语 `services/invite_codes.py`（生成去 0/O/1/I/L、resolve 字段级文案、`consume_code` 条件 UPDATE 原子核销）。
 - `GET /api/bindings`、`POST /api/bindings/{id}/confirm|reject`、`DELETE /api/bindings/{id}`；命令层 `commands/bindings.py`。
-- DB：`invite_codes(code UNIQUE, kind∈{household,lineage,stranger}, creator_id RESTRICT, space_id nullable, max_uses, used_count, expires_at, revoked_at)`，CHECK：`stranger ⇔ space_id IS NULL`、household/lineage ⇒ `space_id NOT NULL AND max_uses IS NOT NULL AND max_uses=1`（SQLite CHECK 对 NULL 放行，必须显式排除）。`account_bindings(initiator_id CASCADE, target_id CASCADE, person_id SET NULL, status∈{pending,confirmed,rejected,cancelled})`。
+- DB：`invite_codes(code UNIQUE, kind∈{household,lineage,stranger}, creator_id nullable SET NULL（迁移 0032，原 RESTRICT 会永久挡住创建者删除——产品无删码入口，已撤销码同样触发 RESTRICT）, space_id nullable, max_uses, used_count, expires_at, revoked_at)`，CHECK：`stranger ⇔ space_id IS NULL`、household/lineage ⇒ `space_id NOT NULL AND max_uses IS NOT NULL AND max_uses=1`（SQLite CHECK 对 NULL 放行，必须显式排除）。`account_bindings(initiator_id CASCADE, target_id CASCADE, person_id SET NULL, status∈{pending,confirmed,rejected,cancelled})`。
 - 配置：`REGISTRATION_ENABLED`（默认 True）经 `GET /api/bootstrap/status` 加法字段 `registration_enabled` 投影。
 
 ### 3. Contracts
 - 注册初始态：`Account(status='claimed', pin_must_change=False)`（自选 PIN 无需强制改）+ `User(profile_status='provisional')`。provisional 能力边界：可建自己的空间（§215/AD-3），**不可建码、不可邀请**。
 - 码语义：household/lineage 码一次性，加入**只走 SpaceMember FSM**（`space_fsm.invite`(pending) → `transition("accept")`，`added_by`=码创建者，审计 `space_invite_accepted`+`invite_code_redeemed`）；stranger 码多人次可设上限，仅归因（audit `invite_code_redeemed`，scene=register）——持码注册者经 `create_space(commit=False)` 得自己独立 household 空间（创建者即 space_admin，符合 §0.8 唯一管理员不变量），与码创建者**零** SpaceMember/可见性关系。设置页兑换与注册时填码同一 `join_space_with_code` 路径（scene=redeem）。
 - 并流绑定：建档撞名判定作用域 = 建档既有查重门禁口径（非全局用户名匹配，§0.9 同名不同人必须放行）；目标资格 = `Account.claimed` 且 `created_by IS NULL`。确认 = 本人 + PIN 复验（登录侧 auth_guard 同源失败计数）+ `confirm_profile_identity`，人物并回仅迁身份承载行（refs/members/边/附件/事实），不覆写存储值；拒绝/取消即删除撞名人物。
+- 删除联动：删除用户时 `delete_profile_core` 调用 `auto_revoke_for_creator_delete` 自动撤销其全部未撤销码（audit `invite_code_auto_revoked_on_delete`，自删场景 actor_id=None）；码行经 0032 `creator_id SET NULL` 保留使用计数与撤销历史，归因由 audit_log 快照承载。
 
 ### 4. Validation & Error Matrix
 - 开关关 → 404 与随机未知路径逐字节一致（body 校验前短路）；前端 `/register` 同形 404（URL 保留）

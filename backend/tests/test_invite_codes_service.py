@@ -1,22 +1,26 @@
 """services/invite_codes.py 原语与授权单测（09-05 Chunk A）。
 
 覆盖：码生成唯一性/字符集、三种 kind 的 DB CHECK 约束、核销竞态（used_count
-并发上界，写锁前置单赢家）、撤销权限（creator vs space_admin）、状态拒绝文案。
+并发上界，写锁前置单赢家）、撤销权限（creator vs space_admin）、状态拒绝文案、
+创建者删除的码处置（P2-2：自动撤销 + 行保留）。
 """
 
 import threading
 from datetime import timedelta
 
 import pytest
-from conftest import create_user_with_pin, seed_space_with_owner
+from conftest import create_space_member, create_user_with_pin, seed_space_with_owner
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from app.commands.context import command_transaction
+from app.commands import members as member_commands
+from app.commands.context import ActorContext, command_transaction
 from app.db import SessionLocal
 from app.errors import INVITE_CODE_FORBIDDEN, SPACE_NOT_FOUND
+from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.space import SpaceMember
+from app.models.user import User
 from app.services import invite_codes
 from app.utils import timeutil
 
@@ -433,3 +437,108 @@ def test_invite_code_join_activates_membership_and_records_attribution(db_sessio
     assert exc.value.status_code == 409
     db_session.expire(code, ["used_count"])
     assert code.used_count == 1
+
+
+# ---- 8. 创建者删除的码处置（09-05 P2-2：creator_id SET NULL + 自动撤销）----
+
+
+def _self_ctx(user) -> ActorContext:
+    return ActorContext(
+        user_id=user.id, account_id=user.account.id, account_status=user.account.status
+    )
+
+
+def test_delete_creator_auto_revokes_unrevoked_codes_and_succeeds(db_session) -> None:
+    """删除创建过码的成员：删除成功（不再被 creator_id RESTRICT 阻断），
+    未撤销码自动撤销并写 audit，码行保留、创建者指针置空（0032 SET NULL）。"""
+    owner = _make_member(db_session, "码处置空间主")
+    space = seed_space_with_owner(db_session, owner.id, name="码处置空间")
+    creator = _make_member(db_session, "码处置成员")
+    create_space_member(db_session, space.id, creator.id, role="member", status="active")
+
+    with command_transaction(db_session, immediate=True):
+        household = invite_codes.create_code(
+            session=db_session, creator=creator, kind="household", space_id=space.id
+        )
+        stranger = invite_codes.create_code(
+            session=db_session, creator=creator, kind="stranger", max_uses=3
+        )
+        already_revoked = invite_codes.create_code(
+            session=db_session, creator=creator, kind="stranger"
+        )
+        already_revoked.revoked_at = already_revoked.created_at
+    db_session.commit()
+    revoked_before = already_revoked.revoked_at
+
+    member_commands.delete_member(
+        db_session, _self_ctx(creator), creator.id, confirm_name="码处置成员"
+    )
+
+    db_session.expire_all()
+    assert db_session.get(User, creator.id) is None  # 删除成功
+    rows = {row.id: row for row in db_session.query(InviteCode).all()}
+    assert set(rows) == {household.id, stranger.id, already_revoked.id}  # 码行不被级联抹掉
+    assert all(row.creator_id is None for row in rows.values())  # 指针置空、历史保留
+    assert rows[household.id].revoked_at is not None  # 未撤销码 → 自动撤销
+    assert rows[stranger.id].revoked_at is not None
+    assert rows[already_revoked.id].revoked_at == revoked_before  # 已撤销码原样
+
+    audits = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "invite_code_auto_revoked_on_delete")
+        .all()
+    )
+    assert len(audits) == 1
+    assert audits[0].target_id == creator.id
+    assert audits[0].actor_id is None  # 自删场景：actor 行随级联消失，快照留痕
+    assert set(audits[0].detail["code_ids"]) == {household.id, stranger.id}
+    assert audits[0].detail["count"] == 2
+
+
+def test_delete_creator_with_consumed_code_unaffected(db_session) -> None:
+    """码已被核销后删除创建者：删除成功，使用计数保留；未撤销的已核销码
+    同样被关闭（核销≠撤销，剩余次数仍可被他人使用），不再出现误报 409。"""
+    owner = _make_member(db_session, "核销空间主")
+    space = seed_space_with_owner(db_session, owner.id, name="核销空间")
+    creator = _make_member(db_session, "核销持码人")
+    create_space_member(db_session, space.id, creator.id, role="member", status="active")
+
+    with command_transaction(db_session, immediate=True):
+        burned = invite_codes.create_code(
+            session=db_session, creator=creator, kind="household", space_id=space.id
+        )
+    with command_transaction(db_session, immediate=True):
+        resolved = invite_codes.resolve_usable_code(db_session, burned.code)
+        invite_codes.consume_code(db_session, resolved)
+    db_session.expire(burned, ["used_count"])
+    assert burned.used_count == 1  # 已核销（一次性用后即焚）
+
+    member_commands.delete_member(
+        db_session, _self_ctx(creator), creator.id, confirm_name="核销持码人"
+    )
+
+    db_session.expire_all()
+    assert db_session.get(User, creator.id) is None  # 核销后删除不受影响
+    row = db_session.query(InviteCode).one()
+    assert row.creator_id is None
+    assert row.used_count == 1  # 核销历史保留
+    assert row.revoked_at is not None  # 名下不再存在任何未撤销码
+
+
+def test_auto_revoke_noop_when_creator_has_no_codes(db_session) -> None:
+    """无码成员删除：无 audit 噪音，删除路径不受影响。"""
+    creator = _make_member(db_session, "无码成员")
+    db_session.commit()
+
+    member_commands.delete_member(
+        db_session, _self_ctx(creator), creator.id, confirm_name="无码成员"
+    )
+
+    db_session.expire_all()
+    assert db_session.get(User, creator.id) is None
+    assert (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "invite_code_auto_revoked_on_delete")
+        .count()
+        == 0
+    )

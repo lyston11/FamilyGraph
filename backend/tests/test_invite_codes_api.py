@@ -7,6 +7,7 @@
 
 from datetime import timedelta
 
+import pytest
 from conftest import (
     auth_header,
     create_space_member,
@@ -14,13 +15,16 @@ from conftest import (
     login,
     seed_space_with_owner,
 )
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.commands import registration as registration_commands
 from app.commands.context import ActorContext
+from app.errors import INVITE_CODE_INVALID
 from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.space import SpaceMember
+from app.models.user import User
 from app.utils import timeutil
 
 
@@ -299,3 +303,51 @@ def test_invite_code_unauthenticated_requests_401(client) -> None:
     assert client.get("/api/invite-codes").status_code == 401
     assert client.post("/api/invite-codes", json={"kind": "stranger"}).status_code == 401
     assert client.post("/api/me/invite-codes/redeem", json={"code": "ABCDEFGH"}).status_code == 401
+
+
+# ---- 删除主体的码处置（09-05 P2-2：creator_id 不再阻断删除）----
+
+
+def test_delete_code_creator_via_api_succeeds_and_auto_revokes(db_session, client) -> None:
+    """创建过码的成员经 API 自删：204（修复前误报 OWNER_TRANSFER_REQUIRED 409），
+    码自动撤销、行保留且创建者指针置空，audit 事件落痕。"""
+    owner = create_user_with_pin(db_session, "自删空间主", "123456")
+    space = seed_space_with_owner(db_session, owner.id, name="自删码空间")
+    creator = create_user_with_pin(db_session, "自删持码人", "444444")
+    create_space_member(db_session, space.id, creator.id, role="member", status="active")
+    creator_id = creator.id  # API 删除在另一 session 执行；先取标量防过期实例刷新
+    # 兑换者在删除前造数：删除后其主键可能被 SQLite 复用，避免身份映射脏状态
+    joiner = create_user_with_pin(db_session, "自删后填码人", "555555")
+
+    created = client.post(
+        "/api/invite-codes",
+        headers=_headers(client, "自删持码人", "444444"),
+        json={"kind": "household", "space_id": space.id},
+    )
+    assert created.status_code == 201, created.text
+    code_id = created.json()["id"]
+
+    deleted = client.delete(
+        f"/api/users/{creator_id}",
+        headers=_headers(client, "自删持码人", "444444"),
+        params={"confirm_name": "自删持码人"},
+    )
+    assert deleted.status_code == 204, deleted.text
+
+    db_session.expire_all()
+    assert db_session.query(User).filter(User.id == creator_id).count() == 0
+    row = db_session.query(InviteCode).one()  # 码行保留，不随创建者级联消失
+    assert row.id == code_id
+    assert row.creator_id is None
+    assert row.revoked_at is not None
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "invite_code_auto_revoked_on_delete")
+        .one()
+    )
+    assert audit.target_id == creator_id
+    assert audit.detail["code_ids"] == [code_id]
+    # 自动撤销后的码不可再被兑换（创建者已删除，resolve 统一按无效处理）
+    with pytest.raises(HTTPException) as exc:
+        registration_commands.redeem_invite_code(db_session, _ctx(joiner), raw_code=row.code)
+    assert exc.value.detail["__api_error__"]["code"] == INVITE_CODE_INVALID  # type: ignore[index]

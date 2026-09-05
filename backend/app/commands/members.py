@@ -911,11 +911,7 @@ def update_disclosure(
                 ip=ctx.ip,
                 detail={
                     "scope": scope_payload["scope"],
-                    **(
-                        {"space_id": space_id}
-                        if scope_payload["scope"] == "space"
-                        else {}
-                    ),
+                    **({"space_id": space_id} if scope_payload["scope"] == "space" else {}),
                     "categories": sorted(changed_high_risk),
                     "allowed": {category: bool(flags[category]) for category in changed_high_risk},
                 },
@@ -943,6 +939,19 @@ def delete_profile_core(
 
     if confirm_name.strip() != target.name.strip():
         raise_api_error(409, CONFIRM_NAME_MISMATCH, "输入的名字与档案名字不一致")
+
+    # 邀请码处置（09-05 P2-2）：码是临时分享凭据，删除前自动撤销未撤销码并写
+    # audit（invite_code_auto_revoked_on_delete）；已核销/已撤销码不动，码行随
+    # 0032 creator_id SET NULL 保留使用计数/撤销历史，删除不再被 FK RESTRICT 阻断。
+    # 自删场景 actor 行随后级联消失，审计以快照留痕（actor_id 置 NULL，同 profile_deleted）。
+    from app.services import invite_codes as invite_codes_service
+
+    invite_codes_service.auto_revoke_for_creator_delete(
+        session,
+        creator_id=target.id,
+        actor_id=None if ctx.user_id == target.id else ctx.user_id,
+        ip=ctx.ip,
+    )
 
     image_paths = [
         row.url_or_path
