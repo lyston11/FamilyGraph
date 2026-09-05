@@ -1,9 +1,4 @@
-import type {
-  BootstrapStatusResponse,
-  InitializeResponse,
-  TokenPairResponse,
-  UserOut,
-} from '@/types/api'
+import type { BootstrapStatusResponse, TokenPairResponse, UserOut } from '@/types/api'
 
 import { apiClient, rawClient } from './client'
 
@@ -56,10 +51,5 @@ export async function changeName(name: string): Promise<UserOut> {
 
 export async function fetchBootstrapStatus(): Promise<BootstrapStatusResponse> {
   const { data } = await apiClient.get<BootstrapStatusResponse>('/bootstrap/status')
-  return data
-}
-
-export async function initializeAdmin(name: string): Promise<InitializeResponse> {
-  const { data } = await apiClient.post<InitializeResponse>('/bootstrap/initialize', { name })
   return data
 }

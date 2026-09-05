@@ -8,22 +8,20 @@ declare module 'vue-router' {
   interface RouteMeta {
     /** 'blank'：沉浸页（登录/引导/改 PIN/确档），App.vue 不渲染应用壳 */
     chrome?: 'blank'
-    /** 仅独立 system_admin 主体可访问。 */
-    systemAdminOnly?: boolean
-    /** @deprecated 请使用 platformOperatorOnly；不得将其解释为空间管理员。 */
-    adminOnly?: boolean
     /** 仅目标空间 active owner/space_admin 可访问。 */
     spaceManagerOnly?: boolean
   }
 }
 
 /**
- * 家庭用户路由表（09-01 design.md §2）：
+ * 家庭用户路由表：
  * - `/`（name `home`）= 我的家庭 HouseholdCardView，登录成功默认目标；
  * - `/family-tree`（name `family-space`）= 家族空间树 FamilyTreeView；
  * - 旧 `/home` 显式重定向到 `/`，不再挂载旧成员混合页。
  * route name 保持外部引用兼容：`home` 仍是登录默认目标，`family-space`
  * 沿用为家族树入口（各视图返回链接无需改动）。
+ * 未知路径（含 /system-admin、/admin 等一切未注册深链）统一进入普通 404，
+ * 不跳转、不提示任何其他产品面（09-04 家庭端零后台痕迹）。
  */
 const router = createRouter({
   history: createWebHistory(),
@@ -84,24 +82,6 @@ const router = createRouter({
       component: () => import('@/views/StatsView.vue'),
     },
     {
-      path: '/system-admin',
-      name: 'system-admin',
-      component: () => import('@/views/SystemAdminView.vue'),
-      meta: { systemAdminOnly: true },
-    },
-    {
-      // 系统管理员登录占位（PRD §2.7）：独立于家庭登录页（blank chrome、无家庭壳），
-      // 真实登录流程由 09-01-system-admin-governance-routes 任务实现。
-      path: '/system-admin/login',
-      name: 'system-admin-login',
-      component: () => import('@/views/SystemAdminLoginView.vue'),
-      meta: { public: true, chrome: 'blank' },
-    },
-    {
-      path: '/admin',
-      redirect: { name: 'system-admin' },
-    },
-    {
       path: '/spaces/:spaceId/manage',
       name: 'space-management',
       component: () => import('@/views/SpaceManagementView.vue'),
@@ -117,17 +97,20 @@ const router = createRouter({
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
     },
-    { path: '/:pathMatch(.*)*', redirect: '/' },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: () => import('@/views/NotFoundView.vue'),
+      meta: { public: true, chrome: 'blank' },
+    },
   ],
 })
 
 /**
  * 认证守卫（architecture.md §1 + state-management.md 红线）：
- * 1. 首启未初始化 → 一律进引导页（公开页除外）
+ * 1. 首启未初始化（无任何家庭账号）→ 一律进引导页（公开页除外）
  * 2. 未登录 → /login；已登录访问 /login → /（name home，我的家庭）
- * 3. system_admin / family_user 互斥：系统主体只能停留在系统后台，
- *    家庭主体（含家庭壳任何页面）不得进入系统后台路由
- * 4. pin_must_change=true → 白名单外强制跳改 PIN 页
+ * 3. pin_must_change=true → 白名单外强制跳改 PIN 页
  */
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
@@ -138,17 +121,12 @@ router.beforeEach(async (to) => {
     return to.name === 'onboarding' ? true : { name: 'onboarding' }
   }
 
-  // 恢复会话：内存无 access 但 localStorage 有 refresh（硬刷新场景）。
-  // 必须先恢复再做权限判断，否则平台运营者硬刷新 /admin 会被误判成普通用户。
+  // 恢复会话：内存无 access 但 localStorage 有 refresh（硬刷新场景）
   if (!auth.isLoggedIn && auth.refreshToken) {
     await auth.resume()
   }
 
   if (to.meta.public) {
-    // 已登录主体访问系统管理员登录占位：系统管理员回后台，家庭用户按互斥回家庭壳
-    if (auth.isLoggedIn && to.name === 'system-admin-login') {
-      return auth.isSystemAdmin ? { name: 'system-admin' } : { name: 'family-space' }
-    }
     if (auth.isLoggedIn && to.name === 'login') {
       return { name: 'home' }
     }
@@ -163,23 +141,11 @@ router.beforeEach(async (to) => {
     }
   }
 
-  // 主体互斥（design.md §6）：系统管理员 token 不能进入家庭用户壳的任何页面；
-  // 家庭用户 token 不能进入系统后台路由（含后台登录占位页）。
-  if (auth.isSystemAdmin && to.name !== 'system-admin' && to.name !== 'force-change-pin') {
-    return { name: 'system-admin' }
-  }
-  if (
-    !auth.isSystemAdmin &&
-    (to.name === 'system-admin' || to.name === 'system-admin-login' || to.meta.systemAdminOnly)
-  ) {
-    return { name: 'family-space' }
-  }
-
   if (to.meta.spaceManagerOnly) {
     const spaces = useSpacesStore()
     const rawSpaceId = to.params.spaceId
     const targetSpaceId = typeof rawSpaceId === 'string' ? Number(rawSpaceId) : NaN
-    // 路由守卫只依赖已加载的 active membership；平台运营者不因平台身份获得空间权限。
+    // 路由守卫只依赖已加载的 active membership。
     if (!Number.isInteger(targetSpaceId) || targetSpaceId <= 0) {
       return { name: 'family-space' }
     }

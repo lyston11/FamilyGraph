@@ -14,6 +14,8 @@ import type { TokenPairResponse, UserOut } from '@/types/api'
  * 认证状态（spec/frontend/state-management.md 红线）：
  * - access token 只存内存；localStorage 仅允许 refresh token
  * - 登出 / 401 / token 失效时清空全部状态与 localStorage，路由守卫兜底跳登录页
+ * - 09-04：家庭端只有 family_user 主体；系统管理员在独立前端应用与会话域，
+ *   本 store 不包含任何后台主体分支。
  */
 const REFRESH_TOKEN_KEY = 'fg.refresh_token'
 
@@ -29,21 +31,10 @@ export const useAuthStore = defineStore('auth', () => {
   // ---- 派生 ----
   const isLoggedIn = computed(() => accessToken.value !== null && user.value !== null)
   const mustChangePin = computed(() => user.value?.pin_must_change === true)
-  /**
-   * 主体判定唯一来源（Phase 6 审计结论固定）：只看服务端签名会话返回的
-   * `principal_type === 'system_admin'`（/auth/login、/auth/login/select、/auth/refresh
-   * 的 TokenPairResponse 与 GET /me；系统主体按设计不调 /me，refresh 响应即权威投影）。
-   * `is_admin` 是 v2 兼容显示字段，platform_role 是家庭端平台运营标记——两者都不参与
-   * 主体互斥判定（architecture.md §0.8：JWT 必须携带 principal_type）。
-   */
-  const isSystemAdmin = computed(() => user.value?.principal_type === 'system_admin')
-  const isPlatformOperator = computed(() => isSystemAdmin.value)
 
   /**
    * 家庭侧敏感缓存清理（不含凭据与 user 投影）：
-   * - 登出 / 401 / token 失效：clearSession 全量清空；
-   * - 登录换入 system_admin 主体（见下方 login/selectCandidate）：同样全量清空，
-   *   保证系统管理员会话与家庭会话互斥切换时家庭 stores 不残留任何 PII。
+   * 登出 / 401 / token 失效时 clearSession 全量清空，业务 store 不残留任何 PII。
    */
   function clearFamilyCaches(): void {
     // 敏感缓存清理红线（state-management.md）：同步清空业务 store 的 PII
@@ -87,32 +78,6 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem(REFRESH_TOKEN_KEY, pair.refresh_token)
   }
 
-  /**
-   * 主体互斥的登录处理（architecture.md §0.8 / PRD §2.7）：唯一登录端点同时服务
-   * 家庭用户与系统管理员。若登录响应是 system_admin 主体，先清空全部家庭敏感
-   * store 再落 token——系统管理员进入后台壳时，家庭 stores 必须为空。
-   */
-  function ensureNoFamilyCachesForPrincipal(pair: TokenPairResponse): void {
-    if (pair.user.principal_type === 'system_admin') {
-      clearFamilyCaches()
-    }
-  }
-
-  /**
-   * 系统管理员登录会话落位（SAR-F1，09-01-system-admin-governance-routes）：
-   * 仅接受 `principal_type === 'system_admin'` 的登录响应。家庭主体 / 未知主体
-   * 不得建立系统管理员会话——丢弃凭据并清理任何临时 auth 状态（含残留
-   * refresh token），调用方（登录页）负责展示统一拒绝文案。
-   */
-  function applySystemAdminSession(pair: TokenPairResponse): void {
-    if (pair.user?.principal_type !== 'system_admin') {
-      clearSession()
-      throw new Error('登录响应主体不是 system_admin，已拒绝建立系统管理员会话')
-    }
-    clearFamilyCaches()
-    applyTokenPair(pair)
-  }
-
   // ---- 动作 ----
   async function checkBootstrap(): Promise<boolean> {
     if (!bootstrapChecked.value) {
@@ -125,7 +90,6 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(name: string, pin: string): Promise<TokenPairResponse> {
     const pair = await authApi.login(name, pin)
-    ensureNoFamilyCachesForPrincipal(pair)
     applyTokenPair(pair)
     return pair
   }
@@ -135,7 +99,6 @@ export const useAuthStore = defineStore('auth', () => {
     userId: number,
   ): Promise<TokenPairResponse> {
     const pair = await authApi.selectCandidate(challengeId, userId)
-    ensureNoFamilyCachesForPrincipal(pair)
     applyTokenPair(pair)
     return pair
   }
@@ -153,13 +116,9 @@ export const useAuthStore = defineStore('auth', () => {
     if (!refreshToken.value) return null
     try {
       const pair = await refreshSession()
-      // GET /me 是家庭端点，系统管理员访问按设计被拒（401）。系统主体的身份
-      // 投影直接采用 refresh 响应：该响应由服务端按签名 token 查表签发，
-      // 是权威来源，不是客户端自带字段。
-      // pin_must_change=true 时 /me 也被门禁拦截（白名单外 403），同样直接采用。
-      const skipFetchMe =
-        pair.user.principal_type === 'system_admin' || pair.user.pin_must_change
-      if (!skipFetchMe) {
+      // pin_must_change=true 时 /me 被门禁拦截（白名单外 403），直接采用
+      // refresh 响应自带的家庭身份投影，不额外请求。
+      if (!pair.user.pin_must_change) {
         user.value = await authApi.fetchMe()
       }
       return user.value
@@ -192,13 +151,6 @@ export const useAuthStore = defineStore('auth', () => {
     return updated
   }
 
-  async function initializeAdmin(name: string): Promise<string> {
-    const result = await authApi.initializeAdmin(name)
-    systemInitialized.value = true
-    bootstrapChecked.value = true
-    return result.one_time_pin
-  }
-
   return {
     accessToken,
     refreshToken,
@@ -207,18 +159,14 @@ export const useAuthStore = defineStore('auth', () => {
     systemInitialized,
     isLoggedIn,
     mustChangePin,
-    isSystemAdmin,
-    isPlatformOperator,
     checkBootstrap,
     login,
     selectCandidate,
-    applySystemAdminSession,
     refreshSession,
     resume,
     logout,
     changePin,
     updateName,
-    initializeAdmin,
     markInitialized(): void {
       systemInitialized.value = true
       bootstrapChecked.value = true
@@ -228,18 +176,16 @@ export const useAuthStore = defineStore('auth', () => {
 })
 
 /**
- * 会话过期整页跳转（主体感知，SAR-F2）：system_admin 会话失效回
- * `/system-admin/login`，family_user 回 `/login`——系统管理员 token 过期
- * 绝不降级为家庭登录入口，反之亦然。principal 由调用方在 clearSession
- * 之前从 auth store 快照（clearSession 后 user 已为 null，无法再读）。
+ * 会话过期整页跳转：家庭会话失效一律回 `/login`。系统管理员会话在
+ * 独立前端应用内自行处理，与家庭跳转路径互不相干（09-04 隔离合同）。
  *
  * 已在目标登录页时不再 assign：初始导航未解析窗口内 AppShell 可能发起
  * 未认证请求（401），重复 assign 会造成登录页无限整页重载循环
  * （09-01 走查实测：2320 次循环请求）。
  */
 export const sessionExpiredNavigator = { assign: (url: string) => window.location.assign(url) }
-export function sessionExpiredRedirect(wasSystemAdmin = false): void {
-  const target = wasSystemAdmin ? '/system-admin/login' : '/login'
+export function sessionExpiredRedirect(): void {
+  const target = '/login'
   if (window.location.pathname !== target) {
     sessionExpiredNavigator.assign(target)
   }
@@ -251,9 +197,7 @@ export function wireAuthInterceptors(): void {
   registerTokenReader(() => store.accessToken)
   registerRefreshExecutor(() => store.refreshSession())
   registerSessionExpiredHandler(() => {
-    // 主体快照必须先于 clearSession 读取：清空后 principal_type 不可再判定
-    const wasSystemAdmin = store.isSystemAdmin
     store.clearSession()
-    sessionExpiredRedirect(wasSystemAdmin)
+    sessionExpiredRedirect()
   })
 }

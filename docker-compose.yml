@@ -1,18 +1,26 @@
-# FamilyGraph 开发/部署底座（m0a；V2.1 新增 agent sidecar）
+# FamilyGraph 开发/部署底座（m0a；V2.1 agent sidecar；09-04 独立系统管理员后台）
 #
 # 用法：
-#   部署：在 .env 提供 SECRET_KEY 与 AGENT_SERVICE_SECRET（强随机值），然后
+#   部署：在 .env 提供 SECRET_KEY、AGENT_SERVICE_SECRET 与 ADMIN_JWT_SECRET/
+#         ADMIN_JWT_ISSUER/ADMIN_JWT_AUDIENCE（强随机值），然后
 #         docker compose up --build -d
-#   前端: http://localhost:8080 （/api 经 nginx 反代到 api）
-#   API 健康: http://localhost:8000/api/health
+#   家庭前端: http://localhost:8080 （/api 经 nginx 反代到 api）
+#   家庭 API 健康: http://localhost:8000/api/health
+#   系统管理员后台: http://127.0.0.1:8081 （仅宿主回环；VPN/内网反代进入，
+#                   /admin-api 经 nginx 反代到 api:8002；初始密码见数据卷
+#                   /data/bootstrap/admin-credentials，0600，首改后删除）
 #
-# 安全合同（P1 收口）：
-#   - 弱默认密钥 fail-closed：SECRET_KEY / AGENT_SERVICE_SECRET 未提供即拒启，
-#     不再提供 dev 弱默认值；开发联调需显式 DEV_ALLOW_WEAK_SECRETS=1（.env）。
+# 安全合同（P1 收口 + 09-04 隔离）：
+#   - 弱默认密钥 fail-closed：SECRET_KEY / AGENT_SERVICE_SECRET / ADMIN_JWT_SECRET
+#     未提供即拒启，不提供 dev 弱默认值；开发联调需显式 DEV_ALLOW_WEAK_SECRETS=1。
 #   - internal agent 协议（8001）绑定 api 在 backend 网络的接口 IP
 #     （INTERNAL_AGENT_API_HOST=172.28.0.10，静态分配），frontend 网络上的
 #     web/nginx 与宿主均无法路由到该接口；backend 网络设 internal:true，
 #     sidecar 无外网 egress（模型流量经 api 容器的 ProviderGateway 代理转发）。
+#   - admin API listener（8002）只绑定 api 在 admin 网络的接口 IP
+#     （ADMIN_API_HOST=172.29.0.10，静态分配），不发布宿主端口：家庭 web、
+#     公网与宿主均不可直达，唯一入口是 admin-web 的 /admin-api 反代；
+#     admin 网络设 internal:true（admin-web 无外网 egress）。
 
 services:
   api:
@@ -20,8 +28,8 @@ services:
     image: familygraph-api:0.1.0
     restart: unless-stopped
     ports:
-      # 仅公开 listener 发布到宿主；internal agent 协议（8001）不发布端口，
-      # 且只绑定 backend 网络接口（见 INTERNAL_AGENT_API_HOST）
+      # 仅家庭 listener 发布到宿主；internal（8001）与 admin（8002）不发布端口，
+      # 分别只绑定 backend / admin 网络接口（见 INTERNAL_AGENT_API_HOST/ADMIN_API_HOST）
       - "8000:8000"
     environment:
       DATA_DIR: /data
@@ -29,6 +37,10 @@ services:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 必须在 .env 中提供强随机值}
       AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:?AGENT_SERVICE_SECRET 必须在 .env 中提供强随机值}
       DEV_ALLOW_WEAK_SECRETS: ${DEV_ALLOW_WEAK_SECRETS:-0}
+      # 09-04 系统管理员：独立 JWT 签发域（与家庭 SECRET_KEY 不同值），缺失/过弱拒启
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET 必须在 .env 中提供强随机值}
+      ADMIN_JWT_ISSUER: ${ADMIN_JWT_ISSUER:?ADMIN_JWT_ISSUER 必须在 .env 中提供}
+      ADMIN_JWT_AUDIENCE: ${ADMIN_JWT_AUDIENCE:?ADMIN_JWT_AUDIENCE 必须在 .env 中提供}
       # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       # 首版云模型固定为与本机 Pi 一致的 liu-dada/gpt-5.6-sol profile；该
@@ -36,6 +48,8 @@ services:
       # 仍可由平台 operator 作为敏感数据回退注册。
       # P1 网络隔离：internal listener 只绑定 backend 网络静态 IP（web/宿主不可路由）
       INTERNAL_AGENT_API_HOST: 172.28.0.10
+      # 09-04 网络隔离：admin listener 只绑定 admin 网络静态 IP（web/宿主不可路由）
+      ADMIN_API_HOST: 172.29.0.10
       # V2.3 Relationship Intelligence
       RELATIONSHIP_INTELLIGENCE_ENABLED: ${RELATIONSHIP_INTELLIGENCE_ENABLED:-0}
       # V2.6 Controlled Web：平台总开关（默认关闭；空间还需 owner/admin 单独 opt-in）
@@ -45,15 +59,19 @@ services:
       STEWARD_WORKER_ENABLED: ${STEWARD_WORKER_ENABLED:-0}
       MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-5}
     volumes:
-      # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷
+      # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷；
+      # /data/bootstrap/admin-credentials（0600 初始凭据）也在此卷
       - app_data:/data
     networks:
       frontend: {}
       backend:
         # 静态 IP：INTERNAL_AGENT_API_HOST 依赖该地址确定 internal 接口
         ipv4_address: 172.28.0.10
+      admin:
+        # 静态 IP：ADMIN_API_HOST 依赖该地址确定 admin 接口
+        ipv4_address: 172.29.0.10
     # 优雅停机：先停止接收新连接，给 uvicorn 时间完成在途请求与 lease 释放
-    # （serve.py 共享信号处理器让双 listener 同时优雅退出）
+    # （serve.py 共享信号处理器让三个 listener 同时优雅退出）
     stop_grace_period: 30s
     healthcheck:
       test:
@@ -86,6 +104,26 @@ services:
       retries: 3
       start_period: 10s
     # 注意：web 不挂载数据卷——nginx 禁止直挂 uploads，附件下载走后端授权端点
+
+  # 09-04 系统管理员后台前端：独立镜像（system-admin-frontend/），只代理
+  # /admin-api 到 api:8002；仅绑定宿主回环 8081，由 VPN/内网反代进入。
+  admin-web:
+    build: ./system-admin-frontend
+    image: familygraph-admin-web:0.1.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - admin
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # V2.1 Agent sidecar（B2）：无业务 DB、无 uploads 卷、不暴露端口、
   # 无外网 egress（backend 网络 internal:true；模型流量经 api 的 Provider
@@ -135,3 +173,10 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
+  # admin：admin-web ↔ api 专用；internal:true，宿主/公网/家庭 web 均不可路由，
+  # 8002 admin listener 只在该网络接口监听
+  admin:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24

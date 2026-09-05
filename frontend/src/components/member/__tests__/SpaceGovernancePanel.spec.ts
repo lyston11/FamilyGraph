@@ -75,7 +75,6 @@ function seed(pinia: Pinia, role: SpaceMemberInfo['role']): void {
   auth.user = {
     id: 1,
     name: '空间用户',
-    is_admin: false,
     pin_must_change: false,
     claim_status: 'claimed',
     profile_status: 'identity_confirmed',

@@ -52,7 +52,6 @@ function makeChangedUser(overrides: Partial<UserOut> = {}): UserOut {
   return {
     id: 1,
     name: '张三',
-    is_admin: false,
     pin_must_change: false,
     claim_status: 'claimed',
     profile_status: 'identity_confirmed',
@@ -65,11 +64,6 @@ async function makeTestRouter(): Promise<Router> {
     history: createMemoryHistory(),
     routes: [
       { path: '/login', name: 'login', component: { template: '<div />' } },
-      {
-        path: '/system-admin/login',
-        name: 'system-admin-login',
-        component: { template: '<div />' },
-      },
       { path: '/force-change-pin', name: 'force-change-pin', component: ChangePinView },
       { path: '/settings', name: 'settings', component: { template: '<div />' } },
     ],
@@ -129,20 +123,4 @@ describe('ChangePinView redirect（SAR-F2 主体感知回跳）', () => {
     wrapper.unmount()
   })
 
-  it('system_admin 改 PIN 完成后回系统管理员登录入口，不进入家庭 /login', async () => {
-    vi.mocked(authApi.changePin).mockResolvedValue(makeChangedUser())
-    const router = await makeTestRouter()
-    const pinia = createPinia()
-    await seedPrincipal(pinia, { principal_type: 'system_admin', is_admin: true })
-    const wrapper = mount(ProvidedChangePin, {
-      global: { plugins: [pinia, router] },
-      attachTo: document.body,
-    })
-    await fillAndSubmit(wrapper)
-
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('system-admin-login'))
-    expect(router.currentRoute.value.name).not.toBe('login')
-    await settleImportChains()
-    wrapper.unmount()
-  })
 })

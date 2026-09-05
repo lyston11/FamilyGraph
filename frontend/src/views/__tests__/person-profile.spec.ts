@@ -215,7 +215,6 @@ async function mountProfile(
   auth.user = {
     id: 1,
     name: '张三',
-    is_admin: false,
     pin_must_change: false,
     claim_status: 'claimed',
     profile_status: 'identity_confirmed',

@@ -82,7 +82,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
       <section class="section" data-test="settings-section-profile">
         <h2 class="section-title">个人资料</h2>
         <p class="meta" data-test="current-user">
-          {{ auth.user?.name }}<template v-if="auth.isPlatformOperator">（平台运营者）</template>
+          {{ auth.user?.name }}
         </p>
         <p class="meta" data-test="profile-status">
           档案状态：{{ auth.user?.profile_status === 'identity_confirmed' ? '已确档' : '待确档' }}

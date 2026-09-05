@@ -7,17 +7,21 @@
 ## 仓库布局
 
 ```
-backend/    FastAPI 应用 + Alembic 迁移 + pytest/ruff/mypy 门禁
-frontend/   Vue3 + Vite + TS 应用 + eslint/vitest 门禁
+backend/                 FastAPI 应用 + Alembic 迁移 + pytest/ruff/mypy 门禁
+frontend/                家庭用户 Vue3 + Vite + TS 应用 + eslint/vitest 门禁
+system-admin-frontend/   系统管理员独立后台应用（仅访问 /admin-api）
 ```
 
 ## 启动方式一：容器模式（推荐）
 
 ```bash
-# 正式部署前设置两个强随机密钥（Agent Runtime 也依赖第二个）
+# 正式部署前设置强随机密钥（Agent Runtime 依赖第二个；系统管理员后台依赖第三组）
 cat > .env <<EOF
 SECRET_KEY=$(openssl rand -hex 32)
 AGENT_SERVICE_SECRET=$(openssl rand -hex 32)
+ADMIN_JWT_SECRET=$(openssl rand -hex 32)
+ADMIN_JWT_ISSUER=familygraph-admin
+ADMIN_JWT_AUDIENCE=familygraph-admin-web
 EOF
 chmod 600 .env
 
@@ -28,24 +32,32 @@ curl -f http://localhost:8080/api/health   # 经 nginx 反代，同样返回 ok
 # 浏览器打开 http://localhost:8080
 ```
 
-数据落盘于命名卷 `app_data`（容器内 `/data`：`db/` SQLite 主库+WAL 文件、`uploads/`、`backups/`）。
+数据落盘于命名卷 `app_data`（容器内 `/data`：`db/` SQLite 主库+WAL 文件、`uploads/`、`backups/`、`bootstrap/`）。
 
 ## 启动方式二：本地开发模式
 
 前置要求：Python ≥ 3.12、Node ≥ 22。
 
 ```bash
-# 终端 1 —— 后端
+# 终端 1 —— 后端（三个 listener：家庭 8000 / agent 内部 8001 / 管理员 8002）
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-export SECRET_KEY=$(openssl rand -hex 32)   # 必需；缺失时应用拒绝启动
+export SECRET_KEY=$(openssl rand -hex 32)          # 必需；缺失时应用拒绝启动
+export ADMIN_JWT_SECRET=$(openssl rand -hex 32)    # 管理员独立签发域；缺失/过弱拒启
+export ADMIN_JWT_ISSUER=familygraph-admin
+export ADMIN_JWT_AUDIENCE=familygraph-admin-web
 uvicorn app.main:app --reload               # http://localhost:8000/api/health
 
-# 终端 2 —— 前端
+# 终端 2 —— 家庭前端
 cd frontend
 npm ci
 npm run dev                                 # http://localhost:5173，/api 由 vite 代理到 :8000
+
+# 终端 3 —— 系统管理员后台前端（开发 5174）
+cd system-admin-frontend
+npm ci
+npm run dev                                 # http://localhost:5174，/admin-api 由 vite 代理到 :8002
 ```
 
 ## 数据库迁移（Alembic）
@@ -123,13 +135,41 @@ sqlite3 app.db "PRAGMA integrity_check"   # 应输出 ok
 ## 迁移到云服务器（迁云清单）
 
 1. 云服务器安装 Docker + Docker Compose。
-2. `git clone` 本仓库 → 配置 `.env`：`SECRET_KEY=<openssl rand -hex 32>`、`AGENT_SERVICE_SECRET=<openssl rand -hex 32>`、`DATA_DIR=/data`，并执行 `chmod 600 .env`。
-3. `docker compose up --build -d` → 首启页面初始化管理员（一次性 PIN，立即截图保存）。
+2. `git clone` 本仓库 → 配置 `.env`：`SECRET_KEY=<openssl rand -hex 32>`、`AGENT_SERVICE_SECRET=<openssl rand -hex 32>`、`ADMIN_JWT_SECRET=<openssl rand -hex 32>`、`ADMIN_JWT_ISSUER=familygraph-admin`、`ADMIN_JWT_AUDIENCE=familygraph-admin-web`、`DATA_DIR=/data`，并执行 `chmod 600 .env`。
+3. `docker compose up --build -d` → 服务自动初始化（家庭账号由开通流程创建）。
 4. 数据迁移：本机执行备份 → 把 tar 包传服务器 → 按上文恢复流程导入数据卷 → 重启。
 5. 域名：DNS A 记录指向服务器 IP；HTTPS 二选一：
    - 方案 A（推荐）：Caddy 反代 80/443，自动签发 Let's Encrypt；
    - 方案 B：certbot + nginx 手动配置证书。
 6. 定期备份建议：crontab 每日执行备份命令，并把 `/data/backups` 同步到对象存储。
+
+---
+
+## 系统管理员后台（仅运维可见，勿写入面向用户的文档）
+
+后台是独立前端（`system-admin-frontend/`）+ 独立 API listener（api 容器内 8002，`/admin-api/*`），与家庭端完全隔离：独立 JWT 签发域（`ADMIN_JWT_*`）、独立浏览器存储、admin Docker 网络内互连；**8002 不发布宿主端口**，唯一入口是 admin-web。
+
+```bash
+# 访问（生产仅回环，由 VPN/内网反代进入）
+curl -f http://127.0.0.1:8081/            # 后台前端
+curl -f http://127.0.0.1:8081/admin-api/health
+
+# 首个管理员凭据（部署启动自动生成，唯一用户名 admin）
+docker compose exec api ls -la /data/bootstrap/
+docker compose exec api cat /data/bootstrap/admin-credentials   # 仅此一次；首登强制改密
+```
+
+- 凭据文件权限 `0600`；**首次成功改密后自动删除**，数据库不存明文，日志不打印。
+- 忘记密码（受限运维恢复）：
+
+```bash
+docker compose exec api python -m app.admin_recovery
+# 生成一次性恢复密码（只落 0600 文件 /data/bootstrap/admin-recovery），
+# 旧 refresh 会话全部撤销，首登强制改密
+```
+
+- 路由矩阵自检：宿主直连 `127.0.0.1:8002` 必须失败；家庭 web `http://localhost:8080/admin-api/health` 返回普通 404。
+- 后台业务面是全业务只读监控 + 空间管理员申请审批（唯一写例外）；敏感详情需提交理由创建 30 分钟访问会话，全部读取留痕（`admin_access_audits` 永久保留）。
 
 ---
 

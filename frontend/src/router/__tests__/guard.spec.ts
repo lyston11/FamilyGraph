@@ -13,7 +13,6 @@ vi.mock('@/api/auth', () => ({
   changePin: vi.fn(),
   changeName: vi.fn(),
   fetchBootstrapStatus: vi.fn(),
-  initializeAdmin: vi.fn(),
 }))
 
 vi.mock('@/api/spaces', () => ({
@@ -69,7 +68,6 @@ function makePair(overrides: Partial<TokenPairResponse['user']> = {}): TokenPair
     user: {
       id: 1,
       name: '张三',
-      is_admin: false,
       pin_must_change: false,
       claim_status: 'claimed',
       profile_status: 'identity_confirmed',
@@ -158,63 +156,10 @@ describe('router guards', () => {
     expect(useAuthStore().isLoggedIn).toBe(true)
   })
 
-  it('系统管理员硬刷新 /system-admin：不调用家庭 /me，会话保留并放行', async () => {
-    localStorage.setItem('fg.refresh_token', 'stored-refresh')
-    useAuthStore()
-
-    const pair = makePair({ is_admin: true })
-    pair.user.principal_type = 'system_admin'
-    mockedRefresh.mockResolvedValue(pair)
-    // 家庭 /me 对系统主体按设计 401；resume 一旦调用它就会清会话把人踢回登录页。
-    mockedFetchMe.mockRejectedValue(new Error('family endpoint rejects system admin'))
-
-    expect(await navigate('/system-admin')).toBe('system-admin')
-    expect(mockedRefresh).toHaveBeenCalledWith('stored-refresh')
-    expect(mockedFetchMe).not.toHaveBeenCalled()
-    expect(useAuthStore().isSystemAdmin).toBe(true)
-    expect(useAuthStore().isLoggedIn).toBe(true)
-  })
-
-  it('旧 /admin 深链在系统管理员硬刷新后重定向到独立后台', async () => {
-    localStorage.setItem('fg.refresh_token', 'stored-refresh')
-    useAuthStore()
-
-    const pair = makePair({ is_admin: true })
-    pair.user.principal_type = 'system_admin'
-    mockedRefresh.mockResolvedValue(pair)
-    mockedFetchMe.mockRejectedValue(new Error('family endpoint rejects system admin'))
-
-    expect(await navigate('/admin')).toBe('system-admin')
-  })
-
-  it('普通用户访问 /admin：权限校验后返回家庭空间', async () => {
-    const auth = useAuthStore()
-    mockedLogin.mockResolvedValue(makePair({ is_admin: false }))
-    await auth.login('张三', '123456')
-
-    await resetToOnboarding()
-    expect(await navigate('/admin')).toBe('family-space')
-  })
-
-  it('平台运营者不因平台角色获得空间管理权限', async () => {
-    const auth = useAuthStore()
-    mockedLogin.mockResolvedValue(makePair({ is_admin: true }))
-    await auth.login('张三', '123456')
-    mockedFetchSpaces.mockResolvedValue([
-      {
-        id: 7,
-        name: '他人空间',
-        owner_id: 99,
-        kind: 'household',
-        created_at: '2026-08-25T00:00:00',
-        pending_count: 0,
-        member_count: 1,
-      },
-    ])
-    mockedFetchSpaceMembers.mockResolvedValue([])
-
-    await resetToOnboarding()
-    expect(await navigate('/spaces/7/manage')).toBe('family-space')
+  it('未注册深链 /admin 与 /system-admin：统一普通 404，不跳转、不提示其他产品面', async () => {
+    expect(await navigate('/admin')).toBe('not-found')
+    expect(await navigate('/system-admin')).toBe('not-found')
+    expect(await navigate('/admin-api/health')).toBe('not-found')
   })
 
   it('当前空间管理员可访问目标空间管理页', async () => {
@@ -287,19 +232,13 @@ describe('router guards', () => {
     expect(await navigate('/spaces/7/manage')).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/spaces/7/manage')
   })
-  it('无凭据访问 /admin：进入登录页并保留独立后台 redirect', async () => {
-    // /admin 只是旧路径重定向；守卫看到的目标已是 /system-admin，回跳地址同此。
-    expect(await navigate('/admin')).toBe('login')
-    expect(router.currentRoute.value.query.redirect).toBe('/system-admin')
-  })
-
-  it('refresh 失败：后台深链进入登录页并清理失效凭据', async () => {
+  it('refresh 失败：受保护深链进入登录页并清理失效凭据', async () => {
     localStorage.setItem('fg.refresh_token', 'dead-token')
     useAuthStore()
     mockedRefresh.mockRejectedValue(new Error('invalid refresh'))
 
-    expect(await navigate('/admin')).toBe('login')
-    expect(router.currentRoute.value.query.redirect).toBe('/system-admin')
+    expect(await navigate('/settings')).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/settings')
     expect(localStorage.getItem('fg.refresh_token')).toBeNull()
   })
 
@@ -429,60 +368,7 @@ describe('router guards: 09-01 Phase 2 路由语义（统一家庭壳）', () =>
     expect(router.currentRoute.value.query.redirect).toBe('/people/5')
   })
 
-  it('家庭用户直达 /system-admin：互斥守卫弹回家族默认入口', async () => {
-    const auth = useAuthStore()
-    mockedLogin.mockResolvedValue(makePair())
-    await auth.login('张三', '123456')
-
-    await resetToOnboarding()
-    expect(await navigate('/system-admin')).toBe('family-space')
-  })
-
-  it('家庭用户直达 /system-admin/login 占位：互斥守卫弹回家族默认入口（Phase 6）', async () => {
-    const auth = useAuthStore()
-    mockedLogin.mockResolvedValue(makePair())
-    await auth.login('张三', '123456')
-
-    await resetToOnboarding()
-    expect(await navigate('/system-admin/login')).toBe('family-space')
-  })
-
-  it('system_admin 访问 /system-admin/login 占位：弹回独立后台（Phase 6）', async () => {
-    const auth = useAuthStore()
-    const pair = makePair({ is_admin: true })
-    pair.user.principal_type = 'system_admin'
-    mockedLogin.mockResolvedValue(pair)
-    await auth.login('系统管理员', '123456')
-
-    await resetToOnboarding()
-    expect(await navigate('/system-admin/login')).toBe('system-admin')
-  })
-
-  it('system_admin 首登必改 PIN 访问 /system-admin/login：经后台路由进入改 PIN 页（SAR-F1/F2）', async () => {
-    const auth = useAuthStore()
-    const pair = makePair({ is_admin: true, pin_must_change: true })
-    pair.user.principal_type = 'system_admin'
-    mockedLogin.mockResolvedValue(pair)
-    await auth.login('系统管理员', '123456')
-
-    await resetToOnboarding()
-    // 已登录系统主体访问登录页 → 后台 → pin_must_change 白名单 → 改 PIN 页
-    expect(await navigate('/system-admin/login')).toBe('force-change-pin')
-  })
-
-  it('未登录访问 /system-admin/login 占位：公开可达（独立于家庭登录页，不套家庭壳）', async () => {
-    expect(await navigate('/system-admin/login')).toBe('system-admin-login')
-  })
-
-  it('system_admin 不能停留在家庭壳页面（互斥弹回系统后台）', async () => {
-    const auth = useAuthStore()
-    const pair = makePair({ is_admin: true })
-    pair.user.principal_type = 'system_admin'
-    mockedLogin.mockResolvedValue(pair)
-    await auth.login('张三', '123456')
-
-    await resetToOnboarding()
-    expect(await navigate('/settings')).toBe('system-admin')
-    expect(await navigate('/stats')).toBe('system-admin')
+  it('未登录访问未注册深链：直接普通 404（公开页，不带家庭壳）', async () => {
+    expect(await navigate('/system-admin/login')).toBe('not-found')
   })
 })

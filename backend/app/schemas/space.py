@@ -104,7 +104,6 @@ class ManagerApplicationOut(BaseModel):
     decision_note: str | None = None
     created_at: datetime
     decided_at: datetime | None = None
-    system_admin_decided_by: int | None = None
 
 
 class ManagerTransferConsentDecision(BaseModel):

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 根组件（design.md §2.2/§3.1）：全局 providers + 主题 token 注入 + 壳条件渲染。
 // P5 收尾：旧组件库已全量移除，naive-ui 为唯一组件库（组件按需 import）。
+// 09-04：家庭端是唯一产品面，后台在独立前端应用，本组件无任何后台壳分支。
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -13,24 +14,18 @@ import {
 
 import AssistantLauncher from '@/components/agent/AssistantLauncher.vue'
 import AppShell from '@/components/shell/AppShell.vue'
-import SystemAdminShell from '@/components/shell/SystemAdminShell.vue'
 import { themeOverrides } from '@/styles/naive-themes'
 import { themeCssVars, themeTokens } from '@/styles/tokens'
-import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 
-const auth = useAuthStore()
 const ui = useUiStore()
 const route = useRoute()
 
 // 两主题均为浅色：不切换 naive 内置主题，仅注入 overrides
 const naiveOverrides = computed<GlobalThemeOverrides>(() => themeOverrides[ui.theme])
 
-// 沉浸页（login/onboarding/force-change-pin/identity-setup/系统管理员登录占位）不套应用壳
+// 沉浸页（login/onboarding/force-change-pin/identity-setup/404）不套应用壳
 const isBlankChrome = computed(() => route.meta.chrome === 'blank')
-const isSystemAdmin = computed(() => auth.isSystemAdmin)
-// 系统管理员登录占位页属于后台边界：不渲染家庭壳的 Assistant 悬浮入口
-const isSystemAdminBoundary = computed(() => route.name === 'system-admin-login')
 
 // 主题 token 单一来源：L2 变量批量注入 documentElement，CSS 与 Naive UI overrides 同源
 watchEffect(() => {
@@ -46,13 +41,12 @@ watchEffect(() => {
     <NMessageProvider>
       <NDialogProvider>
         <NNotificationProvider>
-          <SystemAdminShell v-if="isSystemAdmin && !isBlankChrome" />
-          <AppShell v-else-if="!isBlankChrome" />
+          <AppShell v-if="!isBlankChrome" />
           <RouterView v-else />
         </NNotificationProvider>
       </NDialogProvider>
     </NMessageProvider>
   </NConfigProvider>
   <!-- 悬浮 Assistant 保持全局（壳外，design.md §3.1）；面板内容经 defineAsyncComponent 懒加载 -->
-  <AssistantLauncher v-if="!isSystemAdmin && !isSystemAdminBoundary" />
+  <AssistantLauncher v-if="!isBlankChrome" />
 </template>

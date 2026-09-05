@@ -7,15 +7,11 @@ export interface UserOut {
   id: number
   name: string
   /**
-   * v2 兼容键：语义已从 v1「全局数据权」改为 platform_operator 派生
-   * （backend/app/schemas/auth.py 同键注释）。仅用于 UI 隐藏 admin 入口；
-   * 后端最终鉴权是 require_platform_operator，不信任此布尔。
+   * 09-04：家庭认证响应只描述 family_user 主体；系统管理员的身份模型
+   * 完全不在家庭前端出现（backend/app/schemas/auth.py 同步注释）。
    */
-  /** 签名会话的权威主体类型；is_admin 仅为兼容显示字段。 */
-  is_admin: boolean
+  principal_type?: 'family_user'
   pin_must_change: boolean
-  principal_type?: 'family_user' | 'system_admin'
-  platform_role?: 'platform_operator' | null
   /** 账号生命周期：managed → claimed（唯一转换点=首登认领，v2 §0.3） */
   claim_status: ClaimStatus
   /** 档案确档状态：provisional → identity_confirmed（路由守卫判定源，v2 Gap2） */
@@ -44,11 +40,6 @@ export interface ChallengeCandidate {
 
 export interface BootstrapStatusResponse {
   initialized: boolean
-}
-
-export interface InitializeResponse {
-  user: UserOut
-  one_time_pin: string
 }
 
 /** 统一错误外壳 */

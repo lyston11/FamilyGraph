@@ -1,31 +1,34 @@
 <script setup lang="ts">
 /**
- * 首启引导页（沉浸页，meta.chrome='blank'）：数据库尚无任何家庭账号时显示。
- * 09-04 起系统初始化由部署方完成，家庭端不再提供任何创建/初始化表单；
- * 家庭账号开通流程另立任务（父任务 out of scope）。本页只做静态说明，
- * 不暴露任何其他产品面信息。
+ * 普通 404 页：所有未注册路径（含 /system-admin、/admin 等深链）的统一归宿。
+ * 只说明"页面不存在"，不跳转、不提示任何其他产品面（09-04 家庭端零后台痕迹）。
  */
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+
+function goHome(): void {
+  void router.replace({ name: 'home' })
+}
 </script>
 
 <template>
-  <main class="onboarding-view">
-    <section class="plate" data-test="onboarding-card">
+  <main class="not-found-view">
+    <section class="plate" data-test="not-found-card">
       <div class="brand" aria-hidden="true">
         <span class="seal">谱</span>
       </div>
-
-      <h1 class="title">欢迎使用 FamilyGraph</h1>
-      <p class="desc">系统尚未开通任何家庭账号。请通过你的开通渠道获取账号信息后再来登录。</p>
-
-      <button class="login-btn" type="button" data-test="onboarding-to-login" @click="() => $router.replace({ name: 'login' })">
-        前往登录
+      <h1 class="title">页面不存在</h1>
+      <p class="desc">你访问的地址不存在或已被移除。</p>
+      <button class="home-btn" type="button" data-test="not-found-home" @click="goHome">
+        返回首页
       </button>
     </section>
   </main>
 </template>
 
 <style scoped>
-.onboarding-view {
+.not-found-view {
   display: grid;
   place-items: center;
   min-height: 100vh;
@@ -33,10 +36,10 @@
   box-sizing: border-box;
 }
 
-/* 与登录页同族的"名牌"卡基座（token 驱动双主题观感） */
+/* 与登录/引导页同族的"名牌"卡基座（token 驱动双主题观感） */
 .plate {
   position: relative;
-  width: min(440px, 100%);
+  width: min(400px, 100%);
   padding: 36px 36px 32px;
   background-color: var(--fg-surface-raised);
   border: 1px solid var(--fg-line-strong);
@@ -95,7 +98,7 @@
   color: var(--fg-ink-secondary);
 }
 
-.login-btn {
+.home-btn {
   padding: 10px 24px;
   border: 1px solid var(--fg-line-strong);
   border-radius: var(--fg-radius-control);
@@ -105,7 +108,7 @@
   cursor: pointer;
 }
 
-.login-btn:hover {
+.home-btn:hover {
   background-color: var(--fg-surface-sunken);
 }
 </style>

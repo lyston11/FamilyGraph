@@ -66,7 +66,6 @@ function makeViewer(): UserOut {
   return {
     id: 1,
     name: '我',
-    is_admin: false,
     pin_must_change: false,
     claim_status: 'claimed',
     profile_status: 'identity_confirmed',
