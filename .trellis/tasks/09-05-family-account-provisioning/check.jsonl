@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture.md", "reason": "核查注册/绑定/码功能未破坏身份状态机转换点唯一、§0.8 空间 admin 不变量、8000/8002 隔离与家庭端零后台痕迹"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核查命令分层、审计事件、防枚举文案与限流实现是否符合后端质量约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核查迁移 0030/0031 增量性、CHECK 约束与 down migration"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核查前端组件/store/路由守卫与测试覆盖约定"}

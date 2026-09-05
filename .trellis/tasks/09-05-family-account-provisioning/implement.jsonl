@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/architecture.md", "reason": "§0.3 三条身份状态机转换点唯一、§0.6/0.7 空间创建与审批语义、§0.8 系统管理员/空间角色不变量、§0.9 同一空间人物身份唯一、§215 无空间用户首登引导——本任务全部触达"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 0030/0031 与新表 invite_codes/account_bindings 的建模、CHECK 约束与索引约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "注册端点防枚举统一文案、码校验失败的字段级错误与 raise_api_error 惯例"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "API 命令分层（commands/registration.py 薄 HTTP）、组合事务与审计落点惯例"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "空间键控 store 与会话引导；注册/兑换后空间缓存失效边界"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "RegisterView/邀请码区块的视图与路由落位、meta.chrome 约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "api/inviteCodes.ts 与 auth register 的类型契约"}

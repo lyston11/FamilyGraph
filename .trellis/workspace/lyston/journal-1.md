@@ -673,3 +673,24 @@ accept_transfer 立即事务化（load_actor+检查+CAS+角色翻转同事务）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 后台星空玻璃深度重构（09-05-admin-cosmic-glass-redesign）
+
+**Date**: 2026-09-05
+**Task**: 后台星空玻璃深度重构（09-05-admin-cosmic-glass-redesign）
+**Branch**: `main`
+
+### Summary
+
+用户反馈后台视觉过素。经查 09-04 克制版玻璃效果已部署但肉眼不可辨（星点/星云/玻璃透明度过弱）。新建任务按设计规格将家庭端星空玻璃语言完整移植后台：星云 18%+暗角+加密星点、真玻璃卡片+入场动画、渐变品牌文字、登录页专属星空。颜色字面量收拢 :root；渐变中间色按 WCAG 复算换 #3d6cb0（全程≥4.5:1，核验落附录）。trellis-implement/trellis-check 子代理流程，lint/type-check/build 全绿，镜像重建部署 grep 验证。王德海家成员为无空间归属的建档裸用户（space_members=0），后台按空间读模型不显示属预期。另：会话中完成后台部署升级（.env 补 ADMIN_JWT_*、迁移 0028 显式处置旧 PIN 管理员、修复 compose admin 网络 internal:true 丢端口 bug——docker-compose.yml 改动未提交，属运维修复待单独处理）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5fb5b58` | (see git log) |
+
+### Status
+
+[OK] **Completed**
