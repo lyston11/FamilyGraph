@@ -759,3 +759,24 @@ grilling 五轮对齐后落地 09-05-family-profile-nav-disclosure：R1 上下�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: Agent 模型治理迁移系统管理员后台与双端配置 UI（09-06 子任务 A）
+
+**Date**: 2026-09-06
+**Task**: Agent 模型治理迁移系统管理员后台与双端配置 UI（09-06 子任务 A）
+**Branch**: `main`
+
+### Summary
+
+Provider 治理端点自 /api/admin/agent 迁至 /admin-api/v1/agent（admin_app:8002，ADMIN_JWT+require_admin_ready，runtime 503 门禁，审计改走 admin_access_audits）；agent_space_provider_settings 拆 (space_id, agent_kind) 复合唯一（迁移 0033 整表重建+fail-closed downgrade），新增 agent_platform_defaults 平台默认单行表；resolve_for_space 双维度解析（空间行→平台默认回退（云同意仍归 owner）→no_space_setting），PROVIDER_UNRESOLVED detail 增补 platform_default_configured；家庭域新增 owner 端点 /api/spaces/{id}/model-settings（GET/PUT/DELETE）；admin-web 新增 Provider 管理页（注册表/平台默认/空间排查）；家庭端空间管理新增模型设置分区+两态报错文案；platform_operator 治理路径下线（controlled_web 等保留）。测试：backend 818 passed、admin-web 76 passed、family 488 passed（1 失败属视觉任务 WIP 已 stash 验证），双侧 vue-tsc 净；spec agent-runtime.md §5 已更新。main.py 提交时 hunk 分离，视觉任务未提交改动完整保留在工作区
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8f58d92` | (see git log) |
+
+### Status
+
+[OK] **Completed**
