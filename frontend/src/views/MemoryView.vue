@@ -57,9 +57,10 @@ function goSettings(): void {
   position: relative;
   display: flex;
   flex-direction: column;
-  max-width: 980px;
+  /* 宽度与家庭首页 household-card-view（1320px）保持一致 */
+  max-width: 1320px;
   margin: 0 auto;
-  padding: 32px 36px 28px;
+  padding: 36px 40px 24px;
   box-sizing: border-box;
   background:
     linear-gradient(125deg, color-mix(in srgb, var(--fg-ink) 9%, transparent), transparent 54%),

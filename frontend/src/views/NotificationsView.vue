@@ -269,9 +269,10 @@ function retry(): void {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 980px;
+  /* 容器几何与家庭首页 household-card-view（1320px / 44px 边距）保持一致 */
+  max-width: 1320px;
   margin: 0 auto;
-  padding: 20px 16px 40px;
+  padding: 32px 44px 48px;
   box-sizing: border-box;
 }
 
