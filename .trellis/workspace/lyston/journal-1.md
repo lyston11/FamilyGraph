@@ -823,3 +823,24 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: 空间模型设置 UX：云同意开关即时生效与报错可达性
+
+**Date**: 2026-09-06
+**Task**: 空间模型设置 UX：云同意开关即时生效与报错可达性
+**Branch**: `main`
+
+### Summary
+
+复盘『同意云端执行已开仍报错』事故：开关为本地态未落库，后端 fail-closed 正确。前端落地开关即保存（非乐观绑定+守卫+回弹）、steward 辅助开关整行 PUT 统一语义、未保存徽标、AgentErrorView 动作白名单 + ErrorNotice 管理员『去模型设置』入口、管理页 ?section= 深链。vitest 512/512、type-check/lint 绿；spec 沉淀两条约定。与 lineage 并行会话的工作区改动已隔离（SpaceManagementView 仅暂存 R5 hunks）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dfbb387` | (see git log) |
+
+### Status
+
+[OK] **Completed**
