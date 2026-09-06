@@ -14,6 +14,7 @@
 // - 数据全部经 notifications store（服务端真源），页面不发请求。
 import { NAlert, NButton, NEmpty, NSpin } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import NoticeItemRow from '@/components/notifications/NoticeItemRow.vue'
@@ -25,9 +26,14 @@ import { useSpacesStore } from '@/stores/spaces'
 import type { NotificationItem } from '@/types/api'
 import { classifyNotifications } from '@/types/notifications'
 
+const router = useRouter()
 const spaces = useSpacesStore()
 const notifications = useNotificationsStore()
 const actionCards = useActionCardsStore()
+
+function goHome(): void {
+  void router.push({ name: 'home' })
+}
 const pfv = usePersonalFamilyViewStore()
 
 const spaceId = computed(() => spaces.currentSpaceId)
@@ -113,24 +119,29 @@ function retry(): void {
 
 <template>
   <main class="notifications-view" data-test="notifications-view">
-    <header class="view-head">
-      <div>
-        <h1 class="view-title">通知与待办</h1>
-        <p class="view-subtitle">
-          当前空间：{{ spaces.currentSpace?.name ?? '未选择' }} ·
-          打开通知只会标记已读，不会改变任何申请或连接状态。
-        </p>
-      </div>
-      <NButton
-        size="small"
-        secondary
-        :disabled="loading || unreadCount === 0"
-        data-test="mark-all-read"
-        @click="markAllRead"
-      >
-        全部标记已读
-      </NButton>
-    </header>
+    <article class="notice-hero">
+      <header class="hero-head">
+        <div class="hero-identity">
+          <button class="back-link" type="button" data-test="notifications-back" @click="goHome">
+            ← 返回我的家庭
+          </button>
+          <p class="hero-kind">家庭空间</p>
+          <h1 class="hero-title">通知与待办</h1>
+          <p class="hero-subtitle">
+            当前空间：{{ spaces.currentSpace?.name ?? '未选择' }} ·
+            打开通知只会标记已读，不会改变任何申请或连接状态。
+          </p>
+        </div>
+        <NButton
+          size="small"
+          secondary
+          :disabled="loading || unreadCount === 0"
+          data-test="mark-all-read"
+          @click="markAllRead"
+        >
+          全部标记已读
+        </NButton>
+      </header>
 
     <NSpin v-if="loading && page === null" :show="true" class="loading-spin" />
 
@@ -249,6 +260,7 @@ function retry(): void {
         当前空间暂无通知。
       </NAlert>
     </template>
+    </article>
   </main>
 </template>
 
@@ -257,49 +269,95 @@ function retry(): void {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 860px;
+  max-width: 980px;
   margin: 0 auto;
   padding: 20px 16px 40px;
   box-sizing: border-box;
 }
 
-.view-head {
+/* 09-06 视觉补齐：与家庭首页 family-space-hero 同套大卡设计语言 */
+.notice-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 36px 40px 24px;
+  box-sizing: border-box;
+  background:
+    linear-gradient(125deg, color-mix(in srgb, var(--fg-ink) 9%, transparent), transparent 54%),
+    var(--fg-glass-surface);
+  border: 1px solid var(--fg-glass-border);
+  border-top-color: color-mix(in srgb, var(--fg-ink) 30%, transparent);
+  border-radius: 8px;
+  backdrop-filter: blur(28px) saturate(115%);
+  -webkit-backdrop-filter: blur(28px) saturate(115%);
+  box-shadow:
+    var(--fg-shadow-raised),
+    0 2px 0 color-mix(in srgb, var(--fg-surface) 60%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-ink) 10%, transparent);
+  transition: transform 350ms ease, box-shadow 350ms ease, border-color 350ms ease;
+}
+
+@supports not (backdrop-filter: blur(28px)) {
+  .notice-hero { background: var(--fg-surface-raised); }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .notice-hero:hover {
+    transform: translateY(-4px);
+    border-top-color: color-mix(in srgb, var(--fg-ink) 45%, transparent);
+    box-shadow: var(--fg-shadow-raised), 0 8px 0 -5px var(--fg-glass-border), inset 0 1px 0 color-mix(in srgb, var(--fg-ink) 15%, transparent);
+  }
+}
+
+.hero-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 20px;
   flex-wrap: wrap;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--fg-glass-border);
 }
 
-.view-title {
-  margin: 0;
-  font-family: var(--fg-font-display);
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--fg-ink);
-}
+.hero-identity { min-width: 0; }
 
-.view-subtitle {
-  margin: 4px 0 0;
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--fg-ink-secondary);
+  font: inherit;
   font-size: 12px;
+  cursor: pointer;
+  transition: color 180ms ease;
 }
 
-.loading-spin {
-  min-height: 160px;
+.back-link:hover { color: var(--fg-accent); }
+
+.hero-kind { margin: 0 0 10px; font-size: 12px; color: var(--fg-ink-secondary); }
+
+.hero-title {
+  margin: 0;
+  color: var(--fg-ink);
+  font-family: var(--fg-font-display);
+  font-size: 32px;
+  line-height: 1.4;
+  font-weight: 600;
 }
 
+.hero-subtitle { margin: 10px 0 0; color: var(--fg-ink-secondary); font-size: 12px; line-height: 1.7; }
+
+.loading-spin { min-height: 160px; }
+
+/* 内部分区：大卡内部以分隔线组织（不再各自成卡） */
 .status-panel,
 .notice-section {
-  padding: 20px 24px;
-  background: var(--fg-glass-surface);
-  backdrop-filter: blur(16px) saturate(180%);
-  -webkit-backdrop-filter: blur(16px) saturate(180%);
-  border: 1px solid var(--fg-glass-border);
-  border-radius: calc(var(--fg-radius-card) * 1.5);
-  box-shadow:
-    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
+  padding: 24px 0 20px;
+  border-bottom: 1px solid var(--fg-glass-border);
 }
 
 .status-title {
@@ -370,11 +428,13 @@ function retry(): void {
 }
 
 .all-empty {
+  margin-top: 16px;
   border: none;
 }
 
 /* 移动端（≤600px）：单列分区已就绪；头部动作按钮补足 44px 点按目标 */
 @media (max-width: 600px) {
+  .notice-hero { padding: 24px 20px 20px; }
   .notifications-view :deep(.n-button--small-type) {
     min-height: 44px;
   }

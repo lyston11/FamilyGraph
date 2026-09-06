@@ -297,6 +297,8 @@ function retry(): void {
 
 <template>
   <main class="person-profile-view" data-test="person-profile-view">
+    <!-- 09-06 视觉补齐：与家庭首页 family-space-hero 同套大卡设计语言 -->
+    <article class="profile-hero">
     <!-- 顶部返回：回进入来源（家庭卡/家族树），state 缺失兜底家庭卡 -->
     <div class="back-row">
       <NButton quaternary size="small" class="back-button" data-test="back-to-family-tree" @click="goBack">
@@ -401,6 +403,7 @@ function retry(): void {
         </div>
       </section>
     </template>
+    </article>
 
     <!-- 只读关系说明面板（与家族树共用组件）：覆盖层，无任何写操作 -->
     <RelationshipDetailPanel
@@ -422,14 +425,42 @@ function retry(): void {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 720px;
+  max-width: 980px;
   margin: 0 auto;
   padding: 20px 16px 40px;
   box-sizing: border-box;
 }
 
+/* 09-06 视觉补齐：与家庭首页 family-space-hero 同套大卡设计语言 */
+.profile-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px 24px;
+  box-sizing: border-box;
+  background:
+    linear-gradient(125deg, color-mix(in srgb, var(--fg-ink) 9%, transparent), transparent 54%),
+    var(--fg-glass-surface);
+  border: 1px solid var(--fg-glass-border);
+  border-top-color: color-mix(in srgb, var(--fg-ink) 30%, transparent);
+  border-radius: 8px;
+  backdrop-filter: blur(28px) saturate(115%);
+  -webkit-backdrop-filter: blur(28px) saturate(115%);
+  box-shadow:
+    var(--fg-shadow-raised),
+    0 2px 0 color-mix(in srgb, var(--fg-surface) 60%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-ink) 10%, transparent);
+  transition: transform 350ms ease, box-shadow 350ms ease, border-color 350ms ease;
+}
+
+@supports not (backdrop-filter: blur(28px)) {
+  .profile-hero { background: var(--fg-surface-raised); }
+}
+
 .back-row {
   display: flex;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--fg-glass-border);
 }
 
 .back-button {
@@ -440,19 +471,13 @@ function retry(): void {
   min-height: 160px;
 }
 
+/* 内部分区：大卡内部以分隔线组织（不再各自成卡） */
 .status-panel,
 .identity-card,
 .fields-card,
 .relations-card {
-  padding: 20px 24px;
-  background: var(--fg-glass-surface);
-  backdrop-filter: blur(16px) saturate(180%);
-  -webkit-backdrop-filter: blur(16px) saturate(180%);
-  border: 1px solid var(--fg-glass-border);
-  border-radius: calc(var(--fg-radius-card) * 1.5);
-  box-shadow:
-    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
+  padding: 20px 0 16px;
+  border-bottom: 1px solid var(--fg-glass-border);
 }
 
 .status-title {
