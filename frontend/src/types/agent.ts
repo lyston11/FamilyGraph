@@ -105,3 +105,48 @@ export interface WebCitation {
   fetched_at: string
   trust: 'external'
 }
+
+// ---- 空间模型设置（backend/app/api/space_model_settings.py，09-06 治理迁移）----
+
+/** Provider 设置的 Agent 维度（assistant/steward 各自独立选择与平台默认） */
+export type AgentConfigKind = 'assistant' | 'steward'
+
+/** 单 agent 维度的空间行级设置；enabled=false 且 provider/model 空 = 显式停用 */
+export interface SpaceAgentSetting {
+  agent_kind: AgentConfigKind
+  provider_id: number | null
+  model: string | null
+  cloud_allowed: boolean
+  local_required: boolean
+  enabled: boolean
+}
+
+/** 管理员允许目录条目（仅 enabled Provider；无任何密钥形态字段） */
+export interface AgentModelCatalogEntry {
+  provider_id: number
+  name: string
+  kind: 'openai_compatible' | 'local'
+  api: string
+  models: string[]
+}
+
+/** 单 agent 维度的平台默认（provider/model 成对；null = 该维度未设默认） */
+export interface AgentPlatformDefaultKind {
+  provider_id: number
+  model: string
+}
+
+/** 平台默认状态（backend AgentPlatformDefaultsOut） */
+export interface AgentPlatformDefaultsState {
+  assistant: AgentPlatformDefaultKind | null
+  steward: AgentPlatformDefaultKind | null
+  updated_at: string | null
+}
+
+/** GET /spaces/{space_id}/model-settings 响应（owner 侧模型设置视图） */
+export interface SpaceModelSettings {
+  space_id: number
+  settings: { assistant: SpaceAgentSetting | null; steward: SpaceAgentSetting | null }
+  catalog: AgentModelCatalogEntry[]
+  platform_default: AgentPlatformDefaultsState
+}

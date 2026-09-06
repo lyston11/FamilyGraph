@@ -270,8 +270,13 @@ def create_agent_message(
             replayed=True,
         )
 
-    # 新提交：Provider 策略门禁（可解释拒绝；绝不静默换云）
-    resolution = agent_provider.resolve_for_space(db, agent_session.space_id)
+    # 新提交：Provider 策略门禁（可解释拒绝；绝不静默换云）。
+    # agent_kind 显式 assistant：浏览器消息链路固定 assistant 维度（steward
+    # 消费属子任务 B）；detail.platform_default_configured 供前端区分
+    # 「通道未配置」与「空间未选/未同意云」两态文案（design §4）。
+    resolution = agent_provider.resolve_for_space(
+        db, agent_session.space_id, agent_kind="assistant"
+    )
     if resolution.policy_result != POLICY_ALLOWED:
         if resolution.policy_result == POLICY_DENIED_NO_LOCAL:
             raise_api_error(
@@ -284,7 +289,11 @@ def create_agent_message(
             409,
             PROVIDER_UNRESOLVED,
             "当前空间没有可用的 Provider 配置",
-            {"policy_result": resolution.policy_result, "reason": resolution.reason},
+            {
+                "policy_result": resolution.policy_result,
+                "reason": resolution.reason,
+                "platform_default_configured": resolution.platform_default_configured,
+            },
         )
 
     try:

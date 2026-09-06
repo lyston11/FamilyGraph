@@ -55,6 +55,11 @@ ADMIN_V1_ROUTES = {
     "/admin-api/v1/operations/notifications",
     "/admin-api/v1/agent/runs",
     "/admin-api/v1/agent/jobs",
+    # 09-06 治理迁移：Provider 治理迁入 admin 域（/admin-api/v1/agent/*）
+    "/admin-api/v1/agent/providers",
+    "/admin-api/v1/agent/providers/{provider_id}",
+    "/admin-api/v1/agent/platform-defaults",
+    "/admin-api/v1/agent/spaces/{space_id}/provider-settings",
     "/admin-api/v1/audit/access",
     "/admin-api/v1/access-sessions",
     "/admin-api/v1/manager-applications/{application_id}/approve",
@@ -79,20 +84,19 @@ LEGACY_BREAK_GLASS_PATHS = {
 # ---- 路由注册 ----
 
 
-def test_family_app_registers_no_admin_routes() -> None:
+def test_family_app_registers_no_admin_routes(client: TestClient) -> None:
     """8000 路由表与 OpenAPI 不得出现 system-admin / admin-api / bootstrap 管理能力。
 
-    /api/admin/agent（Provider 治理）与 /api/admin/web（Controlled Web 平台配置）
-    是既有家庭 platform_operator 面（feature flag 门禁），不属本任务移除清单；
-    其余任何 admin 路由（system_admin/admin_metadata/旧 admin.py/bootstrap 管理
-    能力）不得注册。
+    /api/admin/web（Controlled Web 平台配置）是既有家庭 platform_operator 面
+    （feature flag 门禁），不在本任务移除清单；/api/admin/agent（Provider 治理）
+    已于 09-06 迁入 admin 域（/admin-api/v1/agent/*），家庭挂载必须消失（404）。
     """
     registered = {getattr(route, "path", "") for route in app.routes}
 
     def _is_removed_admin_path(path: str) -> bool:
         if not path.startswith("/api/admin"):
             return False
-        return not path.startswith(("/api/admin/agent", "/api/admin/web"))
+        return not path.startswith("/api/admin/web")
 
     assert not any(_is_removed_admin_path(path) for path in registered)
     # /admin-api 在 8000 只允许普通 404 catch-all，不得出现任何真实后台路由
@@ -106,6 +110,9 @@ def test_family_app_registers_no_admin_routes() -> None:
     assert registered.isdisjoint(LEGACY_BREAK_GLASS_PATHS)
     # 兜底：旧 admin.py 的家庭数据路由任何形态都不允许存在
     assert not any(path.startswith("/api/admin/users") for path in registered)
+    # 09-06：旧家庭 agent 治理挂载已删除——任何 token（含有效家庭 token）都 404
+    assert client.get("/api/admin/agent/providers").status_code == 404
+    assert client.post("/api/admin/agent/providers", json={}).status_code == 404
 
     openapi = app.openapi()
     assert not any(_is_removed_admin_path(path) for path in openapi["paths"])
@@ -115,9 +122,10 @@ def test_family_app_registers_no_admin_routes() -> None:
 
 
 def test_admin_app_registers_only_admin_api_routes() -> None:
-    """8002 业务路由 == 认证面七条 + /admin-api/v1 只读模型路由，无其他任何路由。
+    """8002 业务路由 == 认证面七条 + /admin-api/v1 模型路由，无其他任何路由。
 
-    写端点仅限 access-sessions 与 manager-applications approve/reject；
+    写端点仅限 access-sessions、manager-applications approve/reject 与 09-06
+    迁入的 agent 治理（providers 注册/更新、platform-defaults 覆盖）；
     家庭 /api 路由与旧 admin.py 不得出现在 admin listener。
     """
     registered = {getattr(route, "path", "") for route in admin_app.routes}
@@ -130,7 +138,7 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
     ), sorted(business)
     # 家庭面路由不得反向出现在 admin listener
     assert not any(path.startswith("/api/") for path in registered)
-    # 审批之外无任何写能力：v1 路由面只有上面列出的两个 POST 写端点
+    # 审批与 agent 治理之外无任何写能力：v1 路由面写端点全集如下
     writes = {
         route.path
         for route in admin_app.routes
@@ -142,6 +150,9 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
         "/admin-api/v1/access-sessions",
         "/admin-api/v1/manager-applications/{application_id}/approve",
         "/admin-api/v1/manager-applications/{application_id}/reject",
+        "/admin-api/v1/agent/providers",
+        "/admin-api/v1/agent/providers/{provider_id}",
+        "/admin-api/v1/agent/platform-defaults",
     }
 
 

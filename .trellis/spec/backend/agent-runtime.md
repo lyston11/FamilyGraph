@@ -36,9 +36,11 @@
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
 
-## 5. Provider 治理
+## 5. Provider 治理（09-06 迁移后形态）
 
-- platform_operator 经 `/api/admin/agent/providers` 管理（secret 只写不读，secretbox 密文落库）；空间设置 model 必须在该 provider allowlist 内。
+- **治理面在系统管理员域**：system_admin 经 `/admin-api/v1/agent/*`（admin_app :8002，ADMIN_JWT + `require_admin_ready`，router 级 runtime 503 门禁）管理 Provider 注册表（`POST/GET/PATCH /agent/providers`，secret 只写不读、secretbox 密文落库）、平台默认模型（`GET/PUT /agent/platform-defaults`，单行表 `agent_platform_defaults`，provider+model 成对）与空间设置只读排查视图（`GET /agent/spaces/{space_id}/provider-settings`）。写操作审计走 `admin_audit.record_access`（admin_access_audits，actor=system_admin；secret 永不入审计）。旧家庭挂载 `/api/admin/agent/*` 已删除（家庭 listener 一律 404）；`require_platform_operator` 仅余 controlled_web 等非治理路径。
+- **选择权在空间 owner**：owner 经家庭域 `/api/spaces/{space_id}/model-settings`（GET 视图 / PUT 单维度 upsert / DELETE 恢复继承；权限=空间管理员）为 assistant/steward **分别**选择模型与云同意。空间设置按 `(space_id, agent_kind)` 唯一（0033 起双 Agent 维度）；`enabled=false` 行=显式停用（优先于平台默认，解析 `setting_disabled`）。
+- **解析顺序（services/agent_provider.resolve_for_space，agent_kind 参数 fail-closed）**：空间显式行 → 平台默认回退（虚拟 setting，`cloud_allowed=False`/`local_required=False`——默认只决定通道档位，云同意仍归 owner；云默认在 owner 同意前 `denied_cloud_forbidden`）→ `POLICY_DENIED(no_space_setting)`。`platform_default_configured` 随 `PROVIDER_UNRESOLVED` detail 下发，供前端两态文案（通道未配置 vs 空间未选/未同意云）。
 - 策略在消息创建时前置门禁：非 allowed → 409 可解释错误（PROVIDER_UNRESOLVED / PROVIDER_LOCAL_REQUIRED_UNAVAILABLE），**绝不静默换云**。
 - P1 唯一 egress：sidecar 不持 api_key、不直连云端；模型请求经上表代理端点（run token 作 Bearer），`resolve_runtime` 为唯一解密出口。compose 中 agent 容器无外网（backend 网络 `internal:true`），外网 egress 仅 api 容器。sidecar 流重试经 `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS` 注入 pi-ai（5xx/408/409/429 指数退避）。
 - Provider profile 首版固定为 `liu-dada/gpt-5.6-sol`（`openai-responses`、272000/60000、reasoning、text+image、low/medium/high/xhigh/max）；代码门禁拒绝其他云 profile，且不提供可由 Compose 环境变量关闭的绕过开关；local Provider 仍可作为本地敏感数据回退。

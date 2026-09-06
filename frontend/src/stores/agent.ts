@@ -580,7 +580,8 @@ export const useAgentStore = defineStore('agent', () => {
 
   function describeApiError(error: unknown): { code: string; message: string } {
     if (error instanceof ApiError) {
-      return { code: error.code, message: friendlyAgentError(error.code, error.message) }
+      // detail 透传 friendlyAgentError：PROVIDER_UNRESOLVED 两态细分文案（09-06）
+      return { code: error.code, message: friendlyAgentError(error.code, error.message, error.detail) }
     }
     return { code: CLIENT_AGENT_ERRORS.SEND_FAILED, message: '' }
   }

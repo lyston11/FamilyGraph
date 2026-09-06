@@ -15,10 +15,10 @@ import { useSpacesStore } from '@/stores/spaces'
 import type { FamilySpace, NotificationsSnapshot, SpaceMemberInfo } from '@/types/api'
 
 /**
- * SpaceManagementView（09-01 Phase 6，design §5.5）：
- * 五分区侧栏（概览/成员/邀请与申请/Bridge 通知/空间设置）、非管理员安全拒绝态、
- * Bridge 分区无任何操作控件、成员/邀请/申请走既有流程且操作后 reload、
- * 空间设置仅既有字段（空间名）。
+ * SpaceManagementView（09-01 Phase 6，design §5.5；09-06 增模型设置分区）：
+ * 六分区侧栏（概览/成员/邀请与申请/Bridge 通知/模型设置/空间设置）、非管理员
+ * 安全拒绝态、Bridge 分区无任何操作控件、成员/邀请/申请走既有流程且操作后
+ * reload、空间设置仅既有字段（空间名）、模型设置挂载双 Agent 面板。
  */
 
 vi.mock('@/api/members', () => ({
@@ -57,6 +57,17 @@ vi.mock('@/api/notifications', () => ({
   fetchNotifications: vi.fn(),
   markNotificationRead: vi.fn(),
   markAllNotificationsRead: vi.fn(),
+}))
+
+vi.mock('@/api/spaceModelSettings', () => ({
+  fetchSpaceModelSettings: vi.fn().mockResolvedValue({
+    space_id: 7,
+    settings: { assistant: null, steward: null },
+    catalog: [],
+    platform_default: { assistant: null, steward: null, updated_at: null },
+  }),
+  updateSpaceModelSetting: vi.fn(),
+  resetSpaceModelSetting: vi.fn(),
 }))
 
 vi.mock('@/api/actionCards', () => ({
@@ -199,13 +210,13 @@ async function openSection(
   )
 }
 
-describe('SpaceManagementView 五分区侧栏（design §5.5）', () => {
+describe('SpaceManagementView 六分区侧栏（design §5.5；09-06 增模型设置）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
   })
 
-  it('侧栏含五个分区，默认概览；逐分区切换渲染对应内容', async () => {
+  it('侧栏含六个分区，默认概览；逐分区切换渲染对应内容', async () => {
     const pinia = createPinia()
     const { wrapper } = await mountManagement(pinia, 'space_admin')
 
@@ -215,6 +226,7 @@ describe('SpaceManagementView 五分区侧栏（design §5.5）', () => {
       '成员',
       '邀请与申请',
       'Bridge 通知',
+      '模型设置',
       '空间设置',
     ])
     expect(wrapper.find('[data-test="section-overview"]').exists()).toBe(true)
@@ -229,6 +241,12 @@ describe('SpaceManagementView 五分区侧栏（design §5.5）', () => {
 
     await openSection(wrapper, 'bridge')
     expect(wrapper.find('[data-test="bridge-notices-empty"]').exists()).toBe(true)
+
+    await openSection(wrapper, 'models')
+    expect(wrapper.find('[data-test="model-settings-panel"]').exists()).toBe(true)
+    // 双 Agent 维度区块（assistant / steward 各一）
+    expect(wrapper.find('[data-test="model-settings-assistant"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="model-settings-steward"]').exists()).toBe(true)
 
     await openSection(wrapper, 'settings')
     expect(wrapper.find('[data-test="space-name-input"]').exists()).toBe(true)

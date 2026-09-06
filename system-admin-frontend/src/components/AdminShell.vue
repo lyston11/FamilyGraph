@@ -47,6 +47,7 @@ async function onAccountAction(key: string): Promise<void> {
         <RouterLink :to="{ name: 'anomaly-queue' }">异常队列</RouterLink>
         <RouterLink :to="{ name: 'operations' }">运营治理</RouterLink>
         <RouterLink :to="{ name: 'agent-monitor' }">Agent 监控</RouterLink>
+        <RouterLink :to="{ name: 'agent-providers' }">模型治理</RouterLink>
         <RouterLink :to="{ name: 'access-audit' }">读取审计</RouterLink>
       </nav>
       <NDropdown

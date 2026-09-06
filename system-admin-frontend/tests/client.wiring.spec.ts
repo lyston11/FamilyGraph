@@ -210,4 +210,49 @@ describe('adminApiClient 接线', () => {
     expect((network as AdminApiError).code).toBe('NETWORK_ERROR')
     expect((network as AdminApiError).message).toBe('网络连接失败，请稍后重试')
   })
+
+  it('PATCH 请求走统一入口并携带载荷（Provider 更新语义）', async () => {
+    adapterMode = { kind: 'ok', body: { id: 3, enabled: false } }
+    const result = await adminRequest<unknown>({
+      method: 'patch',
+      url: '/v1/agent/providers/3',
+      data: { enabled: false },
+    })
+    expect(result).toEqual({ id: 3, enabled: false })
+    expect(capturedConfig?.method).toBe('patch')
+    expect(capturedConfig?.url).toBe('/v1/agent/providers/3')
+    // adapter 层 axios 已把载荷序列化为 JSON 字符串
+    expect(JSON.parse(String(capturedConfig?.data))).toEqual({ enabled: false })
+  })
+
+  it('AdminApiError 携带错误外壳 detail（如 allowed_models 白名单载荷）', async () => {
+    adapterMode = {
+      kind: 'http',
+      status: 422,
+      body: {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'model 不在该 Provider 的 allowed_models 内',
+          detail: { allowed_models: ['gpt-5.6-sol'] },
+        },
+      },
+    }
+    const error = await adminRequest<unknown>({ method: 'put', url: '/v1/agent/platform-defaults' }).catch(
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(AdminApiError)
+    expect((error as AdminApiError).code).toBe('VALIDATION_ERROR')
+    expect((error as AdminApiError).detail).toEqual({ allowed_models: ['gpt-5.6-sol'] })
+
+    // 无 detail 的错误外壳：detail 保持 undefined
+    adapterMode = {
+      kind: 'http',
+      status: 401,
+      body: { error: { code: 'ADMIN_UNAUTHORIZED', message: '管理员认证失败，请重新登录' } },
+    }
+    const noDetail = await adminRequest<unknown>({ method: 'get', url: '/v1/overview' }).catch(
+      (e: unknown) => e,
+    )
+    expect((noDetail as AdminApiError).detail).toBeUndefined()
+  })
 })

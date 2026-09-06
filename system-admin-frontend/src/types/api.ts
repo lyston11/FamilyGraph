@@ -346,6 +346,109 @@ export interface AdminManagerApplicationOut {
   system_admin_decided_by: number | null
 }
 
+// ---- Agent Provider 治理（backend/app/schemas/agent.py，/admin-api/v1/agent/*）----
+// 09-06 治理迁移：Provider 注册表 + 平台默认 + 空间设置只读排查视图。
+// secret 只写不读：has_secret 布尔是任何响应里唯一密钥相关字段。
+
+export type AgentProviderKind = 'openai_compatible' | 'local'
+
+export type AgentProviderApi = 'openai-completions' | 'openai-responses'
+
+/** Provider 设置的 Agent 维度（assistant/steward 各自独立选择与平台默认）。 */
+export type AgentModelKind = 'assistant' | 'steward'
+
+/** AgentProviderOut：白名单精确集合，永无密钥明文/密文字段。 */
+export interface AdminAgentProviderOut {
+  id: number
+  name: string
+  kind: AgentProviderKind
+  api: AgentProviderApi
+  base_url: string | null
+  compat: Record<string, unknown>
+  context_window: number
+  max_tokens: number
+  reasoning: boolean
+  input_modalities: string[]
+  thinking_levels: string[]
+  has_secret: boolean
+  allowed_models: string[]
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** 单 agent 维度的平台默认（provider/model 成对出现）。 */
+export interface AgentPlatformDefaultKind {
+  provider_id: number
+  model: string
+}
+
+/** AgentPlatformDefaultsOut：None = 该维度未设默认。 */
+export interface AgentPlatformDefaultsOut {
+  assistant: AgentPlatformDefaultKind | null
+  steward: AgentPlatformDefaultKind | null
+  updated_at: string | null
+}
+
+/** 空间单维度行级设置（enabled=false 且 provider/model 空 = 显式停用）。 */
+export interface AgentSpaceSettingRowOut {
+  agent_kind: AgentModelKind
+  provider_id: number | null
+  model: string | null
+  cloud_allowed: boolean
+  local_required: boolean
+  enabled: boolean
+}
+
+/** AdminSpaceProviderSettingsOut：管理员只读排查视图（原始存储态）。 */
+export interface AdminSpaceProviderSettingsOut {
+  space_id: number
+  settings: {
+    assistant: AgentSpaceSettingRowOut | null
+    steward: AgentSpaceSettingRowOut | null
+  }
+  platform_default: AgentPlatformDefaultsOut
+}
+
+// ---- Agent Provider 治理请求载荷（schemas/agent.py _Strict）----
+
+export interface AdminAgentProviderCreatePayload {
+  name: string
+  kind: AgentProviderKind
+  api?: AgentProviderApi
+  base_url?: string | null
+  context_window?: number
+  max_tokens?: number
+  reasoning?: boolean
+  input_modalities?: string[]
+  thinking_levels?: string[]
+  /** 只写：注册时提供即加密落库；响应永不含密钥。 */
+  secret?: string
+  allowed_models: string[]
+  enabled?: boolean
+}
+
+/** PATCH 语义：仅提交变更字段；secret 空串=清除、非空=轮换、缺省=不变。 */
+export interface AdminAgentProviderPatchPayload {
+  name?: string
+  api?: AgentProviderApi
+  base_url?: string | null
+  context_window?: number
+  max_tokens?: number
+  reasoning?: boolean
+  input_modalities?: string[]
+  thinking_levels?: string[]
+  secret?: string | null
+  allowed_models?: string[]
+  enabled?: boolean
+}
+
+/** PUT 全量覆盖：字段缺省/显式 null 均表示清除该维度默认。 */
+export interface AdminAgentPlatformDefaultsPayload {
+  assistant?: AgentPlatformDefaultKind | null
+  steward?: AgentPlatformDefaultKind | null
+}
+
 // ---- 后端错误码（app/errors.py 中 admin 相关子集）----
 
 export const ADMIN_ERROR_CODES = {

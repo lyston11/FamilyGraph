@@ -11,7 +11,11 @@ from app.models.agent import (
     AgentSession,
     AgentToolCall,
 )
-from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
+from app.models.agent_provider import (
+    AgentPlatformDefault,
+    AgentProvider,
+    AgentSpaceProviderSetting,
+)
 from app.models.audit_log import AuditLog
 from app.models.auth_challenge import AuthChallenge
 from app.models.base import Base
@@ -69,6 +73,7 @@ __all__ = [
     "AdminAccessSession",
     "AgentJob",
     "AgentMessage",
+    "AgentPlatformDefault",
     "AgentProvider",
     "AgentRun",
     "AgentRunEvent",

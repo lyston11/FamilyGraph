@@ -33,9 +33,20 @@ def _provider(db, *, name="p1", kind="openai_compatible", enabled=True, models=N
     return row
 
 
-def _setting(db, space_id, provider_id, *, model="model-x", cloud=False, local=False, enabled=True):
+def _setting(
+    db,
+    space_id,
+    provider_id,
+    *,
+    model="model-x",
+    cloud=False,
+    local=False,
+    enabled=True,
+    agent_kind="assistant",
+):
     row = AgentSpaceProviderSetting(
         space_id=space_id,
+        agent_kind=agent_kind,
         provider_id=provider_id,
         model=model,
         cloud_allowed=cloud,
@@ -330,3 +341,187 @@ def test_allowed_runtime_snapshot_requires_provider_revision(db_session):
     resolved = resolve_for_run(db_session, run, space.id)
     assert resolved.policy_result == POLICY_DENIED
     assert resolved.reason == "runtime_snapshot_invalid"
+
+
+# ---- 09-06 治理迁移：agent_kind 维度与平台默认回退（design §7）----
+
+
+def _platform_default(db, *, assistant=None, steward=None):
+    from app.models.agent_provider import AgentPlatformDefault
+
+    row = AgentPlatformDefault(
+        id=1,
+        assistant_provider_id=assistant[0] if assistant else None,
+        assistant_model=assistant[1] if assistant else None,
+        steward_provider_id=steward[0] if steward else None,
+        steward_model=steward[1] if steward else None,
+        updated_at=timeutil.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_agent_kind_isolation_between_kinds(db_session):
+    """steward 行不影响 assistant 解析：维度各自独立（互不替补）。"""
+    _, space = create_agent_fixture(db_session, name="kind-iso")
+    cloud = _provider(db_session, name="cloud-iso")
+    local = _provider(db_session, name="local-iso", kind="local", models=["llama-x"])
+    _setting(db_session, space.id, cloud.id, cloud=True)
+    _setting(
+        db_session, space.id, local.id, model="llama-x", agent_kind="steward"
+    )
+
+    assistant = resolve_for_space(db_session, space.id, agent_kind="assistant")
+    assert assistant.policy_result == POLICY_ALLOWED
+    assert assistant.provider_id == cloud.id
+
+    steward = resolve_for_space(db_session, space.id, agent_kind="steward")
+    assert steward.policy_result == POLICY_ALLOWED
+    assert steward.provider_id == local.id
+
+    # steward 有平台默认/行，assistant 无行且无默认 → no_space_setting（不跨维替补）
+    _, bare = create_agent_fixture(db_session, name="kind-iso-bare")
+    _platform_default(db_session, steward=(local.id, "llama-x"))
+    bare_resolution = resolve_for_space(db_session, bare.id, agent_kind="assistant")
+    assert bare_resolution.policy_result == POLICY_DENIED
+    assert bare_resolution.reason == "no_space_setting"
+
+
+def test_platform_default_local_provider_directly_allowed(db_session):
+    """local 默认 Provider 不受 cloud_allowed 约束：直接 allowed。"""
+    _, space = create_agent_fixture(db_session, name="pd-local")
+    local = _provider(db_session, name="local-pd", kind="local", models=["llama-x"])
+    _platform_default(db_session, assistant=(local.id, "llama-x"))
+
+    result = resolve_for_space(db_session, space.id)
+    assert result.policy_result == POLICY_ALLOWED
+    assert result.provider_id == local.id
+    assert result.model == "llama-x"
+    assert result.platform_default_configured is True
+    assert result.kind == "local"
+
+
+def test_platform_default_cloud_provider_requires_owner_cloud_consent(db_session):
+    """云默认 Provider：平台默认不替 owner 打开云同意 → denied_cloud_forbidden。"""
+    _, space = create_agent_fixture(db_session, name="pd-cloud")
+    cloud = _provider(db_session, name="cloud-pd")
+    _platform_default(db_session, assistant=(cloud.id, "model-x"))
+
+    result = resolve_for_space(db_session, space.id)
+    assert result.policy_result == POLICY_DENIED_CLOUD_FORBIDDEN
+    assert result.reason == "cloud_not_allowed"
+    assert result.platform_default_configured is True
+
+
+def test_no_platform_default_stays_no_space_setting(db_session):
+    """无空间行且无有效默认 → no_space_setting（现状合同不变）。"""
+    _, space = create_agent_fixture(db_session, name="pd-none")
+    result = resolve_for_space(db_session, space.id)
+    assert result.policy_result == POLICY_DENIED
+    assert result.reason == "no_space_setting"
+    assert result.platform_default_configured is False
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["provider_deleted", "provider_disabled", "orphan_model"],
+)
+def test_invalid_platform_default_is_ignored(db_session, scenario):
+    """默认 Provider 缺失/停用/孤 model → 视为无默认，绝不静默改选。"""
+    from app.models.agent_provider import AgentPlatformDefault as PlatformDefaultModel
+
+    _, space = create_agent_fixture(db_session, name=f"pd-invalid-{scenario}")
+    cloud = _provider(db_session, name="cloud-invalid")
+    if scenario == "provider_deleted":
+        # Provider 删除（FK ondelete=SET NULL）后：provider_id 清空、model 孤留
+        _platform_default(db_session, assistant=(cloud.id, "model-x"))
+        db_session.delete(cloud)
+        db_session.commit()
+        assert db_session.get(PlatformDefaultModel, 1).assistant_provider_id is None
+    elif scenario == "provider_disabled":
+        cloud.enabled = False
+        db_session.commit()
+        _platform_default(db_session, assistant=(cloud.id, "model-x"))
+    else:
+        # 孤 model：provider_id 为 NULL 但 model 残留（Provider 删除 SET NULL 结果）
+        from app.models.agent_provider import AgentPlatformDefault
+
+        row = AgentPlatformDefault(
+            id=1, assistant_provider_id=None, assistant_model="model-x",
+            updated_at=timeutil.utcnow(),
+        )
+        db_session.add(row)
+        db_session.commit()
+
+    result = resolve_for_space(db_session, space.id)
+    assert result.policy_result == POLICY_DENIED
+    assert result.reason == "no_space_setting"
+    assert result.platform_default_configured is False
+
+
+def test_explicit_disabled_setting_overrides_platform_default(db_session):
+    """owner 显式停用优先于平台默认：setting_disabled，绝不回退默认。"""
+    _, space = create_agent_fixture(db_session, name="pd-disabled")
+    cloud = _provider(db_session, name="cloud-pd2")
+    _platform_default(db_session, assistant=(cloud.id, "model-x"))
+    _setting(db_session, space.id, cloud.id, enabled=False)
+
+    result = resolve_for_space(db_session, space.id)
+    assert result.policy_result == POLICY_DENIED
+    assert result.reason == "setting_disabled"
+    assert result.platform_default_configured is False
+
+
+def test_unknown_agent_kind_fails_closed(db_session):
+    """未知 agent_kind 一律 422 fail-closed（不静默按 assistant 处理）。"""
+    from app.errors import VALIDATION_ERROR, extract_api_error
+
+    _, space = create_agent_fixture(db_session, name="kind-unknown")
+    with pytest.raises(Exception) as excinfo:
+        resolve_for_space(db_session, space.id, agent_kind="boss")
+    api_error = extract_api_error(excinfo.value.detail) or {}
+    assert excinfo.value.status_code == 422
+    assert api_error.get("code") == VALIDATION_ERROR
+
+
+def test_platform_defaults_helpers_set_and_clear(db_session):
+    """set_platform_defaults：allowlist 校验 + 成对写入/清除（PUT 全量语义）。"""
+    from app.services.agent_provider import (
+        get_platform_defaults,
+        set_platform_defaults,
+    )
+
+    cloud = _provider(db_session, name="cloud-helper", models=["model-x", "model-y"])
+    local = _provider(db_session, name="local-helper", kind="local", models=["llama-x"])
+
+    row = set_platform_defaults(
+        db_session,
+        assistant=(cloud.id, "model-x"),
+        steward=(local.id, "llama-x"),
+        updated_by_admin_id=None,
+    )
+    db_session.commit()
+    assert row.assistant_provider_id == cloud.id and row.assistant_model == "model-x"
+    assert row.steward_provider_id == local.id
+
+    # model 不在 allowlist → 422
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        set_platform_defaults(
+            db_session,
+            assistant=(cloud.id, "not-allowed"),
+            steward=None,
+            updated_by_admin_id=None,
+        )
+    assert excinfo.value.status_code == 422
+
+    # 全量覆盖：只传 steward → assistant 清除
+    row = set_platform_defaults(
+        db_session, assistant=None, steward=(cloud.id, "model-y"), updated_by_admin_id=None
+    )
+    db_session.commit()
+    current = get_platform_defaults(db_session)
+    assert current.assistant_provider_id is None and current.assistant_model is None
+    assert current.steward_provider_id == cloud.id and current.steward_model == "model-y"

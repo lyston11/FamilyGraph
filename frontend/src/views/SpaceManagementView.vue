@@ -1,13 +1,15 @@
 <script setup lang="ts">
-// 当前空间管理（design.md §5.5，09-01 Phase 6）：
-// - 五分区侧栏（桌面侧栏 / 移动端顶部标签）：概览、成员、邀请与申请、Bridge 通知、空间设置；
+// 当前空间管理（design.md §5.5，09-01 Phase 6；09-06 增模型设置分区）：
+// - 六分区侧栏（桌面侧栏 / 移动端顶部标签）：概览、成员、邀请与申请、Bridge 通知、模型设置、空间设置；
 // - 入口只由当前 space 的 active space_admin 关系决定（router 守卫 fail-closed 已拦截
 //   越权直达），页面内对非管理员仍渲染安全拒绝态（双保险）；
 // - 成员/邀请/申请全部复用既有流程组件与 spaces store 命令（操作后服务端 reload），
 //   不新增直接编辑 SourceFact / SpaceMember / PersonalFamilyView 的前端路径；
 // - Bridge 通知分区只读：仅安全状态与通知时间，无 approve/reject/consent/revoke 控件
 //   （管理员对跨 LineageSpace bridge 只有通知查看权，PRD §2.6）；
-// - 空间设置只有既有 PATCH /spaces/{space_id} 合同（空间名），无新增授权字段。
+// - 空间设置只有既有 PATCH /spaces/{space_id} 合同（空间名），无新增授权字段；
+// - 模型设置分区：assistant/steward 双 Agent 模型选择与云同意（09-06 治理迁移，
+//   SpaceModelSettingsPanel 自管数据，权限同 PATCH /spaces 的 space_admin 语义）。
 import { NAlert, NButton, NEmpty, NInput, NSpin, useMessage } from 'naive-ui'
 import { computed, onMounted, ref, watch, type InputHTMLAttributes } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -18,18 +20,20 @@ import InviteMemberDialog from '@/components/member/InviteMemberDialog.vue'
 import PendingProfileRefs from '@/components/member/PendingProfileRefs.vue'
 import SpaceGovernancePanel from '@/components/member/SpaceGovernancePanel.vue'
 import SpaceManagerApplicationPanel from '@/components/member/SpaceManagerApplicationPanel.vue'
+import SpaceModelSettingsPanel from '@/components/member/SpaceModelSettingsPanel.vue'
 import NoticeItemRow from '@/components/notifications/NoticeItemRow.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useSpacesStore } from '@/stores/spaces'
 import type { NotificationItem } from '@/types/api'
 
-type ManagementSection = 'overview' | 'members' | 'invites' | 'bridge' | 'settings'
+type ManagementSection = 'overview' | 'members' | 'invites' | 'bridge' | 'models' | 'settings'
 
 const SECTIONS: ReadonlyArray<{ key: ManagementSection; label: string }> = [
   { key: 'overview', label: '概览' },
   { key: 'members', label: '成员' },
   { key: 'invites', label: '邀请与申请' },
   { key: 'bridge', label: 'Bridge 通知' },
+  { key: 'models', label: '模型设置' },
   { key: 'settings', label: '空间设置' },
 ]
 
@@ -240,6 +244,15 @@ async function saveName(): Promise<void> {
                 <NoticeItemRow :item="item" />
               </li>
             </ul>
+          </section>
+
+          <!-- 模型设置（09-06 治理迁移）：assistant/steward 双 Agent 模型选择与云同意 -->
+          <section v-else-if="activeSection === 'models'" class="section-card" data-test="section-models">
+            <h2 class="section-title">模型设置</h2>
+            <p class="section-hint">
+              为助手与管家分别选择平台管理员允许的模型；云端执行需显式同意，随时可恢复平台默认或停用。
+            </p>
+            <SpaceModelSettingsPanel :space-id="space.id" />
           </section>
 
           <!-- 空间设置：既有 PATCH /spaces/{space_id}，仅空间名，无新增授权字段 -->

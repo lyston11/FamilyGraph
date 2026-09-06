@@ -24,13 +24,16 @@ export class AdminApiError extends Error {
   readonly status: number
   readonly code: string
   readonly serverMessage: string
+  /** 后端错误外壳 detail（如 allowed_models 白名单载荷）；网络/未知错误为 undefined。 */
+  readonly detail?: unknown
 
-  constructor(status: number, code: string, serverMessage: string) {
+  constructor(status: number, code: string, serverMessage: string, detail?: unknown) {
     super(serverMessage || `请求失败（${status}）`)
     this.name = 'AdminApiError'
     this.status = status
     this.code = code
     this.serverMessage = serverMessage
+    this.detail = detail
   }
 }
 
@@ -103,7 +106,7 @@ function toAdminApiError(error: unknown): AdminApiError | RequestAbortedError {
   if (error instanceof AxiosError && error.response) {
     const parsed = extractErrorBody(error.response.data)
     if (parsed) {
-      return new AdminApiError(error.response.status, parsed.code, parsed.message)
+      return new AdminApiError(error.response.status, parsed.code, parsed.message, parsed.detail)
     }
     return new AdminApiError(error.response.status, 'HTTP_ERROR', error.message)
   }
@@ -174,7 +177,7 @@ adminApiClient.interceptors.response.use(
         return Promise.reject(new AccessSessionInvalidError())
       }
       if (parsed) {
-        return Promise.reject(new AdminApiError(status, parsed.code, parsed.message))
+        return Promise.reject(new AdminApiError(status, parsed.code, parsed.message, parsed.detail))
       }
     }
     return Promise.reject(toAdminApiError(error))
@@ -183,7 +186,7 @@ adminApiClient.interceptors.response.use(
 
 /** 统一请求入口：所有错误都归一为 AdminApiError（中止除外）。 */
 export async function adminRequest<T>(config: {
-  method: 'get' | 'post' | 'put'
+  method: 'get' | 'post' | 'put' | 'patch'
   url: string
   data?: unknown
   params?: Record<string, string | number | boolean | null | undefined>

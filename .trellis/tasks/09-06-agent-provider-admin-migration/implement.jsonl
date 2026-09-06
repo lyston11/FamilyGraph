@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/archive/2026-09/09-01-agent-runtime-assistant-only/notes.md", "reason": "双Agent边界与Steward模型辅助'另立任务'的权威决策记录"}
+{"file": ".trellis/tasks/archive/2026-08/08-26-v2-agent-system/prd.md", "reason": "v2 Agent系统权威PRD：R8 Provider治理分层、R1 LLM分工、红线合同"}
+{"file": ".trellis/tasks/09-06-agent-provider-admin-migration/research/current-state.md", "reason": "现状事实与行号锚点（实现前必读）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 迁移/重建表规范（0033 迁移必须遵守）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "raise_api_error 错误外壳规范"}

@@ -3,7 +3,8 @@
  * - 任何 src 文件不得 import 家庭 frontend/ 的任何模块或共享构建产物；
  * - 后台只代理/请求 /admin-api，绝不出现家庭 /api baseURL 或家庭存储 key；
  * - 敏感票据绝不写 localStorage/sessionStorage；
- * - 业务写端点仅审批（approve/reject），无其他 POST/PUT/DELETE。
+ * - 业务写端点仅审批（approve/reject）+ 认证自管理 + Agent 治理
+ *   （providers 注册/更新、platform-defaults 覆盖），无其他 POST/PUT/DELETE。
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -117,7 +118,7 @@ describe('模块图隔离（system-admin-frontend 独立性）', () => {
     expect(profilePanel).not.toContain('sessionStorage')
   })
 
-  it('业务写端点仅审批 + 认证自管理；绝不出现 DELETE 或其他写调用', () => {
+  it('业务写端点仅审批 + 认证自管理 + Agent 治理；绝不出现 DELETE 写调用', () => {
     const allowedWriteUrls = [
       '/auth/login',
       '/auth/refresh',
@@ -126,6 +127,9 @@ describe('模块图隔离（system-admin-frontend 独立性）', () => {
       '/auth/username',
       '/v1/access-sessions',
       '/v1/manager-applications',
+      // 09-06 治理迁移：Provider 注册/更新（POST/PATCH）与平台默认覆盖（PUT）
+      '/v1/agent/providers',
+      '/v1/agent/platform-defaults',
     ]
     for (const file of sourceFiles) {
       const content = readFileSync(file, 'utf8')

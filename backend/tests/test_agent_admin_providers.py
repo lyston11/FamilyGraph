@@ -1,28 +1,47 @@
-"""Provider 治理端点测试（RT-5）：operator 权限、secret 不回显、策略矩阵无静默 fallback。"""
+"""Agent Provider 治理端点测试（admin 域 /admin-api/v1/agent/*，09-06 治理迁移）。
 
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_agent_session,
-    create_space_member,
-    create_user_with_pin,
-    login,
-)
+覆盖（design §7）：
+- 鉴权门禁：无 token 401、password_must_change 403；
+- Provider 注册/更新：secret 只写不读（明文/密文双不回显）、base_url 必填、
+  strict profile 门禁、flag 关闭 503；
+- 平台默认：PUT/GET 全量覆盖、成对与 allowlist 校验；
+- 空间设置只读排查视图；
+- 审计：admin_access_audits 落库（actor=system_admin）、secret 永不入审计。
+
+旧家庭挂载 /api/admin/agent/* 已删除：其 404 由 test_system_admin_boundary.py 断言。
+"""
+
+from conftest import admin_session_headers, create_agent_fixture, create_system_admin
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
+from app.models.admin_access import AdminAccessAudit
+from app.models.agent_provider import (
+    AgentPlatformDefault,
+    AgentProvider,
+    AgentSpaceProviderSetting,
+)
 from app.services.agent_provider import resolve_for_space
 
-
-def _operator_headers(client, db, name: str = "provider-op"):
-    user = create_user_with_pin(db, name, "123456", is_admin=True)
-    token_pair = login(client, name, "123456").json()
-    return user, auth_header(token_pair)
+V1_AGENT = "/admin-api/v1/agent"
+SECRET = "sk-live-abc123"
 
 
-def _register_cloud(client, headers, *, name="cloud-1", models=None, secret="sk-live-abc123"):
-    return client.post(
-        "/api/admin/agent/providers",
+def _admin_headers(admin_client: TestClient, db_session) -> dict[str, str]:
+    create_system_admin(db_session)
+    return admin_session_headers(admin_client)
+
+
+def _register_cloud(
+    admin_client: TestClient,
+    headers,
+    *,
+    name="cloud-1",
+    models=None,
+    secret=SECRET,
+) -> dict:
+    response = admin_client.post(
+        f"{V1_AGENT}/providers",
         json={
             "name": name,
             "kind": "openai_compatible",
@@ -33,280 +52,320 @@ def _register_cloud(client, headers, *, name="cloud-1", models=None, secret="sk-
         },
         headers=headers,
     )
+    assert response.status_code == 201, response.text
+    return response.json()
 
 
-# ---- operator CRUD 与 secret 边界 ----
+# ---- 鉴权门禁 ----
 
 
-def test_provider_crud_requires_platform_operator(client, db_session):
-    _owner, _space = create_agent_fixture(db_session, name="plainuser")
-    normal = auth_header(login(client, "plainuser", "123456").json())
-    cases = [
-        (
-            "post",
-            "/api/admin/agent/providers",
-            {
-                "name": "x",
-                "kind": "local",
-                "allowed_models": ["m"],
-            },
-        ),
-        ("get", "/api/admin/agent/providers", None),
-        ("patch", "/api/admin/agent/providers/1", {"enabled": False}),
-        (
-            "put",
-            "/api/admin/agent/spaces/1/provider-settings",
-            {
-                "provider_id": 1,
-                "model": "m",
-            },
-        ),
-    ]
-    for method, path, payload in cases:
-        kwargs: dict = {"headers": normal}
+def test_agent_admin_endpoints_require_admin_token(admin_client: TestClient) -> None:
+    """无 token / 家庭 token 一律 401 ADMIN_UNAUTHORIZED（admin 域独立签发域）。"""
+    for method, path, payload in (
+        ("post", f"{V1_AGENT}/providers", {"name": "x"}),
+        ("get", f"{V1_AGENT}/providers", None),
+        ("patch", f"{V1_AGENT}/providers/1", {"enabled": False}),
+        ("get", f"{V1_AGENT}/platform-defaults", None),
+        ("put", f"{V1_AGENT}/platform-defaults", {"assistant": None}),
+        ("get", f"{V1_AGENT}/spaces/1/provider-settings", None),
+    ):
+        kwargs: dict = {}
         if payload is not None:
             kwargs["json"] = payload
-        response = getattr(client, method)(path, **kwargs)
-        assert response.status_code == 403
+        response = getattr(admin_client, method)(path, **kwargs)
+        assert response.status_code == 401, path
+        assert response.json()["error"]["code"] == "ADMIN_UNAUTHORIZED", path
 
 
-def test_register_and_list_never_disclose_secret(client, db_session):
-    _op, headers = _operator_headers(client, db_session)
-    created = _register_cloud(client, headers)
-    assert created.status_code == 201
-    body = created.json()
-    assert body["has_secret"] is True
-    assert "secret" not in body
+def test_agent_admin_endpoints_blocked_until_password_change(
+    admin_client: TestClient, db_session
+) -> None:
+    """password_must_change=true：登录可过，但治理端点一律 403（require_admin_ready）。"""
+    create_system_admin(
+        db_session, username="mustchange", password="FixtureAdmin-2026x",
+        password_must_change=True,
+    )
+    headers = admin_session_headers(
+        admin_client, username="mustchange", password="FixtureAdmin-2026x"
+    )
+    response = admin_client.get(f"{V1_AGENT}/providers", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ADMIN_PASSWORD_CHANGE_REQUIRED"
+
+
+# ---- Provider 注册表与 secret 边界 ----
+
+
+def test_register_and_list_never_disclose_secret(admin_client: TestClient, db_session) -> None:
+    headers = _admin_headers(admin_client, db_session)
+    created = _register_cloud(admin_client, headers)
+    assert created["has_secret"] is True
+    assert "secret" not in created
     # 明文与密文都不出现在任何响应里（含列表）
-    listing = client.get("/api/admin/agent/providers", headers=headers)
-    assert "sk-live-abc123" not in listing.text
+    listing = admin_client.get(f"{V1_AGENT}/providers", headers=headers)
+    assert listing.status_code == 200
+    assert SECRET not in listing.text
     row = db_session.scalar(select(AgentProvider).where(AgentProvider.name == "cloud-1"))
     assert row is not None
     assert row.secret_ciphertext is not None
-    assert "sk-live-abc123" not in row.secret_ciphertext
+    assert SECRET not in row.secret_ciphertext
 
-    patched = client.patch(
-        f"/api/admin/agent/providers/{row.id}",
+    # PATCH 语义：仅提交变更字段；secret 非空=轮换、空串=清除
+    patched = admin_client.patch(
+        f"{V1_AGENT}/providers/{row.id}",
         json={"enabled": False},
         headers=headers,
     )
     assert patched.status_code == 200
     assert patched.json()["enabled"] is False
-    missing = client.patch(
-        "/api/admin/agent/providers/9999", json={"enabled": True}, headers=headers
+    assert patched.json()["has_secret"] is True
+
+    rotated = admin_client.patch(
+        f"{V1_AGENT}/providers/{row.id}",
+        json={"secret": "sk-rotated-xyz"},
+        headers=headers,
+    )
+    assert rotated.status_code == 200
+    assert rotated.json()["has_secret"] is True
+    assert "sk-rotated-xyz" not in rotated.text
+
+    cleared = admin_client.patch(
+        f"{V1_AGENT}/providers/{row.id}",
+        json={"secret": ""},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["has_secret"] is False
+
+    missing = admin_client.patch(
+        f"{V1_AGENT}/providers/9999", json={"enabled": True}, headers=headers
     )
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "AGENT_PROVIDER_NOT_FOUND"
 
 
-def test_openai_compatible_requires_base_url(client, db_session):
-    _op, headers = _operator_headers(client, db_session, name="op-baseurl")
-    response = client.post(
-        "/api/admin/agent/providers",
+def test_openai_compatible_requires_base_url(admin_client: TestClient, db_session) -> None:
+    headers = _admin_headers(admin_client, db_session)
+    response = admin_client.post(
+        f"{V1_AGENT}/providers",
         json={"name": "no-url", "kind": "openai_compatible", "allowed_models": ["m"]},
         headers=headers,
     )
     assert response.status_code == 422
 
 
-def test_strict_mode_accepts_only_canonical_liu_dada_profile(client, db_session, monkeypatch):
+def test_strict_mode_accepts_only_canonical_liu_dada_profile(
+    admin_client: TestClient, db_session, monkeypatch
+) -> None:
     from app import config
 
     monkeypatch.setattr(config, "AGENT_PROVIDER_STANDARD_PROFILE_ONLY", True)
-    _op, headers = _operator_headers(client, db_session, name="op-strict-profile")
-    rejected = client.post(
-        "/api/admin/agent/providers",
+    headers = _admin_headers(admin_client, db_session)
+    rejected = admin_client.post(
+        f"{V1_AGENT}/providers",
         json={
             "name": "other-cloud",
             "kind": "openai_compatible",
             "base_url": "https://api.example.com/v1",
             "allowed_models": ["model-x"],
-            "secret": "sk-live-abc123",
+            "secret": SECRET,
         },
         headers=headers,
     )
     assert rejected.status_code == 422
     assert rejected.json()["error"]["detail"]["reason"] == "provider_name_not_allowed"
-    accepted = client.post(
-        "/api/admin/agent/providers",
+    accepted = admin_client.post(
+        f"{V1_AGENT}/providers",
         json={
             "name": "liu-dada",
             "kind": "openai_compatible",
             "api": "openai-responses",
             "base_url": "https://api.liu-dada.com/v1",
             "allowed_models": ["gpt-5.6-sol"],
-            "secret": "sk-live-abc123",
+            "secret": SECRET,
         },
         headers=headers,
     )
     assert accepted.status_code == 201
 
 
-def test_admin_agent_endpoints_disabled_when_flag_off(client, db_session, monkeypatch):
+def test_admin_agent_endpoints_disabled_when_flag_off(
+    admin_client: TestClient, db_session, monkeypatch
+) -> None:
     from app import config as app_config
 
-    _op, headers = _operator_headers(client, db_session, name="op-flagoff")
+    headers = _admin_headers(admin_client, db_session)
     monkeypatch.setattr(app_config, "AGENT_RUNTIME_ENABLED", False)
-    listed = client.get("/api/admin/agent/providers", headers=headers)
+    listed = admin_client.get(f"{V1_AGENT}/providers", headers=headers)
     assert listed.status_code == 503
     assert listed.json()["error"]["code"] == "AGENT_RUNTIME_DISABLED"
 
 
-# ---- 空间设置 ----
+# ---- 平台默认 ----
 
 
-def _space_with_member(db, name: str):
-    user, space = create_agent_fixture(db, name=name)
-    create_space_member(db, space.id, user.id)
-    return user, space
+def test_platform_defaults_put_get_and_validation(admin_client: TestClient, db_session) -> None:
+    headers = _admin_headers(admin_client, db_session)
+    cloud = _register_cloud(admin_client, headers, models=["model-x", "model-y"])
 
+    # 初始为空（GET 不懒建行，未设置即 None）
+    initial = admin_client.get(f"{V1_AGENT}/platform-defaults", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["assistant"] is None
+    assert initial.json()["steward"] is None
 
-def _member_headers(client, db, user):
-    return auth_header(login(client, user.name, "123456").json())
-
-
-def test_space_settings_validation(client, db_session):
-    _op, op_headers = _operator_headers(client, db_session, name="op-settings")
-    provider_id = _register_cloud(client, op_headers).json()["id"]
-    _user, space = _space_with_member(db_session, "settingspace")
-
-    unknown_space = client.put(
-        f"/api/admin/agent/spaces/{space.id}/provider-settings",
-        json={"provider_id": 99999, "model": "model-x"},
-        headers=op_headers,
+    # 设置 assistant 维度默认
+    put = admin_client.put(
+        f"{V1_AGENT}/platform-defaults",
+        json={"assistant": {"provider_id": cloud["id"], "model": "model-x"}},
+        headers=headers,
     )
-    assert unknown_space.status_code == 404
+    assert put.status_code == 200, put.text
+    assert put.json()["assistant"] == {"provider_id": cloud["id"], "model": "model-x"}
+    assert put.json()["steward"] is None
 
-    bad_model = client.put(
-        f"/api/admin/agent/spaces/{space.id}/provider-settings",
-        json={"provider_id": provider_id, "model": "not-allowed"},
-        headers=op_headers,
+    # GET 回读
+    fetched = admin_client.get(f"{V1_AGENT}/platform-defaults", headers=headers)
+    assert fetched.json()["assistant"]["provider_id"] == cloud["id"]
+    row = db_session.get(AgentPlatformDefault, 1)
+    assert row is not None and row.assistant_provider_id == cloud["id"]
+
+    # model 不在该 Provider allowed_models 内 → 422
+    bad_model = admin_client.put(
+        f"{V1_AGENT}/platform-defaults",
+        json={"steward": {"provider_id": cloud["id"], "model": "not-allowed"}},
+        headers=headers,
     )
     assert bad_model.status_code == 422
+    assert "allowed_models" in bad_model.json()["error"]["detail"]
 
-    ok = client.put(
-        f"/api/admin/agent/spaces/{space.id}/provider-settings",
-        json={"provider_id": provider_id, "model": "model-x", "cloud_allowed": True},
-        headers=op_headers,
+    # Provider 不存在 → 422
+    unknown = admin_client.put(
+        f"{V1_AGENT}/platform-defaults",
+        json={"assistant": {"provider_id": 99999, "model": "model-x"}},
+        headers=headers,
     )
-    assert ok.status_code == 200
-    assert ok.json()["model"] == "model-x"
+    assert unknown.status_code == 422
 
-    cleared = client.put(
-        f"/api/admin/agent/spaces/{space.id}/provider-settings",
-        json={"provider_id": None},
-        headers=op_headers,
+    # 全量覆盖语义：只传 steward → assistant 被清除
+    overwritten = admin_client.put(
+        f"{V1_AGENT}/platform-defaults",
+        json={"steward": {"provider_id": cloud["id"], "model": "model-y"}},
+        headers=headers,
     )
-    assert cleared.status_code == 200
-    assert (
-        db_session.scalar(
-            select(AgentSpaceProviderSetting).where(AgentSpaceProviderSetting.space_id == space.id)
-        )
-        is None
+    assert overwritten.status_code == 200
+    assert overwritten.json()["assistant"] is None
+    assert overwritten.json()["steward"]["model"] == "model-y"
+
+
+# ---- 空间设置只读排查视图 ----
+
+
+def test_space_provider_settings_readonly_view(admin_client: TestClient, db_session) -> None:
+    headers = _admin_headers(admin_client, db_session)
+    cloud = _register_cloud(admin_client, headers, models=["model-x"])
+    _owner, space = create_agent_fixture(db_session, name="readonly-space")
+    db_session.commit()
+
+    # 未知空间 404
+    missing = admin_client.get(f"{V1_AGENT}/spaces/99999/provider-settings", headers=headers)
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "SPACE_NOT_FOUND"
+
+    # 无显式行：两维度均为 None + 平台默认状态
+    empty = admin_client.get(f"{V1_AGENT}/spaces/{space.id}/provider-settings", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json()["settings"]["assistant"] is None
+    assert empty.json()["settings"]["steward"] is None
+
+    # 写入显式行后按维度呈现（只读视图，无 PUT 写端点）
+    assistant_row = AgentSpaceProviderSetting(
+        space_id=space.id,
+        agent_kind="assistant",
+        provider_id=cloud["id"],
+        model="model-x",
+        cloud_allowed=True,
+        enabled=True,
     )
+    db_session.add(assistant_row)
+    db_session.commit()
+    view = admin_client.get(f"{V1_AGENT}/spaces/{space.id}/provider-settings", headers=headers)
+    assert view.status_code == 200
+    body = view.json()
+    assert body["settings"]["assistant"]["model"] == "model-x"
+    assert body["settings"]["assistant"]["cloud_allowed"] is True
+    assert body["settings"]["steward"] is None
+    # 只读排查视图响应不含密钥形态字段
+    assert "secret" not in view.text
 
 
-# ---- 策略矩阵：经浏览器消息创建验证可解释拒绝，无静默 fallback ----
-
-
-def _message_response(client, headers, session_id: int):
-    return client.post(
-        f"/api/agent/sessions/{session_id}/messages",
-        json={"content": "hi"},
-        headers={**headers, "Idempotency-Key": "policy-key"},
+def test_space_provider_settings_reflects_platform_defaults(
+    admin_client: TestClient, db_session
+) -> None:
+    headers = _admin_headers(admin_client, db_session)
+    cloud = _register_cloud(admin_client, headers, models=["model-x"])
+    _owner, space = create_agent_fixture(db_session, name="pd-view-space")
+    admin_client.put(
+        f"{V1_AGENT}/platform-defaults",
+        json={"assistant": {"provider_id": cloud["id"], "model": "model-x"}},
+        headers=headers,
     )
+    view = admin_client.get(f"{V1_AGENT}/spaces/{space.id}/provider-settings", headers=headers)
+    assert view.status_code == 200
+    assert view.json()["platform_default"]["assistant"]["provider_id"] == cloud["id"]
+    assert view.json()["platform_default"]["steward"] is None
 
 
-def test_policy_no_setting_rejects_unresolved(client, db_session):
-    member_user, space = _space_with_member(db_session, "pol-nosetting")
-    create_agent_session(db_session, account_id=member_user.account.id, space_id=space.id)
+# ---- 审计：admin_access_audits 落库、secret 永不入审计 ----
+
+
+def test_provider_writes_audited_and_secret_never_in_audit(
+    admin_client: TestClient, db_session
+) -> None:
+    headers = _admin_headers(admin_client, db_session)
+    created = _register_cloud(admin_client, headers)
+    admin_client.patch(
+        f"{V1_AGENT}/providers/{created['id']}", json={"enabled": False}, headers=headers
+    )
+    admin_client.put(
+        f"{V1_AGENT}/platform-defaults",
+        json={"assistant": {"provider_id": created["id"], "model": "model-x"}},
+        headers=headers,
+    )
+    admin_client.get(f"{V1_AGENT}/providers", headers=headers)
+
+    actions = [
+        row.action
+        for row in db_session.scalars(select(AdminAccessAudit).order_by(AdminAccessAudit.id)).all()
+    ]
+    assert "agent.provider.create" in actions
+    assert "agent.provider.update" in actions
+    assert "agent.platform_defaults.update" in actions
+    assert "agent.provider.list" in actions
+
+    # secret 明文/密文绝不进入任何审计行（filters 只放白名单字段）
+    audits = db_session.scalars(select(AdminAccessAudit)).all()
+    for row in audits:
+        assert SECRET not in str(row.filters_json)
+        assert "secret" not in row.filters_json
+    create_audit = next(row for row in audits if row.action == "agent.provider.create")
+    # target_type 词表仅 user/space（既有 CHECK 约束）：provider 主体在 filters
+    assert create_audit.target_type is None and create_audit.target_id is None
+    assert set(create_audit.filters_json) == {"provider_id", "name", "kind", "enabled"}
+    assert create_audit.filters_json["provider_id"] == created["id"]
+
+    update_audit = next(row for row in audits if row.action == "agent.provider.update")
+    assert update_audit.filters_json.get("secret_rotated") is not True  # 该次 PATCH 无 secret
+
+
+def test_family_domain_resolution_unaffected_by_admin_registry(
+    admin_client: TestClient, db_session
+) -> None:
+    """admin 域注册 Provider 本身不改变家庭解析（仍需空间显式行或平台默认）。"""
+    headers = _admin_headers(admin_client, db_session)
+    _register_cloud(admin_client, headers)
+    _owner, space = create_agent_fixture(db_session, name="isolated-space")
     resolution = resolve_for_space(db_session, space.id)
     assert resolution.policy_result == "denied"
     assert resolution.reason == "no_space_setting"
-
-
-def test_policy_matrix_via_message_creation(client, db_session):
-    _op, op_headers = _operator_headers(client, db_session, name="op-matrix")
-    cloud_id = _register_cloud(client, op_headers).json()["id"]
-    local_resp = client.post(
-        "/api/admin/agent/providers",
-        json={
-            "name": "local-1",
-            "kind": "local",
-            "base_url": "http://127.0.0.1:11434/v1",
-            "allowed_models": ["llama-x"],
-        },
-        headers=op_headers,
-    )
-    local_id = local_resp.json()["id"]
-
-    def _case(name: str) -> tuple[object, dict, int]:
-        user, space = _space_with_member(db_session, name)
-        headers = auth_header(login(client, user.name, "123456").json())
-        created = client.post("/api/agent/sessions", json={"space_id": space.id}, headers=headers)
-        return space, headers, created.json()["id"]
-
-    # 1) 云选择 + 未开放云 → PROVIDER_UNRESOLVED（可解释：denied_cloud_forbidden）
-    space, headers, sid = _case("pol-cloudoff")
-    client.put(
-        f"/api/admin/agent/spaces/{space.id}/provider-settings",
-        json={"provider_id": cloud_id, "model": "model-x", "cloud_allowed": False},
-        headers=op_headers,
-    )
-    denied = _message_response(client, headers, sid)
-    assert denied.status_code == 409
-    assert denied.json()["error"]["code"] == "PROVIDER_UNRESOLVED"
-    assert denied.json()["error"]["detail"]["policy_result"] == "denied_cloud_forbidden"
-
-    # 2) 云选择 + 开放云 → 成功入队
-    client.put(
-        f"/api/admin/agent/spaces/{space.id}/provider-settings",
-        json={"provider_id": cloud_id, "model": "model-x", "cloud_allowed": True},
-        headers=op_headers,
-    )
-    allowed = _message_response(client, headers, sid)
-    assert allowed.status_code == 200
-    assert allowed.json()["replayed"] is False
-
-    # 3) 敏感强制本地但选中云 → PROVIDER_LOCAL_REQUIRED_UNAVAILABLE，绝不换云
-    space2, headers2, sid2 = _case("pol-localreq")
-    client.put(
-        f"/api/admin/agent/spaces/{space2.id}/provider-settings",
-        json={
-            "provider_id": cloud_id,
-            "model": "model-x",
-            "cloud_allowed": True,
-            "local_required": True,
-        },
-        headers=op_headers,
-    )
-    rejected = _message_response(client, headers2, sid2)
-    assert rejected.status_code == 409
-    assert rejected.json()["error"]["code"] == "PROVIDER_LOCAL_REQUIRED_UNAVAILABLE"
-    assert rejected.json()["error"]["detail"]["reason"] == "selected_provider_not_local"
-
-    # 4) 强制本地且选择本地 → 成功；解析结果为本地 Provider
-    space3, headers3, sid3 = _case("pol-localok")
-    client.put(
-        f"/api/admin/agent/spaces/{space3.id}/provider-settings",
-        json={"provider_id": local_id, "model": "llama-x", "local_required": True},
-        headers=op_headers,
-    )
-    ok_local = _message_response(client, headers3, sid3)
-    assert ok_local.status_code == 200
-    resolution = resolve_for_space(db_session, space3.id)
-    assert resolution.policy_result == "allowed"
-    assert resolution.kind == "local"
-
-    # 5) Provider 停用后 → PROVIDER_UNRESOLVED（provider_disabled），不静默换云
-    client.patch(
-        f"/api/admin/agent/providers/{local_id}", json={"enabled": False}, headers=op_headers
-    )
-    after_disable = client.post(
-        f"/api/agent/sessions/{sid3}/messages",
-        json={"content": "again"},
-        headers={**headers3, "Idempotency-Key": "after-disable"},
-    )
-    assert after_disable.status_code == 409
-    assert after_disable.json()["error"]["code"] == "PROVIDER_UNRESOLVED"
-    assert after_disable.json()["error"]["detail"]["reason"] == "provider_disabled"
+    assert resolution.platform_default_configured is False

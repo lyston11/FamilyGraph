@@ -60,7 +60,8 @@ export async function cancelAgentRun(runId: number): Promise<AgentRun> {
 const AGENT_ERROR_COPY: Record<string, string> = {
   AGENT_RUN_LIMIT: '并发任务较多，请稍后再试',
   AGENT_RUNTIME_DISABLED: '助手功能当前未启用',
-  PROVIDER_UNRESOLVED: '当前空间还没有可用的模型配置，请联系空间所有者在管理页选择 Provider',
+  // PROVIDER_UNRESOLVED 基线 = 第三态（空间未选模型）；两态细分见 friendlyAgentError
+  PROVIDER_UNRESOLVED: '请到 空间管理 → 模型设置 选择模型',
   PROVIDER_LOCAL_REQUIRED_UNAVAILABLE: '该空间要求本地模型执行，但本地服务暂不可用',
   IDEMPOTENCY_PAYLOAD_CONFLICT: '请求校验冲突，请刷新页面后重试',
   AGENT_SESSION_NOT_FOUND: '会话不存在或无权访问',
@@ -90,7 +91,33 @@ const CLIENT_ERROR_COPY: Record<string, string> = {
   SEND_FAILED: '发送失败，请稍后重试',
 }
 
-export function friendlyAgentError(code: string | null | undefined, fallback?: string): string {
+/**
+ * 结构化错误码 → 用户文案。
+ *
+ * detail 参数（可选，09-06 治理迁移）：PROVIDER_UNRESOLVED 依据后端 detail
+ * 两态细分文案（design §4/§6.4）：
+ * - platform_default_configured=false → 平台通道未配置（联系管理员）；
+ * - reason=cloud_not_allowed → 通道已有但未同意云执行（去模型设置开启）；
+ * - 其余（含无 detail 的 SSE 路径）→ 落基线文案（去模型设置选择模型）。
+ */
+export function friendlyAgentError(
+  code: string | null | undefined,
+  fallback?: string,
+  detail?: unknown,
+): string {
+  if (code === 'PROVIDER_UNRESOLVED') {
+    const payload =
+      typeof detail === 'object' && detail !== null
+        ? (detail as { platform_default_configured?: boolean; reason?: string })
+        : {}
+    if (payload.platform_default_configured === false) {
+      return '助手模型尚未由平台管理员配置，请联系平台管理员'
+    }
+    if (payload.reason === 'cloud_not_allowed') {
+      return '该模型需要云端执行同意，请到 空间管理 → 模型设置 开启'
+    }
+    return AGENT_ERROR_COPY.PROVIDER_UNRESOLVED
+  }
   if (code && code in AGENT_ERROR_COPY) return AGENT_ERROR_COPY[code] as string
   if (code && code in CLIENT_ERROR_COPY) return CLIENT_ERROR_COPY[code] as string
   return fallback ?? '操作失败，请稍后重试'

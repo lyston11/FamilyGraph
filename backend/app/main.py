@@ -47,6 +47,7 @@ from app.api.memory import router as memory_router
 from app.api.misc import router as misc_router
 from app.api.notifications import router as notifications_router
 from app.api.personal_family_view import router as personal_family_view_router
+from app.api.space_model_settings import router as space_model_settings_router
 from app.api.spaces import router as spaces_router
 from app.api.users import members_router
 from app.api.users import router as users_router
@@ -203,8 +204,8 @@ app.include_router(notifications_router, prefix="/api")
 # V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）
 app.include_router(controlled_web_router, prefix="/api")
 app.include_router(controlled_web_admin_router, prefix="/api")
-# Agent Provider 治理：platform_operator 专属（同样受 feature flag 门禁）
-app.include_router(admin_agent_router, prefix="/api/admin/agent")
+# 空间模型设置（owner 侧；治理管理面只在 admin listener，见下方 admin_app）
+app.include_router(space_model_settings_router, prefix="/api")
 # Internal Agent 协议：仅内部网络可达（sidecar → FastAPI），不走 /api 前缀，
 # nginx 不代理该前缀；feature flag 关闭时端点一律 503（RT-6）。
 # P1 网络隔离裁定：internal 协议不再挂载到公开 listener，由下方 internal_app
@@ -261,3 +262,7 @@ admin_app.include_router(health_router, prefix="/admin-api")
 # 独立签发域与 require_admin_ready 门禁；与家庭 listener 无共享 router。
 admin_app.include_router(admin_read_router)
 admin_app.include_router(admin_governance_router)
+# 09-06 治理迁移：Agent Provider 治理迁入系统管理员域（require_admin_ready +
+# runtime 503 门禁；审计走 admin_access_audits）。旧家庭挂载 /api/admin/agent
+# 已删除（对家庭 listener 一律 404）。
+admin_app.include_router(admin_agent_router)

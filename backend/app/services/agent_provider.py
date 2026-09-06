@@ -6,6 +6,11 @@
 - denied_no_local        ：要求本地执行但解析不到可用本地 Provider（可解释拒绝）
 - denied_cloud_forbidden ：空间未开放云端但所选为云 Provider
 
+解析按 agent 维度（assistant|steward）独立进行：空间显式设置优先，无空间行时
+回退平台默认单行表（agent_platform_defaults，仅决定通道与档位；云同意仍归空间），
+均无 → POLICY_DENIED（no_space_setting）。绝不枚举其他 Provider 替补
+（无静默 fallback）。
+
 绝不返回密钥明文或密文；context 仅下发 secret_ref 供 sidecar 安全配置对账。
 """
 
@@ -17,14 +22,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
+from app.errors import VALIDATION_ERROR, raise_api_error
 from app.models.agent import AgentRun
-from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
-from app.utils import secretbox
+from app.models.agent_provider import (
+    AgentPlatformDefault,
+    AgentProvider,
+    AgentSpaceProviderSetting,
+)
+from app.utils import secretbox, timeutil
 
 POLICY_ALLOWED = "allowed"
 POLICY_DENIED = "denied"
 POLICY_DENIED_NO_LOCAL = "denied_no_local"
 POLICY_DENIED_CLOUD_FORBIDDEN = "denied_cloud_forbidden"
+
+# Provider 设置的 Agent 维度（09-06 治理迁移）：assistant/steward 各自独立的
+# 空间选择与平台默认。与 policy_consumer 同维；RuntimeAgentKind 是 generic
+# runtime 的 assistant-only 常量（09-01 决策），不用于本配置维度。
+AGENT_KIND_ASSISTANT = "assistant"
+AGENT_KIND_STEWARD = "steward"
+AGENT_KINDS: tuple[str, ...] = (AGENT_KIND_ASSISTANT, AGENT_KIND_STEWARD)
 
 # Canonical cloud profile copied from the developer's local Pi
 # ``~/.pi/agent/models.json``. Keep this metadata non-secret; credentials are
@@ -86,6 +103,9 @@ class ProviderResolution:
     secret_ref: str | None
     reason: str | None = None
     provider_name: str | None = None
+    # additive（09-06）：本次解析是否来自平台默认回退（无空间显式行时为 True），
+    # 供 PROVIDER_UNRESOLVED detail 区分「通道未配置」与「空间未选/未同意云」。
+    platform_default_configured: bool = False
 
 
 def provider_profile_error(provider: AgentProvider, model: str | None = None) -> str | None:
@@ -128,32 +148,64 @@ def provider_profile_error(provider: AgentProvider, model: str | None = None) ->
     return None
 
 
-def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
-    """按空间解析 Provider 与策略；永不抛错——不可用一律以可解释 denied 表达。
+def resolve_for_space(
+    db: Session, space_id: int, agent_kind: str = AGENT_KIND_ASSISTANT
+) -> ProviderResolution:
+    """按空间 + agent 维度解析 Provider 与策略；不可用一律以可解释 denied 表达。
 
-    space 显式选择优先；无任何可用配置 → POLICY_DENIED（reason 说明缺口），
-    绝不枚举其他 Provider 替补（无静默 fallback）。
+    agent_kind 仅接受 assistant|steward（未知值 fail-closed 422）。解析顺序 =
+    空间显式设置 → 平台默认（owner 未显式选择时的通道回退；云同意仍归空间，
+    云默认 Provider 在 owner 同意云前 denied_cloud_forbidden）→ POLICY_DENIED
+    （no_space_setting）。绝不枚举其他 Provider 替补（无静默 fallback）。
     """
+    if agent_kind not in AGENT_KINDS:
+        raise_api_error(422, VALIDATION_ERROR, "未知的 agent 维度", {"agent_kind": agent_kind})
     setting = db.scalar(
-        select(AgentSpaceProviderSetting).where(AgentSpaceProviderSetting.space_id == space_id)
+        select(AgentSpaceProviderSetting).where(
+            AgentSpaceProviderSetting.space_id == space_id,
+            AgentSpaceProviderSetting.agent_kind == agent_kind,
+        )
     )
     if setting is None:
-        return ProviderResolution(
-            None,
-            None,
-            None,
-            None,
-            {},
-            None,
-            None,
-            None,
-            [],
-            [],
-            POLICY_DENIED,
-            None,
-            "no_space_setting",
+        default = _valid_platform_default(db, agent_kind)
+        if default is None:
+            return ProviderResolution(
+                None,
+                None,
+                None,
+                None,
+                {},
+                None,
+                None,
+                None,
+                [],
+                [],
+                POLICY_DENIED,
+                None,
+                "no_space_setting",
+            )
+        # 平台默认回退：构造虚拟 setting 走既有判定链。cloud_allowed=False /
+        # local_required=False（平台默认只决定通道与档位，不替 owner 打开云同意）。
+        provider_id, model = default
+        setting = AgentSpaceProviderSetting(
+            space_id=space_id,
+            agent_kind=agent_kind,
+            provider_id=provider_id,
+            model=model,
+            cloud_allowed=False,
+            local_required=False,
+            enabled=True,
         )
+        return _resolve_setting(db, setting, platform_default_configured=True)
+    return _resolve_setting(db, setting, platform_default_configured=False)
+
+
+def _resolve_setting(
+    db: Session, setting: AgentSpaceProviderSetting, *, platform_default_configured: bool
+) -> ProviderResolution:
+    """对已存在的（显式或虚拟）setting 走既有判定链；policy 结果永不落库。"""
     if not setting.enabled:
+        # owner 显式停用：优先于平台默认，绝不回退（reason=setting_disabled）
         return ProviderResolution(
             None,
             None,
@@ -168,6 +220,8 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             POLICY_DENIED,
             None,
             "setting_disabled",
+            None,
+            platform_default_configured,
         )
     provider = db.get(AgentProvider, setting.provider_id)
     if provider is None:
@@ -185,6 +239,8 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             POLICY_DENIED,
             None,
             "provider_missing",
+            None,
+            platform_default_configured,
         )
     if not provider.enabled:
         return ProviderResolution(
@@ -201,6 +257,8 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             POLICY_DENIED,
             None,
             "provider_disabled",
+            None,
+            platform_default_configured,
         )
     profile_error = provider_profile_error(provider, setting.model)
     if profile_error is not None:
@@ -219,6 +277,7 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             None,
             profile_error,
             provider.name,
+            platform_default_configured,
         )
     allowed_models = list(provider.allowed_models_json or [])
     if setting.model not in allowed_models:
@@ -236,10 +295,12 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             POLICY_DENIED,
             None,
             "model_not_allowed",
+            None,
+            platform_default_configured,
         )
     if provider.kind == "local":
         # 本地 Provider：满足 local_required；cloud_allowed 不约束本地模型
-        return _allowed(provider, setting.model)
+        return _allowed(provider, setting.model, platform_default_configured)
     # openai_compatible 云 Provider
     if setting.local_required:
         # 要求本地却选中云 Provider：视为本地不可用的可解释拒绝（绝不换选本地替补）
@@ -257,6 +318,8 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             POLICY_DENIED_NO_LOCAL,
             None,
             "selected_provider_not_local",
+            None,
+            platform_default_configured,
         )
     if not setting.cloud_allowed:
         return ProviderResolution(
@@ -273,11 +336,106 @@ def resolve_for_space(db: Session, space_id: int) -> ProviderResolution:
             POLICY_DENIED_CLOUD_FORBIDDEN,
             None,
             "cloud_not_allowed",
+            None,
+            platform_default_configured,
         )
-    return _allowed(provider, setting.model)
+    return _allowed(provider, setting.model, platform_default_configured)
 
 
-def _allowed(provider: AgentProvider, model: str) -> ProviderResolution:
+def _valid_platform_default(db: Session, agent_kind: str) -> tuple[int, str] | None:
+    """读取该 agent 维度的平台默认；provider 存在且 enabled 才视为有效默认。
+
+    Provider 删除（SET NULL）或停用留孤 model → 视为该维度无默认，解析回退到
+    no_space_setting，绝不静默改选其他 Provider。
+    """
+    row = db.get(AgentPlatformDefault, 1)
+    if row is None:
+        return None
+    if agent_kind == AGENT_KIND_STEWARD:
+        provider_id, model = row.steward_provider_id, row.steward_model
+    else:
+        provider_id, model = row.assistant_provider_id, row.assistant_model
+    if provider_id is None or not model:
+        return None
+    provider = db.get(AgentProvider, provider_id)
+    if provider is None or not provider.enabled:
+        return None
+    return provider_id, model
+
+
+def valid_platform_default(db: Session, agent_kind: str) -> tuple[int, str] | None:
+    """该 agent 维度当前有效的平台默认（provider 存在且 enabled）；解析链同口径。
+
+    供 owner 侧设置视图使用：视图只展示解析真正会采用的默认，避免把已被
+    停用/删除 Provider 的陈旧默认呈现为可一键启用的选项。
+    """
+    if agent_kind not in AGENT_KINDS:
+        raise_api_error(422, VALIDATION_ERROR, "未知的 agent 维度", {"agent_kind": agent_kind})
+    return _valid_platform_default(db, agent_kind)
+
+
+def get_platform_defaults(db: Session) -> AgentPlatformDefault:
+    """平台默认单行（懒建照 WebPlatformConfig 先例）；提交由调用方事务决定。"""
+    row = db.get(AgentPlatformDefault, 1)
+    if row is None:
+        row = AgentPlatformDefault(id=1, updated_at=timeutil.utcnow())
+        db.add(row)
+        db.flush()
+    return row
+
+
+def set_platform_defaults(
+    db: Session,
+    *,
+    assistant: tuple[int, str] | None,
+    steward: tuple[int, str] | None,
+    updated_by_admin_id: int | None,
+) -> AgentPlatformDefault:
+    """全量覆盖平台默认（PUT 语义）：tuple=设置该维度，None=清除该维度。
+
+    成对性（provider_id+model 同设/同清）由 schema 层校验（design §1.2）；
+    本层校验 model 必须在该 Provider allowed_models 内（违反一律 422）。
+    云同意语义不在本层（空间 cloud_allowed 默认 False 由解析链执行）。
+    """
+    row = get_platform_defaults(db)
+    for kind, pair in (
+        (AGENT_KIND_ASSISTANT, assistant),
+        (AGENT_KIND_STEWARD, steward),
+    ):
+        if pair is None:
+            # 清除该维度默认：解析链回退 no_space_setting（继承即不存在）
+            if kind == AGENT_KIND_STEWARD:
+                row.steward_provider_id = None
+                row.steward_model = None
+            else:
+                row.assistant_provider_id = None
+                row.assistant_model = None
+            continue
+        provider_id, model = pair
+        provider = db.get(AgentProvider, provider_id)
+        if provider is None:
+            raise_api_error(422, VALIDATION_ERROR, "Provider 不存在", {"provider_id": provider_id})
+        if model not in list(provider.allowed_models_json or []):
+            raise_api_error(
+                422,
+                VALIDATION_ERROR,
+                "model 不在该 Provider 的 allowed_models 内",
+                {"allowed_models": list(provider.allowed_models_json or [])},
+            )
+        if kind == AGENT_KIND_STEWARD:
+            row.steward_provider_id = provider_id
+            row.steward_model = model
+        else:
+            row.assistant_provider_id = provider_id
+            row.assistant_model = model
+    row.updated_by_admin_id = updated_by_admin_id
+    row.updated_at = timeutil.utcnow()
+    return row
+
+
+def _allowed(
+    provider: AgentProvider, model: str, platform_default_configured: bool = False
+) -> ProviderResolution:
     return ProviderResolution(
         provider_id=provider.id,
         model=model,
@@ -292,16 +450,20 @@ def _allowed(provider: AgentProvider, model: str) -> ProviderResolution:
         policy_result=POLICY_ALLOWED,
         secret_ref=f"agent_providers/{provider.id}/secret",
         provider_name=provider.name,
+        platform_default_configured=platform_default_configured,
     )
 
 
-def snapshot_for_space(db: Session, space_id: int) -> dict[str, object]:
+def snapshot_for_space(
+    db: Session, space_id: int, agent_kind: str = AGENT_KIND_ASSISTANT
+) -> dict[str, object]:
     """Capture non-secret provider metadata for an AgentRun.
 
     A denied profile is captured too, so a run cannot become executable merely
-    because an operator changes the space setting after enqueue.
+    because an operator changes the space setting after enqueue. agent_kind 只
+    影响解析维度；快照字段结构保持不变（steward child run 快照扩展属子任务 B）。
     """
-    resolution = resolve_for_space(db, space_id)
+    resolution = resolve_for_space(db, space_id, agent_kind)
     provider_revision: str | None = None
     if resolution.provider_id is not None:
         provider = db.get(AgentProvider, resolution.provider_id)
@@ -327,9 +489,11 @@ def snapshot_for_space(db: Session, space_id: int) -> dict[str, object]:
     }
 
 
-def resolve_for_run(db: Session, run: AgentRun, space_id: int) -> ProviderResolution:
+def resolve_for_run(
+    db: Session, run: AgentRun, space_id: int, agent_kind: str = AGENT_KIND_ASSISTANT
+) -> ProviderResolution:
     """Resolve current authorization while pinning model metadata to run snapshot."""
-    current = resolve_for_space(db, space_id)
+    current = resolve_for_space(db, space_id, agent_kind)
     snapshot = run.runtime_snapshot_json
     if not snapshot:
         return current
@@ -511,7 +675,11 @@ def find_local_provider(db: Session) -> AgentProvider | None:
 
 
 def resolve_runtime(
-    db: Session, space_id: int, *, run: AgentRun | None = None
+    db: Session,
+    space_id: int,
+    *,
+    run: AgentRun | None = None,
+    agent_kind: str = AGENT_KIND_ASSISTANT,
 ) -> ProviderRuntime | None:
     """把空间级 Provider 解析为可注入 sidecar 的运行期配置（含解密凭据）。
 
@@ -520,7 +688,9 @@ def resolve_runtime(
     调用方将其映射为可解释拒绝，绝不回退到 sidecar 环境变量。
     """
     resolution = (
-        resolve_for_run(db, run, space_id) if run is not None else resolve_for_space(db, space_id)
+        resolve_for_run(db, run, space_id, agent_kind)
+        if run is not None
+        else resolve_for_space(db, space_id, agent_kind)
     )
     if (
         resolution.policy_result != POLICY_ALLOWED

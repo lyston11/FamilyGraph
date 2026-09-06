@@ -1,20 +1,31 @@
-"""Agent Provider 治理端点（RT-5；platform_operator 专属，前缀 /api/admin/agent）。
+"""Agent Provider 治理端点（系统管理员域；仅 admin_app :8002，前缀 /admin-api/v1）。
 
+职责边界（09-06 治理迁移 D1/D3/D6，替代旧家庭 platform_operator 端点）：
 - Provider 注册/列表/更新：secret 只写不读，任何响应只含 has_secret 布尔，
   永不含明文或密文（密钥经 utils/secretbox 加密落库）；
-- 空间级设置：model 必须在该 Provider allowed_models 内；provider_id=None
-  清除该空间选择；策略结果由 services/agent_provider 推导，不落库；
-- 全部操作写审计（operator 归属）；feature flag 关闭时一律 503。
+- 平台默认模型设置（agent_platform_defaults 单行表）：只决定通道与档位，
+  绝不替 owner 打开云同意（空间 cloud_allowed 归 owner，design D3/D4）；
+- 空间模型设置只读排查视图：不代替 owner 选择（owner 侧端点在
+  api/space_model_settings.py，家庭 listener）。
+
+信任边界：
+- 鉴权 ADMIN_JWT 独立签发域 + require_admin_ready 门禁（api/admin_deps）；
+  家庭令牌在此一律 401；旧家庭挂载 /api/admin/agent 已删除（404）；
+- AGENT_RUNTIME_ENABLED 关闭时全部 503（router 级门禁，admin_app 侧首个）；
+- 写操作审计走 services/admin_audit.record_access（admin_access_audits，
+  actor=system_admin；与领域事务同提交；filters 仅白名单字段，secret 永不
+  入审计——admin_sanitizer 黑名单之外也不主动传密钥相关键）。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
-from app.api.deps import get_db, require_authenticated_user
+from app.api.admin_deps import AdminPrincipal, require_admin_ready
+from app.api.deps import get_db
 from app.errors import (
     AGENT_PROVIDER_NOT_FOUND,
     AGENT_RUNTIME_DISABLED,
@@ -22,19 +33,19 @@ from app.errors import (
     VALIDATION_ERROR,
     raise_api_error,
 )
-from app.models.account import Account
-from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
+from app.models.agent_provider import AgentPlatformDefault, AgentProvider, AgentSpaceProviderSetting
 from app.models.space import FamilySpace
-from app.models.user import User
 from app.schemas.agent import (
+    AdminSpaceProviderSettingsOut,
+    AgentPlatformDefaultsOut,
+    AgentPlatformDefaultsRequest,
     AgentProviderCreateRequest,
     AgentProviderOut,
     AgentProviderPatchRequest,
-    AgentSpaceProviderSettingsOut,
-    AgentSpaceProviderSettingsRequest,
+    SpaceAgentSettingOut,
+    SpaceModelSettingsKindsOut,
 )
-from app.services import agent_provider, audit
-from app.services.platform_roles import require_platform_operator
+from app.services import admin_audit, agent_provider
 from app.utils import secretbox, timeutil
 
 
@@ -43,16 +54,17 @@ def _require_runtime_enabled() -> None:
         raise_api_error(503, AGENT_RUNTIME_DISABLED, "Agent Runtime 未启用")
 
 
-router = APIRouter(tags=["admin-agent"], dependencies=[Depends(_require_runtime_enabled)])
+router = APIRouter(
+    prefix="/admin-api/v1",
+    tags=["admin-agent"],
+    dependencies=[Depends(_require_runtime_enabled)],
+)
+
+_ENDPOINT = "/admin-api/v1/agent"
 
 
-def _require_operator(
-    db: Session,
-    identity: tuple[User, Account],
-) -> User:
-    actor, account = identity
-    require_platform_operator(db, account)
-    return actor
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
 
 
 def _provider_out(row: AgentProvider) -> AgentProviderOut:
@@ -76,13 +88,37 @@ def _provider_out(row: AgentProvider) -> AgentProviderOut:
     )
 
 
-@router.post("/providers", response_model=AgentProviderOut, status_code=201)
+def _platform_defaults_out(row: AgentPlatformDefault | None) -> AgentPlatformDefaultsOut:
+    """平台默认投影：provider/model 成对非空才视为已设置（孤 model 无效）。"""
+    if row is None:
+        return AgentPlatformDefaultsOut()
+    assistant = (
+        {"provider_id": row.assistant_provider_id, "model": row.assistant_model}
+        if row.assistant_provider_id is not None and row.assistant_model
+        else None
+    )
+    steward = (
+        {"provider_id": row.steward_provider_id, "model": row.steward_model}
+        if row.steward_provider_id is not None and row.steward_model
+        else None
+    )
+    return AgentPlatformDefaultsOut(
+        assistant=assistant, steward=steward, updated_at=row.updated_at
+    )
+
+
+# ---- Provider 注册表 ----
+
+
+@router.post("/agent/providers", response_model=AgentProviderOut, status_code=201)
 def register_provider(
     body: AgentProviderCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: AdminPrincipal = Depends(require_admin_ready),
 ) -> AgentProviderOut:
-    actor = _require_operator(db, identity)
+    """注册 Provider；openai_compatible 必填 base_url；strict 门禁在生产生效。"""
+    admin, _account = identity
     if body.kind == "openai_compatible" and not (body.base_url or "").strip():
         raise_api_error(422, VALIDATION_ERROR, "openai_compatible Provider 必须提供 base_url")
     now = timeutil.utcnow()
@@ -112,37 +148,51 @@ def register_provider(
             {"reason": profile_error},
         )
     db.add(row)
-    db.commit()
-    audit.write_audit(
+    db.flush()
+    admin_audit.record_access(
         db,
-        action="agent_provider_registered",
-        actor_id=actor.id,
-        target_id=row.id,
-        detail={"name": row.name, "kind": row.kind},
+        action="agent.provider.create",
+        endpoint=f"{_ENDPOINT}/providers",
+        system_admin_id=admin.id,
+        # admin_access_audits.target_type 词表仅 user/space（既有 CHECK 约束），
+        # provider 主体以 filters.provider_id 表达
+        filters={"provider_id": row.id, "name": row.name, "kind": row.kind, "enabled": row.enabled},
+        ip=_client_ip(request),
     )
     db.commit()
     return _provider_out(row)
 
 
-@router.get("/providers", response_model=list[AgentProviderOut])
+@router.get("/agent/providers", response_model=list[AgentProviderOut])
 def list_providers(
+    request: Request,
     db: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: AdminPrincipal = Depends(require_admin_ready),
 ) -> list[AgentProviderOut]:
-    _require_operator(db, identity)
+    admin, _account = identity
     rows = db.scalars(select(AgentProvider).order_by(AgentProvider.id.asc())).all()
+    admin_audit.record_access(
+        db,
+        action="agent.provider.list",
+        endpoint=f"{_ENDPOINT}/providers",
+        system_admin_id=admin.id,
+        result_count=len(rows),
+        ip=_client_ip(request),
+    )
+    db.commit()
     return [_provider_out(r) for r in rows]
 
 
-@router.patch("/providers/{provider_id}", response_model=AgentProviderOut)
+@router.patch("/agent/providers/{provider_id}", response_model=AgentProviderOut)
 def update_provider(
     provider_id: int,
     body: AgentProviderPatchRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
+    identity: AdminPrincipal = Depends(require_admin_ready),
 ) -> AgentProviderOut:
-    """部分更新；secret 仅在显式提供时轮换（空字符串清除）。永不回读。"""
-    actor = _require_operator(db, identity)
+    """部分更新（model_fields_set 区分未提供与显式 null）；secret 空串=清除、非空=轮换。"""
+    admin, _account = identity
     row = db.get(AgentProvider, provider_id)
     if row is None:
         raise_api_error(404, AGENT_PROVIDER_NOT_FOUND, "Provider 不存在")
@@ -180,95 +230,133 @@ def update_provider(
             {"reason": profile_error},
         )
     row.updated_at = timeutil.utcnow()
-    db.commit()
-    audit.write_audit(
+    admin_audit.record_access(
         db,
-        action="agent_provider_updated",
-        actor_id=actor.id,
-        target_id=row.id,
-        detail={"fields": sorted(provided)},
+        action="agent.provider.update",
+        endpoint=f"{_ENDPOINT}/providers/{row.id}",
+        system_admin_id=admin.id,
+        # target_type 词表仅 user/space：provider 主体以 filters.provider_id 表达
+        filters={
+            "provider_id": row.id,
+            "fields": sorted(provided),
+            **({"secret_rotated": True} if "secret" in provided and body.secret else {}),
+        },
+        ip=_client_ip(request),
     )
     db.commit()
     return _provider_out(row)
 
 
-@router.put("/spaces/{space_id}/provider-settings", response_model=AgentSpaceProviderSettingsOut)
-def upsert_space_provider_settings(
-    space_id: int,
-    body: AgentSpaceProviderSettingsRequest,
+# ---- 平台默认模型 ----
+
+
+@router.get("/agent/platform-defaults", response_model=AgentPlatformDefaultsOut)
+def get_platform_defaults(
+    request: Request,
     db: Session = Depends(get_db),
-    identity: tuple[User, Account] = Depends(require_authenticated_user),
-) -> AgentSpaceProviderSettingsOut:
-    """空间级 Provider 选择与开关；model 必须在所选 Provider 的 allowlist 内。"""
-    actor = _require_operator(db, identity)
-    space = db.get(FamilySpace, space_id)
-    if space is None:
-        raise_api_error(404, SPACE_NOT_FOUND, "空间不存在")
-
-    existing = db.scalar(
-        select(AgentSpaceProviderSetting).where(AgentSpaceProviderSetting.space_id == space_id)
-    )
-    if body.provider_id is None:
-        # 清除空间选择：解析回到 POLICY_DENIED（no_space_setting），绝不静默替补
-        if existing is not None:
-            db.delete(existing)
-            db.commit()
-        audit.write_audit(
-            db,
-            action="agent_space_provider_cleared",
-            actor_id=actor.id,
-            target_id=space_id,
-            detail={},
-        )
-        db.commit()
-        return AgentSpaceProviderSettingsOut(
-            space_id=space_id,
-            provider_id=None,
-            model=None,
-            cloud_allowed=False,
-            local_required=False,
-            enabled=False,
-        )
-
-    provider = db.get(AgentProvider, body.provider_id)
-    if provider is None:
-        raise_api_error(404, AGENT_PROVIDER_NOT_FOUND, "Provider 不存在")
-    if not body.model:
-        raise_api_error(422, VALIDATION_ERROR, "选择 Provider 时必须指定 model")
-    if body.model not in list(provider.allowed_models_json or []):
-        raise_api_error(
-            422,
-            VALIDATION_ERROR,
-            "model 不在该 Provider 的 allowed_models 内",
-            {"allowed_models": list(provider.allowed_models_json or [])},
-        )
-
-    if existing is None:
-        existing = AgentSpaceProviderSetting(space_id=space_id, provider_id=provider.id, model="")
-        db.add(existing)
-    existing.provider_id = provider.id
-    existing.model = body.model
-    existing.cloud_allowed = body.cloud_allowed
-    existing.local_required = body.local_required
-    existing.enabled = True
-    db.commit()
-    audit.write_audit(
+    identity: AdminPrincipal = Depends(require_admin_ready),
+) -> AgentPlatformDefaultsOut:
+    admin, _account = identity
+    row = db.get(AgentPlatformDefault, 1)
+    admin_audit.record_access(
         db,
-        action="agent_space_provider_settings_updated",
-        actor_id=actor.id,
-        target_id=space_id,
-        detail={
-            "provider_id": provider.id,
-            "cloud_allowed": existing.cloud_allowed,
-            "local_required": existing.local_required,
-        },
+        action="agent.platform_defaults.read",
+        endpoint=f"{_ENDPOINT}/platform-defaults",
+        system_admin_id=admin.id,
+        ip=_client_ip(request),
     )
     db.commit()
-    return AgentSpaceProviderSettingsOut(
+    return _platform_defaults_out(row)
+
+
+@router.put("/agent/platform-defaults", response_model=AgentPlatformDefaultsOut)
+def put_platform_defaults(
+    body: AgentPlatformDefaultsRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    identity: AdminPrincipal = Depends(require_admin_ready),
+) -> AgentPlatformDefaultsOut:
+    """全量覆盖平台默认；成对校验在 schema 结构层，allowlist 校验在 service 层。"""
+    admin, _account = identity
+    row = agent_provider.set_platform_defaults(
+        db,
+        assistant=(body.assistant.provider_id, body.assistant.model)
+        if body.assistant is not None
+        else None,
+        steward=(body.steward.provider_id, body.steward.model)
+        if body.steward is not None
+        else None,
+        updated_by_admin_id=admin.id,
+    )
+    admin_audit.record_access(
+        db,
+        action="agent.platform_defaults.update",
+        endpoint=f"{_ENDPOINT}/platform-defaults",
+        system_admin_id=admin.id,
+        # target_type 词表仅 user/space：维度默认以 filters 中的 provider_id 表达
+        filters={
+            "assistant_provider_id": body.assistant.provider_id if body.assistant else None,
+            "steward_provider_id": body.steward.provider_id if body.steward else None,
+        },
+        ip=_client_ip(request),
+    )
+    db.commit()
+    return _platform_defaults_out(row)
+
+
+# ---- 空间设置只读排查视图 ----
+
+
+@router.get(
+    "/agent/spaces/{space_id}/provider-settings",
+    response_model=AdminSpaceProviderSettingsOut,
+)
+def get_space_provider_settings(
+    space_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    identity: AdminPrincipal = Depends(require_admin_ready),
+) -> AdminSpaceProviderSettingsOut:
+    """两 agent 维度的行级设置（原始存储态）+ 平台默认状态；只读排查用途。"""
+    admin, _account = identity
+    if db.get(FamilySpace, space_id) is None:
+        raise_api_error(404, SPACE_NOT_FOUND, "空间不存在")
+    rows = {
+        row.agent_kind: row
+        for row in db.scalars(
+            select(AgentSpaceProviderSetting).where(
+                AgentSpaceProviderSetting.space_id == space_id
+            )
+        )
+    }
+    admin_audit.record_access(
+        db,
+        action="agent.space_settings.read",
+        endpoint=f"{_ENDPOINT}/spaces/{space_id}/provider-settings",
+        system_admin_id=admin.id,
+        target_type="space",
+        target_id=space_id,
+        ip=_client_ip(request),
+    )
+    db.commit()
+    return AdminSpaceProviderSettingsOut(
         space_id=space_id,
-        provider_id=existing.provider_id,
-        model=existing.model,
-        cloud_allowed=existing.cloud_allowed,
-        local_required=existing.local_required,
-        enabled=existing.enabled,
+        settings=SpaceModelSettingsKindsOut(
+            assistant=_setting_out(rows.get("assistant")),
+            steward=_setting_out(rows.get("steward")),
+        ),
+        platform_default=_platform_defaults_out(db.get(AgentPlatformDefault, 1)),
+    )
+
+
+def _setting_out(row: AgentSpaceProviderSetting | None) -> SpaceAgentSettingOut | None:
+    if row is None:
+        return None
+    return SpaceAgentSettingOut(
+        agent_kind=row.agent_kind,
+        provider_id=row.provider_id,
+        model=row.model,
+        cloud_allowed=bool(row.cloud_allowed),
+        local_required=bool(row.local_required),
+        enabled=bool(row.enabled),
     )

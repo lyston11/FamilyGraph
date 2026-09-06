@@ -204,4 +204,106 @@ describe('类型对齐冒烟（后端合同）', () => {
       ContractViolationError,
     )
   })
+
+  it('AdminAgentProviderOut 白名单精确集合：has_secret 是唯一密钥相关字段', async () => {
+    const { listProviders } = await import('@/api/agent-provider')
+    const backendFixture = {
+      id: 3,
+      name: 'liu-dada',
+      kind: 'openai_compatible',
+      api: 'openai-responses',
+      base_url: 'https://api.liu-dada.com/v1',
+      compat: {},
+      context_window: 272000,
+      max_tokens: 60000,
+      reasoning: true,
+      input_modalities: ['text', 'image'],
+      thinking_levels: ['low', 'high'],
+      has_secret: true,
+      allowed_models: ['gpt-5.6-sol'],
+      enabled: true,
+      created_at: '2026-09-06T00:00:00Z',
+      updated_at: '2026-09-06T00:00:00Z',
+    }
+    mockedAdminRequest.mockResolvedValueOnce([backendFixture])
+    const rows = await listProviders()
+    expect(rows).toHaveLength(1)
+    // 白名单键集合与后端 AgentProviderOut 一致（无任何密钥明文/密文字段）
+    expect(Object.keys(rows[0]).sort()).toEqual(
+      [
+        'allowed_models',
+        'api',
+        'base_url',
+        'compat',
+        'context_window',
+        'created_at',
+        'enabled',
+        'has_secret',
+        'id',
+        'input_modalities',
+        'kind',
+        'max_tokens',
+        'name',
+        'reasoning',
+        'thinking_levels',
+        'updated_at',
+      ].sort(),
+    )
+    expect(JSON.stringify(rows[0])).not.toContain('secret_ciphertext')
+
+    // 非法 kind 枚举被解码器拒绝（fail-closed，不让脏值流入组件）
+    mockedAdminRequest.mockResolvedValueOnce([{ ...backendFixture, kind: 'azure' }])
+    await expect(listProviders()).rejects.toThrow(ContractViolationError)
+  })
+
+  it('AgentPlatformDefaultsOut / AdminSpaceProviderSettingsOut 与后端 schema 对齐', async () => {
+    const { getPlatformDefaults, getSpaceProviderSettings } = await import('@/api/agent-provider')
+    mockedAdminRequest.mockResolvedValueOnce({
+      assistant: { provider_id: 3, model: 'gpt-5.6-sol' },
+      steward: null,
+      updated_at: '2026-09-06T00:00:00Z',
+    })
+    const defaults = await getPlatformDefaults()
+    expect(defaults.assistant).toEqual({ provider_id: 3, model: 'gpt-5.6-sol' })
+    expect(defaults.steward).toBeNull()
+
+    mockedAdminRequest.mockResolvedValueOnce({
+      space_id: 7,
+      settings: {
+        assistant: {
+          agent_kind: 'assistant',
+          provider_id: 3,
+          model: 'gpt-5.6-sol',
+          cloud_allowed: false,
+          local_required: false,
+          enabled: true,
+        },
+        steward: null,
+      },
+      platform_default: { assistant: null, steward: null, updated_at: null },
+    })
+    const view = await getSpaceProviderSettings(7)
+    expect(view.space_id).toBe(7)
+    expect(view.settings.assistant?.agent_kind).toBe('assistant')
+    expect(view.settings.steward).toBeNull()
+    expect(view.platform_default.assistant).toBeNull()
+
+    // agent_kind 非法值被拒绝
+    mockedAdminRequest.mockResolvedValueOnce({
+      space_id: 7,
+      settings: {
+        assistant: null,
+        steward: {
+          agent_kind: 'boss',
+          provider_id: null,
+          model: null,
+          cloud_allowed: false,
+          local_required: false,
+          enabled: false,
+        },
+      },
+      platform_default: { assistant: null, steward: null, updated_at: null },
+    })
+    await expect(getSpaceProviderSettings(7)).rejects.toThrow(ContractViolationError)
+  })
 })

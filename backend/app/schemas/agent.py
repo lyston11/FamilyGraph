@@ -219,7 +219,7 @@ class AgentRunOut(BaseModel):
     settled_at: datetime | None
 
 
-# ---- Provider 治理（platform_operator 专用，api/admin_agent.py，RT-5）----
+# ---- Provider 治理（系统管理员域，api/admin_agent.py 仅 admin_app :8002）----
 
 
 class AgentProviderCreateRequest(_Strict):
@@ -278,19 +278,98 @@ class AgentProviderOut(BaseModel):
     updated_at: datetime
 
 
-class AgentSpaceProviderSettingsRequest(_Strict):
-    """空间级 Provider 选择与开关；provider_id=None 表示清除该空间选择。"""
-
-    provider_id: int | None = Field(default=None, ge=1)
-    model: str | None = Field(default=None, min_length=1, max_length=120)
-    cloud_allowed: bool = False
-    local_required: bool = False
+# ---- 家庭域空间模型设置共享投影（owner 侧 api/space_model_settings.py + 管理员只读视图）----
 
 
-class AgentSpaceProviderSettingsOut(BaseModel):
-    space_id: int
+class SpaceAgentSettingOut(BaseModel):
+    """单 agent 维度的空间行级设置；enabled=False 且 provider/model 为空 = 显式停用。"""
+
+    agent_kind: str
     provider_id: int | None
     model: str | None
     cloud_allowed: bool
     local_required: bool
     enabled: bool
+
+
+class SpaceModelSettingsKindsOut(BaseModel):
+    """两 agent 维度的行级设置投影；None = 无显式行（继承平台默认）。"""
+
+    assistant: SpaceAgentSettingOut | None = None
+    steward: SpaceAgentSettingOut | None = None
+
+
+class AgentModelCatalogEntryOut(BaseModel):
+    """管理员允许目录条目（仅 enabled Provider；无任何密钥形态字段）。"""
+
+    provider_id: int
+    name: str
+    kind: str
+    api: str
+    models: list[str]
+
+
+class AgentPlatformDefaultKindOut(BaseModel):
+    """单 agent 维度的平台默认（成对出现；provider 删除时 SET NULL 整对失效）。"""
+
+    provider_id: int
+    model: str
+
+
+class AgentPlatformDefaultsOut(BaseModel):
+    """平台默认投影：None = 该维度未设默认（空间解析回退 no_space_setting）。"""
+
+    assistant: AgentPlatformDefaultKindOut | None = None
+    steward: AgentPlatformDefaultKindOut | None = None
+    updated_at: datetime | None = None
+
+
+class SpaceModelSettingsOut(BaseModel):
+    """owner 侧模型设置视图：行级设置 + 可选目录 + 有效平台默认（解析同口径）。"""
+
+    space_id: int
+    settings: SpaceModelSettingsKindsOut
+    catalog: list[AgentModelCatalogEntryOut]
+    platform_default: AgentPlatformDefaultsOut
+
+
+class AdminSpaceProviderSettingsOut(BaseModel):
+    """管理员域空间设置只读排查视图（原始存储态，不代替 owner 选择；design §3.1）。
+
+    settings 任一维度为 None 表示该空间该维度无显式行（当前继承平台默认）。
+    """
+
+    space_id: int
+    settings: SpaceModelSettingsKindsOut
+    platform_default: AgentPlatformDefaultsOut
+
+
+# ---- 平台默认与空间模型设置请求 ----
+
+
+class AgentPlatformDefaultKindRequest(_Strict):
+    provider_id: int = Field(ge=1)
+    model: str = Field(min_length=1, max_length=120)
+
+
+class AgentPlatformDefaultsRequest(_Strict):
+    """PUT 全量覆盖：字段缺省/显式 null 均表示清除该维度默认。"""
+
+    assistant: AgentPlatformDefaultKindRequest | None = None
+    steward: AgentPlatformDefaultKindRequest | None = None
+
+
+class AgentSpaceModelSettingsRequest(_Strict):
+    """owner 侧单维度模型选择（PUT 幂等 upsert）。
+
+    - enabled=true：provider_id 与 model 必填且 model ∈ Provider allowlist；
+    - enabled=false：显式停用（provider/model 可空）→ 解析走 setting_disabled；
+    - 继承平台默认请用 DELETE（enabled=true 且无 provider/model 一律 422）。
+    """
+
+    agent_kind: Literal["assistant", "steward"]
+    provider_id: int | None = Field(default=None, ge=1)
+    model: str | None = Field(default=None, min_length=1, max_length=120)
+    cloud_allowed: bool = False
+    local_required: bool = False
+    enabled: bool = True
