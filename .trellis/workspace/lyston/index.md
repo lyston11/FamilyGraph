@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-09-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~782 | Active |
+| `journal-1.md` | ~804 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-09-06 | 双前端星空玻璃视觉重设计收口 + dev-seed 增量补缺 | `451a788`, `9de8ef0` | `main` |
 | 19 | 2026-09-06 | Agent 模型治理迁移系统管理员后台与双端配置 UI（09-06 子任务 A） | `8f58d92` | `main` |
 | 18 | 2026-09-05 | 家庭端自助注册与邀请码体系（grilling 三轮 + 全量实现 + 验收 + 修订） | `a8926eb`, `b40eee3`, `e133b56` | `main` |
 | 17 | 2026-09-05 | 家庭端五项体验修复：导航/资料编辑/家族树/披露策略 | `866cdd0` | `main` |
