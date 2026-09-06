@@ -802,3 +802,24 @@ Provider 治理端点自 /api/admin/agent 迁至 /admin-api/v1/agent（admin_app
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: Steward 模型辅助层（09-06 子任务 B）+ 父任务树收口
+
+**Date**: 2026-09-06
+**Task**: Steward 模型辅助层（09-06 子任务 B）+ 父任务树收口
+**Branch**: `main`
+
+### Summary
+
+Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_calls child run 审计 + steward_llm_candidates 候选池 + action_cards reason_text_llm/presentation_rank）；services/steward_assist 三类辅助点（候选/排序/解释）hook 在确定性流水线之后，SAVEPOINT 隔离单点失败，默认全关=行为等价；候选不经过矩阵绝不进卡、排序严格排列校验、解释只复述已确认事实；空间模型设置 PUT 支持 assist_* flags（assistant 维度 422），面板加三开关，卡片 LLM 解释优先。测试 backend 834 passed（新增 16 用例）、本任务前端 spec 29 passed（AppShell/household-card 2 失败属另一窗口并行 WIP）。父任务 agent-model-config-system 全部子任务完成并归档。09-01 决策记录'另立任务'约定全部兑现
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `61d9d7d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
