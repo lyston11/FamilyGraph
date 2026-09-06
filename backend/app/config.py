@@ -140,6 +140,26 @@ STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))
 # 卡片有效期与 dismissed 后同 kind 冷却天数（ST-4 有效期 / ST-3 不重复骚扰）
 STEWARD_CARD_TTL_DAYS: int = int(os.environ.get("STEWARD_CARD_TTL_DAYS", "14"))
 STEWARD_COOLDOWN_DAYS: int = int(os.environ.get("STEWARD_COOLDOWN_DAYS", "7"))
+# ---- 09-06 Steward 模型辅助层（候选/排序/解释；平台级 per-kind 开关，默认全关）----
+# 有效开关 = 平台级（此处）AND 空间级（agent_space_provider_settings.assist_* 列，
+# owner 经空间模型设置设置）。全部关闭时 Steward 行为与确定性基线逐字节等价。
+STEWARD_ASSIST_CANDIDATE: bool = os.environ.get("STEWARD_ASSIST_CANDIDATE", "").lower() in ("1", "true")
+STEWARD_ASSIST_RANKING: bool = os.environ.get("STEWARD_ASSIST_RANKING", "").lower() in ("1", "true")
+STEWARD_ASSIST_EXPLANATION: bool = os.environ.get("STEWARD_ASSIST_EXPLANATION", "").lower() in (
+    "1",
+    "true",
+)
+# 每 job 预算与上限（超限 skip 并留审计行，绝不拖垮确定性流水线）
+STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB: int = int(
+    os.environ.get("STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", "6")
+)
+STEWARD_ASSIST_MAX_TOKENS_PER_JOB: int = int(
+    os.environ.get("STEWARD_ASSIST_MAX_TOKENS_PER_JOB", "20000")
+)
+STEWARD_ASSIST_TIMEOUT_SECONDS: float = float(
+    os.environ.get("STEWARD_ASSIST_TIMEOUT_SECONDS", "30")
+)
+STEWARD_ASSIST_MAX_CARDS_PER_JOB: int = int(os.environ.get("STEWARD_ASSIST_MAX_CARDS_PER_JOB", "5"))
 # PersonalFamilyView/bridge API and projection; default disabled for safe rollout.
 PERSONAL_FAMILY_VIEW_ENABLED: bool = os.environ.get("PERSONAL_FAMILY_VIEW_ENABLED", "").lower() in (
     "1",

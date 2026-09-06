@@ -82,6 +82,9 @@ def _setting_out(row: AgentSpaceProviderSetting | None) -> SpaceAgentSettingOut 
         cloud_allowed=bool(row.cloud_allowed),
         local_required=bool(row.local_required),
         enabled=bool(row.enabled),
+        assist_candidate=bool(row.assist_candidate),
+        assist_ranking=bool(row.assist_ranking),
+        assist_explanation=bool(row.assist_explanation),
     )
 
 
@@ -164,9 +167,19 @@ def put_space_model_settings(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SpaceAgentSettingOut:
-    """单维度幂等 upsert：enabled=true 成对必填；enabled=false 显式停用（可空）。"""
+    """单维度幂等 upsert：enabled=true 成对必填；enabled=false 显式停用（可空）。
+
+    assist_* 三开关仅 steward 维度可设（assistant 维度任一非 None → 422；
+    09-06 模型辅助层）。
+    """
     actor, _account = identity
     _require_space_manager(session, space_id, actor.id)
+
+    assist_values = (body.assist_candidate, body.assist_ranking, body.assist_explanation)
+    if body.agent_kind != "steward" and any(v is not None for v in assist_values):
+        raise_api_error(
+            422, VALIDATION_ERROR, "assist_* 开关仅对 steward 维度有意义", {"agent_kind": body.agent_kind}
+        )
 
     if body.enabled:
         if body.provider_id is None or not body.model:
@@ -195,6 +208,14 @@ def put_space_model_settings(
     row.cloud_allowed = body.cloud_allowed
     row.local_required = body.local_required
     row.enabled = body.enabled
+    if body.agent_kind == "steward":
+        # flags 与 enabled 独立存储；解析只在 enabled 行读 flags（steward_assist）
+        if body.assist_candidate is not None:
+            row.assist_candidate = body.assist_candidate
+        if body.assist_ranking is not None:
+            row.assist_ranking = body.assist_ranking
+        if body.assist_explanation is not None:
+            row.assist_explanation = body.assist_explanation
     session.commit()
     audit.write_audit(
         session,

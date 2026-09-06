@@ -23,6 +23,10 @@ export interface SpaceModelSettingPayload {
   cloud_allowed?: boolean
   local_required?: boolean
   enabled?: boolean
+  /** 仅 steward 维度有意义（assistant 传任一会被 422） */
+  assist_candidate?: boolean
+  assist_ranking?: boolean
+  assist_explanation?: boolean
 }
 
 export async function fetchSpaceModelSettings(spaceId: number): Promise<SpaceModelSettings> {

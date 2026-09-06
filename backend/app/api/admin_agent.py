@@ -359,4 +359,7 @@ def _setting_out(row: AgentSpaceProviderSetting | None) -> SpaceAgentSettingOut 
         cloud_allowed=bool(row.cloud_allowed),
         local_required=bool(row.local_required),
         enabled=bool(row.enabled),
+        assist_candidate=bool(row.assist_candidate),
+        assist_ranking=bool(row.assist_ranking),
+        assist_explanation=bool(row.assist_explanation),
     )

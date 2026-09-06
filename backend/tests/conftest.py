@@ -118,8 +118,11 @@ _TABLES = (
     "web_platform_configs",
     # v2.4 steward 块：action_cards/steward_jobs 引用 accounts/users/spaces，先于父表删
     # notifications 引用 action_cards/space_members（CASCADE），先于其父表删
+    # 09-06 模型辅助层：两表引用 steward_jobs/agent_providers，先于其父表删
     "notifications",
     "behavior_projections",
+    "steward_model_calls",
+    "steward_llm_candidates",
     "steward_jobs",
     "action_cards",
     # v2.3 事实层：source_facts 引用 raw_relation_inputs，须先删子表；

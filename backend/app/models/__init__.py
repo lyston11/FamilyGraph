@@ -49,7 +49,13 @@ from app.models.space import (
     SpaceMember,
     SpaceProfileRef,
 )
-from app.models.steward import ActionCard, BehaviorProjection, StewardJob
+from app.models.steward import (
+    ActionCard,
+    BehaviorProjection,
+    StewardJob,
+    StewardLlmCandidate,
+    StewardModelCall,
+)
 from app.models.system_admin import SystemAdmin, SystemAdminAccount, SystemAdminRefreshSession
 from app.models.term_registry import TermEntry, TermUsage
 from app.models.user import User
@@ -118,6 +124,8 @@ __all__ = [
     "SpaceMember",
     "SpaceProfileRef",
     "StewardJob",
+    "StewardLlmCandidate",
+    "StewardModelCall",
     "SystemAdmin",
     "SystemAdminAccount",
     "SystemAdminRefreshSession",

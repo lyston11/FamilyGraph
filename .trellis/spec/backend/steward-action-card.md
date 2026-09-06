@@ -121,3 +121,10 @@ request_lineage_membership(
 ```
 
 原因：ActionCard 是建议和确认状态，不是授权凭据；最终领域命令必须再次执行空间、事实、可见性和 FSM 校验，并在同一事务中落事件。
+
+## 模型辅助层（09-06 子任务 B；services/steward_assist.py）
+
+- **三类辅助点**（候选/排序/解释）hook 在 `_execute_locked` 确定性流水线**之后**，`run_assists` 内每个辅助点经 SAVEPOINT（`db.begin_nested`）隔离：单点异常局部回滚 + 记日志，绝不外抛、绝不波及确定性结果（AC-5）。有效开关 = 平台 `config.STEWARD_ASSIST_*` AND 空间 `agent_space_provider_settings.assist_*`（仅 steward 维度消费，默认全关=零调用零写入）。
+- **child run 审计**：每次模型调用一行 `steward_model_calls`（space/job/policy_version/assist_kind/provider/model/prompt sha256 摘要/chars/token usage/status/latency）；prompt 明文永不落库；per `(job_id, assist_kind, seq)` 唯一支撑同事务重入幂等（候选/排序 seq=1、解释 seq=card.id）。整体 crash 回滚后重试会重花 token——已知权衡，由候选 digest 去重与解释逐卡跳过兜底。
+- **红线（改代码前必读）**：候选只落 `steward_llm_candidates` 内部池，不经过确定性矩阵绝不进卡片/任何正式写入；排序必须通过"严格排列"校验（等长、无重复、集合相等）才写 `presentation_rank`，只改呈现顺序（消费点 `api/action_cards.py` list_cards 排序）；解释只写 `reason_text_llm`（≤500 字），失败保持 NULL 回退模板。prompt 输入只允许白名单结构化字段（display name/fact_type/创建选择），绝不含 masked 值、高敏感类别或私人 Session/Memory。
+- **egress**：进程内直连 Provider（`resolve_runtime(agent_kind="steward")` 唯一解密出口），不经 sidecar、不伪造 AgentRun；transport 为模块级 `_post_json`（httpx 同步），测试 monkeypatch 它注入 fake。

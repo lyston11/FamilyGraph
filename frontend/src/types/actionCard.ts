@@ -59,6 +59,8 @@ export interface ActionCard {
   subject_user: ActionCardUserRef
   object_user: ActionCardUserRef | null
   reason_text: string
+  /** 09-06 模型辅助层解释产物；null/缺省 = 用模板 reason_text */
+  reason_text_llm?: string | null
   evidence: ActionCardEvidence
   proposed_action: ProposedAction
   privacy_effect: string

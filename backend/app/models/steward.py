@@ -9,7 +9,9 @@
   并发转换用 compare-and-set revision（合同见 services/action_cards.py）。
   executed_event_id / superseded_by_id 为逻辑引用（不设 FK）：执行命令产生的
   DomainEvent 与被取代卡均只增不删，避免空间级联删除时的自引用/跨表级联环。
-- StewardJob：以 space 为分区键的确定性后台作业（不调用 LLM/Provider/sidecar）。
+- StewardJob：以 space 为分区键的确定性后台作业（V2.4 起家；09-06 起可在开关
+  全开时叠加模型辅助层——候选/排序/解释三类，均不改写任何确定性结论，
+  见 services/steward_assist.py 与 StewardModelCall/StewardLlmCandidate）。
   trigger_cursor 记录入队时 domain_events 水位；checkpoint 只保存作业进度/版本
   （last_event_cursor、finding 签名、统计），绝不保存自由形式隐藏长期记忆。
 
@@ -165,6 +167,12 @@ class ActionCard(Base):
     superseded_by_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     failed_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # 09-06 模型辅助层：解释产物（NULL=未生成，呈现用模板 reason_text）；
+    # 只允许复述卡内已确认事实，生成失败保持 NULL（services/steward_assist）
+    reason_text_llm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 09-06 模型辅助层：LLM 排序产物（1..n；NULL=按 created_at 既有序）。
+    # 只改呈现顺序，绝不改变集合成员（资格判定仍由确定性矩阵决定）
+    presentation_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -218,4 +226,91 @@ class StewardJob(Base):
         return (
             f"<StewardJob {self.id} space={self.space_id} {self.cause}"
             f"/{self.status} cursor={self.trigger_cursor}>"
+        )
+
+
+class StewardModelCall(Base):
+    """child run 审计（09-01 决策"另立任务"的兑现，迁移 0034）。
+
+    Steward 每次模型辅助调用一行；与 Assistant 的 generic AgentSession/AgentRun
+    完全隔离（不伪造 AgentRun）。prompt 只存 sha256 摘要与长度，**永不存明文**
+    （prompt 只含白名单结构化字段，见 services/steward_assist 红线）。
+    per (job_id, assist_kind, seq) 唯一：job crash 重试据此幂等跳过，不重复花费 token。
+    status: succeeded | failed（transport/解析失败）| degraded（provider 不可用）
+    | skipped（预算耗尽）。
+    """
+
+    __tablename__ = "steward_model_calls"
+    __table_args__ = (
+        CheckConstraint(
+            "assist_kind IN ('candidate','ranking','explanation')", name="ck_smc_assist_kind"
+        ),
+        CheckConstraint(
+            "status IN ('succeeded','failed','degraded','skipped')", name="ck_smc_status"
+        ),
+        sa.UniqueConstraint("job_id", "assist_kind", "seq", name="uq_smc_job_kind_seq"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    assist_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    provider_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_providers.id", ondelete="SET NULL"), nullable=True
+    )
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    prompt_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_chars: Mapped[int] = mapped_column(Integer, nullable=False)
+    completion_chars: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="succeeded", nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seq: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<StewardModelCall job={self.job_id} {self.assist_kind}/{self.status}"
+            f" tokens={self.total_tokens}>"
+        )
+
+
+class StewardLlmCandidate(Base):
+    """LLM 关系候选池（内部；R3 红线：不经过确定性矩阵绝不进卡片/任何正式写入）。
+
+    候选只含空间可见 user id + 关系种类 + 理由文本；呈现与产品化另立任务。
+    candidate_digest = payload sha256，(space_id, digest) 唯一：跨 job 重复候选静默跳过。
+    """
+
+    __tablename__ = "steward_llm_candidates"
+    __table_args__ = (
+        CheckConstraint("status IN ('proposed','dismissed')", name="ck_slc_status"),
+        sa.UniqueConstraint("space_id", "candidate_digest", name="uq_slc_space_digest"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    candidate_kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    candidate_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="proposed", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<StewardLlmCandidate space={self.space_id} job={self.job_id}"
+            f" {self.candidate_kind}/{self.status}>"
         )

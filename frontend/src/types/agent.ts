@@ -119,6 +119,10 @@ export interface SpaceAgentSetting {
   cloud_allowed: boolean
   local_required: boolean
   enabled: boolean
+  /** 模型辅助层空间级开关（仅 steward 维度消费；assistant 行恒 false） */
+  assist_candidate: boolean
+  assist_ranking: boolean
+  assist_explanation: boolean
 }
 
 /** 管理员允许目录条目（仅 enabled Provider；无任何密钥形态字段） */

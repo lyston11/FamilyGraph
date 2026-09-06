@@ -202,7 +202,17 @@ def list_cards(
     )
     if state is not None:
         stmt = stmt.where(ActionCard.state == state)
-    rows = list(db.scalars(stmt.order_by(ActionCard.created_at.desc())))
+    # 09-06 模型辅助层：LLM 排序只改呈现顺序——有 presentation_rank 的卡先于
+    # 未排名卡，同序内按 created_at 新→旧；未排名卡保持原时间序（集合成员不变）。
+    rows = list(
+        db.scalars(
+            stmt.order_by(
+                ActionCard.presentation_rank.is_(None).asc(),
+                ActionCard.presentation_rank.asc(),
+                ActionCard.created_at.desc(),
+            )
+        )
+    )
     return [_card_out(db, c) for c in rows]
 
 

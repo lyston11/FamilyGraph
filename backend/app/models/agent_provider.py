@@ -97,6 +97,11 @@ class AgentSpaceProviderSetting(Base):
     cloud_allowed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     local_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 09-06 Steward 模型辅助层空间级开关（仅 steward 维度消费；有效开关 =
+    # 平台 config 开关 AND 空间列，默认全关 → 行为与确定性基线等价）
+    assist_candidate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    assist_ranking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    assist_explanation: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

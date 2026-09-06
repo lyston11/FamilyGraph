@@ -282,7 +282,10 @@ class AgentProviderOut(BaseModel):
 
 
 class SpaceAgentSettingOut(BaseModel):
-    """单 agent 维度的空间行级设置；enabled=False 且 provider/model 为空 = 显式停用。"""
+    """单 agent 维度的空间行级设置；enabled=False 且 provider/model 为空 = 显式停用。
+
+    assist_* 三开关仅 steward 维度消费（09-06 模型辅助层；assistant 行恒 False）。
+    """
 
     agent_kind: str
     provider_id: int | None
@@ -290,6 +293,9 @@ class SpaceAgentSettingOut(BaseModel):
     cloud_allowed: bool
     local_required: bool
     enabled: bool
+    assist_candidate: bool = False
+    assist_ranking: bool = False
+    assist_explanation: bool = False
 
 
 class SpaceModelSettingsKindsOut(BaseModel):
@@ -373,3 +379,7 @@ class AgentSpaceModelSettingsRequest(_Strict):
     cloud_allowed: bool = False
     local_required: bool = False
     enabled: bool = True
+    # 模型辅助层空间级开关（仅 steward 维度；assistant 维度任一非 None → 422）
+    assist_candidate: bool | None = None
+    assist_ranking: bool | None = None
+    assist_explanation: bool | None = None

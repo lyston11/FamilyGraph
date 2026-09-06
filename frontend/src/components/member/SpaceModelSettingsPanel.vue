@@ -46,11 +46,25 @@ interface KindFormState {
   providerId: number | null
   model: string | null
   cloudAllowed: boolean
+  assistCandidate: boolean
+  assistRanking: boolean
+  assistExplanation: boolean
+}
+
+function emptyForm(): KindFormState {
+  return {
+    providerId: null,
+    model: null,
+    cloudAllowed: false,
+    assistCandidate: false,
+    assistRanking: false,
+    assistExplanation: false,
+  }
 }
 
 const forms = ref<Record<AgentConfigKind, KindFormState>>({
-  assistant: { providerId: null, model: null, cloudAllowed: false },
-  steward: { providerId: null, model: null, cloudAllowed: false },
+  assistant: emptyForm(),
+  steward: emptyForm(),
 })
 
 async function load(): Promise<void> {
@@ -78,15 +92,18 @@ function syncForms(): void {
         providerId: row.provider_id,
         model: row.model,
         cloudAllowed: row.cloud_allowed,
+        assistCandidate: row.assist_candidate,
+        assistRanking: row.assist_ranking,
+        assistExplanation: row.assist_explanation,
       }
     } else if (fallbackDefault !== null) {
       forms.value[kind] = {
+        ...emptyForm(),
         providerId: fallbackDefault.provider_id,
         model: fallbackDefault.model,
-        cloudAllowed: false,
       }
     } else {
-      forms.value[kind] = { providerId: null, model: null, cloudAllowed: false }
+      forms.value[kind] = emptyForm()
     }
   }
 }
@@ -169,6 +186,13 @@ async function saveKind(kind: AgentConfigKind, overrides?: Partial<KindFormState
       model: state.model,
       cloud_allowed: state.cloudAllowed,
       enabled: true,
+      ...(kind === 'steward'
+        ? {
+            assist_candidate: state.assistCandidate,
+            assist_ranking: state.assistRanking,
+            assist_explanation: state.assistExplanation,
+          }
+        : {}),
     })
     await load()
     message.success(`${KIND_LABELS[kind]}模型设置已保存`)
@@ -193,6 +217,7 @@ function applyPlatformDefault(kind: AgentConfigKind): void {
   const fallbackDefault = platformDefaultFor(kind)
   if (fallbackDefault === null) return
   forms.value[kind] = {
+    ...emptyForm(),
     providerId: fallbackDefault.provider_id,
     model: fallbackDefault.model,
     cloudAllowed: true,
@@ -289,6 +314,22 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
             </label>
           </div>
 
+          <!-- 09-06 模型辅助层：管家三类辅助开关（默认关；assistant 不涉及） -->
+          <div v-if="kind === 'steward'" class="assist-flags" :data-test="`assist-flags-steward`">
+            <label class="assist-flag">
+              <NSwitch v-model:value="forms[kind].assistCandidate" size="small" />
+              <span>候选补全</span>
+            </label>
+            <label class="assist-flag">
+              <NSwitch v-model:value="forms[kind].assistRanking" size="small" />
+              <span>推荐排序</span>
+            </label>
+            <label class="assist-flag">
+              <NSwitch v-model:value="forms[kind].assistExplanation" size="small" />
+              <span>卡片解释</span>
+            </label>
+          </div>
+
           <div class="kind-actions">
             <NButton
               size="small"
@@ -360,6 +401,9 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
 .control-provider { flex: 1 1 180px; min-width: 0; }
 .control-model { flex: 1 1 160px; min-width: 0; }
 .cloud-consent { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-ink-secondary); }
+
+.assist-flags { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 10px; }
+.assist-flag { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-ink-secondary); }
 
 .kind-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 </style>

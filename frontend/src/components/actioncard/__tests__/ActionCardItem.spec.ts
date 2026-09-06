@@ -204,3 +204,17 @@ describe('ActionCardItem（V2.4 Block S3）', () => {
     wrapper.unmount()
   })
 })
+
+// ---- 09-06 模型辅助层：LLM 解释优先，回退模板 ----
+
+describe('ActionCardItem（模型辅助解释）', () => {
+  it('reason_text_llm 存在时优先展示 LLM 解释', () => {
+    const wrapper = mountItem(makeCard({ reason_text_llm: '管家生成的更通俗解释' }))
+    expect(wrapper.find('[data-test="card-reason"]').text()).toBe('管家生成的更通俗解释')
+  })
+
+  it('reason_text_llm 缺省时回退模板 reason_text', () => {
+    const wrapper = mountItem(makeCard({ reason_text_llm: null }))
+    expect(wrapper.find('[data-test="card-reason"]').text()).toBe('你们是堂兄弟，且都已确认身份')
+  })
+})

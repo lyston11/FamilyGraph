@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -58,7 +59,13 @@ from app.models.steward import (
 )
 from app.models.user import User
 from app.models.v2_foundation import DomainEvent
-from app.services import action_cards, person_identity, recommendation_matrix, steward_events
+from app.services import (
+    action_cards,
+    person_identity,
+    recommendation_matrix,
+    steward_assist,
+    steward_events,
+)
 from app.services.action_cards import ACTION_SUPERSEDE
 from app.services.derived_facts import get_or_compute
 from app.services.disclosure import disclosed_categories
@@ -73,6 +80,8 @@ from app.utils.timeutil import utcnow
 
 # ---- 常量 ----
 SOURCE_FACT_EVENT_PREFIX = "source_fact."
+logger = logging.getLogger(__name__)
+
 POLICY_VERSION = config.POLICY_VERSION
 
 _ACTION_TO_KIND: dict[str, str] = {
@@ -742,6 +751,21 @@ def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str,
     # 4. 惰性过期
     stats["cards_expired"] = action_cards.expire_due_cards(db, space_id=space.id, now=now)
 
+    # 5. 模型辅助层（09-06 子任务 B；默认全关=零调用零写入）。候选/排序/解释
+    #    三类产物均不改变任何确定性结论；单点失败经 SAVEPOINT 局部回滚并记
+    #    审计行（steward_model_calls），绝不影响上方已完成的流水线结果。
+    try:
+        cards = action_cards.active_cards_in_space(db, space.id)
+        steward_assist.run_assists(
+            db,
+            job=job,
+            facts_brief=_confirmed_facts_brief(db, space, visible),
+            visible=visible,
+            cards=cards,
+        )
+    except Exception:  # noqa: BLE001 — 最后防线：辅助层绝不拖垮确定性流水线（AC-5）
+        logger.exception("steward assist crashed; deterministic pipeline results retained")
+
     return {
         "floor_cursor": floor,
         "trigger_cursor": job.trigger_cursor,
@@ -784,6 +808,32 @@ def _applicable_confirmed_facts(
         )
     )
     return [row for row in rows if row.subject_user_id in visible and row.object_user_id in visible]
+
+
+def _confirmed_facts_brief(
+    db: Session, space: FamilySpace, visible: set[int]
+) -> list[dict[str, Any]]:
+    """候选辅助的 prompt 输入（B6 白名单）：仅 display name、fact_type、用户 id。
+
+    绝不含 masked 原值、健康/住址等高敏感类别、私人 Session/Memory 内容；
+    明文不落库（审计只存 sha256 摘要）。
+    """
+    brief: list[dict[str, Any]] = []
+    for fact in _applicable_confirmed_facts(db, space, visible):
+        subject = db.get(User, fact.subject_user_id)
+        obj = db.get(User, fact.object_user_id) if fact.object_user_id else None
+        if subject is None:
+            continue
+        brief.append(
+            {
+                "fact_type": fact.fact_type,
+                "subject_user_id": fact.subject_user_id,
+                "subject_name": subject.name,
+                "object_user_id": fact.object_user_id,
+                "object_name": obj.name if obj else None,
+            }
+        )
+    return brief
 
 
 class _WindowEvents:

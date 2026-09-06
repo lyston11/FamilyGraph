@@ -174,7 +174,8 @@ async function onExecute(): Promise<void> {
     </p>
 
     <!-- 为什么推荐 -->
-    <p class="reason" data-test="card-reason">{{ card.reason_text }}</p>
+    <!-- 09-06 模型辅助层：LLM 解释优先，失败/未生成回退模板文案 -->
+    <p class="reason" data-test="card-reason">{{ card.reason_text_llm ?? card.reason_text }}</p>
 
     <!-- 依据的确认事实 / 路径 -->
     <p v-if="card.evidence.path_summary" class="evidence" data-test="card-evidence">
