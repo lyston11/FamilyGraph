@@ -67,3 +67,38 @@
 - 申请/裁决状态徽章复用领域状态工具类：pending → `fg-badge--proposed`（空心"审批中"）、approved → `fg-badge--confirmed`（"已通过"）、rejected → `fg-badge--disputed`（"未通过"+平台备注），不新增颜色/样式。
 - 队列只展示裁决所需最小数据（申请人名/类型/目标名），不做家庭敏感字段扩展；文案统一「已通过/未通过并留痕审计」。
 - n-select 在 jsdom 测试中的选择走键盘路径（`.n-base-selection` 两次 Enter，见 SpaceGovernanceDialog.spec / MemberCreateWizard.spec）。
+
+## 开关即保存（09-06 UX 复盘沉淀）
+
+### Convention: 控制开关必须真实反映落库状态（开关即保存）
+
+**What**：布尔开关（NSwitch）的可见状态必须与后端落库状态一致。落库即生效的开关用**非乐观绑定**：`:value="form.x"` + `@update:value="handler"`（不用 `v-model`），handler 内 await PUT，成功后 `load()` 重同步；失败时因 `:value` 未变，开关自然回弹，并 toast 错误。选择不完整时回弹并提示，绝不静默丢弃。
+
+**Why**：SpaceModelSettingsPanel 曾把「同意云端执行」做成纯本地 v-model（须再点「保存选择」才落库），开关显示"已同意"而 DB 无行 → 后端 fail-closed 拒绝，用户在聊天里看到"请到模型设置开启"却明知自己开过（09-06 事故）。开关说谎比没有开关更糟。
+
+**Wrong**：
+```vue
+<NSwitch v-model:value="forms[kind].cloudAllowed" />  <!-- 本地态，等隐藏的保存按钮 -->
+```
+
+**Correct**：
+```vue
+<NSwitch
+  :value="forms[kind].cloudAllowed"
+  :loading="savingKind === kind"
+  @update:value="(value: boolean) => toggleCloudConsent(kind, value)"
+/>
+```
+```ts
+async function toggleCloudConsent(kind: AgentConfigKind, next: boolean): Promise<void> {
+  if (forms.value[kind].providerId === null || !forms.value[kind].model) {
+    message.warning('先选择模型')
+    return
+  }
+  await saveKind(kind, { cloudAllowed: next })  // 内部 await PUT → load()；失败 toast，:value 回弹
+}
+```
+
+**边界**：两步选择控件（provider→model 下拉）不适合自动提交，保留显式保存按钮，但必须配「未保存更改」徽标（表单与启用中的落库行逐字段比较；预填不算 dirty）。行级属性型开关（steward assist_*）无独立更新端点时，翻动即整行 PUT 表单（含未保存的下拉改动一并落库，避免 load() 回同步把改动静默丢弃）；无行且表单未选全时开关禁用 + 提示。
+
+**Tests**：`SpaceModelSettingsPanel.spec.ts`（翻开关 → PUT 载荷断言、失败回弹、守卫拦截、徽标出现/消失）。

@@ -59,6 +59,20 @@ export interface ActiveRunView {
   terminal: boolean
 }
 
+/**
+ * 错误横幅结构化动作（09-06 R4）：白名单 kind，UI 按 kind 渲染可行动入口，
+ * 绝不把后端 detail 原始 JSON 带进视图层（spec/backend/error-handling.md）。
+ */
+export interface AgentErrorAction {
+  kind: 'open-model-settings'
+}
+
+export interface AgentErrorView {
+  code: string
+  message: string
+  action?: AgentErrorAction
+}
+
 interface SessionPartition {
   sessions: AgentSession[]
   sessionsLoaded: boolean
@@ -66,7 +80,7 @@ interface SessionPartition {
   messages: AgentMessageView[]
   toolSummaries: ToolSummaryView[]
   run: ActiveRunView | null
-  error: { code: string; message: string } | null
+  error: AgentErrorView | null
   sending: boolean
   loadingHistory: boolean
   draft: string
@@ -235,6 +249,20 @@ export function truncateSessionTitle(text: string): string {
   const chars = Array.from(compact)
   if (chars.length <= SESSION_TITLE_LENGTH) return compact
   return `${chars.slice(0, SESSION_TITLE_LENGTH).join('')}…`
+}
+
+/**
+ * R4：PROVIDER_UNRESOLVED + detail.reason=cloud_not_allowed → 「去模型设置」
+ * 跳转动作（ErrorNotice 仅对当前空间管理员渲染）。其余错误（含无 detail 的
+ * SSE run.failed 路径）不产生动作，纯文案。
+ */
+export function providerUnresolvedAction(
+  code: string,
+  detail: unknown,
+): { action?: AgentErrorAction } {
+  if (code !== 'PROVIDER_UNRESOLVED') return {}
+  const payload = typeof detail === 'object' && detail !== null ? (detail as { reason?: unknown }) : {}
+  return payload.reason === 'cloud_not_allowed' ? { action: { kind: 'open-model-settings' } } : {}
 }
 
 export const useAgentStore = defineStore('agent', () => {
@@ -578,10 +606,14 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  function describeApiError(error: unknown): { code: string; message: string } {
+  function describeApiError(error: unknown): AgentErrorView {
     if (error instanceof ApiError) {
       // detail 透传 friendlyAgentError：PROVIDER_UNRESOLVED 两态细分文案（09-06）
-      return { code: error.code, message: friendlyAgentError(error.code, error.message, error.detail) }
+      return {
+        code: error.code,
+        message: friendlyAgentError(error.code, error.message, error.detail),
+        ...providerUnresolvedAction(error.code, error.detail),
+      }
     }
     return { code: CLIENT_AGENT_ERRORS.SEND_FAILED, message: '' }
   }

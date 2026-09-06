@@ -10,6 +10,7 @@
 // - 空间设置只有既有 PATCH /spaces/{space_id} 合同（空间名），无新增授权字段；
 // - 模型设置分区：assistant/steward 双 Agent 模型选择与云同意（09-06 治理迁移，
 //   SpaceModelSettingsPanel 自管数据，权限同 PATCH /spaces 的 space_admin 语义）。
+// - 分区深链：?section= 合法 key 直达对应分区，切 tab 时 replace 写回（09-06 R5）。
 import { NAlert, NButton, NEmpty, NInput, NSpin, useMessage } from 'naive-ui'
 import { computed, onMounted, ref, watch, type InputHTMLAttributes } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -43,7 +44,28 @@ const spaces = useSpacesStore()
 const notifications = useNotificationsStore()
 const message = useMessage()
 
-const activeSection = ref<ManagementSection>('overview')
+// ---- 分区状态：R5 section 深链同步（挂载时读 ?section=，切 tab 写回，URL 可分享）----
+const SECTION_KEYS: ReadonlySet<string> = new Set(SECTIONS.map((section) => section.key))
+
+/** 仅合法 key 生效（query 可能是数组等非法形态），非法回退概览 */
+function parseSection(raw: unknown): ManagementSection {
+  return typeof raw === 'string' && SECTION_KEYS.has(raw) ? (raw as ManagementSection) : 'overview'
+}
+
+const activeSection = ref<ManagementSection>(parseSection(route.query.section))
+
+watch(
+  () => route.query.section,
+  (value) => {
+    activeSection.value = parseSection(value)
+  },
+)
+
+function selectSection(section: ManagementSection): void {
+  activeSection.value = section
+  // replace 不产生历史噪音；保留其他 query 参数
+  void router.replace({ query: { ...route.query, section } })
+}
 
 const loading = computed(() => spaces.loading)
 const targetSpaceId = computed(() => Number(route.params.spaceId))
@@ -140,7 +162,7 @@ async function saveName(): Promise<void> {
             :class="{ 'management-tab--active': activeSection === section.key }"
             :aria-pressed="activeSection === section.key"
             :data-test="`management-tab-${section.key}`"
-            @click="activeSection = section.key"
+            @click="selectSection(section.key)"
           >
             {{ section.label }}
           </button>

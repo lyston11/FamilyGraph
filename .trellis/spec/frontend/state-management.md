@@ -52,3 +52,11 @@
 **Why**：两个权限域共享任何存储 key 或代码路径，等于把 token 交叉使用面重新打开；后端已按 issuer/audience 物理互拒，前端隔离保证用户永远不会走到那一步。
 
 **Tests**：`system-admin-frontend/tests/auth.store.spec.ts`（独立 key、内存 token、硬校验）、`access-session.store.spec.ts`（票据 TTL/单目标/不持久化）、`router.guard.spec.ts`（未登录/首改密/过期分流）。
+
+### Convention: agent 错误横幅的结构化动作白名单（AgentErrorView.action）
+
+**What**：`stores/agent.ts` 的 partition error 用 `AgentErrorView { code, message, action? }`；`action` 只允许白名单 kind（当前仅 `'open-model-settings'`，由 `providerUnresolvedAction(code, detail)` 从 PROVIDER_UNRESOLVED + detail.reason=cloud_not_allowed 推导）。`ErrorNotice.vue` 按 kind 渲染入口，且权限（`spaces.canManageSpace`）在组件层判定——非管理员渲染纯文案。detail 原始 JSON 不进视图层（与 spec/backend/error-handling.md 的"只映射文案"同口径）。
+
+**Why**：报错要"可行动"而不是纯描述（09-06 事故：文案让用户去模型设置，但不给路径）；同时把"哪些错误带哪些动作"收敛成白名单，避免 detail 形状泄漏进组件。
+
+**Tests**：`ErrorNotice.spec.ts`（管理员见入口且点击直达 `/spaces/{id}/manage?section=models`、非管理员纯文案、无 action 不渲染、STREAM_LOST 文案回退）。

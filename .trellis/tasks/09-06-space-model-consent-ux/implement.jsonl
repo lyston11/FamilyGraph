@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端层规范总览与门禁命令入口"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "面板/开关/naive-ui 组件约定与 token 红线（SpaceModelSettingsPanel、ErrorNotice 改动遵循）"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 划分与缓存失效规则（stores/agent.ts 错误状态形状扩展）"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "strict TS 与判别类型约定（错误 action 字段形状设计）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误码→文案映射合同：只映射文案、不透传 detail 原始 JSON"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁命令、禁止模式、主题与组件库门禁"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件约定符合性检查（开关/徽标/浮层）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验错误映射未透传 detail 原始 JSON"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端层规范总览"}

@@ -23,6 +23,10 @@ import type {
  * 开关（仅云 Provider 可见）、恢复平台默认（DELETE）与显式停用（enabled=false）。
  * 平台默认存在时提供"同意并启用平台默认"一键（复制默认行 + cloud_allowed=true）。
  *
+ * 开关即保存（09-06 UX 复盘）：云同意开关与 steward 三类辅助开关翻动即 PUT
+ * 落库（非乐观：等待结果，失败由 :value 绑定自然回弹），provider/model 下拉
+ * 仍走显式「保存选择」并配「未保存更改」徽标（仅与启用中的落库行比较）。
+ *
  * 权限与解析语义都在服务端（api/space_model_settings.py + services/agent_provider）：
  * 目录只含管理员允许的 enabled Provider；平台默认只决定通道与档位，云同意仍归
  * 空间（开关默认关）。响应无任何密钥形态字段。
@@ -257,6 +261,66 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
     savingKind.value = null
   }
 }
+
+// ---- 开关即保存（09-06 UX 复盘 R1/R2）----
+
+/** steward 辅助开关对应的表单键 */
+type AssistFlagKey = 'assistCandidate' | 'assistRanking' | 'assistExplanation'
+
+/**
+ * R2 守卫：仅「启用中的落库行」或「无启用行但表单选全」时辅助开关可翻动
+ * （显式停用行 + 平台默认预填属于后者：翻开关即整行启用，属快速路径）；
+ * 两者皆不满足（无行、表单未选全）则禁用，避免"翻动却无处落库"再次说谎。
+ */
+const stewardAssistLocked = computed<boolean>(() => {
+  const data = settings.value
+  if (data === null) return true
+  const row = data.settings.steward
+  if (row !== null && row.enabled) return false
+  const form = forms.value.steward
+  return form.providerId === null || !form.model
+})
+
+/**
+ * R3 未保存徽标：表单与「启用中」的落库行逐字段比较；
+ * 无行 / 停用行时的预填（平台默认）不算未保存。
+ */
+function isFormDirty(kind: AgentConfigKind): boolean {
+  const row = rowFor(kind)
+  if (row === null || !row.enabled) return false
+  const state = forms.value[kind]
+  if (state.providerId !== row.provider_id || state.model !== row.model) return true
+  if (state.cloudAllowed !== row.cloud_allowed) return true
+  return (
+    kind === 'steward' &&
+    (state.assistCandidate !== row.assist_candidate ||
+      state.assistRanking !== row.assist_ranking ||
+      state.assistExplanation !== row.assist_explanation)
+  )
+}
+
+/** R1 云同意开关即时保存（非乐观）：未选全先提示；成功刷新状态行，失败由 :value 回弹 */
+async function toggleCloudConsent(kind: AgentConfigKind, next: boolean): Promise<void> {
+  const state = forms.value[kind]
+  if (state.providerId === null || !state.model) {
+    message.warning('先选择模型')
+    return
+  }
+  if (savingKind.value === kind) return
+  await saveKind(kind, { cloudAllowed: next })
+}
+
+/**
+ * R2 辅助开关即时保存：与云同意开关同语义，整行 PUT 表单（后端无 flags-only
+ * 更新）。有启用行时表单初值即行值，干净表单等价于「仅翻转目标 flag」；
+ * 表单有未保存的下拉改动则随本次一并落库（避免 load() 回同步把改动静默丢弃）。
+ */
+async function toggleAssistFlag(flag: AssistFlagKey, next: boolean): Promise<void> {
+  if (savingKind.value !== null) return
+  const overrides: Partial<KindFormState> = {}
+  overrides[flag] = next
+  await saveKind('steward', overrides)
+}
 </script>
 
 <template>
@@ -282,6 +346,13 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
               :data-test="`model-status-${kind}`"
             >
               {{ statusText(kind) }}
+            </span>
+            <span
+              v-if="isFormDirty(kind)"
+              class="kind-unsaved"
+              :data-test="`model-unsaved-${kind}`"
+            >
+              未保存更改
             </span>
           </div>
 
@@ -309,25 +380,61 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
               class="cloud-consent"
               :data-test="`cloud-consent-${kind}`"
             >
-              <NSwitch v-model:value="forms[kind].cloudAllowed" size="small" />
+              <!-- 开关即保存（R1）：:value 非乐观绑定，等待 PUT 结果再翻动 -->
+              <NSwitch
+                :value="forms[kind].cloudAllowed"
+                size="small"
+                :loading="savingKind === kind"
+                aria-label="同意云端执行"
+                data-test="cloud-switch"
+                @update:value="(value: boolean) => toggleCloudConsent(kind, value)"
+              />
               <span>同意云端执行</span>
             </label>
           </div>
 
-          <!-- 09-06 模型辅助层：管家三类辅助开关（默认关；assistant 不涉及） -->
+          <!-- 09-06 模型辅助层：管家三类辅助开关（默认关；assistant 不涉及）；
+               R2 守卫：无启用行且表单未选全时禁用并提示先配置管家模型 -->
           <div v-if="kind === 'steward'" class="assist-flags" :data-test="`assist-flags-steward`">
-            <label class="assist-flag">
-              <NSwitch v-model:value="forms[kind].assistCandidate" size="small" />
+            <label class="assist-flag" data-test="assist-flag-candidate">
+              <NSwitch
+                :value="forms[kind].assistCandidate"
+                size="small"
+                :loading="savingKind === kind"
+                :disabled="stewardAssistLocked"
+                aria-label="候选补全"
+                data-test="assist-switch-candidate"
+                @update:value="(value: boolean) => toggleAssistFlag('assistCandidate', value)"
+              />
               <span>候选补全</span>
             </label>
-            <label class="assist-flag">
-              <NSwitch v-model:value="forms[kind].assistRanking" size="small" />
+            <label class="assist-flag" data-test="assist-flag-ranking">
+              <NSwitch
+                :value="forms[kind].assistRanking"
+                size="small"
+                :loading="savingKind === kind"
+                :disabled="stewardAssistLocked"
+                aria-label="推荐排序"
+                data-test="assist-switch-ranking"
+                @update:value="(value: boolean) => toggleAssistFlag('assistRanking', value)"
+              />
               <span>推荐排序</span>
             </label>
-            <label class="assist-flag">
-              <NSwitch v-model:value="forms[kind].assistExplanation" size="small" />
+            <label class="assist-flag" data-test="assist-flag-explanation">
+              <NSwitch
+                :value="forms[kind].assistExplanation"
+                size="small"
+                :loading="savingKind === kind"
+                :disabled="stewardAssistLocked"
+                aria-label="卡片解释"
+                data-test="assist-switch-explanation"
+                @update:value="(value: boolean) => toggleAssistFlag('assistExplanation', value)"
+              />
               <span>卡片解释</span>
             </label>
+            <span v-if="stewardAssistLocked" class="assist-hint" data-test="assist-guard-hint">
+              先配置管家模型
+            </span>
           </div>
 
           <div class="kind-actions">
@@ -396,14 +503,24 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
 .kind-status { font-size: 12px; color: var(--fg-ink-secondary); }
 .kind-status--off { color: var(--fg-status-disputed); }
 .kind-status--unset { color: var(--fg-status-disputed); }
+/* 未保存更改徽标（R3）：警示色空态描边，随主题 token 派生 */
+.kind-unsaved {
+  font-size: 12px;
+  color: var(--fg-status-disputed);
+  border: 1px solid color-mix(in srgb, var(--fg-status-disputed) 45%, transparent);
+  border-radius: 999px;
+  padding: 0 8px;
+  line-height: 18px;
+}
 
 .kind-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
 .control-provider { flex: 1 1 180px; min-width: 0; }
 .control-model { flex: 1 1 160px; min-width: 0; }
 .cloud-consent { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-ink-secondary); }
 
-.assist-flags { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 10px; }
+.assist-flags { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 10px; }
 .assist-flag { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-ink-secondary); }
+.assist-hint { font-size: 12px; color: var(--fg-status-disputed); }
 
 .kind-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 </style>
