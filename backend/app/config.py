@@ -50,9 +50,10 @@ REGISTRATION_RATE_LIMIT_WINDOW_SECONDS: int = int(
     os.environ.get("REGISTRATION_RATE_LIMIT_WINDOW_SECONDS", "900")
 )
 
-# ---- 09-05 dev 演示数据种子（空库自动播种；默认关闭）----
-# 仅显式 "1" 开启；开启时仍要求 users 表为空才播种（双重门控见 app/dev_seed.py），
-# 非空库一律跳过且零写入。演示 PIN 统一 123456（公开 dev 演示值，PRD 红线允许日志）。
+# ---- 09-05 dev 演示数据种子（固定清单增量补缺；默认关闭）----
+# 仅显式 "1" 开启；开启时按固定清单 insert-only 收敛播种（缺什么补什么，既有
+# 行零改动，收敛规则见 app/dev_seed.py）。演示 PIN 统一 123456（公开 dev 演示值，
+# PRD 红线允许日志）。
 DEV_SEED_DEMO_DATA: str = os.environ.get("DEV_SEED_DEMO_DATA", "0")
 
 # ---- m0b 认证限流参数（design.md 回滚形态：集中在 config，可经 env 热调）----

@@ -72,8 +72,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     with SessionLocal() as bootstrap_session:
         admin_bootstrap.run_startup_preflight(bootstrap_session)
-        # 09-05 dev 演示数据种子：先管理员后演示数据；env 门控 + 空库门控，
-        # 任一不满足零写入（默认 DEV_SEED_DEMO_DATA=0 时完全跳过）。
+        # 09-05 dev 演示数据种子：先管理员后演示数据；env 门控 + 进程级单次，
+        # 开启时按固定清单 insert-only 收敛补缺（既有数据零改动；默认
+        # DEV_SEED_DEMO_DATA=0 时完全跳过）。
         dev_seed.maybe_seed_demo_data(bootstrap_session)
     # 后台维护循环（agent reaper / steward canonical job 泵）：
     # serve.py 多 listener 共享 lifespan，start 内部进程级单例防重复启动。
