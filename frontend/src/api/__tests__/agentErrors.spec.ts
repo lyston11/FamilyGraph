@@ -55,6 +55,16 @@ describe('friendlyAgentError：其余映射不变', () => {
     )
   })
 
+  it('sidecar 运行期错误码（09-06 实测补齐）：provider 出网失败与策略拦截', () => {
+    expect(friendlyAgentError('PROVIDER_STREAM_ERROR')).toBe('模型服务暂时不可用，请稍后重试')
+    expect(friendlyAgentError('POLICY_PROVIDER_BLOCKED')).toBe(
+      '当前模型与空间的安全策略不匹配，请联系空间所有者调整模型设置',
+    )
+    expect(friendlyAgentError('POLICY_TOOL_RESULT_BLOCKED')).toBe(
+      '回答涉及的某些内容被安全策略拦截，请换个问法',
+    )
+  })
+
   it('客户端合成错误码映射；未知码回退 fallback 或通用文案', () => {
     expect(friendlyAgentError(CLIENT_AGENT_ERRORS.STREAM_LOST)).toBe(
       '连接中断，任务状态未知，请点击「重试」恢复',

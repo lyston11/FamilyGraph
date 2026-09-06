@@ -70,9 +70,13 @@ const AGENT_ERROR_COPY: Record<string, string> = {
   SPACE_NOT_FOUND: '空间不存在或无权访问',
   IDEMPOTENCY_KEY_REQUIRED: '请求缺少幂等标识，请刷新页面后重试',
   POLICY_TOOL_BLOCKED: '回答中的某个操作被安全策略拦截，请换个问法',
+  POLICY_TOOL_RESULT_BLOCKED: '回答涉及的某些内容被安全策略拦截，请换个问法',
   POLICY_SECRET_LEAK: '检测到不安全的输出内容，已拦截本次回答',
+  POLICY_PROVIDER_BLOCKED: '当前模型与空间的安全策略不匹配，请联系空间所有者调整模型设置',
   PROVIDER_DENIED_NO_LOCAL: '该空间要求本地模型执行，但本地服务暂不可用',
   PROVIDER_DENIED_CLOUD_FORBIDDEN: '该空间未开放云端模型，请联系空间所有者调整配置',
+  // sidecar 运行期 Provider 出网失败（网络/凭据/上游拒绝；上游错误已脱敏）
+  PROVIDER_STREAM_ERROR: '模型服务暂时不可用，请稍后重试',
   SIDECAR_ERROR: '助手服务暂时不可用，请稍后重试',
 }
 
