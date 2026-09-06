@@ -62,8 +62,10 @@ describe('Phase 7：375px 响应式源级契约', () => {
   })
 
   it('统计页：摘要卡窄屏降级两列 + 动作按钮 44px；页面单列纵排', () => {
+    // repeat(2, 1fr) 与 repeat(2, minmax(0, 1fr))（防长内容撑爆网格）均满足契约：
+    // 摘要卡在 ≤600px 降级为两列。
     expect(statsSource).toMatch(
-      /@media \(max-width: 600px\)[\s\S]*\.summary-cards\s*\{[\s\S]*?repeat\(2, 1fr\)/,
+      /@media \(max-width: 600px\)[\s\S]*\.summary-cards[^{]*\{[\s\S]*?repeat\(2, (minmax\(0, )?1fr\)/,
     )
     expect(statsSource).toMatch(
       /@media \(max-width: 600px\)[\s\S]*\.n-button--small-type[^}]*min-height: 44px;/,

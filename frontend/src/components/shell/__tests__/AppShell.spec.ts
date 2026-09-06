@@ -265,12 +265,10 @@ describe('AppShell navigation（统一家庭壳）', () => {
     wrapper.unmount()
   })
 
-  it('Assistant 面板本期只保留禁用入口占位', async () => {
+  it('Assistant 入口由根组件提供，壳内不重复渲染占位', async () => {
     const { wrapper } = await mountShell()
     const placeholder = wrapper.find('[data-test="assistant-placeholder"]')
-    expect(placeholder.exists()).toBe(true)
-    expect(placeholder.attributes('disabled')).toBeDefined()
-    // 面板未实现：壳内不得出现会话/发送面板
+    expect(placeholder.exists()).toBe(false)
     expect(wrapper.find('[data-test="assistant-panel"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -351,11 +349,9 @@ describe('AppShell navigation（统一家庭壳）', () => {
       label: string
       children: Array<{ label: string; value: number }>
     }>
-    expect(options).toHaveLength(2)
+    expect(options).toHaveLength(1)
     expect(options[0]!.label).toBe('家庭空间')
     expect(options[0]!.children.map((child) => child.value)).toEqual([7, 8])
-    expect(options[1]!.label).toBe('家族空间')
-    expect(options[1]!.children.map((child) => child.value)).toEqual([12])
 
     // 选择其它空间 → 触发空间切换事务
     await (wrapper.vm as unknown as { onSpaceSelect: (id: number) => Promise<void> })
@@ -369,7 +365,7 @@ describe('AppShell navigation（统一家庭壳）', () => {
 
     // 静态背景层存在且由 token 派生（无硬编码色值）
     expect(shellSource).toContain('background-image')
-    expect(shellSource).toContain('radial-gradient')
+    expect(shellSource).toContain('CosmicBackdrop')
     expect(shellSource).toContain('var(--fg-ink')
     // 无动画红线：不引入 keyframes/transition/animation
     expect(shellSource).not.toMatch(/animation|@keyframes|transition/)
@@ -403,8 +399,8 @@ describe('AppShell navigation（统一家庭壳）', () => {
     expect(bottom.find('[data-test="space-management-link"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="notifications-entry"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="account-menu-trigger"]').exists()).toBe(true)
-    // 移动端顶部空间选择器存在（与桌面侧栏选择器并存，按断点显隐）
-    expect(wrapper.find('[data-test="space-picker-topbar"]').exists()).toBe(true)
+    // 空间选择器只保留侧栏一处，顶部不重复渲染
+    expect(wrapper.find('[data-test="space-picker-topbar"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -438,9 +434,8 @@ describe('AppShell navigation（统一家庭壳）', () => {
     )
     expect(shellSource).toContain('calc(64px + env(safe-area-inset-bottom, 0px))')
     expect(shellSource).toContain('padding-bottom: env(safe-area-inset-bottom, 0px)')
-    // 空间选择器整行置底（order + 全宽）：375px 竖屏/横屏都不被挤压
-    expect(shellSource).toContain('order: 10;')
-    expect(shellSource).toContain('flex: 1 1 100%;')
+    // 移动端不再重复渲染顶部空间选择器
+    expect(shellSource).not.toContain('order: 10;')
     // 底部一级导航点击目标 52px ≥ 44px
     expect(shellSource).toMatch(/\.bottom-link\s*\{[\s\S]*?min-height: 52px;/)
   })

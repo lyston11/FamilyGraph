@@ -6,7 +6,7 @@
  * - L2 vars：语义 token，键为 CSS 变量名（注入时拼 `--fg-` 前缀），由 App.vue
  *   批量写入 documentElement——自绘样式与 naive-themes.ts 的 themeOverrides 同源。
  *
- * 两主题（纸墨 paper / 清雅 modern）均为浅色系；不引外部 webfont，全部本地字体栈。
+ * 两主题（暮色 paper / 雾青 modern）使用深色玻璃表面；保留已存储的主题键。
  */
 
 export type ThemeName = 'paper' | 'modern'
@@ -90,7 +90,7 @@ export const spacingScale = {
   xxl: 32,
 } as const
 
-/** 纸墨主题 L1 原始色板：宣纸米白底 + 深墨 + 朱砂主色 + 黛青/苔绿次强调 */
+/** 暮色主题原始色板；字段名保留兼容，业务层只消费语义变量。 */
 export interface PaperPalette {
   paperBase: string
   paperRaised: string
@@ -110,7 +110,7 @@ export interface PaperPalette {
   lineStrong: string
 }
 
-/** 清雅主题 L1 原始色板：纯白底 + 石墨 + 青蓝主色 + 青/靛次强调 */
+/** 雾青主题原始色板。 */
 export interface ModernPalette {
   whiteBase: string
   whiteRaised: string
@@ -143,51 +143,48 @@ export interface ThemeTokens {
 }
 
 const paperPalette: PaperPalette = {
-  paperBase: '#f4f5f3',
-  paperRaised: '#fcfdfb',
-  paperSunken: '#e9eee9',
-  paperDot: '#ccd6cf',
-  ink: '#2b2b26',
-  inkSoft: '#5c594c',
-  inkFaint: '#8f8b7b',
-  vermilion: '#c0392b',
-  vermilionHover: '#cd4a3c',
-  vermilionPressed: '#a53124',
-  indigo: '#3d5a6c',
-  moss: '#5f7052',
-  // 调深自 #a8752c：小字文本对宣纸底 / 8% 软底须 ≥4.5:1（WCAG AA，2026-08-29 实测 5.39 / 4.86）
-  ochre: '#8c5f1d',
-  seal: '#6f6a59',
-  lineHairline: '#dce2dc',
-  lineStrong: '#bbc7bd',
+  paperBase: '#161b1c',
+  paperRaised: '#273032',
+  paperSunken: '#1b2426',
+  paperDot: '#637676',
+  ink: '#f0f1ed',
+  inkSoft: '#bac5c2',
+  inkFaint: '#9baaa5',
+  vermilion: '#edb5aa',
+  vermilionHover: '#f5ccc3',
+  vermilionPressed: '#dba094',
+  indigo: '#a7c7d5',
+  moss: '#a3ccb3',
+  ochre: '#e6c591',
+  seal: '#adbcb5',
+  lineHairline: '#3e4c4c',
+  lineStrong: '#60736e',
 }
 
 const modernPalette: ModernPalette = {
-  whiteBase: '#ffffff',
-  whiteRaised: '#ffffff',
-  graySunken: '#f2f4f7',
-  grayDot: '#d3d7e0',
-  ink: '#1f2329',
-  inkSoft: '#4e5561',
-  inkFaint: '#8a919e',
-  blue: '#2f6fb3',
-  blueHover: '#3d80c4',
-  bluePressed: '#275e98',
-  // 调深自 #2b8a8f：实底徽章白字对纯白底须 ≥4.5:1（WCAG AA，2026-08-29 实测 5.70）
-  cyan: '#1f7176',
-  indigo: '#4c5fbf',
-  // 调深自 #9a6b15：小字文本对纯白底 / 8% 软底须 ≥4.5:1（WCAG AA，2026-08-29 实测 6.20 / 5.55）
-  amber: '#82590f',
-  red: '#c0392b',
-  slate: '#6f7683',
-  lineHairline: '#e5e8ec',
-  lineStrong: '#cfd4dc',
+  whiteBase: '#131c20',
+  whiteRaised: '#243338',
+  graySunken: '#1a272c',
+  grayDot: '#617c87',
+  ink: '#eef4f4',
+  inkSoft: '#b6c8ce',
+  inkFaint: '#99adb6',
+  blue: '#a6d8d3',
+  blueHover: '#c0e8e3',
+  bluePressed: '#8fc4bd',
+  cyan: '#a5d3bd',
+  indigo: '#a8c8ed',
+  amber: '#e5c48f',
+  red: '#f3afa4',
+  slate: '#a4b4bf',
+  lineHairline: '#3d5058',
+  lineStrong: '#607a86',
 }
 
-/** 纸墨（默认）：宣纸米白 + 暖点阵 + 深墨文字 + 朱砂主色 + 宋体标题（design.md §2.3） */
+/** 暮色（默认）：石墨底、银灰玻璃、珊瑚强调色与宋体标题。 */
 export const paperTokens: ThemeTokens = {
   name: 'paper',
-  label: '纸墨',
+  label: '暮色',
   palette: paperPalette,
   vars: {
     'surface': paperPalette.paperBase,
@@ -199,10 +196,7 @@ export const paperTokens: ThemeTokens = {
     'accent': paperPalette.vermilion,
     'accent-hover': paperPalette.vermilionHover,
     'accent-pressed': paperPalette.vermilionPressed,
-    // 朱砂 6% 柔和底（rgba 字面量，色相同 accent）。P5-4 对比度核验：10% 时
-    // accent 彩字（称谓 chip/头像字）在其合成底上仅 4.29:1，不达 AA；降到 6%
-    // 后实测 4.56:1（≥4.5）。naive-themes 不消费该变量，无需同步派生映射。
-    'accent-soft': 'rgba(192, 57, 43, 0.06)',
+    'accent-soft': 'rgba(237, 181, 170, 0.1)',
     'accent-ink': paperPalette.paperRaised,
     'line': paperPalette.lineHairline,
     'line-strong': paperPalette.lineStrong,
@@ -216,14 +210,14 @@ export const paperTokens: ThemeTokens = {
     'dot-gap': '22px',
     'font-display':
       '"Songti SC", "Noto Serif CJK SC", "Noto Serif SC", STSong, SimSun, serif',
-    'radius-card': '4px',
-    'radius-control': '3px',
-    'shadow-card': '0 1px 2px rgba(43, 43, 38, 0.06)',
-    'shadow-raised': '0 2px 10px rgba(43, 43, 38, 0.12)',
-    'glass-surface': 'rgba(252, 253, 251, 0.78)',
-    'glass-surface-raised': 'rgba(252, 253, 251, 0.94)',
-    'glass-border': 'rgba(207, 220, 210, 0.55)',
-    'glass-glow': 'rgba(192, 57, 43, 0.12)',
+    'radius-card': '8px',
+    'radius-control': '6px',
+    'shadow-card': '0 8px 24px rgba(4, 9, 10, 0.2)',
+    'shadow-raised': '0 24px 60px rgba(4, 9, 10, 0.4)',
+    'glass-surface': 'rgba(51, 65, 65, 0.38)',
+    'glass-surface-raised': 'rgba(31, 43, 45, 0.84)',
+    'glass-border': 'rgba(203, 224, 216, 0.19)',
+    'glass-glow': 'rgba(197, 223, 210, 0.08)',
     'canvas-surface': '#111819',
     'canvas-surface-raised': '#202c2b',
     'canvas-ink': '#f3f7ff',
@@ -234,10 +228,10 @@ export const paperTokens: ThemeTokens = {
   },
 }
 
-/** 清雅：纯白大留白 + 冷灰点阵 + 石墨文字 + 青蓝主色 + 无衬线标题（design.md §2.3） */
+/** 雾青：中性深底、薄雾玻璃、薄荷强调色与无衬线标题。 */
 export const modernTokens: ThemeTokens = {
   name: 'modern',
-  label: '清雅',
+  label: '雾青',
   palette: modernPalette,
   vars: {
     'surface': modernPalette.whiteBase,
@@ -249,9 +243,8 @@ export const modernTokens: ThemeTokens = {
     'accent': modernPalette.blue,
     'accent-hover': modernPalette.blueHover,
     'accent-pressed': modernPalette.bluePressed,
-    // 青蓝 10% 柔和底（rgba 字面量，色相同 accent）
-    'accent-soft': 'rgba(47, 111, 179, 0.1)',
-    'accent-ink': '#ffffff',
+    'accent-soft': 'rgba(166, 216, 211, 0.1)',
+    'accent-ink': modernPalette.whiteRaised,
     'line': modernPalette.lineHairline,
     'line-strong': modernPalette.lineStrong,
     'status-confirmed': modernPalette.cyan,
@@ -266,12 +259,12 @@ export const modernTokens: ThemeTokens = {
     'font-display': 'var(--fg-font-body)',
     'radius-card': '8px',
     'radius-control': '8px',
-    'shadow-card': '0 1px 3px rgba(31, 35, 41, 0.08), 0 1px 2px rgba(31, 35, 41, 0.04)',
-    'shadow-raised': '0 8px 24px rgba(31, 35, 41, 0.12)',
-    'glass-surface': 'rgba(255, 255, 255, 0.65)',
-    'glass-surface-raised': 'rgba(255, 255, 255, 0.94)',
-    'glass-border': 'rgba(207, 212, 220, 0.45)',
-    'glass-glow': 'rgba(47, 111, 179, 0.15)',
+    'shadow-card': '0 8px 24px rgba(4, 9, 12, 0.2)',
+    'shadow-raised': '0 24px 60px rgba(4, 9, 12, 0.4)',
+    'glass-surface': 'rgba(46, 68, 76, 0.4)',
+    'glass-surface-raised': 'rgba(28, 44, 51, 0.84)',
+    'glass-border': 'rgba(193, 225, 235, 0.2)',
+    'glass-glow': 'rgba(181, 224, 232, 0.09)',
     'canvas-surface': '#11171b',
     'canvas-surface-raised': '#202c32',
     'canvas-ink': '#f4f8ff',

@@ -6,6 +6,7 @@ import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   NConfigProvider,
+  darkTheme,
   NDialogProvider,
   NMessageProvider,
   NNotificationProvider,
@@ -21,7 +22,7 @@ import { useUiStore } from '@/stores/ui'
 const ui = useUiStore()
 const route = useRoute()
 
-// 两主题均为浅色：不切换 naive 内置主题，仅注入 overrides
+// 两套配色共用 Naive 深色基座，所有表面和语义色从 token 派生。
 const naiveOverrides = computed<GlobalThemeOverrides>(() => themeOverrides[ui.theme])
 
 // 沉浸页（login/onboarding/force-change-pin/identity-setup/404）不套应用壳
@@ -37,7 +38,7 @@ watchEffect(() => {
 </script>
 
 <template>
-  <NConfigProvider :theme-overrides="naiveOverrides">
+  <NConfigProvider :theme="darkTheme" :theme-overrides="naiveOverrides">
     <NMessageProvider>
       <NDialogProvider>
         <NNotificationProvider>

@@ -4,8 +4,7 @@ import { themeTokens, type ThemeName } from './tokens'
 
 /**
  * Naive UI themeOverrides（design.md §2.1）：由 tokens.ts 的 L2 语义 token 派生，
- * 本文件不出现第二份手写色值。两主题均为浅色——n-config-provider 保持 naive
- * 默认 light 主题不切换，仅注入 overrides（App.vue）。
+ * 本文件不出现第二份手写色值。两主题共用 NConfigProvider 的 darkTheme。
  */
 function buildOverrides(name: ThemeName): GlobalThemeOverrides {
   const { vars } = themeTokens[name]
@@ -52,6 +51,12 @@ function buildOverrides(name: ThemeName): GlobalThemeOverrides {
       infoColorHover: vars['info'],
       infoColorPressed: vars['info'],
       infoColorSuppl: vars['info'],
+    },
+    Button: {
+      textColorPrimary: vars['accent-ink'],
+      textColorHoverPrimary: vars['accent-ink'],
+      textColorPressedPrimary: vars['accent-ink'],
+      textColorFocusPrimary: vars['accent-ink'],
     },
   }
 }

@@ -246,7 +246,7 @@ watch(spaceId, () => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 760px;
+  max-width: 980px;
   margin: 0 auto;
   padding: 20px 16px 40px;
   box-sizing: border-box;
@@ -307,6 +307,16 @@ watch(spaceId, () => {
     0 4px 16px color-mix(in srgb, var(--fg-ink) 6%, transparent),
     inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 25%, transparent);
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pending-section .summary-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .summary-card:hover {
@@ -383,9 +393,8 @@ watch(spaceId, () => {
 }
 
 @media (max-width: 600px) {
-  .summary-cards {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  .summary-cards,
+  .pending-section .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   /* 页面为单列纵排；动作按钮补足 44px 点按目标 */
   .stats-view :deep(.n-button--small-type) {

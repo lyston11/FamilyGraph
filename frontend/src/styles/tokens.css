@@ -3,7 +3,8 @@
  * documentElement），本文件不写死任何色值；正文字体栈为两主题共用的静态变量。 */
 
 :root {
-  /* 正文/界面字体栈（标题栈 --fg-font-display 随主题注入：纸墨=宋体栈，清雅=引用本变量） */
+  color-scheme: dark;
+  /* 标题字体随主题注入，正文统一使用本地字体栈。 */
   --fg-font-body:
     'Avenir Next', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
@@ -18,7 +19,7 @@ body {
   color: var(--fg-ink);
 }
 
-/* 画布风格背景：主题底色 + 细点阵，随主题联动（纸墨暖点阵 / 清雅冷灰点阵） */
+/* 页面底色也覆盖认证页和弹层外区域。 */
 body {
   background-color: var(--fg-surface);
   min-width: 320px;

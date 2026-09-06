@@ -52,8 +52,8 @@ export interface FamilyCanvasModel {
 }
 
 /** 世代带行距 / 同带宽列距（谱卷节奏，与旧画布一致量级） */
-export const ROW_SPACING = 160
-export const COL_SPACING = 220
+export const ROW_SPACING = 240
+export const COL_SPACING = 280
 
 function edgeKey(edge: PersonalFamilyViewEdge, index: number): string {
   return `e-${edge.from_user_id}-${edge.to_user_id}-${index}`

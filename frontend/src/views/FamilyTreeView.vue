@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NAlert, NButton, NPopover, NRadioButton, NRadioGroup, NSpin } from 'naive-ui'
+import { House, List, LocateFixed, Maximize, Network, RefreshCw } from 'lucide-vue-next'
 
 import { Controls } from '@vue-flow/controls'
 // 仅引入 Vue Flow 结构样式（定位/层叠）；theme-default 的写死配色不引入，
@@ -105,6 +106,12 @@ async function loadView(force = false): Promise<void> {
 }
 
 onMounted(() => {
+  // 家族树入口从侧栏进入时，直接落到第一个家族空间，避免再次要求用户选择。
+  const target = lineageSpaces.value[0]
+  if (!isLineageContext.value && target) {
+    void spaceContext.switchSpace(target.id)
+    return
+  }
   void loadView()
 })
 
@@ -150,8 +157,8 @@ const flowEdges = computed<FlowEdge[]>(() =>
     target: `n-${spec.targetUserId}`,
     label: spec.label ?? undefined,
     class: 'fg-view-edge',
-    labelStyle: { fill: 'var(--fg-ink-secondary)', fontSize: '12px' },
-    labelBgStyle: { fill: 'var(--fg-surface-raised)' },
+    labelStyle: { fill: 'var(--fg-canvas-ink)', fontSize: '11px' },
+    labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
     labelBgPadding: [6, 2] as [number, number],
     labelBgBorderRadius: 4,
   })),
@@ -197,7 +204,7 @@ function fitToMembers(): void {
   if (positionedNodes.value.length === 0) return
   void fitView({
     nodes: positionedNodes.value.map((node) => `n-${node.userId}`),
-    padding: 0.1,
+    padding: 0.22,
   })
 }
 
@@ -205,7 +212,7 @@ function focusSelf(): void {
   if (viewerId.value === null) return
   const selfNode = positionedNodes.value.find((node) => node.isSelf)
   if (!selfNode) return
-  void setCenter(selfNode.x + 75, selfNode.y + 60, { zoom: 1.1 })
+  void setCenter(selfNode.x + 96, selfNode.y + 72, { zoom: 1.1 })
 }
 
 async function reload(): Promise<void> {
@@ -237,27 +244,21 @@ function resolveName(userId: number): string | null {
 <template>
   <main class="family-tree-view" data-test="family-tree-view">
     <header class="view-head">
-      <h1 class="view-title">家族树</h1>
-      <span v-if="spaceName" class="space-name" data-test="lineage-space-name">{{ spaceName }}</span>
+      <div class="view-identity">
+        <span class="view-kicker"><Network :size="15" aria-hidden="true" /> 家族空间</span>
+        <h1 class="view-title">家族树</h1>
+        <span v-if="spaceName" class="space-name" data-test="lineage-space-name">{{ spaceName }}</span>
+      </div>
+      <div v-if="data && loadError === null && isLineageContext" class="view-count">
+        <strong>{{ data.nodes.length }}</strong><span>位家人</span>
+      </div>
     </header>
 
     <!-- 当前空间不是 lineage：安全上下文提示，不渲染任何投影内容 -->
     <section v-if="!isLineageContext" class="context-panel" data-test="lineage-context-panel">
       <NAlert type="info" :show-icon="true" data-test="not-lineage-hint">
-        家族树按家族空间展示当前授权投影。请先选择一个家族空间。
+        {{ lineageSpaces.length > 0 ? '正在打开最近的家族空间…' : '当前还没有可用的家族空间。' }}
       </NAlert>
-      <div v-if="lineageSpaces.length > 0" class="context-switch">
-        <NButton
-          v-for="space in lineageSpaces"
-          :key="space.id"
-          size="small"
-          secondary
-          :data-test="`switch-to-lineage-${space.id}`"
-          @click="spaceContext.switchSpace(space.id)"
-        >
-          进入「{{ space.name }}」
-        </NButton>
-      </div>
     </section>
 
     <template v-else>
@@ -336,12 +337,7 @@ function resolveName(userId: number): string | null {
             title="适应画布"
             @click="fitToMembers"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-              <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
-              <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-              <path d="M3 16v3a2 2 0 0 0 2 2h3" />
-            </svg>
+            <Maximize :size="19" aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -351,11 +347,7 @@ function resolveName(userId: number): string | null {
             title="回到自己"
             @click="focusSelf"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="7" />
-              <circle cx="12" cy="12" r="2.5" />
-              <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-            </svg>
+            <LocateFixed :size="19" aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -365,10 +357,7 @@ function resolveName(userId: number): string | null {
             title="重新加载"
             @click="reload"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-              <path d="M21 3v5h-5" />
-            </svg>
+            <RefreshCw :size="19" aria-hidden="true" />
           </button>
           <NPopover trigger="click" placement="bottom-end">
             <template #trigger>
@@ -379,10 +368,7 @@ function resolveName(userId: number): string | null {
                 aria-label="图例"
                 title="图例"
               >
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M8 6h13M8 12h13M8 18h13" />
-                  <path d="M3 6h.01M3 12h.01M3 18h.01" />
-                </svg>
+                <List :size="19" aria-hidden="true" />
               </button>
             </template>
             <ul class="legend" data-test="canvas-legend">
@@ -402,10 +388,7 @@ function resolveName(userId: number): string | null {
             title="返回家庭卡"
             @click="backToHousehold"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              <path d="M9 21v-8h6v8" />
-            </svg>
+            <House :size="19" aria-hidden="true" />
           </button>
         </div>
 
@@ -416,6 +399,9 @@ function resolveName(userId: number): string | null {
               :nodes="flowNodes"
               :edges="flowEdges"
               fit-view-on-init
+              :fit-view-params="{ padding: 0.22 }"
+              :min-zoom="0.2"
+              :max-zoom="1.8"
               :zoom-on-pinch="true"
               :pan-on-drag="true"
               :zoom-on-scroll="true"
@@ -452,461 +438,85 @@ function resolveName(userId: number): string | null {
 
 <style scoped>
 .family-tree-view {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 24px 20px 28px;
-  box-sizing: border-box;
-  height: 100%;
-  min-height: 0;
-  animation: fadeIn 0.5s ease;
+  position: relative; display: flex; flex-direction: column; gap: 14px; padding: 28px 32px 24px;
+  box-sizing: border-box; height: calc(100dvh - 72px); min-height: 660px; isolation: isolate;
 }
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+.view-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 0 8px; pointer-events: none; z-index: 2; }
+.view-identity { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.view-kicker { display: flex; align-items: center; gap: 8px; width: 100%; color: var(--fg-canvas-muted); font-size: 11px; }
+.view-title { margin: 0; font-family: var(--fg-font-display); font-size: 30px; font-weight: 600; letter-spacing: 0; color: var(--fg-canvas-ink); }
+.space-name { color: var(--fg-canvas-muted); font-size: 13px; overflow-wrap: anywhere; }
+.view-count { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; color: var(--fg-canvas-muted); font-size: 12px; }
+.view-count strong { font-size: 28px; font-weight: 500; color: var(--fg-canvas-ink); font-variant-numeric: tabular-nums; }
+.context-panel, .status-panel {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 16px;
+  padding: 28px; max-width: 560px; margin: auto; box-sizing: border-box;
+  background: var(--fg-glass-surface-raised); border: 1px solid var(--fg-glass-border); border-radius: 8px;
+  box-shadow: 0 24px 60px color-mix(in srgb, var(--fg-canvas-surface) 55%, transparent);
 }
-
-.view-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding-bottom: 8px;
-  border-bottom: 2px solid color-mix(in srgb, var(--fg-accent) 15%, transparent);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--fg-accent) 6%, transparent) 0%,
-    transparent 60%
-  );
-  margin: -8px -8px 0 -8px;
-  padding: 8px 8px 12px 8px;
-  border-radius: var(--fg-radius-control);
-}
-
-.view-title {
-  margin: 0;
-  font-family: var(--fg-font-display);
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  background: linear-gradient(135deg, var(--fg-accent) 0%, color-mix(in srgb, var(--fg-accent) 70%, var(--fg-ink) 30%) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: slideInLeft 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-@keyframes slideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.space-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg-ink-secondary);
-  padding: 2px 12px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--fg-accent) 10%, transparent) 0%,
-    color-mix(in srgb, var(--fg-accent) 6%, transparent) 100%
-  );
-  border: 1px solid color-mix(in srgb, var(--fg-accent) 20%, transparent);
-  border-radius: 999px;
-  animation: fadeInRight 0.6s ease;
-  animation-delay: 0.2s;
-  animation-fill-mode: backwards;
-}
-
-@keyframes fadeInRight {
-  from {
-    opacity: 0;
-    transform: translateX(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.context-panel,
-.status-panel {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 24px;
-  background: linear-gradient(
-    135deg,
-    var(--fg-surface-raised) 0%,
-    color-mix(in srgb, var(--fg-surface-raised) 97%, var(--fg-accent) 3%) 100%
-  );
-  border: 1px solid color-mix(in srgb, var(--fg-line-strong) 80%, transparent);
-  border-radius: calc(var(--fg-radius-card) * 1.2);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
-    var(--fg-shadow-card);
-  max-width: 600px;
-  animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-@keyframes scaleIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.context-switch {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.status-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  font-family: var(--fg-font-display);
-  color: var(--fg-ink);
-  background: linear-gradient(135deg, var(--fg-accent) 0%, var(--fg-ink) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.status-text {
-  margin: 0;
-  font-size: 14px;
-  color: var(--fg-ink-secondary);
-  line-height: 1.7;
-}
-
-.loading-spin {
-  min-height: 160px;
-}
-
-/* 工具栏：底部居中悬浮胶囊毛玻璃 + 现代操作组 */
+.context-switch { display: flex; gap: 10px; flex-wrap: wrap; }
+.status-title { margin: 0; font-size: 18px; font-family: var(--fg-font-display); color: var(--fg-ink); }
+.status-text { margin: 0; font-size: 13px; color: var(--fg-ink-secondary); line-height: 1.8; }
+.loading-spin { min-height: 160px; margin: auto; }
 .toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px 20px;
-  background: var(--fg-glass-surface-raised);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid var(--fg-glass-border);
-  border-radius: 999px;
-  box-shadow:
-    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 10%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--fg-accent) 12%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 30%, transparent);
-  animation: slideDown 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
-  width: fit-content;
+  position: relative; order: 10; z-index: 5; display: flex; align-items: center; align-self: center;
+  gap: 8px; flex-wrap: wrap; padding: 8px 12px; width: fit-content; max-width: 100%; box-sizing: border-box;
+  background: var(--fg-glass-surface-raised); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--fg-glass-border); border-radius: 8px;
+  box-shadow: 0 4px 0 color-mix(in srgb, var(--fg-canvas-surface-raised) 75%, transparent),
+    0 20px 48px color-mix(in srgb, var(--fg-canvas-surface) 65%, transparent),
+    inset 0 1px 0 var(--fg-surface-raised);
 }
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 降级方案：不支持 backdrop-filter 时使用不透明背景 */
-@supports not (backdrop-filter: blur(12px)) {
-  .toolbar {
-    background: var(--fg-surface-raised);
-  }
-}
-
-.legend {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--fg-ink);
-}
-
-.legend li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--fg-radius-control);
-  transition: all 0.3s ease;
-}
-
-.legend li:hover {
-  background: color-mix(in srgb, var(--fg-accent) 6%, transparent);
-  transform: translateX(4px);
-}
-
-/* 画布容器：现代化边框和深度感 */
-.canvas-section {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 460px;
-  animation: fadeInUp 0.6s ease;
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.canvas-wrap {
-  position: relative;
-  flex: 1;
-  min-height: 480px;
-  background-color: var(--fg-surface);
-  background-image:
-    radial-gradient(ellipse 90% 70% at 50% -10%, color-mix(in srgb, var(--fg-accent) 12%, transparent), transparent 70%),
-    radial-gradient(ellipse 60% 50% at 85% 95%, color-mix(in srgb, var(--fg-info) 10%, transparent), transparent 60%),
-    radial-gradient(circle 1.8px at 28px 36px, var(--fg-dot) 100%, transparent),
-    radial-gradient(circle 1.2px at 160px 140px, color-mix(in srgb, var(--fg-dot) 75%, transparent) 100%, transparent),
-    radial-gradient(circle 1.5px at 290px 80px, var(--fg-dot) 100%, transparent);
-  background-size:
-    100% 100%,
-    100% 100%,
-    260px 260px,
-    190px 190px,
-    340px 340px;
-  border: 1.5px solid var(--fg-glass-border);
-  border-radius: calc(var(--fg-radius-card) * 1.8);
-  overflow: hidden;
-  box-shadow:
-    inset 0 2px 16px color-mix(in srgb, var(--fg-ink) 6%, transparent),
-    0 8px 32px 0 color-mix(in srgb, var(--fg-ink) 8%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--fg-accent) 10%, transparent);
-}
-
-/* 中心聚焦效果：径向渐变遮罩，中心清晰，边缘模糊 */
-.canvas-wrap::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 60% 50% at 50% 50%,
-    transparent 0%,
-    transparent 40%,
-    color-mix(in srgb, var(--fg-surface) 15%, transparent) 70%,
-    color-mix(in srgb, var(--fg-surface) 35%, transparent) 90%,
-    color-mix(in srgb, var(--fg-surface) 45%, transparent) 100%
-  );
-  z-index: 1;
-  transition: opacity 0.5s ease;
-}
-
-/* 悬停画布时减弱聚焦效果，让用户看清周围 */
-.canvas-wrap:hover::after {
-  opacity: 0.5;
-}
-
-/* 确保画布内容在遮罩层下方 */
-.canvas-wrap :deep(.vue-flow) {
-  position: relative;
-  z-index: 0;
-}
-
-/* 边样式：现代化连线 */
-.canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) {
-  stroke: var(--fg-ink-secondary);
-  stroke-width: 2;
-  transition: all 0.3s ease;
-  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--fg-ink) 10%, transparent));
-}
-
-.canvas-wrap :deep(.fg-view-edge:hover .vue-flow__edge-path) {
-  stroke: var(--fg-accent);
-  stroke-width: 2.5;
-  filter: drop-shadow(0 2px 4px color-mix(in srgb, var(--fg-accent) 30%, transparent));
-}
-
-/* Controls 现代化样式 */
+.toolbar .fg-fab-btn { box-shadow: none; border: none; background: transparent; }
+.toolbar .fg-fab-btn:hover { background: var(--fg-accent-soft); }
+.toolbar .fg-fab-btn--accent { background: var(--fg-accent); }
+.toolbar :deep(.n-radio-group) { margin-right: 8px; }
+.legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 12px; color: var(--fg-ink); max-width: 290px; }
+.legend li { display: flex; align-items: center; gap: 8px; }
+.canvas-section { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 340px; margin: 0 -32px; }
+.canvas-wrap { position: relative; flex: 1; min-height: 340px; background: transparent; }
+.canvas-wrap :deep(.vue-flow) { position: absolute; inset: 0; }
+.canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) { stroke: var(--fg-canvas-muted); stroke-width: 1.15; opacity: 0.66; transition: stroke-width 0.2s ease, opacity 0.2s ease; }
+.canvas-wrap :deep(.fg-view-edge:hover .vue-flow__edge-path),
+.canvas-wrap :deep(.fg-view-edge.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
+.canvas-wrap :deep(.vue-flow__edge-text) { font-family: var(--fg-font-body); }
+.canvas-wrap :deep(.vue-flow__edge-textbg) { stroke: var(--fg-canvas-line); stroke-width: 0.5; }
 .canvas-wrap :deep(.vue-flow__controls) {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--fg-surface-raised) 90%, transparent) 0%,
-    color-mix(in srgb, var(--fg-surface-raised) 95%, transparent) 100%
-  );
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--fg-line-strong) 60%, transparent);
-  border-radius: calc(var(--fg-radius-control) * 1.5);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--fg-accent) 8%, transparent),
-    0 4px 12px color-mix(in srgb, var(--fg-ink) 10%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 100%, transparent);
+  position: absolute; top: auto; bottom: 6px; left: 32px; z-index: 5; display: flex;
+  flex-direction: column; background: color-mix(in srgb, var(--fg-canvas-surface-raised) 90%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--fg-canvas-line); border-radius: 8px; overflow: hidden;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--fg-canvas-surface) 65%, transparent);
 }
-
-/* 降级方案：不支持 backdrop-filter 时使用不透明背景 */
-@supports not (backdrop-filter: blur(12px)) {
-  .canvas-wrap :deep(.vue-flow__controls) {
-    background: var(--fg-surface-raised);
-  }
-}
-
 .canvas-wrap :deep(.vue-flow__controls-button) {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--fg-line) 50%, transparent);
-  background-color: transparent;
-  color: var(--fg-ink-secondary);
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  display: flex; align-items: center; justify-content: center; width: 44px; height: 44px;
+  padding: 0; border: none; border-bottom: 1px solid var(--fg-canvas-line);
+  background: transparent; color: var(--fg-canvas-ink); cursor: pointer;
 }
-
-.canvas-wrap :deep(.vue-flow__controls-button:last-child) {
-  border-bottom: none;
+.canvas-wrap :deep(.vue-flow__controls-button:last-child) { border-bottom: none; }
+.canvas-wrap :deep(.vue-flow__controls-button:hover) { background: var(--fg-canvas-surface-raised); }
+.canvas-wrap :deep(.vue-flow__controls-button:disabled) { color: var(--fg-canvas-muted); cursor: default; opacity: 0.4; }
+.canvas-wrap :deep(.vue-flow__controls-button svg) { width: 15px; height: 15px; fill: currentColor; }
+@supports not (backdrop-filter: blur(12px)) {
+  .toolbar { background: var(--fg-surface-raised); }
+  .canvas-wrap :deep(.vue-flow__controls) { background: var(--fg-canvas-surface-raised); }
 }
-
-.canvas-wrap :deep(.vue-flow__controls-button:hover) {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--fg-accent) 12%, transparent) 0%,
-    color-mix(in srgb, var(--fg-accent) 8%, transparent) 100%
-  );
-  color: var(--fg-accent);
-  transform: scale(1.08);
-}
-
-.canvas-wrap :deep(.vue-flow__controls-button:active) {
-  transform: scale(0.95);
-}
-
-.canvas-wrap :deep(.vue-flow__controls-button:disabled) {
-  color: var(--fg-ink-faint);
-  cursor: default;
-  opacity: 0.4;
-}
-
-.canvas-wrap :deep(.vue-flow__controls-button:disabled:hover) {
-  background: transparent;
-  transform: none;
-}
-
-.canvas-wrap :deep(.vue-flow__controls-button svg) {
-  width: 16px;
-  height: 16px;
-  transition: transform 0.3s ease;
-}
-
-.canvas-wrap :deep(.vue-flow__controls-button:hover svg) {
-  transform: scale(1.1);
-}
-
-/* 移动端（≤768px）：工具栏收敛为紧凑单行（可横向滑动，仅工具不恢复列表布局）；
-   触控画布双指缩放/拖拽平移由 VueFlow 的 zoom-on-pinch/pan-on-drag 提供，
-   圆形 FAB 自带 44px 点按目标，布局切换 radio 补足 44px */
 @media (max-width: 768px) {
-  .family-tree-view {
-    padding: 16px 12px 20px;
-    gap: 12px;
-  }
-
-  .view-head {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-
-  .view-title {
-    font-size: 22px;
-  }
-
-  .toolbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding: 10px 12px;
-    padding-bottom: 12px;
-  }
-
-  .toolbar > * {
-    flex: 0 0 auto;
-  }
-
-  .toolbar :deep(.n-button--small-type),
-  .toolbar :deep(.n-radio-button) {
-    min-height: 44px;
-  }
-
-  .canvas-wrap {
-    min-height: 360px;
-  }
-
-  .status-panel,
-  .context-panel {
-    padding: 18px;
-  }
+  .family-tree-view { padding: 20px 16px 16px; gap: 12px; height: calc(100dvh - 182px); min-height: 580px; }
+  .view-title { font-size: 24px; }
+  .view-identity { gap: 6px 12px; }
+  .view-count strong { font-size: 22px; }
+  .view-count { gap: 4px; }
+  .canvas-section { margin: 0 -16px; }
+  .toolbar { flex-wrap: nowrap; align-self: stretch; width: 100%; overflow-x: auto; padding: 6px; gap: 2px; }
+  .toolbar > * { flex: 0 0 auto; }
+  .toolbar :deep(.n-radio-group) { margin-right: 2px; }
+  .toolbar :deep(.n-radio-button) { min-height: 44px; padding: 0 9px; }
+  .toolbar .fg-fab-btn { width: 40px; min-width: 40px; }
+  .canvas-wrap :deep(.vue-flow__controls) { left: 16px; }
+  .status-panel, .context-panel { padding: 20px; }
 }
-
-/* 动效降级支持 */
 @media (prefers-reduced-motion: reduce) {
-  .family-tree-view,
-  .view-title,
-  .space-name,
-  .status-panel,
-  .context-panel,
-  .toolbar,
-  .canvas-section,
-  .legend li {
-    animation: none !important;
-    transition: none !important;
-  }
-
-  .canvas-wrap :deep(.vue-flow__controls-button),
-  .canvas-wrap :deep(.vue-flow__controls-button svg),
-  .canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) {
-    transition: none !important;
-  }
-
-  .canvas-wrap :deep(.vue-flow__controls-button:hover),
-  .canvas-wrap :deep(.vue-flow__controls-button:active),
-  .legend li:hover {
-    transform: none;
-  }
+  .canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) { transition: none; }
 }
 </style>

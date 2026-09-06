@@ -2,10 +2,9 @@
 // 统一家庭用户应用壳（09-01 design.md §3.1）：
 // - 桌面端左侧固定导航：一级入口 = 我的家庭 / 家族树 / 记忆与知识 / 统计，
 //   次级 = 设置；「空间管理」仅当前空间 space_admin 权限成立时出现；
-// - 顶部：通知入口（铃铛 + 未读数，端点 404 时安静降级无角标）、Assistant
-//   入口占位（disabled，依赖 Agent Runtime 任务）、主题切换、账号菜单（含登出）；
+// - 顶部：通知入口、主题切换、账号菜单；Assistant 由根组件提供；
 // - 空间选择器按 household/lineage 分组，切换触发 useSpaceContext 空间切换事务；
-// - 主内容区为静态星空/点阵背景层（纯 CSS，无动画/粒子，token 派生，不承载数据语义）。
+// - 背景贯穿应用壳；家庭与家族视图提供可降级的 Three.js 景深星点。
 // 旧全局搜索（GlobalSearch，走旧 /search 合同）已从壳移除：新壳导航不含全局搜索，
 // 旧全局搜索与授权边界冲突，后续按空间内检索另行设计（记录见任务 notes.md）。
 import { NPopover, NSelect, NSwitch, type SelectOption } from 'naive-ui'
@@ -18,6 +17,7 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { useSpacesStore } from '@/stores/spaces'
 import { useUiStore } from '@/stores/ui'
 import { useSpaceContext } from '@/composables/useSpaceContext'
+import CosmicBackdrop from '@/components/canvas/CosmicBackdrop.vue'
 
 const SPACE_KIND_GROUP_LABELS = { household: '家庭空间', lineage: '家族空间' } as const
 
@@ -38,6 +38,10 @@ const navEntries = [
 ]
 const currentPageLabel = computed(() => navEntries.find((entry) => entry.name === route.name)?.label ?? '家庭空间')
 const cosmicView = computed(() => route.name === 'home' || route.name === 'family-space')
+const pickerKind = computed<'household' | 'lineage'>(() =>
+  spaces.currentSpace?.kind ?? (route.name === 'family-space' ? 'lineage' : 'household'),
+)
+const pickerCaption = computed(() => pickerKind.value === 'lineage' ? '当前家族空间' : '当前家庭空间')
 
 const canManageCurrentSpace = computed(() => spaces.canManageSpace && spaces.currentSpace !== null)
 
@@ -54,7 +58,7 @@ const spaceManagementTarget = computed(() =>
  */
 const spacePickerOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = []
-  for (const kind of ['household', 'lineage'] as const) {
+  for (const kind of [pickerKind.value] as const) {
     const children = spaces.spaces
       .filter((space) => space.kind === kind)
       .map((space) => ({ label: space.name, value: space.id }))
@@ -137,6 +141,22 @@ function onThemeSwitch(value: boolean): void {
   ui.setTheme(value ? 'modern' : 'paper')
 }
 
+async function syncRouteSpace(routeName: string | symbol | null | undefined): Promise<void> {
+  const targetKind = routeName === 'family-space' ? 'lineage' : routeName === 'home' ? 'household' : null
+  if (targetKind === null || spaces.currentSpace?.kind === targetKind) return
+  const preferred = targetKind === 'household' && ui.recentHouseholdId !== null
+    ? spaces.spaces.find((space) => space.id === ui.recentHouseholdId && space.kind === targetKind)
+    : undefined
+  const target = preferred ?? spaces.spaces.find((space) => space.kind === targetKind)
+  if (target) await spaceContext.switchSpace(target.id)
+}
+
+watch(
+  [() => route.name, () => spaces.spaces.length, () => spaces.currentSpace?.kind],
+  ([routeName]) => { void syncRouteSpace(routeName) },
+  { immediate: true },
+)
+
 function isNavActive(name: string): boolean {
   return route.name === name
 }
@@ -160,14 +180,14 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'app-shell--cosmic': cosmicView }">
     <aside class="shell-sidebar">
       <RouterLink class="shell-brand" :to="{ name: 'home' }" aria-label="FamilyGraph 我的家庭">
         <Network class="brand-mark" :size="24" aria-hidden="true" />
         <span>FamilyGraph</span>
       </RouterLink>
       <div class="sidebar-picker">
-        <span class="sidebar-caption">我的空间</span>
+        <span class="sidebar-caption">{{ pickerCaption }}</span>
         <NSelect class="space-select" :value="spaces.currentSpaceId" :options="spacePickerOptions"
           :render-label="renderSpaceOptionLabel" :loading="switching" placeholder="选择空间"
           size="medium" :consistent-menu-width="false" aria-label="切换当前空间"
@@ -209,16 +229,10 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
           <span>{{ currentPageLabel }}</span><ChevronRight :size="14" aria-hidden="true" />
           <strong>{{ spaces.currentSpace?.name ?? '我的空间' }}</strong>
         </div>
-        <div class="topbar-picker">
-          <NSelect class="space-select" :value="spaces.currentSpaceId" :options="spacePickerOptions"
-            :render-label="renderSpaceOptionLabel" :loading="switching" placeholder="选择空间"
-            size="medium" :consistent-menu-width="false" aria-label="切换当前空间"
-            data-test="space-picker-topbar" @update:value="onSpaceSelect" />
-        </div>
         <div class="topbar-actions">
           <NSwitch class="theme-switch" :value="ui.theme === 'modern'"
-            aria-label="切换配色主题（纸墨 / 清雅）" @update:value="onThemeSwitch">
-            <template #checked>清雅</template><template #unchecked>纸墨</template>
+            aria-label="切换配色主题（暮色 / 雾青）" @update:value="onThemeSwitch">
+            <template #checked>雾青</template><template #unchecked>暮色</template>
           </NSwitch>
           <RouterLink class="topbar-button" :to="{ name: 'notifications' }"
             aria-label="通知" title="通知" data-test="notifications-entry">
@@ -246,7 +260,10 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
           </NPopover>
         </div>
       </header>
-      <main class="shell-main" :class="{ 'shell-main--cosmic': cosmicView }"><RouterView /></main>
+      <main class="shell-main" :class="{ 'shell-main--cosmic': cosmicView }">
+        <CosmicBackdrop v-if="cosmicView" />
+        <RouterView />
+      </main>
       <nav class="shell-bottom-nav" aria-label="底部导航">
         <RouterLink v-for="entry in navEntries" :key="entry.name" class="bottom-link"
           :to="{ name: entry.name }" :class="{ 'bottom-link--active': isNavActive(entry.name) }"
@@ -259,11 +276,14 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
 </template>
 
 <style scoped>
-.app-shell { display: flex; min-height: 100vh; min-width: 0; background: var(--fg-surface); }
+.app-shell { position: relative; isolation: isolate; display: flex; min-height: 100vh; min-width: 0; background: linear-gradient(120deg, color-mix(in srgb, var(--fg-ink) 8%, transparent), transparent 58%), var(--fg-surface); }
+.app-shell::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(ellipse 75% 60% at 12% 10%, color-mix(in srgb, var(--fg-accent) 10%, transparent), transparent 68%); opacity: 0.75; }
+.app-shell--cosmic::before { background-image: url('/images/starfield.jpg'); background-size: cover; background-position: center; opacity: 0.045; }
 .shell-sidebar {
   position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column;
   gap: 24px; width: 224px; flex: 0 0 224px; box-sizing: border-box; padding: 22px 16px;
-  background: var(--fg-glass-surface-raised); border-right: 1px solid var(--fg-line);
+  background: color-mix(in srgb, var(--fg-surface) 70%, transparent); border-right: 1px solid var(--fg-glass-border);
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
 }
 .shell-brand {
   display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 6px;
@@ -296,7 +316,7 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
 .shell-brand--topbar { display: none; padding: 0; font-size: 16px; gap: 6px; }
 .topbar-location { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--fg-ink-secondary); min-width: 0; }
 .topbar-location strong { font-weight: 500; color: var(--fg-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topbar-picker { display: none; min-width: 0; flex: 1 1 auto; max-width: 260px; }
+.topbar-picker { display: none; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: auto; }
 .topbar-button {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
@@ -316,13 +336,8 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
 .account-item { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; border: none; background: none; color: var(--fg-ink-secondary); font: inherit; text-align: left; cursor: pointer; }
 .account-item:hover { color: var(--fg-ink); background: var(--fg-surface-sunken); }
 .account-item--danger { color: var(--fg-status-disputed); }
-.shell-main { position: relative; min-width: 0; flex: 1; background: var(--fg-surface); }
-.shell-main--cosmic { isolation: isolate; background-color: var(--fg-canvas-surface); }
-.shell-main--cosmic::before {
-  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background-image: url('/images/starfield.jpg'); background-size: cover;
-  background-position: center top; opacity: 0.65;
-}
+.shell-main { position: relative; min-width: 0; flex: 1; background: transparent; }
+.shell-main--cosmic { isolation: isolate; }
 .shell-bottom-nav {
   display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
   align-items: stretch; justify-content: space-around; background: var(--fg-glass-surface-raised);
@@ -334,7 +349,7 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
 .sidebar-picker :deep(.space-option-name), .topbar-picker :deep(.space-option-name) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-picker :deep(.space-option-badge), .topbar-picker :deep(.space-option-badge) { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; background: var(--fg-accent-soft); color: var(--fg-accent); font-size: 11px; font-weight: 600; }
 @supports not (backdrop-filter: blur(12px)) {
-  .shell-topbar, .shell-bottom-nav { background: var(--fg-surface-raised); }
+  .shell-topbar, .shell-bottom-nav, .shell-sidebar { background: var(--fg-surface-raised); }
 }
 @media (max-width: 768px) {
   .shell-sidebar { display: none; }
@@ -343,7 +358,6 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
   .shell-topbar { flex-wrap: wrap; gap: 4px; row-gap: 8px; padding: 10px 12px; }
   .topbar-actions { gap: 2px; }
   .theme-switch { margin-right: 2px; }
-  .topbar-picker { display: block; order: 10; flex: 1 1 100%; max-width: none; }
   .shell-main { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
   .shell-bottom-nav { display: flex; padding-bottom: env(safe-area-inset-bottom, 0px); }
 }

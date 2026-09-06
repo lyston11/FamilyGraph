@@ -6,33 +6,33 @@
  */
 
 :root {
-  --ag-bg: #f3f5f8;
-  --ag-surface: #ffffff;
-  --ag-border: #d9dee6;
-  --ag-text: #1f2733;
-  --ag-text-secondary: #5b6675;
-  --ag-primary: #2f5ea8;
-  --ag-primary-soft: #e8eef8;
-  --ag-danger: #b3362c;
-  --ag-danger-soft: #f9e9e7;
-  --ag-warning: #8a6116;
-  --ag-warning-soft: #faf3e2;
-  --ag-success: #2e7d4f;
-  --ag-success-soft: #e6f3ec;
+  --ag-bg: #11171b;
+  --ag-surface: #202a2f;
+  --ag-border: #3d5159;
+  --ag-text: #edf3f4;
+  --ag-text-secondary: #aab9bf;
+  --ag-primary: #a8d8d3;
+  --ag-primary-soft: rgba(168, 216, 211, 0.14);
+  --ag-danger: #f0aaa2;
+  --ag-danger-soft: rgba(240, 170, 162, 0.14);
+  --ag-warning: #e5c78e;
+  --ag-warning-soft: rgba(229, 199, 142, 0.14);
+  --ag-success: #a9d5b8;
+  --ag-success-soft: rgba(169, 213, 184, 0.14);
   --ag-radius: 8px;
   /* 星空玻璃视觉（09-04 引入，09-05 深度重构加强）：半透明磨砂面/发丝边/
      星云与星点/暗角/品牌渐变，全部仅在本文件 :root 定义，组件只消费变量 */
-  --ag-glass-bg: rgba(255, 255, 255, 0.6);
-  --ag-glass-bg-strong: rgba(255, 255, 255, 0.78);
-  --ag-glass-border: rgba(47, 94, 168, 0.16);
-  --ag-glow: rgba(47, 94, 168, 0.15);
-  --ag-nebula: rgba(47, 94, 168, 0.18);
-  --ag-nebula-alt: rgba(46, 125, 79, 0.1);
-  --ag-star: rgba(47, 94, 168, 0.5);
-  --ag-star-dim: rgba(47, 94, 168, 0.28);
-  --ag-vignette: rgba(31, 39, 51, 0.06);
-  --ag-accent-grad: linear-gradient(135deg, #2f5ea8 0%, #3d6cb0 55%, #2e7d4f 130%);
-  color-scheme: light;
+  --ag-glass-bg: rgba(35, 49, 55, 0.58);
+  --ag-glass-bg-strong: rgba(27, 40, 46, 0.84);
+  --ag-glass-border: rgba(195, 226, 229, 0.2);
+  --ag-glow: rgba(160, 215, 224, 0.12);
+  --ag-nebula: rgba(85, 142, 171, 0.12);
+  --ag-nebula-alt: rgba(86, 151, 130, 0.07);
+  --ag-star: rgba(210, 236, 241, 0.23);
+  --ag-star-dim: rgba(170, 205, 214, 0.12);
+  --ag-vignette: rgba(3, 8, 10, 0.35);
+  --ag-accent-grad: linear-gradient(135deg, #a8d8d3 0%, #b9dfdc 55%, #b0d5bd 130%);
+  color-scheme: dark;
 }
 
 * {
@@ -45,9 +45,7 @@ body {
   padding: 0;
 }
 
-/* 星空底座（09-05 深度重构）：主题底色 + 顶部主色星云漫射（18%）+ 右下辅助色微光
-   （10%）+ 三组加大加密星点阵（1.5px/1.2px/2px，240/190/320px 周期，亮暗交替）
-   + 边缘暗角增强纵深；纯 CSS 静态层，无脚本无动效 */
+/* 星空底座：低对比星云和稀疏点阵，保证内容始终是视觉主体。 */
 body {
   font-family:
     'PingFang SC',
@@ -62,9 +60,9 @@ body {
     radial-gradient(ellipse 120% 120% at 50% 40%, transparent 60%, var(--ag-vignette) 100%),
     radial-gradient(ellipse 90% 60% at 50% -15%, var(--ag-nebula), transparent 72%),
     radial-gradient(ellipse 60% 50% at 92% 102%, var(--ag-nebula-alt), transparent 62%),
-    radial-gradient(circle 1.5px at 32px 44px, var(--ag-star) 100%, transparent),
-    radial-gradient(circle 1.2px at 118px 156px, var(--ag-star-dim) 100%, transparent),
-    radial-gradient(circle 2px at 216px 88px, var(--ag-star) 100%, transparent);
+    radial-gradient(circle 1px at 32px 44px, var(--ag-star) 100%, transparent),
+    radial-gradient(circle 1px at 118px 156px, var(--ag-star-dim) 100%, transparent),
+    radial-gradient(circle 1.2px at 216px 88px, var(--ag-star) 100%, transparent);
   background-size:
     100% 100%,
     100% 100%,
@@ -109,7 +107,7 @@ body {
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 10px 20px;
+  padding: 14px 24px;
   background: var(--ag-glass-bg-strong);
   backdrop-filter: blur(20px) saturate(170%);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
@@ -120,6 +118,7 @@ body {
 .admin-brand {
   font-weight: 700;
   font-size: 15px;
+  letter-spacing: 0.02em;
 }
 
 .admin-nav {
@@ -131,7 +130,10 @@ body {
 
 .admin-nav a {
   position: relative;
-  padding: 6px 14px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 13px;
   border-radius: 999px;
   color: var(--ag-text-secondary);
   text-decoration: none;
@@ -161,9 +163,9 @@ body {
 .admin-main {
   flex: 1;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: 20px 16px 48px;
+  padding: 32px 24px 64px;
 }
 
 /* ---- 通用卡片 / 面板（真磨砂玻璃材质，透出星空底） ---- */
@@ -173,8 +175,8 @@ body {
   backdrop-filter: blur(20px) saturate(170%);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
   border: 1px solid var(--ag-glass-border);
-  border-radius: var(--ag-radius);
-  padding: 16px;
+  border-radius: 12px;
+  padding: 20px;
   margin-bottom: 16px;
   box-shadow:
     0 8px 32px color-mix(in srgb, var(--ag-text) 8%, transparent),
@@ -281,7 +283,7 @@ body {
 .ag-table td {
   text-align: left;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--ag-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--ag-border) 70%, transparent);
   white-space: nowrap;
 }
 
@@ -356,7 +358,7 @@ body {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 12px;
-  background: var(--ag-bg);
+  background: color-mix(in srgb, var(--ag-text) 8%, transparent);
   color: var(--ag-text-secondary);
 }
 
@@ -387,8 +389,8 @@ body {
   backdrop-filter: blur(20px) saturate(170%);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
   border: 1px solid var(--ag-glass-border);
-  border-radius: var(--ag-radius);
-  padding: 12px 14px;
+  border-radius: 12px;
+  padding: 16px 18px;
   box-shadow:
     0 4px 16px color-mix(in srgb, var(--ag-text) 6%, transparent),
     0 0 12px color-mix(in srgb, var(--ag-primary) 8%, transparent),
@@ -485,6 +487,35 @@ body {
   font-size: 13px;
   color: var(--ag-text-secondary);
 }
+
+.form-field input,
+.ag-inline-form input,
+.ag-filter-label select,
+select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  outline: none;
+  background: color-mix(in srgb, var(--ag-bg) 74%, var(--ag-surface));
+  color: var(--ag-text);
+  font: inherit;
+  color-scheme: dark;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.form-field input:focus,
+.ag-inline-form input:focus,
+.ag-filter-label select:focus,
+select:focus {
+  border-color: var(--ag-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ag-primary) 16%, transparent);
+  background: var(--ag-surface);
+}
+
+.form-field input::placeholder,
+.ag-inline-form input::placeholder { color: var(--ag-text-secondary); }
 
 .form-error {
   color: var(--ag-danger);

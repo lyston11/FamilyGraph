@@ -36,6 +36,14 @@ const auth = useAuthStore()
 const router = useRouter()
 const message = useMessage()
 const ui = useUiStore()
+const activeSection = ref<'profile' | 'privacy' | 'invite' | 'account' | 'display'>('profile')
+const settingsSections = [
+  { key: 'profile', label: '个人资料' },
+  { key: 'privacy', label: '隐私与公示' },
+  { key: 'invite', label: '邀请码' },
+  { key: 'account', label: '账号与安全' },
+  { key: 'display', label: '显示与无障碍' },
+] as const
 
 const nameForm = reactive({ name: auth.user?.name ?? '' })
 const savingName = ref(false)
@@ -132,8 +140,8 @@ async function doLogout(): Promise<void> {
 
 // ---- 显示与无障碍：主题选择（双主题预览小卡，预览色取自 tokens.ts L2 token） ----
 const themeChoices: Array<{ name: ThemeName; tokens: ThemeTokens; desc: string }> = [
-  { name: 'paper', tokens: themeTokens.paper, desc: '宣纸点阵 · 宋体标题 · 朱砂点睛' },
-  { name: 'modern', tokens: themeTokens.modern, desc: '纯白留白 · 无衬线 · 青蓝点缀' },
+  { name: 'paper', tokens: themeTokens.paper, desc: '暮色玻璃 · 宋体标题 · 珊瑚点睛' },
+  { name: 'modern', tokens: themeTokens.modern, desc: '雾青玻璃 · 无衬线 · 薄荷点缀' },
 ]
 
 function previewStyle(tokens: ThemeTokens): Record<string, string> {
@@ -157,8 +165,18 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
         </div>
       </template>
 
+      <nav class="settings-tabs" aria-label="设置分区">
+        <button v-for="section in settingsSections" :key="section.key" type="button"
+          class="settings-tab" :class="{ 'is-active': activeSection === section.key }"
+          :aria-current="activeSection === section.key ? 'page' : undefined"
+          @click="activeSection = section.key">
+          {{ section.label }}
+        </button>
+      </nav>
+
+      <div class="settings-grid">
       <!-- 分区 1：个人资料 -->
-      <section class="section" data-test="settings-section-profile">
+      <section v-show="activeSection === 'profile'" class="section" data-test="settings-section-profile">
         <h2 class="section-title">个人资料</h2>
         <p class="meta" data-test="current-user">
           {{ auth.user?.name }}
@@ -233,21 +251,21 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
       </section>
 
       <!-- 分区 2：隐私与公示 -->
-      <section class="section" data-test="settings-section-privacy">
+      <section v-show="activeSection === 'privacy'" class="section" data-test="settings-section-privacy">
         <h2 class="section-title">隐私与公示</h2>
         <p class="meta">控制你的资料在家族空间中的披露范围；高敏感类别始终受最小披露保护。</p>
         <DisclosureMatrix />
       </section>
 
       <!-- 分区 3：邀请码（09-05 决策 14；provisional 用户由区块内提示，后端 403 兜底） -->
-      <section class="section" data-test="settings-section-invite">
+      <section v-show="activeSection === 'invite'" class="section" data-test="settings-section-invite">
         <h2 class="section-title">邀请码</h2>
         <p class="meta">创建邀请码分享给家人朋友；或凭收到的邀请码加入已有空间。</p>
         <InviteCodeSection />
       </section>
 
       <!-- 分区 4：账号与安全 -->
-      <section class="section" data-test="settings-section-account">
+      <section v-show="activeSection === 'account'" class="section" data-test="settings-section-account">
         <h2 class="section-title">账号与安全</h2>
         <p class="meta">定期更换 PIN 码；导出、更正与删除申请都在这里提交。</p>
         <ChangePinForm />
@@ -258,7 +276,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
       </section>
 
       <!-- 分区 5：显示与无障碍 -->
-      <section class="section" data-test="settings-section-display">
+      <section v-show="activeSection === 'display'" class="section" data-test="settings-section-display">
         <h2 class="section-title">显示与无障碍</h2>
         <p class="meta">选择配色主题（即时生效并记住偏好）；双主题均遵循系统减弱动态设置。</p>
         <div class="theme-cards" role="group" aria-label="选择配色主题（即时生效并记住偏好）" data-test="theme-section">
@@ -289,6 +307,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
           </button>
         </div>
       </section>
+      </div>
     </NCard>
   </main>
 </template>
@@ -297,11 +316,15 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
 .settings-view {
   display: flex;
   justify-content: center;
-  padding: 24px 16px 40px;
+  padding: 28px 24px 56px;
 }
 
 .card {
-  width: min(640px, 100%);
+  width: min(780px, 100%);
+}
+
+.settings-grid {
+  display: block;
 }
 
 .card-title {
@@ -318,8 +341,8 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
 }
 
 .section {
-  margin-bottom: 28px;
-  padding: 24px;
+  margin: 0;
+  padding: 20px;
   background: var(--fg-glass-surface);
   backdrop-filter: blur(16px) saturate(180%);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
@@ -329,6 +352,12 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
     0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
     inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
 }
+
+.settings-tabs { display: flex; gap: 4px; overflow-x: auto; margin: 0 0 18px; padding: 4px; border-bottom: 1px solid var(--fg-line); scrollbar-width: none; }
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tab { flex: 0 0 auto; min-height: 40px; padding: 7px 13px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-ink-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.settings-tab:hover { color: var(--fg-ink); background: var(--fg-surface-sunken); }
+.settings-tab.is-active { color: var(--fg-accent); background: var(--fg-accent-soft); font-weight: 600; }
 
 .section-title {
   margin: 0 0 12px;
