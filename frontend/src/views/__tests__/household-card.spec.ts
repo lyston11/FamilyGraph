@@ -221,12 +221,12 @@ describe('HouseholdCardView 成员投影', () => {
     wrapper.unmount()
   })
 
-  it('加载失败（BLOCKER 404）显示「家庭卡服务合同未就绪」面板，无成员数组兜底', async () => {
+  it('加载失败（404）显示「家庭卡服务未部署」面板，无成员数组兜底', async () => {
     mockedFetchHouseholdCard.mockRejectedValue(new ApiError(404, 'HTTP_ERROR', '请求失败（404）'))
     const { wrapper } = await mountCard()
 
-    expect(wrapper.find('[data-test="contract-not-ready"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="contract-not-ready"]').text()).toContain('家庭卡服务合同未就绪')
+    expect(wrapper.find('[data-test="household-load-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="household-load-error"]').text()).toContain('家庭卡服务未部署')
     expect(wrapper.findAll('[data-test^="member-card-"]')).toHaveLength(0)
     expect(wrapper.find('[data-test="family-status"]').exists()).toBe(false)
 
@@ -285,7 +285,7 @@ describe('HouseholdCardView 退出与空状态', () => {
     document.body.innerHTML = ''
   })
 
-  it('退出按钮切换到第一个可用 lineage 空间（useSpaceContext 事务）', async () => {
+  it('退出按钮切换到当前 household 对应的 lineage 空间', async () => {
     mockedFetchHouseholdCard.mockResolvedValue(makeCardSnapshot())
     const { wrapper } = await mountCard([
       makeSpace({ id: 7, kind: 'household' }),

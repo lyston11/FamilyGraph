@@ -1,0 +1,64 @@
+/*
+ * FamilyGraph 共享品牌设计基座（09-11 frontend-system-admin-audit-remediation R4）。
+ *
+ * 目标：家庭前端与系统管理后台共享同一份品牌层（字体栈、间距阶、圆角、
+ * 焦点环、状态徽章基线），消除两个应用各自复制并互相漂移的定义。
+ *
+ * 分层合同：
+ * - 本文件只定义「非主题、非业务」的品牌基础变量（--brand-*）与工具类基线，
+ *   不写业务色板、不做主题切换；
+ * - 家庭端 `--fg-*` 仍是家庭主题的唯一真源（tokens.ts 运行时注入，双主题），
+ *   本文件与家庭端 tokens.css 保持同值拷贝（字体栈/焦点环），修改需双侧同步；
+ * - 后台 `--ag-*` 通过 :root 别名消费 --brand-*（见 system-admin-frontend
+ *   src/styles/main.css），后台专有的权限语义色保留在 admin 层；
+ * - 两个应用不共享任何 JS/状态/路由，只共享无状态视觉基础。
+ */
+
+:root {
+  /* 品牌正文字体栈（与家庭端 tokens.css --fg-font-body 同值） */
+  --brand-font-body:
+    'Avenir Next', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+
+  /* 间距阶（4px 基线） */
+  --brand-space-1: 4px;
+  --brand-space-2: 8px;
+  --brand-space-3: 12px;
+  --brand-space-4: 16px;
+  --brand-space-5: 24px;
+  --brand-space-6: 32px;
+
+  /* 圆角阶（卡片 / 控件 / 胶囊） */
+  --brand-radius-card: 12px;
+  --brand-radius-control: 8px;
+  --brand-radius-pill: 999px;
+
+  /* 点按目标（移动端可达性红线：≥44px） */
+  --brand-touch-target: 44px;
+}
+
+/* 键盘导航可见焦点（WCAG 2.4.7）：主色由各应用以 --brand-focus-color 提供 */
+:focus-visible {
+  outline: 2px solid var(--brand-focus-color, currentColor);
+  outline-offset: 2px;
+}
+
+/* 状态徽章基线：形状/尺寸跨端一致；颜色由消费端语义变量注入 */
+.brand-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  border-radius: var(--brand-radius-pill);
+}
+
+/* 动效降级（与两端既有规则一致，集中声明避免漂移） */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+  }
+}

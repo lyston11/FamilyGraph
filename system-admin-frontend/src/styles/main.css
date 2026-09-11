@@ -3,9 +3,18 @@
  * 颜色一律走本文件的 --ag-* 变量，组件内不写死色值。
  * 09-05 星空玻璃深度重构：色值字面量只允许出现在下方 :root 的 --ag-* 定义处，
  * 其余规则只消费 var(--ag-*) 或既有变量的 color-mix 派生。
+ * 09-11（R4）：品牌基础（字体/间距/圆角/焦点环/徽章基线）收敛到仓库级
+ * shared/brand-tokens.css，本文件经别名消费，不再各自维护会漂移的定义。
  */
 
+@import '../../../shared/brand-tokens.css';
+
 :root {
+  /* ---- 品牌基础别名（R4）：来源 shared/brand-tokens.css ---- */
+  --brand-focus-color: var(--ag-primary);
+  --ag-font-body: var(--brand-font-body);
+  --ag-radius: var(--brand-radius-control);
+
   --ag-bg: #11171b;
   --ag-surface: #202a2f;
   --ag-border: #3d5159;
@@ -47,12 +56,7 @@ body {
 
 /* 星空底座：低对比星云和稀疏点阵，保证内容始终是视觉主体。 */
 body {
-  font-family:
-    'PingFang SC',
-    'Hiragino Sans GB',
-    'Microsoft YaHei',
-    system-ui,
-    sans-serif;
+  font-family: var(--ag-font-body);
   font-size: 14px;
   color: var(--ag-text);
   background-color: var(--ag-bg);
@@ -134,7 +138,7 @@ body {
   display: inline-flex;
   align-items: center;
   padding: 6px 13px;
-  border-radius: 999px;
+  border-radius: var(--brand-radius-pill);
   color: var(--ag-text-secondary);
   text-decoration: none;
   transition:
@@ -146,6 +150,20 @@ body {
   background: var(--ag-primary-soft);
   color: var(--ag-primary);
   font-weight: 500;
+}
+
+/* 移动端菜单按钮：桌面隐藏（R4 响应式） */
+.admin-nav-toggle {
+  display: none;
+  min-height: 38px;
+  margin-left: auto;
+  padding: 6px 14px;
+  border: 1px solid var(--ag-glass-border);
+  border-radius: var(--brand-radius-pill);
+  background: var(--ag-glass-bg-strong);
+  color: var(--ag-text);
+  font: inherit;
+  cursor: pointer;
 }
 
 /* 激活导航胶囊底部 2px 品牌渐变线 */
@@ -175,7 +193,7 @@ body {
   backdrop-filter: blur(20px) saturate(170%);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
   border: 1px solid var(--ag-glass-border);
-  border-radius: 12px;
+  border-radius: var(--brand-radius-card);
   padding: 20px;
   margin-bottom: 16px;
   box-shadow:
@@ -332,13 +350,57 @@ body {
   font-size: 12px;
 }
 
-/* 375px/移动端：表格保留（容器内部横向滚动，不产生页面级横向滚动），
-   卡片列表同样可见；绝不整体隐藏数据区。 */
+/* 375px/移动端：导航折叠为菜单按钮 + 展开面板（≥44px 点按目标）；
+   表格保留（容器内部横向滚动，不产生页面级横向滚动），卡片列表同样可见；
+   绝不整体隐藏数据区。 */
 @media (max-width: 768px) {
   .ag-table th,
   .ag-table td {
     padding: 6px 8px;
   }
+
+  .admin-header {
+    padding: 10px 16px;
+  }
+
+  .admin-nav-toggle {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* 折叠面板：默认收起；开启后纵向铺满导航项 */
+  .admin-nav {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0 8px;
+  }
+
+  .admin-nav.admin-nav--open {
+    display: flex;
+  }
+
+  .admin-nav a {
+    min-height: var(--brand-touch-target);
+    padding: 10px 14px;
+    border-radius: var(--brand-radius-control);
+  }
+
+  .admin-nav a.router-link-active::after {
+    display: none;
+  }
+
+  /* 页面级横向滚动守卫 */
+  html,
+  body {
+    overflow-x: hidden;
+  }
+}
+
+/* 面板开启时的 body 滚动锁（由 AdminShell 切换） */
+body.ag-nav-locked {
+  overflow: hidden;
 }
 
 /* ---- 状态与反馈 ---- */
@@ -356,7 +418,7 @@ body {
 .ag-tag {
   display: inline-block;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--brand-radius-pill);
   font-size: 12px;
   background: color-mix(in srgb, var(--ag-text) 8%, transparent);
   color: var(--ag-text-secondary);
@@ -389,7 +451,7 @@ body {
   backdrop-filter: blur(20px) saturate(170%);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
   border: 1px solid var(--ag-glass-border);
-  border-radius: 12px;
+  border-radius: var(--brand-radius-card);
   padding: 16px 18px;
   box-shadow:
     0 4px 16px color-mix(in srgb, var(--ag-text) 6%, transparent),

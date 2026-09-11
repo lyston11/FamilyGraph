@@ -6,6 +6,7 @@ import { ArrowUpRight, Bell, Crown, LayoutGrid, List, Network, Pencil, ShieldChe
 import MaskedField from '@/components/common/MaskedField.vue'
 import InviteMemberDialog from '@/components/member/InviteMemberDialog.vue'
 import SpaceCreateDialog from '@/components/member/SpaceCreateDialog.vue'
+import { describeLoadError } from '@/api/loadError'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import { useAuthStore } from '@/stores/auth'
 import { useHouseholdCardStore } from '@/stores/household'
@@ -27,11 +28,14 @@ const isHouseholdContext = computed(() => spaces.currentSpace?.kind === 'househo
 const card = computed(() => (spaceId.value === null ? null : household.forSpace(spaceId.value)))
 const loading = computed(() => spaceId.value !== null && household.isLoading(spaceId.value))
 const loadError = computed(() => (spaceId.value === null ? null : household.errorFor(spaceId.value)))
+/** 按真实失败原因分类的可行动文案（404 未部署 / 403 无权 / 503 维护 / 网络偏斜） */
+const errorCopy = computed(() =>
+  loadError.value === null ? null : describeLoadError(loadError.value, '家庭卡'),
+)
 const householdName = computed(() => card.value?.space_name ?? spaces.currentSpace?.name ?? '我的家庭')
 const members = computed<HouseholdCardMember[]>(() => card.value?.members ?? [])
 const memberCount = computed(() => members.value.length)
 const householdSpaces = computed(() => spaces.spaces.filter((space) => space.kind === 'household'))
-const lineageSpaces = computed(() => spaces.spaces.filter((space) => space.kind === 'lineage'))
 const selfStatus = computed(() => auth.user?.profile_status === 'identity_confirmed' ? '已确档' : '待确档')
 
 async function loadCard(): Promise<void> {
@@ -47,11 +51,13 @@ watch(spaceId, () => {
   void loadCard()
 })
 async function exitToFamilyTree(): Promise<void> {
-  const target = lineageSpaces.value[0]
+  const current = spaces.currentSpace
+  const target = current ? spaces.lineageForSpace(current.id) : null
   if (!target) {
     noLineageHint.value = true
     return
   }
+  // 只切到本家庭所属的 lineage（显式配对优先，owner 唯一匹配回退），不跳到其他家族。
   await spaceContext.switchSpace(target.id)
 }
 function goToSettings(): void { void router.push({ name: 'settings' }) }
@@ -100,9 +106,9 @@ function genderText(value: HouseholdCardMember['display']['gender']): string | n
           <Crown :size="14" aria-hidden="true" /> 空间管理员
         </span>
       </header>
-      <section v-if="loadError !== null" class="status-panel" data-test="contract-not-ready">
-        <h2 class="status-title">家庭卡服务合同未就绪</h2>
-        <p class="status-text">家庭卡投影服务暂时不可用（服务端合同尚未落地或请求失败），已按安全策略不展示任何成员数据。</p>
+      <section v-if="loadError !== null" class="status-panel" data-test="household-load-error">
+        <h2 class="status-title">{{ errorCopy?.title }}</h2>
+        <p class="status-text">{{ errorCopy?.text }} 已按安全策略不展示任何成员数据。</p>
         <NButton size="small" data-test="contract-retry" @click="retry">重新加载</NButton>
       </section>
       <NSpin v-else-if="loading && card === null" class="loading-spin" :show="true" aria-label="正在加载家庭空间" />

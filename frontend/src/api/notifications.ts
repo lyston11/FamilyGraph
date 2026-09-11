@@ -15,13 +15,9 @@ import { isNullableString, isOneOf, isRecord, decodeMaskable } from './decode'
 import { apiClient } from './client'
 
 /**
- * Notifications 客户端合同占位（design.md §4.4）。
+ * Notifications 客户端合同（09-11 起已落地：后端 /api/notifications* 已挂载）。
  *
- * BLOCKER: 服务端合同未落地 —— 下方路径与载荷形状为前端约定，后端任务对齐前
- * 仅以 fixture/decoder/store 测试驱动（对齐清单见任务 notes.md
- * 「前端客户端合同占位（待服务端任务对齐）」）。
- *
- * 合同（占位）：
+ * 合同：
  * - `GET /notifications?space_id=<id>`：按账号 + space_id 返回列表与未读数，
  *   携带 `If-None-Match` 走条件请求，304 由调用方复用上一份安全快照；
  * - `POST /notifications/{id}/read`：仅置已读（响应 `{ id, read_at }`），

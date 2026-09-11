@@ -153,6 +153,7 @@ async function mountManagement(
     data: { space_id: 7, items: [], unread_count: 0 },
     etag: null,
   },
+  initialPath = '/spaces/7/manage',
 ): Promise<{ wrapper: ReturnType<typeof mount>; router: ReturnType<typeof createRouter> }> {
   const auth = useAuthStore(pinia)
   auth.user = {
@@ -190,7 +191,7 @@ async function mountManagement(
       { path: '/spaces/:spaceId/manage', name: 'space-management', component: SpaceManagementView },
     ],
   })
-  await router.push('/spaces/7/manage')
+  await router.push(initialPath)
   await router.isReady()
   const wrapper = mount(ProvidedManagementView, {
     global: { plugins: [pinia, router] },
@@ -351,7 +352,7 @@ describe('SpaceManagementView 六分区侧栏（design §5.5；09-06 增模型�
     wrapper.unmount()
   })
 
-  it('Bridge 通知端点 404：安静的合同未就绪安全态', async () => {
+  it('Bridge 通知端点 404：按真实原因分类的安全态', async () => {
     const pinia = createPinia()
     const { wrapper } = await mountManagement(
       pinia,
@@ -362,8 +363,9 @@ describe('SpaceManagementView 六分区侧栏（design §5.5；09-06 增模型�
 
     await openSection(wrapper, 'bridge')
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-test="bridge-contract-unready"]').exists()).toBe(true),
+      expect(wrapper.find('[data-test="bridge-notice-error"]').exists()).toBe(true),
     )
+    expect(wrapper.find('[data-test="bridge-notice-error"]').text()).toContain('通知服务未部署')
     expect(wrapper.find('[data-test="bridge-notice-item"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -414,5 +416,59 @@ describe('SpaceManagementView 非管理员安全拒绝态（双保险）', () =>
       wrapper.unmount()
       document.body.innerHTML = ''
     }
+  })
+})
+
+describe('SpaceManagementView 分区深链（09-06 R5：?section= 直达与写回）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('挂载时 ?section=models 直达模型设置分区，URL 保留该参数', async () => {
+    const pinia = createPinia()
+    const { wrapper, router } = await mountManagement(
+      pinia,
+      'space_admin',
+      {},
+      undefined,
+      '/spaces/7/manage?section=models',
+    )
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="section-models"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="section-overview"]').exists()).toBe(false)
+    expect(router.currentRoute.value.query.section).toBe('models')
+    wrapper.unmount()
+  })
+
+  it('非法 section 值回退概览', async () => {
+    const pinia = createPinia()
+    const { wrapper } = await mountManagement(
+      pinia,
+      'space_admin',
+      {},
+      undefined,
+      '/spaces/7/manage?section=../hack',
+    )
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="section-overview"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="section-models"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('切分区时把 section 写回 query（URL 可分享）', async () => {
+    const pinia = createPinia()
+    const { wrapper, router } = await mountManagement(pinia, 'space_admin')
+    await openSection(wrapper, 'models')
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.query.section).toBe('models')
+    })
+    await openSection(wrapper, 'overview')
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.query.section).toBe('overview')
+    })
+    wrapper.unmount()
   })
 })

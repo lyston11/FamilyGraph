@@ -5,13 +5,12 @@
 //   computed_at/更新时间；household 显示家庭授权聚合，lineage 显示当前
 //   PersonalFamilyView 聚合；不做跨空间总计；
 // - 不从前端节点数组推导任何统计，也不显示隐藏对象/未授权分支规模；
-// - 端点 404（BLOCKER 合同占位）→「统计服务合同未就绪」安全状态面板，
-//   绝不回退旧 /stats 无空间合同；
-// - 页面不发请求，一切经 store；旧 api/stats.ts 已删除（无消费方）。
+// - 加载失败按真实原因分类（404/403/503/网络），绝不回退旧 /stats 无空间合同；
+// - 页面不发请求，一切经 store。
 import { NAlert, NButton, NSpin } from 'naive-ui'
 import { computed, onMounted, watch } from 'vue'
 
-import { ApiError } from '@/api/errors'
+import { describeLoadError } from '@/api/loadError'
 import { useSpaceStatsStore } from '@/stores/spaceStats'
 import { useSpacesStore } from '@/stores/spaces'
 import type { DirClass, SpaceStatsStatus } from '@/types/api'
@@ -27,9 +26,9 @@ const loadError = computed(() =>
   spaceId.value === null ? null : spaceStats.errorFor(spaceId.value),
 )
 
-/** 404（BLOCKER 端点未落地）→ 合同未就绪安全态；其他错误 → 可重试错误态 */
-const contractUnready = computed(
-  () => loadError.value instanceof ApiError && loadError.value.status === 404,
+/** 按真实失败原因分类的可行动文案（404 未部署 / 403 无权 / 503 维护 / 网络偏斜） */
+const errorCopy = computed(() =>
+  loadError.value === null ? null : describeLoadError(loadError.value, '统计'),
 )
 
 /** 统计口径说明：household = 家庭授权聚合；lineage = 当前 PersonalFamilyView 聚合 */
@@ -124,24 +123,10 @@ watch(spaceId, () => {
 
     <NSpin v-if="loading && data === null" :show="true" class="loading-spin" />
 
-    <!-- 404（BLOCKER 合同占位）：统计服务合同未就绪安全态，不回退旧 /stats -->
-    <section
-      v-else-if="contractUnready"
-      class="status-panel"
-      data-test="stats-contract-unready"
-    >
-      <h2 class="status-title">统计服务合同未就绪</h2>
-      <p class="status-text">
-        空间化统计的服务端合同尚未落地或暂时不可用。已按安全策略不展示任何统计数字；
-        统计只能来自服务端授权聚合，不会由页面从节点数据推算。
-      </p>
-      <NButton size="small" data-test="stats-retry" @click="refresh">重新加载</NButton>
-    </section>
-
-    <!-- 其他错误：可解释失败态（不退化成普通空状态） -->
-    <section v-else-if="loadError !== null" class="status-panel" data-test="stats-error">
-      <h2 class="status-title">统计暂时无法加载</h2>
-      <p class="status-text">网络或服务暂时不可用，请稍后重试。</p>
+    <!-- 加载失败：按真实原因分类（404 未部署 / 403 无权 / 503 维护 / 网络偏斜） -->
+    <section v-else-if="errorCopy !== null" class="status-panel" data-test="stats-error">
+      <h2 class="status-title">{{ errorCopy.title }}</h2>
+      <p class="status-text">{{ errorCopy.text }}</p>
       <NButton size="small" data-test="stats-retry" @click="refresh">重新加载</NButton>
     </section>
 
@@ -393,8 +378,8 @@ watch(spaceId, () => {
 }
 
 @media (max-width: 600px) {
-  .summary-cards,
-  .pending-section .summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-cards { grid-template-columns: repeat(2, 1fr); }
+  .pending-section .summary-cards { grid-template-columns: repeat(2, 1fr); }
 
   /* 页面为单列纵排；动作按钮补足 44px 点按目标 */
   .stats-view :deep(.n-button--small-type) {

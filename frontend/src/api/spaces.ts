@@ -17,8 +17,16 @@ export async function fetchSpaces(): Promise<FamilySpace[]> {
   return data
 }
 
-export async function createSpace(name: string, kind?: 'household' | 'lineage'): Promise<FamilySpace> {
-  const { data } = await apiClient.post<FamilySpace>('/spaces', { name, kind })
+export async function createSpace(
+  name: string,
+  kind?: 'household' | 'lineage',
+  lineageSpaceId?: number | null,
+): Promise<FamilySpace> {
+  const { data } = await apiClient.post<FamilySpace>('/spaces', {
+    name,
+    kind,
+    lineage_space_id: lineageSpaceId ?? null,
+  })
   return data
 }
 
@@ -28,6 +36,20 @@ export async function createSpace(name: string, kind?: 'household' | 'lineage'):
  */
 export async function updateSpace(spaceId: number, name: string): Promise<FamilySpace> {
   const { data } = await apiClient.patch<FamilySpace>(`/spaces/${spaceId}`, { name })
+  return data
+}
+
+/**
+ * 设置/解除家庭空间所属家族（PUT /spaces/{space_id}/lineage-link，仅空间管理员；
+ * lineageSpaceId=null 即解除）。配对是「当前家族空间」选择器切换维度的数据基础。
+ */
+export async function setSpaceLineageLink(
+  spaceId: number,
+  lineageSpaceId: number | null,
+): Promise<FamilySpace> {
+  const { data } = await apiClient.put<FamilySpace>(`/spaces/${spaceId}/lineage-link`, {
+    lineage_space_id: lineageSpaceId,
+  })
   return data
 }
 

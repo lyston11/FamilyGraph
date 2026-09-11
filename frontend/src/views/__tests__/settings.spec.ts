@@ -48,6 +48,22 @@ vi.mock('@/api/governance', () => ({
   withdrawClaimDispute: vi.fn(),
 }))
 
+// 设置页挂载的家庭绑定与邀请码区块（09-11 R6：不 mock 会让 jsdom 发起真实
+// XHR，产生 AggregateError stderr 噪音）
+vi.mock('@/api/bindings', () => ({
+  fetchMyBindings: vi.fn().mockResolvedValue([]),
+  confirmBinding: vi.fn(),
+  rejectBinding: vi.fn(),
+  cancelBinding: vi.fn(),
+}))
+
+vi.mock('@/api/inviteCodes', () => ({
+  fetchMyInviteCodes: vi.fn().mockResolvedValue([]),
+  createInviteCode: vi.fn(),
+  revokeInviteCode: vi.fn(),
+  redeemInviteCode: vi.fn(),
+}))
+
 vi.mock('@/api/spaces', () => ({
   fetchSpaces: vi.fn().mockResolvedValue([]),
   createSpace: vi.fn(),

@@ -10,14 +10,9 @@ import { decodeDisplay } from './personalFamilyView'
 import { apiClient } from './client'
 
 /**
- * HouseholdCard 客户端合同占位（design.md §4.2）。
+ * HouseholdCard 客户端合同（09-11 起已落地：后端 GET /api/household-card 已挂载）。
  *
- * BLOCKER: 服务端合同未落地 —— 下方路径与载荷形状为前端约定，后端任务对齐前
- * 仅以 fixture/decoder/store 测试驱动（对齐清单见任务 notes.md
- * 「前端客户端合同占位（待服务端任务对齐）」）。不得回退 `/users` 全局列表或旧
- * members 列表拼装家庭卡。
- *
- * 合同（占位）：
+ * 合同：
  * - 请求：`GET /household-card?space_id=<id>`，携带 `If-None-Match` 走条件请求，
  *   304 由调用方复用上一份安全快照；
  * - 载荷：`HouseholdCardData`（types/api.ts）——

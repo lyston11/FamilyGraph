@@ -14,6 +14,7 @@ import { apiAgentJobs, apiAgentRuns } from '@/api/read'
 import { RequestAbortedError } from '@/api/client'
 import PageState from '@/components/PageState.vue'
 import ListPagination from '@/components/ListPagination.vue'
+import StewardOpsPanel from '@/components/StewardOpsPanel.vue'
 import type {
   AdminAgentErrorOut,
   AdminAgentJobOut,
@@ -155,6 +156,9 @@ function diagnosticLines(error: AdminAgentErrorOut | null): string[] {
         上次刷新：{{ new Date(lastRefreshedAt).toLocaleTimeString() }}
       </span>
     </p>
+
+    <!-- Steward 管家引擎观测（R5）：安全白名单 DTO，独立轮询生命周期 -->
+    <StewardOpsPanel />
 
     <div class="ag-toolbar">
       <label class="ag-filter-label">

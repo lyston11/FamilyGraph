@@ -30,3 +30,35 @@ npm run build       # 生产构建零报错
 - 空间切换必须清理上一空间的卡片/记忆/RAG 引用，且组件测试验证不会短暂显示上一空间数据。跨空间、private、masked 和未确认事实需要可见的降级文案。
 - Assistant 消息中的结构化 `card_ids`/RAG citation 与空间 Inbox 使用同一个 store 和渲染组件；任何操作后两入口都以服务端状态更新，不维护副本。
 - Policy Guard 错误不能被 UI 捕获后静默吞掉或降级成普通空结果；需要保留可解释的 blocked/local-provider-required 状态。
+
+## 真实 API smoke 门禁（2026-09-11 frontend-system-admin-audit-remediation 起）
+
+- 提交涉及 API 合同 / 认证 / 附件 / 后台读模型的改动时，必须运行
+  `./scripts/frontend-api-smoke.sh --report /tmp/familygraph-smoke.json` 并留存脱敏 JSON 证据。
+  单元 mock 测试不能替代真实链路证据。
+- 退出码语义：0=通过；1=有真实失败；2=环境阻塞（venv 缺失 / alembic 失败 / listener 未就绪）。
+  **blocked 不得写成 passed**，报告原样归档并注明阻塞原因。
+- smoke 报告只允许：用例 ID、listener、method/path 模板、状态码、错误码、耗时；
+  姓名、PIN、JWT、Cookie、prompt、provider 响应、本地路径一律不得出现。
+
+## 敏感媒体访问约定（2026-09-11 起）
+
+- 家庭端 `<img>` 一律不得直接引用 `/attachments/{id}/raw` 等受 Bearer 保护的端点；
+  必须经 `frontend/src/api/attachments.ts` 的 `fetchAttachmentBlob`（Authorization 头 +
+  401 复用统一 refresh single-flight），以 object URL 渲染，并在组件卸载/换图时 revoke。
+- token 绝不出现在 URL query / localStorage / 日志；403/404/网络失败对用户统一为
+  「照片暂时无法加载」安全文案（防枚举）。
+- `fetchAttachmentBlob` 只接受 image/jpeg|png|webp 且 ≤10MB；其余 fail-closed。
+
+## 页面加载失败语义（2026-09-11 起）
+
+- 家庭端列表/投影页（家庭卡/统计/通知）的加载失败统一走
+  `frontend/src/api/loadError.ts` 的 `describeLoadError`：404→服务未部署、403→无权限、
+  503→维护中、status 0→网络/部署偏斜。禁止再出现「合同未就绪」占位文案
+  （相关后端端点均已挂载）。
+
+## 共享品牌 token（2026-09-11 起）
+
+- 跨端共享的品牌基础（字体栈/间距阶/圆角/焦点环/徽章基线）唯一来源是
+  仓库级 `shared/brand-tokens.css`；后台 `main.css` 经 `--ag-*` 别名消费，
+  家庭端 `--fg-*` 主题真源不变（tokens.ts）。新增跨端视觉变量先落 shared，再在端内映射。

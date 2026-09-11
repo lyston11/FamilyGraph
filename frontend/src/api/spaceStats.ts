@@ -4,13 +4,9 @@ import { isNullableString, isOneOf, isRecord, isViewStatus } from './decode'
 import { apiClient } from './client'
 
 /**
- * SpaceStats 客户端合同占位（design.md §4.4）。
+ * SpaceStats 客户端合同（09-11 起已落地：后端 GET /api/stats?space_id= 已挂载）。
  *
- * BLOCKER: 服务端合同未落地 —— 下方路径与载荷形状为前端约定，后端任务对齐前
- * 仅以 fixture/decoder/store 测试驱动（对齐清单见任务 notes.md
- * 「前端客户端合同占位（待服务端任务对齐）」）。
- *
- * 合同（占位）：
+ * 合同：
  * - 请求：`GET /stats?space_id=<id>`，为既有 `/stats` 端点的空间限定查询形态；
  *   旧无空间合同（api/stats.ts）已随 Phase 5 删除，统计页无任何消费方，
  *   本模块不做旧语义回退；

@@ -37,19 +37,17 @@ const ALL_SOURCES = [
 ] as const
 
 describe('Phase 7：375px 响应式源级契约', () => {
-  it('记忆五标签：≤600px 分段控制器外观 + 标签 44px 点按目标；页面顶栏窄屏收敛', () => {
-    // 分段控制器：≤600px 标签栏变分段外观（PRD §2.5），标签 ≥44px 点按目标
+  it('记忆页与设置页同构框架：容器 1120px 居中 + 左侧分区导航 ≤768px 收敛为横向滑动标签条（44px 点按目标）', () => {
+    // 页面容器与设置页同构（max-width 居中，不再是全宽 hero 大卡）
+    expect(memoryViewSource).toMatch(/\.memory-view\s*\{[^}]*max-width: 1120px/)
+    // 分区导航 ≤768px 变横向滑动标签条（与设置页 tabs 同断点），标签 ≥44px 点按目标
     expect(memoryManagerSource).toMatch(
-      /@media \(max-width: 600px\)[\s\S]*\.n-tabs-nav[\s\S]*?border-radius: var\(--fg-radius-control\);/,
+      /@media \(max-width: 768px\)[\s\S]*\.memory-tabs\s*\{[\s\S]*?flex-direction: row;/,
     )
     expect(memoryManagerSource).toMatch(
-      /@media \(max-width: 600px\)[\s\S]*\.n-tabs-tab[^{]*\{[^}]*min-height: 44px;/,
+      /@media \(max-width: 768px\)[\s\S]*\.memory-tabs\s*\{[\s\S]*?overflow-x: auto;/,
     )
-    // 页面容器随壳单列（max-width 约束而非固定宽度），顶栏标签窄屏隐藏
-    expect(memoryViewSource).toMatch(/\.memory-view\s*\{[^}]*padding: 24px clamp\(/)
-    expect(memoryViewSource).toMatch(
-      /@media \(max-width: 600px\)[\s\S]*\.topbar-label\s*\{[\s\S]*?display: none;/,
-    )
+    expect(memoryManagerSource).toMatch(/\.memory-tab\s*\{[^}]*min-height: 44px;/)
   })
 
   it('设置页：inline 表单窄屏纵向堆叠 + 主题预览卡单列', () => {

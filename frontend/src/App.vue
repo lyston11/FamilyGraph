@@ -2,7 +2,7 @@
 // 根组件（design.md §2.2/§3.1）：全局 providers + 主题 token 注入 + 壳条件渲染。
 // P5 收尾：旧组件库已全量移除，naive-ui 为唯一组件库（组件按需 import）。
 // 09-04：家庭端是唯一产品面，后台在独立前端应用，本组件无任何后台壳分支。
-import { computed, watchEffect } from 'vue'
+import { computed, defineAsyncComponent, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   NConfigProvider,
@@ -14,10 +14,13 @@ import {
 } from 'naive-ui'
 
 import AssistantLauncher from '@/components/agent/AssistantLauncher.vue'
-import AppShell from '@/components/shell/AppShell.vue'
 import { themeOverrides } from '@/styles/naive-themes'
 import { themeCssVars, themeTokens } from '@/styles/tokens'
 import { useUiStore } from '@/stores/ui'
+
+// 应用壳按需加载（09-11 R6 性能治理）：blank chrome（登录/引导/404）不渲染壳，
+// 壳及其专属依赖不再静态进入首屏主 chunk；与 AssistantPanel 同一 async 模式。
+const AppShell = defineAsyncComponent(() => import('@/components/shell/AppShell.vue'))
 
 const ui = useUiStore()
 const route = useRoute()

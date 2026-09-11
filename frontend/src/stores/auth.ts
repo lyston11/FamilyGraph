@@ -2,7 +2,19 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import * as authApi from '@/api/auth'
+import { useActionCardsStore } from '@/stores/actionCards'
+import { useAgentStore } from '@/stores/agent'
+import { useFamilyRecommendationsStore } from '@/stores/familyRecommendations'
+import { useGovernanceStore } from '@/stores/governance'
+import { useGraphStore } from '@/stores/graph'
+import { useHouseholdCardStore } from '@/stores/household'
+import { useKinshipStore } from '@/stores/kinship'
 import { useMembersStore } from '@/stores/members'
+import { useMemoryStore } from '@/stores/memory'
+import { useNotificationsStore } from '@/stores/notifications'
+import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
+import { useSpaceStatsStore } from '@/stores/spaceStats'
+import { useSpacesStore } from '@/stores/spaces'
 import {
   registerRefreshExecutor,
   registerSessionExpiredHandler,
@@ -41,32 +53,26 @@ export const useAuthStore = defineStore('auth', () => {
   /**
    * 家庭侧敏感缓存清理（不含凭据与 user 投影）：
    * 登出 / 401 / token 失效时 clearSession 全量清空，业务 store 不残留任何 PII。
+   *
+   * 全部静态导入（09-11 R6）：这些 store 均已被路由/视图/组合式函数静态依赖，
+   * 动态 import 不再产生任何拆包收益，只会制造 rollup 动态/静态冲突警告。
+   * agent/spaces 虽静态导入 auth，但其 useAuthStore 调用均为函数级（运行时
+   * 解析），静态循环无初始化顺序问题。
    */
   function clearFamilyCaches(): void {
-    // 敏感缓存清理红线（state-management.md）：同步清空业务 store 的 PII
     useMembersStore().clear()
-    // v2 治理缓存（确档/数据权利/争议）随会话清空，避免身份切换后残留
-    void import('@/stores/governance').then((m) => m.useGovernanceStore().clear())
-    // Agent 会话/SSE/草稿（V2.2）：关流、清分区、删 sessionStorage Run 游标
-    void import('@/stores/agent').then((m) => m.useAgentStore().clear())
-    // 记忆候选、已确认 Memory 与 RAG 引用（V2.5）随会话清空
-    void import('@/stores/memory').then((m) => m.useMemoryStore().clear())
-    // 称谓缓存与解析态（V2.3）随会话清空
-    void import('@/stores/kinship').then((m) => m.useKinshipStore().clear())
-    // 管家建议卡片（V2.4）随会话清空
-    void import('@/stores/actionCards').then((m) => m.useActionCardsStore().clear())
-    // 亲属推荐按空间缓存的只读候选随会话清空
-    void import('@/stores/familyRecommendations')
-      .then((m) => m.useFamilyRecommendationsStore().clear())
-    // PersonalFamilyView 按空间缓存的授权投影随会话清空
-    void import('@/stores/personalFamilyView').then((m) => m.usePersonalFamilyViewStore().clear())
-    // HouseholdCard / 通知 / 空间统计的空间键控缓存随会话清空（09-01 Phase 1 合同层）
-    void import('@/stores/household').then((m) => m.useHouseholdCardStore().clear())
-    void import('@/stores/notifications').then((m) => m.useNotificationsStore().clear())
-    void import('@/stores/spaceStats').then((m) => m.useSpaceStatsStore().clear())
-    // 延迟导入避免循环依赖：graph/spaces 依赖 auth 时经由函数内解析
-    void import('@/stores/graph').then((m) => m.useGraphStore().clear())
-    void import('@/stores/spaces').then((m) => m.useSpacesStore().clear())
+    useGovernanceStore().clear()
+    useAgentStore().clear()
+    useMemoryStore().clear()
+    useKinshipStore().clear()
+    useActionCardsStore().clear()
+    useFamilyRecommendationsStore().clear()
+    usePersonalFamilyViewStore().clear()
+    useHouseholdCardStore().clear()
+    useNotificationsStore().clear()
+    useSpaceStatsStore().clear()
+    useGraphStore().clear()
+    useSpacesStore().clear()
   }
 
   function clearSession(): void {

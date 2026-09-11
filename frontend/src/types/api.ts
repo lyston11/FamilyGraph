@@ -379,6 +379,12 @@ export interface FamilySpace {
   name: string
   owner_id: number
   kind: 'household' | 'lineage'
+  /**
+   * household → 所属 lineage 空间的显式配对（PUT /spaces/{id}/lineage-link）。
+   * 可选兼容旧载荷：缺省/undefined/null 都按「未配对」处理，前端回退 owner
+   * 唯一匹配推断（spaces store 的 lineageForSpace / householdForLineage）。
+   */
+  lineage_space_id?: number | null
   created_at: string
   pending_count: number
   member_count: number
@@ -586,8 +592,8 @@ export interface Attachment {
 }
 
 // ---- 09-01 PersonalFamilyView 前端 Phase 1：HouseholdCard / Notification / SpaceStats ----
-// 服务端合同占位：三个端点尚未由后端任务落地，客户端合同见任务 notes.md
-// 「前端客户端合同占位（待服务端任务对齐）」；decoder 在 api/ 层 fail-closed。
+// 服务端合同已落地（09-11 复核：GET /api/household-card、/api/stats?space_id、
+// /api/notifications* 均已挂载）；decoder 在 api/ 层保持 fail-closed。
 
 /**
  * HouseholdCard 成员条目（design.md §4.2）：仅服务端确认的 active household 成员。
@@ -638,7 +644,7 @@ export interface HouseholdCardSnapshot {
   etag: string | null
 }
 
-/** 通知种类（合同占位；决定 ActionCard 引用与跳转上下文） */
+/** 通知种类（决定 ActionCard 引用与跳转上下文） */
 export type NotificationKind = 'action_card' | 'space_membership' | 'bridge' | 'relation'
 
 /**

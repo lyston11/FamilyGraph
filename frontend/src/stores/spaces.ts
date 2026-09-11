@@ -19,6 +19,7 @@ import {
   removeOrWithdrawMembership,
   resolveMembership,
   respondOwnershipTransfer,
+  setSpaceLineageLink,
   updateSpace,
 } from '@/api/spaces'
 
@@ -80,6 +81,60 @@ export const useSpacesStore = defineStore('spaces', {
     canTransferOwnership(): boolean {
       return this.isSpaceAdmin
     },
+    /** 全部家族空间（「当前家族空间」选择器唯一选项来源，本 store 只含我 active 成员的空间）。 */
+    lineageSpaces(state): FamilySpace[] {
+      return state.spaces.filter((space) => space.kind === 'lineage')
+    },
+    /**
+     * household → 所属 lineage：显式 lineage_space_id 优先；旧数据回退
+     * 「owner 唯一对应一个 lineage」的确定性推断，多候选不猜（返回 null）。
+     */
+    lineageForSpace(state) {
+      return (spaceId: number): FamilySpace | null => {
+        const space = state.spaces.find((s) => s.id === spaceId && s.kind === 'household')
+        if (!space) return null
+        const linkedId = space.lineage_space_id ?? null
+        if (linkedId !== null) {
+          const linked = state.spaces.find((s) => s.id === linkedId && s.kind === 'lineage')
+          // 显式链接存在但目标不在当前授权投影时，不回退 owner 猜测，避免
+          // 把当前家庭错误显示到另一家族空间。
+          return linked ?? null
+        }
+        const owned = state.spaces.filter(
+          (s) => s.kind === 'lineage' && s.owner_id === space.owner_id,
+        )
+        return owned.length === 1 ? owned[0]! : null
+      }
+    },
+    /**
+     * lineage → 落点 household（家庭卡页的家族切换目标）：显式配对优先；
+     * 无显式配对时回退「owner 相等且未挂到其他家族」的确定性推断。
+     * 多候选时依次取：当前家庭卡（已在该家族内）→ 本人 own 的 → 服务端列表
+     * 第一个，保证切换总能确定性落位。
+     */
+    householdForLineage(state) {
+      return (lineageId: number): FamilySpace | null => {
+        const lineage = state.spaces.find((s) => s.id === lineageId && s.kind === 'lineage')
+        if (!lineage) return null
+        let candidates = state.spaces.filter(
+          (s) => s.kind === 'household' && (s.lineage_space_id ?? null) === lineageId,
+        )
+        if (candidates.length === 0) {
+          candidates = state.spaces.filter(
+            (s) =>
+              s.kind === 'household' &&
+              (s.lineage_space_id ?? null) === null &&
+              s.owner_id === lineage.owner_id,
+          )
+        }
+        if (candidates.length === 0) return null
+        const current = candidates.find((s) => s.id === state.currentSpaceId)
+        if (current) return current
+        const userId = useAuthStore().user?.id
+        const own = userId === undefined ? [] : candidates.filter((s) => s.owner_id === userId)
+        return (own.length > 0 ? own : candidates)[0]!
+      }
+    },
     activeMembers(state): SpaceMemberInfo[] {
       return state.members.filter((m) => m.status === 'active')
     },
@@ -138,6 +193,17 @@ export const useSpacesStore = defineStore('spaces', {
      */
     async rename(spaceId: number, name: string) {
       const updated = await updateSpace(spaceId, name)
+      const index = this.spaces.findIndex((s) => s.id === updated.id)
+      if (index !== -1) this.spaces.splice(index, 1, updated)
+      return updated
+    },
+    /**
+     * 设置/解除家庭空间所属家族（PUT /spaces/{id}/lineage-link）。
+     * 授权由服务端判定（该空间管理员 + 目标 lineage active 成员）；
+     * 成功后用服务端响应替换列表中的同一空间（无乐观本地更新）。
+     */
+    async setLineageLink(spaceId: number, lineageSpaceId: number | null) {
+      const updated = await setSpaceLineageLink(spaceId, lineageSpaceId)
       const index = this.spaces.findIndex((s) => s.id === updated.id)
       if (index !== -1) this.spaces.splice(index, 1, updated)
       return updated

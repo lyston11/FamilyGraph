@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
@@ -34,6 +35,7 @@ import type { CorrectableField, DataRightRequest } from '@/types/api'
 const auth = useAuthStore()
 const governance = useGovernanceStore()
 const message = useMessage()
+const router = useRouter()
 
 const requestingExport = ref(false)
 
@@ -235,9 +237,11 @@ async function submitDeletion(): Promise<void> {
     await governance.executeDelete(request.id, deleteConfirmName.value.trim())
     message.success('档案与账号已删除。感谢你曾使用 FamilyGraph。')
     deleteDialogVisible.value = false
-    // 本地会话即刻失效：清空全部缓存并回登录页
+    // 本地会话即刻失效：清空全部缓存并回登录页。
+    // 09-11 R6：改用 SPA 路由跳转——jsdom 测试里 window.location.assign 触发
+    // 「Not implemented: navigation」噪音；应用内导航本就不该整页刷新。
     auth.clearSession()
-    window.location.assign('/login')
+    await router.push({ name: 'login' })
   } catch (error) {
     deleteError.value =
       error instanceof ApiError

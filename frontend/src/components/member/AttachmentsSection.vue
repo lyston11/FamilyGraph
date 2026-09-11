@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { NButton, NSpin, useMessage } from 'naive-ui'
 
 import {
+  MEDIA_UNAVAILABLE_MESSAGE,
   addLink,
-  attachmentRawUrl,
   deleteAttachment,
+  fetchAttachmentBlob,
   fetchAttachments,
   uploadImage,
   type AttachmentOut,
@@ -14,6 +15,10 @@ import {
 /**
  * 档案附件区（m3a）：相册网格（上传/预览/删除）+ 链接卡片列表。
  * 权限由后端强制（D5 编辑权）；无权者后端返回空/404。
+ *
+ * 媒体认证（R1，09-11 整改）：缩略图/预览经 `fetchAttachmentBlob` 携带内存
+ * access token 获取，经 object URL 渲染；组件卸载、重新加载与换图时统一
+ * revoke，避免 Blob 泄漏。加载失败显示统一安全文案，不泄露附件存在性。
  */
 const props = defineProps<{ userId: number; canEdit: boolean }>()
 
@@ -27,7 +32,20 @@ const linkTitle = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const previewSrc = ref<string | null>(null)
 
-async function load() {
+/** attachmentId → object URL；thumb 与 preview 共用同一份 URL */
+const objectUrls = ref(new Map<number, string>())
+const failedIds = ref(new Set<number>())
+
+function revokeAll(): void {
+  for (const url of objectUrls.value.values()) URL.revokeObjectURL(url)
+  objectUrls.value = new Map()
+  failedIds.value = new Set()
+  previewSrc.value = null
+}
+
+onUnmounted(revokeAll)
+
+async function load(): Promise<void> {
   loading.value = true
   try {
     items.value = await fetchAttachments(props.userId)
@@ -36,6 +54,44 @@ async function load() {
   } finally {
     loading.value = false
   }
+  await loadThumbnails()
+}
+
+/** 只对 image 类型逐张取 blob；单张失败只影响该格，不影响整体列表 */
+async function loadThumbnails(): Promise<void> {
+  const previous = objectUrls.value
+  objectUrls.value = new Map()
+  failedIds.value = new Set()
+  const images = items.value.filter((item) => item.type === 'image')
+  await Promise.all(
+    images.map(async (item) => {
+      try {
+        const blob = await fetchAttachmentBlob(item.id)
+        const url = URL.createObjectURL(blob)
+        objectUrls.value.set(item.id, url)
+      } catch {
+        failedIds.value.add(item.id)
+      }
+    }),
+  )
+  for (const url of previous.values()) URL.revokeObjectURL(url)
+}
+
+function thumbUrl(id: number): string | null {
+  return objectUrls.value.get(id) ?? null
+}
+
+function thumbFailed(id: number): boolean {
+  return failedIds.value.has(id)
+}
+
+function openPreview(id: number): void {
+  const url = objectUrls.value.get(id)
+  if (url) previewSrc.value = url
+}
+
+function closePreview(): void {
+  previewSrc.value = null
 }
 
 onMounted(load)
@@ -91,11 +147,17 @@ async function remove(id: number) {
       <div class="album-grid" data-test="album-grid">
         <div v-for="item in items.filter((i) => i.type === 'image')" :key="item.id" class="photo-cell">
           <img
-            :src="attachmentRawUrl(item.id)"
+            v-if="thumbUrl(item.id)"
+            :src="thumbUrl(item.id) ?? undefined"
             :alt="item.title ?? '家庭照片'"
             class="thumb"
-            @click="previewSrc = attachmentRawUrl(item.id)"
+            data-test="photo-thumb"
+            @click="openPreview(item.id)"
           />
+          <div v-else-if="thumbFailed(item.id)" class="thumb thumb-failed" data-test="photo-unavailable">
+            {{ MEDIA_UNAVAILABLE_MESSAGE }}
+          </div>
+          <div v-else class="thumb thumb-loading" aria-hidden="true" />
           <NButton
             v-if="canEdit"
             size="tiny"
@@ -141,9 +203,18 @@ async function remove(id: number) {
       <button type="submit">添加链接</button>
     </form>
 
-    <!-- 放大预览 -->
+    <!-- 放大预览：object URL 复用缩略图 blob；点击遮罩关闭，Escape 可关 -->
     <teleport to="body">
-      <div v-if="previewSrc" class="preview-mask" @click="previewSrc = null">
+      <div
+        v-if="previewSrc"
+        class="preview-mask"
+        role="dialog"
+        aria-label="照片预览"
+        data-test="photo-preview"
+        tabindex="-1"
+        @click="closePreview"
+        @keydown.escape="closePreview"
+      >
         <img :src="previewSrc" alt="预览大图" class="preview-img" />
       </div>
     </teleport>
@@ -176,6 +247,26 @@ async function remove(id: number) {
   border-radius: var(--fg-radius-control);
   cursor: zoom-in;
   display: block;
+}
+
+.thumb-failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-ink-faint);
+  background: var(--fg-surface-sunken);
+  border: 1px dashed var(--fg-line);
+  cursor: default;
+}
+
+.thumb-loading {
+  background: var(--fg-surface-sunken);
+  border: 1px dashed var(--fg-line);
+  cursor: default;
 }
 
 .del-btn {

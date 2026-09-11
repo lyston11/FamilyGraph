@@ -1,0 +1,8 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"复核两个前端的完整质量门禁、性能阈值、移动端和测试警告。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"复核共享 token、可访问性、Naive UI 和响应式组件实现是否符合规范。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"复核媒体请求、refresh、登出清理和家庭/后台 token 隔离。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"复核 API decoder、错误分类、ETag/304 和 fail-closed 行为。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"复核 smoke 结果与后端错误码/防枚举语义是否一致。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"复核后端测试、listener 和 API 契约验证结果。"}
+{"file":".trellis/spec/architecture.md","reason":"复核后台独立 listener、主体隔离和跨前端边界没有被破坏。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核前端、代理、后端、SSE 和部署配置的端到端数据流。"}

@@ -1,8 +1,13 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
 import { defineComponent, h } from 'vue'
+
+// ErrorNotice uses useRouter: mock to silence router injection warning (no routing here)
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: vi.fn().mockResolvedValue(undefined) }),
+}))
 
 import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
 import ErrorNotice from '@/components/agent/ErrorNotice.vue'

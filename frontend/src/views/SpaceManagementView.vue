@@ -7,15 +7,17 @@
 //   不新增直接编辑 SourceFact / SpaceMember / PersonalFamilyView 的前端路径；
 // - Bridge 通知分区只读：仅安全状态与通知时间，无 approve/reject/consent/revoke 控件
 //   （管理员对跨 LineageSpace bridge 只有通知查看权，PRD §2.6）；
-// - 空间设置只有既有 PATCH /spaces/{space_id} 合同（空间名），无新增授权字段；
+// - 空间设置：既有 PATCH /spaces/{space_id} 合同（空间名）+ 家庭空间所属家族
+//   配对（PUT lineage-link，仅管理员；「当前家族空间」切换维度的数据基础）；
 // - 模型设置分区：assistant/steward 双 Agent 模型选择与云同意（09-06 治理迁移，
-//   SpaceModelSettingsPanel 自管数据，权限同 PATCH /spaces 的 space_admin 语义）。
+//   SpaceModelSettingsPanel 自管数据，权限同 PATCH /spaces 的 space_admin 语义）；
 // - 分区深链：?section= 合法 key 直达对应分区，切 tab 时 replace 写回（09-06 R5）。
-import { NAlert, NButton, NEmpty, NInput, NSpin, useMessage } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NInput, NSelect, NSpin, useMessage } from 'naive-ui'
 import { computed, onMounted, ref, watch, type InputHTMLAttributes } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/errors'
+import { describeLoadError } from '@/api/loadError'
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import InviteMemberDialog from '@/components/member/InviteMemberDialog.vue'
 import PendingProfileRefs from '@/components/member/PendingProfileRefs.vue'
@@ -100,9 +102,9 @@ const bridgeItems = computed<NotificationItem[]>(() => {
 })
 const bridgeLoading = computed(() => notifications.isLoading(targetSpaceId.value))
 const bridgeError = computed(() => notifications.errorFor(targetSpaceId.value))
-/** 通知端点运行时 404（BLOCKER 占位）→ 安静的合同未就绪态，与通知页同一口径 */
-const bridgeContractUnready = computed(
-  () => bridgeError.value instanceof ApiError && bridgeError.value.status === 404,
+/** Bridge 通知加载失败 → 按真实原因分类的安全态，与通知页同一口径 */
+const bridgeErrorCopy = computed(() =>
+  bridgeError.value === null ? null : describeLoadError(bridgeError.value, '通知'),
 )
 
 // ---- 空间设置：既有 PATCH 合同，仅空间名一个字段 ----
@@ -131,6 +133,33 @@ async function saveName(): Promise<void> {
     message.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
   } finally {
     savingName.value = false
+  }
+}
+
+// ---- 家族配对（家庭空间 → 所属 lineage；PUT /spaces/{id}/lineage-link）----
+// 选项只来自本人 active 成员的 lineage 空间；授权由服务端判定（本空间管理员
+// + 目标 lineage active 成员）。解除关联传 null。
+const lineageLinkOptions = computed(() =>
+  spaces.spaces
+    .filter((space) => space.kind === 'lineage')
+    .map((space) => ({ label: space.name, value: space.id })),
+)
+const savingLineageLink = ref(false)
+const currentLineageLink = computed(() =>
+  space.value?.kind === 'household' ? space.value.lineage_space_id ?? null : null,
+)
+
+async function onLineageLinkChange(value: number | null): Promise<void> {
+  const current = space.value
+  if (!current || value === (current.lineage_space_id ?? null)) return
+  savingLineageLink.value = true
+  try {
+    await spaces.setLineageLink(current.id, value)
+    message.success(value === null ? '已解除家族关联' : '所属家族已更新')
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '保存失败，请稍后重试')
+  } finally {
+    savingLineageLink.value = false
   }
 }
 </script>
@@ -249,11 +278,8 @@ async function saveName(): Promise<void> {
               管理员没有批准、否决、修改或撤销权，Bridge 生效只由相关用户本人双向同意决定。
             </p>
             <NSpin v-if="bridgeLoading && bridgeItems.length === 0" :show="true" size="small" />
-            <p v-else-if="bridgeContractUnready" class="safe-note" data-test="bridge-contract-unready">
-              通知服务合同未就绪，已按安全策略不展示任何数据。
-            </p>
-            <p v-else-if="bridgeError !== null" class="safe-note" data-test="bridge-notice-error">
-              Bridge 通知暂时无法加载，稍后可在通知中心查看。
+            <p v-else-if="bridgeErrorCopy !== null" class="safe-note" data-test="bridge-notice-error">
+              {{ bridgeErrorCopy.title }}，已按安全策略不展示任何数据。稍后可在通知中心查看。
             </p>
             <NEmpty
               v-else-if="bridgeItems.length === 0"
@@ -277,7 +303,7 @@ async function saveName(): Promise<void> {
             <SpaceModelSettingsPanel :space-id="space.id" />
           </section>
 
-          <!-- 空间设置：既有 PATCH /spaces/{space_id}，仅空间名，无新增授权字段 -->
+          <!-- 空间设置：既有 PATCH /spaces/{space_id}（空间名）+ 家庭空间的所属家族配对 -->
           <section v-else-if="activeSection === 'settings'" class="section-card" data-test="section-settings">
             <h2 class="section-title">空间设置</h2>
             <form class="settings-form" @submit.prevent="saveName">
@@ -300,8 +326,24 @@ async function saveName(): Promise<void> {
                 保存
               </NButton>
             </form>
+            <form v-if="space.kind === 'household'" class="settings-form" data-test="lineage-link-form">
+              <label class="settings-field">
+                <span class="label">所属家族</span>
+                <NSelect
+                  :value="currentLineageLink"
+                  :options="lineageLinkOptions"
+                  :loading="savingLineageLink"
+                  clearable
+                  placeholder="未关联家族空间"
+                  aria-label="所属家族空间"
+                  data-test="lineage-link-select"
+                  @update:value="onLineageLinkChange"
+                />
+              </label>
+            </form>
             <p class="section-hint">
-              空间设置仅支持修改空间名称；成员、角色与授权由服务端成员关系判定，不在此配置。
+              家庭空间关联家族后，「当前家族空间」切换会在家族树与家庭卡间落到同一家族。
+              成员、角色与授权由服务端成员关系判定，不在此配置。
             </p>
           </section>
         </div>

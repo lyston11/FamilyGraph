@@ -36,7 +36,7 @@ vi.mock('@/api/attachments', () => ({
   addLink: vi.fn(),
   deleteAttachment: vi.fn(),
   uploadImage: vi.fn(),
-  attachmentRawUrl: vi.fn(() => ''),
+  fetchAttachmentBlob: vi.fn().mockRejectedValue(new Error('mocked')),
 }))
 
 const mockedResolve = vi.mocked(kinshipApi.resolveKinship)

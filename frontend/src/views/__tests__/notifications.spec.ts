@@ -3,6 +3,7 @@ import { createPinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
 import { defineComponent, h } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import * as actionCardsApi from '@/api/actionCards'
 import { ApiError } from '@/api/errors'
@@ -111,7 +112,14 @@ async function mountNotifications(): Promise<VueWrapper> {
       return h('div', [h(NMessageProvider, () => h(NotificationsView))])
     },
   })
-  const wrapper = mount(Harness, { global: { plugins: [pinia] }, attachTo: document.body })
+  // NotificationsView 使用 useRouter：注入内存路由消除 router injection 警告
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/', name: 'home', component: { template: '<div />' } }],
+  })
+  await router.push('/')
+  await router.isReady()
+  const wrapper = mount(Harness, { global: { plugins: [pinia, router] }, attachTo: document.body })
   await new Promise((resolve) => setTimeout(resolve))
   return wrapper
 }
@@ -258,11 +266,12 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     wrapper.unmount()
   })
 
-  it('通知端点 404（合同占位）：安静的「合同未就绪」安全态，无假数据', async () => {
+  it('通知端点 404：「通知服务未部署」可行动安全态，无假数据', async () => {
     mockedFetchNotifications.mockRejectedValue(new ApiError(404, 'HTTP_ERROR', 'not found'))
     const wrapper = await mountNotifications()
 
-    expect(wrapper.find('[data-test="notifications-contract-unready"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="notifications-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('通知服务未部署')
     expect(wrapper.find('[data-test="section-pending"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('共建家庭空间建议')
     wrapper.unmount()

@@ -10,15 +10,16 @@
 //   personalFamilyView.reloadAfterBridgeChange(spaceId)（只读重载投影，只触发一次）；
 // - 空间管理员对 bridge 通知只有查看权：本页不渲染任何
 //   approve/reject/consent/revoke 控件（所有卡片操作都在既有 ActionCard 流程内）；
-// - 通知端点运行时 404（BLOCKER 合同占位）→ 安静的「合同未就绪」安全态，无假数据；
+// - 加载失败按真实原因分类（404 未部署 / 403 无权 / 503 维护 / 网络偏斜），
+//   无假数据、无错误横幅泄漏后端细节；
 // - 数据全部经 notifications store（服务端真源），页面不发请求。
-import { NAlert, NButton, NEmpty, NSpin } from 'naive-ui'
+import { NButton, NEmpty, NSpin } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import NoticeItemRow from '@/components/notifications/NoticeItemRow.vue'
-import { ApiError } from '@/api/errors'
+import { describeLoadError } from '@/api/loadError'
 import { useActionCardsStore } from '@/stores/actionCards'
 import { useNotificationsStore } from '@/stores/notifications'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
@@ -43,13 +44,12 @@ const loadError = computed(() =>
   spaceId.value === null ? null : notifications.errorFor(spaceId.value),
 )
 
-/** 404（BLOCKER 端点未落地）→ 安静的合同未就绪态；其他错误 → 可重试错误态 */
-const contractUnready = computed(
-  () => loadError.value instanceof ApiError && loadError.value.status === 404,
+/** 按真实失败原因分类的可行动文案（404 未部署 / 403 无权 / 503 维护 / 网络偏斜） */
+const errorCopy = computed(() =>
+  loadError.value === null ? null : describeLoadError(loadError.value, '通知'),
 )
 
 const sections = computed(() => classifyNotifications(page.value?.items ?? []))
-const hasItems = computed(() => (page.value?.items.length ?? 0) > 0)
 
 /** 全部已读：仅影响已读状态；unread_count 来自服务端载荷 */
 const unreadCount = computed(() =>
@@ -119,12 +119,24 @@ function retry(): void {
 
 <template>
   <main class="notifications-view" data-test="notifications-view">
+    <!-- 顶部行与家庭首页 exit-row 同款：左返回、右动作，卡片上方留白对齐家庭页 -->
+    <div class="exit-row">
+      <button class="back-link" type="button" data-test="notifications-back" @click="goHome">
+        ← 返回我的家庭
+      </button>
+      <NButton
+        size="small"
+        secondary
+        :disabled="loading || unreadCount === 0"
+        data-test="mark-all-read"
+        @click="markAllRead"
+      >
+        全部标记已读
+      </NButton>
+    </div>
     <article class="notice-hero">
       <header class="hero-head">
         <div class="hero-identity">
-          <button class="back-link" type="button" data-test="notifications-back" @click="goHome">
-            ← 返回我的家庭
-          </button>
           <p class="hero-kind">家庭空间</p>
           <h1 class="hero-title">通知与待办</h1>
           <p class="hero-subtitle">
@@ -132,36 +144,18 @@ function retry(): void {
             打开通知只会标记已读，不会改变任何申请或连接状态。
           </p>
         </div>
-        <NButton
-          size="small"
-          secondary
-          :disabled="loading || unreadCount === 0"
-          data-test="mark-all-read"
-          @click="markAllRead"
-        >
-          全部标记已读
-        </NButton>
       </header>
 
     <NSpin v-if="loading && page === null" :show="true" class="loading-spin" />
 
-    <!-- 通知端点 404（BLOCKER 合同占位）：安静的安全态，无假数据、无错误横幅 -->
+    <!-- 加载失败：按真实原因分类（404 未部署 / 403 无权 / 503 维护 / 网络偏斜） -->
     <section
-      v-else-if="contractUnready"
+      v-else-if="errorCopy !== null"
       class="status-panel"
-      data-test="notifications-contract-unready"
+      data-test="notifications-error"
     >
-      <h2 class="status-title">通知服务合同未就绪</h2>
-      <p class="status-text">
-        通知中心的服务端合同尚未落地或暂时不可用。已按安全策略不展示任何通知数据；待办仍可从各流程入口进入处理。
-      </p>
-      <NButton size="small" data-test="notifications-retry" @click="retry">重新加载</NButton>
-    </section>
-
-    <!-- 其他错误：可解释失败态（不退化成普通空状态） -->
-    <section v-else-if="loadError !== null" class="status-panel" data-test="notifications-error">
-      <h2 class="status-title">通知暂时无法加载</h2>
-      <p class="status-text">网络或服务暂时不可用，请稍后重试。</p>
+      <h2 class="status-title">{{ errorCopy.title }}</h2>
+      <p class="status-text">{{ errorCopy.text }}</p>
       <NButton size="small" data-test="notifications-retry" @click="retry">重新加载</NButton>
     </section>
 
@@ -248,17 +242,6 @@ function retry(): void {
         </ul>
       </section>
 
-      <!-- 无任何通知：整体空态 -->
-      <NAlert
-        v-if="!hasItems"
-        type="info"
-        :show-icon="true"
-        :closable="false"
-        class="all-empty"
-        data-test="notifications-all-empty"
-      >
-        当前空间暂无通知。
-      </NAlert>
     </template>
     </article>
   </main>
@@ -268,19 +251,29 @@ function retry(): void {
 .notifications-view {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  /* 容器几何与家庭首页 household-card-view（1320px / 44px 边距）保持一致 */
+  /* 容器几何与家庭首页 household-card-view（1320px / 44px 边距 / 20px 行距）保持一致 */
+  gap: 20px;
   max-width: 1320px;
   margin: 0 auto;
   padding: 32px 44px 48px;
   box-sizing: border-box;
 }
 
-/* 09-06 视觉补齐：与家庭首页 family-space-hero 同套大卡设计语言 */
+/* 顶部行同款家庭首页 exit-row：卡片上方留白（32 + 44 + 20）与家庭页一致 */
+.exit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+
+/* 09-06 视觉补齐：与家庭首页 family-space-hero 同套大卡设计语言（含 580px 最小卡高） */
 .notice-hero {
   position: relative;
   display: flex;
   flex-direction: column;
+  min-height: 580px;
   padding: 36px 40px 24px;
   box-sizing: border-box;
   background:
@@ -311,23 +304,18 @@ function retry(): void {
 }
 
 .hero-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  flex-wrap: wrap;
-  padding-bottom: 24px;
+  padding-bottom: 32px;
   border-bottom: 1px solid var(--fg-glass-border);
 }
 
 .hero-identity { min-width: 0; }
 
+/* 返回链接移到卡片上方顶部行后，按家庭页 exit-button 同规格（44px 点按目标） */
 .back-link {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
-  margin: 0 0 8px;
-  padding: 0;
+  padding: 0 6px;
   border: 0;
   background: transparent;
   color: var(--fg-ink-secondary);
@@ -350,15 +338,29 @@ function retry(): void {
   font-weight: 600;
 }
 
-.hero-subtitle { margin: 10px 0 0; color: var(--fg-ink-secondary); font-size: 12px; line-height: 1.7; }
+.hero-subtitle { margin: 6px 0 0; color: var(--fg-ink-secondary); font-size: 12px; line-height: 1.7; }
 
 .loading-spin { min-height: 160px; }
 
-/* 内部分区：大卡内部以分隔线组织（不再各自成卡） */
+/* 内部分区：大卡内部以分隔线组织（不再各自成卡）；节奏对齐首页卡高度 */
 .status-panel,
 .notice-section {
-  padding: 24px 0 20px;
+  padding: 14px 0 12px;
   border-bottom: 1px solid var(--fg-glass-border);
+}
+
+/* 空态压缩：NEmpty 默认图标+留白过大，是卡片偏高的主因 */
+.status-panel :deep(.n-empty),
+.notice-section :deep(.n-empty) {
+  --n-icon-size: 30px;
+  --n-text-color: var(--fg-ink-faint);
+  padding: 2px 0 0;
+  min-height: 0;
+}
+
+.status-panel :deep(.n-empty .n-empty__icon),
+.notice-section :deep(.n-empty .n-empty__icon) {
+  height: 30px;
 }
 
 .status-title {
@@ -376,21 +378,21 @@ function retry(): void {
 }
 
 .section-title {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 15px;
   font-weight: 700;
   color: var(--fg-ink);
 }
 
 .section-hint {
-  margin: 0 0 10px;
+  margin: 2px 0 8px;
   color: var(--fg-ink-secondary);
   font-size: 12px;
 }
 
 .notice-list {
   list-style: none;
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -398,7 +400,7 @@ function retry(): void {
 }
 
 .notice-item {
-  padding: 14px 16px;
+  padding: 10px 14px;
   border: 1px solid var(--fg-glass-border);
   border-radius: calc(var(--fg-radius-card) * 1.2);
   background: var(--fg-glass-surface-raised);
@@ -428,10 +430,7 @@ function retry(): void {
   opacity: 0.82;
 }
 
-.all-empty {
-  margin-top: 16px;
-  border: none;
-}
+
 
 /* 移动端（≤600px）：单列分区已就绪；头部动作按钮补足 44px 点按目标 */
 @media (max-width: 600px) {

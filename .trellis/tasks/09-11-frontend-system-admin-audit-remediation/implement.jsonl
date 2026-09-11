@@ -1,0 +1,8 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、type-check、测试、移动端和性能门禁；用于 R2/R4/R6 的实现与验收。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Naive UI、token、状态徽章、浮层和可访问组件约定；用于 R1/R4。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"access token 内存态、刷新、缓存清理和家庭/后台隔离红线；用于 R1/R2/R7。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"运行时解码、错误外壳和 fail-closed 合同；用于 R2/R3。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"统一错误码、403/404 防枚举和错误响应语义；用于 R2/R3。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端测试门禁和 listener 验证约定；用于真实 API smoke 的隔离环境。"}
+{"file":".trellis/spec/architecture.md","reason":"家庭端与系统后台主体、listener 和数据隔离边界；用于 R2/R4/R7。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"前后端契约、跨层数据流和回归边界；用于整个任务的设计与实现顺序。"}

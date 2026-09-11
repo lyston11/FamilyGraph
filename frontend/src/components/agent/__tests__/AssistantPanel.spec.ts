@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
 import { defineComponent, h } from 'vue'
 
+// ErrorNotice uses useRouter: mock to silence router injection warning (no routing here)
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: vi.fn().mockResolvedValue(undefined) }),
+}))
+
 import * as agentApi from '@/api/agent'
 import AssistantPanel from '@/components/agent/AssistantPanel.vue'
 import { useAgentStore } from '@/stores/agent'

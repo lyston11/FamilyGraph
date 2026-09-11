@@ -152,17 +152,35 @@ describe('StatsView（PRD §2.6：只按当前空间的服务端授权聚合）'
     wrapper.unmount()
   })
 
-  it('404（BLOCKER 合同占位）→「统计服务合同未就绪」安全态，不回退旧 /stats', async () => {
+  it('404 →「统计服务未部署」可行动安全态，不回退旧 /stats', async () => {
     mockedFetchSpaceStats.mockRejectedValue(new ApiError(404, 'HTTP_ERROR', 'not found'))
     const wrapper = await mountStats()
 
-    expect(wrapper.find('[data-test="stats-contract-unready"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="stats-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('统计服务未部署')
     expect(wrapper.text()).not.toContain('12')
     expect(wrapper.find('[data-test="stat-node-count"]').exists()).toBe(false)
     // 旧无空间合同不回退：只有带 space_id 的一次请求
     expect(mockedFetchSpaceStats).toHaveBeenCalledTimes(1)
     expect(mockedFetchSpaceStats).toHaveBeenCalledWith(7, null)
     wrapper.unmount()
+  })
+
+  it('403/503/网络失败 → 各自可行动文案（不再统一「合同未就绪」）', async () => {
+    mockedFetchSpaceStats.mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'forbidden'))
+    const forbidden = await mountStats()
+    expect(forbidden.find('[data-test="stats-error"]').text()).toContain('没有权限查看统计')
+    forbidden.unmount()
+
+    mockedFetchSpaceStats.mockRejectedValue(new ApiError(503, 'MAINTENANCE', 'unavailable'))
+    const maintenance = await mountStats()
+    expect(maintenance.find('[data-test="stats-error"]').text()).toContain('统计服务维护中')
+    maintenance.unmount()
+
+    mockedFetchSpaceStats.mockRejectedValue(new ApiError(0, 'NETWORK_ERROR', 'offline'))
+    const offline = await mountStats()
+    expect(offline.find('[data-test="stats-error"]').text()).toContain('网络异常')
+    offline.unmount()
   })
 
   it('lineage 空间：显示当前家族视图聚合口径', async () => {
