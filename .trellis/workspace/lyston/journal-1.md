@@ -844,3 +844,13 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+## 2026-09-11 frontend-system-admin-audit-remediation（完成并归档）
+
+- R1 媒体认证：fetchAttachmentBlob（内存 token/401 单飞刷新/object URL 生命周期）替换 raw URL `<img>`；安全失败态防枚举。
+- R2/R3：scripts/frontend-api-smoke.sh 真实隔离三 listener smoke（30 用例，含双向 token 交叉拒绝与 404 字节一致）；合同未就绪占位语义全部替换为 describeLoadError 分类文案。
+- R4：shared/brand-tokens.css 共享品牌基座（--ag-* 别名消费）；AdminShell 375px 折叠导航（ARIA/Escape/滚动锁）。
+- R5：StewardOpsPanel 消费 steward/status+jobs 白名单 DTO；重跑入口 disabled 并记录「需 status 暴露 policy_version」依赖。
+- R6：主 chunk 625→358kB、动态/静态冲突与构建警告归零（three 735kB 记录为例外）；测试 stderr 警告归零（XHR mock/router 注入/SPA 导航）。
+- 证据：任务目录 release-evidence.md；smoke 30/30、家庭 521、后台 83 测试通过。后端 ruff/mypy 失败属其他任务未提交文件（steward/space_model_settings/lineage），边界外未触碰。
+- 提交含 stores/spaces.ts、api/spaces.ts 等与交付物同文件纠缠的 lineage 前端 in-flight 改动（不可分离，已记录）；README/后端/AppShell/MemoryManager 等未提交改动保留在工作区。
