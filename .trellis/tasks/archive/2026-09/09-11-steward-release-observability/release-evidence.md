@@ -1,7 +1,7 @@
 # Release Evidence — Steward 端到端发布门禁与可观测性
 
 > 生成：2026-09-12（实施会话）；环境：macOS arm64（Apple Silicon），Python 3.12。
-> 证据分级：**stub** = 本仓 fake transport / 进程内 TestClient；**真实 provider** = 本轮未运行（见文末缺口清单）。
+> 证据分级：**stub** = 本仓 fake transport / 进程内 TestClient；**真实 provider** = 2026-09-12 已运行并通过（§9，liu-dada/gpt-5.6-sol）。
 
 ## 1. 隔离端到端验收（R1/AC-1）— stub，已通过
 
@@ -101,7 +101,7 @@
 
 ## 6. 全量回归门禁
 
-- `cd backend && .venv/bin/python -m pytest -q` → **963 passed, 3 skipped**（退出码 0；含审计修复回归）。
+- `cd backend && .venv/bin/python -m pytest -q` → **967 passed, 3 skipped**（退出码 0；含审计修复回归与真实 provider 轮新增回归）。
 - `ruff check .` 全仓 0 错误；`ruff format --check .` 全仓通过；`mypy app` 0 错误（原 5 个既有错误已修）。
 - `ruff check` / `ruff format --check`：本任务所有触及文件 clean（仓库内其余历史遗留不属于本任务）。
 - `mypy app`：本任务文件 0 错误。
@@ -112,7 +112,7 @@
 
 | 缺口 | 说明 |
 |---|---|
-| 真实 provider 证据未取得 | 全部模型行为由受控 fake HTTP 服务证明（程序合同）；无真实 LLM 成功/降级记录。按 R5 门禁口径，本任务发布门禁为 **partial（stub-only）**，不得标记 completed。 |
+| ~~真实 provider 证据未取得~~ **已关闭（2026-09-12，§9）** | 真实 provider E2E 通过（liu-dada/gpt-5.6-sol，成功与降级记录单列）；模型协议合同仍由受控 fake HTTP 服务承载注入场景。 |
 | 卡片取代路径在 E2E 中无到期卡可观察 | 本场景不构造到期卡（避免人为回拨业务时间到卡片域）；卡片取代已有单测回归覆盖。 |
 | 容量外推 | 200 人全矩阵实测为小时级，证据按实测 viewer 行线性外推并显式标注 `extrapolated=true`。 |
 | 无外部监控平台 | 首版按 PRD 使用现有日志与后台状态；告警为 status API 内的 `alerts` 数组，无 PagerDuty/OTel 推送。 |
@@ -142,3 +142,43 @@
 
 任务元数据同步：七个任务由 completed 改回 in_progress（release_gate=partial），子任务
 implement.md 清单补记实际完成项，父/延期任务相对链接随解除归档恢复有效。
+
+## 9. 真实 provider E2E 轮（2026-09-12）— 通过，发布门禁缺口关闭
+
+配置：cc-switch `pi` 应用 `liu-dada` 配置，与代码内生产标准 profile 常量逐项一致——
+provider `liu-dada`、模型 `gpt-5.6-sol`、协议 `openai-responses`、`https://api.liu-dada.com/v1`、
+context 272k / max_tokens 60k / reasoning。密钥只经 `LIU_DADA_API_KEY` 环境变量在运行时注入
+（来源 cc-switch 本地库），不写入代码、证据、日志或任务文件；证据 JSON 已复核无密钥泄漏。
+
+命令：`cd backend && STEWARD_E2E_REAL_PROVIDER=1 LIU_DADA_API_KEY=… .venv/bin/python scripts/steward_e2e.py`（退出码 0）
+
+真实模式语义：成功路径走真实端点且 `AGENT_PROVIDER_STANDARD_PROFILE_ONLY=True` 全程保持
+（注册行 + 空间解析按生产门禁验证）；协议失败注入仍由 fake provider 承载（注入期间临时关闭
+标准 profile 门禁并把空间选择切到合成行，注入后立即恢复真实 provider 与门禁）；另对真实端点
+注入 2s 确定性超时取得真实降级记录。推理模型时延参数按真实模式放大（单次超时 90s、批次
+lease 600s，均在启动校验区间内）。
+
+| 场景 | 结果 |
+|---|---|
+| 标准 profile 生产门禁（注册 + 空间解析） | 通过：`provider_profile_error` 无原因码，policy=allowed |
+| 真实模型成功路径（candidate 辅助） | 2 次调用 **succeeded**（延迟 3.6s / 18.1s；prompt 746 tokens、completion ~80 tokens），批次 applied |
+| 空候选语义 | 真实模型对无可推断花名册返回 `[]` → call succeeded、batch applied、零候选（发现并修复的语义缺陷，见下） |
+| 建议投影 | 无建议（确定性候选为空也合规，E2E note 路径） |
+| 协议失败注入（fake 承载：畸形/超时） | failed/`invalid_response`、unknown/`timeout`——core 全部 succeeded（隔离成立） |
+| 真实端点降级（单次超时压到 2s） | call **unknown/`timeout`**（保守计费，不自动重发），core succeeded |
+| 中断恢复 / 关闭重开 / 最终观测 | 同 stub 轮全部通过；final admin status state=running、alerts=[]、core_failed=0 |
+
+stub 回归：同一脚本默认模式重跑退出码 0（真实模式为纯增量，不改 stub 语义）。
+
+真实 E2E 发现并修复的两个产品缺陷：
+
+| 缺陷 | 修复 |
+|---|---|
+| `_post_json` 用 `iter_raw()` 读取响应——不按 `Content-Encoding` 解压；liu-dada 生产端点默认 gzip（已实测 `content-encoding: gzip`），压缩体直接 JSON 解析失败 → 全部真实调用 `invalid_response` | 改为 `iter_bytes()`（httpx 自动解压；字节上界按解压后体积计，语义更严）。回归：`test_post_json_decodes_gzip_response`；`test_oversized_response_capped_without_full_read` 桩同步适配 |
+| 空候选数组 `[]` 与"不可解析/编造"混为 degraded——真实模型"无可提候选"的正常回答会被记为降级，生产 `assist_degraded` 指标将长期虚高 | `validate_candidate_output` 区分**内在空数组**（合法"无可提候选"，返回 `[]` → succeeded）与**元素全部被过滤**（编造/越权/未成年 → 仍整体拒绝 degraded），绝不把被拒输出降格为空成功。回归：`test_candidate_validator_empty_array_is_valid_no_candidates`、`test_candidate_empty_array_succeeded_applied_with_no_candidates` |
+
+全量回归（本轮）：`ruff check .` / `ruff format --check .` 通过，`mypy app` 0 错误，
+`pytest -q` **967 passed, 3 skipped**（退出码 0）。
+
+任务元数据同步（本轮）：七个任务 release_gate 由 partial 更新为 pass，gate_note/notes 与各
+prd.md 状态行同步记录本轮证据；任务状态保持 in_progress，待实现审查/收尾流程后归档。

@@ -66,3 +66,11 @@ config/compose/README 新键）由主会话逐项核实、修复并补齐交付�
 - E2E 最终快照 budget_reserved_tokens>0：tick 停止后 pending 批次的预留行如实上报，
   属调度语义而非泄漏；evidence 已记录。
 - 200 人容量为线性外推（extrapolated=true），非全矩阵实测。
+
+### 真实 provider 轮补记（2026-09-12，独立会话）
+
+上节"真实 provider 未运行：门禁为 partial"的缺口已关闭：真实 provider E2E 通过
+（liu-dada/gpt-5.6-sol，cc-switch pi 配置，stub 与 real 模式退出码均 0；成功/降级记录单列）。
+过程中发现并修复两个产品缺陷（gzip 响应解压、空候选数组语义），新增回归 3 条，
+backend 全量 967 passed/3 skipped。完整证据与命令见本目录 release-evidence.md §9；
+缺口清单相应行已标记关闭。
