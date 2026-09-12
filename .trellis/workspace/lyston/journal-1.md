@@ -876,3 +876,25 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: 修复管理员后台壳层主轴错位
+<!-- trellis-session: v=2 fp=3884b5a614409acc -->
+
+**Date**: 2026-09-12
+**Task**: 修复管理员后台壳层主轴错位
+**Branch**: `main`
+
+### Summary
+
+定位并修复 .admin-shell 旧 flex-direction: column 覆盖新壳层，恢复桌面端侧栏与右侧内容横向排列；新增真实 CSS 主轴回归断言。管理员 type-check、lint、86 tests、build、task validate 和 diff check 全部通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `323f36c` | fix(admin): correct shell layout axis |
+
+### Status
+
+[OK] **Completed**
