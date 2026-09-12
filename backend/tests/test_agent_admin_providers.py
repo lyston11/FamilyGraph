@@ -82,7 +82,9 @@ def test_agent_admin_endpoints_blocked_until_password_change(
 ) -> None:
     """password_must_change=true：登录可过，但治理端点一律 403（require_admin_ready）。"""
     create_system_admin(
-        db_session, username="mustchange", password="FixtureAdmin-2026x",
+        db_session,
+        username="mustchange",
+        password="FixtureAdmin-2026x",
         password_must_change=True,
     )
     headers = admin_session_headers(

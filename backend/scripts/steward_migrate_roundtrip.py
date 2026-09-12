@@ -265,8 +265,107 @@ def main() -> int:
         assert index_exists(conn, "steward_jobs", "uq_steward_jobs_space_active")
     print("[migrate] re-upgrade head: new tables + indexes rebuilt, old data intact")
 
+    # ---- 4. 新状态数据下行（真实生产形态：unknown/in_flight attempt + 建议通知）----
+    from datetime import datetime
+
+    from sqlalchemy import insert, select
+
+    from app.models.notification import Notification
+    from app.models.steward import StewardAssistBatch, StewardModelCall
+    from app.models.steward_suggestion import StewardSuggestion
+
+    now = datetime.now().astimezone()
+    with engine.begin() as conn:
+        acct_id = conn.scalar(select(Account.id).where(Account.user_id == user_id))
+        batch_id = conn.execute(
+            insert(StewardAssistBatch)
+            .values(
+                job_id=job_id,
+                space_id=space_id,
+                evidence_hash="0" * 64,
+                policy_version="test",
+                status="leased",
+                created_at=now,
+                updated_at=now,
+            )
+            .returning(StewardAssistBatch.id)
+        ).scalar_one()
+        for status in ("unknown", "in_flight"):
+            conn.execute(
+                insert(StewardModelCall).values(
+                    space_id=space_id,
+                    job_id=job_id,
+                    batch_id=batch_id,
+                    policy_version="test",
+                    assist_kind="candidate",
+                    subject_key="candidate:1",
+                    input_hash="0" * 64,
+                    prompt_digest="0" * 64,
+                    prompt_chars=10,
+                    status=status,
+                    seq=1 if status == "unknown" else 2,
+                    attempt_no=1 if status == "unknown" else 2,
+                    reserved_input_tokens=10,
+                    reserved_output_tokens=5,
+                    created_at=now,
+                )
+            )
+        sug_id = conn.execute(
+            insert(StewardSuggestion)
+            .values(
+                space_id=space_id,
+                origin="model",
+                kind="relation_proposal",
+                subject_user_id=user_id,
+                object_user_id=user2_id,
+                value_json={"fact_type": "direct_sibling"},
+                evidence_json={"facts": []},
+                evidence_hash="1" * 64,
+                dedupe_key="dp:1",
+                policy_version="test",
+                status="proposed",
+                revision=1,
+                created_at=now,
+                updated_at=now,
+            )
+            .returning(StewardSuggestion.id)
+        ).scalar_one()
+        conn.execute(
+            insert(Notification).values(
+                kind="steward_suggestion",
+                space_id=space_id,
+                recipient_account_id=acct_id,
+                suggestion_id=sug_id,
+                title="待核实建议",
+                created_at=now,
+            )
+        )
+    print("[migrate] new-state data seeded at head: batch + calls + suggestion notification")
+
+    alembic("downgrade", pre_revision)
+    with engine.connect() as conn:
+        kept_statuses = list(conn.execute(select(StewardModelCall.status)).scalars().all())
+        assert kept_statuses and all(
+            s in ("succeeded", "failed", "degraded", "skipped") for s in kept_statuses
+        ), f"下行后存在违反旧 CHECK 的状态: {kept_statuses}"
+        suggestion_kind_rows = (
+            conn.execute(select(Notification.id).where(Notification.kind == "steward_suggestion"))
+            .scalars()
+            .all()
+        )
+        assert not suggestion_kind_rows, "建议通知应在下行时被显式删除"
+    print("[migrate] downgrade new-state: calls failed, suggestion notifications removed")
+
+    alembic("upgrade", "head")
+    with engine.connect() as conn:
+        statuses = list(conn.execute(select(StewardModelCall.status)).scalars().all())
+        assert statuses and all(
+            s == "failed" for s in statuses
+        ), f"再上行后状态意外变化: {statuses}"
+    print("[migrate] re-upgrade with new-state data: converged rows stable")
+
     print(
-        "[migrate] RESULT ok=true steps=3 "
+        "[migrate] RESULT ok=true steps=4 "
         f"pre={pre_revision} head={head_revision} evidence=json_roundtrip"
     )
     return 0

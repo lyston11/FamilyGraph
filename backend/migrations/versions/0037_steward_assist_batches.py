@@ -99,6 +99,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 新状态（reserved/in_flight/unknown）不在旧 CHECK 集合内：先把它们收敛为
+    # failed（保留行与已计费记录，不删历史计费），再换 CHECK。回滚是应急路径；
+    # 中间态行本就不可信（崩溃恢复语义），failed + 降级标记是保守终态。
+    op.execute(
+        "UPDATE steward_model_calls SET status = 'failed', error_code = 'downgrade_forced' "
+        "WHERE status IN ('reserved', 'in_flight', 'unknown')"
+    )
     with op.batch_alter_table("steward_model_calls") as batch_op:
         batch_op.drop_constraint("fk_smc_batch", type_="foreignkey")
         batch_op.drop_constraint("ck_smc_status", type_="check")

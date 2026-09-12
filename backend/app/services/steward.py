@@ -386,46 +386,19 @@ def schedule_steward_job_for_event(session: Session, event: DomainEvent) -> None
     """把已追加事件合并到每个受影响空间的活跃 Steward Job。
 
     领域命令通常仍在同一事务中，因此这里不再开启第二个 SQLite 立即事务；
-    只在当前 Session 内更新/新增队列行，由外层命令统一提交。全局事件按空间
-    fan-out，但每个 job 仍只读取自己的 scope。card/steward 内部事件由 emit
-    调用方过滤，避免执行结果再次触发无限队列。
+    只在当前 Session 内更新/新增队列行，由外层命令统一提交。空间作用域由
+    ``domain_events.resolve_event_space_ids`` 统一权威解析：事件自身空间 ∪
+    payload 空间列表（桥接两侧）→ 全局人物事件按 active membership/ref/桥接受权
+    范围收敛，绝不广播到全部空间。card/steward 内部事件由 emit 调用方过滤。
     """
     if not config.STEWARD_ENABLED or event.type.startswith(("card.", "steward.")):
         return
     session.flush()
     if event.id is None:  # pragma: no cover - autoincrement after flush
         return
-    if event.space_id is None:
-        payload_space_ids = (event.payload or {}).get("space_ids")
-        if event.type.startswith("profile.") and isinstance(payload_space_ids, list):
-            space_ids = sorted(
-                {space_id for space_id in payload_space_ids if isinstance(space_id, int)}
-            )
-        elif event.type == "account.claimed":
-            user_id = (event.payload or {}).get("user_id")
-            if isinstance(user_id, int):
-                space_ids = sorted(
-                    {
-                        *session.scalars(
-                            select(SpaceMember.space_id).where(
-                                SpaceMember.user_id == user_id,
-                                SpaceMember.status == "active",
-                            )
-                        ).all(),
-                        *session.scalars(
-                            select(SpaceProfileRef.space_id).where(
-                                SpaceProfileRef.user_id == user_id,
-                                SpaceProfileRef.status == "active",
-                            )
-                        ).all(),
-                    }
-                )
-            else:
-                space_ids = []
-        else:
-            space_ids = list(session.scalars(select(FamilySpace.id)))
-    else:
-        space_ids = [event.space_id]
+    from app.services.domain_events import resolve_event_space_ids
+
+    space_ids = resolve_event_space_ids(session, event)
     cause = _cause_for_event(event.type)
     now = utcnow()
     for space_id in space_ids:
@@ -883,6 +856,18 @@ def run_steward_job(
             else min(raw_upper, job.trigger_cursor)
         )
         summary = _execute_locked(db, job, now=moment, upper=exec_upper)
+        # 结算前复查租约 deadline（F17 完整合同）：大空间重算可能超过租约 TTL，
+        # 过期执行者不得提交成功结果——整体回滚（含本事务内派生写入），作业由
+        # reaper 按过期回收重队。容量证据已证明该形态真实存在（200 人全矩阵
+        # 估算 4.6h ≫ 300s），是独立 worker/增量计算后续项的触发依据。
+        settled_moment = utcnow()
+        if job.lease_expires_at is not None and job.lease_expires_at <= settled_moment:
+            raise_api_error(
+                409,
+                STEWARD_LEASE_STALE,
+                "执行期间租约到期，结果不结算；作业将按过期回收",
+                detail={"lease_expires_at": job.lease_expires_at.isoformat()},
+            )
         job.status = "succeeded"
         job.last_event_cursor = exec_upper
         job.error_code = None
@@ -893,8 +878,8 @@ def run_steward_job(
             "finding_signatures": summary["finding_signatures"],
             "stats": summary["stats"],
         }
-        job.settled_at = moment
-        job.updated_at = moment
+        job.settled_at = settled_moment
+        job.updated_at = settled_moment
         db.flush()
         emit_domain_event(
             db,

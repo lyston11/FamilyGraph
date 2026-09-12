@@ -157,6 +157,38 @@ def resolve_pfv_impact(session: Session, event: DomainEvent) -> dict[int, set[in
     return scopes
 
 
+def resolve_event_space_ids(session: Session, event: DomainEvent) -> list[int]:
+    """解析事件 → 需要登记 Steward 作业的空间集合（调度侧唯一作用域权威）。
+
+    收敛顺序：event.space_id ∪ payload.space_ids/space_id（桥接事件两侧空间）→
+    仍为空时按事件人物（active membership/ref/桥接受权范围）收敛。绝不把无空间
+    维度的事件广播到全部空间；解析不出任何空间就返回空列表（不登记作业）。
+    """
+    payload = event.payload or {}
+    space_ids: set[int] = set()
+    if isinstance(event.space_id, int):
+        space_ids.add(event.space_id)
+    payload_space_ids = payload.get("space_ids")
+    if isinstance(payload_space_ids, list):
+        space_ids.update(s for s in payload_space_ids if isinstance(s, int))
+    payload_space_id = payload.get("space_id")
+    if isinstance(payload_space_id, int):
+        space_ids.add(payload_space_id)
+
+    if not space_ids:
+        user_ids = set(_event_user_ids(event, payload))
+        # term.personal 等账号维度事件：account_id → 本人 → 本人受权空间。
+        account_id = payload.get("account_id")
+        if isinstance(account_id, int):
+            user_id = session.scalar(select(Account.user_id).where(Account.id == account_id))
+            if user_id is not None:
+                user_ids.add(int(user_id))
+        for uid in user_ids:
+            space_ids |= _spaces_for_user(session, uid)
+
+    return sorted(space_ids)
+
+
 def _maybe_initialize_views(event: DomainEvent, session: Session) -> None:
     """R2：成员资格合法获得/建空间后在同事务初始化该账号的 queued 视图行。
 

@@ -48,9 +48,7 @@ def _require_space_manager(session: Session, space_id: int, user_id: int) -> Fam
     return space
 
 
-def _resolve_lineage_target(
-    session: Session, actor_id: int, lineage_space_id: int
-) -> FamilySpace:
+def _resolve_lineage_target(session: Session, actor_id: int, lineage_space_id: int) -> FamilySpace:
     """校验家族配对目标：存在、kind=lineage、操作者是其 active 成员。
 
     非成员与不存在统一 404（防枚举）；目标不是 lineage 走 422。

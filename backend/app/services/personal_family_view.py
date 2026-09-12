@@ -610,8 +610,13 @@ def request_view_recompute(*, space_id: int) -> None:
                 cause="domain_event",
                 trigger_cursor=current_event_watermark(session),
             )
-    except Exception:
-        logger.warning("pfv recompute enqueue failed for space %s", space_id, exc_info=True)
+    except Exception as exc:
+        # 日志脱敏：异常原文可能携带 SQL 绑定参数，只记异常类名
+        logger.warning(
+            "pfv recompute enqueue failed for space %s (error=%s)",
+            space_id,
+            type(exc).__name__,
+        )
 
 
 def rebuild_space_views(session: Session, *, space_id: int) -> int:

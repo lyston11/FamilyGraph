@@ -28,10 +28,7 @@ from sqlalchemy import text
 from app.models.space import FamilySpace
 
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "migrations"
-    / "versions"
-    / "0035_space_lineage_link.py"
+    Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0035_space_lineage_link.py"
 )
 
 
@@ -74,10 +71,7 @@ def test_lineage_link_set_and_projected(client, db_session) -> None:
 
     assert response.status_code == 200, response.text
     assert response.json()["lineage_space_id"] == lineage.id
-    spaces = {
-        space["id"]: space
-        for space in client.get("/api/spaces", headers=headers).json()
-    }
+    spaces = {space["id"]: space for space in client.get("/api/spaces", headers=headers).json()}
     assert spaces[household.id]["lineage_space_id"] == lineage.id
 
 

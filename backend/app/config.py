@@ -292,7 +292,15 @@ def _validate_steward_scheduling() -> None:
         ("STEWARD_ASSIST_MAX_RESPONSE_BYTES", STEWARD_ASSIST_MAX_RESPONSE_BYTES, 1024, 1 << 22),
         ("STEWARD_ASSIST_BATCH_LEASE_SECONDS", STEWARD_ASSIST_BATCH_LEASE_SECONDS, 5, 3600),
         ("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", STEWARD_ASSIST_MAX_CONCURRENT_BATCHES, 1, 8),
+        ("STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB, 1, 64),
+        ("STEWARD_ASSIST_MAX_TOKENS_PER_JOB", STEWARD_ASSIST_MAX_TOKENS_PER_JOB, 100, 1_000_000),
+        ("STEWARD_ASSIST_MAX_CARDS_PER_JOB", STEWARD_ASSIST_MAX_CARDS_PER_JOB, 1, 100),
     )
+    if not (0.1 <= STEWARD_ASSIST_TIMEOUT_SECONDS <= 300):
+        raise RuntimeError(
+            f"STEWARD_ASSIST_TIMEOUT_SECONDS 必须在 [0.1, 300] 内，当前为 "
+            f"{STEWARD_ASSIST_TIMEOUT_SECONDS}"
+        )
     for name, value, low, high in bounds:
         if not low <= value <= high:
             raise RuntimeError(f"{name} 必须在 [{low}, {high}] 区间内（当前 {value}）")

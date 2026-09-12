@@ -56,9 +56,7 @@ def _put(client, headers, space_id, payload):
 
 def test_model_settings_require_authenticated_user(client: TestClient) -> None:
     assert client.get(BASE.format(space_id=1)).status_code == 401
-    assert (
-        client.put(BASE.format(space_id=1), json={"agent_kind": "assistant"}).status_code == 401
-    )
+    assert client.put(BASE.format(space_id=1), json={"agent_kind": "assistant"}).status_code == 401
     assert client.delete(BASE.format(space_id=1) + "/assistant").status_code == 401
 
 
@@ -72,9 +70,7 @@ def test_model_settings_require_space_manager(client: TestClient, db_session) ->
     assert got.json()["error"]["code"] == "SPACE_FORBIDDEN_ACTOR"
     put = _put(client, headers, space.id, {"agent_kind": "assistant", "enabled": False})
     assert put.status_code == 403
-    removed = client.delete(
-        BASE.format(space_id=space.id) + "/assistant", headers=headers
-    )
+    removed = client.delete(BASE.format(space_id=space.id) + "/assistant", headers=headers)
     assert removed.status_code == 403
 
 
@@ -109,9 +105,7 @@ def test_get_catalog_only_enabled_providers(client: TestClient, db_session) -> N
 # ---- PUT：两维度 upsert 互不干扰 ----
 
 
-def test_put_two_kinds_independent_and_allowlist_validation(
-    client: TestClient, db_session
-) -> None:
+def test_put_two_kinds_independent_and_allowlist_validation(client: TestClient, db_session) -> None:
     owner, space = create_agent_fixture(db_session, name="ms-kinds")
     db_session.commit()
     headers = auth_header(login(client, owner.name, "123456").json())
@@ -322,15 +316,11 @@ def test_platform_default_inheritance_and_owner_cloud_consent(
 # ---- 消息创建链路：空间未选/未同意云错误两态可区分（AC-2/R5 detail 合同）----
 
 
-def test_message_creation_error_detail_distinguishes_states(
-    client: TestClient, db_session
-) -> None:
+def test_message_creation_error_detail_distinguishes_states(client: TestClient, db_session) -> None:
     owner, space = create_agent_fixture(db_session, name="ms-errdetail")
     db_session.commit()
     headers = auth_header(login(client, owner.name, "123456").json())
-    agent_session = create_agent_session(
-        db_session, account_id=owner.account.id, space_id=space.id
-    )
+    agent_session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)
 
     def _send() -> dict:
         response = client.post(

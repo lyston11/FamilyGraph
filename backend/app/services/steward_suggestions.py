@@ -283,7 +283,15 @@ def project_for_job(
     """
     now = now or utcnow()
     created = 0
-    fact_snapshots = [{"id": int(f.id), "revision": int(f.revision)} for f in facts]
+    fact_snapshots = [
+        {
+            "id": int(f.id),
+            "revision": int(f.revision),
+            "subject_user_id": int(f.subject_user_id),
+            "object_user_id": int(f.object_user_id),
+        }
+        for f in facts
+    ]
 
     # 模型候选 → relation_proposal（payload 合同三键；旧裸 JSON 永不公开）。
     # 09-11 E2E 修正：候选由辅助批次在 job 结算后写回（job_id=注册 job），
@@ -354,16 +362,27 @@ def project_for_job(
         pair_raw = detail.get("pair")
         subject_id: int | None = None
         object_id: int | None = None
-        if isinstance(pair_raw, list) and len(pair_raw) == 2:
-            subject_id, object_id = int(pair_raw[0]), int(pair_raw[1])
-        elif isinstance(detail.get("subject_user_id"), int):
-            subject_id = int(detail["subject_user_id"])
+        try:
+            if isinstance(pair_raw, list) and len(pair_raw) == 2:
+                subject_id, object_id = int(pair_raw[0]), int(pair_raw[1])
+            elif isinstance(detail.get("subject_user_id"), int):
+                subject_id = int(detail["subject_user_id"])
+        except (TypeError, ValueError):
+            continue  # 畸形 pair：跳过本条 finding，不让单条坏数据阻断整批投影
             object_id = int(detail["object_user_id"])
         if subject_id is None:
             continue
         evidence = {
+            # 证据引用与 pair 用户相关的事实（subject/object 端点匹配），
+            # 不是 id 恰好等于用户 id 的事实——findings pair 是用户 id 维度。
             "facts": [
-                f for f in fact_snapshots if subject_id in (f["id"],) or object_id in (f["id"],)
+                f
+                for f in fact_snapshots
+                if subject_id in (f["subject_user_id"], f["object_user_id"])
+                or (
+                    object_id is not None
+                    and object_id in (f["subject_user_id"], f["object_user_id"])
+                )
             ]
         }
         member_users = _space_active_member_user_ids(session, job.space_id)
@@ -489,42 +508,63 @@ def list_suggestions_page(
     cursor: int | None,
     limit: int,
 ) -> dict[str, Any]:
-    """分页列表（keyset by id）；只返回 active 成员可见且证据可见的建议。"""
+    """分页列表（keyset by id）；只返回 active 成员可见且证据可见的建议。
+
+    可见性/动作过滤在取数后进行：过滤会造成页面欠返，因此按批 over-fetch
+    继续向前取数，直到集满 limit 条或数据耗尽。next_cursor 指向最后一条
+    已返回项的 id（客户端以其为 keyset 继续），保证不漏行。
+    """
     space, viewer = authorized_space_or_404(session, account=account, space_id=space_id)
     limit = max(1, min(int(limit), 100))
-    stmt = (
-        select(StewardSuggestion)
-        .where(StewardSuggestion.space_id == space.id)
-        .order_by(StewardSuggestion.id.desc())
-        .limit(limit + 1)
-    )
-    if cursor is not None and cursor > 0:
-        stmt = stmt.where(StewardSuggestion.id < cursor)
-    rows = list(session.scalars(stmt))
-    next_cursor: int | None = None
-    if len(rows) > limit:
-        rows = rows[:limit]
-        next_cursor = rows[-1].id
     items: list[dict[str, Any]] = []
-    for suggestion in rows:
-        # 列表与详情同口径：证据端点对当前账号不可见（隐藏人物）→ 不透出
-        if not _endpoints_visible(session, viewer, suggestion):
-            continue
-        try:
-            allowed = allowed_actions(session, viewer, account, suggestion)
-        except Exception:  # noqa: BLE001 — 端点消失等异常按 404 语义丢弃该行
-            allowed = []
-        if not allowed:
-            continue
-        if "dismiss" in allowed:
-            recipient = _recipient_row(session, suggestion.id, account.id)
-            if recipient is not None and recipient.dismissed_at is not None:
-                state = "dismissed"
+    fetch_cursor = cursor
+    exhausted = False
+    while len(items) < limit and not exhausted:
+        stmt = (
+            select(StewardSuggestion)
+            .where(StewardSuggestion.space_id == space.id)
+            .order_by(StewardSuggestion.id.desc())
+            .limit(limit + 1)
+        )
+        if fetch_cursor is not None and fetch_cursor > 0:
+            stmt = stmt.where(StewardSuggestion.id < fetch_cursor)
+        rows = list(session.scalars(stmt))
+        if len(rows) > limit:
+            rows = rows[:limit]
+        else:
+            exhausted = True
+        if not rows:
+            break
+        last_consumed_id: int | None = None
+        for suggestion in rows:
+            last_consumed_id = suggestion.id
+            # 列表与详情同口径：证据端点对当前账号不可见（隐藏人物）→ 不透出
+            if not _endpoints_visible(session, viewer, suggestion):
+                continue
+            try:
+                allowed = allowed_actions(session, viewer, account, suggestion)
+            except Exception:  # noqa: BLE001 — 端点消失等异常按 404 语义丢弃该行
+                allowed = []
+            if not allowed:
+                continue
+            if "dismiss" in allowed:
+                recipient = _recipient_row(session, suggestion.id, account.id)
+                if recipient is not None and recipient.dismissed_at is not None:
+                    state = "dismissed"
+                else:
+                    state = suggestion.status
             else:
                 state = suggestion.status
-        else:
-            state = suggestion.status
-        items.append(_serialize(session, suggestion, allowed, state))
+            items.append(_serialize(session, suggestion, allowed, state))
+            if len(items) >= limit:
+                break
+        # 中途集满：游标必须落在最后消费行，跳过的批次尾行下一页会重新读入，
+        # 不丢行；整批消费完才推进到批次末行。
+        if len(items) >= limit and last_consumed_id is not None:
+            fetch_cursor = last_consumed_id
+    # 还有未读尽的上游数据（exhausted=False）说明后面可能仍有可见行；
+    # 否则到头了，不再给 cursor。
+    next_cursor = items[-1]["id"] if (items and not exhausted) else None
     return {"space_id": space.id, "items": items, "next_cursor": next_cursor}
 
 

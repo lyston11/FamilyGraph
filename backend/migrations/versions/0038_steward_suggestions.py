@@ -152,6 +152,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 建议通知的 kind 不在旧 CHECK 集合内：回滚是应急路径，先删除这类通知行
+    # （建议本身可由 Steward 重算重新投影，通知为可再生状态；删除仅发生于
+    # downgrade，不影响 forward 路径的数据）。
+    op.execute("DELETE FROM notifications WHERE kind = 'steward_suggestion'")
     op.drop_index("uq_notifications_suggestion", table_name="notifications")
     with op.batch_alter_table("notifications") as batch:
         batch.drop_constraint("fk_notifications_suggestion", type_="foreignkey")

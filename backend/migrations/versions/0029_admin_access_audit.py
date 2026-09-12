@@ -31,9 +31,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "target_type IN ('user','space')", name="ck_admin_access_session_target"
         ),
-        sa.ForeignKeyConstraint(
-            ["system_admin_id"], ["system_admins.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["system_admin_id"], ["system_admins.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token_hash", name="uq_admin_access_sessions_token_hash"),
     )
@@ -61,14 +59,10 @@ def upgrade() -> None:
             name="ck_admin_access_audit_target",
         ),
         sa.ForeignKeyConstraint(["system_admin_id"], ["system_admins.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(
-            ["session_id"], ["admin_access_sessions.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["session_id"], ["admin_access_sessions.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_admin_access_audits_created_at", "admin_access_audits", ["created_at"]
-    )
+    op.create_index("ix_admin_access_audits_created_at", "admin_access_audits", ["created_at"])
     op.create_index("ix_admin_access_audits_admin", "admin_access_audits", ["system_admin_id"])
     op.create_index(
         "ix_admin_access_audits_target", "admin_access_audits", ["target_type", "target_id"]

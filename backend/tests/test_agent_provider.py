@@ -368,9 +368,7 @@ def test_agent_kind_isolation_between_kinds(db_session):
     cloud = _provider(db_session, name="cloud-iso")
     local = _provider(db_session, name="local-iso", kind="local", models=["llama-x"])
     _setting(db_session, space.id, cloud.id, cloud=True)
-    _setting(
-        db_session, space.id, local.id, model="llama-x", agent_kind="steward"
-    )
+    _setting(db_session, space.id, local.id, model="llama-x", agent_kind="steward")
 
     assistant = resolve_for_space(db_session, space.id, agent_kind="assistant")
     assert assistant.policy_result == POLICY_ALLOWED
@@ -448,7 +446,9 @@ def test_invalid_platform_default_is_ignored(db_session, scenario):
         from app.models.agent_provider import AgentPlatformDefault
 
         row = AgentPlatformDefault(
-            id=1, assistant_provider_id=None, assistant_model="model-x",
+            id=1,
+            assistant_provider_id=None,
+            assistant_model="model-x",
             updated_at=timeutil.utcnow(),
         )
         db_session.add(row)

@@ -27,9 +27,7 @@ down_revision: str | None = "0032_invite_codes_creator_set_null"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_SETTING_COLUMNS = (
-    "id, space_id, provider_id, model, cloud_allowed, local_required, enabled"
-)
+_SETTING_COLUMNS = "id, space_id, provider_id, model, cloud_allowed, local_required, enabled"
 
 
 def _create_settings_new(*, with_agent_kind: bool) -> None:
@@ -137,9 +135,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     steward_count = bind.scalar(
-        sa.text(
-            "SELECT COUNT(*) FROM agent_space_provider_settings WHERE agent_kind = 'steward'"
-        )
+        sa.text("SELECT COUNT(*) FROM agent_space_provider_settings WHERE agent_kind = 'steward'")
     )
     if steward_count:
         raise RuntimeError(

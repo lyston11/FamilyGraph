@@ -37,6 +37,7 @@ from app.models.agent_provider import AgentPlatformDefault, AgentProvider, Agent
 from app.models.space import FamilySpace
 from app.schemas.agent import (
     AdminSpaceProviderSettingsOut,
+    AgentPlatformDefaultKindOut,
     AgentPlatformDefaultsOut,
     AgentPlatformDefaultsRequest,
     AgentProviderCreateRequest,
@@ -93,18 +94,18 @@ def _platform_defaults_out(row: AgentPlatformDefault | None) -> AgentPlatformDef
     if row is None:
         return AgentPlatformDefaultsOut()
     assistant = (
-        {"provider_id": row.assistant_provider_id, "model": row.assistant_model}
+        AgentPlatformDefaultKindOut(
+            provider_id=row.assistant_provider_id, model=row.assistant_model
+        )
         if row.assistant_provider_id is not None and row.assistant_model
         else None
     )
     steward = (
-        {"provider_id": row.steward_provider_id, "model": row.steward_model}
+        AgentPlatformDefaultKindOut(provider_id=row.steward_provider_id, model=row.steward_model)
         if row.steward_provider_id is not None and row.steward_model
         else None
     )
-    return AgentPlatformDefaultsOut(
-        assistant=assistant, steward=steward, updated_at=row.updated_at
-    )
+    return AgentPlatformDefaultsOut(assistant=assistant, steward=steward, updated_at=row.updated_at)
 
 
 # ---- Provider 注册表 ----
@@ -324,9 +325,7 @@ def get_space_provider_settings(
     rows = {
         row.agent_kind: row
         for row in db.scalars(
-            select(AgentSpaceProviderSetting).where(
-                AgentSpaceProviderSetting.space_id == space_id
-            )
+            select(AgentSpaceProviderSetting).where(AgentSpaceProviderSetting.space_id == space_id)
         )
     }
     admin_audit.record_access(

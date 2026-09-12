@@ -34,6 +34,7 @@ from app.models.space import FamilySpace
 from app.models.user import User
 from app.schemas.agent import (
     AgentModelCatalogEntryOut,
+    AgentPlatformDefaultKindOut,
     AgentPlatformDefaultsOut,
     AgentSpaceModelSettingsRequest,
     SpaceAgentSettingOut,
@@ -112,14 +113,17 @@ def _valid_platform_defaults_out(session: Session) -> AgentPlatformDefaultsOut:
     pairs = {
         kind: agent_provider.valid_platform_default(session, kind) for kind in AGENT_MODEL_KINDS
     }
-    return AgentPlatformDefaultsOut(
-        assistant={"provider_id": pairs["assistant"][0], "model": pairs["assistant"][1]}
+    assistant = (
+        AgentPlatformDefaultKindOut(provider_id=pairs["assistant"][0], model=pairs["assistant"][1])
         if pairs["assistant"] is not None
-        else None,
-        steward={"provider_id": pairs["steward"][0], "model": pairs["steward"][1]}
-        if pairs["steward"] is not None
-        else None,
+        else None
     )
+    steward = (
+        AgentPlatformDefaultKindOut(provider_id=pairs["steward"][0], model=pairs["steward"][1])
+        if pairs["steward"] is not None
+        else None
+    )
+    return AgentPlatformDefaultsOut(assistant=assistant, steward=steward)
 
 
 def _validate_selection(session: Session, provider_id: int, model: str) -> AgentProvider:
@@ -187,9 +191,7 @@ def put_space_model_settings(
     if body.enabled:
         if body.provider_id is None or not body.model:
             # 继承平台默认请用 DELETE；显式停用请用 enabled=false
-            raise_api_error(
-                422, VALIDATION_ERROR, "选择模型时必须同时指定 provider_id 与 model"
-            )
+            raise_api_error(422, VALIDATION_ERROR, "选择模型时必须同时指定 provider_id 与 model")
         provider = _validate_selection(session, body.provider_id, body.model)
         new_provider_id: int | None = provider.id
         new_model: str | None = body.model
@@ -236,7 +238,9 @@ def put_space_model_settings(
         },
     )
     session.commit()
-    return _setting_out(row)
+    result = _setting_out(row)
+    assert result is not None  # 刚 upsert 的行必然存在
+    return result
 
 
 @router.delete("/spaces/{space_id}/model-settings/{agent_kind}", status_code=204)

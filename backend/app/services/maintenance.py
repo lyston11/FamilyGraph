@@ -131,7 +131,7 @@ async def maintenance_loop(interval_seconds: float) -> None:
             raise
         except Exception as exc:
             # 日志脱敏（09-11 R3）：只记异常类名与安全分类码，不输出异常原文
-            #（DB 异常可能携带绑定参数）。
+            # （DB 异常可能携带绑定参数）。
             logger.warning(
                 "maintenance tick failed; retrying next interval (error=%s)",
                 type(exc).__name__,

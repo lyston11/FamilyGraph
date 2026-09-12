@@ -1299,3 +1299,109 @@ def test_integrity_scan_not_short_circuited_by_succeeded_cursor(db_session) -> N
         db_session, space_id=space.id, cause="source_fact", trigger_cursor=1
     )
     assert not created3
+
+
+# ---- 审计修复回归：全局事件不广播、桥接事件两侧空间入队 ----
+
+
+def test_global_source_fact_event_scopes_to_authorized_spaces(db_session) -> None:
+    """无 space_id 的 source_fact 事件只收敛到端点人物的受权空间，绝不广播全库。"""
+    from app.models.space import FamilySpace
+
+    space_a = _space(db_session, "scope-a", kind="household")
+    user = db_session.get(User, space_a.owner_id)
+    create_space_member(db_session, space_a.id, user.id, role="space_admin")
+    stranger = create_user_with_pin(db_session, "scope-stranger", "654321")
+    unrelated = FamilySpace(
+        name="scope-unrelated", owner_id=stranger.id, kind="lineage", created_at=timeutil.utcnow()
+    )
+    db_session.add(unrelated)
+    db_session.commit()
+
+    event = emit_event(
+        db_session,
+        event_type="source_fact.revised",
+        aggregate_type="source_fact",
+        aggregate_id=99,
+        payload={"subject_user_id": user.id, "object_user_id": user.id},
+        space_id=None,
+    )
+    db_session.flush()
+    job_a = db_session.scalar(select(StewardJob).where(StewardJob.space_id == space_a.id))
+    assert job_a is not None, "端点受权空间应登记作业"
+    stray = db_session.scalar(select(StewardJob).where(StewardJob.space_id == unrelated.id))
+    assert stray is None, "无受权关系的空间不得被全局事件波及"
+    assert event.space_id is None
+
+
+def test_bridge_event_enqueues_both_sides(db_session) -> None:
+    """桥接事件携带 space_id=A + payload.space_ids=[A,B]：B 侧必须立即登记作业。"""
+    from app.models.space import FamilySpace
+
+    space_a = _space(db_session, "bridge-a", kind="lineage")
+    other_owner = create_user_with_pin(db_session, "bridge-owner-b", "654321")
+    space_b = FamilySpace(
+        name="bridge-b", owner_id=other_owner.id, kind="lineage", created_at=timeutil.utcnow()
+    )
+    db_session.add(space_b)
+    db_session.commit()
+
+    emit_event(
+        db_session,
+        event_type="personal_family_bridge.activated",
+        aggregate_type="personal_family_bridge",
+        aggregate_id=1,
+        payload={"status": "active", "revision": 1, "space_ids": [space_a.id, space_b.id]},
+        space_id=space_a.id,
+    )
+    db_session.flush()
+    assert (
+        db_session.scalar(select(StewardJob).where(StewardJob.space_id == space_a.id)) is not None
+    )
+    assert (
+        db_session.scalar(select(StewardJob).where(StewardJob.space_id == space_b.id)) is not None
+    ), "桥接对端空间必须同事务登记作业，而不是等待周期扫描"
+
+
+def test_settle_rejected_when_lease_expires_during_execution(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """执行期间租约到期：结果不得结算为 succeeded，事务整体回滚由 reaper 回收。"""
+    from app.utils import timeutil
+
+    space = _space(db_session, "lease-expire-settle")
+    job, _ = steward.enqueue_steward_job(
+        db_session, space_id=space.id, cause="source_fact", trigger_cursor=1
+    )
+    leased = steward.lease_next_steward_job(db_session, leased_by="test-worker", space_id=space.id)
+    assert leased is not None and leased.id == job.id
+    attempt = job.attempt
+    db_session.commit()
+
+    # 执行本身瞬时完成，但模拟墙钟在执行期间越过租约 deadline
+    monkeypatch.setattr(
+        steward,
+        "_execute_locked",
+        lambda db, job, *, now, upper: {
+            "finding_signatures": [],
+            "stats": {},
+        },
+    )
+    real_utcnow = timeutil.utcnow
+    monkeypatch.setattr(
+        steward,
+        "utcnow",
+        lambda: real_utcnow() + timedelta(seconds=3600),
+    )
+
+    with pytest.raises(fastapi.HTTPException) as excinfo:
+        steward.run_steward_job(db_session, job, worker_id="test-worker", expected_attempt=attempt)
+    assert excinfo.value.status_code == 409
+    db_session.rollback()
+
+    # 事务回滚：作业保持过期 lease 形态，由 reaper 按过期回收
+    assert steward.reaper_pass(db_session) == 1
+    db_session.expire_all()
+    final = db_session.get(StewardJob, job.id)
+    assert final.status in ("queued", "expired")
+    assert final.status != "succeeded"
