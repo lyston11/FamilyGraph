@@ -119,6 +119,7 @@ describe('类型对齐冒烟（后端合同）', () => {
           space_id: 1,
           name: 'A',
           kind: 'household',
+          lineage_space_id: null,
           created_at: '2026-08-01T00:00:00Z',
           manager_user_id: null,
           manager_name: null,

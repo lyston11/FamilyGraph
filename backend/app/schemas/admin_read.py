@@ -96,6 +96,8 @@ class AdminOverviewItemOut(BaseModel):
     space_id: int
     name: str
     kind: Literal["household", "lineage"]
+    # 家庭空间所属的族谱空间；族谱空间本身为 null。
+    lineage_space_id: int | None = None
     created_at: datetime
     manager_user_id: int | None = None
     manager_name: str | None = None

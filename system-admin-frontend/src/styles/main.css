@@ -282,6 +282,32 @@ body {
   margin-bottom: 12px;
 }
 
+.ag-toolbar .ag-inline-form {
+  display: flex;
+  flex: 1 1 360px;
+  gap: 8px;
+  min-width: min(100%, 280px);
+}
+
+.ag-toolbar .ag-inline-form input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ag-toolbar .ag-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ag-text-secondary);
+  font-size: 12px;
+}
+
+.ag-space-pair {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .ag-breadcrumb {
   font-size: 13px;
   color: var(--ag-text-secondary);

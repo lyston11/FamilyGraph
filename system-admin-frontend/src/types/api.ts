@@ -70,6 +70,8 @@ export interface AdminOverviewItemOut {
   space_id: number
   name: string
   kind: SpaceKind
+  /** household 所属的族谱空间；lineage 本身为 null。 */
+  lineage_space_id?: number | null
   created_at: string
   manager_user_id: number | null
   manager_name: string | null

@@ -120,6 +120,7 @@ def test_overview_exact_field_sets(admin_client: TestClient, db_session, v1_head
             "space_id",
             "name",
             "kind",
+            "lineage_space_id",
             "created_at",
             "manager_user_id",
             "manager_name",

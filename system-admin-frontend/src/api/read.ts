@@ -82,10 +82,14 @@ function decodeSpaceKind(raw: unknown, label: string): SpaceKind {
 
 function decodeOverviewItem(raw: unknown): import('@/types/api').AdminOverviewItemOut {
   const obj = expectObject(raw, 'overview item')
+  const lineageSpaceId = obj['lineage_space_id']
   return {
     space_id: expectNumber(obj['space_id'], 'space_id'),
     name: expectString(obj['name'], 'name'),
     kind: decodeSpaceKind(obj['kind'], 'kind'),
+    ...(lineageSpaceId === undefined
+      ? {}
+      : { lineage_space_id: expectNumberOrNull(lineageSpaceId, 'lineage_space_id') }),
     created_at: expectString(obj['created_at'], 'created_at'),
     manager_user_id: expectNumberOrNull(obj['manager_user_id'], 'manager_user_id'),
     manager_name: expectStringOrNull(obj['manager_name'], 'manager_name'),

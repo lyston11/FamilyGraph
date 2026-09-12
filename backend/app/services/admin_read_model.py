@@ -238,6 +238,7 @@ def overview(
                 space_id=space.id,
                 name=space.name,
                 kind=_kind(space.kind),
+                lineage_space_id=space.lineage_space_id,
                 created_at=space.created_at,
                 manager_user_id=manager_user_id,
                 manager_name=manager_name,
