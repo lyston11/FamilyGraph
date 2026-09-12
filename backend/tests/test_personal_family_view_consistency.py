@@ -72,6 +72,67 @@ def _view(session, account_id: int, space_id: int) -> PersonalFamilyView:
     )
 
 
+# ---- 称谓闭环黄金用例 ----
+
+
+def test_pfv_persists_daughter_in_law_term_for_dm_sf(db_session) -> None:
+    viewer, space = create_agent_fixture(db_session, name="kinship-term")
+    son = create_user_with_pin(db_session, "kinship-son", "123456", gender="m")
+    wife = create_user_with_pin(db_session, "kinship-wife", "123456", gender="f")
+    create_space_member(db_session, space.id, son.id)
+    create_space_member(db_session, space.id, wife.id)
+
+    _confirm(db_session, "biological_parent", viewer.id, son.id, space.id)
+    _confirm(db_session, "spouse", son.id, wife.id, space.id)
+    terms.seed_builtin_packs(db_session)
+    db_session.commit()
+
+    view = _materialize(db_session, viewer.account, space.id)
+    edge = db_session.scalar(
+        select(PersonalFamilyViewEdge).where(
+            PersonalFamilyViewEdge.view_id == view.id,
+            PersonalFamilyViewEdge.to_user_id == wife.id,
+        )
+    )
+
+    assert edge is not None
+    assert edge.concept_code == "Dm-Sf"
+    assert edge.term == "儿媳"
+    assert edge.authorization_basis_json["term_source_level"] == "locale"
+
+
+def test_legacy_pfv_version_cannot_serve_structural_snapshot(db_session) -> None:
+    viewer, space = create_agent_fixture(db_session, name="kinship-legacy")
+    son = create_user_with_pin(db_session, "kinship-legacy-son", "123456", gender="m")
+    wife = create_user_with_pin(db_session, "kinship-legacy-wife", "123456", gender="f")
+    create_space_member(db_session, space.id, son.id)
+    create_space_member(db_session, space.id, wife.id)
+    _confirm(db_session, "biological_parent", viewer.id, son.id, space.id)
+    _confirm(db_session, "spouse", son.id, wife.id, space.id)
+    terms.seed_builtin_packs(db_session)
+    db_session.commit()
+
+    view = _materialize(db_session, viewer.account, space.id)
+    edge = db_session.scalar(
+        select(PersonalFamilyViewEdge).where(
+            PersonalFamilyViewEdge.view_id == view.id,
+            PersonalFamilyViewEdge.to_user_id == wife.id,
+        )
+    )
+    assert edge is not None and edge.term == "儿媳"
+
+    view.computation_version = "pfv-v1"
+    view.policy_version = "graph"
+    db_session.commit()
+
+    payload = personal_family_view.view_payload(
+        db_session, account=viewer.account, space_id=space.id
+    )
+    assert payload["nodes"] == []
+    assert payload["edges"] == []
+    assert payload["stale_reason"] == "version_drift"
+
+
 # ---- AC-1：逐事件影响矩阵 ----
 
 
