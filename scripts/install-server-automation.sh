@@ -20,6 +20,17 @@ ENV_FILE="$HOME/.config/familygraph/familygraph.env"
 
 chmod +x "$REPO_ROOT/scripts/server-sync-code.sh" "$REPO_ROOT/scripts/server-backup.sh"
 
+# 数据库迁移（幂等）：服务 fail-closed，拒绝在未迁移库上自动 bootstrap
+echo "applying alembic migrations…"
+(
+    cd "$REPO_ROOT/backend"
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+    "$REPO_ROOT/backend/.venv/bin/alembic" upgrade head
+)
+
 # 无人值守提交的 git 身份（已有全局/仓库配置则不覆盖）
 git -C "$REPO_ROOT" config user.name  >/dev/null 2>&1 || \
     git -C "$REPO_ROOT" config user.name "lyston11"
