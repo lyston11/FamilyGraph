@@ -364,12 +364,16 @@ def project_for_job(
         object_id: int | None = None
         try:
             if isinstance(pair_raw, list) and len(pair_raw) == 2:
+                if any(isinstance(value, bool) or not isinstance(value, int) for value in pair_raw):
+                    continue
                 subject_id, object_id = int(pair_raw[0]), int(pair_raw[1])
             elif isinstance(detail.get("subject_user_id"), int):
                 subject_id = int(detail["subject_user_id"])
+                raw_object_id = detail.get("object_user_id")
+                if isinstance(raw_object_id, int) and not isinstance(raw_object_id, bool):
+                    object_id = int(raw_object_id)
         except (TypeError, ValueError):
             continue  # 畸形 pair：跳过本条 finding，不让单条坏数据阻断整批投影
-            object_id = int(detail["object_user_id"])
         if subject_id is None:
             continue
         evidence = {
@@ -558,9 +562,9 @@ def list_suggestions_page(
             items.append(_serialize(session, suggestion, allowed, state))
             if len(items) >= limit:
                 break
-        # 中途集满：游标必须落在最后消费行，跳过的批次尾行下一页会重新读入，
-        # 不丢行；整批消费完才推进到批次末行。
-        if len(items) >= limit and last_consumed_id is not None:
+        # 每批消费后都推进内部游标；否则整批被过滤时会重复查询同一批并循环。
+        # 集满时游标落在最后消费行，后续未消费的尾行留给下一次查询。
+        if last_consumed_id is not None:
             fetch_cursor = last_consumed_id
     # 还有未读尽的上游数据（exhausted=False）说明后面可能仍有可见行；
     # 否则到头了，不再给 cursor。

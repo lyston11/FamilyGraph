@@ -229,9 +229,9 @@ def _invalidate_personal_family_view(event: DomainEvent, session: Session) -> No
 
 def _schedule_steward_job(event: DomainEvent, session: Session) -> None:
     """在领域事件所属事务内登记 Steward 水位，避免提交后丢触发。"""
-    if event.space_id is None and (
-        event.type.startswith("memory.") or event.type.startswith("rag.")
-    ):
+    # Memory/RAG 是受各自授权与索引流程管理的内容，不属于 Steward 核心事实或
+    # PersonalFamilyView 影响面；无论是否带空间维度，都不能触发 Steward 作业。
+    if event.type.startswith(("memory.", "rag.")):
         return
     if not event.type.startswith(_INTERNAL_STEWARD_EVENT_PREFIXES):
         # Import lazily: steward imports this module to append its own events.

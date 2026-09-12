@@ -770,6 +770,100 @@ def test_list_hides_suggestions_with_invisible_endpoints(db_session) -> None:
     assert excinfo.value.status_code == 404
 
 
+def test_findings_subject_object_shape_preserves_object_endpoint(db_session) -> None:
+    """确定性 finding 的显式端点字段应完整进入建议，而非只保留 subject。"""
+    owner, space = create_agent_fixture(db_session, name="sg-finding-endpoints")
+    other = _make_member(db_session, space, "sg-finding-endpoint-b")
+    job = _make_job(db_session, space)
+
+    created = _project(
+        db_session,
+        job,
+        findings=[
+            {
+                "kind": "conflict",
+                "detail": {
+                    "code": "duplicate_person_name",
+                    "subject_user_id": owner.id,
+                    "object_user_id": other.id,
+                },
+                "signature": "finding-endpoints-v1",
+            }
+        ],
+    )
+
+    assert created == 1
+    suggestion = db_session.query(StewardSuggestion).one()
+    assert suggestion.subject_user_id == owner.id
+    assert suggestion.object_user_id == other.id
+
+
+def test_findings_bool_pair_is_skipped(db_session) -> None:
+    """布尔值不是合法用户 ID，畸形 pair 只跳过当前 finding。"""
+    _owner, space = create_agent_fixture(db_session, name="sg-finding-bool-pair")
+    job = _make_job(db_session, space)
+
+    created = _project(
+        db_session,
+        job,
+        findings=[
+            {
+                "kind": "conflict",
+                "detail": {"code": "duplicate_person_name", "pair": [True, 2]},
+                "signature": "finding-bool-pair-v1",
+            }
+        ],
+    )
+
+    assert created == 0
+    assert db_session.query(StewardSuggestion).count() == 0
+
+
+def test_suggestion_list_overfetch_advances_past_filtered_batch(db_session) -> None:
+    """连续隐藏行不能让 over-fetch 反复读取同一批而卡住列表请求。"""
+    owner, space = create_agent_fixture(db_session, name="sg-page-progress")
+    visible_other = _make_member(db_session, space, "sg-page-visible")
+    hidden_users = [
+        create_user_with_pin(db_session, f"sg-page-hidden-{idx}", "123456") for idx in range(3)
+    ]
+    now = timeutil.utcnow()
+
+    # 先创建可见行，再创建 3 条最新的隐藏端点行，使第一批完全被过滤。
+    visible, _ = steward_suggestions.upsert_suggestion(
+        db_session,
+        space_id=space.id,
+        origin="deterministic",
+        kind="identity_duplicate",
+        subject_user_id=owner.id,
+        object_user_id=visible_other.id,
+        value_json={"code": "duplicate_person_weak", "signature": "page-visible"},
+        evidence_json={"facts": []},
+        policy_version="p1",
+        recipient_account_ids=[owner.account.id],
+        now=now,
+    )
+    for idx, hidden in enumerate(hidden_users):
+        steward_suggestions.upsert_suggestion(
+            db_session,
+            space_id=space.id,
+            origin="deterministic",
+            kind="identity_duplicate",
+            subject_user_id=hidden.id,
+            object_user_id=owner.id,
+            value_json={"code": "duplicate_person_weak", "signature": f"page-hidden-{idx}"},
+            evidence_json={"facts": []},
+            policy_version="p1",
+            recipient_account_ids=[owner.account.id],
+            now=now,
+        )
+    db_session.commit()
+
+    page = steward_suggestions.list_suggestions_page(
+        db_session, account=owner.account, space_id=space.id, cursor=None, limit=1
+    )
+    assert [item["id"] for item in page["items"]] == [visible.id]
+
+
 # ---- 路由级回归（release-observability E2E 发现的序列化缺口）----
 
 

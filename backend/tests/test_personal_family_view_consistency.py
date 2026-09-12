@@ -172,6 +172,35 @@ def test_private_memory_event_never_triggers_space_work(db_session) -> None:
     assert db_session.query(StewardJob).count() == jobs_before
 
 
+def test_scoped_memory_and_rag_events_never_trigger_steward_work(db_session) -> None:
+    """带空间维度的 memory/RAG 事件也不应登记 Steward 作业。"""
+    from app.models.steward import StewardJob
+
+    owner, space = create_agent_fixture(db_session, name="imp-scoped-memory")
+    jobs_before = db_session.query(StewardJob).count()
+    domain_events.emit(
+        db_session,
+        event_type="memory.confirmed",
+        aggregate_type="memory",
+        aggregate_id=1,
+        payload={"scope": "space", "space_id": space.id},
+        space_id=space.id,
+        actor_account_id=owner.account.id,
+    )
+    domain_events.emit(
+        db_session,
+        event_type="rag.document.ingested",
+        aggregate_type="rag_document",
+        aggregate_id=1,
+        payload={"scope": "space", "space_id": space.id},
+        space_id=space.id,
+        actor_account_id=owner.account.id,
+    )
+    db_session.commit()
+
+    assert db_session.query(StewardJob).count() == jobs_before
+
+
 # ---- AC-2：无浏览器 GET 的初始化收敛 ----
 
 
