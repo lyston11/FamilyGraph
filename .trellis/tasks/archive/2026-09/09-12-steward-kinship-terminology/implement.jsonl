@@ -1,0 +1,8 @@
+{"file":".trellis/spec/guides/index.md","reason":"跨层任务通用规范与验收约定"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"relationship_resolver、TermRegistry、四级称谓和安全边界权威规范"}
+{"file":".trellis/spec/backend/index.md","reason":"backend 开发前检查与质量门禁"}
+{"file":".trellis/spec/frontend/index.md","reason":"frontend 层边界与验证入口"}
+{"file":".trellis/tasks/archive/2026-09/09-11-steward-projection-consistency/prd.md","reason":"已有 PFV、称谓接入、失效与 ETag 验收合同"}
+{"file":".trellis/tasks/archive/2026-09/09-11-steward-projection-consistency/design.md","reason":"已有个人视图计算、称谓解析和重算设计"}
+{"file":".trellis/tasks/archive/2026-09/09-11-steward-release-observability/release-evidence.md","reason":"自动 tick、Provider 证据分级和发布门禁限制"}
+{"file":".trellis/tasks/archive/2026-09/09-11-steward-assist-execution/implement.md","reason":"模型辅助与核心 PFV 隔离合同"}

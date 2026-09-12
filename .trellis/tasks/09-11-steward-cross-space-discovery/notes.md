@@ -1,28 +1,6 @@
-# Notes — Steward 跨空间亲属发现：延期设计与准入条件
 
-## 2026-09-11 规划记录
+## 2026-09-12 研究轮
 
-- 前轮曾把 cross-space 和 Pi 人格一起写“明确不建任务”，这里修正：跨空间是已讨论的延期研究项，应登记；Pi 人格、自动扩权/事实写入仍是明确不做。
-- 这个任务的 planning 不代表可直接实施；meta.execution_gate=deferred_design_review。
+已基于当前 `family-recommendations`、`relationship_graph`、`personal_family_bridge` 和现行安全记忆完成研究，详见 `research.md`。结论为 NO-GO：当前发布继续保持跨空间发现关闭；显式 bridge 只作为双方 anchor 本人分别同意后的授权通道，不得被改造成主动 MatchBroker。未来若重启，必须先解决不可枚举响应、未成年人/跟踪风险、单次绑定 token、撤权竞态和双边 opt-in 语义。
 
-## 决策与证据边界
-
-- 已确认路线：确定性核心 + 可选候选/排序/解释；先可靠性再用户审核；站内通知。
-- 对应条目：[F23](../09-11-steward-complete-hardening/research/findings.md#f23)。
-- 当前状态：延期研究，未授权实现。实现清单全部未勾选，不代表工作已完成。
-- 09-09 会话报告核心/维护 46 passed、辅助 16 passed；这次没有重复运行测试，不能作为未来改动通过依据。
-
-## 实施与验证约定
-
-本轮仅生成规划，未修改上述产品代码，也未重跑历史测试。文件行号以 2026-09-11 工作区为准；实施前必须读将修改的完整函数与现行 spec。
-迁移必须接实施时唯一 head，不硬编码已被并行工作使用的编号；测试只用隔离 DATA_DIR。不得把 conftest 的 downgrade base 对准业务库。
-
-## 实施结果待记录
-
-实施后逐 AC 追加实际命令、退出码、必要的脱敏证据及剩余问题。本节是交接记录入口，不替代 PRD 验收。
-
-## 2026-09-12 父任务归档交接
-
-父任务 09-11-steward-complete-hardening 执行轮结束并归档；本任务（延期设计 F23）按规划
-解除 parent 关联、保持活动独立推进。跨空间匹配保持关闭，go/no-go 决策前不进入实现；
-findings.md 修复状态回填节已登记 F23 状态。
+本轮只补研究材料和准入条件，未生成真实人物候选、未调用外部 Provider、未修改产品代码；任务继续保持 planning/deferred_design_review。

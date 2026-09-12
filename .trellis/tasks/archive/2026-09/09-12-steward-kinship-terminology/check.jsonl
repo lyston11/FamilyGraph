@@ -1,0 +1,6 @@
+{"file":".trellis/spec/guides/index.md","reason":"跨层任务通用规范与验收约定"}
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"四级称谓、concept code 和安全边界核验"}
+{"file":".trellis/spec/backend/index.md","reason":"backend 质量检查"}
+{"file":".trellis/spec/frontend/index.md","reason":"frontend 类型和 UI 消费边界"}
+{"file":".trellis/tasks/archive/2026-09/09-11-steward-projection-consistency/prd.md","reason":"PFV 称谓与失效验收"}
+{"file":".trellis/tasks/archive/2026-09/09-11-steward-release-observability/release-evidence.md","reason":"真实 API、自动 tick 与 Provider 证据核验"}

@@ -182,3 +182,7 @@ stub 回归：同一脚本默认模式重跑退出码 0（真实模式为纯增�
 
 任务元数据同步（本轮）：七个任务 release_gate 由 partial 更新为 pass，gate_note/notes 与各
 prd.md 状态行同步记录本轮证据；任务状态保持 in_progress，待实现审查/收尾流程后归档。
+
+## 10. 称谓投影闭环子任务（2026-09-12）
+
+`09-12-steward-kinship-terminology` 增加截图黄金关系回归：`Dm-Sf` 经确定性 resolver 和 zh-CN TermRegistry 持久化为“儿媳”；旧 `pfv-v1/policy_version=graph` 快照返回安全版本漂移状态并等待 Steward 重算，不继续暴露结构文案。Backend 全量 969 passed/3 skipped；frontend 全量测试/build/type-check/lint 通过；Steward API + maintenance 自动 tick E2E 退出码 0。此证据不改变真实 Provider 证据分级，也不关闭父任务延期研究。

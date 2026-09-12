@@ -1,6 +1,6 @@
 # Steward 管家引擎完整性与产品闭环补齐
 
-> 状态：in_progress；六个修复子任务实现回归已通过（2026-09-12）；发布门禁 PARTIAL——真实 provider E2E 未运行，整体不得标记 completed（审计修复轮见 [release-evidence §8](../09-11-steward-release-observability/release-evidence.md)）。
+> 状态：in_progress；六个修复子任务实现回归已通过（2026-09-12）；真实 provider E2E 已通过（liu-dada/gpt-5.6-sol，退出码 0）——发布门禁缺口已关闭（审计修复轮与真实 provider 轮见 [release-evidence §8/§9](../09-11-steward-release-observability/release-evidence.md)）。
 
 ## Goal
 
@@ -45,12 +45,12 @@ HEAD `7af9e1f`，以含未提交改动的当前工作区为准。核心 pipeline
 
 | 顺序/阶段 | 任务 | 优先级 | 负责范围 |
 |---|---|---|---|
-| 1 | [Steward 生产调度与运维可靠性](../09-11-steward-production-ops/prd.md) | P1 | F01, F02, F03, F17 |
-| 2 | [Steward 模型调用事务隔离、预算与崩溃恢复](../09-11-steward-assist-execution/prd.md) | P1 | F04, F05, F06, F16, F19 |
-| 3 | [Steward 个人视图、称谓与失效传播修复](../09-11-steward-projection-consistency/prd.md) | P1 | F09, F10, F11, F12, F13 |
-| 4 | [Steward 模型辅助安全修复与质量评测](../09-11-steward-quality-security/prd.md) | P1 | F07, F08, F18, F19, F20 |
-| 5 | [Steward 候选审核、冲突待办与站内通知闭环](../09-11-steward-candidate-review/prd.md) | P1 | F07, F08, F14, F15 |
-| 6 | [Steward 端到端发布门禁与可观测性](../09-11-steward-release-observability/prd.md) | P2 | F01, F16, F20, F21 |
+| 1 | [Steward 生产调度与运维可靠性](../archive/2026-09/09-11-steward-production-ops/prd.md) | P1 | F01, F02, F03, F17 |
+| 2 | [Steward 模型调用事务隔离、预算与崩溃恢复](../archive/2026-09/09-11-steward-assist-execution/prd.md) | P1 | F04, F05, F06, F16, F19 |
+| 3 | [Steward 个人视图、称谓与失效传播修复](../archive/2026-09/09-11-steward-projection-consistency/prd.md) | P1 | F09, F10, F11, F12, F13 |
+| 4 | [Steward 模型辅助安全修复与质量评测](../archive/2026-09/09-11-steward-quality-security/prd.md) | P1 | F07, F08, F18, F19, F20 |
+| 5 | [Steward 候选审核、冲突待办与站内通知闭环](../archive/2026-09/09-11-steward-candidate-review/prd.md) | P1 | F07, F08, F14, F15 |
+| 6 | [Steward 端到端发布门禁与可观测性](../archive/2026-09/09-11-steward-release-observability/prd.md) | P2 | F01, F16, F20, F21 |
 | 延期 | [Steward 后续能力：授权知识、个人路径解释与地区称谓](../09-11-steward-capability-followups/prd.md) | P3 | F22 |
 | 延期 | [Steward 跨空间亲属发现：延期设计与准入条件](../09-11-steward-cross-space-discovery/prd.md) | P3 | F23 |
 
