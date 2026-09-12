@@ -1,0 +1,49 @@
+{
+  "id": "steward-production-ops",
+  "name": "steward-production-ops",
+  "title": "Steward 生产调度与运维可靠性",
+  "description": "让已有的空间后台引擎能在无新事件、停机重启、短暂失败和运维重跑时持续收敛；已有成功历史与当前领域数据不被重复执行覆盖。",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/maintenance.py",
+    "backend/app/services/steward.py",
+    "backend/app/models/steward.py",
+    "backend/app/config.py",
+    "backend/app/main.py",
+    "backend/app/serve.py",
+    "backend/app/api/admin_deps.py",
+    "backend/app/services/admin_audit.py",
+    "system-admin-frontend/src",
+    "docker-compose.yml",
+    "scripts/dev-up.sh"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "awaiting_implementation_review",
+    "depends_on": [],
+    "finding_ids": [
+      "F01",
+      "F02",
+      "F03",
+      "F17"
+    ],
+    "wave": "current"
+  }
+}

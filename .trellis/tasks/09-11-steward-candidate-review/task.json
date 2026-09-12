@@ -1,0 +1,53 @@
+{
+  "id": "steward-candidate-review",
+  "name": "steward-candidate-review",
+  "title": "Steward 候选审核、冲突待办与站内通知闭环",
+  "description": "把有证据的模型候选与确定性冲突变成可理解的待办，用户可以看理由、驳回、补资料或显式发起关系提案；正式关系仍由有权当事人完成确认。",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/steward_assist.py",
+    "backend/app/services/steward.py",
+    "backend/app/services/notifications.py",
+    "backend/app/models/notification.py",
+    "backend/app/commands/connections.py",
+    "backend/app/services/source_facts.py",
+    "backend/app/services/terms.py",
+    "frontend/src/views/NotificationsView.vue",
+    "frontend/src/components/notifications/NoticeItemRow.vue",
+    "frontend/src/stores/notifications.ts"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "awaiting_implementation_review",
+    "depends_on": [
+      "09-11-steward-production-ops",
+      "09-11-steward-assist-execution",
+      "09-11-steward-projection-consistency",
+      "09-11-steward-quality-security"
+    ],
+    "finding_ids": [
+      "F07",
+      "F08",
+      "F14",
+      "F15"
+    ],
+    "wave": "current"
+  }
+}

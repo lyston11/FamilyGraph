@@ -1,0 +1,49 @@
+{
+  "id": "steward-projection-consistency",
+  "name": "steward-projection-consistency",
+  "title": "Steward 个人视图、称谓与失效传播修复",
+  "description": "让个人家族树在关系、称谓、成员、披露、桥接和策略变化后及时重算，并在后台未完成时也不返回失效关系路径或借 304 保留旧权限内容。",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/domain_events.py",
+    "backend/app/services/personal_family_view.py",
+    "backend/app/services/steward.py",
+    "backend/app/services/terms.py",
+    "backend/app/api/personal_family_view.py",
+    "backend/app/commands/registration.py",
+    "backend/app/commands/spaces.py",
+    "frontend/src/api/personalFamilyView.ts"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "awaiting_implementation_review",
+    "depends_on": [
+      "09-11-steward-production-ops"
+    ],
+    "finding_ids": [
+      "F09",
+      "F10",
+      "F11",
+      "F12",
+      "F13"
+    ],
+    "wave": "current"
+  }
+}

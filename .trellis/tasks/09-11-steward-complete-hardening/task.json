@@ -1,0 +1,53 @@
+{
+  "id": "steward-complete-hardening",
+  "name": "steward-complete-hardening",
+  "title": "Steward 管家引擎完整性与产品闭环补齐",
+  "description": "Steward 六个修复任务与两个延期研究：调度、模型事务、视图称谓、候选审核、安全质量、发布观测及后续能力。",
+  "status": "planning",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-11-steward-production-ops",
+    "09-11-steward-assist-execution",
+    "09-11-steward-projection-consistency",
+    "09-11-steward-quality-security",
+    "09-11-steward-candidate-review",
+    "09-11-steward-release-observability",
+    "09-11-steward-capability-followups",
+    "09-11-steward-cross-space-discovery"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "仅规划。23 条已识别事项见 research/findings.md；本轮范围限定 Steward，不声明穷尽全仓漏洞。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "awaiting_implementation_review",
+    "current_wave_children": [
+      "09-11-steward-production-ops",
+      "09-11-steward-assist-execution",
+      "09-11-steward-projection-consistency",
+      "09-11-steward-quality-security",
+      "09-11-steward-candidate-review",
+      "09-11-steward-release-observability"
+    ],
+    "deferred_children": [
+      "09-11-steward-capability-followups",
+      "09-11-steward-cross-space-discovery"
+    ],
+    "finding_count": 23,
+    "baseline_head": "7af9e1f",
+    "creation_authorized": true
+  }
+}

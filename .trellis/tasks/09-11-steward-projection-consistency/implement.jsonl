@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/09-11-steward-complete-hardening/research/current-contracts.md", "reason": "已实现能力、领域权限与共享边界；避免重建和扩权。"}
+{"file": ".trellis/tasks/09-11-steward-complete-hardening/research/findings.md", "reason": "本次核实的缺陷、源码锚点、风险类别和主责归属。"}
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "现有 canonical job、ActionCard/FSM、模型辅助基线合同；待修偏差见 findings。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 事务、迁移及并发约束。"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "SourceFact、词典、关系路径和证据合同。"}

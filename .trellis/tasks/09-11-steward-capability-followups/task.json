@@ -1,0 +1,41 @@
+{
+  "id": "steward-capability-followups",
+  "name": "steward-capability-followups",
+  "title": "Steward 后续能力：授权知识、个人路径解释与地区称谓",
+  "description": "为已经讨论但尚未有完整产品闭环的可选能力保留可执行研究与准入方案，避免未来重复发现或为了“像 Agent”增加无用模块。",
+  "status": "planning",
+  "dev_type": "research",
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/memory_rag.py",
+    "backend/app/services/terms.py",
+    "backend/app/services/personal_family_view.py",
+    "backend/app/services/steward_assist.py"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "deferred_design_review",
+    "depends_on": [
+      "09-11-steward-release-observability"
+    ],
+    "finding_ids": [
+      "F22"
+    ],
+    "wave": "later"
+  }
+}

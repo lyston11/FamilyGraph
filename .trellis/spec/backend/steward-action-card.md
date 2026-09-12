@@ -122,9 +122,36 @@ request_lineage_membership(
 
 原因：ActionCard 是建议和确认状态，不是授权凭据；最终领域命令必须再次执行空间、事实、可见性和 FSM 校验，并在同一事务中落事件。
 
-## 模型辅助层（09-06 子任务 B；services/steward_assist.py）
+## 模型辅助层（09-06 引入；09-11 加固后现行合同）
 
-- **三类辅助点**（候选/排序/解释）hook 在 `_execute_locked` 确定性流水线**之后**，`run_assists` 内每个辅助点经 SAVEPOINT（`db.begin_nested`）隔离：单点异常局部回滚 + 记日志，绝不外抛、绝不波及确定性结果（AC-5）。有效开关 = 平台 `config.STEWARD_ASSIST_*` AND 空间 `agent_space_provider_settings.assist_*`（仅 steward 维度消费，默认全关=零调用零写入）。
-- **child run 审计**：每次模型调用一行 `steward_model_calls`（space/job/policy_version/assist_kind/provider/model/prompt sha256 摘要/chars/token usage/status/latency）；prompt 明文永不落库；per `(job_id, assist_kind, seq)` 唯一支撑同事务重入幂等（候选/排序 seq=1、解释 seq=card.id）。整体 crash 回滚后重试会重花 token——已知权衡，由候选 digest 去重与解释逐卡跳过兜底。
-- **红线（改代码前必读）**：候选只落 `steward_llm_candidates` 内部池，不经过确定性矩阵绝不进卡片/任何正式写入；排序必须通过"严格排列"校验（等长、无重复、集合相等）才写 `presentation_rank`，只改呈现顺序（消费点 `api/action_cards.py` list_cards 排序）；解释只写 `reason_text_llm`（≤500 字），失败保持 NULL 回退模板。prompt 输入只允许白名单结构化字段（display name/fact_type/创建选择），绝不含 masked 值、高敏感类别或私人 Session/Memory。
-- **egress**：进程内直连 Provider（`resolve_runtime(agent_kind="steward")` 唯一解密出口），不经 sidecar、不伪造 AgentRun；transport 为模块级 `_post_json`（httpx 同步），测试 monkeypatch 它注入 fake。
+- **三类辅助点**（候选/排序/解释）：core 事务提交确定性结果后，**同一短事务**登记 `StewardAssistBatch`（job 唯一）；HTTP 只发生在批次执行器内有界线程 + 独立 Session 中，**任何业务 DB 写事务内禁止网络调用**。有效开关 = 平台 `config.STEWARD_ASSIST_*` AND 空间 `agent_space_provider_settings.assist_*`（仅 steward 维度消费，默认全关=零调用零写入）。
+- **attempt 审计**：`steward_model_calls` 为 attempt 行，唯一键 `(job_id, assist_kind, subject_key, input_hash, attempt_no)`；状态机 `reserved → in_flight → succeeded/failed/degraded/skipped/unknown`。prompt 明文永不落库（只存 sha256 摘要/长度/预算快照）；usage 缺失/负数/部分缺失按预留保守计费；unknown（读超时等无法证明上游未处理）保守计费且**不自动重发**。
+- **预算**：发送前预留调用次数 + 输入/输出 token 上界 + 墙钟；failed/degraded/invalid-output 同样消耗预算；输出 cap=min(辅助上限, 剩余预算)。
+- **写回栅栏**：发送前与应用前各一次短事务重验——空间设置、provider id/模型、policy_version、源事实 digest/revision、卡片状态/revision、候选受众、租约。任何变化 skip/supersede（安全原因码入审计）；禁用辅助后旧在途响应不得落文案。
+- **上限**：`STEWARD_ASSIST_MAX_PROMPT_BYTES` / `MAX_RESPONSE_BYTES`（流式读，超界即断）、单批候选/卡片数、批次并发、`BATCH_LEASE_SECONDS` 租约、单次 HTTP timeout=min(配置, 剩余租约)。
+- **红线（改代码前必读）**：候选只落 `steward_llm_candidates` 内部池 + `StewardSuggestion` 审核投影，绝不直接进卡片/任何正式写入；排序必须通过"严格排列"校验且按 recipient 分组；解释只输出结构化 `{reason_code, supporting_fact_ids, template_slots}` 由确定性模板渲染。prompt 输入只允许白名单结构化字段，绝不含 masked 值、高敏感类别或私人 Session/Memory。
+
+## 生产调度与租约栅栏（09-11 production-ops；迁移 0036）
+
+- `StewardSpaceSchedule(space_id PK, next_scan_at, last_scheduled_cursor, policy_version)`：每 tick 用 BEGIN IMMEDIATE 选最多 10 个到期空间（`STEWARD_SCAN_INTERVAL_SECONDS` 默认 300）；扫描经 canonical enqueue 合同登记作业（`integrity_scan` 的 succeeded 短路仅在扫描路径豁免），首次启用/重新启用/策略版本变化触发有界追补。
+- `StewardJob` 增 `available_at`、`retry_of_job_id`（逻辑关联，终态不复活）、`error_code`（安全分类码）。可重试错误（DB 锁/暂时资源）按 `STEWARD_RETRY_BACKOFF_*_SECONDS`（5s/30s）退避回队，`STEWARD_MAX_ATTEMPTS`（默认 3）耗尽进 failed；确定性错误（输入/权限）直接终态，不拖累其他空间。
+- **租约栅栏**：run/heartbeat/settle 必须传 `worker_id + expected_attempt` 并校验 lease owner + deadline；旧执行者结算被拒（`STEWARD_LEASE_STALE`）。lease 时固定执行水位 checkpoint；运行中更高水位只产生后继作业，结算不得宣告未处理水位完成。
+- **admin 运维 API（仅 :8002，`app/api/admin_steward.py`）**：`GET /steward/status`、`GET /steward/jobs`（字段白名单，读不受引擎门禁）；`POST /steward/spaces/{id}/rerun`（受 `STEWARD_ENABLED` 门禁；Idempotency-Key 幂等；reason 只存分类码；60s 冷却 429、策略冲突 409、关闭 503、未知空间同形 404）。family token 一律 401；家庭 API 不挂任何后台路由。
+
+## 建议审核闭环（09-11 candidate-review；迁移 0038）
+
+- `StewardSuggestion`（origin= deterministic|model；kind 仅 relation_proposal|term_preference|identity_duplicate|missing_information；evidence_json 只存允许 ID/revision；evidence_hash 去重键 = space/kind/有向端点/结构化值/证据哈希，**不含模型措辞**）+ `StewardSuggestionRecipient`（per-recipient dismissed/read/cooldown）。
+- 关系建议 submit → 202 `{suggestion, linked_proposal, pending_confirmations}`，只生成 proposed SourceFact（provenance=agent_proposal）；确认走 `commands/relationship_proposals.py`，确认人 = 端点本人 ∪ 合法代管，**空间 owner 非端点永远不能代确认**；路由禁止直接调 `transition_source_fact`。term_preference 仅本人提交并调既有个人词命令。identity_duplicate/missing_information v1 无 submit。
+- 通知复用现有 Notification（suggestion_id FK，唯一 recipient×space×suggestion，固定模板标题、状态实时投影）；未验证 rationale 绝不进通知/列表。
+
+## 可观测性与脱敏（09-11 release-observability）
+
+- `GET /admin-api/v1/steward/status` 输出 metrics（core/assist 队列、失败、预算、pfv_stale、卡片计数——全部真实 DB 行）+ alerts（`queue_backlog` 阈值 `STEWARD_ALERT_QUEUE_SECONDS`（0=自动 max(2×扫描间隔,60s)）、`queue_stalled`）；worker 停而 HTTP 存活 → degraded；config 关闭是 disabled/paused，不算故障。
+- **日志红线**：异常只记关联 ID + 异常类名 + 安全错误码；`str(exc)` 原文、SQL 绑定参数、模型 payload、姓名/PIN/token/key 绝不进日志/审计/响应。新增回归用合成哨兵断言零外泄。
+- 验证脚本（临时 DATA_DIR）：`scripts/steward_e2e.py`（端到端）、`steward_capacity.py`（容量采样）、`steward_migrate_roundtrip.py`（迁移往返）；证据 JSON 已 gitignore。
+
+## 安全链与评测（09-11 quality-security；services/steward_guard.py）
+
+- 链路：代号投影（不发原始姓名）→ context/input policy → provider 设置/revision → `before_provider_request` 最终 payload 检查（复用 policy_guard，不经 ProviderProxy、不伪造 AgentRun）→ 有界 transport → 闭合 schema 校验（证据 ID 围栏、允许 kind、严格排列、受众范围）→ 写回栅栏 → 呈现/审核投影。
+- 读侧信任门：`reason_text_llm` 仅 schema_version=2 验证行外显；旧纯文本行视为 untrusted，读取回退模板并进后台重生成队列。
+- 评测：`tests/fixtures/steward_eval/` 版本化 fixtures（ST-5 矩阵 + 对抗例）；硬安全门禁（授权/事实约束用例）100% 通过才可开新策略的模型开关，候选召回阈值独立统计（≥0.9）；fake transport 证据只证明程序合同，真实 provider 质量分数不得伪造。

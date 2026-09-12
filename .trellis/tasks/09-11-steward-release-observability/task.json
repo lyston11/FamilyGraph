@@ -1,0 +1,53 @@
+{
+  "id": "steward-release-observability",
+  "name": "steward-release-observability",
+  "title": "Steward 端到端发布门禁与可观测性",
+  "description": "用隔离测试和可审查运行证据证明从真实领域操作到后台重算、建议通知、用户确认及后续失效的完整路径可用；发布后能诊断开关、积压、失败和模型降级。",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/maintenance.py",
+    "backend/app/services/steward.py",
+    "backend/app/logctx.py",
+    "backend/app/api/admin_deps.py",
+    "backend/app/services/admin_audit.py",
+    "system-admin-frontend/src",
+    "scripts",
+    "README.md",
+    "docker-compose.yml"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "awaiting_implementation_review",
+    "depends_on": [
+      "09-11-steward-production-ops",
+      "09-11-steward-assist-execution",
+      "09-11-steward-projection-consistency",
+      "09-11-steward-quality-security",
+      "09-11-steward-candidate-review"
+    ],
+    "finding_ids": [
+      "F01",
+      "F16",
+      "F20",
+      "F21"
+    ],
+    "wave": "current"
+  }
+}

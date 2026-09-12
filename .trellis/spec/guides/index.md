@@ -1,5 +1,7 @@
 # Thinking Guides
 
+> **历史资料（不可执行）**：Trellis 规范已弃用。本目录仅供追溯；开发规则以仓库根目录 [AGENTS.md](../../AGENTS.md) 及现行项目文档为准。请勿将本文作为新任务的门禁或实现入口。
+
 > **Purpose**: Expand your thinking to catch things you might not have considered.
 
 ---

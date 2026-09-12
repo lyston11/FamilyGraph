@@ -1,0 +1,47 @@
+{
+  "id": "steward-assist-execution",
+  "name": "steward-assist-execution",
+  "title": "Steward 模型调用事务隔离、预算与崩溃恢复",
+  "description": "把核心结果的成功与辅助模型的成败分开，使慢模型不占用 SQLite 写锁；调用失败、崩溃和预算耗尽可追溯且不会无限付费或回写陈旧内容。",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/steward.py",
+    "backend/app/services/steward_assist.py",
+    "backend/app/services/maintenance.py",
+    "backend/app/models/steward.py",
+    "backend/app/config.py",
+    "backend/tests/conftest.py"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "awaiting_implementation_review",
+    "depends_on": [
+      "09-11-steward-production-ops"
+    ],
+    "finding_ids": [
+      "F04",
+      "F05",
+      "F06",
+      "F16",
+      "F19"
+    ],
+    "wave": "current"
+  }
+}

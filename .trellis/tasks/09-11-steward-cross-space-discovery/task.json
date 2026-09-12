@@ -1,0 +1,40 @@
+{
+  "id": "steward-cross-space-discovery",
+  "name": "steward-cross-space-discovery",
+  "title": "Steward 跨空间亲属发现：延期设计与准入条件",
+  "description": "保留跨空间“可能认识的人”与 MatchBroker 的后续需求及风险决策，明确在当前发布中不开发、不启用，防止被当作普通推荐缺口自动扩权实现。",
+  "status": "planning",
+  "dev_type": "research",
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-11",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-11-steward-complete-hardening",
+  "relatedFiles": [
+    "backend/app/services/family_recommendations.py",
+    "backend/app/services/personal_family_bridge.py",
+    "backend/app/services/visibility.py"
+  ],
+  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "meta": {
+    "planning_date": "2026-09-11",
+    "execution_gate": "deferred_design_review",
+    "depends_on": [
+      "09-11-steward-release-observability"
+    ],
+    "finding_ids": [
+      "F23"
+    ],
+    "wave": "later"
+  }
+}

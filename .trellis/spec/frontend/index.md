@@ -1,5 +1,7 @@
 # 前端开发规范
 
+> **历史资料（不可执行）**：Trellis 规范已弃用。本目录仅供追溯；开发规则以仓库根目录 [AGENTS.md](../../AGENTS.md) 及现行项目文档为准。请勿将本文作为新任务的门禁或实现入口。
+
 > 技术栈：Vue 3 + Vite + TypeScript + Naive UI + Pinia + Vue Flow + d3-hierarchy；双主题设计 token 体系（styles/tokens.ts 单一来源，2026-08-29 起替代 Element Plus）。全局架构契约见 [../architecture.md](../architecture.md)。
 
 | Guide | Description | Status |

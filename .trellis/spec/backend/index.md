@@ -1,5 +1,7 @@
 # 后端开发规范
 
+> **历史资料（不可执行）**：Trellis 规范已弃用。本目录仅供追溯；开发规则以仓库根目录 [AGENTS.md](../../AGENTS.md) 及现行项目文档为准。请勿将本文作为新任务的门禁或实现入口。
+
 > 技术栈：FastAPI + SQLAlchemy + SQLite(WAL) + lunar-python + JWT。全局架构契约见 [../architecture.md](../architecture.md)（身份模型/状态机/授权矩阵/删除级联的权威定义）。
 
 | Guide | Description | Status |
