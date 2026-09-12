@@ -3,7 +3,7 @@
   "name": "steward-production-ops",
   "title": "Steward 生产调度与运维可靠性",
   "description": "让已有的空间后台引擎能在无新事件、停机重启、短暂失败和运维重跑时持续收敛；已有成功历史与当前领域数据不被重复执行覆盖。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "fullstack",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-11",
-  "completedAt": null,
+  "completedAt": "2026-09-12",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -33,7 +33,7 @@
     "docker-compose.yml",
     "scripts/dev-up.sh"
   ],
-  "notes": "实现回归已完成；发布门禁为 partial（真实 provider E2E 未运行）。详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes。",
+  "notes": "实现回归与真实 provider E2E 已完成（2026-09-12，liu-dada/gpt-5.6-sol，退出码 0）。详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes。",
   "meta": {
     "planning_date": "2026-09-11",
     "execution_gate": "awaiting_implementation_review",
@@ -45,7 +45,7 @@
       "F17"
     ],
     "wave": "current",
-    "release_gate": "partial",
-    "gate_note": "实现回归已通过（backend 963 passed；E2E/评测/迁移往返脚本退出码 0）；真实 provider E2E 未运行，发布门禁为 PARTIAL（stub-only），不得标记 completed——审计结论 2026-09-12。"
+    "release_gate": "pass",
+    "gate_note": "实现回归已通过（backend 967 passed, 3 skipped，2026-09-12）；真实 provider E2E 已通过（liu-dada/gpt-5.6-sol，stub 与 real 模式退出码均 0，成功/降级记录单列，见 release-evidence.md §9）——发布门禁缺口已关闭，不得再以 stub-only 为由阻止 completed。"
   }
 }
