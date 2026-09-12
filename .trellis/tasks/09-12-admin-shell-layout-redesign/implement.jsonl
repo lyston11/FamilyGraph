@@ -1,0 +1,3 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"后台壳层玻璃视觉、响应式与可访问性约定"}
+{"file":"frontend/src/components/shell/AppShell.vue","reason":"用户端壳层的桌面侧栏、右侧 body 与移动断点基线"}
+{"file":"system-admin-frontend/src/styles/main.css","reason":"管理员壳层当前 CSS 与冲突规则的直接实现"}

@@ -104,7 +104,7 @@ body {
 .admin-shell {
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
 /* 顶栏：sticky 半透明磨砂玻璃，滚动时透出星空底 */
@@ -1113,6 +1113,7 @@ select:focus {
   position: relative;
   isolation: isolate;
   display: flex;
+  flex-direction: row;
   min-height: 100vh;
   min-width: 0;
   background: linear-gradient(120deg, color-mix(in srgb, var(--ag-text) 7%, transparent), transparent 58%), var(--ag-bg);

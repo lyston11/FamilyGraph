@@ -1,0 +1,3 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端验证命令、移动端与视觉质量门禁"}
+{"file":"system-admin-frontend/tests/admin-shell.mobile.spec.ts","reason":"现有移动导航行为回归契约"}
+{"file":"system-admin-frontend/tests/app.shell.spec.ts","reason":"App 入口壳层挂载回归测试"}
