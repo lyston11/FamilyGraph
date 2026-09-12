@@ -72,7 +72,7 @@ async function onAccountAction(key: string): Promise<void> {
 
 <template>
   <div class="admin-shell" @keydown="onNavKeydown">
-    <header class="admin-header">
+    <aside class="admin-sidebar" :class="{ 'admin-sidebar--open': mobileNavOpen }">
       <div class="admin-brand-lockup">
         <span class="admin-brand-mark" aria-hidden="true">⌘</span>
         <div>
@@ -80,21 +80,10 @@ async function onAccountAction(key: string): Promise<void> {
           <span class="admin-brand">系统管理后台</span>
         </div>
       </div>
-      <div class="admin-header-context" aria-label="后台说明">
+      <div class="admin-sidebar-context" aria-label="后台说明">
         <span class="admin-context-dot" aria-hidden="true"></span>
         <span>只读治理 · 空间健康 · 安全审计</span>
       </div>
-      <button
-        type="button"
-        class="admin-nav-toggle"
-        data-testid="mobile-nav-toggle"
-        :aria-expanded="mobileNavOpen"
-        aria-controls="admin-nav-panel"
-        aria-label="导航菜单"
-        @click="toggleMobileNav"
-      >
-        菜单
-      </button>
       <nav
         id="admin-nav-panel"
         class="admin-nav"
@@ -109,24 +98,47 @@ async function onAccountAction(key: string): Promise<void> {
         <RouterLink :to="{ name: 'agent-providers' }"><span>06</span>模型治理</RouterLink>
         <RouterLink :to="{ name: 'access-audit' }"><span>07</span>读取审计</RouterLink>
       </nav>
-      <NDropdown
-        trigger="click"
-        :options="[...accountOptions]"
-        @select="onAccountAction"
-      >
+      <div class="admin-sidebar-footer">
+        <span class="admin-sidebar-footer-label">当前管理员</span>
+        <strong>{{ adminLabel || '已登录' }}</strong>
+      </div>
+    </aside>
+    <div class="admin-shell-body">
+      <header class="admin-header">
+        <div class="admin-header-context" aria-label="后台说明">
+          <span class="admin-context-dot" aria-hidden="true"></span>
+          <span>控制室 <b>/</b> 治理概览</span>
+        </div>
         <button
           type="button"
-          class="ag-tag"
-          data-testid="account-menu"
-          aria-haspopup="menu"
-          :aria-label="`账号菜单：${adminLabel || '当前管理员'}`"
+          class="admin-nav-toggle"
+          data-testid="mobile-nav-toggle"
+          :aria-expanded="mobileNavOpen"
+          aria-controls="admin-nav-panel"
+          aria-label="导航菜单"
+          @click="toggleMobileNav"
         >
-          {{ adminLabel }}
+          菜单
         </button>
-      </NDropdown>
-    </header>
-    <main class="admin-main">
-      <RouterView />
-    </main>
+        <NDropdown
+          trigger="click"
+          :options="[...accountOptions]"
+          @select="onAccountAction"
+        >
+          <button
+            type="button"
+            class="ag-tag admin-account-trigger"
+            data-testid="account-menu"
+            aria-haspopup="menu"
+            :aria-label="`账号菜单：${adminLabel || '当前管理员'}`"
+          >
+            {{ adminLabel || '当前管理员' }}
+          </button>
+        </NDropdown>
+      </header>
+      <main class="admin-main">
+        <RouterView />
+      </main>
+    </div>
   </div>
 </template>
