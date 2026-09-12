@@ -38,3 +38,7 @@
 - V2.3 新增三工具@1：resolve_free_text_relation（只读）、get_term_alternatives（只读）、record_term_usage（**同意门控**：description/prompt 双处声明必须先获用户明确同意；source_event 服务端固定 assistant_query）。
 - get_relationship_path / explain_structural_path 升 @2 并保留 @1 兼容声明（supported_versions 列表模式）。
 - 双侧 schema 收敛流程照旧：backend agent_tools.py 注册表为权威，sidecar TypeBox 与 frontend types 三方对齐；涉及 internal 协议必须 Compose 真实联调（stub openai-compatible Provider 容器即可走通 enqueue→lease→context→session 构造→settle 全链路）。
+
+## Steward 称谓投影黄金合同
+
+PersonalFamilyView 的称谓展示必须沿用 `relationship_resolver → concept_code → terms.resolve_term_or_structural`，前端只消费 PFV edge 的 `term`。黄金关系 `Dm-Sf` 在 zh-CN 内置词典中解析为“儿媳”；结构路径只作为详情证据或无词条时的安全 fallback。旧 `pfv-v1`/`policy_version=graph` 投影必须因版本漂移被拒绝并排队重算，不能继续作为 current 快照提供。

@@ -1,7 +1,8 @@
 # 开发/演示环境数据播种与默认管理员指南
 
-> 适用范围：本地与 docker compose 开发部署。权威合同来源：`.trellis/spec/backend/`、
-> `backend/app/services/admin_bootstrap.py`、`backend/app/dev_seed.py`（本文与其冲突时以代码为准）。
+> 适用范围：本地与 Docker Compose 开发部署。管理员 bootstrap 和演示种子的实际行为以
+> `backend/app/services/admin_bootstrap.py`、`backend/app/dev_seed.py` 及其测试为准；
+> 本文只在播种、重置、管理员初始化或存量升级时按需阅读；相关任务和规范见 `.trellis/`。
 > 高层架构见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
 ## 1. 账号从哪来（三条路径，各司其职）
@@ -12,7 +13,7 @@
 | 家庭演示用户（王德海家） | dev 种子（`app/dev_seed.py`） | `DEV_SEED_DEMO_DATA=1`；启动时按**固定清单增量补缺**（只增不改不删） | 演示 PIN 统一 `123456`（公开 dev 值） |
 | 真实家庭账号 | 建档/邀请/注册等业务流程 | 用户操作 | 业务流一次性交付（不归本文管） |
 
-约定（务必理解后再动数据）：
+执行播种或重置前确认以下不变量：
 
 1. **"第一个默认管理员"指 bootstrap 创建的 `admin`**，只在空 `system_admins` 表上生成；
    已有管理员（无论 active/disabled）的部署重启**绝不**生成第二账号——这是防意外的安全设计。
@@ -34,12 +35,11 @@
 ## 3. 常用命令
 
 ```bash
-# 一次性清库并重播种（备份当前库到 /data/backups/ 后删除 db/-wal/-shm）
+# 一次性清库并重播种（破坏性操作；先确认目标为开发库，脚本会备份后删除 db/-wal/-shm）
 docker compose exec api python -m app.dev_seed --reset
 docker compose restart api          # 重启后：迁移 → admin bootstrap → 播种/补缺
 
 # 忘记管理员密码：生成一次性恢复密码（写入 DATA_DIR/bootstrap/admin-recovery，0600）
-docker compose exec api python -m app.dev_seed --help     # 种子 CLI 自身
 docker compose exec api python -m app.admin_recovery --username admin
 
 # 验证播种结果

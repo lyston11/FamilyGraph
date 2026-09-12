@@ -55,6 +55,18 @@ def test_candidate_validator_rejects_and_maps() -> None:
     assert steward_guard.validate_candidate_output("不是 JSON", _CTX) is None
 
 
+def test_candidate_validator_empty_array_is_valid_no_candidates() -> None:
+    """空数组是合法的"无可提候选"；元素全部被过滤仍整体拒绝（None）。
+
+    真实模型（gpt-5.6-sol）在花名册无可推断关系时返回 []——2026-09-12 真实
+    provider E2E 确认；此前空数组与不可解析混为 degraded，会污染生产指标。
+    """
+    assert steward_guard.validate_candidate_output("[]", _CTX) == []
+    # 全部元素被过滤（编造 kind / 不在花名册）：整体拒绝，不是空成功
+    fabricated = json.dumps([{"kind": "grandparent", "subject": "n001", "object": "n003"}])
+    assert steward_guard.validate_candidate_output(fabricated, _CTX) is None
+
+
 def test_candidate_digest_ignores_wording() -> None:
     a = steward_guard.candidate_digest("spouse", 1, 2)
     b = steward_guard.candidate_digest("spouse", 1, 2)

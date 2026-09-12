@@ -11,9 +11,18 @@ SourceFact + 领域事件）→ 自动 tick → job/PFV/卡片/通知 → 模型
 （fake provider HTTP 服务：成功/畸形/超时）→ 建议审阅/提交/确认 → 撤权 →
 失败注入 → 进程中断恢复（过期 lease/batch）→ 关闭/重开 → 最终重算。
 
+真实 provider 模式（STEWARD_E2E_REAL_PROVIDER=1）：成功路径改用与本机 Pi
+一致的生产标准 profile（liu-dada / gpt-5.6-sol / openai-responses），标准
+profile 门禁全程保持开启（注册/解析按生产合同验证）；失败注入仍走 fake
+provider（协议合同需要受控服务），另对真实端点注入确定性传输超时取得真实
+降级记录。密钥只经 LIU_DADA_API_KEY 环境变量注入，绝不写入代码、证据或日志。
+推理模型延迟远高于 fake：单次调用超时与批次 lease 按真实模式放大（受启动
+校验上界约束）。
+
 证据：仅记录 ID/状态/计数（绝无个人内容）到 backend/.steward-e2e-evidence.json。
 
 用法：cd backend && .venv/bin/python scripts/steward_e2e.py
+      STEWARD_E2E_REAL_PROVIDER=1 LIU_DADA_API_KEY=... .venv/bin/python scripts/steward_e2e.py
 """
 
 from __future__ import annotations
@@ -48,7 +57,21 @@ os.environ["BEHAVIOR_PROJECTION_ENABLED"] = "1"
 os.environ["STEWARD_ASSIST_CANDIDATE"] = "1"
 os.environ["STEWARD_ASSIST_RANKING"] = "1"
 os.environ["STEWARD_ASSIST_EXPLANATION"] = "1"
-os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"] = "1.5"
+
+# 真实 provider 模式必须在导入 app 之前放大模型时延相关参数（config 于导入时
+# 固化）。推理模型（gpt-5.6-sol）单次调用常见数十秒：单次超时 90s、批次 lease
+# 600s，均在上游启动校验区间内（timeout [0.1,300]、lease [5,3600]）。
+_REAL_PROVIDER_MODE = os.environ.get("STEWARD_E2E_REAL_PROVIDER", "").lower() in ("1", "true")
+if _REAL_PROVIDER_MODE:
+    if not os.environ.get("LIU_DADA_API_KEY"):
+        raise SystemExit(
+            "STEWARD_E2E_REAL_PROVIDER=1 需要 LIU_DADA_API_KEY 环境变量"
+            "（密钥只经环境变量注入，勿写入任何文件）"
+        )
+    os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"] = "90"
+    os.environ["STEWARD_ASSIST_BATCH_LEASE_SECONDS"] = "600"
+else:
+    os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"] = "1.5"
 
 EVIDENCE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".steward-e2e-evidence.json"
@@ -143,6 +166,8 @@ def _start_fake_provider() -> tuple[str, ThreadingHTTPServer]:
 def main() -> int:
     import platform as _plat
 
+    real_mode = _REAL_PROVIDER_MODE
+    EVIDENCE["provider_mode"] = "real-liu-dada/gpt-5.6-sol" if real_mode else "fake-stub"
     EVIDENCE["hardware"] = {
         "machine": _plat.machine(),
         "processor": _plat.processor(),
@@ -159,10 +184,12 @@ def main() -> int:
 
     from fastapi.testclient import TestClient
     from sqlalchemy import select
+    from sqlalchemy.orm import Session
 
     from app import config
     from app.db import SessionLocal
     from app.main import admin_app, app
+    from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
     from app.models.notification import Notification
     from app.models.personal_family_view import PersonalFamilyView
     from app.models.steward import (
@@ -176,12 +203,31 @@ def main() -> int:
     from app.services import maintenance
     from app.utils.secretbox import encrypt_secret
 
-    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
+    # stub 模式：合成 fake 行需要关闭标准 profile 门禁（与单测同一手法）。
+    # 真实模式：门禁保持生产态开启，真实 profile 必须通过注册/解析门禁；
+    # 仅失败注入阶段临时关闭（fake 行按单测合同解析），注入后立即恢复。
+    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = real_mode
     client = TestClient(app)
     admin = TestClient(admin_app)
 
-    def auth(token_pair: dict) -> dict[str, str]:
+    def auth(token_pair: dict) -> dict:
         return {"Authorization": f"Bearer {token_pair['access_token']}"}
+
+    def select_steward_provider(db: Session, provider_id: int, model: str) -> None:
+        """把空间 steward 维度的 Provider 选择切到指定行（真实/失败注入切换用）。"""
+        setting = db.scalar(
+            select(AgentSpaceProviderSetting).where(
+                AgentSpaceProviderSetting.space_id == space_id,
+                AgentSpaceProviderSetting.agent_kind == "steward",
+            )
+        )
+        assert setting is not None
+        setting.provider_id = provider_id
+        setting.model = model
+        setting.assist_candidate = True
+        setting.assist_ranking = True
+        setting.assist_explanation = True
+        db.commit()
 
     def register(name: str) -> dict:
         r = client.post("/api/auth/register", json={"name": name, "pin": "135246"})
@@ -216,11 +262,14 @@ def main() -> int:
             time.sleep(0.2)
         return {"ticks": ticks, "jobs_executed": executed}
 
-    def wait_batches(timeout: float = 20.0, *, keep_ticking: bool = False) -> list[str]:
+    def wait_batches(
+        timeout: float = 20.0, *, keep_ticking: bool = False, poll_seconds: float = 0.2
+    ) -> list[str]:
         """辅助批次在受限线程内真实 HTTP 执行；轮询至收敛。
 
         keep_ticking：辅助批次由 maintenance tick 调度（每 tick 至多一个），
-        模拟真实持续运行的循环在等待期间继续 tick。
+        模拟真实持续运行的循环在等待期间继续 tick。poll_seconds：真实模式下
+        单次模型调用常达数十秒，放大轮询间隔避免高频 tick 与执行事务争锁。
         """
         import faulthandler
 
@@ -240,7 +289,7 @@ def main() -> int:
                     break
             finally:
                 db.close()
-            time.sleep(0.2)
+            time.sleep(poll_seconds)
         else:
             faulthandler.dump_traceback(file=sys.stderr)
         return statuses
@@ -345,21 +394,44 @@ def main() -> int:
         alerts=r.json()["alerts"],
     )
 
-    # ---- 7. 模型辅助批次（fake provider：成功）----
-    from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
-
-    base_url, fakesrv = _start_fake_provider()
+    # ---- 7. 模型辅助批次（真实模式：liu-dada/gpt-5.6-sol 生产 profile；stub：fake）----
+    fakesrv = None
     db = SessionLocal()
-    provider = AgentProvider(
-        name="e2e-fake-provider",
-        kind="openai_compatible",
-        base_url=base_url,
-        secret_ciphertext=encrypt_secret("sk-e2e-fake-not-a-real-key"),
-        allowed_models_json=["e2e-model"],
-        enabled=True,
-        created_at=tu.utcnow(),
-        updated_at=tu.utcnow(),
-    )
+    if real_mode:
+        # 生产标准 profile：字段与 agent_provider.STANDARD_* 常量逐一对齐
+        # （compat 必须为空 dict）。密钥密文经 secretbox（SECRET_KEY 派生）落本地
+        # 临时库；明文只存在于本进程环境变量，绝不写入证据/日志。
+        provider = AgentProvider(
+            name="liu-dada",
+            kind="openai_compatible",
+            api="openai-responses",
+            base_url="https://api.liu-dada.com/v1",
+            secret_ciphertext=encrypt_secret(os.environ["LIU_DADA_API_KEY"]),
+            allowed_models_json=["gpt-5.6-sol"],
+            context_window=272_000,
+            max_tokens=60_000,
+            reasoning=True,
+            input_modalities_json=["text", "image"],
+            thinking_levels_json=["low", "medium", "high", "xhigh", "max"],
+            compat_json={},
+            enabled=True,
+            created_at=tu.utcnow(),
+            updated_at=tu.utcnow(),
+        )
+        assist_model = "gpt-5.6-sol"
+    else:
+        fake_base_url, fakesrv = _start_fake_provider()
+        provider = AgentProvider(
+            name="e2e-fake-provider",
+            kind="openai_compatible",
+            base_url=fake_base_url,
+            secret_ciphertext=encrypt_secret("sk-e2e-fake-not-a-real-key"),
+            allowed_models_json=["e2e-model"],
+            enabled=True,
+            created_at=tu.utcnow(),
+            updated_at=tu.utcnow(),
+        )
+        assist_model = "e2e-model"
     db.add(provider)
     db.flush()
     db.add(
@@ -367,7 +439,7 @@ def main() -> int:
             space_id=space_id,
             agent_kind="steward",
             provider_id=provider.id,
-            model="e2e-model",
+            model=assist_model,
             cloud_allowed=True,
             enabled=True,
             assist_candidate=True,
@@ -375,18 +447,38 @@ def main() -> int:
             assist_explanation=True,
         )
     )
+    db.flush()
+    if real_mode:
+        # 生产门禁验证：标准 profile 必须在注册行 + 空间解析两个关口都通过。
+        from app.services import agent_provider as _ap
+
+        profile_err = _ap.provider_profile_error(provider, assist_model)
+        assert profile_err is None, f"标准 profile 未通过生产门禁: {profile_err}"
+        resolution = _ap.resolve_for_space(db, space_id, _ap.AGENT_KIND_STEWARD)
+        assert resolution.policy_result == _ap.POLICY_ALLOWED, (
+            resolution.policy_result,
+            resolution.reason,
+        )
     db.commit()
     db.close()
-    step("assist_provider_registered", provider_id=provider.id, base_url_host="127.0.0.1(fake)")
+    step(
+        "assist_provider_registered",
+        provider_mode=EVIDENCE["provider_mode"],
+        provider_name=provider.name,
+        model=assist_model,
+        standard_profile_gate="enforced" if real_mode else "disabled-for-fake-row",
+        base_url_host="api.liu-dada.com" if real_mode else "127.0.0.1(fake)",
+    )
 
     # 新事件（成员改名）触发新 job → 注册批次
     r = client.put("/api/me/name", json={"name": "e2e-乙-改名"}, headers=b["headers"])
     assert r.status_code == 200, r.text
-    for _ in range(10):
-        maintenance.run_maintenance_tick()
-        if wait_batches(timeout=3.0):
-            continue
-        break
+    maintenance.run_maintenance_tick()
+    wait_batches(
+        timeout=900.0 if real_mode else 30.0,
+        keep_ticking=True,
+        poll_seconds=2.0 if real_mode else 0.2,
+    )
     db = SessionLocal()
     batches = list(db.scalars(select(StewardAssistBatch)).all())
     calls = list(db.scalars(select(StewardModelCall)).all())
@@ -398,6 +490,18 @@ def main() -> int:
         batch_ids=[bt.id for bt in batches],
         batch_statuses={str(bt.id): bt.status for bt in batches},
         call_statuses=[cl.status for cl in calls],
+        # 真实 provider 证据：仅时延/用量计数（绝无 prompt/响应内容）
+        call_summary=[
+            {
+                "kind": cl.assist_kind,
+                "status": cl.status,
+                "error_code": cl.error_code,
+                "latency_ms": cl.latency_ms,
+                "prompt_tokens": cl.prompt_tokens,
+                "completion_tokens": cl.completion_tokens,
+            }
+            for cl in calls
+        ],
         llm_candidates=len(candidates),
         all_core_succeeded=all(j.status == "succeeded" for j in jobs),
     )
@@ -414,7 +518,11 @@ def main() -> int:
     r = client.put("/api/me/name", json={"name": "e2e-丙-改名"}, headers=c["headers"])
     assert r.status_code == 200, r.text
     drained = tick_until_drained()
-    wait_batches()
+    wait_batches(
+        timeout=900.0 if real_mode else 20.0,
+        keep_ticking=True,
+        poll_seconds=2.0 if real_mode else 0.2,
+    )
     db = SessionLocal()
     suggestions = list(db.scalars(select(StewardSuggestion)).all())
     sug_summary = [
@@ -499,11 +607,34 @@ def main() -> int:
     # ---- 9. 失败注入（畸形响应 → degraded/failed 辅助；core 仍成功）----
     # 注意：注入必须在撤权之前——撤权后空间无 confirmed 事实，候选 roster 为空，
     # 根本不会注册辅助批次，注入将无从观察。
+    # 真实模式：协议注入需要受控服务，临时切换到 fake provider 行（合成行按
+    # 单测合同在门禁关闭期间解析），并把单次超时临时压回 stub 值以复现同一
+    # 注入语义（1.5s < fake 5s 慢响应 → unknown/timeout 分类）；注入后立即
+    # 切回真实 provider 并恢复生产门禁与真实超时。
+    if real_mode:
+        config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
+        config.STEWARD_ASSIST_TIMEOUT_SECONDS = 1.5
+        fake_base_url, fakesrv = _start_fake_provider()
+        db = SessionLocal()
+        fake_provider = AgentProvider(
+            name="e2e-fake-provider",
+            kind="openai_compatible",
+            base_url=fake_base_url,
+            secret_ciphertext=encrypt_secret("sk-e2e-fake-not-a-real-key"),
+            allowed_models_json=["e2e-model"],
+            enabled=True,
+            created_at=tu.utcnow(),
+            updated_at=tu.utcnow(),
+        )
+        db.add(fake_provider)
+        db.flush()
+        select_steward_provider(db, fake_provider.id, "e2e-model")
+        db.close()
     _mode["value"] = "malformed"
     r = client.put("/api/me/name", json={"name": "e2e-甲-再改名"}, headers=a["headers"])
     assert r.status_code == 200, r.text
     drained = tick_until_drained()
-    wait_batches()
+    wait_batches(timeout=120.0 if real_mode else 20.0)
     db = SessionLocal()
     calls = list(db.scalars(select(StewardModelCall)).all())
     batches_all = list(db.scalars(select(StewardAssistBatch)).all())
@@ -523,7 +654,7 @@ def main() -> int:
     r = client.put("/api/me/name", json={"name": "e2e-乙-再改名"}, headers=b["headers"])
     assert r.status_code == 200, r.text
     tick_until_drained()
-    wait_batches(timeout=30.0, keep_ticking=True)
+    wait_batches(timeout=120.0 if real_mode else 30.0, keep_ticking=True)
     db = SessionLocal()
     unknown = [
         {"status": cl.status, "error_code": cl.error_code}
@@ -546,6 +677,47 @@ def main() -> int:
     )
     db.close()
     _mode["value"] = "success"
+
+    if real_mode:
+        # 注入结束：切回真实 provider，恢复生产门禁与真实超时，收起 fake 服务。
+        db = SessionLocal()
+        select_steward_provider(db, provider.id, assist_model)
+        db.close()
+        if fakesrv is not None:
+            fakesrv.shutdown()
+            fakesrv = None
+        config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = True
+        config.STEWARD_ASSIST_TIMEOUT_SECONDS = float(os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"])
+
+        # ---- 9.5 真实端点降级（真实模式专属）：把单次超时压到 2s（低于真实
+        # 推理延迟、高于建连），对真实 API 触发确定性读超时 → unknown/timeout
+        # 保守计费分类（建连过慢则为 failed/connect_failed），core job 不受影响。
+        config.STEWARD_ASSIST_TIMEOUT_SECONDS = 2.0
+        r = client.put("/api/me/name", json={"name": "e2e-真实超时改名"}, headers=a["headers"])
+        assert r.status_code == 200, r.text
+        maintenance.run_maintenance_tick()
+        wait_batches(timeout=300.0, keep_ticking=True, poll_seconds=1.0)
+        db = SessionLocal()
+        degraded_calls = [
+            {
+                "kind": cl.assist_kind,
+                "status": cl.status,
+                "error_code": cl.error_code,
+                "latency_ms": cl.latency_ms,
+            }
+            for cl in db.scalars(select(StewardModelCall)).all()
+            if cl.model == assist_model and cl.status in ("failed", "unknown", "degraded")
+        ]
+        jobs = list(db.scalars(select(StewardJob).where(StewardJob.space_id == space_id)).all())
+        step(
+            "real_provider_degradation",
+            degraded_calls=degraded_calls,
+            core_all_succeeded=all(j.status == "succeeded" for j in jobs),
+        )
+        assert degraded_calls, "期望真实端点超时产生 failed/unknown/degraded 辅助调用"
+        assert all(j.status == "succeeded" for j in jobs), jobs
+        db.close()
+        config.STEWARD_ASSIST_TIMEOUT_SECONDS = float(os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"])
 
     # ---- 10. 撤权（revoke → 证据失效 → 卡片取代）----
     r = client.post(f"/api/relations/{edge_id}/revoke", headers=a["headers"])
@@ -642,7 +814,8 @@ def main() -> int:
         alerts=final_status["alerts"],
         job_rows=job_rows,
     )
-    fakesrv.shutdown()
+    if fakesrv is not None:
+        fakesrv.shutdown()
     with open(EVIDENCE_PATH, "w") as fh:
         json.dump(EVIDENCE, fh, ensure_ascii=False, indent=2, default=str)
     print(f"[e2e] evidence written to {EVIDENCE_PATH}")

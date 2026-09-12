@@ -2,7 +2,7 @@
 
 现代家谱协作 Web 平台：以每个人为第一人称维护家庭空间，家庭空间相连自然涌现家族视图。
 
-系统架构与设计总览见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；长期工程决策见 `.agent-notes/implemented/`，记录规范见 [.write-notes-like-deepseek/SKILL.md](.write-notes-like-deepseek/SKILL.md)。Trellis 目录仅保留历史资料，已不再作为开发入口。
+系统架构与设计总览见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；开发流程、任务和规范见 `.trellis/` 与根目录 [AGENTS.md](AGENTS.md)。`.agent-notes/` 仅保留早期迁移期间的历史记录。
 
 技术栈：Vue 3 + Vite + TypeScript（前端）｜FastAPI + SQLAlchemy + SQLite(WAL)（后端）｜Docker Compose（部署）。
 
@@ -93,7 +93,7 @@ alembic revision -m "change"  # 生成新迁移（业务表结构随各子任务
 
 | 改动类型 | 建议检查 |
 |---|---|
-| 文档、配置说明、脚本注释 | Markdown/格式检查；涉及 Agent Notes 时运行 `npm run verify-agent-notes` |
+| 文档、配置说明、脚本注释 | Markdown/格式检查；涉及 Trellis 任务或规范时运行 `python3 ./.trellis/scripts/task.py validate <task-dir>` |
 | 后端单包或纯函数 | `cd backend && ruff check <files> && .venv/bin/python -m pytest -q <相关测试>`；改公共类型时加 `mypy app` |
 | 家庭前端或后台前端 | 在对应目录运行 `npm run lint`、`npm run type-check`，必要时 `npm test`；构建/发布改动再运行 `npm run build` |
 | 数据模型、迁移、认证、权限、跨 listener 或跨前后端 | 运行受影响包的完整检查，并执行相关回归测试；涉及真实 HTTP 契约时运行 API smoke |

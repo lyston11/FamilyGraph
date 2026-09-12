@@ -1019,7 +1019,7 @@ class _HugeResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def iter_raw(self):
+    def iter_bytes(self):
         while self._remaining > 0:
             step = min(len(self._chunk), self._remaining)
             self._remaining -= step
@@ -1384,3 +1384,62 @@ def test_candidate_minor_endpoint_dropped(db_session, monkeypatch) -> None:
     _run_assists(db_session)
 
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
+
+
+def test_post_json_decodes_gzip_response(monkeypatch) -> None:
+    """真实 transport 合同：gzip 响应体必须按 Content-Encoding 解压后再解析。
+
+    liu-dada 生产端点默认返回 gzip；iter_raw 只回原始压缩字节，会导致全部
+    真实调用 invalid_response（2026-09-12 真实 provider E2E 发现并修复）。
+    """
+    import gzip
+
+    envelope = {
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "[]"}]}],
+        "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+    }
+    compressed = gzip.compress(json.dumps(envelope).encode("utf-8"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "provider.test"
+        return httpx.Response(200, content=compressed, headers={"Content-Encoding": "gzip"})
+
+    real_client = httpx.Client
+
+    class _MockClient(real_client):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(steward_assist.httpx, "Client", _MockClient)
+
+    data = steward_assist._post_json("https://provider.test/v1/responses", {}, {"model": "m"}, 5.0)
+    assert data["usage"]["total_tokens"] == 5
+
+
+def test_candidate_empty_array_succeeded_applied_with_no_candidates(
+    db_session, monkeypatch
+) -> None:
+    """真实模型语义：[] = "无可提候选"，调用 succeeded、批次 applied、零候选。
+
+    与 test_candidate_unparseable_degraded_but_audited 对偶（2026-09-12 真实
+    provider E2E 发现：gpt-5.6-sol 对无可推断花名册返回 []，此前被误判 degraded）。
+    """
+    space, _a, _b, event = _spouse_space(db_session, "assist-cand-empty")
+    provider = _provider(db_session)
+    _steward_setting(db_session, space, provider, candidate=True)
+    _turn_on(monkeypatch, ranking=False, explanation=False)
+    calls: list[dict] = []
+    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["[]"]))
+
+    _run_job(db_session, space, event.id)
+    _run_assists(db_session)
+
+    assert list(db_session.scalars(select(StewardLlmCandidate))) == []
+    job = db_session.scalar(select(StewardJob).where(StewardJob.space_id == space.id))
+    row = _calls(db_session, job.id)[0]
+    assert row.status == "succeeded"
+    assert row.error_code is None
+    assert row.billed_tokens == 15
+    batch = db_session.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job.id))
+    assert batch is not None and batch.status == "applied"

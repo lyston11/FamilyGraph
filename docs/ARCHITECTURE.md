@@ -1,7 +1,7 @@
 # FamilyGraph 系统架构与设计
 
 > 本文是项目的高层架构与设计总览，反映 2026-09 独立系统管理员平台（09-04 任务树）落地后的现状。
-> 可执行合同（API 签名、错误矩阵、测试清单）的权威来源是 `.trellis/spec/architecture.md`，本文与其保持同步；两者冲突时以 spec 为准并修订本文。
+> 本文描述当前架构。API 签名、错误矩阵和测试清单以当前代码、迁移、测试及本目录中的配套文档为准；开发规范与任务流程见 `.trellis/spec/`、`.trellis/tasks/` 和根目录 `AGENTS.md`。发现不一致时，先在受影响模块的代码和测试中确认，再同步更新文档。
 > 数据播种、默认管理员来源与存量部署升级处置见 [DEV-DATA-SEEDING.md](./DEV-DATA-SEEDING.md)。
 
 ## 1. 系统总览
@@ -121,14 +121,16 @@ backend/app/
 ├── services/        # 领域服务：visibility（家庭授权单点）
 │                    #   admin_auth / admin_bootstrap / admin_read_model
 │                    #   admin_access_sessions / admin_audit / admin_sanitizer
-├── models/          # ORM：业务表 + system_admin + admin_access（0028/0029）
+├── models/          # ORM：业务表 + system_admin + admin_access（0028/0029 起持续演进）
 ├── schemas/         # Pydantic：admin_read.py 为字段白名单唯一来源
 └── utils/           # security.py（家庭 PIN/JWT）；admin_security.py（admin JWT 签发域）
 ```
 
-规则：api → services → models 单向依赖；家庭数据出口必须经 `visibility.py`；admin 读模型禁止复用家庭 visibility 链。Alembic 迁移链 `0001→0029`；对历史凭据结构 fail-closed，不做静默数据转换。
+规则：api → services → models 单向依赖；家庭数据出口必须经 `visibility.py`；admin 读模型禁止复用家庭 visibility 链。Alembic 迁移链从 `0001` 持续到仓库当前最新版本（目前为 `0038`）；对历史凭据结构 fail-closed，不做静默数据转换。
 
-## 7. 安全不变量（改任何代码前先读）
+## 7. 安全不变量（涉及边界改动时复核）
+
+修改认证、授权、路由注册、数据投影、附件、日志或部署网络时，复核以下不变量并运行对应回归测试；纯文档、样式或不触及这些边界的局部改动无需逐条重读。
 
 1. 家庭端零后台痕迹：源码、bundle、source map、路由表、OpenAPI 不得出现 `system_admin`/`admin-api`/后台端口等字符串（构建后有扫描）。
 2. 未注册路径统一普通 404，不用 403/重定向/自定义错误页（存在性 oracle 红线）。
@@ -139,7 +141,17 @@ backend/app/
 7. 敏感详情必须带 30 分钟目标绑定会话 + 理由，全部读取留痕。
 8. 字段白名单精确集合断言；模型没有的字段不得虚构。
 
-## 8. 质量门禁
+## 8. 按风险选择验证
+
+验证范围与改动面匹配。提交前完成受影响包的针对性检查；跨层、认证授权、迁移、部署或无法确定影响面的改动再扩大到完整门禁。低风险可逆改动不强制运行全部套件。
+
+| 风险/范围 | 检查 |
+|---|---|
+| 后端局部逻辑 | 相关 pytest + `ruff check`；公共类型变化加 `mypy app` |
+| 任一前端局部改动 | 对应项目 `npm run lint`、`npm run type-check`；测试行为变化加 `npm test` |
+| 构建、依赖或发布配置 | 对应项目完整检查并 `npm run build` |
+| 认证、授权、listener 隔离、迁移、跨前后端契约 | 相关回归红线测试；必要时执行真实 API smoke |
+| 发布或影响面不明 | 三个包完整检查，并执行 API smoke |
 
 ```bash
 cd backend                 && .venv/bin/python -m pytest -q && ruff check . && ruff format --check . && mypy app
@@ -147,4 +159,4 @@ cd frontend                && npm run type-check && npm run lint && npm test && 
 cd system-admin-frontend   && npm run type-check && npm run lint && npm test && npm run build
 ```
 
-回归红线测试（节选）：授权矩阵 IDOR（`test_authz_matrix.py`）、双 listener 路由注册与旧 admin.py 未注册、交叉签发域拒绝、凭据文件 0600 生命周期、字段白名单精确集合、访问会话拒绝矩阵、家庭 dist 禁止字符串扫描。
+回归红线测试（节选）：授权矩阵 IDOR（`test_authz_matrix.py`）、双 listener 路由注册与旧 admin.py 未注册、交叉签发域拒绝、凭据文件 0600 生命周期、字段白名单精确集合、访问会话拒绝矩阵、家庭 dist 禁止字符串扫描。只在对应边界改动时运行相关集合；未运行或环境阻塞的检查应在交付说明中注明。

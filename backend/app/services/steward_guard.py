@@ -218,14 +218,19 @@ def validate_candidate_output(text: str, ctx: ProjectionContext) -> list[dict[st
     """校验候选输出：JSON 数组，每项 {kind, subject, object}（节点代号）。
 
     - kind 必须是原子 SOURCE_FACT_TYPES（派生称谓/祖辈一律丢弃）；
-    - subject/object 必须是本次输入内的节点代号且互不相同；
+    - subject/object 必须是本次授权输入内的节点代号且互不相同；
     - 任一端点是未成年人 → 丢弃（未成年不进入推荐线索）；
     - rationale 等自由文本字段一律丢弃（不进 digest、不落库）。
-    返回 candidate-review 消费形状列表（非空），整体不可解析 → None。
+    返回 candidate-review 消费形状列表；空数组是合法的"无可提候选"（返回 []，
+    真实模型在无可推断关系时的正常回答，2026-09-12 真实 provider E2E 确认）；
+    不可解析 → None；任一元素被过滤（编造/越权/未成年）→ 整体拒绝（None），
+    绝不把被拒输出降格为空成功。
     """
     parsed = _extract_json(text)
     if not isinstance(parsed, list):
         return None
+    if not parsed:
+        return []
     items: list[dict[str, Any]] = []
     for entry in parsed:
         if not isinstance(entry, dict):

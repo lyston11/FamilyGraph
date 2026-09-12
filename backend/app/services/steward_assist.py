@@ -132,14 +132,17 @@ def _post_json(
     """默认 transport：httpx 同步 POST，响应体流式读取并有字节上界（F19）。
 
     超出 STEWARD_ASSIST_MAX_RESPONSE_BYTES 立即中止读取并抛错（调用方记
-    failed/response_too_large），绝不把无上界的响应整体读入内存。
+    failed/response_too_large），绝不把无上界的响应整体读入内存。必须用
+    iter_bytes（自动按 Content-Encoding 解压）：iter_raw 返回原始压缩字节，
+    gzip 响应会直接导致 JSON 解析失败（真实 liu-dada 端点默认 gzip，
+    2026-09-12 真实 provider E2E 发现）；字节上界按解压后体积计。
     """
     with httpx.Client(timeout=timeout) as client:
         with client.stream("POST", url, headers=headers, json=payload) as response:
             response.raise_for_status()
             chunks: list[bytes] = []
             total = 0
-            for chunk in response.iter_raw():
+            for chunk in response.iter_bytes():
                 total += len(chunk)
                 if total > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
                     raise ValueError(REASON_RESPONSE_TOO_LARGE)
@@ -869,8 +872,9 @@ def _validate_output(
         )
         return {**structured, "rendered": rendered}
     if kind == "candidate":
+        # [] 是合法的"无可提候选"（不是 degraded）；None 才是不可解析/整体被拒
         items = steward_guard.validate_candidate_output(text, ctx)
-        return {"items": items} if items else None
+        return {"items": items} if items is not None else None
     # ranking：严格排列校验
     order = steward_guard.validate_ranking_output(text, list(card_ids or []))
     return {"order": order} if order is not None else None
