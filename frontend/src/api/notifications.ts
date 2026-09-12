@@ -1,6 +1,7 @@
 import type {
   Maskable,
   NotificationActionCardRef,
+  NotificationSuggestionRef,
   NotificationDomainStatus,
   NotificationItem,
   NotificationKind,
@@ -36,6 +37,7 @@ const NOTIFICATION_KINDS: readonly NotificationKind[] = [
   'space_membership',
   'bridge',
   'relation',
+  'steward_suggestion',
 ]
 
 const NOTIFICATION_DOMAIN_STATUSES: readonly NotificationDomainStatus[] = [
@@ -76,6 +78,11 @@ function decodeNotificationPayload(value: unknown): NotificationPayload | null {
   return { title: value.title, summary, actor_name: actorName, space_name: spaceName }
 }
 
+function decodeSuggestionRef(value: unknown): NotificationSuggestionRef | null {
+  if (!isRecord(value) || typeof value.suggestion_id !== 'number') return null
+  return { suggestion_id: value.suggestion_id }
+}
+
 function decodeNotificationItem(value: unknown): NotificationItem | null {
   if (!isRecord(value)) return null
   if (
@@ -100,6 +107,15 @@ function decodeNotificationItem(value: unknown): NotificationItem | null {
   }
   if (value.kind === 'action_card' && actionCard === null) return null
 
+  // kind='steward_suggestion' 却无引用同样视为脏数据
+  let suggestion: NotificationSuggestionRef | null = null
+  if (value.suggestion !== null && value.suggestion !== undefined) {
+    const ref = decodeSuggestionRef(value.suggestion)
+    if (ref === null) return null
+    suggestion = ref
+  }
+  if (value.kind === 'steward_suggestion' && suggestion === null) return null
+
   return {
     id: value.id,
     space_id: value.space_id,
@@ -107,6 +123,7 @@ function decodeNotificationItem(value: unknown): NotificationItem | null {
     payload,
     domain_status: value.domain_status,
     action_card: actionCard,
+    suggestion,
     created_at: value.created_at,
     read_at: typeof value.read_at === 'string' ? value.read_at : null,
   }

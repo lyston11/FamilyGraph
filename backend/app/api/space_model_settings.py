@@ -178,7 +178,10 @@ def put_space_model_settings(
     assist_values = (body.assist_candidate, body.assist_ranking, body.assist_explanation)
     if body.agent_kind != "steward" and any(v is not None for v in assist_values):
         raise_api_error(
-            422, VALIDATION_ERROR, "assist_* 开关仅对 steward 维度有意义", {"agent_kind": body.agent_kind}
+            422,
+            VALIDATION_ERROR,
+            "assist_* 开关仅对 steward 维度有意义",
+            {"agent_kind": body.agent_kind},
         )
 
     if body.enabled:

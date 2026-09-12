@@ -140,10 +140,17 @@ STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))
 # 卡片有效期与 dismissed 后同 kind 冷却天数（ST-4 有效期 / ST-3 不重复骚扰）
 STEWARD_CARD_TTL_DAYS: int = int(os.environ.get("STEWARD_CARD_TTL_DAYS", "14"))
 STEWARD_COOLDOWN_DAYS: int = int(os.environ.get("STEWARD_COOLDOWN_DAYS", "7"))
+# ---- 09-11 Steward 建议审核投影（candidate-review）----
+# 建议有效期与按收件人驳回冷却天数（同证据版本内不重复骚扰）
+STEWARD_SUGGESTION_TTL_DAYS: int = int(os.environ.get("STEWARD_SUGGESTION_TTL_DAYS", "30"))
+STEWARD_SUGGESTION_COOLDOWN_DAYS: int = int(os.environ.get("STEWARD_SUGGESTION_COOLDOWN_DAYS", "7"))
 # ---- 09-06 Steward 模型辅助层（候选/排序/解释；平台级 per-kind 开关，默认全关）----
 # 有效开关 = 平台级（此处）AND 空间级（agent_space_provider_settings.assist_* 列，
 # owner 经空间模型设置设置）。全部关闭时 Steward 行为与确定性基线逐字节等价。
-STEWARD_ASSIST_CANDIDATE: bool = os.environ.get("STEWARD_ASSIST_CANDIDATE", "").lower() in ("1", "true")
+STEWARD_ASSIST_CANDIDATE: bool = os.environ.get("STEWARD_ASSIST_CANDIDATE", "").lower() in (
+    "1",
+    "true",
+)
 STEWARD_ASSIST_RANKING: bool = os.environ.get("STEWARD_ASSIST_RANKING", "").lower() in ("1", "true")
 STEWARD_ASSIST_EXPLANATION: bool = os.environ.get("STEWARD_ASSIST_EXPLANATION", "").lower() in (
     "1",
@@ -160,6 +167,42 @@ STEWARD_ASSIST_TIMEOUT_SECONDS: float = float(
     os.environ.get("STEWARD_ASSIST_TIMEOUT_SECONDS", "30")
 )
 STEWARD_ASSIST_MAX_CARDS_PER_JOB: int = int(os.environ.get("STEWARD_ASSIST_MAX_CARDS_PER_JOB", "5"))
+# ---- 09-11 辅助批次执行限制（R5：字节/并发/墙钟均有上界）----
+# prompt 明文字节上界（超限不发送，记 skipped prompt_too_large）
+STEWARD_ASSIST_MAX_PROMPT_BYTES: int = int(
+    os.environ.get("STEWARD_ASSIST_MAX_PROMPT_BYTES", str(64 * 1024))
+)
+# HTTP 响应体流式读取字节上界（超限中止读取，记 failed response_too_large）
+STEWARD_ASSIST_MAX_RESPONSE_BYTES: int = int(
+    os.environ.get("STEWARD_ASSIST_MAX_RESPONSE_BYTES", str(256 * 1024))
+)
+# 辅助批次 lease 时长（同时是单批总墙钟 deadline；lease 过期由恢复收敛）
+STEWARD_ASSIST_BATCH_LEASE_SECONDS: int = int(
+    os.environ.get("STEWARD_ASSIST_BATCH_LEASE_SECONDS", "120")
+)
+# 全局并发批次上界（1=串行；调度器一次至多 lease 一个未过期批次）
+STEWARD_ASSIST_MAX_CONCURRENT_BATCHES: int = int(
+    os.environ.get("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", "1")
+)
+
+# ---- 09-11 Steward 生产调度（周期扫描与有限恢复；正数 + 上界校验见 ensure_ready）----
+# 空间周期扫描间隔（首次启用/重新启用/policy_version 变化时该空间被置为立即到期追补）
+STEWARD_SCAN_INTERVAL_SECONDS: int = int(os.environ.get("STEWARD_SCAN_INTERVAL_SECONDS", "300"))
+# 单个扫描 tick 最多登记的 core job 数（防止单 tick 长时间占住事件循环外线程）
+STEWARD_SCAN_MAX_JOBS_PER_TICK: int = int(os.environ.get("STEWARD_SCAN_MAX_JOBS_PER_TICK", "10"))
+# 可重试失败的有限退避（第 1/2 次重试前等待秒数；max_attempts 沿用上方 3）
+STEWARD_RETRY_BACKOFF_FIRST_SECONDS: int = int(
+    os.environ.get("STEWARD_RETRY_BACKOFF_FIRST_SECONDS", "5")
+)
+STEWARD_RETRY_BACKOFF_SECOND_SECONDS: int = int(
+    os.environ.get("STEWARD_RETRY_BACKOFF_SECOND_SECONDS", "30")
+)
+# 管理员单空间重跑冷却（8002 POST rerun；0 允许运维态关闭冷却）
+STEWARD_RERUN_COOLDOWN_SECONDS: int = int(os.environ.get("STEWARD_RERUN_COOLDOWN_SECONDS", "60"))
+# 队列积压告警阈值（秒；status API 的 alerts 输出）。0 = 自动 = max(2×扫描间隔, 60)。
+# 仅产生可见告警，不改变任何调度/执行行为（09-11 发布可观测性 R2/AC-4）。
+STEWARD_ALERT_QUEUE_SECONDS: int = int(os.environ.get("STEWARD_ALERT_QUEUE_SECONDS", "0"))
+
 # PersonalFamilyView/bridge API and projection; default disabled for safe rollout.
 PERSONAL_FAMILY_VIEW_ENABLED: bool = os.environ.get("PERSONAL_FAMILY_VIEW_ENABLED", "").lower() in (
     "1",
@@ -228,11 +271,31 @@ def _reject_weak_default_secrets() -> None:
         )
     if MAINTENANCE_INTERVAL_SECONDS <= 0:
         raise RuntimeError("MAINTENANCE_INTERVAL_SECONDS 必须为正数")
+    _validate_steward_scheduling()
     if AGENT_RUNTIME_ENABLED and AGENT_SERVICE_SECRET in _WEAK_SECRETS:
         raise RuntimeError(
             "AGENT_SERVICE_SECRET 命中已知弱默认值：请提供真实随机密钥，"
             "或仅开发态显式设置 DEV_ALLOW_WEAK_SECRETS=1"
         )
+
+
+def _validate_steward_scheduling() -> None:
+    """09-11 生产调度参数校验：正数 + 上界（防止误配产生无限/负退避）。"""
+    bounds: tuple[tuple[str, int, int, int], ...] = (
+        ("STEWARD_SCAN_INTERVAL_SECONDS", STEWARD_SCAN_INTERVAL_SECONDS, 1, 86400),
+        ("STEWARD_SCAN_MAX_JOBS_PER_TICK", STEWARD_SCAN_MAX_JOBS_PER_TICK, 1, 100),
+        ("STEWARD_RETRY_BACKOFF_FIRST_SECONDS", STEWARD_RETRY_BACKOFF_FIRST_SECONDS, 0, 3600),
+        ("STEWARD_RETRY_BACKOFF_SECOND_SECONDS", STEWARD_RETRY_BACKOFF_SECOND_SECONDS, 0, 3600),
+        ("STEWARD_RERUN_COOLDOWN_SECONDS", STEWARD_RERUN_COOLDOWN_SECONDS, 0, 3600),
+        ("STEWARD_ALERT_QUEUE_SECONDS", STEWARD_ALERT_QUEUE_SECONDS, 0, 86400),
+        ("STEWARD_ASSIST_MAX_PROMPT_BYTES", STEWARD_ASSIST_MAX_PROMPT_BYTES, 1024, 1 << 20),
+        ("STEWARD_ASSIST_MAX_RESPONSE_BYTES", STEWARD_ASSIST_MAX_RESPONSE_BYTES, 1024, 1 << 22),
+        ("STEWARD_ASSIST_BATCH_LEASE_SECONDS", STEWARD_ASSIST_BATCH_LEASE_SECONDS, 5, 3600),
+        ("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", STEWARD_ASSIST_MAX_CONCURRENT_BATCHES, 1, 8),
+    )
+    for name, value, low, high in bounds:
+        if not low <= value <= high:
+            raise RuntimeError(f"{name} 必须在 [{low}, {high}] 区间内（当前 {value}）")
 
 
 def ensure_admin_ready() -> None:

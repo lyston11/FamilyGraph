@@ -19,18 +19,21 @@ import { useRouter } from 'vue-router'
 
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import NoticeItemRow from '@/components/notifications/NoticeItemRow.vue'
+import SuggestionReviewDialog from '@/components/notifications/SuggestionReviewDialog.vue'
 import { describeLoadError } from '@/api/loadError'
 import { useActionCardsStore } from '@/stores/actionCards'
 import { useNotificationsStore } from '@/stores/notifications'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpacesStore } from '@/stores/spaces'
-import type { NotificationItem } from '@/types/api'
+import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
+import type { NotificationItem, SuggestionItem } from '@/types/api'
 import { classifyNotifications } from '@/types/notifications'
 
 const router = useRouter()
 const spaces = useSpacesStore()
 const notifications = useNotificationsStore()
 const actionCards = useActionCardsStore()
+const suggestions = useStewardSuggestionsStore()
 
 function goHome(): void {
   void router.push({ name: 'home' })
@@ -89,6 +92,8 @@ watch(hasActiveBridge, (active) => {
 async function load(): Promise<void> {
   if (spaceId.value === null) return
   await notifications.load(spaceId.value).catch(() => undefined)
+  // 待核实建议（Steward 投影）：与通知并行加载；失败不阻塞通知分区
+  await suggestions.load(spaceId.value).catch(() => undefined)
 }
 
 onMounted(() => {
@@ -96,8 +101,10 @@ onMounted(() => {
 })
 
 watch(spaceId, () => {
-  // 切换空间：收起 ActionCard 面板并按新上下文重读（store 已按空间清理）
+  // 切换空间：收起 ActionCard 面板与建议弹层并按新上下文重读（store 已按空间清理）
   inboxOpened.value = false
+  reviewOpened.value = false
+  reviewSuggestion.value = null
   void load()
 })
 
@@ -105,6 +112,22 @@ watch(spaceId, () => {
 function openNotification(item: NotificationItem): void {
   if (item.read_at !== null || spaceId.value === null) return
   void notifications.markRead(spaceId.value, item.id).catch(() => undefined)
+}
+
+// ---- 待核实建议详情弹层：打开只读；提交/驳回在弹层内显式触发 ----
+const reviewOpened = ref(false)
+const reviewSuggestion = ref<SuggestionItem | null>(null)
+
+function openSuggestion(item: NotificationItem): void {
+  if (item.read_at === null && spaceId.value !== null) {
+    void notifications.markRead(spaceId.value, item.id).catch(() => undefined)
+  }
+  const id = item.suggestion?.suggestion_id
+  if (id === undefined) return
+  const found =
+    suggestions.forSpace(spaceId.value ?? 0)?.items.find((s) => s.id === id) ?? null
+  reviewSuggestion.value = found
+  reviewOpened.value = true
 }
 
 function markAllRead(): void {
@@ -198,7 +221,44 @@ function retry(): void {
         </ul>
       </section>
 
-      <!-- 分区 2：通知 -->
+      <!-- 分区 2：待核实（Steward 建议投影；与确定性推荐分开，只读详情 + 显式确认） -->
+      <section class="notice-section" data-test="section-verify">
+        <h2 class="section-title">待核实</h2>
+        <p class="section-hint">
+          Steward 基于已确认事实发现的可疑/缺失线索；查看详情不会提交任何动作。
+        </p>
+        <NEmpty
+          v-if="sections.verify.length === 0"
+          description="没有待核实的线索"
+          size="small"
+          data-test="verify-empty"
+        />
+        <ul v-else class="notice-list">
+          <li
+            v-for="item in sections.verify"
+            :key="item.id"
+            class="notice-item"
+            :class="{ 'notice-item--unread': item.read_at === null }"
+            data-test="verify-item"
+            @click="openSuggestion(item)"
+          >
+            <NoticeItemRow :item="item">
+              <template #actions>
+                <NButton
+                  size="small"
+                  secondary
+                  data-test="open-details"
+                  @click.stop="openSuggestion(item)"
+                >
+                  查看详情
+                </NButton>
+              </template>
+            </NoticeItemRow>
+          </li>
+        </ul>
+      </section>
+
+      <!-- 分区 3：通知 -->
       <section class="notice-section" data-test="section-notices">
         <h2 class="section-title">通知</h2>
         <NEmpty
@@ -221,7 +281,7 @@ function retry(): void {
         </ul>
       </section>
 
-      <!-- 分区 3：已完成·历史（read_at 有值且领域终态） -->
+      <!-- 分区 4：已完成·历史（read_at 有值且领域终态） -->
       <section class="notice-section" data-test="section-history">
         <h2 class="section-title">已完成 · 历史</h2>
         <NEmpty
@@ -243,6 +303,14 @@ function retry(): void {
       </section>
 
     </template>
+
+    <!-- 建议详情/确认弹层（本页不直接执行命令；动作在弹层内显式触发） -->
+    <SuggestionReviewDialog
+      v-if="spaceId !== null"
+      v-model:opened="reviewOpened"
+      v-model:suggestion="reviewSuggestion"
+      :space-id="spaceId"
+    />
     </article>
   </main>
 </template>

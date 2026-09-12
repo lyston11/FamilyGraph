@@ -1,14 +1,15 @@
 <script setup lang="ts">
-// 记忆与知识五标签容器（PRD §2.5 / design §5.4，09-01 Phase 5）：
-// - 五个标签（移动端 CSS 分段控制器外观）：待确认 / 我的私有记忆 / 当前家庭共享 /
-//   当前家族共享 / 检索与引用；有待确认候选时默认进入待确认，否则默认私有；
+// 记忆与知识五分区容器（PRD §2.5 / design §5.4，09-01 Phase 5；09-06 框架重构）：
+// - 与设置页同构：左侧竖向分区导航（≤768px 收敛为横向滑动标签条）+ 右侧玻璃卡分区，
+//   五个分区 = 待确认 / 我的私有记忆 / 当前家庭共享 / 当前家族共享 / 检索与引用；
+//   有待确认候选时默认进入待确认，否则默认私有；
 // - 候选 / 正式记忆 / 检索结果视觉状态分离（icon+文字徽章，不只靠颜色）；
 // - 私有记忆：新增（只能新建候选）/ 撤销 / 删除，默认 scope=private；
 //   家庭/家族共享内容只能经候选确认（含目标 scope 与隐私影响）产生；
 // - 所有写入/撤销/删除/确认完成后由 store 重读服务端状态（无乐观本地副本）；
 // - scope 标签是对已授权数据的展示层过滤，不做前端授权推导；
 // - 数据全部经 memory store（服务端真源），组件不发请求。
-import { NAlert, NButton, NEmpty, NSpin, NSwitch, NTabPane, NTabs, useDialog } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NSpin, NSwitch, useDialog } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
 
 import MemoryCandidateConfirmDialog from './MemoryCandidateConfirmDialog.vue'
@@ -54,6 +55,15 @@ const pendingTabLabel = computed(() => {
   const count = memory.pendingCandidates.length
   return count > 0 ? `待确认（${count}）` : '待确认'
 })
+
+/** 左侧分区导航（与设置页 settings-tabs 同构）；待确认标签携带候选数 */
+const memoryTabs = computed(() => [
+  { key: 'pending' as MemoryTabId, label: pendingTabLabel.value },
+  { key: 'private' as MemoryTabId, label: TAB_LABELS.private },
+  { key: 'household' as MemoryTabId, label: TAB_LABELS.household },
+  { key: 'lineage' as MemoryTabId, label: TAB_LABELS.lineage },
+  { key: 'rag' as MemoryTabId, label: TAB_LABELS.rag },
+])
 
 // ---- 各标签的记忆列表（对已授权数据的展示层过滤，不做前端授权推导） ----
 const privateMemories = computed<Memory[]>(() =>
@@ -151,47 +161,48 @@ function removeMemory(item: Memory): void {
     },
   })
 }
+
+// 页头「刷新」动作经 MemoryManager ref 触发（MemoryView 调用）
+defineExpose({ load })
 </script>
 
 <template>
   <section class="memory-manager" data-test="memory-manager">
-    <div class="intro">
-      <div>
-        <p class="eyebrow">LONG-TERM KNOWLEDGE</p>
-        <h2>记忆与知识</h2>
-        <p class="description">
-          原始聊天不会自动进入检索。只有你确认的记忆，或明确授权的材料，才会成为可追溯的知识来源。
-        </p>
-      </div>
-      <NButton quaternary data-test="memory-refresh" @click="load">刷新</NButton>
-    </div>
+    <div class="memory-layout">
+      <!-- 左侧分区导航（设置页 settings-tabs 同构） -->
+      <nav class="memory-tabs" aria-label="记忆分区" data-test="memory-tabs">
+        <button v-for="tab in memoryTabs" :key="tab.key" type="button" class="memory-tab"
+          :class="{ 'is-active': activeTab === tab.key }"
+          :aria-current="activeTab === tab.key ? 'page' : undefined"
+          :aria-pressed="activeTab === tab.key"
+          :data-test="`memory-tab-${tab.key}`"
+          @click="activeTab = tab.key">
+          {{ tab.label }}
+        </button>
+      </nav>
 
-    <!-- Policy Guard / 服务端错误不静默（V2.5 合同）：保留可解释的错误状态 -->
-    <NAlert
-      v-if="memory.error"
-      type="warning"
-      :show-icon="true"
-      :closable="false"
-      class="error-alert"
-      data-test="memory-error"
-    >
-      {{ memory.error.message }}
-    </NAlert>
+      <div class="memory-grid">
+        <!-- Policy Guard / 服务端错误不静默（V2.5 合同）：保留可解释的错误状态 -->
+        <NAlert
+          v-if="memory.error"
+          type="warning"
+          :show-icon="true"
+          :closable="false"
+          class="error-alert"
+          data-test="memory-error"
+        >
+          {{ memory.error.message }}
+        </NAlert>
 
-    <NTabs
-      :value="activeTab ?? undefined"
-      type="line"
-      class="memory-tabs"
-      data-test="memory-tabs"
-      @update:value="(value: string | number) => (activeTab = value as MemoryTabId)"
-    >
-      <!-- 标签 1：待确认（候选；只能确认/拒绝/稍后处理） -->
-      <NTabPane name="pending" :tab="pendingTabLabel">
-        <section class="tab-section" data-test="candidate-section">
-          <div class="section-heading">
-            <p class="section-hint">
-              候选保留原话、摘要和用途；确认 scope 前不会被任何会话检索。
-            </p>
+        <!-- 分区 1：待确认（候选；只能确认/拒绝/稍后处理） -->
+        <section v-show="activeTab === 'pending'" class="section" data-test="candidate-section">
+          <div class="section-head">
+            <div>
+              <h2 class="section-title">待确认</h2>
+              <p class="meta">
+                候选保留原话、摘要和用途；确认 scope 前不会被任何会话检索。
+              </p>
+            </div>
             <div class="history-toggle">
               <span class="history-label">显示已处理</span>
               <NSwitch
@@ -262,13 +273,14 @@ function removeMemory(item: Memory): void {
             </article>
           </div>
         </section>
-      </NTabPane>
 
-      <!-- 标签 2：我的私有记忆（默认 scope=private；新增/撤销/删除） -->
-      <NTabPane name="private" :tab="TAB_LABELS.private">
-        <section class="tab-section" data-test="private-section">
-          <div class="section-heading">
-            <p class="section-hint">仅本人可见；撤销或删除后旧索引立即失效。</p>
+        <!-- 分区 2：我的私有记忆（默认 scope=private；新增/撤销/删除） -->
+        <section v-show="activeTab === 'private'" class="section" data-test="private-section">
+          <div class="section-head">
+            <div>
+              <h2 class="section-title">我的私有记忆</h2>
+              <p class="meta">仅本人可见；撤销或删除后旧索引立即失效。</p>
+            </div>
             <NButton size="small" type="primary" secondary data-test="add-memory" @click="openEditor">
               新增记忆
             </NButton>
@@ -289,12 +301,11 @@ function removeMemory(item: Memory): void {
             />
           </div>
         </section>
-      </NTabPane>
 
-      <!-- 标签 3：当前家庭共享 -->
-      <NTabPane name="household" :tab="TAB_LABELS.household">
-        <section class="tab-section" data-test="household-shared-section">
-          <p class="section-hint">
+        <!-- 分区 3：当前家庭共享 -->
+        <section v-show="activeTab === 'household'" class="section" data-test="household-shared-section">
+          <h2 class="section-title">当前家庭共享</h2>
+          <p class="meta">
             当前家庭空间（{{ currentSpace?.name ?? '未选择' }}）的共享记忆；由候选确认时的目标 scope 决定。
           </p>
           <NEmpty
@@ -313,12 +324,11 @@ function removeMemory(item: Memory): void {
             />
           </div>
         </section>
-      </NTabPane>
 
-      <!-- 标签 4：当前家族共享 -->
-      <NTabPane name="lineage" :tab="TAB_LABELS.lineage">
-        <section class="tab-section" data-test="lineage-shared-section">
-          <p class="section-hint">
+        <!-- 分区 4：当前家族共享 -->
+        <section v-show="activeTab === 'lineage'" class="section" data-test="lineage-shared-section">
+          <h2 class="section-title">当前家族共享</h2>
+          <p class="meta">
             当前家族空间（{{ currentSpace?.name ?? '未选择' }}）的共享记忆；由候选确认时的目标 scope 决定。
           </p>
           <NEmpty
@@ -337,13 +347,15 @@ function removeMemory(item: Memory): void {
             />
           </div>
         </section>
-      </NTabPane>
 
-      <!-- 标签 5：检索与引用（只读 + 保存只能新建候选） -->
-      <NTabPane name="rag" :tab="TAB_LABELS.rag">
-        <MemoryRagPanel />
-      </NTabPane>
-    </NTabs>
+        <!-- 分区 5：检索与引用（只读 + 保存只能新建候选） -->
+        <section v-show="activeTab === 'rag'" class="section" data-test="rag-section">
+          <h2 class="section-title">检索与引用</h2>
+          <p class="meta">检索当前空间允许的已确认知识；结果只读，「保存」只能新建候选。</p>
+          <MemoryRagPanel />
+        </section>
+      </div>
+    </div>
 
     <!-- 候选确认弹层（抽取组件）：原话/摘要/用途/敏感等级/scope/隐私影响确认前可见 -->
     <MemoryCandidateConfirmDialog
@@ -361,77 +373,79 @@ function removeMemory(item: Memory): void {
   color: var(--fg-ink);
 }
 
-.intro,
-.section-heading,
-.candidate-topline,
-.candidate-actions,
-.memory-meta,
-.candidate-meta {
+/* 设置页同构布局：左侧 168px 竖向分区导航 + 右侧玻璃卡分区 */
+.memory-layout {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  gap: 20px;
 }
 
-.intro,
-.section-heading {
+.memory-tabs { display: flex; flex-direction: column; gap: 4px; flex: 0 0 168px; position: sticky; top: 96px; }
+.memory-tab { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 14px; border: 1px solid transparent; border-radius: var(--fg-radius-control); background: transparent; color: var(--fg-ink-secondary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.memory-tab:hover { color: var(--fg-ink); background: var(--fg-surface-sunken); }
+.memory-tab.is-active { color: var(--fg-accent); background: var(--fg-accent-soft); font-weight: 600; }
+.memory-tab:focus-visible { outline: 2px solid var(--fg-accent); outline-offset: 2px; }
+
+.memory-grid {
+  min-width: 0;
+  flex: 1;
+}
+
+/* 分区玻璃卡（与设置页 .section 同款 token 组合） */
+.section {
+  margin: 0;
+  padding: 24px;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--fg-glass-surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--fg-glass-border);
+  border-radius: var(--fg-radius-card);
+  box-shadow:
+    0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
+}
+
+@supports not (backdrop-filter: blur(12px)) {
+  .section { background: var(--fg-surface-raised); }
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 14px;
 }
 
-.intro {
-  padding: 2px 0 18px;
-  border-bottom: 1px solid var(--fg-line);
+.section-title {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--fg-ink);
 }
 
-.eyebrow {
-  margin: 0 0 5px;
-  color: var(--fg-ink-faint);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
+.meta {
+  margin: 0 0 14px;
+  color: var(--fg-ink-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-h2,
+.section-head .meta {
+  margin: 0;
+}
+
 h4,
 p {
   margin-top: 0;
 }
 
-h2 {
-  margin-bottom: 6px;
-  font-family: var(--fg-font-display);
-  font-size: 25px;
-  font-weight: 600;
-}
-
-.description,
-.section-hint,
-.candidate-meta,
-.memory-scope {
+.candidate-meta {
   color: var(--fg-ink-secondary);
   font-size: 12px;
   line-height: 1.6;
-}
-
-.description {
-  max-width: 560px;
-  margin-bottom: 0;
-}
-
-.memory-tabs {
-  margin-top: 8px;
-}
-
-.tab-section {
-  padding: 14px 0 20px;
-}
-
-.section-heading {
-  align-items: flex-start;
-  margin-bottom: 14px;
-}
-
-.section-hint {
-  margin: 0 0 10px;
 }
 
 .history-toggle {
@@ -524,18 +538,22 @@ blockquote {
   margin-top: 12px;
 }
 
-.memory-list {
-  margin-top: 4px;
-}
-
 .error-alert {
-  margin-top: 14px;
+  margin: 0 0 16px;
 }
 
-/* 移动端（≤600px）：标签栏变分段控制器外观（PRD §2.5），无新颜色 */
+/* ≤768px：分区导航收敛为顶部横向滑动标签条（与设置页同断点同形态） */
+@media (max-width: 768px) {
+  .memory-layout { flex-direction: column; }
+  .memory-tabs { position: static; flex-direction: row; flex: 0 0 auto; width: 100%; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+  .memory-tab { flex: 0 0 auto; white-space: nowrap; }
+  .memory-grid { width: 100%; }
+}
+
 @media (max-width: 600px) {
-  .intro,
-  .section-heading {
+  .section { padding: 20px 16px; }
+
+  .section-head {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -543,28 +561,6 @@ blockquote {
   .candidate-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
-  }
-
-  .memory-manager :deep(.n-tabs .n-tabs-nav) {
-    padding: 3px;
-    border: 1px solid var(--fg-line);
-    border-radius: var(--fg-radius-control);
-    background: var(--fg-surface-sunken);
-  }
-
-  .memory-manager :deep(.n-tabs .n-tabs-tab) {
-    justify-content: center;
-    min-height: 44px;
-    padding: 8px 6px;
-  }
-
-  .memory-manager :deep(.n-tabs .n-tabs-tab--active) {
-    font-weight: 700;
-  }
-
-  .memory-manager :deep(.n-tabs .n-tabs-pad),
-  .memory-manager :deep(.n-tabs .n-tabs-tab-pad) {
-    display: none;
   }
 }
 </style>

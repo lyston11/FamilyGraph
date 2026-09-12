@@ -24,6 +24,7 @@ from app.models.account import Account
 from app.models.notification import Notification
 from app.models.space import FamilySpace, SpaceMember
 from app.models.steward import ActionCard
+from app.models.steward_suggestion import StewardSuggestion
 from app.models.user import User
 from app.services import visibility
 from app.services.action_cards import CARD_KIND_META
@@ -41,6 +42,13 @@ _CARD_DOMAIN_STATUS: dict[str, str] = {
     "dismissed": "rejected",
     "expired": "expired",
     "superseded": "revoked",
+}
+
+SUGGESTION_KIND_TITLES: dict[str, str] = {
+    "relation_proposal": "Steward 有关系线索待核实",
+    "term_preference": "Steward 有称谓偏好待确认",
+    "identity_duplicate": "发现疑似重复档案待核实",
+    "missing_information": "发现资料缺口待核实",
 }
 
 _INVITE_TITLE = "你有新的家庭空间邀请"
@@ -65,6 +73,7 @@ def _add_notification(
     title: str,
     action_card_id: int | None = None,
     space_member_id: int | None = None,
+    suggestion_id: int | None = None,
     actor_user_id: int | None = None,
     summary: str | None = None,
     now: datetime | None = None,
@@ -76,6 +85,7 @@ def _add_notification(
             recipient_account_id=recipient_account_id,
             action_card_id=action_card_id,
             space_member_id=space_member_id,
+            suggestion_id=suggestion_id,
             actor_user_id=actor_user_id,
             title=title,
             summary=summary,
@@ -95,6 +105,24 @@ def record_action_card_notification(session: Session, card: ActionCard) -> None:
         action_card_id=card.id,
         actor_user_id=card.subject_user_id,
         title=f"{CARD_KIND_META[card.kind]['label']}推荐待确认",
+    )
+
+
+def record_suggestion_notification(
+    session: Session, *, suggestion: StewardSuggestion, recipient_account_id: int
+) -> None:
+    """Steward 建议产生 → 收件人站内通知（固定模板 title，UNIQUE 去重兜底）。
+
+    summary 不复制任何未经校验的模型 rationale：留空，详情由建议端点投影。
+    """
+    _add_notification(
+        session,
+        kind="steward_suggestion",
+        space_id=suggestion.space_id,
+        recipient_account_id=recipient_account_id,
+        suggestion_id=suggestion.id,
+        actor_user_id=suggestion.subject_user_id,
+        title=SUGGESTION_KIND_TITLES[suggestion.kind],
     )
 
 
@@ -151,6 +179,17 @@ def _project_item(
         if domain_status is None:  # pragma: no cover - FSM 枚举扩展时的防线
             return None
         action_card = {"card_id": card.id, "revision": card.revision}
+    elif row.kind == "steward_suggestion":
+        from app.services import steward_suggestions as suggestion_service
+
+        suggestion = (
+            session.get(StewardSuggestion, row.suggestion_id) if row.suggestion_id else None
+        )
+        if suggestion is None or suggestion.space_id != row.space_id:
+            return None  # 引用损坏（级联删除/换空间）：fail-closed 丢弃该行
+        domain_status = suggestion_service.SUGGESTION_DOMAIN_STATUS.get(suggestion.status)
+        if domain_status is None:  # pragma: no cover - 状态枚举扩展时的防线
+            return None
     elif row.kind == "space_membership":
         from app.services import space_fsm
 
@@ -183,6 +222,9 @@ def _project_item(
         },
         "domain_status": domain_status,
         "action_card": action_card,
+        "suggestion": (
+            {"suggestion_id": row.suggestion_id} if row.kind == "steward_suggestion" else None
+        ),
         "created_at": row.created_at,
         "read_at": row.read_at,
     }
@@ -252,5 +294,6 @@ __all__ = [
     "mark_all_notifications_read",
     "mark_notification_read",
     "record_action_card_notification",
+    "record_suggestion_notification",
     "record_membership_request_notification",
 ]

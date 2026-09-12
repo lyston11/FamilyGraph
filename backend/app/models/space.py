@@ -50,6 +50,12 @@ class FamilySpace(Base):
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     kind: Mapped[str] = mapped_column(String(16), default="household", nullable=False)
+    # 显式家族配对（仅 household 行有值）：所属 lineage 空间。NULL = 未配对，
+    # 前端按 owner 唯一匹配回退推断；命令层保证目标 kind='lineage'。
+    # RESTRICT 与 owner 同哲学：删除 lineage 前必须先显式解除配对，禁止静默断链。
+    lineage_space_id: Mapped[int | None] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="RESTRICT"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover

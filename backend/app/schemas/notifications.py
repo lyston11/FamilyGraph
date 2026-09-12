@@ -11,7 +11,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NotificationKind = Literal["action_card", "space_membership", "bridge", "relation"]
+NotificationKind = Literal[
+    "action_card", "space_membership", "bridge", "relation", "steward_suggestion"
+]
 NotificationDomainStatus = Literal[
     "pending",
     "active",
@@ -43,6 +45,12 @@ class NotificationActionCardRefOut(BaseModel):
     revision: int
 
 
+class NotificationSuggestionRefOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suggestion_id: int
+
+
 class NotificationItemOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -52,6 +60,7 @@ class NotificationItemOut(BaseModel):
     payload: NotificationPayloadOut
     domain_status: NotificationDomainStatus
     action_card: NotificationActionCardRefOut | None
+    suggestion: NotificationSuggestionRefOut | None
     created_at: datetime
     read_at: datetime | None
 
@@ -92,6 +101,7 @@ __all__ = [
     "NotificationReadAllIn",
     "NotificationReadAllOut",
     "NotificationReadOut",
+    "NotificationSuggestionRefOut",
     "NotificationsPageOut",
     "NotificationPayloadOut",
 ]

@@ -1,0 +1,190 @@
+"""Steward 路径日志/审计脱敏回归（09-11 R3/AC-3）。
+
+合成 secret 哨兵（假 token + 假姓名）被植入异常原文后，断言：
+- 应用日志（任何 logger 输出）与 StewardJob 落库内容、admin 8002 响应均无哨兵原文；
+- 落库/响应只含白名单安全错误码与关联 ID。
+"""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+from conftest import admin_session_headers, create_system_admin, create_user_with_pin
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from test_steward import _emit_fact_event, _fact, _person
+
+from app import config
+from app.models.space import FamilySpace
+from app.models.steward import StewardJob
+from app.services import maintenance, steward, steward_suggestions
+
+# 合成哨兵：故意同时包含 token 形态、SQL 形态与中文姓名形态
+SENTINEL_TOKEN = "SUPER-SECRET-TOKEN-9f8e7d6c-sk-live"
+SENTINEL_NAME = "哨兵姓名王大锤"
+SENTINEL_SQL = "INSERT INTO accounts (pin_hash) VALUES ('SUPER-SECRET-TOKEN-9f8e7d6c')"
+SENTINELS = (SENTINEL_TOKEN, SENTINEL_NAME, SENTINEL_SQL)
+
+
+def _assert_no_sentinel(text: str) -> None:
+    for sentinel in SENTINELS:
+        assert sentinel not in text, f"哨兵泄漏到日志/响应: {sentinel[:24]}..."
+
+
+def _log_text(caplog: pytest.LogCaptureFixture) -> str:
+    return "\n".join(f"{r.levelname}:{r.name}:{r.getMessage()}" for r in caplog.records)
+
+
+@pytest.fixture()
+def _sentinel_space(db_session):
+    owner = _person(db_session, None, "hyg-owner")
+    space = FamilySpace(
+        name="hygiene", kind="household", owner_id=owner.id, created_at=owner.created_at
+    )
+    db_session.add(space)
+    db_session.commit()
+    return space
+
+
+def test_suggestion_projection_failure_never_leaks(
+    db_session, _sentinel_space, caplog, monkeypatch
+) -> None:
+    """建议投影异常（可能携带 SQL 参数/repr）只落 job_id + 异常类名。"""
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError(
+            f"sqlite error: {SENTINEL_SQL} for {SENTINEL_NAME} token={SENTINEL_TOKEN}"
+        )
+
+    monkeypatch.setattr(steward_suggestions, "project_for_job", _boom)
+    caplog.set_level(logging.DEBUG)
+
+    fact = _fact(
+        db_session,
+        "spouse",
+        _person(db_session, _sentinel_space.id, "hyg-a").id,
+        _person(db_session, _sentinel_space.id, "hyg-b").id,
+        space_id=_sentinel_space.id,
+    )
+    _emit_fact_event(db_session, fact)
+    db_session.commit()
+    job = db_session.scalar(select(StewardJob).where(StewardJob.space_id == _sentinel_space.id))
+    assert job is not None
+    granted = steward.lease_next_steward_job(db_session, leased_by="w")
+    steward.run_steward_job(db_session, granted)
+
+    text = _log_text(caplog)
+    _assert_no_sentinel(text)
+    assert "suggestion projection failed" in text
+    assert f"job {granted.id}" in text
+    # 确定性 core 不受影响
+    db_session.refresh(granted)
+    assert granted.status == "succeeded"
+
+
+def test_execute_failure_persists_only_safe_code(
+    db_session, _sentinel_space, caplog, monkeypatch
+) -> None:
+    """执行路径异常：落库只有白名单安全错误码；日志无哨兵；终态 failed。"""
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError(f"constraint failed: {SENTINEL_SQL} name={SENTINEL_NAME}")
+
+    monkeypatch.setattr(steward, "_rebuild_space_derived", _boom)
+    caplog.set_level(logging.DEBUG)
+
+    job, _ = steward.enqueue_steward_job(
+        db_session, space_id=_sentinel_space.id, cause="source_fact", trigger_cursor=1
+    )
+    granted = steward.lease_next_steward_job(db_session, leased_by="w")
+    assert granted is not None
+    with pytest.raises(RuntimeError):
+        steward.execute_steward_job(db_session, granted, worker_id="w", expected_attempt=1)
+
+    db_session.expire_all()
+    row = db_session.get(StewardJob, job.id)
+    assert row.status == "failed"
+    assert row.error_code == steward.ERROR_EXECUTION_FAILED
+    assert row.error_json is not None and set(row.error_json) == {"code"}
+    _assert_no_sentinel(_log_text(caplog))
+    db_session.expunge_all()
+
+
+def test_maintenance_tick_failure_never_leaks(db_session, caplog, monkeypatch) -> None:
+    """maintenance tick / 辅助调度异常只记异常类名，不外泄异常原文。"""
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    monkeypatch.setattr(config, "STEWARD_WORKER_ENABLED", True)
+
+    def _boom(session):
+        raise RuntimeError(f"operational error: {SENTINEL_SQL} {SENTINEL_NAME}")
+
+    monkeypatch.setattr(steward, "scan_due_spaces", _boom)
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(RuntimeError):
+        maintenance.run_maintenance_tick()
+    _assert_no_sentinel(_log_text(caplog))
+
+    def _boom2(session):
+        raise RuntimeError(f"dispatch failed: {SENTINEL_TOKEN}")
+
+    monkeypatch.setattr(steward, "scan_due_spaces", lambda session: 0)
+    monkeypatch.setattr(steward, "reaper_pass", lambda session: 0)
+    monkeypatch.setattr(maintenance.steward_assist, "recover_stuck_batches", _boom2)
+    caplog.clear()
+    maintenance.run_maintenance_tick()
+    text = _log_text(caplog)
+    _assert_no_sentinel(text)
+    assert "assist dispatch failed" in text
+
+
+def test_admin_status_and_jobs_responses_never_leak(
+    admin_client: TestClient, db_session, _sentinel_space, caplog, monkeypatch
+) -> None:
+    """异常路径后，8002 status/jobs 响应与日志均无哨兵（AC-3）。"""
+    create_system_admin(db_session)
+    headers = admin_session_headers(admin_client)
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    monkeypatch.setattr(config, "STEWARD_WORKER_ENABLED", True)
+    job, _ = steward.enqueue_steward_job(
+        db_session, space_id=_sentinel_space.id, cause="source_fact", trigger_cursor=1
+    )
+    granted = steward.lease_next_steward_job(db_session, leased_by="w")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError(f"boom {SENTINEL_TOKEN} {SENTINEL_NAME}")
+
+    monkeypatch.setattr(steward, "_detect_findings", _boom)
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(RuntimeError):
+        steward.execute_steward_job(db_session, granted, worker_id="w", expected_attempt=1)
+    db_session.expire_all()
+
+    status = admin_client.get("/admin-api/v1/steward/status", headers=headers)
+    assert status.status_code == 200
+    jobs = admin_client.get(
+        "/admin-api/v1/steward/jobs", params={"space_id": _sentinel_space.id}, headers=headers
+    )
+    assert jobs.status_code == 200
+    _assert_no_sentinel(status.text)
+    _assert_no_sentinel(jobs.text)
+    body = status.json()
+    # 观测指标存在且是纯计数/时间戳形态（R2）
+    assert set(body["metrics"]) == {
+        "core_queue_depth",
+        "oldest_queued_age_seconds",
+        "last_scan_at",
+        "last_worker_tick_at",
+        "core_failed",
+        "assist_failed",
+        "assist_degraded",
+        "assist_unknown",
+        "budget_reserved_tokens",
+        "budget_consumed_tokens",
+        "pfv_stale",
+        "cards_created",
+        "cards_superseded",
+    }
+    assert all(alert["code"] in ("queue_backlog", "queue_stalled") for alert in body["alerts"])
+    _assert_no_sentinel(_log_text(caplog))
+    _ = create_user_with_pin  # 保持导入被引用（conftest 契约）

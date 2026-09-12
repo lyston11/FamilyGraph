@@ -18,8 +18,11 @@ platform_operator 角色不参与任何判定。
 红线：绝不写 SourceFact、绝不发送加入申请、绝不合并空间、绝不保存自由形式
 隐藏长期记忆（checkpoint 只存进度/签名/统计）。
 
-事务模型：整个执行包在一个立即事务内（SQLite 家族空间规模下最安全的崩溃
-语义——要么全部生效要么全部回滚）；外部网络调用不存在于本模块。
+事务模型（09-11 R1）：整个确定性执行包在一个立即事务内（SQLite 家族空间规模
+下最安全的崩溃语义——要么全部生效要么全部回滚）；模型辅助只在同事务登记批次
+行（StewardAssistBatch），所有 HTTP 由 maintenance 的事务外受限线程执行，
+本模块不存在网络调用。辅助的崩溃恢复不依赖 SAVEPOINT——批次/attempt 行的
+状态机即是崩溃合同（见 services/steward_assist.py）。
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app import config
@@ -45,6 +48,8 @@ from app.errors import (
     STEWARD_JOB_NOT_ACTIVE,
     STEWARD_JOB_NOT_FOUND,
     STEWARD_JOB_SPACE_BUSY,
+    STEWARD_LEASE_STALE,
+    extract_api_error,
     raise_api_error,
 )
 from app.models.account import Account
@@ -56,6 +61,7 @@ from app.models.steward import (
     STEWARD_JOB_CAUSES,
     BehaviorProjection,
     StewardJob,
+    StewardSpaceSchedule,
 )
 from app.models.user import User
 from app.models.v2_foundation import DomainEvent
@@ -65,6 +71,7 @@ from app.services import (
     recommendation_matrix,
     steward_assist,
     steward_events,
+    steward_suggestions,
 )
 from app.services.action_cards import ACTION_SUPERSEDE
 from app.services.derived_facts import get_or_compute
@@ -96,6 +103,48 @@ PROJECTION_KEY_PREFIXES = (
     "term_usage:",
     "kinship_recommendation_dismissed:",
 )
+
+# ---- 安全错误分类（09-11 R3/F16）----
+# 只落白名单分类码；异常原文/SQL 参数/堆栈永不进入 error_json、领域事件或日志。
+ERROR_TRANSIENT_DB_LOCK = "STEWARD_TRANSIENT_DB_LOCK"
+ERROR_TRANSIENT_TIMEOUT = "STEWARD_TRANSIENT_TIMEOUT"
+ERROR_EXECUTION_FAILED = "STEWARD_EXECUTION_FAILED"
+ERROR_DB_OPERATIONAL = "STEWARD_DB_OPERATIONAL"
+# 可重试的 SQLite 瞬时锁冲突特征（busy_timeout 耗尽 / 死锁类暂时资源错误）
+_RETRYABLE_LOCK_MARKERS = (
+    "database is locked",
+    "database table is locked",
+    "database schema is locked",
+)
+
+
+def classify_execution_error(exc: Exception) -> tuple[str, bool]:
+    """把执行异常分类为 (安全错误码, 是否可重试)。
+
+    可重试 = 数据库锁冲突/暂时超时（有限退避后重试）；确定性 = 输入/权限类
+    业务错误（带 API 错误码，fail-closed 进入 failed 终态）与其余未知异常
+    （未知异常一律按确定性处理：不无限重试掩盖真实缺陷）。
+    """
+    if isinstance(exc, sqlite3.OperationalError):
+        message = str(exc).lower()
+        if any(marker in message for marker in _RETRYABLE_LOCK_MARKERS):
+            return ERROR_TRANSIENT_DB_LOCK, True
+        return ERROR_DB_OPERATIONAL, False
+    if isinstance(exc, TimeoutError):
+        return ERROR_TRANSIENT_TIMEOUT, True
+    api_error = extract_api_error(getattr(exc, "detail", None))
+    if api_error is not None:
+        # 输入/权限类确定性错误：保留白名单 API 错误码（无原文参数）
+        return str(api_error.get("code", ERROR_EXECUTION_FAILED)), False
+    return ERROR_EXECUTION_FAILED, False
+
+
+def _lease_stale(job: StewardJob, *, worker_id: str | None, now: datetime) -> bool:
+    """租约栅栏：owner 不匹配或 lease 已过期（旧执行者不得覆盖新租约）。"""
+    if worker_id is not None and job.leased_by != worker_id:
+        return True
+    deadline = job.lease_expires_at
+    return deadline is None or deadline <= now
 
 
 @contextmanager
@@ -428,6 +477,7 @@ def enqueue_steward_job(
     policy_version: str | None = None,
     max_attempts: int | None = None,
     now: datetime | None = None,
+    retry_of_job_id: int | None = None,
 ) -> tuple[StewardJob, bool]:
     """幂等入队。返回 (job, created)。
 
@@ -435,7 +485,7 @@ def enqueue_steward_job(
     - 活跃作业存在但水位更旧且 cause 非 admin_rerun → 409（每空间至多一个活跃）；
     - 已 succeeded 且 last_event_cursor ≥ 本次水位（非 admin_rerun）→ 幂等返回
       历史作业，重放零副作用（AC-ST2）；
-    - 否则插入 queued 作业。
+    - 否则插入 queued 作业（retry_of_job_id 链接被关联的历史作业，如人工重跑）。
     """
     _require_enabled()
     if cause not in STEWARD_JOB_CAUSES:
@@ -443,48 +493,80 @@ def enqueue_steward_job(
     attempts = max_attempts if max_attempts is not None else config.STEWARD_MAX_ATTEMPTS
     moment = now or utcnow()
     with _immediate_tx(db):
-        active = db.scalar(
-            select(StewardJob).where(
-                StewardJob.space_id == space_id,
-                StewardJob.status.in_(STEWARD_ACTIVE_JOB_STATUSES),
-            )
-        )
-        if active is not None:
-            if active.trigger_cursor >= trigger_cursor:
-                return active, False
-            raise_api_error(
-                409,
-                STEWARD_JOB_SPACE_BUSY,
-                "该空间已有活跃的 Steward Job",
-                detail={"job_id": active.id, "trigger_cursor": active.trigger_cursor},
-            )
-        if cause != "admin_rerun":
-            done = db.scalar(
-                select(StewardJob)
-                .where(
-                    StewardJob.space_id == space_id,
-                    StewardJob.status == "succeeded",
-                    StewardJob.last_event_cursor >= trigger_cursor,
-                )
-                .order_by(StewardJob.id.desc())
-            )
-            if done is not None:
-                return done, False
-        job = StewardJob(
+        return _enqueue_core_job_locked(
+            db,
             space_id=space_id,
             cause=cause,
             trigger_cursor=trigger_cursor,
-            status="queued",
-            attempt=0,
+            policy_version=policy_version,
             max_attempts=attempts,
-            policy_version=policy_version or POLICY_VERSION,
-            checkpoint_json={},
-            created_at=moment,
-            updated_at=moment,
+            now=moment,
+            retry_of_job_id=retry_of_job_id,
         )
-        db.add(job)
-        db.flush()
-        return job, True
+
+
+def _enqueue_core_job_locked(
+    db: Session,
+    *,
+    space_id: int,
+    cause: str,
+    trigger_cursor: int,
+    policy_version: str | None = None,
+    max_attempts: int | None = None,
+    now: datetime,
+    respect_succeeded_shortcircuit: bool = True,
+    retry_of_job_id: int | None = None,
+) -> tuple[StewardJob, bool]:
+    """canonical enqueue 的锁内实现（调用方必须已持有立即事务写锁）。
+
+    - integrity_scan（周期扫描）不走 succeeded 水位短路：cursor 相同也允许到期
+      检查执行（R2：扫描不被历史 succeeded 幂等短路）；
+    - admin_rerun 人工重跑：绕过短路并链接被重跑的历史作业（retry_of_job_id）。
+    """
+    attempts = max_attempts if max_attempts is not None else config.STEWARD_MAX_ATTEMPTS
+    active = db.scalar(
+        select(StewardJob).where(
+            StewardJob.space_id == space_id,
+            StewardJob.status.in_(STEWARD_ACTIVE_JOB_STATUSES),
+        )
+    )
+    if active is not None:
+        if active.trigger_cursor >= trigger_cursor:
+            return active, False
+        raise_api_error(
+            409,
+            STEWARD_JOB_SPACE_BUSY,
+            "该空间已有活跃的 Steward Job",
+            detail={"job_id": active.id, "trigger_cursor": active.trigger_cursor},
+        )
+    if respect_succeeded_shortcircuit and cause != "admin_rerun":
+        done = db.scalar(
+            select(StewardJob)
+            .where(
+                StewardJob.space_id == space_id,
+                StewardJob.status == "succeeded",
+                StewardJob.last_event_cursor >= trigger_cursor,
+            )
+            .order_by(StewardJob.id.desc())
+        )
+        if done is not None:
+            return done, False
+    job = StewardJob(
+        space_id=space_id,
+        cause=cause,
+        trigger_cursor=trigger_cursor,
+        status="queued",
+        attempt=0,
+        max_attempts=attempts,
+        policy_version=policy_version or POLICY_VERSION,
+        checkpoint_json={},
+        created_at=now,
+        updated_at=now,
+        retry_of_job_id=retry_of_job_id,
+    )
+    db.add(job)
+    db.flush()
+    return job, True
 
 
 def require_steward_job(db: Session, job_id: int) -> StewardJob:
@@ -502,36 +584,54 @@ def lease_next_steward_job(
     ttl_seconds: int | None = None,
     now: datetime | None = None,
 ) -> StewardJob | None:
-    """租赁最早 queued 作业；attempt 每次 lease +1（无作业返回 None）。"""
+    """租赁最早 queued 作业；attempt 每次 lease +1（无作业返回 None）。
+
+    available_at 未到的退避重试作业不可租（09-11 R3：有限退避）；lease 同时
+    固定本次执行水位上界（checkpoint_json.execution_cursor）：运行期间到来的
+    更高事件水位只更新 trigger_cursor 请求后继工作，结算不得宣告未处理水位。
+    """
     _require_enabled()
     ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_LEASE_TTL_SECONDS
     with _immediate_tx(db):
         stmt = select(StewardJob).where(StewardJob.status == "queued")
         if space_id is not None:
             stmt = stmt.where(StewardJob.space_id == space_id)
+        moment = now or utcnow()
+        # 退避未到期的作业暂不可租
+        stmt = stmt.where((StewardJob.available_at.is_(None)) | (StewardJob.available_at <= moment))
         stmt = stmt.order_by(StewardJob.created_at.asc(), StewardJob.id.asc()).limit(1)
         job = db.scalar(stmt)
         if job is None:
             return None
-        moment = now or utcnow()
         job.status = "leased"
         job.attempt += 1
         job.leased_by = leased_by
         job.lease_expires_at = moment + timedelta(seconds=ttl)
         job.heartbeat_at = moment
         job.updated_at = moment
+        checkpoint = dict(job.checkpoint_json or {})
+        checkpoint["execution_cursor"] = job.trigger_cursor
+        job.checkpoint_json = checkpoint
         db.flush()
         return job
 
 
 def heartbeat_steward_job(
-    db: Session, job: StewardJob, *, ttl_seconds: int | None = None, now: datetime | None = None
+    db: Session,
+    job: StewardJob,
+    *,
+    worker_id: str | None = None,
+    ttl_seconds: int | None = None,
+    now: datetime | None = None,
 ) -> datetime:
+    """续租；租约栅栏验证 owner + deadline（F17：过期执行者不得续新租约）。"""
     ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_LEASE_TTL_SECONDS
     with _immediate_tx(db):
         if job.status not in ("leased", "running"):
             raise_api_error(409, STEWARD_JOB_NOT_ACTIVE, "作业不在活跃状态，无法续租")
         moment = now or utcnow()
+        if _lease_stale(job, worker_id=worker_id, now=moment):
+            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，续租被拒绝")
         expires = moment + timedelta(seconds=ttl)
         job.lease_expires_at = expires
         job.heartbeat_at = moment
@@ -547,8 +647,16 @@ def settle_steward_job(
     status: str,
     error: dict[str, Any] | None = None,
     now: datetime | None = None,
+    worker_id: str | None = None,
+    expected_attempt: int | None = None,
+    error_code: str | None = None,
 ) -> StewardJob:
-    """终态落库（succeeded|failed|expired 仅可从 leased/running 进入）并写领域事件。"""
+    """终态落库（succeeded|failed|expired 仅可从 leased/running 进入）并写领域事件。
+
+    租约栅栏（F17）：验证 job id + attempt + lease owner + lease deadline——
+    旧执行者用过期租约/旧 attempt 结算被拒（409 STEWARD_LEASE_STALE），
+    不覆盖新 lease 持有者的工作。
+    """
     if status not in ("succeeded", "failed", "expired"):
         raise_api_error(422, STEWARD_JOB_NOT_ACTIVE, "非法的终态", detail={"status": status})
     moment = now or utcnow()
@@ -564,10 +672,21 @@ def settle_steward_job(
                 "仅 leased/running 可进入终态",
                 detail={"status": job.status},
             )
+        if expected_attempt is not None and job.attempt != expected_attempt:
+            raise_api_error(
+                409,
+                STEWARD_LEASE_STALE,
+                "attempt 与当前租约不一致，结算被拒绝",
+                detail={"expected_attempt": expected_attempt, "attempt": job.attempt},
+            )
+        if _lease_stale(job, worker_id=worker_id, now=moment):
+            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，结算被拒绝")
         job.status = status
         job.settled_at = moment
         job.updated_at = moment
         job.error_json = error
+        safe_code = error_code or (str(error.get("code")) if error and error.get("code") else None)
+        job.error_code = safe_code
         db.flush()
         emit_domain_event(
             db,
@@ -615,6 +734,7 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
             if exhausted:
                 job.settled_at = moment
                 job.error_json = {"code": "STEWARD_LEASE_EXPIRED"}
+                job.error_code = "STEWARD_LEASE_EXPIRED"
                 emit_domain_event(
                     db,
                     event_type=steward_events.EVENT_STEWARD_JOB_FAILED,
@@ -633,11 +753,106 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
         return len(stale)
 
 
+# ---- 周期扫描与追补（09-11 R2；调度表不改事实，只触发 canonical enqueue）----
+
+
+def current_event_watermark(db: Session) -> int:
+    """domain_events 全局水位（追加单调）；各空间作业以此为其窗口上界候选。"""
+    return int(db.scalar(select(func.max(DomainEvent.id))) or 0)
+
+
+# 内部调用别名（scan 路径）
+_current_watermark = current_event_watermark
+
+
+def scan_due_spaces(db: Session, *, limit: int | None = None, now: datetime | None = None) -> int:
+    # Note: 扫描/重试/租约栅栏合同 —
+    # 见 .agent-notes/implemented/architecture/2026-09-11-steward-scheduling-lease-fencing.md
+    """周期扫描：选择到期空间并经 canonical enqueue 合同登记核心作业。
+
+    - 短 BEGIN IMMEDIATE + 单写者锁：多进程/多 listener 并发扫描不会重复登记
+      活跃作业（每空间至多一个活跃作业由锁内检查 + partial unique index 兜底）；
+    - 追补：调度行缺失（首次启用/重新启用）或 policy_version 变化 → 该空间被
+      置为立即到期，本轮即登记追补作业；
+    - cursor 与上次相同也照样触发到期检查（integrity_scan 不走 succeeded 水位
+      幂等短路——到期卡片检查必须持续运行，不能只依据 max(event.id) 宣告已算）；
+    - 扫描绝不直接写 SourceFact / 视图 / 卡片，只登记作业。
+    """
+    _require_enabled()
+    moment = now or utcnow()
+    max_jobs = limit if limit is not None else config.STEWARD_SCAN_MAX_JOBS_PER_TICK
+    interval = timedelta(seconds=config.STEWARD_SCAN_INTERVAL_SECONDS)
+    with _immediate_tx(db):
+        space_ids = list(db.scalars(select(FamilySpace.id)).all())
+        rows = {row.space_id: row for row in db.scalars(select(StewardSpaceSchedule)).all()}
+        for space_id in space_ids:
+            row = rows.get(space_id)
+            if row is None:
+                db.add(
+                    StewardSpaceSchedule(
+                        space_id=space_id,
+                        next_scan_at=moment,
+                        last_scheduled_cursor=0,
+                        policy_version=POLICY_VERSION,
+                        updated_at=moment,
+                    )
+                )
+            elif row.policy_version != POLICY_VERSION:
+                row.policy_version = POLICY_VERSION
+                row.next_scan_at = moment
+                row.updated_at = moment
+        db.flush()
+        due = list(
+            db.scalars(
+                select(StewardSpaceSchedule)
+                .where(StewardSpaceSchedule.next_scan_at <= moment)
+                .order_by(StewardSpaceSchedule.next_scan_at.asc())
+                .limit(max_jobs)
+            )
+        )
+        enqueued = 0
+        for schedule in due:
+            watermark = _current_watermark(db)
+            active = db.scalar(
+                select(StewardJob).where(
+                    StewardJob.space_id == schedule.space_id,
+                    StewardJob.status.in_(STEWARD_ACTIVE_JOB_STATUSES),
+                )
+            )
+            if active is None:
+                _job, created = _enqueue_core_job_locked(
+                    db,
+                    space_id=schedule.space_id,
+                    cause="integrity_scan",
+                    trigger_cursor=watermark,
+                    now=moment,
+                    respect_succeeded_shortcircuit=False,
+                )
+                if created:
+                    enqueued += 1
+            schedule.last_scheduled_cursor = watermark
+            schedule.next_scan_at = moment + interval
+            schedule.updated_at = moment
+        return enqueued
+
+
 # ---- 执行器 ----
 
 
-def run_steward_job(db: Session, job: StewardJob, *, now: datetime | None = None) -> dict[str, Any]:
-    """执行一次 steward 作业（运行 + 结算同一立即事务，崩溃即整体回滚）。"""
+def run_steward_job(
+    db: Session,
+    job: StewardJob,
+    *,
+    now: datetime | None = None,
+    worker_id: str | None = None,
+    expected_attempt: int | None = None,
+) -> dict[str, Any]:
+    """执行一次 steward 作业（运行 + 结算同一立即事务，崩溃即整体回滚）。
+
+    租约栅栏（F17）：验证 job id + attempt + lease owner + lease deadline；
+    执行水位上界在 lease 时固定（checkpoint_json.execution_cursor）——运行期间
+    更高的 trigger_cursor 只请求后继作业，结算不宣告未处理水位。
+    """
     _require_enabled()
     with _immediate_tx(db):
         if job.status not in ("leased", "running"):
@@ -648,14 +863,32 @@ def run_steward_job(db: Session, job: StewardJob, *, now: datetime | None = None
                 detail={"status": job.status},
             )
         moment = now or utcnow()
+        if expected_attempt is not None and job.attempt != expected_attempt:
+            raise_api_error(
+                409,
+                STEWARD_LEASE_STALE,
+                "attempt 与当前租约不一致，执行被拒绝",
+                detail={"expected_attempt": expected_attempt, "attempt": job.attempt},
+            )
+        if _lease_stale(job, worker_id=worker_id, now=moment):
+            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，执行被拒绝")
         job.status = "running"
         job.heartbeat_at = moment
         job.updated_at = moment
-        summary = _execute_locked(db, job, now=moment)
+        # lease 时固定的执行水位上界（缺失时退回 trigger_cursor，兼容直调路径）
+        raw_upper = (job.checkpoint_json or {}).get("execution_cursor")
+        exec_upper = (
+            job.trigger_cursor
+            if not isinstance(raw_upper, int)
+            else min(raw_upper, job.trigger_cursor)
+        )
+        summary = _execute_locked(db, job, now=moment, upper=exec_upper)
         job.status = "succeeded"
-        job.last_event_cursor = job.trigger_cursor
+        job.last_event_cursor = exec_upper
+        job.error_code = None
+        job.available_at = None
         job.checkpoint_json = {
-            "last_event_cursor": job.trigger_cursor,
+            "last_event_cursor": exec_upper,
             "policy_version": job.policy_version,
             "finding_signatures": summary["finding_signatures"],
             "stats": summary["stats"],
@@ -673,29 +906,91 @@ def run_steward_job(db: Session, job: StewardJob, *, now: datetime | None = None
                 "space_id": job.space_id,
                 "cause": job.cause,
                 "status": "succeeded",
-                "trigger_cursor": job.trigger_cursor,
+                "trigger_cursor": exec_upper,
                 "stats": summary["stats"],
             },
             space_id=job.space_id,
             actor_account_id=None,
         )
+        # 运行期间到来的更高水位：只请求后继工作（新 queued 行），不由本次
+        # 结算宣告完成；本作业已终态，插入不违反每空间单活跃约束。
+        if job.trigger_cursor > exec_upper:
+            follow_up_cause = job.cause if job.cause in STEWARD_JOB_CAUSES else "domain_event"
+            db.add(
+                StewardJob(
+                    space_id=job.space_id,
+                    cause=follow_up_cause,
+                    trigger_cursor=job.trigger_cursor,
+                    status="queued",
+                    attempt=0,
+                    max_attempts=job.max_attempts,
+                    policy_version=job.policy_version,
+                    checkpoint_json={},
+                    created_at=moment,
+                    updated_at=moment,
+                )
+            )
+            db.flush()
         return summary
 
 
 def execute_steward_job(
-    db: Session, job: StewardJob, *, now: datetime | None = None
+    db: Session,
+    job: StewardJob,
+    *,
+    now: datetime | None = None,
+    worker_id: str | None = None,
+    expected_attempt: int | None = None,
 ) -> dict[str, Any]:
-    """带失败结算的执行包装：异常时把作业标 failed 并原样抛出。"""
+    """带失败恢复的执行包装（09-11 R3）：
+
+    - 租约栅栏拒绝（STEWARD_LEASE_STALE / NOT_ACTIVE）→ 原样抛出，绝不结算
+      （旧执行者不得覆盖新租约）；
+    - 可重试错误（DB 锁/暂时超时）且重试预算未耗尽 → 回 queued 并按
+      attempt 设置有限退避 available_at（错误只落安全分类码）；
+    - 确定性错误或预算耗尽 → failed 终态（终态不复活，人工重跑另建新行），
+      并抛出原异常。
+    """
     try:
-        return run_steward_job(db, job, now=now)
-    except Exception as exc:
-        settle_steward_job(
-            db,
-            require_steward_job(db, job.id),
-            status="failed",
-            error={"code": type(exc).__name__, "message": str(exc)[:500]},
-            now=now,
+        return run_steward_job(
+            db, job, now=now, worker_id=worker_id, expected_attempt=expected_attempt
         )
+    except Exception as exc:
+        api_error = extract_api_error(getattr(exc, "detail", None))
+        if api_error is not None and str(api_error.get("code")) in (
+            STEWARD_LEASE_STALE,
+            STEWARD_JOB_NOT_ACTIVE,
+        ):
+            raise
+        code, retryable = classify_execution_error(exc)
+        current = require_steward_job(db, job.id)
+        moment = now or utcnow()
+        if retryable and current.attempt < current.max_attempts:
+            backoff_seconds = (
+                config.STEWARD_RETRY_BACKOFF_FIRST_SECONDS
+                if current.attempt <= 1
+                else config.STEWARD_RETRY_BACKOFF_SECOND_SECONDS
+            )
+            current.status = "queued"
+            current.available_at = moment + timedelta(seconds=backoff_seconds)
+            current.leased_by = None
+            current.lease_expires_at = None
+            current.heartbeat_at = None
+            current.updated_at = moment
+            current.error_code = code
+            current.error_json = {"code": code, "retryable": True}
+            db.commit()
+        else:
+            settle_steward_job(
+                db,
+                current,
+                status="failed",
+                error={"code": code},
+                error_code=code,
+                now=moment,
+                worker_id=worker_id,
+                expected_attempt=expected_attempt,
+            )
         raise
 
 
@@ -715,7 +1010,9 @@ def _completed_cursor_floor(db: Session, job: StewardJob) -> int:
     return int(floor) if floor is not None else 0
 
 
-def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str, Any]:
+def _execute_locked(
+    db: Session, job: StewardJob, *, now: datetime, upper: int | None = None
+) -> dict[str, Any]:
     space = db.get(FamilySpace, job.space_id)
     assert space is not None  # FK 保证存在
     stats: dict[str, int] = {
@@ -729,9 +1026,10 @@ def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str,
     }
     visible = _space_visible_user_ids(db, space)
     floor = _completed_cursor_floor(db, job)
+    exec_upper = job.trigger_cursor if upper is None else min(upper, job.trigger_cursor)
 
-    # 1. 事件窗口消费 + 本空间派生缓存重算
-    touched = _consume_window(db, space, floor=floor, upper=job.trigger_cursor)
+    # 1. 事件窗口消费 + 本空间派生缓存重算（窗口 = (floor, lease 时固定的上界]）
+    touched = _consume_window(db, space, floor=floor, upper=exec_upper)
     stats["events_consumed"] = len(touched.events)
     stats["derived_recomputed"] = _rebuild_space_derived(db, space, visible)
     from app.services.personal_family_view import rebuild_space_views
@@ -744,6 +1042,28 @@ def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str,
     emitted = _emit_new_findings(db, job, findings, prior_signatures, now=now)
     stats["findings_emitted"] = emitted
 
+    # 5.5 建议审核投影（09-11 candidate-review）：把有证据的模型候选与本批
+    # findings 投影为可审核 StewardSuggestion（同事务；投影失败不回滚 core
+    # 确定性结果，由调用方 SAVEPOINT 语义隔离）。
+    try:
+        with db.begin_nested():
+            stats["suggestions_projected"] = steward_suggestions.project_for_job(
+                db,
+                job,
+                findings=findings,
+                facts=_applicable_confirmed_facts(db, space, visible),
+                now=now,
+            )
+    except Exception as exc:  # noqa: BLE001 — 辅助投影绝不拖垮确定性 core
+        # 日志脱敏（09-11 R3）：异常原文可能携带 SQL 参数/字段 repr，只记
+        # job_id 与异常类名（safe error 分类见 classify_execution_error）。
+        logger.warning(
+            "steward suggestion projection failed for job %s (error=%s)",
+            job.id,
+            type(exc).__name__,
+        )
+        stats["suggestions_projected"] = 0
+
     # 3. 推荐矩阵 → 出卡（先重验证旧卡再出新卡，避免陈旧卡阻塞去重）
     stats["cards_superseded"] += _revalidate_active_cards(db, space, now=now)
     stats["cards_created"] = _recommend_cards(db, space, visible, now=now)
@@ -751,24 +1071,23 @@ def _execute_locked(db: Session, job: StewardJob, *, now: datetime) -> dict[str,
     # 4. 惰性过期
     stats["cards_expired"] = action_cards.expire_due_cards(db, space_id=space.id, now=now)
 
-    # 5. 模型辅助层（09-06 子任务 B；默认全关=零调用零写入）。候选/排序/解释
-    #    三类产物均不改变任何确定性结论；单点失败经 SAVEPOINT 局部回滚并记
-    #    审计行（steward_model_calls），绝不影响上方已完成的流水线结果。
-    try:
-        cards = action_cards.active_cards_in_space(db, space.id)
-        steward_assist.run_assists(
-            db,
-            job=job,
-            facts_brief=_confirmed_facts_brief(db, space, visible),
-            visible=visible,
-            cards=cards,
-        )
-    except Exception:  # noqa: BLE001 — 最后防线：辅助层绝不拖垮确定性流水线（AC-5）
-        logger.exception("steward assist crashed; deterministic pipeline results retained")
+    # 5. 模型辅助层（09-11 R1/R2 重构）：仅在同一短事务内登记辅助批次行
+    #    （StewardAssistBatch，R2：canonical job 的受限子阶段）。HTTP 绝不出现在
+    #    本写事务内——辅助执行由 maintenance 在事务外的受限线程按批次 lease
+    #    进行，辅助失败不回滚已提交的 core，也不阻塞其他空间调度。三类产物均
+    #    不改变任何确定性结论。
+    cards = action_cards.active_cards_in_space(db, space.id)
+    steward_assist.register_batch_for_job(
+        db,
+        job=job,
+        facts_brief=_confirmed_facts_brief(db, space, visible),
+        visible=visible,
+        cards=cards,
+    )
 
     return {
         "floor_cursor": floor,
-        "trigger_cursor": job.trigger_cursor,
+        "trigger_cursor": exec_upper,
         "finding_signatures": sorted(f["signature"] for f in findings),
         "stats": stats,
     }
@@ -1239,6 +1558,8 @@ __all__ = [
     "ACTION_SUPERSEDE",
     "POLICY_VERSION",
     "PROJECTION_KEY_PREFIXES",
+    "classify_execution_error",
+    "current_event_watermark",
     "enqueue_steward_job",
     "execute_steward_job",
     "heartbeat_steward_job",
@@ -1249,6 +1570,7 @@ __all__ = [
     "reaper_pass",
     "require_steward_job",
     "run_steward_job",
+    "scan_due_spaces",
     "schedule_steward_job_for_event",
     "set_kind_cooldown",
     "settle_steward_job",

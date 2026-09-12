@@ -104,7 +104,13 @@ async function onAccountAction(key: string): Promise<void> {
         :options="[...accountOptions]"
         @select="onAccountAction"
       >
-        <button type="button" class="ag-tag" data-testid="account-menu">
+        <button
+          type="button"
+          class="ag-tag"
+          data-testid="account-menu"
+          aria-haspopup="menu"
+          :aria-label="`账号菜单：${adminLabel || '当前管理员'}`"
+        >
           {{ adminLabel }}
         </button>
       </NDropdown>

@@ -12,6 +12,7 @@ import { useKinshipStore } from '@/stores/kinship'
 import { useMembersStore } from '@/stores/members'
 import { useMemoryStore } from '@/stores/memory'
 import { useNotificationsStore } from '@/stores/notifications'
+import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpaceStatsStore } from '@/stores/spaceStats'
 import { useSpacesStore } from '@/stores/spaces'
@@ -70,6 +71,7 @@ export const useAuthStore = defineStore('auth', () => {
     usePersonalFamilyViewStore().clear()
     useHouseholdCardStore().clear()
     useNotificationsStore().clear()
+    useStewardSuggestionsStore().clear()
     useSpaceStatsStore().clear()
     useGraphStore().clear()
     useSpacesStore().clear()

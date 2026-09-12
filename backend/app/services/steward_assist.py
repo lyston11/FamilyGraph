@@ -1,25 +1,31 @@
-"""Steward 模型辅助层（09-06 子任务 B；候选/排序/解释，child run 审计）。
+"""Steward 模型辅助批次执行器（09-11：事务隔离 + 预算预留 + 崩溃恢复）。
 
-兑现 09-01 决策记录的约定："未来模型只能辅助候选、排序和解释"、"模型 child
-run/context 审计另立任务"。三类辅助点全部默认关闭（平台 config AND 空间
-settings 行），关闭时零调用、行为与确定性基线逐字节等价。
+09-06 子任务 B 的候选/排序/解释三类辅助保留原有语义与红线（候选只落内部池、
+排序只改呈现顺序且必须严格排列、解释只复述卡内已确认事实），但执行模型按
+09-11 design 重构为三阶段：
 
-红线（R3，全部有测试）：
-- 确定性内核（dirty 重算/冲突检测/资格矩阵/checkpoint 幂等）不因本层改变；
-  本层任何失败只留审计行与日志，绝不拖垮流水线（degrade-to-template）。
-- 候选只落内部池 steward_llm_candidates，不经过确定性矩阵绝不进卡片、
-  绝不产生任何正式写入（SourceFact/成员/可见权/申请）。
-- 排序只改呈现顺序（presentation_rank），必须通过"严格排列"校验，
-  绝不改变卡片集合成员。
-- 解释只写 reason_text_llm，只允许复述卡内已确认事实。
+1. **注册**（core 短事务内，无网络）：`run_steward_job` 提交确定性结果的同一
+   短事务里调用 `register_batch_for_job` 登记一行 `StewardAssistBatch`（R1：
+   HTTP 绝不发生在业务 DB 写事务内）。辅助失败/崩溃不回滚 core，也不阻塞
+   其他空间的 core 调度。
+2. **调度/预留**（独立短事务）：`schedule_due_batch` 选中至多一个到期批次，
+   在锁内按白名单重建 prompt 输入、预留 `StewardModelCall` attempt 行
+   （reserved 状态 + 输入 token 保守上界 + 输出 cap），随后释放连接——HTTP
+   在独立受限执行线程中进行（maintenance 经 `launch_batch` 提交，不阻塞
+   core tick）。
+3. **写回**（新 Session 短事务）：发送后先审计/计费提交，再以写回栅栏
+   （`_fence_check`）重验空间开关、provider revision、policy、facts 摘要、
+   卡片状态/revision 与 lease，任一变化即 skip/supersede（安全原因码），
+   通过后按 CAS 应用产物。
 
-child run 审计（B2）：每次模型调用一行 StewardModelCall——space/job/
-policy_version/assist_kind/provider/model/prompt sha256 摘要与长度/token
-usage/status/latency；prompt 明文永不落库。per (job_id, assist_kind, seq)
-唯一：job crash 重试据此幂等跳过，不重复花费 token（B4）。
+预算（R3/F06）：发送前预留调用次数与 token；failed/degraded/invalid-output
+同样消耗（billed_tokens）；usage 缺 total 用 input+output，缺失/负数/部分
+字段保守回落预留值；unknown（无法证明上游未处理）保守计费且不自动重发
+（上游未证实支持幂等键）。prompt/响应均有字节上界，响应流式读取后再解析。
 
-egress（B1）：进程内直连 Provider（resolve_runtime 唯一解密出口），
-不经 sidecar、不伪造 AgentRun；api 容器仍是唯一 egress 点。
+崩溃合同（F05）：core 提交后、发送前、发送后审计前、写回前四个崩溃点全部
+凭 batch/attempt 状态经 `recover_stuck_batches` 恢复；绝不产生 Assistant
+三表（AgentSession/AgentRun/AgentMessage）行。prompt/响应明文永不落库。
 """
 
 from __future__ import annotations
@@ -29,6 +35,8 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -37,13 +45,52 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models.agent_provider import AgentSpaceProviderSetting
-from app.models.steward import ActionCard, StewardJob, StewardLlmCandidate, StewardModelCall
-from app.services import action_cards, agent_provider
+from app.models.space import FamilySpace
+from app.models.steward import (
+    ActionCard,
+    StewardAssistBatch,
+    StewardJob,
+    StewardLlmCandidate,
+    StewardModelCall,
+)
+from app.models.user import User
+from app.services import action_cards, agent_provider, steward_guard
+from app.services.steward_guard import ProjectionContext
 from app.utils import timeutil
 
 logger = logging.getLogger(__name__)
 
 ASSIST_KINDS: tuple[str, ...] = ("candidate", "ranking", "explanation")
+
+# 各辅助点的输出 token cap（预留时再与剩余预算取 min）
+_KIND_OUTPUT_CAPS: dict[str, int] = {"candidate": 2000, "ranking": 1000, "explanation": 800}
+
+# 消耗预算的 attempt 状态（skipped = 从未预留，不计入）
+_BUDGETED_STATUSES = ("reserved", "in_flight", "succeeded", "failed", "degraded", "unknown")
+
+# ---- 安全原因码（白名单；异常原文/上游 body 永不落库或入日志）----
+REASON_ASSIST_DISABLED = "assist_disabled"
+REASON_JOB_NOT_SETTLED = "job_not_settled"
+REASON_POLICY_CHANGED = "policy_changed"
+REASON_PROVIDER_CHANGED = "provider_changed"
+REASON_PROVIDER_UNAVAILABLE = "provider_unavailable"
+REASON_PROVIDER_API_UNSUPPORTED = "provider_api_unsupported"
+REASON_EVIDENCE_CHANGED = "evidence_changed"
+REASON_CARD_CHANGED = "card_changed"
+REASON_LEASE_LOST = "lease_lost"
+REASON_BUDGET_EXHAUSTED = "budget_exhausted"
+REASON_INSUFFICIENT_BUDGET = "insufficient_budget"
+REASON_PROMPT_TOO_LARGE = "prompt_too_large"
+REASON_RESPONSE_TOO_LARGE = "response_too_large"
+REASON_TIMEOUT = "timeout"
+REASON_NETWORK_UNKNOWN = "network_unknown"
+REASON_TRANSPORT_FAILED = "transport_failed"
+REASON_INVALID_OUTPUT = "invalid_output"
+REASON_POLICY_BLOCKED = "policy_blocked"
+
+_EXPLAIN_MAX_CHARS = 500
+
+Transport = Callable[[str, dict[str, str], dict[str, Any], float], dict[str, Any]]
 
 # 与 provider_proxy._API_PATHS 对齐（egress 路径单点语义）
 _API_PATHS = {
@@ -51,25 +98,125 @@ _API_PATHS = {
     "openai-responses": "/responses",
 }
 
-_EXPLAIN_MAX_CHARS = 500
-
-Transport = Callable[[str, dict[str, str], dict[str, Any], float], dict[str, Any]]
+# 09-11 R1/R2：prompt 输入只含节点代号/已确认 fact 白名单；输出封闭 schema
+# （候选=原子事实类型+节点代号；排序=严格排列；解释=结构化 reason_code/
+# supporting_fact_ids/template_slots，由确定性模板渲染，见 services/steward_guard）。
+_PROMPTS: dict[str, str] = {
+    "candidate": (
+        "你是家庭空间管家助手。输入是节点代号花名册与已确认事实清单（节点代号如"
+        " n001，绝不包含真实姓名）。只提出可能补充的原子亲属关系候选，输出 JSON"
+        ' 数组，每项为 {"kind": 原子关系类型, "subject": 节点代号, "object": 节点代号}。'
+        "kind 只能是 biological_parent/adoptive_parent/step_parent/guardian/spouse/"
+        "partner/direct_sibling 之一（祖辈、称谓等派生概念禁止）；subject/object"
+        " 必须来自花名册中的节点代号且互不相同；不得编造其他节点；不得输出理由文本。"
+    ),
+    "ranking": (
+        "你是家庭空间管家助手。对给定的推荐卡按对用户的实际有用程度排序。"
+        "输出 JSON 数组：仅包含给定 card id 的整数，每个 id 恰好出现一次，"
+        "不得新增、遗漏或重复。"
+    ),
+    "explanation": (
+        "你是家庭空间管家助手。基于给定推荐卡的结构化信息输出一个 JSON 对象："
+        ' {"reason_code": 允许的理由码, "supporting_fact_ids": [证据 fact id],'
+        ' "template_slots": {槽位: 节点代号}}。reason_code 只能使用输入中声明的'
+        " allowed_reason_code；supporting_fact_ids 只能引用 evidence_facts 中出现的"
+        " id；template_slots 只能使用声明的槽位键，值必须是输入中的节点代号。"
+        "绝不编造事实、人物、关系或承诺；不输出自由文本。"
+    ),
+}
 
 
 def _post_json(
     url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float
 ) -> dict[str, Any]:
-    """默认 transport：httpx 同步 POST（测试 monkeypatch 本函数注入 fake）。"""
+    """默认 transport：httpx 同步 POST，响应体流式读取并有字节上界（F19）。
+
+    超出 STEWARD_ASSIST_MAX_RESPONSE_BYTES 立即中止读取并抛错（调用方记
+    failed/response_too_large），绝不把无上界的响应整体读入内存。
+    """
     with httpx.Client(timeout=timeout) as client:
-        response = client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
+        with client.stream("POST", url, headers=headers, json=payload) as response:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_raw():
+                total += len(chunk)
+                if total > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
+                    raise ValueError(REASON_RESPONSE_TOO_LARGE)
+                chunks.append(chunk)
+    body = b"".join(chunks)
+    data = json.loads(body)
     if not isinstance(data, dict):
         raise ValueError("provider response is not a JSON object")
     return data
 
 
-# ---- 开关与预算 ----
+def _canonical_hash(value: Any) -> str:
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _facts_evidence(db: Session, space_id: int) -> dict[str, Any]:
+    """候选证据指纹：facts brief 白名单字段 + 源事实 revision（栅栏可检测改证据）。"""
+    from app.services import steward as steward_service
+
+    space = db.get(FamilySpace, space_id)
+    if space is None:
+        return {"brief": [], "revisions": []}
+    visible = steward_service._space_visible_user_ids(db, space)
+    brief = steward_service._confirmed_facts_brief(db, space, visible)
+    revisions = [
+        [int(f.id), int(f.revision)]
+        for f in steward_service._applicable_confirmed_facts(db, space, visible)
+    ]
+    return {"brief": brief, "revisions": revisions}
+
+
+def trusted_explanations(db: Session, card_ids: list[int]) -> dict[int, str]:
+    """R5：card_id → 已验证的解释渲染文本（读取面唯一信任入口）。
+
+    信任判据：该卡最新一次解释 attempt 状态 succeeded 且 output_json 携带
+    ``schema_version == EXPLANATION_SCHEMA_VERSION`` 的结构化产物，其 rendered
+    文本与卡片当前 reason_text_llm 一致。旧 reason_text_llm 纯文本行（无验证
+    版本）视为 untrusted：读取回退模板、并作为后台重新生成的目标；绝不批量
+    当作已验证输出。
+    """
+    if not card_ids:
+        return {}
+    wanted = {f"card:{int(cid)}" for cid in card_ids}
+    rows = db.scalars(
+        select(StewardModelCall)
+        .where(
+            StewardModelCall.assist_kind == "explanation",
+            StewardModelCall.status == "succeeded",
+            StewardModelCall.subject_key.in_(wanted),
+        )
+        .order_by(StewardModelCall.id.desc())
+    )
+    trusted: dict[int, str] = {}
+    seen: set[int] = set()
+    for row in rows:
+        subject = row.subject_key or "card:0"
+        try:
+            card_id = int(subject.split(":", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if card_id in seen:
+            continue
+        seen.add(card_id)
+        output = row.output_json if isinstance(row.output_json, dict) else {}
+        rendered = output.get("rendered")
+        if output.get("schema_version") != steward_guard.EXPLANATION_SCHEMA_VERSION:
+            continue
+        if not isinstance(rendered, str) or not rendered:
+            continue
+        card = db.get(ActionCard, card_id)
+        if card is not None and card.reason_text_llm == rendered:
+            trusted[card_id] = rendered
+    return trusted
+
+
+# ---- 开关 ----
 
 
 def _platform_flag(kind: str) -> bool:
@@ -95,70 +242,562 @@ def assist_enabled(db: Session, space_id: int, kind: str) -> bool:
     return _platform_flag(kind) and _space_flag(db, space_id, kind)
 
 
+def _enabled_kinds(db: Session, space_id: int) -> list[str]:
+    return [kind for kind in ASSIST_KINDS if assist_enabled(db, space_id, kind)]
+
+
+# ---- 预算（F06：所有已预留/已发送 attempt 都计入，不只 succeeded）----
+
+
 def _budget_state(db: Session, job_id: int) -> tuple[int, int]:
-    calls, tokens = db.execute(
-        select(func.count(StewardModelCall.id), func.coalesce(func.sum(StewardModelCall.total_tokens), 0)).where(  # type: ignore[arg-type]
+    rows = db.execute(
+        select(
+            func.count(StewardModelCall.id),
+            func.coalesce(
+                func.sum(
+                    func.coalesce(
+                        StewardModelCall.billed_tokens,
+                        func.coalesce(StewardModelCall.reserved_input_tokens, 0)
+                        + func.coalesce(StewardModelCall.reserved_output_tokens, 0),
+                    )
+                ),
+                0,
+            ),
+        ).where(
             StewardModelCall.job_id == job_id,
-            StewardModelCall.status == "succeeded",
+            StewardModelCall.status.in_(_BUDGETED_STATUSES),
         )
     ).one()
-    return int(calls), int(tokens)
+    return int(rows[0]), int(rows[1])
 
 
-# ---- child run 审计 ----
+def _estimate_input_tokens(prompt: str) -> int:
+    """输入 token 保守上界：无可靠估算器的模型按 1 token/byte 计（有效上界），
+    宁可少发也不超预算。"""
+    return max(1, len(prompt.encode("utf-8")))
 
 
-def _record_call(
+def _bill_usage(
+    usage: dict[str, int] | None, reserved_in: int, reserved_out: int
+) -> tuple[int | None, int | None, int]:
+    """保守计费（R3）：返回 (prompt_tokens, completion_tokens, billed)。
+
+    - total 有效（非负且 >0）→ billed=total；
+    - 缺 total → input+output（字段缺失/负数按预留值回落）；
+    - 全部缺失/非法 → 按预留不释放（宁可多记不可少记）。
+    """
+
+    def _valid(value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return int(value)
+
+    if usage:
+        total = _valid(usage.get("total_tokens"))
+        if total is not None and total > 0:
+            pt = _valid(usage.get("prompt_tokens"))
+            ct = _valid(usage.get("completion_tokens"))
+            return pt, ct, total
+        pt = _valid(usage.get("prompt_tokens"))
+        ct = _valid(usage.get("completion_tokens"))
+        if pt is not None or ct is not None:
+            billed = (pt if pt is not None else reserved_in) + (
+                ct if ct is not None else reserved_out
+            )
+            return pt, ct, max(1, billed)
+    return None, None, reserved_in + reserved_out
+
+
+# ---- prompt 组装（R1 受众限定投影：节点代号 + 已确认事实白名单；明文只在内存）----
+
+
+def _visible_context(db: Session, space_id: int) -> ProjectionContext:
+    """本次授权输入的投影上下文：visible 集合 → 稳定节点代号 + 未成年标记。
+
+    visible 集合只决定投影范围（space-wide），不是每个账号的授权集合。
+    """
+    from app.services import steward as steward_service
+    from app.services.visibility import is_minor
+
+    space = db.get(FamilySpace, space_id)
+    if space is None:
+        return ProjectionContext(set())
+    visible = steward_service._space_visible_user_ids(db, space)
+    users = [db.get(User, uid) for uid in visible]
+    minor_ids = {u.id for u in users if u is not None and is_minor(u)}
+    return ProjectionContext(visible, minor_ids=minor_ids)
+
+
+def _candidate_facts(db: Session, space_id: int, ctx: ProjectionContext) -> list[dict[str, Any]]:
+    """候选投影输入的已确认事实白名单（id/type/revision + 双端点 id）。"""
+    from app.services import steward as steward_service
+
+    space = db.get(FamilySpace, space_id)
+    if space is None:
+        return []
+    facts: list[dict[str, Any]] = []
+    for fact in steward_service._applicable_confirmed_facts(db, space, set(ctx.user_ids)):
+        facts.append(
+            {
+                "fact_id": int(fact.id),
+                "fact_type": fact.fact_type,
+                "revision": int(fact.revision),
+                "subject_user_id": int(fact.subject_user_id),
+                "object_user_id": int(fact.object_user_id)
+                if fact.object_user_id is not None
+                else None,
+            }
+        )
+    return facts
+
+
+def _ranking_targets(db: Session, card_ids: list[int]) -> list[ActionCard]:
+    cards = [db.get(ActionCard, int(cid)) for cid in card_ids]
+    return [c for c in cards if c is not None and c.state in ("pending", "viewed")]
+
+
+def _ranking_groups(cards: list[ActionCard]) -> list[dict[str, Any]]:
+    """按 recipient_account_id 分组（R3）：绝不把其他收件人的卡混进同一排序输入。"""
+    groups: dict[int, list[int]] = {}
+    for card in cards:
+        groups.setdefault(int(card.recipient_account_id), []).append(int(card.id))
+    return [
+        {"recipient_account_id": recipient, "card_ids": ids}
+        for recipient, ids in sorted(groups.items())
+    ]
+
+
+def _card_projection(card: ActionCard, ctx: ProjectionContext) -> dict[str, Any]:
+    """解释投影输入的卡片结构化信息（不含 reason 文案原文，避免携带展示名）。"""
+    evidence_facts = [
+        {"id": int(f["id"]), "type": str(f.get("type")), "revision": int(f["revision"])}
+        for f in card.evidence_json.get("facts", [])
+        if isinstance(f, dict) and isinstance(f.get("id"), int)
+    ]
+    return {
+        "card_id": int(card.id),
+        "kind": card.kind,
+        "subject_user_id": int(card.subject_user_id),
+        "object_user_id": int(card.object_user_id) if card.object_user_id else None,
+        "evidence_facts": evidence_facts,
+    }
+
+
+def _explanation_targets(db: Session, card_ids: list[int]) -> list[ActionCard]:
+    """解释辅助目标：无文案，或文案存在但无已验证的结构化产物（R5：旧纯文本
+    reason_text_llm 视为 untrusted，回退模板并后台重新生成）。"""
+    cards = [db.get(ActionCard, int(cid)) for cid in card_ids]
+    active = [c for c in cards if c is not None and c.state in ("pending", "viewed")]
+    trusted = trusted_explanations(db, [int(c.id) for c in active])
+    return [c for c in active if not trusted.get(int(c.id))]
+
+
+def _counterpart_name(db: Session, card: ActionCard) -> str | None:
+    """服务端按卡片参与者替换展示名（解释模板槽渲染用；绝不来自模型输出）。
+
+    收件人已由确定性矩阵/列表端点授权可见这两个参与者；取 object（缺失时
+    subject）作为面向收件人的对方称呼。
+    """
+    target_id = card.object_user_id or card.subject_user_id
+    user = db.get(User, int(target_id)) if target_id is not None else None
+    return user.name if user is not None else None
+
+
+def _explanation_user_content(card: ActionCard, ctx: ProjectionContext) -> str:
+    return steward_guard.project_explanation_input(_card_projection(card, ctx), ctx)
+
+
+def _build_payload(api: str, system: str, user: str, max_out_tokens: int) -> dict[str, Any]:
+    if api == "openai-responses":
+        return {
+            "model": "",
+            "input": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_output_tokens": max_out_tokens,
+            "stream": False,
+        }
+    return {
+        "model": "",
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "max_tokens": max_out_tokens,
+        "stream": False,
+    }
+
+
+def _fill_model(payload: dict[str, Any], model: str) -> dict[str, Any]:
+    payload["model"] = model
+    return payload
+
+
+# ---- 注册（core 短事务内调用；无网络）----
+
+
+def register_batch_for_job(
     db: Session,
     *,
     job: StewardJob,
-    assist_kind: str,
-    seq: int,
-    provider_id: int | None,
-    model: str | None,
-    prompt: str,
-    completion: str,
-    usage: dict[str, int] | None,
-    status: str,
-    error_code: str | None,
-    latency_ms: int,
-) -> StewardModelCall:
-    row = StewardModelCall(
+    facts_brief: list[dict[str, Any]],
+    visible: set[int],
+    cards: list[ActionCard],
+    now: Any = None,
+) -> StewardAssistBatch | None:
+    """在 core 提交的同一短事务里登记辅助批次（有可用工作才登记）。
+
+    无开关开启/无工作 → None（行为与确定性基线等价）；绝不在此发生网络调用。
+    """
+    if not config.STEWARD_ENABLED:
+        return None
+    kinds = _enabled_kinds(db, job.space_id)
+    if not kinds:
+        return None
+    now = now or timeutil.utcnow()
+    active = [c for c in cards if c.state in ("pending", "viewed")]
+    has_candidate = "candidate" in kinds and bool(facts_brief)
+    active_ids = [int(c.id) for c in active][: config.STEWARD_ASSIST_MAX_CARDS_PER_JOB]
+    by_id = {int(c.id): c for c in active}
+    # R3：排序输入按 recipient_account_id 分组，组内 ≥2 张卡才有排序意义
+    ranking_groups = [
+        g
+        for g in _ranking_groups([by_id[i] for i in active_ids if i in by_id])
+        if len(g["card_ids"]) >= 2
+    ]
+    # R5：旧纯文本 reason_text_llm（untrusted）也作为重新生成目标
+    trusted = trusted_explanations(db, active_ids)
+    explain_ids = [i for i in active_ids if i not in trusted][
+        : config.STEWARD_ASSIST_MAX_CARDS_PER_JOB
+    ]
+    has_ranking = "ranking" in kinds and bool(ranking_groups)
+    has_explanation = "explanation" in kinds and bool(explain_ids)
+    if not (has_candidate or has_ranking or has_explanation):
+        return None
+    active_cards = [
+        {"id": int(c.id), "revision": int(c.revision), "state": c.state} for c in active
+    ]
+    fence = {
+        "kinds": [
+            kind
+            for kind, has in (
+                ("candidate", has_candidate),
+                ("ranking", has_ranking),
+                ("explanation", has_explanation),
+            )
+            if has
+        ],
+        "cards": active_cards,
+        "ranking_groups": ranking_groups if has_ranking else [],
+        "explain_ids": explain_ids if has_explanation else [],
+    }
+    existing = db.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job.id))
+    if existing is not None:
+        return existing
+    batch = StewardAssistBatch(
         space_id=job.space_id,
         job_id=job.id,
+        evidence_hash=_canonical_hash(_facts_evidence(db, job.space_id)),
         policy_version=job.policy_version,
-        assist_kind=assist_kind,
-        provider_id=provider_id,
-        model=model,
-        prompt_digest=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-        prompt_chars=len(prompt),
-        completion_chars=len(completion or ""),
-        prompt_tokens=usage.get("prompt_tokens") if usage else None,
-        completion_tokens=usage.get("completion_tokens") if usage else None,
-        total_tokens=usage.get("total_tokens") if usage else None,
-        status=status,
-        error_code=error_code,
-        latency_ms=latency_ms,
-        seq=seq,
-        created_at=timeutil.utcnow(),
+        status="pending",
+        attempt=0,
+        next_attempt_at=now,
+        fence_json=fence,
+        created_at=now,
+        updated_at=now,
     )
-    db.add(row)
+    db.add(batch)
     db.flush()
-    return row
+    return batch
 
 
-def _seq_done(db: Session, job_id: int, assist_kind: str, seq: int) -> bool:
-    """该 (job, kind, seq) 审计行已存在 → 本轮跳过（同事务重入/部分重试幂等）。"""
-    return (
-        db.scalar(
-            select(StewardModelCall.id).where(
-                StewardModelCall.job_id == job_id,
-                StewardModelCall.assist_kind == assist_kind,
-                StewardModelCall.seq == seq,
+# ---- 写回栅栏（R4：发送前与写回前各验一次；TOCTOU 关口）----
+
+
+def _fence_check(db: Session, batch: StewardAssistBatch, kinds: list[str]) -> str | None:
+    """重验证据与授权快照。返回 None=通过，否则安全原因码。"""
+    if not config.STEWARD_ENABLED:
+        return REASON_ASSIST_DISABLED
+    for kind in kinds:
+        if not assist_enabled(db, batch.space_id, kind):
+            return REASON_ASSIST_DISABLED
+    job = db.get(StewardJob, batch.job_id)
+    if job is None or job.status != "succeeded":
+        return REASON_JOB_NOT_SETTLED
+    if job.policy_version != batch.policy_version:
+        return REASON_POLICY_CHANGED
+    runtime = agent_provider.resolve_runtime(
+        db, batch.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+    )
+    if runtime is None or not (runtime.base_url or "").rstrip("/"):
+        return REASON_PROVIDER_UNAVAILABLE
+    if _API_PATHS.get(runtime.api) is None:
+        return REASON_PROVIDER_API_UNSUPPORTED
+    # R1：云同意撤销 / 要求本地但选中云 → 降级（policy_blocked），绝不自动切云
+    if runtime.kind != "local":
+        setting = db.scalar(
+            select(AgentSpaceProviderSetting).where(
+                AgentSpaceProviderSetting.space_id == batch.space_id,
+                AgentSpaceProviderSetting.agent_kind == agent_provider.AGENT_KIND_STEWARD,
             )
         )
-        is not None
+        if setting is None or setting.local_required or not setting.cloud_allowed:
+            return REASON_POLICY_BLOCKED
+    reserved = db.scalar(
+        select(StewardModelCall)
+        .where(
+            StewardModelCall.batch_id == batch.id,
+            StewardModelCall.provider_id.is_not(None),
+        )
+        .order_by(StewardModelCall.id)
+        .limit(1)
     )
+    if reserved is not None:
+        if reserved.provider_id != runtime.provider_id or reserved.model != runtime.model:
+            return REASON_PROVIDER_CHANGED
+    if "candidate" in kinds:
+        if _canonical_hash(_facts_evidence(db, batch.space_id)) != batch.evidence_hash:
+            return REASON_EVIDENCE_CHANGED
+    fence = batch.fence_json or {}
+    for entry in fence.get("cards", []):
+        card = db.get(ActionCard, int(entry["id"]))
+        if (
+            card is None
+            or card.revision != entry["revision"]
+            or card.state not in ("pending", "viewed")
+        ):
+            return REASON_CARD_CHANGED
+    return None
+
+
+# ---- 调度/预留（独立短事务；HTTP 不在本事务）----
+
+
+def _next_seq(db: Session, job_id: int, kind: str, seq_counters: dict[str, int]) -> int:
+    """同批内自增（DB 内 max 只能看到已 flush 行，必须叠加本批 pending 行）。"""
+    if kind not in seq_counters:
+        current = db.scalar(
+            select(func.max(StewardModelCall.seq)).where(
+                StewardModelCall.job_id == job_id, StewardModelCall.assist_kind == kind
+            )
+        )
+        seq_counters[kind] = int(current or 0)
+    seq_counters[kind] += 1
+    return seq_counters[kind]
+
+
+def _reserve_attempt(
+    db: Session,
+    *,
+    batch: StewardAssistBatch,
+    job: StewardJob,
+    kind: str,
+    subject_key: str,
+    user_content: str,
+    runtime: Any,
+    budget: dict[str, int],
+    lease_no: int,
+    seq_counters: dict[str, int],
+) -> None:
+    """为一个发送主题预留 attempt（或落 skipped 审计行）。budget 就地扣减。"""
+    system = _PROMPTS[kind]
+    prompt = f"{system}\n{user_content}"
+    prompt_bytes = len(prompt.encode("utf-8"))
+    row_common: dict[str, Any] = {
+        "space_id": batch.space_id,
+        "job_id": job.id,
+        "policy_version": batch.policy_version,
+        "assist_kind": kind,
+        "provider_id": runtime.provider_id if runtime else None,
+        "model": runtime.model if runtime else None,
+        "prompt_digest": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "prompt_chars": len(prompt),
+        "seq": _next_seq(db, job.id, kind, seq_counters),
+        "subject_key": subject_key,
+        "input_hash": _canonical_hash(user_content),
+        "attempt_no": lease_no,
+        "batch_id": batch.id,
+        "created_at": timeutil.utcnow(),
+    }
+    max_out = _KIND_OUTPUT_CAPS[kind]
+    if budget["calls"] >= config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB:
+        db.add(StewardModelCall(status="skipped", error_code=REASON_BUDGET_EXHAUSTED, **row_common))
+        return
+    est_in = _estimate_input_tokens(prompt)
+    remaining_tokens = config.STEWARD_ASSIST_MAX_TOKENS_PER_JOB - budget["tokens"]
+    if est_in + 1 > remaining_tokens:
+        db.add(
+            StewardModelCall(status="skipped", error_code=REASON_INSUFFICIENT_BUDGET, **row_common)
+        )
+        return
+    if prompt_bytes > config.STEWARD_ASSIST_MAX_PROMPT_BYTES:
+        db.add(StewardModelCall(status="skipped", error_code=REASON_PROMPT_TOO_LARGE, **row_common))
+        return
+    reserved_out = max(1, min(max_out, remaining_tokens - est_in))
+    db.add(
+        StewardModelCall(
+            status="reserved",
+            reserved_input_tokens=est_in,
+            reserved_output_tokens=reserved_out,
+            **row_common,
+        )
+    )
+    budget["calls"] += 1
+    budget["tokens"] += est_in + reserved_out
+
+
+def schedule_due_batch(
+    db: Session, *, worker_id: str = "inproc-assist-worker", now: Any = None
+) -> StewardAssistBatch | None:
+    """选中至多一个到期批次：预留 attempt 行并置 leased（独立短事务）。
+
+    全局并发 = 至多 STEWARD_ASSIST_MAX_CONCURRENT_BATCHES 个未过期 lease。
+    返回 None 表示无可执行批次。此函数内无网络调用。
+    """
+    from app.services.steward import _immediate_tx
+
+    now = now or timeutil.utcnow()
+    with _immediate_tx(db):
+        in_flight = len(
+            list(
+                db.scalars(
+                    select(StewardAssistBatch.id).where(
+                        StewardAssistBatch.status == "leased",
+                        StewardAssistBatch.lease_until > now,
+                    )
+                )
+            )
+        )
+        if in_flight >= config.STEWARD_ASSIST_MAX_CONCURRENT_BATCHES:
+            return None
+        batch = db.scalar(
+            select(StewardAssistBatch)
+            .where(
+                StewardAssistBatch.status == "pending",
+                StewardAssistBatch.next_attempt_at.is_not(None),
+                StewardAssistBatch.next_attempt_at <= now,
+            )
+            .order_by(StewardAssistBatch.next_attempt_at.asc(), StewardAssistBatch.id.asc())
+            .limit(1)
+        )
+        if batch is None:
+            return None
+        job = db.get(StewardJob, batch.job_id)
+        fence = batch.fence_json or {}
+        kinds = [k for k in fence.get("kinds", []) if k in ASSIST_KINDS]
+        if job is None or job.status != "succeeded":
+            batch.status = "superseded"
+            batch.error_code = REASON_JOB_NOT_SETTLED
+            batch.updated_at = now
+            return None
+        if not kinds:
+            batch.status = "superseded"
+            batch.error_code = REASON_ASSIST_DISABLED
+            batch.updated_at = now
+            return None
+        # 写回栅栏第一道：注册后世界可能已变化（开关/policy/provider/facts/卡片）
+        reason = _fence_check(db, batch, kinds)
+        if reason is not None:
+            batch.status = "superseded"
+            batch.error_code = reason
+            batch.updated_at = now
+            db.flush()
+            return None
+        runtime = agent_provider.resolve_runtime(
+            db, batch.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+        )
+        lease_no = batch.attempt + 1
+        budget = {"calls": 0, "tokens": 0}
+        seq_counters: dict[str, int] = {}
+        calls_used, tokens_used = _budget_state(db, job.id)
+        budget["calls"] = calls_used
+        budget["tokens"] = tokens_used
+        if "candidate" in kinds:
+            ctx = _visible_context(db, batch.space_id)
+            _reserve_attempt(
+                db,
+                batch=batch,
+                job=job,
+                kind="candidate",
+                subject_key="facts",
+                user_content=steward_guard.project_candidate_input(
+                    _candidate_facts(db, batch.space_id, ctx), ctx
+                ),
+                runtime=runtime,
+                budget=budget,
+                lease_no=lease_no,
+                seq_counters=seq_counters,
+            )
+        if "ranking" in kinds:
+            for group in fence.get("ranking_groups", []):
+                targets = _ranking_targets(db, [int(i) for i in group.get("card_ids", [])])
+                if len(targets) < 2:
+                    continue
+                _reserve_attempt(
+                    db,
+                    batch=batch,
+                    job=job,
+                    kind="ranking",
+                    subject_key=(
+                        f"ranking:{int(group.get('recipient_account_id', 0))}:"
+                        + ",".join(str(int(c.id)) for c in targets)
+                    ),
+                    user_content=steward_guard.project_ranking_input(
+                        [{"card_id": int(c.id), "kind": c.kind} for c in targets]
+                    ),
+                    runtime=runtime,
+                    budget=budget,
+                    lease_no=lease_no,
+                    seq_counters=seq_counters,
+                )
+        if "explanation" in kinds:
+            ctx = _visible_context(db, batch.space_id)
+            for card in _explanation_targets(db, [int(i) for i in fence.get("explain_ids", [])]):
+                _reserve_attempt(
+                    db,
+                    batch=batch,
+                    job=job,
+                    kind="explanation",
+                    subject_key=f"card:{int(card.id)}",
+                    user_content=_explanation_user_content(card, ctx),
+                    runtime=runtime,
+                    budget=budget,
+                    lease_no=lease_no,
+                    seq_counters=seq_counters,
+                )
+        batch.attempt = lease_no
+        batch.status = "leased"
+        batch.lease_owner = worker_id
+        batch.lease_until = now + timedelta(seconds=config.STEWARD_ASSIST_BATCH_LEASE_SECONDS)
+        batch.updated_at = now
+        db.flush()
+        return batch
+
+
+# ---- 执行（受限线程内、自有 Session；HTTP 无任何打开事务）----
+
+
+def _classify_transport_error(exc: Exception) -> tuple[str, str]:
+    """transport 异常 → (attempt 状态, 安全错误码)。
+
+    - 连接建立失败：确定未发送 → failed（不消耗上行不确定性）；
+    - 读超时/读中断等无法证明上游未处理 → unknown（保守计费 + 不自动重发）；
+    - 其余（fake/程序错误等）→ failed（记异常类名，无原文）。
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "failed", f"http_{getattr(exc.response, 'status_code', 0)}"
+    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
+        return "failed", "connect_failed"
+    if isinstance(exc, httpx.TimeoutException):
+        return "unknown", REASON_TIMEOUT
+    if isinstance(exc, ValueError):
+        if str(exc) == REASON_RESPONSE_TOO_LARGE:
+            return "failed", REASON_RESPONSE_TOO_LARGE
+        return "failed", "invalid_response"
+    if isinstance(exc, httpx.HTTPError):
+        return "unknown", REASON_NETWORK_UNKNOWN
+    return "failed", type(exc).__name__[:64]
 
 
 def _parse_response(api: str, data: dict[str, Any]) -> tuple[str, dict[str, int] | None]:
@@ -192,395 +831,578 @@ def _parse_response(api: str, data: dict[str, Any]) -> tuple[str, dict[str, int]
     return text, usage
 
 
-def _call_model_impl(
-    db: Session,
+def _validate_output(
+    kind: str,
+    text: str,
     *,
-    job: StewardJob,
-    assist_kind: str,
-    seq: int,
-    system: str,
-    user: str,
-    max_out_tokens: int,
-    transport: Transport | None,
-) -> tuple[str | None, StewardModelCall | None]:
-    if _seq_done(db, job.id, assist_kind, seq):
-        return None, None
-    calls_used, tokens_used = _budget_state(db, job.id)
-    if calls_used >= config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB or (
-        tokens_used >= config.STEWARD_ASSIST_MAX_TOKENS_PER_JOB
-    ):
-        row = _record_call(
-            db,
-            job=job,
-            assist_kind=assist_kind,
-            seq=seq,
-            provider_id=None,
-            model=None,
-            prompt=f"{system}\n{user}",
-            completion="",
-            usage=None,
-            status="skipped",
-            error_code="budget_exhausted",
-            latency_ms=0,
-        )
-        return None, row
+    ctx: ProjectionContext,
+    card_ids: list[int] | None = None,
+    card: ActionCard | None = None,
+    db: Session | None = None,
+) -> Any:
+    """校验模型输出为可写回产物（R2 封闭 schema；非法返回 None → degraded）。
 
-    runtime = agent_provider.resolve_runtime(db, job.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD)
-    prompt = f"{system}\n{user}"
-    if runtime is None or not (runtime.base_url or "").rstrip("/"):
-        row = _record_call(
-            db,
-            job=job,
-            assist_kind=assist_kind,
-            seq=seq,
-            provider_id=None,
-            model=None,
-            prompt=prompt,
-            completion="",
-            usage=None,
-            status="degraded",
-            error_code="provider_unavailable",
-            latency_ms=0,
-        )
-        return None, row
-
-    api_path = _API_PATHS.get(runtime.api)
-    if api_path is None:
-        row = _record_call(
-            db,
-            job=job,
-            assist_kind=assist_kind,
-            seq=seq,
-            provider_id=runtime.provider_id,
-            model=runtime.model,
-            prompt=prompt,
-            completion="",
-            usage=None,
-            status="degraded",
-            error_code="provider_api_unsupported",
-            latency_ms=0,
-        )
-        return None, row
-
-    if runtime.api == "openai-responses":
-        payload: dict[str, Any] = {
-            "model": runtime.model,
-            "input": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_output_tokens": max_out_tokens,
-            "stream": False,
-        }
-    else:
-        payload = {
-            "model": runtime.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_tokens": max_out_tokens,
-            "stream": False,
-        }
-    url = f"{runtime.base_url.rstrip('/')}{api_path}"
-    headers = {"Authorization": f"Bearer {runtime.api_key}"} if runtime.api_key else {}
-    started = time.monotonic()
-    try:
-        data = (transport or _post_json)(
-            url, headers, payload, config.STEWARD_ASSIST_TIMEOUT_SECONDS
-        )
-        text, usage = _parse_response(runtime.api, data)
-    except Exception as exc:  # noqa: BLE001 — 任何 transport/解析失败只记 failed 行
-        row = _record_call(
-            db,
-            job=job,
-            assist_kind=assist_kind,
-            seq=seq,
-            provider_id=runtime.provider_id,
-            model=runtime.model,
-            prompt=prompt,
-            completion="",
-            usage=None,
-            status="failed",
-            error_code=type(exc).__name__[:64],
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
-        return None, row
-
-    row = _record_call(
-        db,
-        job=job,
-        assist_kind=assist_kind,
-        seq=seq,
-        provider_id=runtime.provider_id,
-        model=runtime.model,
-        prompt=prompt,
-        completion=text,
-        usage=usage,
-        status="succeeded",
-        error_code=None,
-        latency_ms=int((time.monotonic() - started) * 1000),
-    )
-    return text, row
-
-
-# ---- 三个辅助点 ----
-
-
-def _extract_json_array(text: str) -> list[Any] | None:
-    """从模型文本提取 JSON 数组（容忍 ```json 围栏）；失败返回 None。"""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.startswith("json"):
-            stripped = stripped[4:]
-    try:
-        parsed = json.loads(stripped.strip())
-    except json.JSONDecodeError:
-        start, end = stripped.find("["), stripped.rfind("]")
-        if start < 0 or end <= start:
+    候选：原子事实类型 + 本次授权输入内的节点代号；排序：严格排列；解释：
+    结构化 {reason_code, supporting_fact_ids, template_slots} + 确定性模板
+    渲染文本（rendered）。任何编造/越权/自由文本都整体拒绝，绝不截断通过。
+    """
+    if kind == "explanation":
+        if card is None or db is None:
             return None
-        try:
-            parsed = json.loads(stripped[start : end + 1])
-        except json.JSONDecodeError:
+        reason_code = steward_guard.EXPLANATION_REASON_CODES.get(card.kind)
+        projection = _card_projection(card, ctx)
+        slot_values = {
+            ctx.codename(int(card.subject_user_id)),
+            ctx.codename(int(card.object_user_id)) if card.object_user_id else None,
+        }
+        slot_values.discard(None)
+        structured = steward_guard.validate_explanation_output(
+            text,
+            reason_code=reason_code,
+            evidence_fact_ids=[int(f["id"]) for f in projection["evidence_facts"]],
+            slot_values_allowed={str(v) for v in slot_values},
+        )
+        if structured is None:
             return None
-    return parsed if isinstance(parsed, list) else None
+        rendered = steward_guard.render_explanation(
+            structured, counterpart_name=_counterpart_name(db, card)
+        )
+        return {**structured, "rendered": rendered}
+    if kind == "candidate":
+        items = steward_guard.validate_candidate_output(text, ctx)
+        return {"items": items} if items else None
+    # ranking：严格排列校验
+    order = steward_guard.validate_ranking_output(text, list(card_ids or []))
+    return {"order": order} if order is not None else None
 
 
-def maybe_generate_candidates(
+def execute_batch(
     db: Session,
+    batch_id: int,
     *,
-    space_id: int,
-    job: StewardJob,
-    facts_brief: list[dict[str, Any]],
-    visible: set[int],
     transport: Transport | None = None,
-) -> None:
-    """候选生成：LLM 提议只落内部池；非法项丢弃；绝不触发任何卡片/正式写入。"""
-    if not assist_enabled(db, space_id, "candidate") or not facts_brief:
-        return
-    system = (
-        "你是家庭空间管家助手。只基于给定的已确认事实清单，提出可能的关系候选建议"
-        "（如可补充的称谓/分支假设）。输出 JSON 数组，每项为"
-        ' {"kind": 关系种类, "subject_user_id": 整数, "object_user_id": 整数,'
-        ' "rationale": 简短理由}。subject/object 必须来自清单中出现的用户 id，'
-        "绝不编造其他 id；不得断言未确认的事实。"
-    )
-    user = json.dumps(facts_brief, ensure_ascii=False)
-    text, _row = _call_model_impl(
-        db,
-        job=job,
-        assist_kind="candidate",
-        seq=1,
-        system=system,
-        user=user,
-        max_out_tokens=2000,
-        transport=transport,
-    )
-    if not text:
-        return
-    items = _extract_json_array(text)
-    if items is None:
-        logger.warning("steward assist candidate: unparseable output; dropped")
-        return
+    after_send: Callable[[Session, StewardAssistBatch], None] | None = None,
+) -> str:
+    # Note: 辅助 HTTP 唯一合法路径 —
+    # 见 .agent-notes/implemented/architecture/2026-09-11-steward-assist-batch-executor.md
+    """执行一个 leased 批次：发送（无事务）→ 审计/计费短事务 → 栅栏 + 写回短事务。
+
+    阶段：
+    tx1  预发送栅栏 + attempt reserved→in_flight + 批次 applying，提交；
+    HTTP 全部在事务外（受 lease 墙钟 deadline 与单次 timeout 双重上界）；
+    tx2  保守计费/状态结算 + 已验证产物 output_json，提交（崩溃恢复点③④）；
+    tx3  写回栅栏重验 → CAS 应用产物 → 批次 applied/superseded。
+    返回批次最终状态字符串。
+    """
+    from app.services.steward import _immediate_tx
+
+    batch = db.get(StewardAssistBatch, batch_id)
+    if batch is None or batch.status != "leased":
+        return batch.status if batch is not None else "missing"
     now = timeutil.utcnow()
-    accepted = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get("kind") or "").strip()[:48]
-        subject_id, object_id = item.get("subject_user_id"), item.get("object_user_id")
-        rationale = str(item.get("rationale") or "").strip()[:500]
-        if not kind or not isinstance(subject_id, int) or isinstance(subject_id, bool):
-            continue
-        if not isinstance(object_id, int) or isinstance(object_id, bool):
-            continue
-        if subject_id not in visible or object_id not in visible or subject_id == object_id:
-            continue
-        payload = {
-            "kind": kind,
-            "subject_user_id": subject_id,
-            "object_user_id": object_id,
-            "rationale": rationale,
-        }
-        digest = hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest()
-        exists = db.scalar(
-            select(StewardLlmCandidate.id).where(
-                StewardLlmCandidate.space_id == space_id,
-                StewardLlmCandidate.candidate_digest == digest,
+    if batch.lease_until is None or batch.lease_until <= now:
+        return batch.status  # 恢复器负责过期 lease
+
+    # ---- tx1：预发送栅栏 + attempt reserved→in_flight + 批次 applying ----
+    local_required = False
+    cloud_allowed = True
+    with _immediate_tx(db):
+        batch = db.get(StewardAssistBatch, batch_id)
+        assert batch is not None
+        if batch.status != "leased":
+            return batch.status
+        attempts = list(
+            db.scalars(
+                select(StewardModelCall)
+                .where(
+                    StewardModelCall.batch_id == batch.id,
+                    StewardModelCall.status == "reserved",
+                )
+                .order_by(StewardModelCall.id)
             )
         )
-        if exists is not None:
-            continue
-        db.add(
-            StewardLlmCandidate(
-                space_id=space_id,
-                job_id=job.id,
-                candidate_kind=kind,
-                payload_json=payload,
-                candidate_digest=digest,
-                status="proposed",
-                created_at=now,
+        reason = _fence_check(db, batch, [a.assist_kind for a in attempts])
+        if reason is not None:
+            for attempt in attempts:
+                attempt.status = "skipped"
+                attempt.error_code = reason
+            batch.status = "superseded"
+            batch.error_code = reason
+            batch.updated_at = now
+            db.flush()
+            return batch.status
+        batch.status = "applying"
+        batch.updated_at = now
+        for attempt in attempts:
+            attempt.status = "in_flight"
+        db.flush()
+        # 在锁内读取构建 payload 所需的运行时与出站 policy 开关（HTTP 在事务外）
+        runtime = agent_provider.resolve_runtime(
+            db, batch.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+        )
+        setting = db.scalar(
+            select(AgentSpaceProviderSetting).where(
+                AgentSpaceProviderSetting.space_id == batch.space_id,
+                AgentSpaceProviderSetting.agent_kind == agent_provider.AGENT_KIND_STEWARD,
             )
         )
-        accepted += 1
-    db.flush()
-    logger.info("steward assist candidate: %d accepted / %d proposed", accepted, len(items))
+        if setting is not None:
+            local_required = bool(setting.local_required)
+            cloud_allowed = bool(setting.cloud_allowed)
 
-
-def maybe_rank_cards(
-    db: Session,
-    *,
-    job: StewardJob,
-    cards: list[ActionCard],
-    transport: Transport | None = None,
-) -> None:
-    """排序：只对给定卡集合的呈现顺序重排；非法输出一律丢弃（AC-2）。"""
-    space_id = job.space_id
-    if not assist_enabled(db, space_id, "ranking"):
-        return
-    targets = [c for c in cards if c.state in ("pending", "viewed")][
-        : config.STEWARD_ASSIST_MAX_CARDS_PER_JOB
-    ]
-    if len(targets) < 2:
-        return
-    ids = [int(c.id) for c in targets]
-    system = (
-        "你是家庭空间管家助手。对给定的推荐卡按对用户的实际有用程度排序。"
-        "输出 JSON 数组：仅包含给定 card id 的整数，每个 id 恰好出现一次，"
-        "不得新增、遗漏或重复。"
-    )
-    user = json.dumps(
-        [{"card_id": int(c.id), "kind": c.kind, "reason": c.reason_text} for c in targets],
-        ensure_ascii=False,
-    )
-    text, row = _call_model_impl(
-        db,
-        job=job,
-        assist_kind="ranking",
-        seq=1,
-        system=system,
-        user=user,
-        max_out_tokens=1000,
-        transport=transport,
-    )
-    if not text:
-        return
-    parsed = _extract_json_array(text)
-    valid = (
-        parsed is not None
-        and len(parsed) == len(ids)
-        and all(isinstance(v, int) and not isinstance(v, bool) for v in parsed)
-        and set(parsed) == set(ids)
-    )
-    if not valid or parsed is None:
-        # 非严格排列：绝不应用（AC-2）；审计行标注 degraded
-        if row is not None:
-            row.status = "degraded"
-            row.error_code = "invalid_permutation"
-        logger.warning("steward assist ranking: invalid permutation; ignored")
-        return
-    for rank_value, card_id in enumerate(parsed, 1):
-        card = next(c for c in targets if int(c.id) == card_id)
-        card.presentation_rank = rank_value
-    db.flush()
-
-
-def maybe_explain_cards(
-    db: Session,
-    *,
-    job: StewardJob,
-    cards: list[ActionCard],
-    transport: Transport | None = None,
-) -> None:
-    """解释：只复述卡内已确认事实；失败保持 NULL（模板兜底）。"""
-    if not assist_enabled(db, job.space_id, "explanation"):
-        return
-    targets = [
-        c
-        for c in cards
-        if c.state in ("pending", "viewed") and not c.reason_text_llm
-    ][: config.STEWARD_ASSIST_MAX_CARDS_PER_JOB]
-    if not targets:
-        return
-    system = (
-        "你是家庭空间管家助手。把给定推荐卡的结构化信息改写成一段面向普通用户的"
-        "自然语言解释（为什么推荐、隐私影响是什么）。只允许复述给定的已确认事实，"
-        "绝不编造或推断新事实；输出纯文本，不超过 300 字。"
-    )
-    for card in targets:
-        user = json.dumps(
-            {
-                "card_id": int(card.id),
-                "kind": card.kind,
-                "reason": card.reason_text,
-                "privacy_effect": card.privacy_effect,
-                "proposed_action": card.proposed_action_json,
-                "evidence_fact_types": [
-                    f.get("type") for f in card.evidence_json.get("facts", []) if isinstance(f, dict)
-                ],
-            },
-            ensure_ascii=False,
+    # ---- HTTP（无事务；受总 deadline 与单次 timeout 双重上界）----
+    assert runtime is not None  # 预发送栅栏已确保 provider 可用
+    api = runtime.api
+    policy_blocked: list[int] = []
+    results: list[
+        tuple[StewardModelCall, str | None, dict[str, int] | None, Exception | None, int, int]
+    ] = []
+    for attempt in attempts:
+        if attempt.status != "in_flight":
+            continue
+        remaining = (
+            (batch.lease_until - timeutil.utcnow()).total_seconds()
+            if batch.lease_until is not None
+            else 0.0
         )
-        text, _row = _call_model_impl(
-            db,
-            job=job,
-            assist_kind="explanation",
-            seq=int(card.id),
-            system=system,
-            user=user,
-            max_out_tokens=800,
-            transport=transport,
-        )
-        if text and text.strip():
-            card.reason_text_llm = text.strip()[:_EXPLAIN_MAX_CHARS]
-    db.flush()
-
-
-def run_assists(
-    db: Session,
-    *,
-    job: StewardJob,
-    facts_brief: list[dict[str, Any]],
-    visible: set[int],
-    cards: list[ActionCard],
-    transport: Transport | None = None,
-) -> None:
-    """编排三个辅助点；单点异常经 SAVEPOINT 隔离回滚，绝不外抛、绝不波及
-    主流水线已写入的确定性结果（AC-5）。"""
-    assists = (
-        (
-            "candidate",
-            lambda: maybe_generate_candidates(
-                db,
-                space_id=job.space_id,
-                job=job,
-                facts_brief=facts_brief,
-                visible=visible,
-                transport=transport,
+        if remaining <= 0:
+            # 墙钟耗尽：未发送的保留 in_flight，由恢复器按 unknown 收敛
+            continue
+        timeout = max(0.1, min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining))
+        user_content = _user_content_for(db, attempt)
+        payload = _fill_model(
+            _build_payload(
+                api,
+                _PROMPTS[attempt.assist_kind],
+                user_content,
+                attempt.reserved_output_tokens or 1,
             ),
-        ),
-        ("ranking", lambda: maybe_rank_cards(db, job=job, cards=cards, transport=transport)),
-        (
-            "explanation",
-            lambda: maybe_explain_cards(db, job=job, cards=cards, transport=transport),
-        ),
-    )
-    for name, runner in assists:
+            attempt.model or "",
+        )
+        # R1：发送前最终 payload 检查（复用 policy_guard；不经 ProviderProxy、
+        # 不伪造 AgentRun）。block → 本次不发送（降级，安全原因码入审计）。
+        decision = steward_guard.outbound_check(
+            payload,
+            provider_kind=runtime.kind,
+            local_required=local_required,
+            cloud_allowed=cloud_allowed,
+        )
+        if decision.action == "block":
+            policy_blocked.append(attempt.id)
+            continue
+        if decision.action == "redact":
+            payload = decision.value
+        url = f"{(runtime.base_url or '').rstrip('/')}{_API_PATHS[api]}"
+        headers = {"Authorization": f"Bearer {runtime.api_key}"} if runtime.api_key else {}
+        started = time.monotonic()
+        text: str | None = None
+        usage: dict[str, int] | None = None
+        exc: Exception | None = None
+        response_bytes = 0
         try:
-            with db.begin_nested():
-                runner()
-        except Exception:  # noqa: BLE001 — 单点失败只记日志，SAVEPOINT 已局部回滚
-            logger.exception("steward assist %s failed; degraded to deterministic baseline", name)
+            data = (transport or _post_json)(url, headers, payload, timeout)
+            response_bytes = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+            text, usage = _parse_response(api, data)
+        except Exception as caught:  # noqa: BLE001 — 异常分类为安全码，不外泄原文
+            exc = caught
+        latency_ms = int((time.monotonic() - started) * 1000)
+        results.append((attempt, text, usage, exc, latency_ms, response_bytes))
+
+    if after_send is not None:
+        after_send(db, batch)
+
+    # ---- tx2：审计 + 保守计费（崩溃恢复点③：发送后审计前）----
+    with _immediate_tx(db):
+        batch = db.get(StewardAssistBatch, batch_id)
+        assert batch is not None
+        # R1：policy 拦截的 attempt 从未发送 → skipped（不消耗计费），安全原因码入审计
+        for blocked_id in policy_blocked:
+            blocked = db.get(StewardModelCall, blocked_id)
+            if blocked is not None and blocked.status == "in_flight":
+                blocked.status = "skipped"
+                blocked.error_code = REASON_POLICY_BLOCKED
+                db.flush()
+        for attempt, text, usage, exc, latency_ms, response_bytes in results:
+            fresh = db.get(StewardModelCall, attempt.id)
+            assert fresh is not None
+            fresh.latency_ms = latency_ms
+            if exc is not None:
+                status, code = _classify_transport_error(exc)
+                fresh.status = status
+                fresh.error_code = code
+                pt, ct, billed = _bill_usage(
+                    None, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
+                )
+            else:
+                assert text is not None
+                fresh.completion_chars = len(text)
+                fresh.response_bytes = response_bytes
+                pt, ct, billed = _bill_usage(
+                    usage, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
+                )
+                fresh.prompt_tokens = pt
+                fresh.completion_tokens = ct
+                fresh.total_tokens = billed
+                fresh.status = "succeeded"
+                fresh.error_code = None
+                ctx = _visible_context(db, batch.space_id)
+                card_ids: list[int] = []
+                expl_card: ActionCard | None = None
+                if fresh.assist_kind == "ranking" and fresh.subject_key:
+                    parts = fresh.subject_key.split(":")
+                    if len(parts) == 3:
+                        card_ids = [int(x) for x in parts[2].split(",") if x]
+                elif fresh.assist_kind == "explanation" and fresh.subject_key:
+                    try:
+                        expl_card = db.get(ActionCard, int(fresh.subject_key.split(":", 1)[1]))
+                    except (IndexError, ValueError):
+                        expl_card = None
+                product = _validate_output(
+                    fresh.assist_kind,
+                    text,
+                    ctx=ctx,
+                    card_ids=card_ids,
+                    card=expl_card,
+                    db=db,
+                )
+                if product is None:
+                    fresh.status = "degraded"
+                    fresh.error_code = REASON_INVALID_OUTPUT
+                else:
+                    fresh.output_json = product
+            fresh.billed_tokens = billed
+            db.flush()
+        db.commit()
+
+    # ---- tx3：写回栅栏重验 + CAS 应用（崩溃恢复点④：写回前）----
+    return _apply_batch(db, batch_id, now=timeutil.utcnow())
+
+
+def _user_content_for(db: Session, attempt: StewardModelCall) -> str:
+    """按 attempt 的 subject_key 重建白名单 user prompt（R1 投影；与预留一致：
+    input_hash 在 tx3 前不重验——发送前重建失败按空输入处理，输出校验兜底）。"""
+    kind = attempt.assist_kind
+    subject = attempt.subject_key or ""
+    if kind == "candidate":
+        ctx = _visible_context(db, attempt.space_id)
+        return steward_guard.project_candidate_input(
+            _candidate_facts(db, attempt.space_id, ctx), ctx
+        )
+    if kind == "ranking":
+        parts = subject.split(":")
+        card_ids = [int(x) for x in parts[-1].split(",") if x] if len(parts) >= 2 else []
+        targets = _ranking_targets(db, card_ids)
+        return steward_guard.project_ranking_input(
+            [{"card_id": int(c.id), "kind": c.kind} for c in targets]
+        )
+    try:
+        card_id = int(subject.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return "{}"
+    card = db.get(ActionCard, card_id)
+    if card is None:
+        return "{}"
+    return _explanation_user_content(card, _visible_context(db, attempt.space_id))
+
+
+def _apply_batch(db: Session, batch_id: int, *, now: Any, from_recovery: bool = False) -> str:
+    from app.services.steward import _immediate_tx
+
+    with _immediate_tx(db):
+        batch = db.get(StewardAssistBatch, batch_id)
+        if batch is None or batch.status != "applying":
+            return batch.status if batch is not None else "missing"
+        all_statuses = [
+            row[0]
+            for row in db.execute(
+                select(StewardModelCall.status).where(StewardModelCall.batch_id == batch.id)
+            ).all()
+        ]
+        attempts = list(
+            db.scalars(
+                select(StewardModelCall).where(
+                    StewardModelCall.batch_id == batch.id,
+                    StewardModelCall.status.in_(("succeeded", "degraded")),
+                )
+            )
+        )
+        # 结果不明/发送失败 → 批次终态 failed（不自动重发），产物一律不应用
+        if "unknown" in all_statuses:
+            batch.status = "failed"
+            batch.error_code = REASON_NETWORK_UNKNOWN
+            batch.updated_at = now
+            db.flush()
+            return batch.status
+        if "failed" in all_statuses:
+            batch.status = "failed"
+            batch.error_code = REASON_TRANSPORT_FAILED
+            batch.updated_at = now
+            db.flush()
+            return batch.status
+        kinds = sorted({a.assist_kind for a in attempts})
+        # 写回栅栏第二道：返回内容应用前重验世界（禁用开关/换 provider/改证据/
+        # 卡片变化/租约丢失 → 全部不应用，安全原因码入审计）。
+        # 恢复路径（from_recovery）代表原执行者已死、由恢复器接管，不做 lease 检查
+        if not from_recovery and (batch.lease_until is None or batch.lease_until <= now):
+            batch.status = "superseded"
+            batch.error_code = REASON_LEASE_LOST
+            batch.updated_at = now
+            db.flush()
+            return batch.status
+        reason = _fence_check(db, batch, kinds)
+        if reason is not None:
+            batch.status = "superseded"
+            batch.error_code = reason
+            batch.updated_at = now
+            db.flush()
+            return batch.status
+        for attempt in attempts:
+            product = attempt.output_json
+            if not product:
+                continue
+            if attempt.assist_kind == "candidate":
+                for item in product.get("items", []):
+                    # R3：候选是线索——只落内部池（结构化 shape 对齐
+                    # candidate-review）；digest 仅基于结构，不含 rationale/措辞
+                    kind = str(item.get("kind") or "")
+                    subject_id = int(item.get("subject_user_id") or 0)
+                    object_id = int(item.get("object_user_id") or 0)
+                    digest = steward_guard.candidate_digest(kind, subject_id, object_id)
+                    exists = db.scalar(
+                        select(StewardLlmCandidate.id).where(
+                            StewardLlmCandidate.space_id == batch.space_id,
+                            StewardLlmCandidate.candidate_digest == digest,
+                        )
+                    )
+                    if exists is not None:
+                        continue
+                    db.add(
+                        StewardLlmCandidate(
+                            space_id=batch.space_id,
+                            job_id=batch.job_id,
+                            candidate_kind=kind,
+                            payload_json={
+                                key: item[key]
+                                for key in steward_guard.CANDIDATE_PAYLOAD_KEYS
+                                if key in item
+                            },
+                            candidate_digest=digest,
+                            status="proposed",
+                            created_at=now,
+                        )
+                    )
+            elif attempt.assist_kind == "ranking":
+                for rank_value, card_id in enumerate(product.get("order", []), 1):
+                    card = db.get(ActionCard, int(card_id))
+                    if card is not None and card.state in ("pending", "viewed"):
+                        card.presentation_rank = rank_value
+            else:  # explanation：仅写已验证结构化产物的确定性渲染文本
+                card_id = int((attempt.subject_key or "card:0").split(":", 1)[1])
+                card = db.get(ActionCard, card_id)
+                rendered = str(product.get("rendered") or "")
+                if (
+                    card is not None
+                    and card.state in ("pending", "viewed")
+                    and rendered
+                    and product.get("schema_version") == steward_guard.EXPLANATION_SCHEMA_VERSION
+                ):
+                    card.reason_text_llm = rendered[:_EXPLAIN_MAX_CHARS]
+        db.flush()
+        batch.status = "applied"
+        batch.error_code = None
+        batch.updated_at = now
+        return batch.status
+
+
+# ---- 崩溃恢复（AC-2：四个崩溃点全部可恢复；不产生 Assistant 三表行）----
+
+
+def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
+    """收敛卡在中间态的批次；返回处理数。
+
+    - succeeded job 无批次（崩溃点①/历史行）→ 补登 pending 批次；
+    - pending 批次（崩溃点②，attempt 未预留）→ 无需处理，调度器直接可取；
+    - lease 过期的 leased/applying 批次（崩溃点③④）→ in_flight attempt 记
+      unknown（保守计费，不自动重发：上游未证实支持幂等键）；succeeded 且有
+      output_json 的 attempt 重跑写回栅栏后 CAS 应用；无产物可应用 → 批次
+      failed（assist_unknown_outcome）。
+    """
+    from app.services.steward import _immediate_tx
+
+    now = now or timeutil.utcnow()
+    handled = 0
+    resume_apply: list[int] = []
+    with _immediate_tx(db):
+        # ①：core 已 succeeded 但批次缺失（core 崩溃在登记前不可能——同事务；
+        # 此分支兜底历史/异常路径）
+        orphan_jobs = list(
+            db.scalars(
+                select(StewardJob).where(
+                    StewardJob.status == "succeeded",
+                    ~select(StewardAssistBatch.id)
+                    .where(StewardAssistBatch.job_id == StewardJob.id)
+                    .exists(),
+                )
+            )
+        )
+        for job in orphan_jobs:
+            from app.services import steward as steward_service
+
+            space = db.get(FamilySpace, job.space_id)
+            if space is None:
+                continue
+            visible = steward_service._space_visible_user_ids(db, space)
+            batch = register_batch_for_job(
+                db,
+                job=job,
+                facts_brief=steward_service._confirmed_facts_brief(db, space, visible),
+                visible=visible,
+                cards=list(action_cards.active_cards_in_space(db, job.space_id)),
+                now=now,
+            )
+            if batch is not None:
+                handled += 1
+        # ③④：lease 过期的中间态批次（含已终态但仍残留 in_flight attempt 的批次）
+        stale = list(
+            db.scalars(
+                select(StewardAssistBatch).where(
+                    StewardAssistBatch.lease_until.is_not(None),
+                    StewardAssistBatch.lease_until <= now,
+                    StewardAssistBatch.status.in_(("leased", "applying", "failed", "superseded")),
+                )
+            )
+        )
+        for batch in stale:
+            unknown = 0
+            applied_products = False
+            for attempt in db.scalars(
+                select(StewardModelCall).where(StewardModelCall.batch_id == batch.id)
+            ):
+                if attempt.status == "in_flight":
+                    attempt.status = "unknown"
+                    attempt.error_code = REASON_NETWORK_UNKNOWN
+                    attempt.billed_tokens = (attempt.reserved_input_tokens or 0) + (
+                        attempt.reserved_output_tokens or 0
+                    )
+                    unknown += 1
+                elif attempt.status == "reserved":
+                    # 崩溃点②：预留后、发送前——从未发送，释放预留（零计费）
+                    attempt.status = "skipped"
+                    attempt.error_code = REASON_LEASE_LOST
+                elif attempt.status == "succeeded" and attempt.output_json:
+                    applied_products = True
+            terminal = batch.status in ("failed", "superseded")
+            if applied_products and batch.status == "applying":
+                # ④：审计已落库、写回未完成——事务外重跑栅栏后 CAS 应用
+                resume_apply.append(batch.id)
+            elif terminal:
+                pass  # 已终态：只收敛残留 attempt，不改批次
+            elif unknown:
+                # ③：发送结果不明——保守计费，停止本批自动重发（上游未证实
+                # 支持幂等键，不自动复用请求标识）
+                batch.status = "failed"
+                batch.error_code = REASON_NETWORK_UNKNOWN
+            elif any(
+                status in ("failed", "degraded", "succeeded")
+                for status in db.scalars(
+                    select(StewardModelCall.status).where(StewardModelCall.batch_id == batch.id)
+                )
+            ):
+                batch.status = "failed"
+                batch.error_code = REASON_TRANSPORT_FAILED
+            else:
+                # ②：预留后、发送前崩溃——从未发送，回 pending 可重新调度
+                batch.status = "pending"
+                batch.next_attempt_at = now
+                batch.error_code = None
+            batch.updated_at = now
+            handled += 1
+    # 事务提交后：对有完整产物的批次重跑写回栅栏并 CAS 应用（恢复点④）
+    for batch_id in resume_apply:
+        _apply_batch(db, batch_id, now=timeutil.utcnow(), from_recovery=True)
+    return handled
+
+
+# ---- 有界执行线程（maintenance 用；HTTP 永不阻塞 core tick）----
+
+_executor: ThreadPoolExecutor | None = None
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(
+            max_workers=max(1, config.STEWARD_ASSIST_MAX_CONCURRENT_BATCHES),
+            thread_name_prefix="steward-assist",
+        )
+    return _executor
+
+
+def _execute_in_own_session(batch_id: int) -> None:
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    try:
+        execute_batch(session, batch_id)
+    except Exception as exc:  # noqa: BLE001 — 辅助失败绝不外抛拖垮调用方（AC-5）
+        # 日志脱敏（09-11 R3）：只记批次 id 与异常类名；异常原文可能携带 SQL
+        # 参数/上游响应片段，绝不进入日志（结构化日志只含关联 ID + 安全错误码）。
+        logger.warning(
+            "steward assist batch %s crashed; deterministic core retained (error=%s)",
+            batch_id,
+            type(exc).__name__,
+        )
+        session.rollback()
+    finally:
+        session.close()
+
+
+def launch_batch(batch_id: int) -> None:
+    """把批次执行提交到有界线程池（非阻塞；HTTP 只占用执行线程与自身 Session）。"""
+    _get_executor().submit(_execute_in_own_session, batch_id)
+
+
+def shutdown_assist_executor() -> None:
+    """优雅停机：不无限等待 httpx（单次调用受 timeout 上界，线程必然有限收敛）。"""
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
+
+
+def run_due_batch(
+    db: Session, *, transport: Transport | None = None, now: Any = None
+) -> str | None:
+    """同步便捷路径（测试/单机）：调度 + 执行一个到期批次。返回最终状态或 None。"""
+    batch = schedule_due_batch(db, now=now)
+    if batch is None:
+        return None
+    return execute_batch(db, batch.id, transport=transport)
+
+
+# ---- 兼容旧测试的审计读取辅助 ----
+
+
+def batch_calls(db: Session, job_id: int) -> list[StewardModelCall]:
+    return list(
+        db.scalars(
+            select(StewardModelCall)
+            .where(StewardModelCall.job_id == job_id)
+            .order_by(StewardModelCall.id)
+        )
+    )
 
 
 __all__ = [
     "ASSIST_KINDS",
+    "REASON_ASSIST_DISABLED",
     "assist_enabled",
-    "maybe_explain_cards",
-    "maybe_generate_candidates",
-    "maybe_rank_cards",
-    "run_assists",
+    "batch_calls",
+    "execute_batch",
+    "launch_batch",
+    "recover_stuck_batches",
+    "register_batch_for_job",
+    "run_due_batch",
+    "schedule_due_batch",
+    "shutdown_assist_executor",
 ]

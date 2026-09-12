@@ -19,7 +19,7 @@ from conftest import (
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.models.agent_provider import AgentProvider, AgentPlatformDefault, AgentSpaceProviderSetting
+from app.models.agent_provider import AgentPlatformDefault, AgentProvider, AgentSpaceProviderSetting
 from app.services.agent_provider import (
     POLICY_ALLOWED,
     POLICY_DENIED,

@@ -50,6 +50,9 @@ class CardOut(BaseModel):
     subject_user: ActionCardUserRef
     object_user: ActionCardUserRef | None
     reason_text: str
+    # 09-11 quality-security：只暴露已验证（结构化 schema v2）的解释文本；
+    # 旧纯文本/未验证行序列化为 null，前端回退确定性模板 reason_text。
+    reason_text_llm: str | None = None
     evidence: ActionCardEvidence
     proposed_action: ProposedActionOut
     privacy_effect: str

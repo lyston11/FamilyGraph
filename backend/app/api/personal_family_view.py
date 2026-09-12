@@ -46,10 +46,26 @@ def read_personal_family_view(
     _actor, account = identity
     if space_id <= 0:
         raise_api_error(422, "VALIDATION_ERROR", "空间参数不合法")
-    view = personal_family_view.get_view(session, account=account, space_id=space_id)
-    etag = personal_family_view.etag_for(view)
-    if if_none_match == etag:
+    # 1. 授权与只读读取（get_current_view 复核空间/成员资格，404 先于一切缓存判断；
+    #    GET 全程只读，不建行不隐式重算——R5）。
+    view = personal_family_view.get_current_view(session, account=account, space_id=space_id)
+    if view is None:
+        # 尚无投影行：安全空态 + 显式短事务登记后台重算
+        personal_family_view.request_view_recompute(space_id=space_id)
+        return PersonalFamilyViewOut.model_validate(
+            personal_family_view.empty_view_payload(space_id=space_id)
+        )
+    etag = personal_family_view.etag_for(view, account=account)
+    current = personal_family_view.view_is_current(
+        session, view=view, account=account, space_id=space_id
+    )
+    # 2. 只有完整权限复核 + 新鲜度（事实/词典/策略/计算版本）通过才允许 304；
+    #    stale/版本漂移的旧 ETag 绝不命中（R5）。
+    if if_none_match == etag and current:
         return Response(status_code=304, headers={"ETag": etag})
+    if not current:
+        # 显式短事务登记重算（独立事务；GET 自身事务不承担入队写）
+        personal_family_view.request_view_recompute(space_id=space_id)
     payload = personal_family_view.view_payload(session, account=account, space_id=space_id)
     response.headers["ETag"] = etag
     result = PersonalFamilyViewOut.model_validate(payload)

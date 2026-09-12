@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import fastapi
 import pytest
 from conftest import (
@@ -885,7 +887,7 @@ def test_steward_job_failed_event_on_settle(db_session) -> None:
 
     original = st_mod._execute_locked
 
-    def boom(db, job, *, now):
+    def boom(db, job, *, now, upper=None):
         raise RuntimeError("boom")
 
     st_mod._execute_locked = boom  # type: ignore[assignment]
@@ -1202,3 +1204,98 @@ def test_audit_ignores_same_name_different_birth(db_session) -> None:
     _run_job(db_session, space, cursor.id)
 
     assert _dup_conflicts(db_session) == []
+
+
+# ---- 09-11 生产调度：固定执行水位 / 退避不可租 / 重跑链接（R2/R3/R4）----
+
+
+def test_higher_watermark_during_run_requests_follow_up(db_session) -> None:
+    """运行期间更高事件水位：结算不宣告未处理水位，只请求后继作业（R4）。"""
+    space = _space(db_session, "wm", kind="lineage")
+    job, _ = steward.enqueue_steward_job(
+        db_session, space_id=space.id, cause="source_fact", trigger_cursor=5
+    )
+    grant = steward.lease_next_steward_job(db_session, leased_by="w")
+    assert grant is not None
+    assert grant.checkpoint_json["execution_cursor"] == 5
+    # 模拟运行期间事件到达，把请求水位推高
+    grant.trigger_cursor = 9
+    db_session.commit()
+
+    steward.run_steward_job(db_session, grant)
+    db_session.commit()
+    db_session.expire_all()
+    settled = db_session.get(StewardJob, job.id)
+    assert settled.status == "succeeded"
+    assert settled.last_event_cursor == 5  # 只宣告 lease 时固定的上界
+    follow_up = db_session.scalar(
+        select(StewardJob).where(
+            StewardJob.space_id == space.id,
+            StewardJob.status == "queued",
+            StewardJob.trigger_cursor == 9,
+        )
+    )
+    assert follow_up is not None and follow_up.id != job.id
+
+
+def test_backoff_job_not_leaseable_until_available_at(db_session) -> None:
+    """退避中的 queued 作业：available_at 未到不可租，到期后恢复可租（R3）。"""
+    space = _space(db_session, "backoff", kind="lineage")
+    job, _ = steward.enqueue_steward_job(
+        db_session, space_id=space.id, cause="source_fact", trigger_cursor=1
+    )
+    job.available_at = timeutil.utcnow() + timedelta(seconds=120)
+    db_session.commit()
+    assert steward.lease_next_steward_job(db_session, leased_by="w") is None
+
+    job.available_at = timeutil.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+    granted = steward.lease_next_steward_job(db_session, leased_by="w")
+    assert granted is not None and granted.id == job.id
+
+
+def test_rerun_job_links_previous_job(db_session) -> None:
+    """人工重跑：新作业以 retry_of_job_id 链接历史作业，终态不复活（R3）。"""
+    space = _space(db_session, "link", kind="lineage")
+    old, created = steward.enqueue_steward_job(
+        db_session,
+        space_id=space.id,
+        cause="source_fact",
+        trigger_cursor=1,
+        retry_of_job_id=999,
+    )
+    assert created
+    assert old.retry_of_job_id == 999
+
+
+def test_integrity_scan_not_short_circuited_by_succeeded_cursor(db_session) -> None:
+    """相同水位下周期扫描仍登记 integrity_scan 作业（R2 到期检查持续）。"""
+    from app.models.steward import StewardSpaceSchedule
+
+    space = _space(db_session, "scan-short", kind="lineage")
+    first, created1 = steward.enqueue_steward_job(
+        db_session, space_id=space.id, cause="integrity_scan", trigger_cursor=1
+    )
+    assert created1
+    grant = steward.lease_next_steward_job(db_session, leased_by="w")
+    assert grant is not None
+    steward.run_steward_job(db_session, grant)
+    db_session.commit()
+
+    # 周期扫描：无活跃作业且调度行到期 → 即使 cursor 不变也登记新作业
+    assert steward.scan_due_spaces(db_session) == 1
+    second = db_session.scalars(
+        select(StewardJob)
+        .where(StewardJob.space_id == space.id, StewardJob.cause == "integrity_scan")
+        .order_by(StewardJob.id.desc())
+        .limit(1)
+    ).first()
+    assert second is not None and second.id != first.id
+    schedule = db_session.get(StewardSpaceSchedule, space.id)
+    assert schedule.last_scheduled_cursor >= 1
+
+    # 对照：source_fact 触发在相同水位下仍被 succeeded 覆盖短路
+    _source, created3 = steward.enqueue_steward_job(
+        db_session, space_id=space.id, cause="source_fact", trigger_cursor=1
+    )
+    assert not created3

@@ -111,15 +111,15 @@ async function mountManager(): Promise<ReturnType<typeof mount>> {
   return wrapper
 }
 
-/** 点击 n-tabs 标签头切换面板（按标签文字定位） */
+/** 点击左侧分区导航按钮切换分区（按分区文字定位；09-06 起为设置页同构按钮导航） */
 async function switchTab(wrapper: ReturnType<typeof mount>, label: string): Promise<void> {
-  const tab = wrapper.findAll('.n-tabs-tab').find((node) => node.text().includes(label))
+  const tab = wrapper.findAll('.memory-tab').find((node) => node.text().includes(label))
   expect(tab, `tab ${label}`).not.toBeUndefined()
   await tab!.trigger('click')
   await new Promise((resolve) => setTimeout(resolve))
 }
 
-describe('MemoryManager（五标签，PRD §2.5 / design §5.4）', () => {
+describe('MemoryManager（五分区，PRD §2.5 / design §5.4）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
@@ -130,10 +130,10 @@ describe('MemoryManager（五标签，PRD §2.5 / design §5.4）', () => {
     mockedSearch.mockResolvedValue([])
   })
 
-  it('五标签渲染；有待确认候选时默认进入待确认（候选视觉状态 = icon+文字）', async () => {
+  it('五分区渲染；有待确认候选时默认进入待确认（候选视觉状态 = icon+文字）', async () => {
     const wrapper = await mountManager()
 
-    const labels = wrapper.findAll('.n-tabs-tab').map((node) => node.text())
+    const labels = wrapper.findAll('.memory-tab').map((node) => node.text())
     expect(labels.some((text) => text.includes('待确认'))).toBe(true)
     expect(labels).toEqual([
       expect.stringContaining('待确认'),
@@ -143,7 +143,10 @@ describe('MemoryManager（五标签，PRD §2.5 / design §5.4）', () => {
       expect.stringContaining('检索与引用'),
     ])
 
-    // 默认待确认：候选卡可见，且为「候选 · 未进入检索」icon+文字徽章（非仅颜色）
+    // 默认待确认：分区导航高亮 + 候选卡可见，且为「候选 · 未进入检索」icon+文字徽章（非仅颜色）
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="memory-tab-pending"]').classes()).toContain('is-active')
+    })
     expect(wrapper.find('[data-test="candidate-card"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="candidate-state-badge"]').text()).toContain('候选 · 未进入检索')
     expect(wrapper.find('[data-test="candidate-card"]').text()).toContain('每年春节一起包饺子。')
@@ -152,15 +155,16 @@ describe('MemoryManager（五标签，PRD §2.5 / design §5.4）', () => {
     wrapper.unmount()
   })
 
-  it('无待确认候选时默认进入「我的私有记忆」标签', async () => {
+  it('无待确认候选时默认进入「我的私有记忆」分区', async () => {
     mockedCandidates.mockResolvedValue([])
     const wrapper = await mountManager()
 
     await vi.waitFor(() => {
-      expect(wrapper.find('[data-test="private-section"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="private-section"]').isVisible()).toBe(true)
     })
-    expect(wrapper.find('[data-test="candidate-section"]').exists()).toBe(false)
-    // 私有标签提供「新增记忆」入口（提交只能新建候选）
+    // 分区常驻 DOM（v-show），非当前分区仅隐藏
+    expect(wrapper.find('[data-test="candidate-section"]').isVisible()).toBe(false)
+    // 私有分区提供「新增记忆」入口（提交只能新建候选）
     expect(wrapper.find('[data-test="add-memory"]').exists()).toBe(true)
     wrapper.unmount()
   })

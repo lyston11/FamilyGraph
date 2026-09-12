@@ -9,6 +9,7 @@ __pycache__/
 
 # 本地数据与构建产物
 backend/data/
+.dev-logs/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
@@ -21,7 +22,14 @@ frontend/coverage/
 .vscode/
 .DS_Store
 
-# AI 工具平台配置（按平台本地使用，不入库；.trellis/.agents 除外）
+# AI 工具平台配置（按平台本地使用，不入库）
 .codex/
 .pi/
 .zcode/
+
+# Agent Notes 看板生成物
+board.html
+
+# 评测/验收产物
+.steward-eval-report.json
+.steward-*-evidence.json

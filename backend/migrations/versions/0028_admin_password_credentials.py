@@ -87,7 +87,9 @@ def _create_password_schema() -> None:
             unique=True,
         ),
         sa.Column("password_hash", sa.String(255), nullable=False),
-        sa.Column("password_must_change", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column(
+            "password_must_change", sa.Boolean(), nullable=False, server_default=sa.text("1")
+        ),
         sa.Column("password_version", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("failed_attempts", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("locked_until", sa.DateTime(), nullable=True),

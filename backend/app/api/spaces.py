@@ -32,6 +32,7 @@ from app.schemas.space import (
     PositionsPayload,
     SpaceCreate,
     SpaceInviteCreate,
+    SpaceLineageLinkUpdate,
     SpaceMemberOut,
     SpaceOut,
     SpaceProfileRefOut,
@@ -66,10 +67,37 @@ def create_space(
     """创建空间：owner 即 active 成员（自建即同意）；kind 默认 household。"""
     actor, account = identity
     ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
-    space = space_commands.create_space(session, ctx, name=payload.name, kind=payload.kind)
+    space = space_commands.create_space(
+        session,
+        ctx,
+        name=payload.name,
+        kind=payload.kind,
+        lineage_space_id=payload.lineage_space_id,
+    )
     out = SpaceOut.model_validate(space)
     out.member_count = 1
     return out
+
+
+@router.put("/spaces/{space_id}/lineage-link", response_model=SpaceOut)
+def set_space_lineage_link(
+    space_id: int,
+    payload: SpaceLineageLinkUpdate,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SpaceOut:
+    """设置/解除家庭空间的所属家族配对（仅该空间管理员；null 即解除）。
+
+    配对是「家族空间」唯一切换维度的数据基础：壳层选择器据此把家族落到
+    家庭卡/家族树，不再依赖 owner 相等的启发式推断。
+    """
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    space = space_commands.set_lineage_link(
+        session, ctx, space_id, lineage_space_id=payload.lineage_space_id
+    )
+    return SpaceOut.model_validate(space)
 
 
 # ---- 空间管理者申请（用户侧；裁决在 /admin/manager-applications）----

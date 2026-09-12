@@ -9,13 +9,14 @@
  */
 import type { NotificationDomainStatus, NotificationItem, NotificationKind } from '@/types/api'
 
-export type NotificationSection = 'pending-action' | 'notices' | 'history'
+export type NotificationSection = 'pending-action' | 'verify' | 'notices' | 'history'
 
 export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   action_card: '管家建议',
   space_membership: '空间成员',
   bridge: '家族连接',
   relation: '关系',
+  steward_suggestion: '待核实',
 }
 
 export const NOTIFICATION_DOMAIN_STATUS_LABELS: Record<NotificationDomainStatus, string> = {
@@ -47,6 +48,14 @@ export const NOTIFICATION_DOMAIN_STATUS_BADGES: Record<NotificationDomainStatus,
 
 /** 通知分区归类：ActionCard 引用且未处理 → 待我处理；已读且领域终态 → 历史 */
 export function classifyNotification(item: NotificationItem): NotificationSection {
+  // 待核实（Steward 建议）：与确定性 family-recommendations 分开的独立分区；
+  // 只有服务端给出的 pending/accepted（提案待确认）状态进入，终态照常归档
+  if (
+    item.kind === 'steward_suggestion' &&
+    (item.domain_status === 'pending' || item.domain_status === 'accepted')
+  ) {
+    return 'verify'
+  }
   if (item.kind === 'action_card' && item.domain_status === 'pending') {
     return 'pending-action'
   }
@@ -58,17 +67,20 @@ export function classifyNotification(item: NotificationItem): NotificationSectio
 
 export function classifyNotifications(items: readonly NotificationItem[]): {
   pendingAction: NotificationItem[]
+  verify: NotificationItem[]
   notices: NotificationItem[]
   history: NotificationItem[]
 } {
   const pendingAction: NotificationItem[] = []
+  const verify: NotificationItem[] = []
   const notices: NotificationItem[] = []
   const history: NotificationItem[] = []
   for (const item of items) {
     const section = classifyNotification(item)
     if (section === 'pending-action') pendingAction.push(item)
+    else if (section === 'verify') verify.push(item)
     else if (section === 'history') history.push(item)
     else notices.push(item)
   }
-  return { pendingAction, notices, history }
+  return { pendingAction, verify, notices, history }
 }

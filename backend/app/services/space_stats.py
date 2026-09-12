@@ -51,6 +51,10 @@ def space_stats_payload(session: Session, *, account: Account, space_id: int) ->
     """构造空间统计聚合；调用方（API 层）负责 ETag/304。"""
     space, actor = authorized_space_or_404(session, account=account, space_id=space_id)
     view = personal_family_view.get_view(session, account=account, space_id=space_id)
+    # 首读物化（09-11 R5：仅显式提交的首次物化；已存在的 stale/queued 行不再
+    # 隐式重算，失效由 domain_events 驱动、steward 重建）。
+    if view.status == "never_computed":
+        personal_family_view.rebuild_view(session, account=account, space_id=space_id)
     # 首读重建落库（可重建投影；失效由 domain_events 驱动、steward 重建），
     # 使 view_version/computed_at/stale 聚合稳定，条件请求（304）可复用。
     session.commit()

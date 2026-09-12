@@ -23,6 +23,7 @@ ITEM_KEYS = {
     "payload",
     "domain_status",
     "action_card",
+    "suggestion",
     "created_at",
     "read_at",
 }

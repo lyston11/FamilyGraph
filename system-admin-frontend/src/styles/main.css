@@ -14,6 +14,12 @@
   --brand-focus-color: var(--ag-primary);
   --ag-font-body: var(--brand-font-body);
   --ag-radius: var(--brand-radius-control);
+  --ag-space-1: var(--brand-space-1);
+  --ag-space-2: var(--brand-space-2);
+  --ag-space-3: var(--brand-space-3);
+  --ag-space-4: var(--brand-space-4);
+  --ag-space-5: var(--brand-space-5);
+  --ag-space-6: var(--brand-space-6);
 
   --ag-bg: #11171b;
   --ag-surface: #202a2f;
@@ -28,7 +34,6 @@
   --ag-warning-soft: rgba(229, 199, 142, 0.14);
   --ag-success: #a9d5b8;
   --ag-success-soft: rgba(169, 213, 184, 0.14);
-  --ag-radius: 8px;
   /* 星空玻璃视觉（09-04 引入，09-05 深度重构加强）：半透明磨砂面/发丝边/
      星云与星点/暗角/品牌渐变，全部仅在本文件 :root 定义，组件只消费变量 */
   --ag-glass-bg: rgba(35, 49, 55, 0.58);
@@ -109,9 +114,9 @@ body {
   z-index: 100;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--ag-space-4);
   flex-wrap: wrap;
-  padding: 14px 24px;
+  padding: var(--ag-space-3) var(--ag-space-6);
   background: var(--ag-glass-bg-strong);
   backdrop-filter: blur(20px) saturate(170%);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
@@ -120,6 +125,8 @@ body {
 }
 
 .admin-brand {
+  flex: 0 0 auto;
+  min-width: 0;
   font-weight: 700;
   font-size: 15px;
   letter-spacing: 0.02em;
@@ -127,7 +134,7 @@ body {
 
 .admin-nav {
   display: flex;
-  gap: 4px;
+  gap: var(--ag-space-1);
   flex-wrap: wrap;
   flex: 1;
 }
@@ -144,6 +151,11 @@ body {
   transition:
     background-color 0.2s ease,
     color 0.2s ease;
+}
+
+.admin-nav a:hover {
+  background: color-mix(in srgb, var(--ag-primary) 8%, transparent);
+  color: var(--ag-text);
 }
 
 .admin-nav a.router-link-active {
@@ -166,6 +178,11 @@ body {
   cursor: pointer;
 }
 
+.admin-nav-toggle:hover {
+  border-color: color-mix(in srgb, var(--ag-primary) 45%, var(--ag-glass-border));
+  color: var(--ag-primary);
+}
+
 /* 激活导航胶囊底部 2px 品牌渐变线 */
 .admin-nav a.router-link-active::after {
   content: '';
@@ -183,7 +200,7 @@ body {
   width: 100%;
   max-width: 1240px;
   margin: 0 auto;
-  padding: 32px 24px 64px;
+  padding: var(--ag-space-6) var(--ag-space-5) 64px;
 }
 
 /* ---- 通用卡片 / 面板（真磨砂玻璃材质，透出星空底） ---- */
@@ -360,7 +377,16 @@ body {
   }
 
   .admin-header {
-    padding: 10px 16px;
+    gap: var(--ag-space-2);
+    padding: 10px var(--ag-space-4);
+    align-items: center;
+  }
+
+  .admin-brand {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
   }
 
   .admin-nav-toggle {
@@ -373,8 +399,11 @@ body {
     display: none;
     flex-basis: 100%;
     flex-direction: column;
-    gap: 2px;
-    padding: 4px 0 8px;
+    gap: var(--ag-space-1);
+    margin-top: var(--ag-space-2);
+    padding: var(--ag-space-2) 0 var(--ag-space-2);
+    border-top: 1px solid var(--ag-glass-border);
+    border-bottom: 1px solid var(--ag-glass-border);
   }
 
   .admin-nav.admin-nav--open {
@@ -387,6 +416,25 @@ body {
     border-radius: var(--brand-radius-control);
   }
 
+  .admin-nav a.router-link-active {
+    box-shadow: inset 3px 0 0 var(--ag-primary);
+  }
+
+  .admin-header > .n-dropdown,
+  .admin-header > .ag-tag {
+    flex: 0 0 auto;
+  }
+
+  .admin-header .ag-tag {
+    max-width: 112px;
+    min-height: var(--brand-touch-target);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+  }
+
   .admin-nav a.router-link-active::after {
     display: none;
   }
@@ -395,6 +443,30 @@ body {
   html,
   body {
     overflow-x: hidden;
+  }
+
+  .admin-main {
+    padding: var(--ag-space-5) var(--ag-space-4) 48px;
+  }
+}
+
+@media (max-width: 390px) {
+  .admin-header {
+    padding-inline: var(--ag-space-3);
+  }
+
+  .admin-brand {
+    max-width: min(52vw, 220px);
+  }
+
+  .admin-nav-toggle {
+    min-width: var(--brand-touch-target);
+    padding-inline: var(--ag-space-2);
+  }
+
+  .admin-header .ag-tag {
+    max-width: 84px;
+    padding-inline: var(--ag-space-2);
   }
 }
 

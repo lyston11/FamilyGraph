@@ -645,7 +645,12 @@ export interface HouseholdCardSnapshot {
 }
 
 /** 通知种类（决定 ActionCard 引用与跳转上下文） */
-export type NotificationKind = 'action_card' | 'space_membership' | 'bridge' | 'relation'
+export type NotificationKind =
+  | 'action_card'
+  | 'space_membership'
+  | 'bridge'
+  | 'relation'
+  | 'steward_suggestion'
 
 /**
  * 通知引用的领域对象状态：跨领域 FSM 的最小集合。
@@ -670,6 +675,11 @@ export interface NotificationActionCardRef {
   revision: number
 }
 
+/** Steward 建议引用：仅建议号；建议详情/操作一律走 stewardSuggestions store */
+export interface NotificationSuggestionRef {
+  suggestion_id: number
+}
+
 /** 通知安全载荷：服务端脱敏后的最小展示字段，不含私人记忆/隐藏节点数据 */
 export interface NotificationPayload {
   title: string
@@ -690,6 +700,8 @@ export interface NotificationItem {
   domain_status: NotificationDomainStatus
   /** ActionCard 引用；kind='action_card' 时必须存在 */
   action_card: NotificationActionCardRef | null
+  /** Steward 建议引用；kind='steward_suggestion' 时必须存在 */
+  suggestion: NotificationSuggestionRef | null
   created_at: string
   /** 已读时间；null=未读。已读与领域状态/ActionCard revision 严格分离 */
   read_at: string | null
@@ -719,6 +731,88 @@ export interface NotificationReadResult {
 export interface NotificationReadAllResult {
   space_id: number
   marked_count: number
+}
+
+// ---- 09-11 Steward 建议审核（candidate-review；/api/steward-suggestions*）----
+// 建议是服务端受控投影：kind/state/allowed_actions 全部由服务端给出，
+// 前端绝不本地推导授权，也绝不展示 raw model payload（后端不下发）。
+
+export type SuggestionKind =
+  | 'relation_proposal'
+  | 'term_preference'
+  | 'identity_duplicate'
+  | 'missing_information'
+
+export type SuggestionOrigin = 'deterministic' | 'model'
+
+export type SuggestionState = 'proposed' | 'submitted' | 'resolved' | 'dismissed' | 'expired'
+
+export type SuggestionAction = 'open_details' | 'submit' | 'dismiss'
+
+/** 证据摘要：仅计数与白名单 fact id/revision（不含模型自由文本） */
+export interface SuggestionEvidenceSummary {
+  fact_count: number
+  facts: Array<{ fact_id: number; revision: number }>
+}
+
+export interface SuggestionItem {
+  id: number
+  space_id: number
+  kind: SuggestionKind
+  origin: SuggestionOrigin
+  state: SuggestionState
+  revision: number
+  evidence_hash: string
+  subject_user_id: number
+  object_user_id: number | null
+  subject_name: string | null
+  object_name: string | null
+  /** 结构化建议值（relation 的 fact_type / finding 的 code 等；封闭字段） */
+  value: Record<string, unknown>
+  evidence_summary: SuggestionEvidenceSummary
+  allowed_actions: SuggestionAction[]
+  expires_at: string | null
+  created_at: string
+}
+
+export interface SuggestionsPage {
+  space_id: number
+  items: SuggestionItem[]
+  next_cursor: number | null
+}
+
+export interface SuggestionDismissResult {
+  id: number
+  state: SuggestionState
+  revision: number
+  dismissed_at: string | null
+  cooldown_until: string | null
+}
+
+export interface SuggestionLinkedProposal {
+  source_fact_id: number
+  revision: number
+  state: string
+  fact_type: string
+}
+
+export interface SuggestionLinkedPreference {
+  term_id: number
+  concept_code: string
+  term: string
+}
+
+/** POST /steward-suggestions/{id}/submit 202 响应（relation_proposal） */
+export interface SuggestionSubmitProposalResult {
+  suggestion: SuggestionItem
+  linked_proposal: SuggestionLinkedProposal
+  pending_confirmations: Array<{ account_id: number }>
+}
+
+/** POST /steward-suggestions/{id}/submit 200 响应（term_preference） */
+export interface SuggestionSubmitPreferenceResult {
+  suggestion: SuggestionItem
+  linked_preference: SuggestionLinkedPreference
 }
 
 /** 空间化统计的视图状态机：与 PersonalFamilyView 一致 */

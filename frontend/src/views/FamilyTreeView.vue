@@ -106,12 +106,8 @@ async function loadView(force = false): Promise<void> {
 }
 
 onMounted(() => {
-  // 家族树入口从侧栏进入时，直接落到第一个家族空间，避免再次要求用户选择。
-  const target = lineageSpaces.value[0]
-  if (!isLineageContext.value && target) {
-    void spaceContext.switchSpace(target.id)
-    return
-  }
+  // 家族树不替用户更换空间；当前仍是 household 时保留上下文，等待用户
+  // 在壳层的「当前家族空间」选择器中明确选择目标 lineage。
   void loadView()
 })
 
@@ -219,9 +215,11 @@ async function reload(): Promise<void> {
   await loadView(true)
 }
 
-/** 返回家庭卡（PRD §2.5 底部操作）：切换到最近/第一个可用家庭空间；无可用空间时不动作 */
+/** 返回家庭卡（PRD §2.5 底部操作）：切到本家族配对的家庭卡（显式配对优先，
+ *  owner 唯一匹配回退，本人 own 的优先）；无落点时不动作 */
 async function backToHousehold(): Promise<void> {
-  const target = householdSpaces.value[0]
+  const currentLineage = spaces.currentSpace
+  const target = currentLineage ? spaces.householdForLineage(currentLineage.id) : null
   if (!target) return
   await spaceContext.switchSpace(target.id)
 }
@@ -257,7 +255,7 @@ function resolveName(userId: number): string | null {
     <!-- 当前空间不是 lineage：安全上下文提示，不渲染任何投影内容 -->
     <section v-if="!isLineageContext" class="context-panel" data-test="lineage-context-panel">
       <NAlert type="info" :show-icon="true" data-test="not-lineage-hint">
-        {{ lineageSpaces.length > 0 ? '正在打开最近的家族空间…' : '当前还没有可用的家族空间。' }}
+        {{ lineageSpaces.length > 0 ? '当前家庭空间还没有确定所属的家族空间，无法自动打开家族树。可在空间管理的基本设置中关联家族，或在左侧选择要查看的家族空间。' : '当前还没有可用的家族空间。' }}
       </NAlert>
     </section>
 

@@ -133,6 +133,7 @@ function makeNotification(overrides: Record<string, unknown> = {}) {
     },
     domain_status: 'pending' as const,
     action_card: null,
+  suggestion: null,
     created_at: '2026-09-01T08:00:00',
     read_at: null,
     ...overrides,
@@ -318,7 +319,8 @@ describe('SpaceManagementView 六分区侧栏（design §5.5；09-06 增模型�
         items: [
           makeNotification({ id: 11, domain_status: 'pending' }),
           makeNotification({ id: 12, domain_status: 'active', read_at: '2026-09-01T09:00:00' }),
-          makeNotification({ id: 13, kind: 'action_card', action_card: { card_id: 5, revision: 1 } }),
+          makeNotification({ id: 13, kind: 'action_card', suggestion: null,
+    action_card: { card_id: 5, revision: 1 } }),
           makeNotification({ id: 14, kind: 'space_membership' }),
         ],
       },

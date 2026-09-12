@@ -120,7 +120,14 @@ _TABLES = (
     # notifications 引用 action_cards/space_members（CASCADE），先于其父表删
     # 09-06 模型辅助层：两表引用 steward_jobs/agent_providers，先于其父表删
     "notifications",
+    # 09-11 建议审核投影：notifications.suggestion_id 引用本表，先于其删；
+    # steward_llm_candidates/steward_jobs 的引用为 SET NULL，无需提前
+    "steward_suggestion_recipients",
+    "steward_suggestions",
     "behavior_projections",
+    "steward_space_schedules",
+    # 09-11 辅助批次：steward_model_calls.batch_id 引用本表，先于其删
+    "steward_assist_batches",
     "steward_model_calls",
     "steward_llm_candidates",
     "steward_jobs",
@@ -173,6 +180,9 @@ def _clean_tables(db_session):
     yield db_session
     # 先丢弃测试残留的脏状态，再按子表→父表顺序清空（满足 FK，无需关外键）
     db_session.rollback()
+    # family_spaces.lineage_space_id 是自引用 RESTRICT（0035）：单语句 DELETE
+    # 逐行即时校验 FK、行序无法保证 lineage 后于引用它的 household 删除，先解引用
+    db_session.execute(text("UPDATE family_spaces SET lineage_space_id = NULL"))
     for table in _TABLES:
         db_session.execute(text(f"DELETE FROM {table}"))
     db_session.commit()

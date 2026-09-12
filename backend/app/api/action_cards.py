@@ -138,7 +138,19 @@ def _proposed_action_out(card: ActionCard) -> dict[str, Any]:
     return {"type": str(action_verb) if action_verb is not None else "", "params": raw}
 
 
-def _card_out(db: Session, card: ActionCard) -> CardOut:
+def _card_out(
+    db: Session, card: ActionCard, *, trusted_map: dict[int, str] | None = None
+) -> CardOut:
+    from app.services import steward_assist
+
+    # R5：只把「已验证结构化解释」暴露给呈现层；旧纯文本 reason_text_llm 视为
+    # untrusted，读取面回退模板 reason_text（后台会重新生成）。
+    trusted_map = (
+        trusted_map
+        if trusted_map is not None
+        else steward_assist.trusted_explanations(db, [int(card.id)])
+    )
+    trusted = trusted_map.get(int(card.id))
     return CardOut(
         id=card.id,
         kind=card.kind,
@@ -146,6 +158,7 @@ def _card_out(db: Session, card: ActionCard) -> CardOut:
         subject_user=_user_ref(db, card.subject_user_id),  # type: ignore[arg-type]
         object_user=_user_ref(db, card.object_user_id),  # type: ignore[arg-type]
         reason_text=card.reason_text,
+        reason_text_llm=trusted,
         evidence=_evidence_out(card),  # type: ignore[arg-type]
         proposed_action=_proposed_action_out(card),  # type: ignore[arg-type]
         privacy_effect=card.privacy_effect,
@@ -213,7 +226,11 @@ def list_cards(
             )
         )
     )
-    return [_card_out(db, c) for c in rows]
+    from app.services import steward_assist
+
+    # R5：一次查询当前收件人卡片的已验证解释，避免逐卡查询
+    trusted_map = steward_assist.trusted_explanations(db, [int(c.id) for c in rows])
+    return [_card_out(db, c, trusted_map=trusted_map) for c in rows]
 
 
 # ---- 状态转换：view / dismiss / accept ----

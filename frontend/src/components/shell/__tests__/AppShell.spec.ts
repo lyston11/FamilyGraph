@@ -12,11 +12,13 @@ import { useUiStore } from '@/stores/ui'
 
 // 空间上下文协调器在壳层测试中打桩：壳只负责接线，事务语义由
 // composables/__tests__/useSpaceContext.spec.ts 覆盖。
-const switchSpaceMock = vi.fn<(spaceId: number) => Promise<boolean>>()
+const switchSpaceMock = vi.fn<
+  (spaceId: number, options?: { navigate?: boolean }) => Promise<boolean>
+>()
 const ensureDefaultSpaceMock = vi.fn<() => Promise<string>>()
 vi.mock('@/composables/useSpaceContext', () => ({
   useSpaceContext: () => ({
-    switchSpace: (spaceId: number) => switchSpaceMock(spaceId),
+    switchSpace: (spaceId: number, options?: { navigate?: boolean }) => switchSpaceMock(spaceId, options),
     ensureDefaultSpace: () => ensureDefaultSpaceMock(),
     defaultTarget: () => ({ name: 'home' }),
   }),
@@ -132,17 +134,17 @@ describe('AppShell navigation（统一家庭壳）', () => {
     ensureDefaultSpaceMock.mockResolvedValue('household')
   })
 
-  it('一级导航顺序固定：我的家庭、家族树、记忆与知识、统计；设置为次级入口', async () => {
+  it('一级导航顺序固定：我的家庭、家族树、统计；记忆与知识、设置为次级入口（记忆在设置上方）', async () => {
     const { wrapper } = await mountShell({ path: '/stats' })
 
     const primary = wrapper.find('nav[aria-label="主导航"]')
     expect(primary.exists()).toBe(true)
     const labels = primary.findAll('a').map((a) => a.text().trim())
-    expect(labels).toEqual(['我的家庭', '家族树', '记忆与知识', '统计'])
+    expect(labels).toEqual(['我的家庭', '家族树', '统计'])
 
     const secondary = wrapper.find('nav[aria-label="次级导航"]')
     expect(secondary.exists()).toBe(true)
-    expect(secondary.findAll('a').map((a) => a.text().trim())).toEqual(['设置'])
+    expect(secondary.findAll('a').map((a) => a.text().trim())).toEqual(['记忆与知识', '设置'])
 
     // 当前页高亮与 aria-current（exact 匹配，`/` 不误高亮其它路由）
     const statsLink = primary.find('a[href="/stats"]')
@@ -245,6 +247,7 @@ describe('AppShell navigation（统一家庭壳）', () => {
             },
             domain_status: 'pending',
             action_card: null,
+  suggestion: null,
             created_at: '2026-09-01T00:00:00',
             read_at: null,
           },
@@ -330,7 +333,7 @@ describe('AppShell navigation（统一家庭壳）', () => {
     wrapper.unmount()
   })
 
-  it('空间选择器按 household/lineage 分组并触发切换事务', async () => {
+  it('空间选择器只展示家族空间，并在家庭页切到对应家庭卡', async () => {
     const { wrapper, pinia } = await mountShell()
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [
@@ -342,7 +345,7 @@ describe('AppShell navigation（统一家庭壳）', () => {
     spaces.members = [makeMember({ space_id: 7 })]
     await wrapper.vm.$nextTick()
 
-    // 分组结构（家庭空间/家族空间 = 类型标记）
+    // 所有页面的选择器都只展示家族空间，选择后由当前页面决定落到家庭卡或家族树
     const options = (wrapper.vm as unknown as { spacePickerOptions: unknown[] })
       .spacePickerOptions as Array<{
       type: string
@@ -350,13 +353,95 @@ describe('AppShell navigation（统一家庭壳）', () => {
       children: Array<{ label: string; value: number }>
     }>
     expect(options).toHaveLength(1)
-    expect(options[0]!.label).toBe('家庭空间')
-    expect(options[0]!.children.map((child) => child.value)).toEqual([7, 8])
-
+    expect(options[0]!.label).toBe('家族空间')
+    expect(options[0]!.children.map((child) => child.value)).toEqual([12, 7])
     // 选择其它空间 → 触发空间切换事务
     await (wrapper.vm as unknown as { onSpaceSelect: (id: number) => Promise<void> })
       .onSpaceSelect(12)
-    expect(switchSpaceMock).toHaveBeenCalledWith(12)
+    expect(switchSpaceMock).toHaveBeenCalledWith(8, { navigate: true })
+    wrapper.unmount()
+  })
+
+  it('显式家族配对（lineage_space_id）优先于 owner 推断驱动选项归属', async () => {
+    const { wrapper, pinia } = await mountShell()
+    const spaces = useSpacesStore(pinia)
+    spaces.spaces = [
+      makeSpace({ id: 7, name: '我的家庭', kind: 'household', owner_id: 1, lineage_space_id: 12 }),
+      makeSpace({ id: 8, name: '父母家', kind: 'household', owner_id: 9 }),
+      makeSpace({ id: 12, name: '张氏家族', kind: 'lineage', owner_id: 5 }),
+    ]
+    spaces.currentSpaceId = 8
+    spaces.members = [makeMember({ space_id: 7 })]
+    await wrapper.vm.$nextTick()
+
+    const options = (wrapper.vm as unknown as { spacePickerOptions: unknown[] })
+      .spacePickerOptions as Array<{ children: Array<{ value: number }> }>
+    // 家族项 12 的家庭卡来自显式配对（我的家庭 7，跨 owner，与家族 owner 无关）；
+    // 父母家（8）解析不到所属 lineage，保留为孤立家族项
+    expect(options[0]!.children.map((child) => child.value)).toEqual([12, 8])
+    // 家庭页（当前在孤立的父母家 8）选择张氏家族 → 落到显式配对的家庭卡 7，不按 owner 猜
+    await (wrapper.vm as unknown as { onSpaceSelect: (id: number) => Promise<void> })
+      .onSpaceSelect(12)
+    expect(switchSpaceMock).toHaveBeenCalledWith(7, { navigate: true })
+    wrapper.unmount()
+  })
+
+  it('家族树页选择家族空间时落到对应 lineage', async () => {
+    const { wrapper, pinia } = await mountShell({ path: '/family-tree' })
+    const spaces = useSpacesStore(pinia)
+    spaces.spaces = [
+      makeSpace({ id: 7, name: '王德海家', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '王氏家族', kind: 'lineage', owner_id: 1 }),
+      makeSpace({ id: 8, name: '李国强家', kind: 'household', owner_id: 9, lineage_space_id: 14 }),
+      makeSpace({ id: 14, name: '李氏家族', kind: 'lineage', owner_id: 9 }),
+    ]
+    spaces.currentSpaceId = 12
+    spaces.members = [makeMember({ space_id: 12 })]
+    await wrapper.vm.$nextTick()
+
+    await (wrapper.vm as unknown as { onSpaceSelect: (id: number) => Promise<void> })
+      .onSpaceSelect(14)
+    expect(switchSpaceMock).toHaveBeenCalledWith(14, { navigate: true })
+    wrapper.unmount()
+  })
+
+  it('进入家族树时，已恢复的家庭卡上下文自动切到显式配对 lineage', async () => {
+    const { wrapper, pinia } = await mountShell({ path: '/family-tree' })
+    const spaces = useSpacesStore(pinia)
+    spaces.spaces = [
+      makeSpace({ id: 7, name: '王德海家', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '王氏家族', kind: 'lineage', owner_id: 1 }),
+    ]
+    spaces.currentSpaceId = 7
+    spaces.members = [makeMember({ space_id: 7 })]
+    await flushPromises()
+
+    expect(switchSpaceMock).toHaveBeenCalledWith(12, undefined)
+    wrapper.unmount()
+  })
+
+  it('设置等空间页切换家族时保留当前页面和当前空间类型', async () => {
+    const { wrapper, pinia, router } = await mountShell({ path: '/settings' })
+    const spaces = useSpacesStore(pinia)
+    spaces.spaces = [
+      makeSpace({ id: 7, name: '王德海家', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '王氏家族', kind: 'lineage', owner_id: 1 }),
+      makeSpace({ id: 8, name: '李国强家', kind: 'household', owner_id: 9, lineage_space_id: 14 }),
+      makeSpace({ id: 14, name: '李氏家族', kind: 'lineage', owner_id: 9 }),
+    ]
+    spaces.currentSpaceId = 12
+    spaces.members = [makeMember({ space_id: 12 })]
+    await wrapper.vm.$nextTick()
+
+    await (wrapper.vm as unknown as { onSpaceSelect: (id: number) => Promise<void> })
+      .onSpaceSelect(14)
+    expect(switchSpaceMock).toHaveBeenCalledWith(14, { navigate: false })
+    expect(router.currentRoute.value.name).toBe('settings')
+
+    switchSpaceMock.mockClear()
+    await (wrapper.vm as unknown as { onSpaceSelect: (id: number) => Promise<void> })
+      .onSpaceSelect(12)
+    expect(switchSpaceMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -399,8 +484,10 @@ describe('AppShell navigation（统一家庭壳）', () => {
     expect(bottom.find('[data-test="space-management-link"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="notifications-entry"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="account-menu-trigger"]').exists()).toBe(true)
-    // 空间选择器只保留侧栏一处，顶部不重复渲染
-    expect(wrapper.find('[data-test="space-picker-topbar"]').exists()).toBe(false)
+    // 移动端侧栏隐藏：空间选择器由顶栏承载（.topbar-picker 仅 ≤768px 显示，
+    // 桌面端仍使用同一份家族选项）
+    expect(wrapper.find('[data-test="space-picker-topbar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="space-picker-mobile"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

@@ -22,6 +22,7 @@ function makeItem(overrides: Record<string, unknown> = {}) {
     kind: 'action_card' as const,
     payload: { title: '族谱连接请求', summary: null, actor_name: '成员20', space_name: null },
     domain_status: 'pending' as const,
+    suggestion: null,
     action_card: { card_id: 55, revision: 2 },
     created_at: '2026-09-01T08:00:00',
     read_at: null,

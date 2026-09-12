@@ -74,6 +74,7 @@ function makeItem(overrides: Record<string, unknown> = {}) {
       space_name: null,
     },
     domain_status: 'pending' as const,
+    suggestion: null,
     action_card: { card_id: 55, revision: 2 },
     created_at: '2026-09-01T08:00:00',
     read_at: null,
@@ -151,6 +152,7 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
             kind: 'space_membership',
             domain_status: 'accepted',
             action_card: null,
+  suggestion: null,
             read_at: '2026-09-01T09:00:00',
           }), // 历史：已读 + 领域终态
           makeItem({
@@ -252,6 +254,7 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
             kind: 'bridge',
             domain_status: 'active',
             action_card: null,
+  suggestion: null,
             payload: { title: '家族连接已生效', summary: null, actor_name: null, space_name: null },
           }),
         ],
@@ -307,6 +310,7 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
             kind: 'bridge',
             domain_status: 'pending',
             action_card: null,
+  suggestion: null,
             payload: {
               title: '跨族谱连接请求',
               summary: '另一侧空间请求建立连接',

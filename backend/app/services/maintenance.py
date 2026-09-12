@@ -8,7 +8,8 @@ P1 收口（08-29）：steward 的 lease/run/settle/reaper 领域执行器此前
   （过期 lease 按 cancelled 收敛，不回队重试）；
 - STEWARD_ENABLED 且 STEWARD_WORKER_ENABLED：周期执行 ``steward.reaper_pass``
   （过期 lease 回队或判 expired），并把 queued 作业 lease→execute（含失败
-  结算）连续泵干。
+  结算）连续泵干；随后按 09-11 R1/R2 恢复并调度模型辅助批次（StewardAssistBatch），
+  HTTP 在有界独立线程执行（自有 Session，绝不占用 core 写事务或 core tick）。
 
 DB 操作全部走 SessionLocal 独立会话，与请求会话隔离；单次 tick 异常只记日志
 不终止循环（调度器自身 fail-open；领域事务内部仍 fail-closed）。
@@ -27,7 +28,7 @@ from sqlalchemy import select
 from app import config
 from app.db import SessionLocal
 from app.models.steward import StewardJob
-from app.services import agent_queue, steward
+from app.services import agent_queue, steward, steward_assist
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,20 @@ _holders = 0
 
 
 def run_maintenance_tick() -> dict[str, int]:
-    """执行一轮维护：返回各部分处理计数（同步，独立会话，可单测直接调用）。"""
+    """执行一轮维护：返回各部分处理计数（同步，独立会话，可单测直接调用）。
+
+    09-11 生产调度：worker 块先做空间周期扫描（追补 + 到期检查，经 canonical
+    enqueue 合同登记作业），再泵 queued 作业；执行带租约栅栏参数（worker id +
+    lease 时 attempt），旧执行者/过期租约不得覆盖新租约。
+    """
     counters = {
         "agent_reaped": 0,
         "steward_reaped": 0,
+        "steward_scanned": 0,
         "steward_executed": 0,
         "steward_failed": 0,
+        "steward_assist_recovered": 0,
+        "steward_assist_scheduled": 0,
     }
     db = SessionLocal()
     try:
@@ -54,18 +63,43 @@ def run_maintenance_tick() -> dict[str, int]:
             counters["agent_reaped"] = agent_queue.reaper_pass(db)
         if config.STEWARD_ENABLED and config.STEWARD_WORKER_ENABLED:
             counters["steward_reaped"] = steward.reaper_pass(db)
+            counters["steward_scanned"] = steward.scan_due_spaces(db)
             for _ in range(_MAX_JOBS_PER_TICK):
                 job = steward.lease_next_steward_job(db, leased_by="inproc-steward-worker")
                 if job is None:
                     break
+                attempt = job.attempt
                 try:
-                    # execute_steward_job：成功→succeeded；异常→failed 结算（独立
-                    # 事务已提交）后原样抛出。单个毒药作业不得卡死整轮泵。
-                    steward.execute_steward_job(db, job)
+                    # execute_steward_job：成功→succeeded；可重试错误→退避回队；
+                    # 确定性错误/预算耗尽→failed 终态（独立事务已提交）后原样
+                    # 抛出。单个毒药作业不得卡死整轮泵。
+                    steward.execute_steward_job(
+                        db,
+                        job,
+                        worker_id="inproc-steward-worker",
+                        expected_attempt=attempt,
+                    )
                     counters["steward_executed"] += 1
                 except Exception:
                     counters["steward_failed"] += 1
-                    logger.exception("steward job %s failed and was settled", job.id)
+                    logger.warning("steward job %s not settled this tick", job.id)
+            # ---- 09-11 辅助批次（R1：core 先泵，辅助后行；HTTP 不在本会话/事务）----
+            # 恢复四个崩溃点的中间态批次，再调度至多一个到期批次，并把 HTTP
+            # 执行提交到有界线程池（自有 Session）——模型慢调用不阻塞 core tick，
+            # 其他空间的确定性作业照常推进。
+            try:
+                counters["steward_assist_recovered"] = steward_assist.recover_stuck_batches(db)
+                batch = steward_assist.schedule_due_batch(db)
+                if batch is not None:
+                    counters["steward_assist_scheduled"] = 1
+                    steward_assist.launch_batch(batch.id)
+            except Exception as exc:  # noqa: BLE001 — 辅助调度失败不影响 core 泵
+                # 日志脱敏（09-11 R3）：不输出异常原文（可能含 SQL 参数/repr），
+                # 只记异常类名；辅助自身状态机保留安全错误码。
+                logger.warning(
+                    "steward assist dispatch failed; core tick unaffected (error=%s)",
+                    type(exc).__name__,
+                )
         db.commit()
         return counters
     except Exception:
@@ -95,8 +129,13 @@ async def maintenance_loop(interval_seconds: float) -> None:
                 logger.info("maintenance tick", extra={"counters": counters})
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("maintenance tick failed; retrying next interval")
+        except Exception as exc:
+            # 日志脱敏（09-11 R3）：只记异常类名与安全分类码，不输出异常原文
+            #（DB 异常可能携带绑定参数）。
+            logger.warning(
+                "maintenance tick failed; retrying next interval (error=%s)",
+                type(exc).__name__,
+            )
         await asyncio.sleep(interval_seconds)
 
 
@@ -135,3 +174,5 @@ async def stop_maintenance_loop() -> None:
         await task
     except asyncio.CancelledError:
         pass
+    # 优雅停机：不无限等待在途 httpx（单次调用受 timeout 上界，线程有限收敛）
+    steward_assist.shutdown_assist_executor()

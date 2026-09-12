@@ -9,7 +9,6 @@
 // ProfileDrawer 依赖旧 /users members 合同，不进入全局设置（差异记录见 notes.md）。
 import {
   NButton,
-  NCard,
   NDatePicker,
   NForm,
   NFormItem,
@@ -20,6 +19,7 @@ import {
 } from 'naive-ui'
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ArrowLeft, Save } from 'lucide-vue-next'
 
 import { ApiError } from '@/api/errors'
 import { fetchMember, updateMember } from '@/api/members'
@@ -154,21 +154,25 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
 </script>
 
 <template>
-  <main class="settings-view">
-    <NCard class="card" data-test="settings-card">
-      <template #header>
-        <div class="title-row">
-          <NButton text data-test="settings-back" @click="router.push({ name: 'home' })">
-            ← 返回我的家庭
-          </NButton>
-          <span class="card-title">设置</span>
-        </div>
-      </template>
+  <main class="settings-view" data-test="settings-card">
+    <header class="settings-header">
+      <div>
+        <p class="eyebrow">账户偏好</p>
+        <h1>设置</h1>
+      </div>
+      <NButton data-test="settings-back" @click="router.push({ name: 'home' })">
+        <template #icon><ArrowLeft :size="16" aria-hidden="true" /></template>
+        返回我的家庭
+      </NButton>
+    </header>
 
-      <nav class="settings-tabs" aria-label="设置分区">
+    <div class="settings-layout">
+      <nav class="settings-tabs" aria-label="设置分区" data-test="settings-nav">
         <button v-for="section in settingsSections" :key="section.key" type="button"
           class="settings-tab" :class="{ 'is-active': activeSection === section.key }"
           :aria-current="activeSection === section.key ? 'page' : undefined"
+          :aria-pressed="activeSection === section.key"
+          :data-test="`settings-tab-${section.key}`"
           @click="activeSection = section.key">
           {{ section.label }}
         </button>
@@ -178,31 +182,29 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
       <!-- 分区 1：个人资料 -->
       <section v-show="activeSection === 'profile'" class="section" data-test="settings-section-profile">
         <h2 class="section-title">个人资料</h2>
-        <p class="meta" data-test="current-user">
-          {{ auth.user?.name }}
-        </p>
-        <p class="meta" data-test="profile-status">
-          档案状态：{{ auth.user?.profile_status === 'identity_confirmed' ? '已确档' : '待确档' }}
-        </p>
-        <NForm inline :show-feedback="false" @submit.prevent="saveName">
-          <NFormItem label="修改名字" :label-props="{ for: 'settings-name-input' }">
+        <div class="profile-summary">
+          <strong data-test="current-user">{{ auth.user?.name }}</strong>
+          <span class="meta" data-test="profile-status">
+            档案状态：{{ auth.user?.profile_status === 'identity_confirmed' ? '已确档' : '待确档' }}
+          </span>
+        </div>
+        <NForm class="name-form" label-placement="top" :show-feedback="false" @submit.prevent="saveName">
+          <NFormItem class="name-field" label="修改名字" :label-props="{ for: 'settings-name-input' }">
             <NInput
               v-model:value="nameForm.name"
               :input-props="{ id: 'settings-name-input' }"
               data-test="name-input"
             />
           </NFormItem>
-          <NFormItem>
-            <NButton type="primary" :loading="savingName" data-test="name-save" @click="saveName">
-              保存
-            </NButton>
-          </NFormItem>
+          <NButton :loading="savingName" data-test="name-save" @click="saveName">
+            <template #icon><Save :size="16" aria-hidden="true" /></template>保存名字
+          </NButton>
         </NForm>
         <p v-if="nameError" class="error" data-test="name-error">{{ nameError }}</p>
 
         <!-- 基础资料编辑（09-05 PRD R2）：PATCH /members/{self} -->
         <NForm label-placement="top" class="profile-form" @submit.prevent="saveProfile">
-          <NFormItem label="性别" data-test="profile-gender-item">
+          <NFormItem label="性别" class="form-wide" data-test="profile-gender-item">
             <NRadioGroup v-model:value="profileForm.gender" data-test="profile-gender">
               <NRadio v-for="option in genderOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
@@ -227,7 +229,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
               data-test="profile-death"
             />
           </NFormItem>
-          <NFormItem label="简介" data-test="profile-bio-item">
+          <NFormItem label="简介" class="form-wide" data-test="profile-bio-item">
             <NInput
               v-model:value="profileForm.bio"
               type="textarea"
@@ -237,14 +239,14 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
               data-test="profile-bio"
             />
           </NFormItem>
-          <NFormItem>
+          <NFormItem class="form-wide profile-actions" :show-feedback="false">
             <NButton
               type="primary"
               :loading="savingProfile"
               data-test="profile-save"
               @click="saveProfile"
             >
-              保存资料
+              <template #icon><Save :size="16" aria-hidden="true" /></template>保存资料
             </NButton>
           </NFormItem>
         </NForm>
@@ -308,67 +310,97 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
         </div>
       </section>
       </div>
-    </NCard>
+    </div>
   </main>
 </template>
 
 <style scoped>
 .settings-view {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+  box-sizing: border-box;
+}
+
+.settings-header {
   display: flex;
-  justify-content: center;
-  padding: 28px 24px 56px;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
-.card {
-  width: min(780px, 100%);
+.eyebrow {
+  margin: 0 0 5px;
+  color: var(--fg-accent);
+  font-size: 12px;
+  letter-spacing: 0;
 }
 
-.settings-grid {
-  display: block;
-}
-
-.card-title {
+h1 {
+  margin: 0 0 8px;
   font-family: var(--fg-font-display);
-  font-size: 18px;
+  font-size: 30px;
   color: var(--fg-ink);
 }
 
-.title-row {
+.settings-layout {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.settings-grid {
+  min-width: 0;
+  flex: 1;
 }
 
 .section {
   margin: 0;
-  padding: 20px;
+  padding: 24px;
+  min-width: 0;
+  box-sizing: border-box;
   background: var(--fg-glass-surface);
   backdrop-filter: blur(16px) saturate(180%);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   border: 1px solid var(--fg-glass-border);
-  border-radius: calc(var(--fg-radius-card) * 1.5);
+  border-radius: var(--fg-radius-card);
   box-shadow:
     0 4px 20px color-mix(in srgb, var(--fg-ink) 6%, transparent),
     inset 0 1px 0 color-mix(in srgb, var(--fg-surface-raised) 20%, transparent);
 }
 
-.settings-tabs { display: flex; gap: 4px; overflow-x: auto; margin: 0 0 18px; padding: 4px; border-bottom: 1px solid var(--fg-line); scrollbar-width: none; }
+.settings-tabs { display: flex; flex-direction: column; gap: 4px; flex: 0 0 168px; position: sticky; top: 96px; }
 .settings-tabs::-webkit-scrollbar { display: none; }
-.settings-tab { flex: 0 0 auto; min-height: 40px; padding: 7px 13px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-ink-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.settings-tab { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 14px; border: 1px solid transparent; border-radius: var(--fg-radius-control); background: transparent; color: var(--fg-ink-secondary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
 .settings-tab:hover { color: var(--fg-ink); background: var(--fg-surface-sunken); }
 .settings-tab.is-active { color: var(--fg-accent); background: var(--fg-accent-soft); font-weight: 600; }
+.settings-tab:focus-visible { outline: 2px solid var(--fg-accent); outline-offset: 2px; }
 
 .section-title {
   margin: 0 0 12px;
-  font-size: 15px;
+  font-size: 17px;
   color: var(--fg-ink);
 }
 
 .meta {
   margin: 0 0 12px;
   color: var(--fg-ink-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
+
+.profile-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 24px; }
+.profile-summary strong { font-size: 16px; overflow-wrap: anywhere; }
+.profile-summary .meta { margin: 0; }
+.name-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.name-field { flex: 1 1 200px; max-width: 360px; min-width: 0; }
+.name-form :deep(.n-form-item-blank) { min-height: 0; }
+.profile-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--fg-line); }
+.profile-form :deep(.n-form-item) { min-width: 0; }
+.profile-form :deep(.n-date-picker) { width: 100%; }
+.form-wide { grid-column: 1 / -1; }
+.profile-actions { margin-top: 4px; }
 
 .data-rights {
   margin: 16px 0;
@@ -453,7 +485,23 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
   font-size: 13px;
 }
 
+@supports not (backdrop-filter: blur(12px)) {
+  .section { background: var(--fg-surface-raised); }
+}
+
+@media (max-width: 768px) {
+  .settings-layout { flex-direction: column; }
+  .settings-tabs { position: static; flex-direction: row; flex: 0 0 auto; width: 100%; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+  .settings-tab { flex: 0 0 auto; white-space: nowrap; }
+  .settings-grid { width: 100%; }
+}
+
 @media (max-width: 480px) {
+  .settings-view { padding: 22px 12px 36px; }
+  .settings-header { flex-wrap: wrap; }
+  h1 { font-size: 24px; }
+  .section { padding: 20px 16px; }
+  .profile-form { grid-template-columns: minmax(0, 1fr); }
   .theme-cards {
     grid-template-columns: 1fr;
   }

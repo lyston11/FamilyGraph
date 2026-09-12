@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-NOTIFICATION_KINDS = ("action_card", "space_membership", "bridge", "relation")
+NOTIFICATION_KINDS = ("action_card", "space_membership", "bridge", "relation", "steward_suggestion")
 
 _KIND_SQL = f"kind IN ({', '.join(repr(kind) for kind in NOTIFICATION_KINDS)})"
 
@@ -43,6 +43,20 @@ class Notification(Base):
             "read_at",
         ),
         Index("ix_notifications_space", "space_id"),
+        # kind='steward_suggestion' 的行必须带合法建议引用
+        CheckConstraint(
+            "kind <> 'steward_suggestion' OR suggestion_id IS NOT NULL",
+            name="ck_notifications_suggestion_ref",
+        ),
+        # 每收件人×空间×建议至多一条通知（防重复卡通知）
+        Index(
+            "uq_notifications_suggestion",
+            "recipient_account_id",
+            "space_id",
+            "suggestion_id",
+            unique=True,
+            sqlite_where=text("suggestion_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -59,6 +73,10 @@ class Notification(Base):
     )
     space_member_id: Mapped[int | None] = mapped_column(
         ForeignKey("space_members.id", ondelete="CASCADE"), nullable=True
+    )
+    # steward 建议引用（kind='steward_suggestion'；FK 级联：建议行删除 → 通知随之删除）
+    suggestion_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_suggestions.id", ondelete="CASCADE"), nullable=True
     )
     # 动作主体（SET NULL：主体档案删除后投影为 null，不阻塞通知历史）
     actor_user_id: Mapped[int | None] = mapped_column(

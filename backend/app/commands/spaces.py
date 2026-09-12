@@ -48,23 +48,50 @@ def _require_space_manager(session: Session, space_id: int, user_id: int) -> Fam
     return space
 
 
+def _resolve_lineage_target(
+    session: Session, actor_id: int, lineage_space_id: int
+) -> FamilySpace:
+    """校验家族配对目标：存在、kind=lineage、操作者是其 active 成员。
+
+    非成员与不存在统一 404（防枚举）；目标不是 lineage 走 422。
+    """
+    lineage = _space_or_404(session, lineage_space_id)
+    if lineage.kind != "lineage":
+        raise_api_error(422, VALIDATION_ERROR, "关联目标必须是家族空间")
+    _require_active_member(session, lineage_space_id, actor_id)
+    return lineage
+
+
 def create_space(
     session: Session,
     ctx: ActorContext,
     *,
     name: str,
     kind: str = "household",
+    lineage_space_id: int | None = None,
     commit: bool = True,
 ) -> FamilySpace:
     """创建空间：owner 即 active 成员（自建即同意）。
 
     ``commit=False`` 供上层应用命令（如注册命令的陌生人码分支）把空间创建
     合并进同一个短事务，与 create_shared_household 的组合惯例一致。
+    ``lineage_space_id`` 仅 household 可用：创建即挂入指定家族空间（须为其
+    active 成员），命令层校验，数据库不靠 CHECK 兜底。
     """
     actor = load_actor(session, ctx)
     now = utcnow()
+    if lineage_space_id is not None:
+        if kind != "household":
+            raise_api_error(422, VALIDATION_ERROR, "仅家庭空间可以关联家族空间")
+        _resolve_lineage_target(session, actor.id, lineage_space_id)
     with command_transaction(session, commit=commit):
-        space = FamilySpace(name=name.strip(), owner_id=actor.id, kind=kind, created_at=now)
+        space = FamilySpace(
+            name=name.strip(),
+            owner_id=actor.id,
+            kind=kind,
+            lineage_space_id=lineage_space_id,
+            created_at=now,
+        )
         session.add(space)
         session.flush()
         session.add(
@@ -126,6 +153,48 @@ def rename_space(
             target_id=space.id,
             ip=ctx.ip,
             detail={"name": space.name},
+        )
+    return space
+
+
+def set_lineage_link(
+    session: Session,
+    ctx: ActorContext,
+    space_id: int,
+    *,
+    lineage_space_id: int | None,
+) -> FamilySpace:
+    """设置/解除家庭空间的所属家族配对（仅该空间管理员；清除传 None）。
+
+    授权：household 的 space_admin；同时要求操作者是目标 lineage 的 active
+    成员（不能把自家空间挂进自己进不去的家族）。家族侧的解绑不在此处：
+    删除/移交 lineage 是独立治理流程。
+    """
+    actor = load_actor(session, ctx)
+    with command_transaction(session):
+        space = _require_space_manager(session, space_id, actor.id)
+        if space.kind != "household":
+            raise_api_error(422, VALIDATION_ERROR, "仅家庭空间可以关联家族空间")
+        old_link = space.lineage_space_id
+        if lineage_space_id is not None:
+            _resolve_lineage_target(session, actor.id, lineage_space_id)
+        space.lineage_space_id = lineage_space_id
+        emit(
+            session,
+            event_type="space.updated",
+            aggregate_type="space",
+            aggregate_id=space.id,
+            payload={"lineage_space_id": lineage_space_id, "old_lineage_space_id": old_link},
+            space_id=space.id,
+            actor_account_id=ctx.account_id,
+        )
+        audit.write_audit(
+            session,
+            action="space_lineage_link_updated",
+            actor_id=actor.id,
+            target_id=space.id,
+            ip=ctx.ip,
+            detail={"lineage_space_id": lineage_space_id},
         )
     return space
 

@@ -134,6 +134,11 @@ def register_user(
             )
 
         # 5. 直接登录态：refresh 会话与账号同事务落库（access 由 HTTP 层签发）
+        # 5.5 R2 后台初始化：本事务内为该账号已合法获得的空间建立 queued 视图行
+        #     （无空间/无码分支不建任何行；不伪造授权外成员/节点）。
+        from app.services.personal_family_view import initialize_account_views
+
+        initialize_account_views(session, account_id=user.account.id, user_id=user.id)
         refresh_raw = issue_refresh_session(session, user.account, rotated_from=None)
         audit.write_audit(
             session,

@@ -13,10 +13,20 @@ SpaceRole = Literal["space_admin", "member"]
 class SpaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     kind: Literal["household", "lineage"] = "household"
+    # 创建时直接挂到家族空间（仅 household 可用；须为该 lineage active 成员）
+    lineage_space_id: int | None = Field(default=None, gt=0)
 
 
 class SpaceUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+
+
+class SpaceLineageLinkUpdate(BaseModel):
+    """家庭空间 ↔ 家族空间显式配对（ lineage_space_id=null 表示解除配对）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lineage_space_id: int | None = Field(default=None, gt=0)
 
 
 class SpaceOut(BaseModel):
@@ -26,6 +36,7 @@ class SpaceOut(BaseModel):
     name: str
     owner_id: int
     kind: str = "household"
+    lineage_space_id: int | None = None
     created_at: datetime
     pending_count: int = 0
     member_count: int = 0

@@ -2,7 +2,7 @@
 
 现代家谱协作 Web 平台：以每个人为第一人称维护家庭空间，家庭空间相连自然涌现家族视图。
 
-系统架构与设计总览见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；可执行合同（API 签名、错误矩阵、测试清单）见 `.trellis/spec/architecture.md`。
+系统架构与设计总览见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；长期工程决策见 `.agent-notes/implemented/`，记录规范见 [.write-notes-like-deepseek/SKILL.md](.write-notes-like-deepseek/SKILL.md)。Trellis 目录仅保留历史资料，已不再作为开发入口。
 
 技术栈：Vue 3 + Vite + TypeScript（前端）｜FastAPI + SQLAlchemy + SQLite(WAL)（后端）｜Docker Compose（部署）。
 
@@ -36,9 +36,23 @@ curl -f http://localhost:8080/api/health   # 经 nginx 反代，同样返回 ok
 
 数据落盘于命名卷 `app_data`（容器内 `/data`：`db/` SQLite 主库+WAL 文件、`uploads/`、`backups/`、`bootstrap/`）。
 
-## 启动方式二：本地开发模式
+## 启动方式二：开发模式（本地或远程）
 
 前置要求：Python ≥ 3.12、Node ≥ 22。
+
+选择与环境匹配的一键脚本。远程隧道已安装时，远程模式是默认选择；没有隧道或需要隔离本地数据库时使用全本地模式。两个模式互斥。
+
+```bash
+# 远程开发：服务器后端/数据库/dbx，本地前端 + SSH 隧道
+./scripts/dev-up-remote.sh
+
+# 全本地开发：三 listener + 两个前端
+./scripts/dev-up.sh
+```
+
+脚本会跳过已运行进程、写入 `.dev-logs/` 并检查健康端点。dbx 仅在服务器部署，远程模式通过 `http://127.0.0.1:4225` 访问。后端代码在服务器更新后执行 `git pull`、必要时 `alembic upgrade head`，再 `systemctl --user restart familygraph-api`。
+
+只有在故障排查、调试单个进程或运行隔离测试时才手动逐个启动；此时仍需自行配置环境变量并验证对应端口：
 
 ```bash
 # 终端 1 —— 后端（三个 listener：家庭 8000 / agent 内部 8001 / 管理员 8002）
@@ -49,7 +63,7 @@ export SECRET_KEY=$(openssl rand -hex 32)          # 必需；缺失时应用拒
 export ADMIN_JWT_SECRET=$(openssl rand -hex 32)    # 管理员独立签发域；缺失/过弱拒启
 export ADMIN_JWT_ISSUER=familygraph-admin
 export ADMIN_JWT_AUDIENCE=familygraph-admin-web
-uvicorn app.main:app --reload               # http://localhost:8000/api/health
+python -m app.serve                            # 8000/8001/8002；健康检查见下文
 
 # 终端 2 —— 家庭前端
 cd frontend
@@ -73,12 +87,42 @@ alembic revision -m "change"  # 生成新迁移（业务表结构随各子任务
 
 数据库 URL 由 `app/config.py` 统一提供（默认 `<cwd>/data/db/app.db`，可用 `DATA_DIR` 覆盖）；启动时自动设置 PRAGMA：`foreign_keys=ON, journal_mode=WAL, busy_timeout=5000, synchronous=NORMAL`。
 
-## 质量门禁
+## 按改动范围选择验证
+
+验证命令按受影响包和风险选择，不要求每次改动运行全量门禁。提交或交付前至少完成与改动直接相关的检查，并记录未运行的高成本检查及原因。
+
+| 改动类型 | 建议检查 |
+|---|---|
+| 文档、配置说明、脚本注释 | Markdown/格式检查；涉及 Agent Notes 时运行 `npm run verify-agent-notes` |
+| 后端单包或纯函数 | `cd backend && ruff check <files> && .venv/bin/python -m pytest -q <相关测试>`；改公共类型时加 `mypy app` |
+| 家庭前端或后台前端 | 在对应目录运行 `npm run lint`、`npm run type-check`，必要时 `npm test`；构建/发布改动再运行 `npm run build` |
+| 数据模型、迁移、认证、权限、跨 listener 或跨前后端 | 运行受影响包的完整检查，并执行相关回归测试；涉及真实 HTTP 契约时运行 API smoke |
+| 发布、部署、依赖升级或无法确定影响面 | 三个包的完整检查，必要时再运行 API smoke |
+
+低风险、可逆改动可以只做针对性检查；测试失败、环境缺失或 smoke 返回 blocked 必须报告，不得标记为通过。
+
+### 常用完整检查
 
 ```bash
-cd backend  && ruff check . && ruff format --check . && mypy app/ && pytest
-cd frontend && npm run lint && npm run type-check && npm run test && npm run build
+cd backend                 && ruff check . && ruff format --check . && mypy app && pytest
+cd frontend                && npm run lint && npm run type-check && npm test && npm run build
+cd system-admin-frontend   && npm run lint && npm run type-check && npm test && npm run build
 ```
+
+### 真实 API smoke（按需）
+
+当改动涉及 API 路由、认证授权、跨 listener 边界、数据库迁移、前后端契约或发布流程时，在隔离环境启动真实后端三 listener 并执行端到端契约用例：
+
+```bash
+./scripts/frontend-api-smoke.sh --report /tmp/familygraph-smoke.json
+```
+
+- 随机端口 + 一次性临时 `DATA_DIR`（合成 seed），不触碰业务库与用户 `.env`；
+  运行结束自动清理临时目录与 bootstrap 凭据；
+- 退出码：`0` 全部通过 / `1` 有真实失败 / `2` 环境阻塞（如 backend/.venv 缺失、
+  alembic 失败、listener 60s 未就绪）——**blocked 不等于通过**，不得写进发布证据；
+- 报告为脱敏 JSON：只含用例 ID、listener、method/path 模板、状态码、错误码、
+  耗时；不含姓名、PIN、JWT、Cookie、prompt、provider 响应或本地路径。
 
 ## 备份约束（重要）
 
@@ -112,7 +156,7 @@ SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件
 }
 ```
 
-通过 `/api/admin/agent/providers` 提交上述非敏感字段，并在创建请求的 `secret` 字段注入 API key。密钥只会以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、Trellis 文档或 Agent 容器环境。随后用 `/api/admin/agent/spaces/{space_id}/provider-settings` 选择 `gpt-5.6-sol` 并设置 `cloud_allowed=true`。
+通过 `/api/admin/agent/providers` 提交上述非敏感字段，并在创建请求的 `secret` 字段注入 API key。密钥只会以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、Agent Notes 或 Agent 容器环境。随后用 `/api/admin/agent/spaces/{space_id}/provider-settings` 选择 `gpt-5.6-sol` 并设置 `cloud_allowed=true`。
 
 ---
 
@@ -185,7 +229,9 @@ docker compose exec api python -m app.admin_recovery
 |------|----------|------|------|
 | Agent Runtime | `AGENT_RUNTIME_ENABLED` | `0` | 关闭时 `/internal/agent/*` 一律 503 |
 | 关系智能 | `RELATIONSHIP_INTELLIGENCE_ENABLED` | `0` | 关闭时关系解析端点 503 |
-| Steward | `STEWARD_ENABLED` | `0` | 关闭时 ActionCard 入口 503 |
+| Steward | `STEWARD_ENABLED` | `0` | 关闭时 ActionCard 入口 503；admin listener `GET /admin-api/v1/steward/status` 始终可读 disabled 状态 |
+| Steward worker/扫描 | `STEWARD_WORKER_ENABLED` / `STEWARD_SCAN_INTERVAL_SECONDS` 等 | `0` / `300` | worker 关闭时作业可排队不执行（paused）；扫描间隔/退避/重跑冷却见 `backend/app/config.py`（正数 + 上界校验） |
+| Steward 积压告警 | `STEWARD_ALERT_QUEUE_SECONDS` | `0` | 最老 queued 作业年龄超过该阈值（0=自动=max(2×扫描间隔, 60s)）且核心已启用时，`GET /admin-api/v1/steward/status` 的 `alerts` 输出 `queue_backlog`；worker 启用但连续两个扫描窗口无结算进展输出 `queue_stalled` 并把 state 升级 `degraded`。仅产生可见告警，不改变调度行为 |
 | Memory/RAG | `MEMORY_ENABLED` / `RAG_ENABLED` | `0` | 关闭时无候选/检索，工具路径保留 |
 | 受控联网 | `CONTROLLED_WEB_ENABLED` | `0` | 平台总开关；空间还需 owner/admin 单独 opt-in |
 

@@ -64,6 +64,10 @@ ADMIN_V1_ROUTES = {
     "/admin-api/v1/access-sessions",
     "/admin-api/v1/manager-applications/{application_id}/approve",
     "/admin-api/v1/manager-applications/{application_id}/reject",
+    # 09-11 Steward 运维（仅 admin listener；读不受引擎门禁，rerun 受 STEWARD_ENABLED 门禁）
+    "/admin-api/v1/steward/status",
+    "/admin-api/v1/steward/jobs",
+    "/admin-api/v1/steward/spaces/{space_id}/rerun",
 }
 
 LEGACY_BREAK_GLASS_PATHS = {
@@ -153,6 +157,8 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
         "/admin-api/v1/agent/providers",
         "/admin-api/v1/agent/providers/{provider_id}",
         "/admin-api/v1/agent/platform-defaults",
+        # 09-11：admin steward 唯一写端点（单空间重跑，STEWARD_ENABLED 门禁 + 幂等键）
+        "/admin-api/v1/steward/spaces/{space_id}/rerun",
     }
 
 

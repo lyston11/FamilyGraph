@@ -1,133 +1,107 @@
 <script setup lang="ts">
+// 记忆与知识页（09-06 重构）：与设置页同构的页面框架——
+// 页头（eyebrow + 标题 + 说明，右侧 刷新/返回 动作）+ 左侧分区导航 + 右侧玻璃卡分区，
+// 分区导航与分区卡由 MemoryManager 承载（五分区：待确认/私有/家庭/家族/检索）。
 import { NButton } from 'naive-ui'
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ArrowLeft, RotateCw } from 'lucide-vue-next'
 
 import MemoryManager from '@/components/memory/MemoryManager.vue'
 import { useSpacesStore } from '@/stores/spaces'
 
 const router = useRouter()
 const spaces = useSpacesStore()
+const managerRef = ref<InstanceType<typeof MemoryManager> | null>(null)
 
 onMounted(() => {
   void spaces.load().catch(() => undefined)
 })
 
-function goFamilySpace(): void {
-  void router.push({ name: 'family-space' })
+function goHome(): void {
+  void router.push({ name: 'home' })
 }
 
-function goSettings(): void {
-  void router.push({ name: 'settings' })
+/** 刷新走 MemoryManager.load（候选 + 私有 + 当前空间共享一并重读服务端） */
+function refresh(): void {
+  void managerRef.value?.load()
 }
 </script>
 
 <template>
-  <main class="memory-view">
-    <!-- 09-06 视觉补齐：与家庭首页 family-space-hero 同套大卡设计语言 -->
-    <article class="memory-hero">
-      <header class="hero-head">
-        <div class="hero-identity">
-          <NButton quaternary size="small" data-test="memory-back" @click="goFamilySpace">
-            ← 家庭空间
-          </NButton>
-          <p class="hero-kind">FamilyGraph / Knowledge</p>
-          <h1 class="hero-title">记忆与知识</h1>
-        </div>
-        <NButton quaternary size="small" class="topbar-label" data-test="memory-settings" @click="goSettings">
-          设置
-        </NButton>
-      </header>
-      <div class="hero-body">
-        <MemoryManager />
+  <main class="memory-view" data-test="memory-view">
+    <header class="memory-header">
+      <div class="memory-heading">
+        <p class="eyebrow">长期知识</p>
+        <h1>记忆与知识</h1>
+        <p class="header-meta">
+          原始聊天不会自动进入检索。只有你确认的记忆，或明确授权的材料，才会成为可追溯的知识来源。
+        </p>
       </div>
-    </article>
+      <div class="memory-actions">
+        <NButton quaternary data-test="memory-refresh" @click="refresh">
+          <template #icon><RotateCw :size="16" aria-hidden="true" /></template>
+          刷新
+        </NButton>
+        <NButton data-test="memory-back" @click="goHome">
+          <template #icon><ArrowLeft :size="16" aria-hidden="true" /></template>
+          返回我的家庭
+        </NButton>
+      </div>
+    </header>
+    <MemoryManager ref="managerRef" />
   </main>
 </template>
 
 <style scoped>
-/* 页面底色随主题 token（body 点阵基座之上，仅保留主色柔光 wash） */
+/* 与设置页同构的容器几何：1120px 居中 + 同套页头节奏 */
 .memory-view {
-  min-height: 100vh;
-  padding: 24px clamp(16px, 5vw, 72px) 48px;
-  background: radial-gradient(circle at 84% 0%, var(--fg-accent-soft), transparent 34%);
-}
-
-.memory-hero {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  /* 宽度与家庭首页 household-card-view（1320px）保持一致 */
-  max-width: 1320px;
+  max-width: 1120px;
   margin: 0 auto;
-  padding: 36px 40px 24px;
+  padding: 32px 20px 48px;
   box-sizing: border-box;
-  background:
-    linear-gradient(125deg, color-mix(in srgb, var(--fg-ink) 9%, transparent), transparent 54%),
-    var(--fg-glass-surface);
-  border: 1px solid var(--fg-glass-border);
-  border-top-color: color-mix(in srgb, var(--fg-ink) 30%, transparent);
-  border-radius: 8px;
-  backdrop-filter: blur(28px) saturate(115%);
-  -webkit-backdrop-filter: blur(28px) saturate(115%);
-  box-shadow:
-    var(--fg-shadow-raised),
-    0 2px 0 color-mix(in srgb, var(--fg-surface) 60%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--fg-ink) 10%, transparent);
-  transition: transform 350ms ease, box-shadow 350ms ease, border-color 350ms ease;
 }
 
-@supports not (backdrop-filter: blur(28px)) {
-  .memory-hero { background: var(--fg-surface-raised); }
-}
-
-@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-  .memory-hero:hover {
-    transform: translateY(-4px);
-    border-top-color: color-mix(in srgb, var(--fg-ink) 45%, transparent);
-    box-shadow: var(--fg-shadow-raised), 0 8px 0 -5px var(--fg-glass-border), inset 0 1px 0 color-mix(in srgb, var(--fg-ink) 15%, transparent);
-  }
-}
-
-.hero-head {
+.memory-header {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
-  flex-wrap: wrap;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--fg-glass-border);
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
-.hero-identity { min-width: 0; }
-
-.hero-kind {
-  margin: 0 0 10px;
-  color: var(--fg-ink-faint);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+.eyebrow {
+  margin: 0 0 5px;
+  color: var(--fg-accent);
+  font-size: 12px;
+  letter-spacing: 0;
 }
 
-.hero-title {
+h1 {
   margin: 0;
-  color: var(--fg-ink);
   font-family: var(--fg-font-display);
-  font-size: 32px;
-  line-height: 1.4;
-  font-weight: 600;
+  font-size: 30px;
+  color: var(--fg-ink);
 }
 
-.hero-body { padding-top: 20px; }
-
-.memory-view :deep(.memory-manager) {
-  max-width: none;
+.header-meta {
+  max-width: 560px;
+  margin: 8px 0 0;
+  color: var(--fg-ink-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-@media (max-width: 600px) {
-  .memory-hero { padding: 24px 20px 20px; }
-  .topbar-label {
-    display: none;
-  }
+.memory-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+@media (max-width: 480px) {
+  .memory-view { padding: 22px 12px 36px; }
+  .memory-header { flex-wrap: wrap; }
+  h1 { font-size: 24px; }
 }
 </style>

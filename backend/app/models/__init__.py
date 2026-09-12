@@ -56,6 +56,10 @@ from app.models.steward import (
     StewardLlmCandidate,
     StewardModelCall,
 )
+from app.models.steward_suggestion import (  # noqa: F401 (ORM 注册)
+    StewardSuggestion,
+    StewardSuggestionRecipient,
+)
 from app.models.system_admin import SystemAdmin, SystemAdminAccount, SystemAdminRefreshSession
 from app.models.term_registry import TermEntry, TermUsage
 from app.models.user import User

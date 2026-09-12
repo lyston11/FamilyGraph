@@ -26,6 +26,7 @@ from app.api.admin_agent import router as admin_agent_router
 from app.api.admin_auth import router as admin_auth_router
 from app.api.admin_governance import router as admin_governance_router
 from app.api.admin_read import router as admin_read_router
+from app.api.admin_steward import router as admin_steward_router
 from app.api.agent import router as agent_router
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
@@ -49,6 +50,7 @@ from app.api.notifications import router as notifications_router
 from app.api.personal_family_view import router as personal_family_view_router
 from app.api.space_model_settings import router as space_model_settings_router
 from app.api.spaces import router as spaces_router
+from app.api.steward_suggestions import router as steward_suggestions_router
 from app.api.users import members_router
 from app.api.users import router as users_router
 from app.errors import INTERNAL_ERROR, VALIDATION_ERROR, extract_api_error, raise_api_error
@@ -202,6 +204,7 @@ app.include_router(personal_family_view_router, prefix="/api")
 app.include_router(family_recommendations_router, prefix="/api")
 app.include_router(household_card_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
+app.include_router(steward_suggestions_router, prefix="/api")
 # V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）
 app.include_router(controlled_web_router, prefix="/api")
 app.include_router(controlled_web_admin_router, prefix="/api")
@@ -267,3 +270,5 @@ admin_app.include_router(admin_governance_router)
 # runtime 503 门禁；审计走 admin_access_audits）。旧家庭挂载 /api/admin/agent
 # 已删除（对家庭 listener 一律 404）。
 admin_app.include_router(admin_agent_router)
+# 09-11 Steward 运维（status/jobs 只读不受引擎门禁；rerun 受 STEWARD_ENABLED 门禁）。
+admin_app.include_router(admin_steward_router)
