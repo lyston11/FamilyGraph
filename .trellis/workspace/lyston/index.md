@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
-- **Last Active**: 2026-09-06
+- **Total Sessions**: 23
+- **Last Active**: 2026-09-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~846 | Active |
+| `journal-1.md` | ~878 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-09-12 | 修复管理员后台壳层接入与用户端布局 | `20d5d51` | `main` |
 | 22 | 2026-09-06 | 空间模型设置 UX：云同意开关即时生效与报错可达性 | `dfbb387` | `main` |
 | 21 | 2026-09-06 | Steward 模型辅助层（09-06 子任务 B）+ 父任务树收口 | `61d9d7d` | `main` |
 | 20 | 2026-09-06 | 双前端星空玻璃视觉重设计收口 + dev-seed 增量补缺 | `451a788`, `9de8ef0` | `main` |

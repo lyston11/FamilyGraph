@@ -854,3 +854,25 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 - R6：主 chunk 625→358kB、动态/静态冲突与构建警告归零（three 735kB 记录为例外）；测试 stderr 警告归零（XHR mock/router 注入/SPA 导航）。
 - 证据：任务目录 release-evidence.md；smoke 30/30、家庭 521、后台 83 测试通过。后端 ruff/mypy 失败属其他任务未提交文件（steward/space_model_settings/lineage），边界外未触碰。
 - 提交含 stores/spaces.ts、api/spaces.ts 等与交付物同文件纠缠的 lineage 前端 in-flight 改动（不可分离，已记录）；README/后端/AppShell/MemoryManager 等未提交改动保留在工作区。
+
+
+## Session 23: 修复管理员后台壳层接入与用户端布局
+<!-- trellis-session: v=2 fp=c68fa8445b133f95 -->
+
+**Date**: 2026-09-12
+**Task**: 修复管理员后台壳层接入与用户端布局
+**Branch**: `main`
+
+### Summary
+
+将 AdminShell 接入 system-admin App，改为 FamilyGraph 用户端同款桌面侧栏与移动抽屉导航，补充登录页无壳层回归测试；type-check、lint、85 tests、build 和 task validate 全部通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `20d5d51` | fix(admin): mount familygraph shell in app |
+
+### Status
+
+[OK] **Completed**
