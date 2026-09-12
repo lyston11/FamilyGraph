@@ -73,7 +73,17 @@ async function onAccountAction(key: string): Promise<void> {
 <template>
   <div class="admin-shell" @keydown="onNavKeydown">
     <header class="admin-header">
-      <span class="admin-brand">FamilyGraph 系统管理后台</span>
+      <div class="admin-brand-lockup">
+        <span class="admin-brand-mark" aria-hidden="true">⌘</span>
+        <div>
+          <span class="admin-brand-kicker">FAMILYGRAPH / CONTROL ROOM</span>
+          <span class="admin-brand">系统管理后台</span>
+        </div>
+      </div>
+      <div class="admin-header-context" aria-label="后台说明">
+        <span class="admin-context-dot" aria-hidden="true"></span>
+        <span>只读治理 · 空间健康 · 安全审计</span>
+      </div>
       <button
         type="button"
         class="admin-nav-toggle"
@@ -91,13 +101,13 @@ async function onAccountAction(key: string): Promise<void> {
         :class="{ 'admin-nav--open': mobileNavOpen }"
         aria-label="主导航"
       >
-        <RouterLink :to="{ name: 'overview' }">概览</RouterLink>
-        <RouterLink :to="{ name: 'space-admins' }">空间管理员</RouterLink>
-        <RouterLink :to="{ name: 'anomaly-queue' }">异常队列</RouterLink>
-        <RouterLink :to="{ name: 'operations' }">运营治理</RouterLink>
-        <RouterLink :to="{ name: 'agent-monitor' }">Agent 监控</RouterLink>
-        <RouterLink :to="{ name: 'agent-providers' }">模型治理</RouterLink>
-        <RouterLink :to="{ name: 'access-audit' }">读取审计</RouterLink>
+        <RouterLink :to="{ name: 'overview' }"><span>01</span>概览</RouterLink>
+        <RouterLink :to="{ name: 'space-admins' }"><span>02</span>空间管理员</RouterLink>
+        <RouterLink :to="{ name: 'anomaly-queue' }"><span>03</span>异常队列</RouterLink>
+        <RouterLink :to="{ name: 'operations' }"><span>04</span>运营治理</RouterLink>
+        <RouterLink :to="{ name: 'agent-monitor' }"><span>05</span>Agent 监控</RouterLink>
+        <RouterLink :to="{ name: 'agent-providers' }"><span>06</span>模型治理</RouterLink>
+        <RouterLink :to="{ name: 'access-audit' }"><span>07</span>读取审计</RouterLink>
       </nav>
       <NDropdown
         trigger="click"

@@ -44,9 +44,15 @@ onMounted(load)
 </script>
 
 <template>
-  <div>
-    <h1 class="ag-page-title">概览</h1>
-    <p class="ag-page-subtitle">空间健康与管理员归属总览；异常空间只读展示，不做自动修复。</p>
+  <div class="admin-overview">
+    <div class="ag-page-intro">
+      <div>
+        <div class="ag-overline">SYSTEM PULSE / 01</div>
+        <h1 class="ag-page-title">概览</h1>
+        <p class="ag-page-subtitle">空间健康与管理员归属总览；异常空间只读展示，不做自动修复。</p>
+      </div>
+      <div class="ag-intro-note"><span class="admin-context-dot"></span> 数据来自当前治理快照</div>
+    </div>
 
     <section v-if="data" class="ag-metric-grid" data-testid="overview-totals">
       <div class="ag-metric">
