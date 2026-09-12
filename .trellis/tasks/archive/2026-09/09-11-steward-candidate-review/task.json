@@ -3,7 +3,7 @@
   "name": "steward-candidate-review",
   "title": "Steward 候选审核、冲突待办与站内通知闭环",
   "description": "把有证据的模型候选与确定性冲突变成可理解的待办，用户可以看理由、驳回、补资料或显式发起关系提案；正式关系仍由有权当事人完成确认。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "fullstack",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-11",
-  "completedAt": null,
+  "completedAt": "2026-09-12",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -32,7 +32,7 @@
     "frontend/src/components/notifications/NoticeItemRow.vue",
     "frontend/src/stores/notifications.ts"
   ],
-  "notes": "实现回归已完成；发布门禁为 partial（真实 provider E2E 未运行）。详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes。",
+  "notes": "实现回归与真实 provider E2E 已完成（2026-09-12，liu-dada/gpt-5.6-sol，退出码 0）。详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes。",
   "meta": {
     "planning_date": "2026-09-11",
     "execution_gate": "awaiting_implementation_review",
@@ -49,7 +49,7 @@
       "F15"
     ],
     "wave": "current",
-    "release_gate": "partial",
-    "gate_note": "实现回归已通过（backend 963 passed；E2E/评测/迁移往返脚本退出码 0）；真实 provider E2E 未运行，发布门禁为 PARTIAL（stub-only），不得标记 completed——审计结论 2026-09-12。"
+    "release_gate": "pass",
+    "gate_note": "实现回归已通过（backend 967 passed, 3 skipped，2026-09-12）；真实 provider E2E 已通过（liu-dada/gpt-5.6-sol，stub 与 real 模式退出码均 0，成功/降级记录单列，见 release-evidence.md §9）——发布门禁缺口已关闭，不得再以 stub-only 为由阻止 completed。"
   }
 }
