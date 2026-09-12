@@ -133,6 +133,22 @@ def test_legacy_pfv_version_cannot_serve_structural_snapshot(db_session) -> None
     assert payload["stale_reason"] == "version_drift"
 
 
+def test_rebuild_space_views_repairs_current_version_drift(db_session) -> None:
+    """周期重建必须发现 current 行的代码版本漂移，即使没有领域事件。"""
+    viewer, space = create_agent_fixture(db_session, name="version-drift-rebuild")
+    view = _materialize(db_session, viewer.account, space.id)
+    view.policy_version = "graph"
+    view.computation_version = "pfv-v1"
+    db_session.commit()
+
+    assert personal_family_view.rebuild_space_views(db_session, space_id=space.id) == 1
+    db_session.commit()
+    repaired = _view(db_session, viewer.account.id, space.id)
+    assert repaired.status == "current"
+    assert repaired.policy_version == personal_family_view.POLICY_VERSION
+    assert repaired.computation_version == personal_family_view.COMPUTATION_VERSION
+
+
 # ---- AC-1：逐事件影响矩阵 ----
 
 

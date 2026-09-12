@@ -246,6 +246,9 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
           size="medium" :consistent-menu-width="false" aria-label="切换当前空间"
           data-test="space-picker" @update:value="onSpaceSelect" />
       </div>
+      <div v-if="spaces.membersError" class="sidebar-error" role="alert">
+        成员信息加载失败，请重试。
+      </div>
       <nav class="sidebar-nav" aria-label="主导航">
         <RouterLink v-for="entry in sidebarPrimaryEntries" :key="entry.name" class="nav-link"
           :to="{ name: entry.name }" :class="{ 'nav-link--active': isNavActive(entry.name) }"

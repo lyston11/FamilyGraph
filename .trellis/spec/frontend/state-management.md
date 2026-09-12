@@ -60,3 +60,6 @@
 **Why**：报错要"可行动"而不是纯描述（09-06 事故：文案让用户去模型设置，但不给路径）；同时把"哪些错误带哪些动作"收敛成白名单，避免 detail 形状泄漏进组件。
 
 **Tests**：`ErrorNotice.spec.ts`（管理员见入口且点击直达 `/spaces/{id}/manage?section=models`、非管理员纯文案、无 action 不渲染、STREAM_LOST 文案回退）。
+### Convention: 成员授权投影 stale-while-revalidate
+
+`spaces.loadMembers(spaceId)` 重校验同一空间时先发请求、成功后整体替换 `members`；在途期间保留旧成员关系，避免管理员入口因瞬时空数组闪断。失败必须保留旧投影并设置 `membersError`，调用方可展示失败态；路由守卫仍以本次请求结果 fail-closed。跨空间切换清空旧授权上下文，守卫刷新目标空间时传 `setCurrentSpace: false`，不得改写 `currentSpaceId`。

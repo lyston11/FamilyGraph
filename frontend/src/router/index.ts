@@ -176,11 +176,18 @@ router.beforeEach(async (to) => {
     // 每次进入都重新确认目标空间的 active membership，避免旧空间/旧会话缓存放行。
     // 成员请求失败时也必须拒绝（fail-closed），不能拿旧缓存继续做授权判断。
     try {
-      await spaces.loadMembers(targetSpaceId)
+      await spaces.loadMembers(targetSpaceId, { setCurrentSpace: false })
     } catch {
       return { name: 'family-space' }
     }
-    if (spaces.currentSpaceId !== targetSpaceId || !spaces.canManageSpace) {
+    const userId = useAuthStore().user?.id
+    const targetMembership = spaces.members.find(
+      (member) =>
+        member.space_id === targetSpaceId &&
+        member.user_id === userId &&
+        member.status === 'active',
+    )
+    if (!targetMembership || targetMembership.role !== 'space_admin') {
       return { name: 'family-space' }
     }
   }

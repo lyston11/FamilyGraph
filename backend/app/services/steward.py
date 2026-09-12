@@ -512,7 +512,7 @@ def _enqueue_core_job_locked(
             "该空间已有活跃的 Steward Job",
             detail={"job_id": active.id, "trigger_cursor": active.trigger_cursor},
         )
-    if respect_succeeded_shortcircuit and cause != "admin_rerun":
+    if respect_succeeded_shortcircuit and cause not in {"admin_rerun", "integrity_scan"}:
         done = db.scalar(
             select(StewardJob)
             .where(

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/architecture.md", "reason": "全局授权与可见性边界：pfv 空响应 fail-closed 与守卫 fail-closed 的红线依据"}
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "StewardJob 队列/水位/重建合同：死锁 A（入队幂等吸收）与死锁 B（重建筛选）都落在该层"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "SourceFact/图投影真源与 FSM：视图重建依赖的确认事实口径"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "spaces store 改动约定：loadMembers 先清后取改 stale-while-revalidate"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "AppShell 导航入口与错误态呈现规范：入口不闪断、失败不静默"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "后端失效链路与前端授权展示跨层联动"}
+{"file": ".trellis/tasks/09-12-pfv-drift-and-sidebar-role-flicker/research.md", "reason": "本次排查完整证据：代码定位、DB/日志证据、临时恢复与复发推演"}

@@ -135,6 +135,10 @@ request_lineage_membership(
 
 - `StewardSpaceSchedule(space_id PK, next_scan_at, last_scheduled_cursor, policy_version)`：每 tick 用 BEGIN IMMEDIATE 选最多 10 个到期空间（`STEWARD_SCAN_INTERVAL_SECONDS` 默认 300）；扫描经 canonical enqueue 合同登记作业（`integrity_scan` 的 succeeded 短路仅在扫描路径豁免），首次启用/重新启用/策略版本变化触发有界追补。
 - `StewardJob` 增 `available_at`、`retry_of_job_id`（逻辑关联，终态不复活）、`error_code`（安全分类码）。可重试错误（DB 锁/暂时资源）按 `STEWARD_RETRY_BACKOFF_*_SECONDS`（5s/30s）退避回队，`STEWARD_MAX_ATTEMPTS`（默认 3）耗尽进 failed；确定性错误（输入/权限）直接终态，不拖累其他空间。
+
+### Gotcha: PFV 版本漂移必须由 integrity_scan 发现
+
+`rebuild_space_views` 的候选条件必须同时覆盖 `status` 非 current 与 `policy_version`/`computation_version` 不匹配；版本升级不会产生领域事件，GET 触发的补偿作业使用 `integrity_scan`，该原因不得被 succeeded 水位短路。重建成功必须回写两个版本字段，否则每个周期都会重复重建。
 - **租约栅栏**：run/heartbeat/settle 必须传 `worker_id + expected_attempt` 并校验 lease owner + deadline；旧执行者结算被拒（`STEWARD_LEASE_STALE`）。lease 时固定执行水位 checkpoint；运行中更高水位只产生后继作业，结算不得宣告未处理水位完成。
 - **admin 运维 API（仅 :8002，`app/api/admin_steward.py`）**：`GET /steward/status`、`GET /steward/jobs`（字段白名单，读不受引擎门禁）；`POST /steward/spaces/{id}/rerun`（受 `STEWARD_ENABLED` 门禁；Idempotency-Key 幂等；reason 只存分类码；60s 冷却 429、策略冲突 409、关闭 503、未知空间同形 404）。family token 一律 401；家庭 API 不挂任何后台路由。
 

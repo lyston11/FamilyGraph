@@ -39,6 +39,7 @@ export const useSpacesStore = defineStore('spaces', {
     profileRefs: [] as SpaceProfileRefInfo[],
     /** 当前空间的 owner 移交记录（含历史；AC-F5） */
     transfers: [] as OwnershipTransfer[],
+    membersError: null as string | null,
     loading: false,
   }),
   getters: {
@@ -163,21 +164,32 @@ export const useSpacesStore = defineStore('spaces', {
         if (generation === this.generation) this.loading = false
       }
     },
-    async loadMembers(spaceId: number) {
+    async loadMembers(spaceId: number, options: { setCurrentSpace?: boolean } = {}) {
       const generation = this.generation
-      this.currentSpaceId = spaceId
-      // 切换或重新校验前先丢弃旧空间授权缓存；请求失败不得沿用旧 membership。
-      this.members = []
-      this.transfers = []
-      this.profileRefs = []
-      const members = await fetchSpaceMembers(spaceId)
-      if (generation !== this.generation || this.currentSpaceId !== spaceId) return
-      this.members = members
+      const setCurrentSpace = options.setCurrentSpace ?? true
+      const previousSpaceId = this.currentSpaceId
+      if (setCurrentSpace) this.currentSpaceId = spaceId
+      if (setCurrentSpace && previousSpaceId !== null && previousSpaceId !== spaceId) {
+        this.members = []
+        this.transfers = []
+        this.profileRefs = []
+      }
+      this.membersError = null
+      try {
+        const members = await fetchSpaceMembers(spaceId)
+        if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return
+        this.members = members
+      } catch (error) {
+        if (generation === this.generation) {
+          this.membersError = error instanceof Error ? error.message : '成员加载失败'
+        }
+        throw error
+      }
       const transfers = await fetchOwnershipTransfers(spaceId).catch(() => [])
-      if (generation !== this.generation || this.currentSpaceId !== spaceId) return
+      if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return
       this.transfers = transfers
       const refs = await fetchSpaceProfileRefs(spaceId).catch(() => [])
-      if (generation !== this.generation || this.currentSpaceId !== spaceId) return
+      if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return
       this.profileRefs = refs
     },
     async create(name: string, kind: 'household' | 'lineage' = 'household') {
@@ -246,6 +258,7 @@ export const useSpacesStore = defineStore('spaces', {
       this.members = []
       this.profileRefs = []
       this.transfers = []
+      this.membersError = null
       this.currentSpaceId = null
     },
   },

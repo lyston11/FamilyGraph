@@ -252,6 +252,7 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
         session, account=account, space_id=space_id, graph_hash=graph.snapshot_hash
     )
     view.policy_version = POLICY_VERSION
+    view.computation_version = COMPUTATION_VERSION
     view.computed_at = now
     view.invalidated_at = None
     view.failed_reason = None
@@ -607,7 +608,8 @@ def request_view_recompute(*, space_id: int) -> None:
             enqueue_steward_job(
                 session,
                 space_id=space_id,
-                cause="domain_event",
+                # Version drift has no new domain event to advance the watermark.
+                cause="integrity_scan",
                 trigger_cursor=current_event_watermark(session),
             )
     except Exception as exc:
@@ -628,7 +630,12 @@ def rebuild_space_views(session: Session, *, space_id: int) -> int:
     rows = session.scalars(
         select(PersonalFamilyView).where(
             PersonalFamilyView.space_id == space_id,
-            PersonalFamilyView.status.in_(("queued", "stale", "failed", "never_computed")),
+            (
+                PersonalFamilyView.status.in_(("queued", "stale", "failed", "never_computed"))
+                | (PersonalFamilyView.policy_version != POLICY_VERSION)
+                | (PersonalFamilyView.computation_version != COMPUTATION_VERSION)
+                | PersonalFamilyView.input_hash.is_(None)
+            ),
         )
     ).all()
     rebuilt = 0

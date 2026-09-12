@@ -201,6 +201,23 @@ describe('spaces store（AD-3）', () => {
     expect(store.profileRefs).toEqual([])
   })
 
+  it('成员重校验在途期间保留旧成员并记录失败态', async () => {
+    const store = useSpacesStore()
+    store.currentSpaceId = 1
+    store.members = [{
+      id: 1, space_id: 1, user_id: 1, added_by: 1, role: 'space_admin', status: 'active',
+      updated_at: '2026-08-29T00:00:00',
+    }]
+    let rejectMembers: (error: Error) => void = () => {}
+    mockedMembers.mockImplementationOnce(() => new Promise((_, reject) => { rejectMembers = reject }))
+    const pending = store.loadMembers(1)
+    expect(store.members).toHaveLength(1)
+    rejectMembers(new Error('network down'))
+    await expect(pending).rejects.toThrow('network down')
+    expect(store.members).toHaveLength(1)
+    expect(store.membersError).toBe('network down')
+  })
+
   it('clear：清空待确档引用缓存', async () => {
     mockedFetch.mockResolvedValue([makeSpace()])
     mockedMembers.mockResolvedValue([])

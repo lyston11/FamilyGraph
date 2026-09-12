@@ -165,6 +165,11 @@ export function useSpaceContext() {
     switchEpoch += 1
     const epoch = switchEpoch
     spaces.currentSpaceId = spaceId
+    // A space switch starts a new authorization context; do not expose the
+    // previous space's membership while the target request is pending.
+    spaces.members = []
+    spaces.transfers = []
+    spaces.profileRefs = []
 
     // 3. 清理旧空间敏感缓存
     clearSpaceCaches(previousSpaceId)
@@ -174,7 +179,12 @@ export function useSpaceContext() {
 
     // 4. 按空间类型加载新的服务端投影；失败留在新上下文的安全失败态。
     //    成员关系是空间授权上下文的基础投影，先行加载。
-    await spaces.loadMembers(spaceId).catch(() => undefined)
+    try {
+      await spaces.loadMembers(spaceId)
+    } catch {
+      // membersError is exposed by the store; continue into the new context's
+      // safe failure state so a transient outage does not roll back navigation.
+    }
     if (epoch !== switchEpoch) return false
     const primaryProjection =
       target.kind === 'household'
