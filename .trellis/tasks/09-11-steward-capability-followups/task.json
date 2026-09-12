@@ -19,7 +19,7 @@
   "pr_url": null,
   "subtasks": [],
   "children": [],
-  "parent": "09-11-steward-complete-hardening",
+  "parent": null,
   "relatedFiles": [
     "backend/app/services/memory_rag.py",
     "backend/app/services/terms.py",

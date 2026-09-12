@@ -19,7 +19,7 @@
   "pr_url": null,
   "subtasks": [],
   "children": [],
-  "parent": "09-11-steward-complete-hardening",
+  "parent": null,
   "relatedFiles": [
     "backend/app/services/family_recommendations.py",
     "backend/app/services/personal_family_bridge.py",
