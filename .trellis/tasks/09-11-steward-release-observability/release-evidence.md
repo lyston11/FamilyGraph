@@ -136,6 +136,8 @@
 - 畸形 finding pair 导致整批投影跳过 → 逐条 try/skip。
 - 建议分页过滤欠返 → over-fetch 循环；每批消费后推进内部游标，集满时游标落在最后消费行，不丢行也不重复查询。
 - 确定性 finding 显式端点、布尔型畸形 pair 与空间维度 memory/RAG 事件均有回归覆盖；后者不登记 Steward 作业。
+- Steward 事件窗口复用 `resolve_event_space_ids`，过滤无关全局及 memory/RAG 事件；
+  `test_consume_window_filters_unrelated_global_and_memory_events` 回归通过。
 - 评测/E2E 证据 JSON 保持 gitignore：属可再生本地产物（内含临时路径），由脚本随时重建；发布声明引用命令 + 退出码，不依赖入库的历史工件。
 
 任务元数据同步：七个任务由 completed 改回 in_progress（release_gate=partial），子任务

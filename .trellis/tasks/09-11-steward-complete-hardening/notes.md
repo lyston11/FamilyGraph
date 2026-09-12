@@ -74,3 +74,6 @@ projection-consistency → quality-security → candidate-review → release-obs
 修复后门禁：backend 963 passed/3 skipped；ruff check / format --check 全仓通过；
 mypy app 0 错误；E2E、评测、迁移往返脚本退出码 0。发布门禁维持 PARTIAL
 （真实 provider E2E 未运行）。
+
+补充复核：`steward._consume_window` 已复用 `domain_events.resolve_event_space_ids`，
+不再把无关全局或 memory/RAG 事件计入窗口；新增回归后 backend 为 964 passed/3 skipped。
