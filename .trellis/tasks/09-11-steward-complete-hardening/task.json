@@ -3,7 +3,7 @@
   "name": "steward-complete-hardening",
   "title": "Steward 管家引擎完整性与产品闭环补齐",
   "description": "Steward 六个修复任务与两个延期研究：调度、模型事务、视图称谓、候选审核、安全质量、发布观测及后续能力。",
-  "status": "completed",
+  "status": "in_progress",
   "dev_type": "fullstack",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-11",
-  "completedAt": "2026-09-12",
+  "completedAt": null,
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -30,7 +30,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "仅规划。23 条已识别事项见 research/findings.md；本轮范围限定 Steward，不声明穷尽全仓漏洞。",
+  "notes": "实现回归已完成；发布门禁为 partial（真实 provider E2E 未运行）。23 条已识别事项见 research/findings.md；本轮范围限定 Steward，不声明穷尽全仓漏洞。",
   "meta": {
     "planning_date": "2026-09-11",
     "execution_gate": "awaiting_implementation_review",
@@ -48,6 +48,8 @@
     ],
     "finding_count": 23,
     "baseline_head": "7af9e1f",
-    "creation_authorized": true
+    "creation_authorized": true,
+    "release_gate": "partial",
+    "gate_note": "实现回归已通过（backend 963 passed；E2E/评测/迁移往返脚本退出码 0）；真实 provider E2E 未运行，发布门禁为 PARTIAL（stub-only），不得标记 completed——审计结论 2026-09-12。"
   }
 }

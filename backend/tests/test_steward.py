@@ -1363,6 +1363,44 @@ def test_bridge_event_enqueues_both_sides(db_session) -> None:
     ), "桥接对端空间必须同事务登记作业，而不是等待周期扫描"
 
 
+def test_consume_window_filters_unrelated_global_and_memory_events(db_session) -> None:
+    """事件窗口只统计当前空间受影响事件，排除无关全局及 memory/RAG。"""
+    space = _space(db_session, "window-scope", kind="household")
+    owner = db_session.get(User, space.owner_id)
+    assert owner is not None
+    create_space_member(db_session, space.id, owner.id)
+    related = emit_event(
+        db_session,
+        event_type="source_fact.revised",
+        aggregate_type="source_fact",
+        aggregate_id=101,
+        payload={"subject_user_id": owner.id, "object_user_id": owner.id},
+        space_id=None,
+    )
+    unrelated = emit_event(
+        db_session,
+        event_type="source_fact.revised",
+        aggregate_type="source_fact",
+        aggregate_id=102,
+        payload={"subject_user_id": 999001, "object_user_id": 999002},
+        space_id=None,
+    )
+    memory = emit_event(
+        db_session,
+        event_type="memory.confirmed",
+        aggregate_type="memory",
+        aggregate_id=103,
+        payload={"space_id": space.id},
+        space_id=space.id,
+    )
+    db_session.flush()
+
+    window = steward._consume_window(
+        db_session, space, floor=0, upper=max(related.id, unrelated.id, memory.id)
+    )
+    assert [event.id for event in window.events] == [related.id]
+
+
 def test_settle_rejected_when_lease_expires_during_execution(
     db_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

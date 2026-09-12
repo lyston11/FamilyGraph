@@ -2,18 +2,18 @@
 
 ## 开始条件
 
-- [ ] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
-- [ ] 确认依赖：`09-11-steward-assist-execution`, `09-11-steward-projection-consistency`。
-- [ ] 取得最新实施摘要的明确批准再 task.py start；当前仅规划。
+- [x] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
+- [x] 确认依赖：`09-11-steward-assist-execution`, `09-11-steward-projection-consistency`。
+- [x] 取得最新实施摘要的明确批准并完成本任务实现；发布门禁仍为 partial。
 
 ## 有序执行
 
-- [ ] 1. 先补缺失 payload policy 和解释恶意输出的失败用例，记录当前缺口而非声称已泄漏。
-- [ ] 2. 实现受众限定的输入 projector 与 policy adapter，捕获出站确认无 raw/masked/secret。
-- [ ] 3. 实现闭合输出 schema、证据匹配和模板呈现；与候选审核约定类型映射。
-- [ ] 4. 补两协议 provider/failure/timeout 和默认全关回归，沿用 assist-execution 预算记录。
-- [ ] 5. 建立 fixture 评测与 JSON 报告脚本，接入本仓现有检查入口；真实模型评测另存证据。
-- [ ] 6. 同步 ActionCard 前端只展示被校验的辅助解释，保持确定性隐私影响可见。
+- [x] 1. 先补缺失 payload policy 和解释恶意输出的失败用例，记录当前缺口而非声称已泄漏。
+- [x] 2. 实现受众限定的输入 projector 与 policy adapter，捕获出站确认无 raw/masked/secret。
+- [x] 3. 实现闭合输出 schema、证据匹配和模板呈现；与候选审核约定类型映射。
+- [x] 4. 补两协议 provider/failure/timeout 和默认全关回归，沿用 assist-execution 预算记录。
+- [x] 5. 建立 fixture 评测与 JSON 报告脚本，接入本仓现有检查入口；真实模型评测另存证据。
+- [x] 6. 同步 ActionCard 前端只展示被校验的辅助解释，保持确定性隐私影响可见。
 
 ## 改动边界与重用位置
 
@@ -41,6 +41,6 @@ cd backend
 
 ## 回滚与交接
 
-- [ ] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
-- [ ] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
-- [ ] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。
+- [x] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
+- [x] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
+- [x] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。

@@ -1,7 +1,7 @@
 # Steward 模型辅助安全修复与质量评测
 
 > 父任务：[09-11-steward-complete-hardening](../09-11-steward-complete-hardening/prd.md)
-> 状态：规划完成待实施评审；本轮不启动；优先级 P1。
+> 状态：实现回归已通过（2026-09-12）；发布门禁 PARTIAL——真实 provider E2E 未运行，不得标记 completed（审计结论见 ../09-11-steward-release-observability/release-evidence.md §8）。
 
 ## Goal
 

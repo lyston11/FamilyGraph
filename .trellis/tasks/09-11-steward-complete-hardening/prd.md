@@ -1,6 +1,6 @@
 # Steward 管家引擎完整性与产品闭环补齐
 
-> 状态：planning；2026-09-11；本轮交付任务规划，不执行产品实现。
+> 状态：in_progress；六个修复子任务实现回归已通过（2026-09-12）；发布门禁 PARTIAL——真实 provider E2E 未运行，整体不得标记 completed（审计修复轮见 [release-evidence §8](../09-11-steward-release-observability/release-evidence.md)）。
 
 ## Goal
 

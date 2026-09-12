@@ -89,6 +89,9 @@
   - 空库：downgrade（steward 表全部卸除）→ upgrade head；
   - 旧数据（0035 处 seed user/space/job）：upgrade head（新表建立，旧行保留）→
     downgrade 0035（新表卸除，旧数据完整）→ re-upgrade（表/索引重建，数据不丢）。
+  - 新状态数据（`unknown`/`in_flight` attempt + `steward_suggestion` 通知）：
+    downgrade 0035（先保守收敛/删除不可兼容投影）→ re-upgrade，数据与约束可恢复；
+    该场景由 roundtrip 脚本第 4 步覆盖。
   head 链：`0035_space_lineage_link → 0036 → 0037 → 0038_steward_suggestions`。
 - 关闭→重开：E2E 场景 12/13（上表）。
 - 恢复：备份恢复 runbook 见 [runbook.md](runbook.md)；**绝不**对业务库执行 conftest 的
@@ -98,7 +101,8 @@
 
 ## 6. 全量回归门禁
 
-- `cd backend && .venv/bin/python -m pytest -q` → **956 passed, 3 skipped**（退出码 0）。
+- `cd backend && .venv/bin/python -m pytest -q` → **963 passed, 3 skipped**（退出码 0；含审计修复回归）。
+- `ruff check .` 全仓 0 错误；`ruff format --check .` 全仓通过；`mypy app` 0 错误（原 5 个既有错误已修）。
 - `ruff check` / `ruff format --check`：本任务所有触及文件 clean（仓库内其余历史遗留不属于本任务）。
 - `mypy app`：本任务文件 0 错误。
 - system-admin-frontend：`npm run type-check`、`npm run lint`、`npm test`（83 passed）、
@@ -112,3 +116,27 @@
 | 卡片取代路径在 E2E 中无到期卡可观察 | 本场景不构造到期卡（避免人为回拨业务时间到卡片域）；卡片取代已有单测回归覆盖。 |
 | 容量外推 | 200 人全矩阵实测为小时级，证据按实测 viewer 行线性外推并显式标注 `extrapolated=true`。 |
 | 无外部监控平台 | 首版按 PRD 使用现有日志与后台状态；告警为 status API 内的 `alerts` 数组，无 PagerDuty/OTel 推送。 |
+
+## 8. 审计修复轮（2026-09-12）
+
+外部审计确认四项发布/正确性阻断与若干低级风险，全部修复并回归：
+
+| 阻断 | 修复 |
+|---|---|
+| 全局事件广播到所有空间（调度器对无 space_id 事件 `SELECT all FamilySpace`） | 作用域权威上移 `domain_events.resolve_event_space_ids`：事件空间 ∪ payload 空间 → 全局人物事件按 active membership/ref/桥接受权范围收敛；解析不出空间不登记作业。回归：`test_global_source_fact_event_scopes_to_authorized_spaces` |
+| 桥接事件只给 A 空间入队（payload.space_ids 被忽略，B 侧只能等周期扫描） | 调度器统一走同一解析合同，payload.space_ids 并入。回归：`test_bridge_event_enqueues_both_sides` |
+| 租约过期后仍提交 succeeded（结算前无 deadline 复查） | `run_steward_job` 结算前复查 `lease_expires_at`，过期则整体回滚（含本事务派生写入），由 reaper 按过期回收重队。回归：`test_settle_rejected_when_lease_expires_during_execution`。配合容量证据（200 人 4.6h ≫ TTL 300s），独立 worker/增量计算 follow-up 优先级提升 |
+| 生产数据上迁移回滚不可用（0038 建议通知违反旧 kind CHECK；0037 unknown/in_flight 违反旧 status CHECK） | 0038.down 先删建议通知（可再生投影，应急路径，仅下行）；0037.down 先把 reserved/in_flight/unknown 收敛为 failed（`downgrade_forced`，保留计费行）。`steward_migrate_roundtrip.py` 扩展第 4 场景（真实新状态数据 down→up）实测通过 |
+
+低级风险关闭：
+
+- PFV recompute 入队失败日志 `exc_info=True` → 只记异常类名（SQL 绑定参数不外泄）。
+- 辅助预算参数纳入启动校验：`STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB / MAX_TOKENS_PER_JOB / MAX_CARDS_PER_JOB` 加上下界，`STEWARD_ASSIST_TIMEOUT_SECONDS` 限 [0.1, 300]，越界拒启。
+- findings 证据 user-id/fact-id 混用：证据快照改按 pair 用户端点匹配事实，并在快照中记录事实端点。
+- 畸形 finding pair 导致整批投影跳过 → 逐条 try/skip。
+- 建议分页过滤欠返 → over-fetch 循环；每批消费后推进内部游标，集满时游标落在最后消费行，不丢行也不重复查询。
+- 确定性 finding 显式端点、布尔型畸形 pair 与空间维度 memory/RAG 事件均有回归覆盖；后者不登记 Steward 作业。
+- 评测/E2E 证据 JSON 保持 gitignore：属可再生本地产物（内含临时路径），由脚本随时重建；发布声明引用命令 + 退出码，不依赖入库的历史工件。
+
+任务元数据同步：七个任务由 completed 改回 in_progress（release_gate=partial），子任务
+implement.md 清单补记实际完成项，父/延期任务相对链接随解除归档恢复有效。

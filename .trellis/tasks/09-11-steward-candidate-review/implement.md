@@ -2,18 +2,18 @@
 
 ## 开始条件
 
-- [ ] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
-- [ ] 确认依赖：`09-11-steward-production-ops`, `09-11-steward-assist-execution`, `09-11-steward-projection-consistency`, `09-11-steward-quality-security`。
-- [ ] 取得最新实施摘要的明确批准再 task.py start；当前仅规划。
+- [x] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
+- [x] 确认依赖：`09-11-steward-production-ops`, `09-11-steward-assist-execution`, `09-11-steward-projection-consistency`, `09-11-steward-quality-security`。
+- [x] 取得最新实施摘要的明确批准并完成本任务实现；发布门禁仍为 partial。
 
 ## 有序执行
 
-- [ ] 1. 列出 SourceFact 全部 kind 到可执行用户命令的映射，先写 owner 非当事人不可确认回归。
-- [ ] 2. 实现 Suggestion/Recipient 与必要 typed proposal 模型、迁移、schema、证据校验和唯一键。
-- [ ] 3. 实现从安全模型候选和确定性 findings 投影；复用身份证据/terms/source_facts 服务，禁止原文直出。
-- [ ] 4. 实现 scoped list/dismiss/submit + 幂等领域命令；补关系方向/双当事人确认与撤权测试。
-- [ ] 5. 扩展现有 notifications 生成/投影/引用，补实际 NoticeItemRow 导航和 read-only 语义。
-- [ ] 6. 实现 decoder/store/建议详情确认 UI；联测 submitted→领域决议→Steward 重算→resolved。
+- [x] 1. 列出 SourceFact 全部 kind 到可执行用户命令的映射，先写 owner 非当事人不可确认回归。
+- [x] 2. 实现 Suggestion/Recipient 与必要 typed proposal 模型、迁移、schema、证据校验和唯一键。
+- [x] 3. 实现从安全模型候选和确定性 findings 投影；复用身份证据/terms/source_facts 服务，禁止原文直出。
+- [x] 4. 实现 scoped list/dismiss/submit + 幂等领域命令；补关系方向/双当事人确认与撤权测试。
+- [x] 5. 扩展现有 notifications 生成/投影/引用，补实际 NoticeItemRow 导航和 read-only 语义。
+- [x] 6. 实现 decoder/store/建议详情确认 UI；联测 submitted→领域决议→Steward 重算→resolved。
 
 ## 改动边界与重用位置
 
@@ -44,6 +44,6 @@ cd backend
 
 ## 回滚与交接
 
-- [ ] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
-- [ ] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
-- [ ] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。
+- [x] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
+- [x] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
+- [x] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。

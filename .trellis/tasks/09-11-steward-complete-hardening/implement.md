@@ -12,7 +12,7 @@
 - [x] 4. candidate-review：证据、受众、人工提案/确认、既有通知扩展（迁移 0038 + 前端建议审核 UI）；核验发现并修复列表端点可见性 MAJOR；owner 非当事人不可直接确认有回归。
 - [x] 5. release-observability：E2E 驱动（真实 API + 自动 tick）、admin 观测指标/告警、日志脱敏、容量采样、迁移往返、release-evidence.md 与 runbook.md；真实 provider 未运行 → 门禁 partial（stub 口径）。
 - [x] 6. 对照 research/findings.md 把本轮 F01–F21 逐条填入实际 AC 证据；F22/F23 保留 deferred（findings.md 修复状态回填节 + coverage.md 状态列）。
-- [x] 7. 更新现行 specs（steward-action-card.md 重写模型辅助节 + 新增调度/建议/观测/安全链节）与源码过时注释（steward.py crash 合同 docstring）；保存既有归档历史；质量核验（backend 956 passed / 前端 525 passed / 管理前端 83 passed / ruff / mypy）、提交和父子归档（延期子任务解除父子关联保留活动）。
+- [x] 7. 更新现行 specs（steward-action-card.md 重写模型辅助节 + 新增调度/建议/观测/安全链节）与源码过时注释（steward.py crash 合同 docstring）；保存既有归档历史；质量核验（backend 963 passed / 前端 526 passed / 管理前端 83 passed / ruff / mypy）、提交和父子归档（延期子任务解除父子关联保留活动）。
 
 ## 验证命令与限制
 

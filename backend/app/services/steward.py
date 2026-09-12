@@ -1152,7 +1152,9 @@ class _WindowEvents:
 
 def _consume_window(db: Session, space: FamilySpace, *, floor: int, upper: int) -> _WindowEvents:
     """读取 (floor, upper] 内与本空间相关的事件；记录 source_fact.* 触及的用户。"""
-    events = list(
+    # Note: 事件窗口复用统一空间解析合同 — 见
+    # .agent-notes/implemented/bug-fix/2026-09-12-steward-event-window-scope.md
+    candidates = list(
         db.scalars(
             select(DomainEvent)
             .where(
@@ -1163,6 +1165,17 @@ def _consume_window(db: Session, space: FamilySpace, *, floor: int, upper: int) 
             .order_by(DomainEvent.id.asc())
         )
     )
+    # 调度入口与窗口消费共用同一空间解析合同，避免把无关全局事件计入
+    # events_consumed 或在未来复用 touched_users 时越过租户边界。Memory/RAG
+    # 由各自索引流程管理，从未登记 Steward 作业，也不应进入该窗口统计。
+    from app.services.domain_events import resolve_event_space_ids
+
+    events = [
+        event
+        for event in candidates
+        if not event.type.startswith(("memory.", "rag."))
+        and space.id in resolve_event_space_ids(db, event)
+    ]
     touched: set[int] = set()
     for event in events:
         if not event.type.startswith(SOURCE_FACT_EVENT_PREFIX):

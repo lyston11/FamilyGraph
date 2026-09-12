@@ -57,3 +57,20 @@ projection-consistency → quality-security → candidate-review → release-obs
   parent 关联保留活动，不随父任务假归档。
 - 本轮提交包含工作区中先于本轮存在的 0035 空间 lineage 未提交前置工作（0036-0038 的
   down_revision 依赖它，无法拆分提交）。
+
+## 2026-09-12 审计修复轮
+
+外部审计判定"完整完成"不成立（四项阻断 + 交付口径矛盾），全部按结论处理：
+
+1. 全局事件不再广播全库（调度作用域上移 domain_events.resolve_event_space_ids）；
+2. 桥接事件两侧空间同事务入队；
+3. 结算前复查租约 deadline，过期整体回滚由 reaper 回收；
+4. 0037/0038 down 兼容真实新状态数据，往返脚本扩展第 4 场景实测通过；
+5. 低级风险（exc_info 日志、预算启动校验、fact-id 混用、坏 payload 逐条跳过、
+   分页欠返、证据 JSON 口径）全部关闭；
+6. 七个任务元数据由 completed 改回 in_progress（release_gate=partial），
+   子任务 implement.md 清单补记实际完成项，归档解除后父/延期链接恢复有效。
+
+修复后门禁：backend 963 passed/3 skipped；ruff check / format --check 全仓通过；
+mypy app 0 错误；E2E、评测、迁移往返脚本退出码 0。发布门禁维持 PARTIAL
+（真实 provider E2E 未运行）。

@@ -2,18 +2,18 @@
 
 ## 开始条件
 
-- [ ] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
-- [ ] 确认依赖：`09-11-steward-production-ops`。
-- [ ] 取得最新实施摘要的明确批准再 task.py start；当前仅规划。
+- [x] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
+- [x] 确认依赖：`09-11-steward-production-ops`。
+- [x] 取得最新实施摘要的明确批准并完成本任务实现；发布门禁仍为 partial。
 
 ## 有序执行
 
-- [ ] 1. 用独立连接构建慢 transport 写锁复现，先保存观察结果。
-- [ ] 2. 设计 batch/attempt migration 并加入 conftest 子表清理顺序；新增 core 和 assist 分阶段测试。
-- [ ] 3. 把 _execute_locked 内网络调用移到提交后的辅助执行器；创建 batch 与 core 在同一短事务。
-- [ ] 4. 实现预算预留、usage 校验、byte/deadline 上限、unknown 处置和有限执行并发。
-- [ ] 5. 加入回写版本/权限/设置 fence；与 quality-security 共享发包政策适配器，不复制授权逻辑。
-- [ ] 6. 完成故障注入和 migration 往返；更新“savepoint 防回滚”旧说明与真实 crash 合同。
+- [x] 1. 用独立连接构建慢 transport 写锁复现，先保存观察结果。
+- [x] 2. 设计 batch/attempt migration 并加入 conftest 子表清理顺序；新增 core 和 assist 分阶段测试。
+- [x] 3. 把 _execute_locked 内网络调用移到提交后的辅助执行器；创建 batch 与 core 在同一短事务。
+- [x] 4. 实现预算预留、usage 校验、byte/deadline 上限、unknown 处置和有限执行并发。
+- [x] 5. 加入回写版本/权限/设置 fence；与 quality-security 共享发包政策适配器，不复制授权逻辑。
+- [x] 6. 完成故障注入和 migration 往返；更新“savepoint 防回滚”旧说明与真实 crash 合同。
 
 ## 改动边界与重用位置
 
@@ -40,6 +40,6 @@ cd backend
 
 ## 回滚与交接
 
-- [ ] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
-- [ ] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
-- [ ] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。
+- [x] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
+- [x] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
+- [x] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。

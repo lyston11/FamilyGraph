@@ -3,7 +3,7 @@
   "name": "steward-assist-execution",
   "title": "Steward 模型调用事务隔离、预算与崩溃恢复",
   "description": "把核心结果的成功与辅助模型的成败分开，使慢模型不占用 SQLite 写锁；调用失败、崩溃和预算耗尽可追溯且不会无限付费或回写陈旧内容。",
-  "status": "completed",
+  "status": "in_progress",
   "dev_type": "fullstack",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-11",
-  "completedAt": "2026-09-12",
+  "completedAt": null,
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -28,7 +28,7 @@
     "backend/app/config.py",
     "backend/tests/conftest.py"
   ],
-  "notes": "详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes；仅规划。",
+  "notes": "实现回归已完成；发布门禁为 partial（真实 provider E2E 未运行）。详细范围、接口、验收、依赖和回滚见 prd/design/implement/notes。",
   "meta": {
     "planning_date": "2026-09-11",
     "execution_gate": "awaiting_implementation_review",
@@ -42,6 +42,8 @@
       "F16",
       "F19"
     ],
-    "wave": "current"
+    "wave": "current",
+    "release_gate": "partial",
+    "gate_note": "实现回归已通过（backend 963 passed；E2E/评测/迁移往返脚本退出码 0）；真实 provider E2E 未运行，发布门禁为 PARTIAL（stub-only），不得标记 completed——审计结论 2026-09-12。"
   }
 }

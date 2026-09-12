@@ -2,18 +2,18 @@
 
 ## 开始条件
 
-- [ ] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
-- [ ] 确认依赖：`09-11-steward-production-ops`。
-- [ ] 取得最新实施摘要的明确批准再 task.py start；当前仅规划。
+- [x] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
+- [x] 确认依赖：`09-11-steward-production-ops`。
+- [x] 取得最新实施摘要的明确批准并完成本任务实现；发布门禁仍为 partial。
 
 ## 有序执行
 
-- [ ] 1. 逐个采样 actual event producer，建立 fixtures 与事件影响矩阵，先复现前缀/全局失效缺失。
-- [ ] 2. 实现统一影响解析并同时用于 invalidation、queue、建议失效。
-- [ ] 3. 补合法访问后 PFV ensure/init，保持 account.claimed 两入口，处理已存在 self-registration。
-- [ ] 4. 替换 purpose 充当 policy version，接入词典解析和版本；修复 per-view savepoint。
-- [ ] 5. 实现完整路径与替代路径重验、授权优先 ETag、无隐式未提交缓存的 GET。
-- [ ] 6. 跑 backend PFV/bridge/terms/claim/recommendations 与 frontend 页面/store 缓存回归。
+- [x] 1. 逐个采样 actual event producer，建立 fixtures 与事件影响矩阵，先复现前缀/全局失效缺失。
+- [x] 2. 实现统一影响解析并同时用于 invalidation、queue、建议失效。
+- [x] 3. 补合法访问后 PFV ensure/init，保持 account.claimed 两入口，处理已存在 self-registration。
+- [x] 4. 替换 purpose 充当 policy version，接入词典解析和版本；修复 per-view savepoint。
+- [x] 5. 实现完整路径与替代路径重验、授权优先 ETag、无隐式未提交缓存的 GET。
+- [x] 6. 跑 backend PFV/bridge/terms/claim/recommendations 与 frontend 页面/store 缓存回归。
 
 ## 改动边界与重用位置
 
@@ -42,6 +42,6 @@ cd backend
 
 ## 回滚与交接
 
-- [ ] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
-- [ ] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
-- [ ] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。
+- [x] 按 design 的停用顺序验证，核心授权检查不能随辅助回滚移除。
+- [x] 把实测命令、结果、故障/安全限制和剩余项追加 notes.md；没有外部证据不能声称真实 provider E2E。
+- [x] 更新所属 spec、父任务 findings/验收清单；不得仅靠归档标记认定修复。

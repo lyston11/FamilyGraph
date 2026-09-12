@@ -1,7 +1,7 @@
 # Steward 端到端发布门禁与可观测性
 
 > 父任务：[09-11-steward-complete-hardening](../09-11-steward-complete-hardening/prd.md)
-> 状态：规划完成待实施评审；本轮不启动；优先级 P2。
+> 状态：实现回归已通过（2026-09-12）；发布门禁 PARTIAL——真实 provider E2E 未运行，不得标记 completed（审计结论见 ../09-11-steward-release-observability/release-evidence.md §8）。
 
 ## Goal
 
