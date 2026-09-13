@@ -124,9 +124,17 @@ npm run build
 - 步骤 5（部分）：GET `/api/personal-family-view?progressive=true` 返回 `progress` 块（contract_version pfv-progress-v1、phase、generation/revision、completed/total、next_poll_ms）；缺省响应不含 progress（`response_model_exclude_unset`）。前端：结果未就绪按 next_poll_ms 轮询、首屏才 fitView（称谓批次不重排视口）、无称谓节点显示「整理中」、decoder/store/types 同步。
 - 检查：backend ruff/format/mypy 通过；pytest 1055 passed（含新增 `test_steward_short_tx.py`——慢计算期间独立连接写入 <5s 完成的 AC1 核心回归、发布栅栏、发布结果等价；`test_personal_family_view_progressive.py` 7 项合同）；frontend lint/type-check/test(583)/build 全通过。未运行 frontend-api-smoke（需完整开发环境，本机未起 dev-up）。
 
-尚未实施（后续轮次，按 design.md 全量合同）：
+第二轮（2026-09-14，commit 0baf299）已实施：
 
-- generation 分区表、retry budget、publication 指针、delivery intents 的迁移与状态机（步骤 2 的存储半边）；当前分块提交仍写入现有 DerivedFact/PFV 行，由 evidence_hash 指纹 + 后继扫描收敛。
-- 必需工作清单/执行游标的持久后继集合、跨代预算与人工重试合同（步骤 3 剩余）。
-- demand/focus/retry POST 入口、展示有效期响应头与 304 续期、ETag 绑定 generation/revision（步骤 5 剩余）。
-- 推测层独立重验增强、admin 端核心/交付分离视图、性能实测矩阵（AC1 的 30/50/200 人冷热样本、两次真实 300 秒扫描窗口）。
+- 迁移 0044（`steward_generations`/`steward_generation_views`/`steward_retry_budgets`）：隔离库 upgrade → downgrade → 重升级验证通过。
+- 执行器接入：每代次登记发布行（指纹+游标）；无变化指纹短路结构重算（有 failed 视图的代次不算完整发布）；per-viewer 真实进度行；必需阶段失败按指纹跨代记账，耗尽整代失败（不发布/不推进水位）。
+- 渐进 API：progress 优先读代次进度行（generation/revision 单调，stale running → retrying）；POST `/personal-family-view/demand`（成员 404 fail-closed、focus 骨架内校验 422、活跃作业合并）；200/304 签发 `X-PFV-Display-Until`（默认 300s）。
+- 推测层重验增强（effective_enabled + viewer_path 逐步重验）；admin status 增 `delivery_backlog`/`latest_generation`。
+- 基准脚本 `scripts/benchmark-steward-recompute.py`（隔离临时库）。实测（本机 macOS/SQLite WAL/busy_timeout=5000）：30 人冷 13.4s / 热 0.019s（短路生效）；50 人冷 60.0s / 热 0.027s；冷算期间并发写 0 失败，p95 9.6–15.7ms、p99 19.9–27.9ms（≤100ms 目标达标）；max 偶发 525ms（30 人）/1387ms（50 人）尖峰——疑似 WAL autocheckpoint/fsync，属 AC1「单次 >500ms 必须整改项」，整改方向：视图行分块应用与 checkpoint 调优（未在本轮实施）。200 人样本与真实 300 秒扫描窗口观测未执行（脚本已支持）。
+- spec 更新：`.trellis/spec/backend/steward-action-card.md` §9（短事务/generation/demand 合同）。
+
+仍未实施（后续轮次）：
+
+- 全 staging + publication 指针读路径切换（当前 PFV live 行按视图原子重建，跨视图代次一致性靠指纹+后继扫描收敛）；
+- delivery intents 独立表（辅助交付沿用 StewardAssistBatch 状态机）；
+- admin_rerun 预算放宽的 API 化；max 尖峰整改（见上）。
