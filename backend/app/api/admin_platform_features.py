@@ -10,11 +10,23 @@ from app.api.deps import get_db
 from app.schemas.platform_features import (
     PlatformFeatureAdminOut,
     PlatformFeatureUpdateRequest,
+    StewardAssistSwitchesOut,
 )
 from app.services import admin_audit, platform_features
 
 router = APIRouter(prefix="/admin-api/v1", tags=["admin-platform-features"])
 _ENDPOINT = "/admin-api/v1/platform-features"
+
+
+def _assist_out(state: platform_features.PlatformFeatureState) -> StewardAssistSwitchesOut:
+    return StewardAssistSwitchesOut(
+        candidate=state.steward_assist_candidate,
+        ranking=state.steward_assist_ranking,
+        explanation=state.steward_assist_explanation,
+        candidate_source=state.steward_assist_candidate_source,
+        ranking_source=state.steward_assist_ranking_source,
+        explanation_source=state.steward_assist_explanation_source,
+    )
 
 
 def _out(db: Session) -> PlatformFeatureAdminOut:
@@ -24,6 +36,7 @@ def _out(db: Session) -> PlatformFeatureAdminOut:
         rag_enabled=state.rag_enabled,
         memory_source=state.memory_source,
         rag_source=state.rag_source,
+        steward_assist=_assist_out(state),
         updated_at=state.updated_at,
     )
 
@@ -64,6 +77,9 @@ def update_platform_features(
         db,
         memory_enabled=body.memory_enabled,
         rag_enabled=body.rag_enabled,
+        steward_assist_candidate=body.steward_assist_candidate,
+        steward_assist_ranking=body.steward_assist_ranking,
+        steward_assist_explanation=body.steward_assist_explanation,
         system_admin_id=admin.id,
     )
     admin_audit.record_access(
@@ -74,6 +90,9 @@ def update_platform_features(
         filters={
             "memory_enabled": body.memory_enabled,
             "rag_enabled": body.rag_enabled,
+            "steward_assist_candidate": body.steward_assist_candidate,
+            "steward_assist_ranking": body.steward_assist_ranking,
+            "steward_assist_explanation": body.steward_assist_explanation,
         },
         result_count=1,
         ip=_ip(request),
@@ -84,5 +103,6 @@ def update_platform_features(
         rag_enabled=state.rag_enabled,
         memory_source=state.memory_source,
         rag_source=state.rag_source,
+        steward_assist=_assist_out(state),
         updated_at=state.updated_at,
     )

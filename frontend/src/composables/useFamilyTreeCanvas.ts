@@ -2,6 +2,7 @@ import type {
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
+  PersonalFamilyViewInferredEdge,
   PersonalFamilyViewTopologyEdge,
 } from '@/types/api'
 
@@ -30,6 +31,10 @@ export interface FamilyCanvasNodeData {
   isSelf: boolean
   /** 服务端解析的 viewer→该成员称谓；null = 暂无 */
   term: string | null
+  /** 推测层：该成员仅经推测边上树（inclusion_reason_code=inferred_path） */
+  inferred: boolean
+  /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
+  inferredTerm: string | null
 }
 
 export interface FamilyCanvasNode {
@@ -39,6 +44,10 @@ export interface FamilyCanvasNode {
   isSelf: boolean
   /** 服务端解析的 viewer→该成员称谓；null = 暂无 */
   term: string | null
+  /** 推测层成员：节点卡片渲染「推测」角标 */
+  inferred: boolean
+  /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
+  inferredTerm: string | null
   x: number
   y: number
 }
@@ -56,10 +65,22 @@ export interface FamilyStructuralEdge {
   orientation: 'vertical' | 'horizontal'
 }
 
+/** 推测边画布规格（09-13 推测层）：虚线渲染 + 一键确认/驳回 */
+export interface FamilyCanvasInferredEdgeSpec {
+  key: string
+  edge: PersonalFamilyViewInferredEdge
+  /** 虚线边标签：单跳确定性称谓（subject→object 方向） */
+  label: string | null
+  sourceUserId: number
+  targetUserId: number
+}
+
 export interface FamilyCanvasModel {
   nodes: FamilyCanvasNode[]
   /** confirmed 结构边：画布连线的唯一来源 */
   edges: FamilyStructuralEdge[]
+  /** 管家推测边：独立虚线叠层，不进入 confirmed 布局约束 */
+  inferredEdges: FamilyCanvasInferredEdgeSpec[]
   /** 个人摘要边（viewer→成员称谓路径）：只用于节点名牌称谓与几何估计，绝不画线 */
   summaryEdges: PersonalFamilyViewEdge[]
   /** false = 旧载荷缺 topology_edges 字段：结构数据未提供（区别于合法空数组） */
@@ -81,37 +102,6 @@ export const HANDLE_SOURCE_BOTTOM = 'fg-handle-src-bottom'
 export const HANDLE_TARGET_LEFT = 'fg-handle-tgt-left'
 export const HANDLE_SOURCE_RIGHT = 'fg-handle-src-right'
 
-/**
- * 构造画布模型：nodes 来自已解码快照；edges 只来自 confirmed 结构边。
- * 个人摘要 edges 不进入连线——它们是 viewer 视角路径摘要，不是亲属结构。
- */
-export function buildFamilyCanvas(
-  data: PersonalFamilyViewData,
-  viewerId: number | null,
-): FamilyCanvasModel {
-  const topologyAvailable = data.topology_edges !== null
-  const edges: FamilyStructuralEdge[] = (data.topology_edges ?? []).map((edge) => ({
-    key: edge.id,
-    edge,
-    label: structuralEdgeLabel(edge),
-    sourceUserId: edge.from_user_id,
-    targetUserId: edge.to_user_id,
-    orientation: edge.edge_kind === 'parent' ? 'vertical' : 'horizontal',
-  }))
-
-  const nodes: FamilyCanvasNode[] = data.nodes.map((node) => ({
-    userId: node.user_id,
-    display: node.display,
-    visibilityLevel: node.visibility_level,
-    isSelf: viewerId !== null && node.user_id === viewerId,
-    term: viewerId === null ? null : termTowardViewer(node.user_id, viewerId, data.edges),
-    x: 0,
-    y: 0,
-  }))
-
-  return { nodes, edges, summaryEdges: data.edges, topologyAvailable }
-}
-
 /** viewer 视角称谓：取第一条连接 viewer 与该成员的摘要边的 term（仅节点名牌用） */
 function termTowardViewer(
   userId: number,
@@ -127,6 +117,60 @@ function termTowardViewer(
   return null
 }
 
+export function buildFamilyCanvas(
+  data: PersonalFamilyViewData,
+  viewerId: number | null,
+): FamilyCanvasModel {
+  const topologyAvailable = data.topology_edges !== null
+  const edges: FamilyStructuralEdge[] = (data.topology_edges ?? []).map((edge) => ({
+    key: edge.id,
+    edge,
+    label: structuralEdgeLabel(edge),
+    sourceUserId: edge.from_user_id,
+    targetUserId: edge.to_user_id,
+    orientation: edge.edge_kind === 'parent' ? 'vertical' : 'horizontal',
+  }))
+
+  const nodeUserIds = new Set(data.nodes.map((node) => node.user_id))
+  const inferredEdges: FamilyCanvasInferredEdgeSpec[] = data.inferred_edges
+    .filter(
+      (edge) => nodeUserIds.has(edge.subject_user_id) && nodeUserIds.has(edge.object_user_id),
+    )
+    .map((edge) => ({
+      key: `i-${edge.id}`,
+      edge,
+      label: edge.term,
+      sourceUserId: edge.subject_user_id,
+      targetUserId: edge.object_user_id,
+    }))
+
+  const inferredTermByUser = new Map<number, string | null>()
+  for (const edge of data.inferred_edges) {
+    if (edge.new_user_id !== null && !inferredTermByUser.has(edge.new_user_id)) {
+      inferredTermByUser.set(edge.new_user_id, edge.viewer_term)
+    }
+  }
+
+  const nodes: FamilyCanvasNode[] = data.nodes.map((node) => ({
+    userId: node.user_id,
+    display: node.display,
+    visibilityLevel: node.visibility_level,
+    isSelf: viewerId !== null && node.user_id === viewerId,
+    term: viewerId === null ? null : termTowardViewer(node.user_id, viewerId, data.edges),
+    inferred: node.inclusion_reason_code === 'inferred_path',
+    inferredTerm: inferredTermByUser.get(node.user_id) ?? null,
+    x: 0,
+    y: 0,
+  }))
+
+  return { nodes, edges, inferredEdges, summaryEdges: data.edges, topologyAvailable }
+}
+
+/**
+ * 树状布局（默认）：confirmed 结构边存在时走确定性世代布局（design.md §6）；
+ * 世代约束矛盾 → failed=true 并回退自由画布摆位。结构数据未提供（旧载荷）
+ * 时仅按个人摘要估计几何位置——不绘制任何星形替代连线。
+ */
 export interface TreeLayoutOutcome {
   nodes: FamilyCanvasNode[]
   /**
@@ -136,11 +180,6 @@ export interface TreeLayoutOutcome {
   failed: boolean
 }
 
-/**
- * 树状布局（默认）：confirmed 结构边存在时走确定性世代布局（design.md §6）；
- * 世代约束矛盾 → failed=true 并回退自由画布摆位。结构数据未提供（旧载荷）
- * 时仅按个人摘要估计几何位置——不绘制任何星形替代连线。
- */
 export function applyTreeViewLayout(
   model: FamilyCanvasModel,
   viewerId: number | null,
@@ -148,22 +187,111 @@ export function applyTreeViewLayout(
   if (!model.topologyAvailable) {
     return { nodes: estimatePositionsFromSummary(model, viewerId), failed: false }
   }
+  // confirmed 节点只由 confirmed 结构边约束（推测边不重排 confirmed 世代）
+  const confirmedNodes = model.nodes.filter((node) => !node.inferred)
   const positions = computeFamilyTreeLayout({
-    userIds: model.nodes.map((node) => node.userId),
+    userIds: confirmedNodes.map((node) => node.userId),
     edges: model.edges.map((spec) => spec.edge),
     viewerId,
   })
   if (positions === null) {
     return { nodes: applyFreeCanvasLayout(model), failed: true }
   }
+  const allPositions = placeInferredNodes(model, positions)
   return {
     nodes: model.nodes.map((node) => ({
       ...node,
-      x: positions.get(node.userId)?.x ?? 0,
-      y: positions.get(node.userId)?.y ?? 0,
+      x: allPositions.get(node.userId)?.x ?? 0,
+      y: allPositions.get(node.userId)?.y ?? 0,
     })),
     failed: false,
   }
+}
+
+/**
+ * 推测节点摆位（09-13 推测层 × 结构布局并存）：沿推测单跳方向传播世代带
+ * （parent 类低一带、对称类同带；逐轮传播直至稳定，上限 = 推测边数——有界、
+ * 确定性），横向锚定首个已定位邻居并按占用扫描避让；未锚定时回退环形兜底位。
+ * 只影响几何摆位：推测边由视图单独虚线渲染，不进入 confirmed 结构。
+ */
+function placeInferredNodes(
+  model: FamilyCanvasModel,
+  confirmedPositions: Map<number, { x: number; y: number }>,
+): Map<number, { x: number; y: number }> {
+  const result = new Map(confirmedPositions)
+  const inferredNodes = model.nodes.filter(
+    (node) => node.inferred && !result.has(node.userId),
+  )
+  if (inferredNodes.length === 0) return result
+
+  const rankByUser = new Map<number, number>()
+  for (const [userId, position] of confirmedPositions) {
+    rankByUser.set(userId, Math.round(position.y / ROW_SPACING))
+  }
+  for (let round = 0; round <= model.inferredEdges.length; round += 1) {
+    let changed = false
+    for (const spec of model.inferredEdges) {
+      const subjectId = spec.edge.subject_user_id
+      const objectId = spec.edge.object_user_id
+      const sym =
+        spec.edge.relation_kind === 'spouse' ||
+        spec.edge.relation_kind === 'partner' ||
+        spec.edge.relation_kind === 'direct_sibling'
+      const rankSubject = rankByUser.get(subjectId)
+      const rankObject = rankByUser.get(objectId)
+      if (rankSubject !== undefined && rankObject === undefined) {
+        rankByUser.set(objectId, sym ? rankSubject : rankSubject + 1)
+        changed = true
+      } else if (rankObject !== undefined && rankSubject === undefined) {
+        rankByUser.set(subjectId, sym ? rankObject : rankObject - 1)
+        changed = true
+      }
+    }
+    if (!changed) break
+  }
+
+  const fallbackRing = new Map(
+    applyFreeCanvasLayout(model)
+      .filter((node) => node.inferred)
+      .map((node) => [node.userId, { x: node.x, y: node.y }]),
+  )
+  const occupied = new Set(
+    [...result.values()].map((p) => `${Math.round(p.x)}:${Math.round(p.y)}`),
+  )
+  for (const node of inferredNodes) {
+    const rank = rankByUser.get(node.userId)
+    if (rank === undefined) {
+      const fallback = fallbackRing.get(node.userId)
+      if (fallback) {
+        result.set(node.userId, fallback)
+        occupied.add(`${Math.round(fallback.x)}:${Math.round(fallback.y)}`)
+      }
+      continue
+    }
+    const y = rank * ROW_SPACING
+    let anchorX: number | null = null
+    for (const spec of model.inferredEdges) {
+      const subjectId = spec.edge.subject_user_id
+      const objectId = spec.edge.object_user_id
+      const other =
+        subjectId === node.userId
+          ? objectId
+          : objectId === node.userId
+            ? subjectId
+            : null
+      if (other === null) continue
+      const anchor = result.get(other)
+      if (anchor !== undefined) {
+        anchorX = anchor.x
+        break
+      }
+    }
+    let x = anchorX === null ? 0 : anchorX + COL_SPACING
+    while (occupied.has(`${Math.round(x)}:${Math.round(y)}`)) x += COL_SPACING
+    result.set(node.userId, { x, y })
+    occupied.add(`${Math.round(x)}:${Math.round(y)}`)
+  }
+  return result
 }
 
 /**
@@ -178,19 +306,46 @@ function estimatePositionsFromSummary(
   const deltaByUser = new Map<number, number>()
   for (const node of model.nodes) deltaByUser.set(node.userId, 0)
 
+  const touched = new Set<number>(viewerId !== null ? [viewerId] : [])
   if (viewerId !== null) {
     const summaryEdges = model.summaryEdges ?? []
-    const seen = new Set<number>()
     for (const edge of summaryEdges) {
       const delta = summaryGenerationDelta(edge, viewerId)
       if (delta === null) continue
       const other = edge.from_user_id === viewerId ? edge.to_user_id : edge.from_user_id
       // 同一成员多条边时取首次结果，保证确定性
-      if (!seen.has(other)) {
-        seen.add(other)
+      if (!touched.has(other)) {
+        touched.add(other)
         deltaByUser.set(other, delta)
       }
     }
+  }
+
+  // 推测层节点摆位（09-13）：沿推测单跳方向传播世代差（parent 类 subject 是
+  // object 的家长 → object 低一带；对称类同带）。链式推测逐轮传播直至稳定，
+  // 上限 = 推测边数（确定性；只影响几何摆位，不产生关系语义结论）。
+  for (let round = 0; round <= model.inferredEdges.length; round += 1) {
+    let changed = false
+    for (const spec of model.inferredEdges) {
+      const subjectId = spec.edge.subject_user_id
+      const objectId = spec.edge.object_user_id
+      const sym =
+        spec.edge.relation_kind === 'spouse' ||
+        spec.edge.relation_kind === 'partner' ||
+        spec.edge.relation_kind === 'direct_sibling'
+      const deltaSubject = deltaByUser.get(subjectId)
+      const deltaObject = deltaByUser.get(objectId)
+      if (deltaSubject !== undefined && deltaObject === undefined) {
+        deltaByUser.set(objectId, sym ? deltaSubject : deltaSubject + 1)
+        touched.add(objectId)
+        changed = true
+      } else if (deltaObject !== undefined && deltaSubject === undefined) {
+        deltaByUser.set(subjectId, sym ? deltaObject : deltaObject - 1)
+        touched.add(subjectId)
+        changed = true
+      }
+    }
+    if (!changed) break
   }
 
   const bands = new Map<number, number[]>()

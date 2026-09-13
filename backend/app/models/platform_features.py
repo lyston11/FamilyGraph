@@ -19,6 +19,10 @@ class PlatformFeatureConfig(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     memory_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     rag_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 09-13：平台级 Steward 辅助开关（治理面与 memory/rag 一致；行缺失 = env 回退）
+    steward_assist_candidate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    steward_assist_ranking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    steward_assist_explanation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_by_system_admin_id: Mapped[int | None] = mapped_column(
         ForeignKey("system_admins.id", ondelete="SET NULL"), nullable=True

@@ -71,6 +71,7 @@ from app.services import (
     recommendation_matrix,
     steward_assist,
     steward_events,
+    steward_inferred,
     steward_suggestions,
 )
 from app.services.action_cards import ACTION_SUPERSEDE
@@ -1008,6 +1009,8 @@ def _execute_locked(
         "findings_emitted": 0,
         "cards_expired": 0,
         "personal_family_views_rebuilt": 0,
+        "inferred_projected": 0,
+        "inferred_superseded": 0,
     }
     visible = _space_visible_user_ids(db, space)
     floor = _completed_cursor_floor(db, job)
@@ -1048,6 +1051,29 @@ def _execute_locked(
             type(exc).__name__,
         )
         stats["suggestions_projected"] = 0
+
+    # 5.6 推测层投影（09-13）：LLM 候选 → 推测边（显示层投影，永不写事实）。
+    #     与建议投影同一 SAVEPOINT 隔离纪律：失败仅记日志，不拖垮确定性 core。
+    try:
+        with db.begin_nested():
+            stats["inferred_superseded"] = steward_inferred.supersede_evidence_changed(
+                db, job.space_id, now=now
+            )
+            stats["inferred_projected"] = steward_inferred.project_for_job(
+                db,
+                job,
+                facts=_applicable_confirmed_facts(db, space, visible),
+                visible=visible,
+                now=now,
+            )
+    except Exception as exc:  # noqa: BLE001 — 推测投影绝不拖垮确定性 core
+        logger.warning(
+            "steward inferred projection failed for job %s (error=%s)",
+            job.id,
+            type(exc).__name__,
+        )
+        stats["inferred_superseded"] = 0
+        stats["inferred_projected"] = 0
 
     # 3. 推荐矩阵 → 出卡（先重验证旧卡再出新卡，避免陈旧卡阻塞去重）
     stats["cards_superseded"] += _revalidate_active_cards(db, space, now=now)

@@ -84,6 +84,30 @@ onMounted(load)
 
 const MODELS_SEPARATOR = ','
 
+/** LearnGraph 风格的快捷接入：只预填连接信息，密钥和模型仍由管理员确认。 */
+const QUICK_PROVIDER_PRESETS = [
+  {
+    id: 'liu-dada',
+    label: 'liu-dada',
+    description: '平台受控云模型',
+    name: 'liu-dada',
+    baseUrl: 'https://api.liu-dada.com/v1',
+    api: 'openai-responses' as const,
+    kind: 'openai_compatible' as const,
+    models: 'gpt-5.6-sol',
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama',
+    description: '本机模型，无需 API Key',
+    name: 'Ollama',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    api: 'openai-completions' as const,
+    kind: 'local' as const,
+    models: '',
+  },
+] as const
+
 interface ProviderFormState {
   name: string
   kind: AgentProviderKind
@@ -127,6 +151,23 @@ function openCreate(): void {
   form.value = blankForm()
   formError.value = ''
   formMode.value = 'create'
+}
+
+function applyQuickProvider(presetId: string): void {
+  const preset = QUICK_PROVIDER_PRESETS.find((item) => item.id === presetId)
+  if (!preset) return
+  form.value = {
+    ...form.value,
+    name: preset.name,
+    kind: preset.kind,
+    api: preset.api,
+    baseUrl: preset.baseUrl,
+    models: preset.models,
+  }
+}
+
+function resetProviderFields(): void {
+  form.value = blankForm()
 }
 
 function openEdit(row: AdminAgentProviderOut): void {
@@ -219,6 +260,7 @@ const pdForm = ref<Record<'assistant' | 'steward', PdKindState>>({
   assistant: { providerId: '', model: '' },
   steward: { providerId: '', model: '' },
 })
+const pdManualModel = ref<Record<'assistant' | 'steward', string>>({ assistant: '', steward: '' })
 const pdError = ref('')
 const pdSuccess = ref('')
 const pdSubmitting = ref(false)
@@ -233,12 +275,14 @@ function syncPdForm(): void {
       providerId: current === null ? '' : String(current.provider_id),
       model: current?.model ?? '',
     }
+    pdManualModel.value[kind] = current?.model ?? ''
   }
 }
 
 function onPdProviderChange(kind: 'assistant' | 'steward'): void {
   // Provider 变更时 model 联动重置：旧 model 大概率不在新 allowlist 内
   pdForm.value[kind].model = ''
+  pdManualModel.value[kind] = ''
 }
 
 function pdModelsFor(kind: 'assistant' | 'steward'): string[] {
@@ -256,9 +300,10 @@ async function savePlatformDefaults(): Promise<void> {
     for (const kind of ['assistant', 'steward'] as const) {
       const state = pdForm.value[kind]
       const providerId = Number(state.providerId)
+      const model = pdManualModel.value[kind].trim() || state.model
       payload[kind] =
-        state.providerId && state.model && Number.isFinite(providerId)
-          ? { provider_id: providerId, model: state.model }
+        state.providerId && model && Number.isFinite(providerId)
+          ? { provider_id: providerId, model }
           : null
     }
     platformDefaults.value = await putPlatformDefaults(
@@ -278,6 +323,14 @@ function describeDefault(kind: 'assistant' | 'steward'): string {
   if (current === null) return '未设置（新空间将提示联系管理员）'
   const provider = providers.value.find((row) => row.id === current.provider_id)
   return `${provider?.name ?? `Provider #${current.provider_id}`} · ${current.model}`
+}
+
+function defaultModelForProvider(providerId: number): string {
+  const defaults = platformDefaults.value
+  const matches = [defaults?.assistant, defaults?.steward].filter(
+    (item): item is NonNullable<typeof item> => item?.provider_id === providerId,
+  )
+  return matches[0]?.model ?? '未设默认'
 }
 
 // ---- 区块 3：空间设置只读排查 ----
@@ -325,7 +378,7 @@ async function lookupSpace(): Promise<void> {
     </p>
 
     <!-- 区块 1：Provider 注册表 -->
-    <section class="ag-card" aria-labelledby="provider-registry-title">
+    <section class="ag-card provider-registry-card" aria-labelledby="provider-registry-title">
       <h2 id="provider-registry-title" class="ag-heading-section">Provider 注册表</h2>
       <PageState v-if="listState !== 'ready'" :state="listState" empty-text="暂无 Provider" @retry="load" />
       <template v-else>
@@ -341,39 +394,51 @@ async function lookupSpace(): Promise<void> {
           </button>
         </div>
         <div v-if="providers.length === 0">
-          <PageState state="empty" empty-text="尚无注册的 Provider" />
+          <div class="provider-empty-state">
+            <strong>还没有模型服务商</strong>
+            <span>先填写服务商地址和 API Key，再把模型设为助手或管家的默认模型。</span>
+            <button type="button" class="ag-tag ag-btn-primary" data-testid="provider-empty-cta" @click="openCreate">
+              添加第一个服务商
+            </button>
+          </div>
         </div>
         <div v-else class="ag-table-wrap">
+          <div class="provider-catalog-bar" role="tablist" aria-label="Provider 服务能力">
+            <span class="provider-catalog-label">服务与模型</span>
+            <button type="button" class="provider-catalog-pill provider-catalog-pill-active" role="tab" aria-selected="true">
+              模型
+            </button>
+            <span class="provider-catalog-note">已注册的连接、密钥状态与默认模型</span>
+          </div>
           <table class="ag-table" data-testid="provider-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>名称</th>
-                <th>类型</th>
-                <th>接口</th>
-                <th>允许模型</th>
-                <th>密钥</th>
+                <th>实例</th>
+                <th>协议</th>
                 <th>状态</th>
-                <th>更新时间</th>
+                <th>密钥</th>
+                <th>默认模型</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="row in providers" :key="row.id">
-                <td>{{ row.id }}</td>
-                <td>{{ row.name }}</td>
-                <td>{{ row.kind === 'local' ? '本地' : '云(openai_compatible)' }}</td>
-                <td>{{ row.api }}</td>
-                <td>{{ row.allowed_models.join('、') }}</td>
+                <td>
+                  <strong class="provider-instance-name">{{ row.name }}</strong>
+                  <small class="provider-instance-meta">{{ row.kind === 'local' ? '本地' : '云兼容（openai_compatible）' }} · #{{ row.id }}</small>
+                </td>
+                <td><span class="provider-protocol">{{ row.api }}</span></td>
+                <td>
+                  <span class="ag-tag" :class="{ 'ag-tag-healthy': row.enabled }">
+                    {{ row.enabled ? '已启用' : '已停用' }}
+                  </span>
+                </td>
                 <td>
                   <span class="ag-tag">{{ row.has_secret ? '已配置' : '无' }}</span>
                 </td>
                 <td>
-                  <span class="ag-tag" :class="{ 'ag-tag-healthy': row.enabled }">
-                    {{ row.enabled ? '启用' : '停用' }}
-                  </span>
+                  <span class="provider-default-model">{{ defaultModelForProvider(row.id) }}</span>
                 </td>
-                <td>{{ row.updated_at }}</td>
                 <td>
                   <button
                     type="button"
@@ -389,16 +454,39 @@ async function lookupSpace(): Promise<void> {
           </table>
         </div>
 
+        <div v-if="formMode !== 'closed'" class="provider-modal-layer" @click.self="closeForm">
         <form
-          v-if="formMode !== 'closed'"
-          class="provider-form"
+          class="provider-form provider-form-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="provider-form-title"
           novalidate
           data-testid="provider-form"
           @submit.prevent="submitForm"
         >
-          <h3 class="ag-heading-sm">
+          <h3 id="provider-form-title" class="ag-heading-sm">
             {{ formMode === 'create' ? '注册 Provider' : `编辑 Provider #${editing?.id}` }}
           </h3>
+          <p v-if="formMode === 'create'" class="provider-form-intro">
+            可以从快捷接入开始，也可以完全自定义。快捷项只预填地址与协议，不会保存 API Key。
+          </p>
+          <div v-if="formMode === 'create'" class="quick-provider-grid" aria-label="快捷接入">
+            <button
+              v-for="preset in QUICK_PROVIDER_PRESETS"
+              :key="preset.id"
+              type="button"
+              class="quick-provider-card"
+              :data-testid="`quick-provider-${preset.id}`"
+              @click="applyQuickProvider(preset.id)"
+            >
+              <strong>{{ preset.label }}</strong>
+              <span>{{ preset.description }}</span>
+            </button>
+            <button type="button" class="quick-provider-card quick-provider-card-custom" data-testid="quick-provider-custom" @click="resetProviderFields">
+              <strong>自定义</strong>
+              <span>填写任意兼容网关</span>
+            </button>
+          </div>
           <div class="provider-form-grid">
             <div class="form-field">
               <label for="provider-name">名称</label>
@@ -442,6 +530,7 @@ async function lookupSpace(): Promise<void> {
                 placeholder="gpt-5.6-sol, gpt-5.6-mini"
                 data-testid="provider-models"
               />
+              <small class="field-hint">填模型 ID，例如 gpt-5.6-sol；多个模型用逗号分隔。</small>
             </div>
             <div class="form-field">
               <label for="provider-secret">
@@ -485,6 +574,7 @@ async function lookupSpace(): Promise<void> {
             </button>
           </div>
         </form>
+        </div>
       </template>
     </section>
 
@@ -495,6 +585,10 @@ async function lookupSpace(): Promise<void> {
         仅决定通道与模型档位；空间是否同意云端执行仍由空间所有者决定。清除某维度 =
         新空间在该维度无可用模型（提示联系管理员）。
       </p>
+      <div v-if="providers.length === 0" class="provider-empty-hint">
+        <span>先添加一个模型服务商，平台默认才能绑定模型。</span>
+        <button type="button" class="ag-tag" data-testid="pd-open-provider" @click="openCreate">添加服务商</button>
+      </div>
       <div class="pd-grid">
         <div v-for="kind in (['assistant', 'steward'] as const)" :key="kind" class="pd-kind">
           <h3 class="ag-heading-sm">{{ kind === 'assistant' ? '助手（assistant）' : '管家（steward）' }}</h3>
@@ -526,6 +620,19 @@ async function lookupSpace(): Promise<void> {
                 {{ model }}
               </option>
             </select>
+            <input
+              v-model="pdManualModel[kind]"
+              :id="`pd-${kind}-model-manual`"
+              class="pd-model-input"
+              type="text"
+              :list="`pd-${kind}-models`"
+              :placeholder="pdForm[kind].providerId ? '也可以直接填写模型 ID' : '先选择服务商'"
+              :disabled="!pdForm[kind].providerId"
+              :data-testid="`pd-${kind}-model-manual`"
+            />
+            <datalist :id="`pd-${kind}-models`">
+              <option v-for="model in pdModelsFor(kind)" :key="model" :value="model" />
+            </datalist>
           </div>
         </div>
       </div>
@@ -594,6 +701,176 @@ async function lookupSpace(): Promise<void> {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--ag-border, rgba(148, 163, 184, 0.25));
+}
+
+.ag-card.provider-registry-card {
+  /* fixed 弹层不能嵌在会创建定位上下文的卡片内，否则打开时会出现跳跃。 */
+  transform: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.provider-modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--ag-bg, #02080c) 88%, transparent);
+  backdrop-filter: blur(8px);
+  isolation: isolate;
+}
+
+.provider-form-modal {
+  width: min(760px, 100%);
+  max-height: min(88vh, 760px);
+  overflow: auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 24px;
+  border: 1px solid var(--ag-border, rgba(148, 163, 184, 0.35));
+  border-radius: 16px;
+  background: var(--ag-glass-bg-strong, rgba(9, 20, 25, 0.96));
+  box-shadow: 0 24px 80px color-mix(in srgb, var(--ag-bg, #02080c) 65%, transparent);
+}
+
+.provider-form-modal .form-actions {
+  position: sticky;
+  bottom: -24px;
+  z-index: 1;
+  margin: 20px -24px -24px;
+  padding: 16px 24px 24px;
+  border-top: 1px solid var(--ag-border, rgba(148, 163, 184, 0.25));
+  background: var(--ag-glass-bg-strong, rgba(9, 20, 25, 0.96));
+}
+
+.provider-catalog-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ag-border, rgba(148, 163, 184, 0.25));
+}
+
+.provider-catalog-label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.provider-catalog-pill {
+  border: 1px solid var(--ag-border, rgba(148, 163, 184, 0.3));
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--ag-text-secondary, #aab9bf);
+  font-size: 12px;
+}
+
+.provider-catalog-pill-active {
+  border-color: var(--ag-primary, #a8d8d3);
+  background: var(--ag-primary, #a8d8d3);
+  color: var(--ag-ink, #102025);
+}
+
+.provider-catalog-note {
+  margin-left: auto;
+  color: var(--ag-text-secondary, #aab9bf);
+  font-size: 11px;
+}
+
+.provider-instance-name {
+  display: block;
+}
+
+.provider-instance-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--ag-text-secondary, #aab9bf);
+  font-size: 11px;
+}
+
+.provider-protocol,
+.provider-default-model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.provider-empty-state,
+.provider-empty-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 18px;
+  border: 1px dashed var(--ag-border, rgba(148, 163, 184, 0.35));
+  border-radius: 12px;
+  background: var(--ag-glass-bg, rgba(2, 12, 18, 0.45));
+}
+
+.provider-empty-state span,
+.provider-empty-hint span,
+.provider-form-intro,
+.field-hint {
+  color: var(--ag-text-secondary, #94a3b8);
+  font-size: 12px;
+}
+
+.provider-empty-state span {
+  flex: 1 1 260px;
+}
+
+.provider-empty-hint {
+  margin-bottom: 16px;
+}
+
+.quick-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 14px 0 16px;
+}
+
+.quick-provider-card {
+  display: flex;
+  min-height: 72px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--ag-border, rgba(148, 163, 184, 0.3));
+  border-radius: 10px;
+  background: var(--ag-surface, rgba(7, 24, 32, 0.55));
+  color: var(--ag-text, #e2e8f0);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.quick-provider-card:hover,
+.quick-provider-card:focus-visible {
+  border-color: var(--ag-primary, #8ed6ce);
+  background: var(--ag-glass-bg-strong, rgba(11, 35, 43, 0.72));
+  transform: translateY(-1px);
+}
+
+.quick-provider-card span {
+  color: var(--ag-text-secondary, #94a3b8);
+  font-size: 11px;
+}
+
+.quick-provider-card-custom {
+  border-style: dashed;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 5px;
+}
+
+.pd-model-input {
+  margin-top: 8px;
 }
 
 .provider-form-grid {

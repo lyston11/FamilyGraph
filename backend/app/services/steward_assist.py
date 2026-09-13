@@ -54,7 +54,7 @@ from app.models.steward import (
     StewardModelCall,
 )
 from app.models.user import User
-from app.services import action_cards, agent_provider, steward_guard
+from app.services import action_cards, agent_provider, platform_features, steward_guard
 from app.services.steward_guard import ProjectionContext
 from app.utils import timeutil
 
@@ -222,8 +222,12 @@ def trusted_explanations(db: Session, card_ids: list[int]) -> dict[int, str]:
 # ---- 开关 ----
 
 
-def _platform_flag(kind: str) -> bool:
-    return bool(getattr(config, f"STEWARD_ASSIST_{kind.upper()}"))
+def _platform_flag(db: Session, kind: str) -> bool:
+    """平台级辅助开关生效值：平台配置行治理（DB ∧ env 部署兜底），行缺失 = env。
+
+    09-13 治理迁移前本值只读 env；行缺失路径保持 env 回退（既有语义兼容）。
+    """
+    return platform_features.is_steward_assist_platform_enabled(db, kind)
 
 
 def _space_flag(db: Session, space_id: int, kind: str) -> bool:
@@ -242,7 +246,7 @@ def assist_enabled(db: Session, space_id: int, kind: str) -> bool:
     """有效开关 = 平台级 AND 空间级（steward 维度显式行）；默认全关。"""
     if kind not in ASSIST_KINDS:
         raise ValueError(f"unknown assist kind: {kind}")
-    return _platform_flag(kind) and _space_flag(db, space_id, kind)
+    return _platform_flag(db, kind) and _space_flag(db, space_id, kind)
 
 
 def _enabled_kinds(db: Session, space_id: int) -> list[str]:

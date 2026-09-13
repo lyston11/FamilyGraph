@@ -74,6 +74,8 @@ class GraphEdge:
     - parent：direction="up" 表示 to 是 from 的家长；"down" 反向；
       subtype 取自 fact_type（biological/adoptive/step/guardian）。
     - spouse/partner/sibling：direction="sym"，对称边双向各存一条。
+    - 推测边（extra_edges 注入）：fact_id = -(推测边 id) < 0，与 confirmed
+      事实（fact_id > 0）、bridge（fact_id = 0）区分；消费方据负值识别推测步。
     """
 
     to_id: int
@@ -81,6 +83,32 @@ class GraphEdge:
     subtype: str | None
     direction: str
     fact_id: int
+
+
+@dataclass(frozen=True)
+class ExtraEdge:
+    """增广图注入的推测单跳（PFV 推测层消费；id 为 steward_inferred_edges.id）。
+
+    subject 是 object 的家长类关系（parent 四型）或对称关系（spouse/partner/
+    direct_sibling）。fact_id 恒为 -id（负值标记推测步）。
+    """
+
+    edge_id: int
+    subject_user_id: int
+    object_user_id: int
+    relation_kind: str
+
+    @property
+    def fact_id(self) -> int:
+        return -self.edge_id
+
+
+_INFERENCE_PARENT_SUBTYPES = {
+    "biological_parent": "biological",
+    "adoptive_parent": "adoptive",
+    "step_parent": "step",
+    "guardian": "guardian",
+}
 
 
 @dataclass(frozen=True)
@@ -237,8 +265,20 @@ def topology_edges_from_facts(facts: Iterable[SourceFact]) -> list[dict[str, Any
     return [edges[key] for key in sorted(edges)]
 
 
-def load_graph(session: Session, *, viewer_user_id: int, space_id: int) -> RelationshipGraph:
-    """构建并返回当前空间口径的关系图快照（含 snapshot_hash 指纹）。"""
+def load_graph(
+    session: Session,
+    *,
+    viewer_user_id: int,
+    space_id: int,
+    extra_edges: list[ExtraEdge] | tuple[ExtraEdge, ...] | None = None,
+) -> RelationshipGraph:
+    """构建并返回当前空间口径的关系图快照（含 snapshot_hash 指纹）。
+
+    ``extra_edges``（推测层，缺省 None = 行为与推测层上线前逐字节一致）：把
+    proposed 推测单跳注入邻接表参与路径枚举；与 confirmed 事实同结构的推测边
+    跳过（不重复）。snapshot_hash 恒为 confirmed 事实指纹——推测层不进入缓存
+    语义，DerivedFact 缓存（恒不传 extra_edges）不受影响。
+    """
     visible = _visible_node_ids(session, viewer_user_id=viewer_user_id, space_id=space_id)
     bridge_user_ids: set[int] = set()
     bridge_space_ids: set[int] = set()
@@ -324,6 +364,68 @@ def load_graph(session: Session, *, viewer_user_id: int, space_id: int) -> Relat
         adjacency.setdefault(viewer_user_id, []).append(
             GraphEdge(other_anchor_id, EDGE_BRIDGE, None, "sym", 0)
         )
+
+    if extra_edges:
+        confirmed_keys: set[tuple[int, int, str]] = set()
+        for fact in participating:
+            ftype = fact.fact_type
+            pair = (
+                {fact.subject_user_id, fact.object_user_id}
+                if ftype
+                in (
+                    "spouse",
+                    "partner",
+                    "direct_sibling",
+                )
+                else None
+            )
+            if pair is not None:
+                confirmed_keys |= {
+                    (fact.subject_user_id, fact.object_user_id, ftype),
+                    (fact.object_user_id, fact.subject_user_id, ftype),
+                }
+            else:
+                confirmed_keys.add((fact.subject_user_id, fact.object_user_id, ftype))
+        for extra in sorted(extra_edges, key=lambda item: item.edge_id):
+            sym = extra.relation_kind in ("spouse", "partner", "direct_sibling")
+            supported = sym or extra.relation_kind in _INFERENCE_PARENT_SUBTYPES
+            if not supported:
+                continue
+            if extra.subject_user_id not in visible or extra.object_user_id not in visible:
+                continue
+            keys = (
+                {
+                    (extra.subject_user_id, extra.object_user_id, extra.relation_kind),
+                    (extra.object_user_id, extra.subject_user_id, extra.relation_kind),
+                }
+                if extra.relation_kind in ("spouse", "partner", "direct_sibling")
+                else {(extra.subject_user_id, extra.object_user_id, extra.relation_kind)}
+            )
+            if keys & confirmed_keys:
+                continue  # 与 confirmed 事实同结构：推测边不进入增广图
+            fid = extra.fact_id
+            if extra.relation_kind in _INFERENCE_PARENT_SUBTYPES:
+                subtype = _INFERENCE_PARENT_SUBTYPES[extra.relation_kind]
+                adjacency.setdefault(extra.object_user_id, []).append(
+                    GraphEdge(extra.subject_user_id, EDGE_PARENT, subtype, "up", fid)
+                )
+                adjacency.setdefault(extra.subject_user_id, []).append(
+                    GraphEdge(extra.object_user_id, EDGE_PARENT, subtype, "down", fid)
+                )
+            else:
+                edge_type = (
+                    EDGE_SPOUSE
+                    if extra.relation_kind == "spouse"
+                    else EDGE_PARTNER
+                    if extra.relation_kind == "partner"
+                    else EDGE_SIBLING
+                )
+                adjacency.setdefault(extra.subject_user_id, []).append(
+                    GraphEdge(extra.object_user_id, edge_type, None, "sym", fid)
+                )
+                adjacency.setdefault(extra.object_user_id, []).append(
+                    GraphEdge(extra.subject_user_id, edge_type, None, "sym", fid)
+                )
 
     for edges in adjacency.values():
         edges.sort(key=lambda edge: (edge.to_id, _EDGE_ORDER[edge.edge_type], edge.fact_id))

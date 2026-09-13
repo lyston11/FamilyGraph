@@ -33,7 +33,10 @@ board.html
 # 评测/验收产物
 .steward-eval-report.json
 .steward-*-evidence.json
+<<<<<<< HEAD
 
 # 任务 worktree 中链接主检出依赖的符号链接
+=======
+>>>>>>> origin/main
 backend/.venv
 frontend/node_modules

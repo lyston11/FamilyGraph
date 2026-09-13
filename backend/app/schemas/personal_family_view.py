@@ -53,6 +53,32 @@ class PersonalFamilyViewTopologyEdgeOut(BaseModel):
     subtype: TopologyEdgeSubtype | None = None
 
 
+class InferredEdgeOut(BaseModel):
+    """管家推测边（09-13 推测层；显示层投影，永不写 confirmed 事实）。
+
+    - subject/object + relation_kind：单跳原子关系建议（虚线边渲染依据）；
+    - term：单跳确定性称谓（subject→object 方向）；viewer_term/viewer_path：
+      端点中「新上树成员」的 viewer 视角称谓与路径（无则 None/空）；
+    - new_user_id：尚无 confirmed 路径的端点（两端均已知时为 None）；
+    - id 为 steward_inferred_edges.id（确认/驳回操作端点寻址用）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    subject_user_id: int
+    object_user_id: int
+    relation_kind: str
+    term: str | None
+    path: list[dict[str, Any]]
+    viewer_term: str | None
+    viewer_path: list[dict[str, Any]]
+    new_user_id: int | None
+    evidence_fact_ids: list[int]
+    revision: int
+    created_at: datetime
+
+
 class PersonalFamilyViewOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +87,7 @@ class PersonalFamilyViewOut(BaseModel):
     view_version: int
     computed_at: datetime | None
     nodes: list[PersonalFamilyViewNodeOut]
+    inferred_edges: list[InferredEdgeOut] = []
     edges: list[PersonalFamilyViewEdgeOut]
     topology_edges: list[PersonalFamilyViewTopologyEdgeOut] = Field(default_factory=list)
     truncated: bool = False

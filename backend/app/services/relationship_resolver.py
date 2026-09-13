@@ -318,10 +318,24 @@ def bulk_concept_codes(
 
 
 def resolve_relationship(
-    session: Session, *, viewer_user_id: int, target_user_id: int, space_id: int
+    session: Session,
+    *,
+    viewer_user_id: int,
+    target_user_id: int,
+    space_id: int,
+    extra_edges: tuple[Any, ...] | list[Any] | None = None,
 ) -> RelationshipResolution:
-    """解析 viewer 在 space 内与 target 的亲属关系（确定性；AC-KI2/KI7）。"""
-    graph = load_graph(session, viewer_user_id=viewer_user_id, space_id=space_id)
+    """解析 viewer 在 space 内与 target 的亲属关系（确定性；AC-KI2/KI7）。
+
+    ``extra_edges``（推测层，缺省 None = 行为不变）：透传给 load_graph 的
+    推测单跳增广；含推测步的路径仍由本模块确定性枚举/编码/排序。
+    """
+    graph = load_graph(
+        session,
+        viewer_user_id=viewer_user_id,
+        space_id=space_id,
+        extra_edges=extra_edges,
+    )
 
     if viewer_user_id == target_user_id:
         return RelationshipResolution(

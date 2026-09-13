@@ -9,6 +9,7 @@ import {
 } from '@/composables/useFamilyTreeCanvas'
 import type {
   PersonalFamilyViewData,
+  PersonalFamilyViewInferredEdge,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
   PersonalFamilyViewNode,
@@ -104,6 +105,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
     view_version: 2,
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
+    inferred_edges: [],
     edges: [],
     topology_edges: [],
     truncated: false,
@@ -283,6 +285,7 @@ describe('applyTreeViewLayout（topology_edges 缺失 → 摘要几何估计，�
   const spouse = makeNode(4)
   const data = makeData({
     nodes: [makeNode(VIEWER_ID), father, child, spouse],
+    inferred_edges: [],
     edges: [
       makeSummaryEdge(VIEWER_ID, 2, [makeStep(VIEWER_ID, 2, 'up')]),
       makeSummaryEdge(VIEWER_ID, 3, [makeStep(VIEWER_ID, 3, 'down')]),
@@ -334,5 +337,114 @@ describe('applyFreeCanvasLayout（自由画布）', () => {
     const keys = new Set(others.map((node) => `${node.x}:${node.y}`))
     expect(keys.size).toBe(others.length)
     expect(applyFreeCanvasLayout(model)).toEqual(nodes)
+  })
+})
+
+// ---- 推测层 × 结构布局并存（09-13 串行集成） ----
+
+function makeInferredEdge(
+  id: number,
+  subjectUserId: number,
+  objectUserId: number,
+  relationKind: string,
+  overrides: Partial<PersonalFamilyViewInferredEdge> = {},
+): PersonalFamilyViewInferredEdge {
+  return {
+    id,
+    subject_user_id: subjectUserId,
+    object_user_id: objectUserId,
+    relation_kind: relationKind,
+    term: null,
+    path: [],
+    viewer_term: null,
+    viewer_path: [],
+    new_user_id: null,
+    evidence_fact_ids: [],
+    revision: 1,
+    created_at: '2026-09-13T08:00:00',
+    ...overrides,
+  }
+}
+
+function makeInferredNode(id: number): PersonalFamilyViewNode {
+  return {
+    user_id: id,
+    display: makeDisplay(id),
+    visibility_level: 'household_detail',
+    inclusion_reason_code: 'inferred_path',
+  }
+}
+
+describe('buildFamilyCanvas 推测层（09-13）× 结构边并存', () => {
+  it('推测边进独立 inferredEdges 规格；confirmed 结构边不受影响；新成员带 inferred 标记', () => {
+    const data = makeData({
+      nodes: [makeNode(VIEWER_ID, 'self_private'), makeNode(2), makeInferredNode(3)],
+      edges: [makeSummaryEdge(VIEWER_ID, 2, [makeStep(VIEWER_ID, 2, 'up')], { term: '父亲' })],
+      topology_edges: [makeTopologyEdge('parent', 2, VIEWER_ID, 'biological')],
+      inferred_edges: [makeInferredEdge(7, 2, 3, 'spouse', { term: '妻子', new_user_id: 3 })],
+    })
+
+    const model = buildFamilyCanvas(data, VIEWER_ID)
+    // confirmed 结构边只来自 topology；推测边独立成组
+    expect(model.edges).toHaveLength(1)
+    expect(model.edges[0]?.key).toBe(`parent:biological:2:${VIEWER_ID}`)
+    expect(model.inferredEdges).toHaveLength(1)
+    expect(model.inferredEdges[0]).toMatchObject({
+      key: 'i-7',
+      label: '妻子',
+      sourceUserId: 2,
+      targetUserId: 3,
+    })
+    // 新上树成员：inferred 标记 + viewer 视角推测称谓
+    const newNode = model.nodes.find((node) => node.userId === 3)
+    expect(newNode?.inferred).toBe(true)
+    const withTerm = buildFamilyCanvas(
+      makeData({
+        nodes: [makeNode(VIEWER_ID, 'self_private'), makeNode(2), makeInferredNode(3)],
+        topology_edges: [makeTopologyEdge('parent', 2, VIEWER_ID, 'biological')],
+        inferred_edges: [
+          makeInferredEdge(7, 2, 3, 'spouse', { term: '妻子', viewer_term: '爸爸', new_user_id: 3 }),
+        ],
+      }),
+      VIEWER_ID,
+    )
+    expect(withTerm.nodes.find((node) => node.userId === 3)?.inferredTerm).toBe('爸爸')
+  })
+
+  it('端点不在节点集合的推测边被丢弃（解码已保证，画布二次防御）', () => {
+    const data = makeData({
+      nodes: [makeNode(VIEWER_ID, 'self_private'), makeNode(2)],
+      topology_edges: [makeTopologyEdge('parent', 2, VIEWER_ID, 'biological')],
+      inferred_edges: [makeInferredEdge(8, 2, 99, 'spouse')],
+    })
+    const model = buildFamilyCanvas(data, VIEWER_ID)
+    expect(model.inferredEdges).toHaveLength(0)
+  })
+
+  it('推测节点摆位：parent 类推测单跳放到锚点下一带，且不重排 confirmed 世代', () => {
+    // parent 类推测：subject=2 是 object=3 的家长 → 3 在 2 的下一带
+    const dataParent = makeData({
+      nodes: [makeNode(VIEWER_ID, 'self_private'), makeNode(2), makeInferredNode(3)],
+      topology_edges: [makeTopologyEdge('parent', 2, VIEWER_ID, 'biological')],
+      inferred_edges: [makeInferredEdge(9, 2, 3, 'parent')],
+    })
+    const outcome = applyTreeViewLayout(buildFamilyCanvas(dataParent, VIEWER_ID), VIEWER_ID)
+    expect(outcome.failed).toBe(false)
+    const byUser = new Map(outcome.nodes.map((node) => [node.userId, node]))
+    // confirmed 世代不被推测边重排：父子结构布局保持
+    expect(byUser.get(2)?.y).toBe(-ROW_SPACING)
+    expect(byUser.get(VIEWER_ID)?.y).toBe(0)
+    // 推测新成员沿推测方向：锚点 2 的下一带
+    expect(byUser.get(3)?.y).toBe(byUser.get(2)!.y + ROW_SPACING)
+  })
+
+  it('推测边数据保持 void 兼容：无推测时布局不受影响', () => {
+    const data = makeData({
+      nodes: [makeNode(VIEWER_ID, 'self_private'), makeNode(2)],
+      topology_edges: [makeTopologyEdge('parent', 2, VIEWER_ID, 'biological')],
+    })
+    const outcome = applyTreeViewLayout(buildFamilyCanvas(data, VIEWER_ID), VIEWER_ID)
+    expect(outcome.failed).toBe(false)
+    expect(outcome.nodes).toHaveLength(2)
   })
 })

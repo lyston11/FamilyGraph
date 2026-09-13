@@ -53,6 +53,7 @@ from app.api.personal_family_view import router as personal_family_view_router
 from app.api.platform_features import router as platform_features_router
 from app.api.space_model_settings import router as space_model_settings_router
 from app.api.spaces import router as spaces_router
+from app.api.steward_inferred import router as steward_inferred_router
 from app.api.steward_suggestions import router as steward_suggestions_router
 from app.api.users import members_router
 from app.api.users import router as users_router
@@ -209,6 +210,7 @@ app.include_router(family_recommendations_router, prefix="/api")
 app.include_router(household_card_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(steward_suggestions_router, prefix="/api")
+app.include_router(steward_inferred_router, prefix="/api")
 # V2.6 Controlled Web（平台与空间双重 opt-in；默认关闭）
 app.include_router(controlled_web_router, prefix="/api")
 app.include_router(controlled_web_admin_router, prefix="/api")

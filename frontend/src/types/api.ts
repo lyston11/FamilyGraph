@@ -328,6 +328,47 @@ export interface PersonalFamilyViewTopologyEdge {
   subtype: TopologyEdgeSubtype | null
 }
 
+/**
+ * 管家推测边（09-13 推测层；backend schemas InferredEdgeOut）。
+ * subject/object + relation_kind = 单跳原子关系建议（虚线渲染依据）；
+ * term = 单跳确定性称谓（subject→object 方向）；viewer_term/viewer_path =
+ * 「新上树成员」（new_user_id）的 viewer 视角称谓与路径；id 为推测边 id
+ * （确认/驳回操作寻址用）。
+ */
+export interface PersonalFamilyViewInferredEdge {
+  id: number
+  subject_user_id: number
+  object_user_id: number
+  relation_kind: string
+  term: string | null
+  path: PersonalFamilyViewPathStep[]
+  viewer_term: string | null
+  viewer_path: PersonalFamilyViewPathStep[]
+  new_user_id: number | null
+  evidence_fact_ids: number[]
+  revision: number
+  created_at: string
+}
+
+/** 推测边动作结果（dismiss/reinstate；confirm 的 200/202 共用外壳） */
+export interface InferredEdgeActionResult {
+  id: number
+  status: string
+  revision: number
+}
+
+/** 推测边确认结果：有权当事人 200（已转正）；无权 202（提案待对方确认） */
+export interface InferredEdgeConfirmResult {
+  edge: InferredEdgeActionResult
+  linked_proposal: {
+    source_fact_id: number
+    revision: number
+    state: string
+    fact_type: string
+  } | null
+  pending_confirmations: Array<{ account_id: number }>
+}
+
 export type PersonalFamilyViewStatus =
   | 'never_computed'
   | 'queued'
@@ -363,6 +404,8 @@ export interface PersonalFamilyViewData {
   view_version: number
   computed_at: string | null
   nodes: PersonalFamilyViewNode[]
+  /** 管家推测边（09-13；旧后端/关闭开关时为空数组） */
+  inferred_edges: PersonalFamilyViewInferredEdge[]
   edges: PersonalFamilyViewEdge[]
   /**
    * confirmed 结构边：解码器把「旧载荷缺字段」规范为 null（结构数据未提供，

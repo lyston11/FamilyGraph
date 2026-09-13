@@ -308,6 +308,53 @@ body {
   gap: 6px;
 }
 
+.ag-space-sections {
+  display: grid;
+  gap: 26px;
+}
+
+.ag-space-section {
+  border: 1px solid color-mix(in srgb, var(--ag-glass-border) 82%, transparent);
+  border-radius: var(--brand-radius-card);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ag-bg) 26%, transparent);
+}
+
+.ag-space-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ag-glass-border) 76%, transparent);
+}
+
+.ag-space-section-header h2 {
+  margin: 2px 0 4px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.ag-space-section-header p {
+  margin: 0;
+  color: var(--ag-text-secondary);
+  font-size: 12px;
+}
+
+.ag-section-kicker {
+  color: var(--ag-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.ag-section-count {
+  flex: 0 0 auto;
+  color: var(--ag-text-secondary);
+  font-size: 12px;
+  padding-top: 4px;
+}
+
 .ag-breadcrumb {
   font-size: 13px;
   color: var(--ag-text-secondary);
@@ -323,10 +370,41 @@ body {
   text-decoration: none;
 }
 
+.ag-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--ag-glass-border);
+  border-radius: var(--brand-radius-control);
+  background: color-mix(in srgb, var(--ag-surface) 32%, transparent);
+  color: var(--ag-text) !important;
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 180ms ease;
+}
+
+.ag-back-link:hover {
+  border-color: color-mix(in srgb, var(--ag-primary) 60%, var(--ag-glass-border));
+  background: color-mix(in srgb, var(--ag-primary) 10%, var(--ag-surface));
+  text-decoration: none !important;
+  transform: translateX(-2px);
+}
+
+.ag-back-link:focus-visible {
+  outline: 2px solid var(--brand-focus-color);
+  outline-offset: 3px;
+}
+
 /* ---- 表格（桌面）与卡片（移动端）双渲染 ---- */
 
 .ag-table-wrap {
   overflow-x: auto;
+}
+
+.ag-space-section .ag-table {
+  background: color-mix(in srgb, var(--ag-surface) 12%, transparent);
 }
 
 .ag-table {

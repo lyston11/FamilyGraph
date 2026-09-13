@@ -50,7 +50,7 @@ function mountNode({
   return mount(MemberNode, {
     props: {
       id: `n-${display.id}`,
-      data: { display, visibilityLevel, isSelf, term },
+      data: { display, visibilityLevel, isSelf, term, inferred: false, inferredTerm: null },
     },
     // Handle 依赖 VueFlow 节点注册表（无画布上下文时 onMounted 取不到 node），
     // 名牌自身的渲染/交互合同与连接点无关，stub 隔离
@@ -117,7 +117,14 @@ describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
     const wrapper = mount(MemberNode, {
       props: {
         id: 'n-7',
-        data: { display: makeDisplay(), visibilityLevel: 'household_detail', isSelf: false, term: null },
+        data: {
+        display: makeDisplay(),
+        visibilityLevel: 'household_detail',
+        isSelf: false,
+        term: null,
+        inferred: false,
+        inferredTerm: null,
+      },
       },
       global: {
         stubs: {

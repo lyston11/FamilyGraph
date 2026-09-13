@@ -176,6 +176,23 @@ describe('adminApiClient 接线', () => {
     expect(sessionExpiredCalls).toBe(0)
   })
 
+  it('refresh 端点 401 不递归触发第二次 refresh', async () => {
+    adapterMode = {
+      kind: 'http',
+      status: 401,
+      body: { error: { code: 'ADMIN_UNAUTHORIZED', message: '管理员认证失败，请重新登录' } },
+    }
+    const error = await adminRequest<unknown>({
+      method: 'post',
+      url: '/auth/refresh',
+      data: { refresh_token: 'stale-refresh' },
+    }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(AdminApiError)
+    expect((error as AdminApiError).code).toBe('ADMIN_UNAUTHORIZED')
+    expect(refreshAttempts).toBe(0)
+    expect(sessionExpiredCalls).toBe(0)
+  })
+
   it('403 ADMIN_ACCESS_SESSION_INVALID → AccessSessionInvalidError', async () => {
     adapterMode = {
       kind: 'http',

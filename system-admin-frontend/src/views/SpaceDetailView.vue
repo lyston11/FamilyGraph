@@ -196,7 +196,14 @@ onMounted(() => {
 <template>
   <div>
     <nav class="ag-breadcrumb" aria-label="面包屑">
-      <RouterLink :to="{ name: 'overview' }">概览</RouterLink>
+      <RouterLink
+        class="ag-back-link"
+        :to="{ name: 'overview' }"
+        data-testid="back-to-overview"
+      >
+        <span aria-hidden="true">←</span>
+        返回概览
+      </RouterLink>
       <span>/</span>
       <span>空间详情</span>
     </nav>

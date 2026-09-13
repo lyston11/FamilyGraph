@@ -11,6 +11,7 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import type { Edge as FlowEdge, EdgeMouseEvent, Node as FlowNode } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 
+import InferredEdgePanel from '@/components/canvas/InferredEdgePanel.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import StructuralRelationshipPanel from '@/components/canvas/StructuralRelationshipPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
@@ -22,6 +23,7 @@ import {
   HANDLE_SOURCE_RIGHT,
   HANDLE_TARGET_LEFT,
   HANDLE_TARGET_TOP,
+  type FamilyCanvasInferredEdgeSpec,
   type FamilyStructuralEdge,
 } from '@/composables/useFamilyTreeCanvas'
 import { useAuthStore } from '@/stores/auth'
@@ -59,6 +61,7 @@ const { fitView, setCenter } = useVueFlow()
 
 const viewMode = ref<'tree' | 'canvas'>('tree')
 const selectedEdge = ref<FamilyStructuralEdge | null>(null)
+const selectedInferred = ref<FamilyCanvasInferredEdgeSpec | null>(null)
 /** 世代布局冲突回退提示（切换空间/刷新后清除） */
 const layoutFallbackNotice = ref(false)
 
@@ -125,6 +128,7 @@ onMounted(() => {
 watch([spaceId, isLineageContext], () => {
   // 切换空间：清面板选择与回退提示，并按新上下文读取投影（旧请求由 store epoch 丢弃）
   selectedEdge.value = null
+  selectedInferred.value = null
   layoutFallbackNotice.value = false
   void loadView()
 })
@@ -134,8 +138,13 @@ watch([spaceId, isLineageContext], () => {
 const canvasModel = computed(() =>
   data.value
     ? buildFamilyCanvas(data.value, viewerId.value)
-    : { nodes: [], edges: [] as FamilyStructuralEdge[], summaryEdges: [], topologyAvailable: false },
-)
+    : {
+        nodes: [],
+        edges: [] as FamilyStructuralEdge[],
+        inferredEdges: [] as FamilyCanvasInferredEdgeSpec[],
+        summaryEdges: [],
+        topologyAvailable: false,
+      },)
 
 /** 树状模式的确定性世代布局结果（design.md §6）；仅 tree 模式计算 */
 const treeLayout = computed(() =>
@@ -173,6 +182,8 @@ const flowNodes = computed<FlowNode[]>(() =>
       visibilityLevel: node.visibilityLevel,
       isSelf: node.isSelf,
       term: node.term,
+      inferred: node.inferred,
+      inferredTerm: node.inferredTerm,
     },
     draggable: viewMode.value === 'canvas',
   })),
@@ -226,6 +237,29 @@ const flowEdges = computed<FlowEdge[]>(() =>
   }),
 )
 
+const inferredFlowEdges = computed<FlowEdge[]>(() =>
+  canvasModel.value.inferredEdges.map((spec) => {
+    // 推测边同样显式绑定端口（左右按实际 x 选侧）；虚线叠层无方向箭头
+    const sourcePos = positionByUser.value.get(spec.sourceUserId)
+    const targetPos = positionByUser.value.get(spec.targetUserId)
+    const leftIsSource = (sourcePos?.x ?? 0) <= (targetPos?.x ?? 0)
+    return {
+      id: spec.key,
+      source: `n-${leftIsSource ? spec.sourceUserId : spec.targetUserId}`,
+      sourceHandle: HANDLE_SOURCE_RIGHT,
+      target: `n-${leftIsSource ? spec.targetUserId : spec.sourceUserId}`,
+      targetHandle: HANDLE_TARGET_LEFT,
+      type: 'straight',
+      label: spec.label === null ? undefined : `推测·${spec.label}`,
+      class: 'fg-view-edge fg-view-edge-inferred',
+      labelStyle: { fill: 'var(--fg-canvas-muted)', fontSize: '11px' },
+      labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
+      labelBgPadding: [6, 2] as [number, number],
+      labelBgBorderRadius: 4,
+    }
+  }),
+)
+
 // ---- 交互：节点/边点击 → 页面路由或只读面板；画布组件不参与路由 ----
 
 function onNodeSelect(userId: number): void {
@@ -249,13 +283,33 @@ function openRelationshipPanel(edgeKey: string): void {
 
 function onEdgeClick(event: EdgeMouseEvent): void {
   const edgeId = event.edge?.id
-  if (typeof edgeId === 'string') openRelationshipPanel(edgeId)
+  if (typeof edgeId !== 'string') return
+  if (edgeId.startsWith('i-')) {
+    selectedEdge.value = null
+    selectedInferred.value =
+      canvasModel.value.inferredEdges.find((candidate) => candidate.key === edgeId) ?? null
+    return
+  }
+  selectedInferred.value = null
+  openRelationshipPanel(edgeId)
 }
 
-// 结构边随快照刷新/空间切换消失时清空面板，避免残留旧端点信息
+/** 推测边动作完成（确认/驳回）：强制重载授权投影（无乐观更新红线），关面板 */
+async function onInferredAction(): Promise<void> {
+  selectedInferred.value = null
+  await loadView(true)
+}
+
+// 结构/推测边随快照刷新/空间切换消失时清空面板，避免残留旧端点信息
 watch(canvasModel, (model) => {
   if (selectedEdge.value && !model.edges.some((candidate) => candidate.key === selectedEdge.value?.key)) {
     selectedEdge.value = null
+  }
+  if (
+    selectedInferred.value &&
+    !model.inferredEdges.some((candidate) => candidate.key === selectedInferred.value?.key)
+  ) {
+    selectedInferred.value = null
   }
 })
 
@@ -488,7 +542,7 @@ function resolveName(userId: number): string | null {
           <div class="canvas-wrap">
             <VueFlow
               :nodes="flowNodes"
-              :edges="flowEdges"
+              :edges="[...flowEdges, ...inferredFlowEdges]"
               fit-view-on-init
               :fit-view-params="{ padding: 0.22 }"
               :min-zoom="0.2"
@@ -508,6 +562,17 @@ function resolveName(userId: number): string | null {
                 />
               </template>
             </VueFlow>
+
+            <!-- 推测边操作面板：虚线边点击入口；动作后强制刷新投影 -->
+            <InferredEdgePanel
+              v-if="selectedInferred"
+              :space-id="spaceId ?? 0"
+              :edge="selectedInferred.edge"
+              :resolve-name="resolveName"
+              @close="selectedInferred = null"
+              @confirmed="onInferredAction"
+              @dismissed="onInferredAction"
+            />
 
             <!-- 只读结构关系说明面板：覆盖层，画布位置与缩放保持不变 -->
             <StructuralRelationshipPanel
@@ -574,6 +639,9 @@ function resolveName(userId: number): string | null {
 .canvas-wrap :deep(.fg-struct-edge.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
 .canvas-wrap :deep(.vue-flow__edge-text) { font-family: var(--fg-font-body); }
 .canvas-wrap :deep(.vue-flow__edge-textbg) { stroke: var(--fg-canvas-line); stroke-width: 0.5; }
+.canvas-wrap :deep(.fg-view-edge-inferred .vue-flow__edge-path) { stroke: var(--fg-canvas-muted); stroke-width: 1.15; stroke-dasharray: 6 5; opacity: 0.85; transition: stroke-width 0.2s ease, opacity 0.2s ease; }
+.canvas-wrap :deep(.fg-view-edge-inferred:hover .vue-flow__edge-path),
+.canvas-wrap :deep(.fg-view-edge-inferred.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
 .canvas-wrap :deep(.vue-flow__controls) {
   position: absolute; top: auto; bottom: 6px; left: 32px; z-index: 5; display: flex;
   flex-direction: column; background: color-mix(in srgb, var(--fg-canvas-surface-raised) 90%, transparent);
