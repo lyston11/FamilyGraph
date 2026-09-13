@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "serve 三 listener 与 SSE 事件流关闭行为直接相关"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "启动/关闭路径日志约定"}
