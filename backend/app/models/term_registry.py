@@ -68,6 +68,7 @@ BUILTIN_ZH_CN_TERMS = [
     ("Um-Uf", "奶奶"),
     ("Uf-Um", "外公"),
     ("Uf-Uf", "外婆"),
+    ("Uf-Uf", "姥姥"),  # 09-13 terminology：同一概念的可核验同义词
     ("Um-Uf-Bm", "舅爷爷"),  # E2 黄金用例：奶奶的兄弟
     ("Uf-Bm", "舅舅"),
     ("Uf-Bf", "姨妈"),

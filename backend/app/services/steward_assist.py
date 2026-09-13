@@ -44,26 +44,38 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import config
+from app.models.account import Account
 from app.models.agent_provider import AgentSpaceProviderSetting
-from app.models.space import FamilySpace
+from app.models.space import FamilySpace, SpaceMember
 from app.models.steward import (
     ActionCard,
     StewardAssistBatch,
     StewardJob,
     StewardLlmCandidate,
     StewardModelCall,
+    StewardSpaceSchedule,
 )
 from app.models.user import User
-from app.services import action_cards, agent_provider, platform_features, steward_guard
+from app.services import (
+    action_cards,
+    agent_provider,
+    platform_features,
+    steward_guard,
+)
 from app.services.steward_guard import ProjectionContext
 from app.utils import timeutil
 
 logger = logging.getLogger(__name__)
 
-ASSIST_KINDS: tuple[str, ...] = ("candidate", "ranking", "explanation")
+ASSIST_KINDS: tuple[str, ...] = ("candidate", "ranking", "explanation", "terminology")
 
 # 各辅助点的输出 token cap（预留时再与剩余预算取 min）
-_KIND_OUTPUT_CAPS: dict[str, int] = {"candidate": 2000, "ranking": 1000, "explanation": 800}
+_KIND_OUTPUT_CAPS: dict[str, int] = {
+    "candidate": 2000,
+    "ranking": 1000,
+    "explanation": 800,
+    "terminology": 1000,
+}
 
 # 消耗预算的 attempt 状态（skipped = 从未预留，不计入）
 _BUDGETED_STATUSES = ("reserved", "in_flight", "succeeded", "failed", "degraded", "unknown")
@@ -114,6 +126,16 @@ _PROMPTS: dict[str, str] = {
         "你是家庭空间管家助手。对给定的推荐卡按对用户的实际有用程度排序。"
         "输出 JSON 数组：仅包含给定 card id 的整数，每个 id 恰好出现一次，"
         "不得新增、遗漏或重复。"
+    ),
+    "terminology": (
+        "你负责改善给定查看者对亲属的称呼。关系路径及语义由系统提供，不能修改"
+        "或增补事实。保持方向、继养监护、配偶/伴侣和已知长幼；未知就使用中性"
+        "表达。尊重明确偏好及拒绝记录。可以输出可由给定词素、同义词及路径组合"
+        '验证的自然称谓；输出 JSON 对象 {"version":1, "context_hash":'
+        ' 输入给出的 context_hash, "items":[{"target_ref": 目标代号, '
+        '"concept_code": 服务端给出的概念码, "term": 称谓, '
+        '"reason_code": "synonym"|"shorter_chain"|"preferred_usage"}]}。'
+        "无改善返回空 items 列表；不输出自由文本或其他字段。"
     ),
     "explanation": (
         "你是家庭空间管家助手。基于给定推荐卡的结构化信息输出一个 JSON 对象："
@@ -480,7 +502,39 @@ def register_batch_for_job(
     ]
     has_ranking = "ranking" in kinds and bool(ranking_groups)
     has_explanation = "explanation" in kinds and bool(explain_ids)
-    if not (has_candidate or has_ranking or has_explanation):
+    # terminology（09-13）：有界 viewer 组 + 组内有界目标；无改善空间不发模型
+    terminology_groups: list[dict[str, Any]] = []
+    if "terminology" in kinds:
+        from app.services import steward_terminology
+
+        raw_groups = steward_terminology.collect_model_groups(
+            db,
+            space_id=job.space_id,
+            max_groups=config.STEWARD_TERMINOLOGY_MAX_VIEWER_GROUPS_PER_JOB,
+            max_targets=config.STEWARD_TERMINOLOGY_MAX_TARGETS_PER_GROUP,
+        )
+        for group in raw_groups:
+            terminology_groups.append(
+                {
+                    "viewer_account_id": int(group["viewer_account_id"]),
+                    "root_user_id": int(group["root_user_id"]),
+                    "digest": steward_terminology.targets_digest(group["targets"]),
+                    "targets": [
+                        {
+                            "target_user_id": int(t["target_user_id"]),
+                            "concept_code": t["concept_code"],
+                            "baseline_term": t["baseline_term"],
+                            "path": t["path"],
+                            "semantic_hash": t["semantic_hash"],
+                            "age_context": bool(t.get("age_context")),
+                            "projection_id": t.get("projection_id"),
+                        }
+                        for t in group["targets"]
+                    ],
+                }
+            )
+    has_terminology = "terminology" in kinds and bool(terminology_groups)
+    if not (has_candidate or has_ranking or has_explanation or has_terminology):
         return None
     active_cards = [
         {"id": int(c.id), "revision": int(c.revision), "state": c.state} for c in active
@@ -492,12 +546,14 @@ def register_batch_for_job(
                 ("candidate", has_candidate),
                 ("ranking", has_ranking),
                 ("explanation", has_explanation),
+                ("terminology", has_terminology),
             )
             if has
         ],
         "cards": active_cards,
         "ranking_groups": ranking_groups if has_ranking else [],
         "explain_ids": explain_ids if has_explanation else [],
+        "terminology_groups": terminology_groups if has_terminology else [],
     }
     existing = db.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job.id))
     if existing is not None:
@@ -567,6 +623,40 @@ def _fence_check(db: Session, batch: StewardAssistBatch, kinds: list[str]) -> st
         if _canonical_hash(_facts_evidence(db, batch.space_id)) != batch.evidence_hash:
             return REASON_EVIDENCE_CHANGED
     fence = batch.fence_json or {}
+    if "terminology" in kinds:
+        from app.services import steward_terminology
+
+        for group in fence.get("terminology_groups", []):
+            # viewer 账号仍存在且其用户仍是空间 active 成员（个人化输入授权前提）
+            viewer_account = db.get(Account, int(group.get("viewer_account_id", 0)))
+            if viewer_account is None:
+                return REASON_EVIDENCE_CHANGED
+            member = db.scalar(
+                select(SpaceMember.id).where(
+                    SpaceMember.space_id == batch.space_id,
+                    SpaceMember.user_id == viewer_account.user_id,
+                    SpaceMember.status == "active",
+                )
+            )
+            if member is None:
+                return REASON_EVIDENCE_CHANGED
+            for target in group.get("targets", []):
+                from app.services import terms
+
+                current = steward_terminology.projection_semantic_hash(
+                    viewer_account_id=int(group["viewer_account_id"]),
+                    space_id=batch.space_id,
+                    target_user_id=int(target["target_user_id"]),
+                    concept_code=target["concept_code"],
+                    path_fact_revisions=[
+                        [int(step["fact_id"]), 0]
+                        for step in target.get("path", [])
+                        if isinstance(step.get("fact_id"), int) and step["fact_id"] > 0
+                    ],
+                    term_registry_hash=terms.term_registry_hash(db, space_id=batch.space_id),
+                )
+                if current != target.get("semantic_hash"):
+                    return REASON_EVIDENCE_CHANGED
     for entry in fence.get("cards", []):
         card = db.get(ActionCard, int(entry["id"]))
         if (
@@ -606,6 +696,7 @@ def _reserve_attempt(
     budget: dict[str, int],
     lease_no: int,
     seq_counters: dict[str, int],
+    viewer_account_id: int | None = None,
 ) -> None:
     """为一个发送主题预留 attempt（或落 skipped 审计行）。budget 就地扣减。"""
     system = _PROMPTS[kind]
@@ -625,6 +716,7 @@ def _reserve_attempt(
         "input_hash": _canonical_hash(user_content),
         "attempt_no": lease_no,
         "batch_id": batch.id,
+        "viewer_account_id": viewer_account_id,
         "created_at": timeutil.utcnow(),
     }
     max_out = _KIND_OUTPUT_CAPS[kind]
@@ -693,6 +785,12 @@ def schedule_due_batch(
         job = db.get(StewardJob, batch.job_id)
         fence = batch.fence_json or {}
         kinds = [k for k in fence.get("kinds", []) if k in ASSIST_KINDS]
+        # 公平调度（B design §6）：每空间 cursor 轮转 kind 队列，跳过无工作 kind
+        schedule = db.get(StewardSpaceSchedule, batch.space_id)
+        cursor = int(schedule.assist_kind_cursor) if schedule is not None else 0
+        offset = cursor % len(ASSIST_KINDS) if ASSIST_KINDS else 0
+        ordered = ASSIST_KINDS[offset:] + ASSIST_KINDS[:offset]
+        kinds = [k for k in ordered if k in kinds]
         if job is None or job.status != "succeeded":
             batch.status = "superseded"
             batch.error_code = REASON_JOB_NOT_SETTLED
@@ -773,6 +871,59 @@ def schedule_due_batch(
                     lease_no=lease_no,
                     seq_counters=seq_counters,
                 )
+        if "terminology" in kinds:
+            from app.services import steward_terminology
+
+            for group in fence.get("terminology_groups", []):
+                targets = list(group.get("targets", []))
+                if not targets:
+                    continue
+                # 发送前栅栏已在 _fence_check 验证语义摘要；此处重建投影输入
+                user_content = steward_terminology.project_terminology_input(
+                    db, {"targets": targets}
+                )
+                account_row = db.get(Account, int(group["viewer_account_id"]))
+                if account_row is None:
+                    continue
+                _reserve_attempt(
+                    db,
+                    batch=batch,
+                    job=job,
+                    kind="terminology",
+                    subject_key=(
+                        f"terminology:{int(group['viewer_account_id'])}:"
+                        f"{int(group['root_user_id'])}:{group.get('digest', '')}"
+                    ),
+                    user_content=user_content,
+                    runtime=runtime,
+                    budget=budget,
+                    lease_no=lease_no,
+                    seq_counters=seq_counters,
+                    viewer_account_id=int(group["viewer_account_id"]),
+                )
+        # 记录本轮实际预留到的 kind，推进每空间 cursor（只记调度进度）
+        reserved_kinds = {
+            row.assist_kind
+            for row in db.scalars(
+                select(StewardModelCall).where(
+                    StewardModelCall.batch_id == batch.id,
+                    StewardModelCall.status == "reserved",
+                )
+            )
+        }
+        if schedule is None:
+            schedule = StewardSpaceSchedule(
+                space_id=batch.space_id,
+                next_scan_at=now,
+                last_scheduled_cursor=0,
+                policy_version=job.policy_version,
+                updated_at=now,
+            )
+            db.add(schedule)
+        if reserved_kinds:
+            last_reserved = max((ordered.index(k) for k in reserved_kinds), default=-1)
+            schedule.assist_kind_cursor = (offset + last_reserved + 1) % len(ASSIST_KINDS)
+        schedule.updated_at = now
         batch.attempt = lease_no
         batch.status = "leased"
         batch.lease_owner = worker_id
@@ -846,6 +997,7 @@ def _validate_output(
     card_ids: list[int] | None = None,
     card: ActionCard | None = None,
     db: Session | None = None,
+    term_group: dict[str, Any] | None = None,
 ) -> Any:
     """校验模型输出为可写回产物（R2 封闭 schema；非法返回 None → degraded）。
 
@@ -875,6 +1027,14 @@ def _validate_output(
             structured, counterpart_name=_counterpart_name(db, card)
         )
         return {**structured, "rendered": rendered}
+    if kind == "terminology":
+        from app.services import steward_terminology
+
+        if db is None or term_group is None:
+            return None
+        return steward_terminology.validate_model_output(
+            db, text=text, group=term_group, space_id=term_group["space_id"]
+        )
     if kind == "candidate":
         # [] 是合法的"无可提候选"（不是 degraded）；None 才是不可解析/整体被拒
         items = steward_guard.validate_candidate_output(text, ctx)
@@ -1065,6 +1225,17 @@ def execute_batch(
                         expl_card = db.get(ActionCard, int(fresh.subject_key.split(":", 1)[1]))
                     except (IndexError, ValueError):
                         expl_card = None
+                term_group: dict[str, Any] | None = None
+                if fresh.assist_kind == "terminology":
+                    term_group = _term_group_for(db, fresh)
+                    if term_group is None:
+                        product = None
+                        # 直接落 degraded 分支：跳过常规校验
+                        fresh.status = "degraded"
+                        fresh.error_code = REASON_INVALID_OUTPUT
+                        fresh.billed_tokens = billed
+                        db.flush()
+                        continue
                 product = _validate_output(
                     fresh.assist_kind,
                     text,
@@ -1072,6 +1243,7 @@ def execute_batch(
                     card_ids=card_ids,
                     card=expl_card,
                     db=db,
+                    term_group=term_group,
                 )
                 if product is None:
                     fresh.status = "degraded"
@@ -1091,6 +1263,21 @@ def _user_content_for(db: Session, attempt: StewardModelCall) -> str:
     input_hash 在 tx3 前不重验——发送前重建失败按空输入处理，输出校验兜底）。"""
     kind = attempt.assist_kind
     subject = attempt.subject_key or ""
+    if kind == "terminology":
+        # terminology：从批次栅栏按 digest 取回本组目标（服务端真源，不靠 echo）
+        batch = db.get(StewardAssistBatch, attempt.batch_id) if attempt.batch_id else None
+        fence = (batch.fence_json or {}) if batch is not None else {}
+        digest = subject.split(":")[-1] if subject else ""
+        for group in fence.get("terminology_groups", []):
+            if group.get("digest") == digest and int(group.get("viewer_account_id", 0)) == (
+                attempt.viewer_account_id or 0
+            ):
+                from app.services import steward_terminology
+
+                return steward_terminology.project_terminology_input(
+                    db, {"targets": group.get("targets", [])}
+                )
+        return "{}"
     if kind == "candidate":
         ctx = _visible_context(db, attempt.space_id)
         return steward_guard.project_candidate_input(
@@ -1111,6 +1298,25 @@ def _user_content_for(db: Session, attempt: StewardModelCall) -> str:
     if card is None:
         return "{}"
     return _explanation_user_content(card, _visible_context(db, attempt.space_id))
+
+
+def _term_group_for(db: Session, attempt: StewardModelCall) -> dict[str, Any] | None:
+    """terminology attempt 的服务端目标组（批次栅栏 + digest + viewer 匹配）。"""
+    batch = db.get(StewardAssistBatch, attempt.batch_id) if attempt.batch_id else None
+    if batch is None:
+        return None
+    subject = attempt.subject_key or ""
+    parts = subject.split(":")
+    if len(parts) != 4:
+        return None
+    for group in (batch.fence_json or {}).get("terminology_groups", []):
+        if (
+            group.get("digest") == parts[3]
+            and int(group.get("viewer_account_id", 0)) == int(parts[1])
+            and int(group.get("viewer_account_id", 0)) == (attempt.viewer_account_id or -1)
+        ):
+            return {**group, "space_id": batch.space_id}
+    return None
 
 
 def _apply_batch(db: Session, batch_id: int, *, now: Any, from_recovery: bool = False) -> str:
@@ -1204,6 +1410,98 @@ def _apply_batch(db: Session, batch_id: int, *, now: Any, from_recovery: bool = 
                     card = db.get(ActionCard, int(card_id))
                     if card is not None and card.state in ("pending", "viewed"):
                         card.presentation_rank = rank_value
+            elif attempt.assist_kind == "terminology":
+                from app.services import steward_terminology
+                from app.services.personal_family_view import request_view_recompute
+
+                group = _term_group_for(db, attempt)
+                viewer_account_id = int(attempt.viewer_account_id or 0)
+                for item in product.get("items", []):
+                    target_user_id = int(item["target_user_id"])
+                    if group is None:
+                        continue
+                    from app.models.steward import StewardTermProjection
+
+                    projection = db.scalar(
+                        select(StewardTermProjection).where(
+                            StewardTermProjection.space_id == batch.space_id,
+                            StewardTermProjection.viewer_account_id == viewer_account_id,
+                            StewardTermProjection.target_user_id == target_user_id,
+                        )
+                    )
+                    if projection is None:
+                        projection, _created = steward_terminology.upsert_projection(
+                            db,
+                            space_id=batch.space_id,
+                            viewer_account_id=viewer_account_id,
+                            root_user_id=int(group["root_user_id"]),
+                            target_user_id=target_user_id,
+                            concept_code=item["concept_code"],
+                            semantic_hash=item["semantic_hash"],
+                            baseline_term=None,
+                            baseline_source=None,
+                            term=None,
+                            origin=None,
+                            now=now,
+                        )
+                    # 同输入 CAS 更新：相同词幂等，不覆盖反馈/last_checked 之外的审计
+                    _updated, _changed = steward_terminology.upsert_projection(
+                        db,
+                        space_id=batch.space_id,
+                        viewer_account_id=viewer_account_id,
+                        root_user_id=int(group["root_user_id"]),
+                        target_user_id=target_user_id,
+                        concept_code=item["concept_code"],
+                        semantic_hash=item["semantic_hash"],
+                        baseline_term=projection.baseline_term,
+                        baseline_source=projection.baseline_source,
+                        term=str(item["term"]),
+                        origin="model",
+                        source_model_call_id=int(attempt.id),
+                        now=now,
+                    )
+                    projection.last_checked_hash = steward_terminology.request_hash_for(
+                        item["semantic_hash"]
+                    )
+                    projection.last_attempt_at = now
+                    projection.last_attempt_status = "applied"
+                    steward_terminology.upsert_term_preference_suggestion(
+                        db,
+                        space_id=batch.space_id,
+                        viewer_account_id=viewer_account_id,
+                        subject_user_id=int(group["root_user_id"]),
+                        object_user_id=target_user_id,
+                        concept_code=item["concept_code"],
+                        term=str(item["term"]),
+                        projection_id=int(projection.id),
+                        projection_revision=int(projection.revision),
+                        semantic_hash=item["semantic_hash"],
+                        reason_code=str(item.get("reason_code") or "synonym"),
+                        policy_version=batch.policy_version,
+                        origin="model",
+                        now=now,
+                    )
+                # 全组标记已检查：同 request_hash 不自动重发（含被丢弃条目）
+                from app.models.steward import StewardTermProjection as _STP
+
+                assert group is not None
+                for target in group.get("targets", []):
+                    row = db.scalar(
+                        select(_STP).where(
+                            _STP.space_id == batch.space_id,
+                            _STP.viewer_account_id == viewer_account_id,
+                            _STP.target_user_id == int(target["target_user_id"]),
+                        )
+                    )
+                    if row is not None:
+                        row.last_checked_hash = steward_terminology.request_hash_for(
+                            target["semantic_hash"]
+                        )
+                        row.last_attempt_at = now
+                        if row.last_attempt_status != "applied":
+                            row.last_attempt_status = "checked"
+                # 输出变化只触发一次幂等后台刷新；不在网络事务重建全空间
+                request_view_recompute(space_id=batch.space_id)
             else:  # explanation：仅写已验证结构化产物的确定性渲染文本
                 card_id = int((attempt.subject_key or "card:0").split(":", 1)[1])
                 card = db.get(ActionCard, card_id)
@@ -1215,6 +1513,29 @@ def _apply_batch(db: Session, batch_id: int, *, now: Any, from_recovery: bool = 
                     and product.get("schema_version") == steward_guard.EXPLANATION_SCHEMA_VERSION
                 ):
                     card.reason_text_llm = rendered[:_EXPLAIN_MAX_CHARS]
+        # terminology degraded（无效输出）：整组记已检查——同 request_hash 不重发
+        from app.models.steward import StewardTermProjection as _STP
+        from app.services import steward_terminology as _sterm
+
+        for attempt in attempts:
+            if attempt.assist_kind != "terminology" or attempt.status != "degraded":
+                continue
+            group = _term_group_for(db, attempt)
+            if group is None:
+                continue
+            viewer_account_id = int(attempt.viewer_account_id or 0)
+            for target in group.get("targets", []):
+                row = db.scalar(
+                    select(_STP).where(
+                        _STP.space_id == batch.space_id,
+                        _STP.viewer_account_id == viewer_account_id,
+                        _STP.target_user_id == int(target["target_user_id"]),
+                    )
+                )
+                if row is not None:
+                    row.last_checked_hash = _sterm.request_hash_for(target["semantic_hash"])
+                    row.last_attempt_at = now
+                    row.last_attempt_status = "checked"
         db.flush()
         batch.status = "applied"
         batch.error_code = None

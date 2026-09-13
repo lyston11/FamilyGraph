@@ -150,6 +150,8 @@ def upsert_suggestion(
     source_job_id: int | None = None,
     expires_at: datetime | None = None,
     recipient_account_ids: list[int] | None = None,
+    viewer_account_id: int | None = None,
+    notify: bool = True,
     now: datetime | None = None,
 ) -> tuple[StewardSuggestion, bool]:
     """去重投影一条建议：同 (space, dedupe_key, evidence_hash) 收敛为一行。
@@ -157,6 +159,8 @@ def upsert_suggestion(
     返回 (suggestion, created)。同 key 同证据 → 复用既有活跃行（并发生成
     收敛；唯一索引兜底）；同 key 证据变化 → 新建议 + supersede 旧活动行
     （驳回冷却只作用于旧收件人的旧证据版本）。
+    term_preference 类必须提供 viewer_account_id（B：生产维度归入去重键）；
+    ``notify=False`` 不逐条创建待办通知（B-R7：称谓建议只在称谓面板展示）。
     """
     if kind not in (
         "relation_proposal",
@@ -168,12 +172,14 @@ def upsert_suggestion(
     if origin not in ("deterministic", "model"):
         raise ValueError(f"unknown suggestion origin: {origin}")
     now = now or utcnow()
+    if kind == "term_preference" and viewer_account_id is None:
+        raise ValueError("term_preference suggestions require viewer_account_id")
     dedupe_key = compute_dedupe_key(
         kind=kind,
         subject_user_id=subject_user_id,
         object_user_id=object_user_id,
         value_json=value_json,
-        viewer_account_id=None,  # v1 无个人维度生成来源；提交面保留该维度
+        viewer_account_id=viewer_account_id,
     )
     evidence_hash = compute_evidence_hash(evidence_json)
     existing = session.scalar(
@@ -200,6 +206,7 @@ def upsert_suggestion(
         evidence_hash=evidence_hash,
         dedupe_key=dedupe_key,
         policy_version=policy_version,
+        viewer_account_id=viewer_account_id,
         status="proposed",
         revision=1,
         expires_at=expires_at or default_expires_at(now),
@@ -213,7 +220,8 @@ def upsert_suggestion(
     if existing is not None:
         _supersede(session, existing, suggestion.id, now)
     _ensure_recipients(session, suggestion, recipient_account_ids or [], now)
-    _record_suggestion_notifications(session, suggestion)
+    if notify:
+        _record_suggestion_notifications(session, suggestion)
     return suggestion, True
 
 
@@ -592,6 +600,7 @@ def list_suggestions_page(
     space_id: int,
     cursor: int | None,
     limit: int,
+    kind: str | None = None,
 ) -> dict[str, Any]:
     """分页列表（keyset by id）；只返回 active 成员可见且证据可见的建议。
 
@@ -611,6 +620,15 @@ def list_suggestions_page(
             .order_by(StewardSuggestion.id.desc())
             .limit(limit + 1)
         )
+        if kind is not None:
+            if kind not in (
+                "relation_proposal",
+                "term_preference",
+                "identity_duplicate",
+                "missing_information",
+            ):
+                raise_api_error(422, VALIDATION_ERROR, "未知建议种类")
+            stmt = stmt.where(StewardSuggestion.kind == kind)
         if fetch_cursor is not None and fetch_cursor > 0:
             stmt = stmt.where(StewardSuggestion.id < fetch_cursor)
         rows = list(session.scalars(stmt))
@@ -944,6 +962,11 @@ def submit_suggestion(
             suggestion.updated_at = now
             suggestion.linked_term_id = entry.id
             suggestion.submit_key = key
+            # B-R5：主动保留 = 本人偏好反馈（kept）；复用本人词条合同
+            recipient = _recipient_row(session, suggestion.id, account.id)
+            if recipient is not None:
+                recipient.preference_feedback = "kept"
+                recipient.preference_at = now
             payload = {
                 "suggestion": _serialize(
                     session,
@@ -963,6 +986,109 @@ def submit_suggestion(
             session.flush()
             return 200, payload
         raise_api_error(422, SUGGESTION_SUBMIT_NOT_ALLOWED, "未知建议种类")  # pragma: no cover
+
+
+def restore_term(
+    session: Session,
+    *,
+    account: Account,
+    space_id: int,
+    suggestion_id: int,
+    expected_revision: int,
+    expected_projection_revision: int,
+    semantic_hash: str,
+    idempotency_key: str,
+    now: datetime | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """恢复默认叫法（B-R5/R-05，仅本人）：原子 CAS + 稳定抑制 + 即时回退。
+
+    - 幂等：同 Idempotency-Key 返回既有结果（成功后 revision 增长不破坏重试）；
+    - 陈旧请求（建议/投影 revision 或 semantic_hash 不匹配）→ 409 无副作用；
+    - 显式个人词条生效后不可经本操作覆盖（建议已 resolved → 409）。
+    """
+    from app.models.steward import StewardTermProjection, StewardTermSuppression
+    from app.services.personal_family_view import request_view_recompute
+
+    now = now or utcnow()
+    key = idempotency_key.strip()
+    if not key or len(key) > 120:
+        raise_api_error(422, VALIDATION_ERROR, "缺少合法的 Idempotency-Key")
+    with command_transaction(session, immediate=True):
+        viewer, suggestion = visible_suggestion_or_404(
+            session, account=account, space_id=space_id, suggestion_id=suggestion_id
+        )
+        if suggestion.kind != "term_preference" or suggestion.viewer_account_id != account.id:
+            raise_api_error(404, SUGGESTION_NOT_FOUND, "建议不存在")
+        if suggestion.submit_key == key and suggestion.submit_result_json is not None:
+            stored = dict(suggestion.submit_result_json)
+            return int(stored.get("status_code", 200)), stored.get("payload", {})
+        if suggestion.status not in SUGGESTION_ACTIVE_STATES:
+            raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议已终结")
+        if suggestion.revision != expected_revision:
+            raise_api_error(409, SUGGESTION_REVISION_CONFLICT, "建议已被其他操作更新")
+        value = dict(suggestion.value_json)
+        projection = session.scalar(
+            select(StewardTermProjection).where(
+                StewardTermProjection.id == int(value.get("projection_id") or 0)
+            )
+        )
+        if (
+            projection is None
+            or projection.revision != expected_projection_revision
+            or projection.semantic_hash != semantic_hash
+        ):
+            raise_api_error(409, SUGGESTION_EVIDENCE_CHANGED, "称谓依据已变化，请基于新建议操作")
+        # 原子写：抑制该词 + 投影回退 baseline + 建议终态 restored
+        suppression_key = str(value.get("suppression_key") or "")
+        existing_suppression = session.scalar(
+            select(StewardTermSuppression.id).where(
+                StewardTermSuppression.viewer_account_id == account.id,
+                StewardTermSuppression.space_id == suggestion.space_id,
+                StewardTermSuppression.target_user_id == suggestion.object_user_id,
+                StewardTermSuppression.suppression_key == suppression_key,
+            )
+        )
+        if existing_suppression is None and suppression_key:
+            session.add(
+                StewardTermSuppression(
+                    viewer_account_id=account.id,
+                    space_id=suggestion.space_id,
+                    target_user_id=int(suggestion.object_user_id or 0),
+                    suppression_key=suppression_key,
+                    source_suggestion_id=suggestion.id,
+                    created_at=now,
+                )
+            )
+        baseline = projection.baseline_term
+        projection.term = None
+        projection.origin = None
+        projection.status = "suppressed"
+        projection.revision += 1
+        projection.updated_at = now
+        suggestion.status = "resolved"
+        suggestion.revision += 1
+        suggestion.updated_at = now
+        suggestion.submit_key = key
+        recipient = _recipient_row(session, suggestion.id, account.id)
+        if recipient is not None:
+            recipient.preference_feedback = "restored"
+            recipient.preference_at = now
+        request_view_recompute(space_id=suggestion.space_id)
+        payload = {
+            "suggestion": _serialize(
+                session, suggestion, ["open_details"], "resolved", viewer=viewer, account=account
+            ),
+            "projection": {
+                "id": projection.id,
+                "revision": projection.revision,
+                "baseline_term": baseline,
+                "status": projection.status,
+            },
+        }
+        session.flush()
+        suggestion.submit_result_json = _jsonable({"status_code": 200, "payload": payload})
+        session.flush()
+        return 200, payload
 
 
 def resolve_for_linked_fact(session: Session, *, fact_id: int) -> None:

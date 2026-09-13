@@ -262,6 +262,8 @@ class StewardSpaceSchedule(Base):
     next_scan_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_scheduled_cursor: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 每空间辅助 kind 轮转进度（terminology 公平调度；默认 0）
+    assist_kind_cursor: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -345,7 +347,8 @@ class StewardModelCall(Base):
     __tablename__ = "steward_model_calls"
     __table_args__ = (
         CheckConstraint(
-            "assist_kind IN ('candidate','ranking','explanation')", name="ck_smc_assist_kind"
+            "assist_kind IN ('candidate','ranking','explanation','terminology')",
+            name="ck_smc_assist_kind",
         ),
         CheckConstraint(_SMC_STATUS_CHECK_SQL, name="ck_smc_status"),
         sa.UniqueConstraint("job_id", "assist_kind", "seq", name="uq_smc_job_kind_seq"),
@@ -396,6 +399,10 @@ class StewardModelCall(Base):
     reserved_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 保守计费结算值（缺失/负数 usage 回落预留；unknown 同样计费）
     billed_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # terminology 的 viewer 绑定（每 attempt 一个账号；旧三类保持 NULL）
+    viewer_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True
+    )
     response_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 解析并验证通过的可写回产物（非原始 payload）：候选列表/排列/解释文本
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -438,3 +445,105 @@ class StewardLlmCandidate(Base):
             f"<StewardLlmCandidate space={self.space_id} job={self.job_id}"
             f" {self.candidate_kind}/{self.status}>"
         )
+
+
+class StewardTermProjection(Base):
+    """管家自动称谓投影（09-13-steward-terminology-autonomy；迁移 0044）。
+
+    可重建的显示缓存，不是新词典：TermEntry/TermUsage 与两人晋升规则仍是
+    真源。唯一键 (space_id, viewer_account_id, root_user_id, target_user_id)。
+    自动 term 只改善已绑定路径的显示，不作为关系依据；个人/生效空间词条
+    读取时无条件优先。status: active | suppressed | stale | unchanged。
+    origin: deterministic | model（NULL=尚无自动产物）。
+    """
+
+    __tablename__ = "steward_term_projections"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','suppressed','stale','unchanged')", name="ck_stp_status"
+        ),
+        CheckConstraint("origin IN ('deterministic','model')", name="ck_stp_origin"),
+        sa.UniqueConstraint(
+            "space_id",
+            "viewer_account_id",
+            "root_user_id",
+            "target_user_id",
+            name="uq_stp_scope",
+        ),
+        Index("ix_stp_semantic", "viewer_account_id", "semantic_hash"),
+        Index("ix_stp_checked", "last_checked_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    viewer_account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    root_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    target_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    concept_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 当前语义依据版本摘要（不含输出自身 revision，避免自激调用）
+    semantic_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 请求摘要（semantic_hash + 模型规则/prompt 版本）
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    baseline_term: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    baseline_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    term: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    origin: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source_model_call_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    last_checked_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_attempt_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 稳定抑制键（account/space/target + 已验证语义 + 规范词；不含任何版本号）
+    suppression_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rule_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<StewardTermProjection v={self.viewer_account_id} t={self.target_user_id}"
+            f" {self.status} term={self.term}>"
+        )
+
+
+class StewardTermSuppression(Base):
+    """恢复原叫法的稳定拒绝记录（跨建议/证据/prompt 版本防重现）。
+
+    按 suppression_key（account/space/target + 已验证关系语义 + 规范词）查找；
+    不含路径事实 ID/revision、词条 revision、prompt 或反馈版本——同一关系换
+    等价证据路径不能绕过恢复过的拒绝。
+    """
+
+    __tablename__ = "steward_term_suppressions"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "viewer_account_id",
+            "space_id",
+            "target_user_id",
+            "suppression_key",
+            name="uq_sts_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    viewer_account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    target_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    suppression_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_suggestion_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

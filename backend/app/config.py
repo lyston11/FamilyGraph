@@ -156,6 +156,11 @@ STEWARD_ASSIST_EXPLANATION: bool = os.environ.get("STEWARD_ASSIST_EXPLANATION", 
     "1",
     "true",
 )
+# 09-13 称谓自主优化（terminology）：默认关闭；默认关闭时确定性称谓继续可用
+STEWARD_ASSIST_TERMINOLOGY: bool = os.environ.get("STEWARD_ASSIST_TERMINOLOGY", "").lower() in (
+    "1",
+    "true",
+)
 # 每 job 预算与上限（超限 skip 并留审计行，绝不拖垮确定性流水线）
 STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", "6")
@@ -181,6 +186,13 @@ STEWARD_ASSIST_BATCH_LEASE_SECONDS: int = int(
     os.environ.get("STEWARD_ASSIST_BATCH_LEASE_SECONDS", "120")
 )
 # 全局并发批次上界（1=串行；调度器一次至多 lease 一个未过期批次）
+# terminology 有界目标（每 job 至多 2 个 viewer 组、每组至多 8 个目标）
+STEWARD_TERMINOLOGY_MAX_VIEWER_GROUPS_PER_JOB: int = int(
+    os.environ.get("STEWARD_TERMINOLOGY_MAX_VIEWER_GROUPS_PER_JOB", "2")
+)
+STEWARD_TERMINOLOGY_MAX_TARGETS_PER_GROUP: int = int(
+    os.environ.get("STEWARD_TERMINOLOGY_MAX_TARGETS_PER_GROUP", "8")
+)
 STEWARD_ASSIST_MAX_CONCURRENT_BATCHES: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", "1")
 )

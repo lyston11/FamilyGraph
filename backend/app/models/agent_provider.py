@@ -102,6 +102,8 @@ class AgentSpaceProviderSetting(Base):
     assist_candidate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     assist_ranking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     assist_explanation: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 09-13 称谓自主优化空间级开关（与平台 steward_assist_terminology 相与）
+    assist_terminology: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # 09-13 Steward 推测层空间级开关（有效开关 = 平台 config 开关 AND 本列，
     # 默认关 → 无推测投影、PFV 无推测区块）
     inferred_tree: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

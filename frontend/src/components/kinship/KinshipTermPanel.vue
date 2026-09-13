@@ -4,9 +4,11 @@ import type { InputHTMLAttributes as VueInputHTMLAttributes } from 'vue'
 import { NButton, NInput, NModal, useMessage } from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
+import { fetchSuggestions, restoreSuggestionTerm, submitSuggestion } from '@/api/stewardSuggestions'
 import { useAuthStore } from '@/stores/auth'
 import { useKinshipStore } from '@/stores/kinship'
 import { useSpacesStore } from '@/stores/spaces'
+import type { SuggestionItem } from '@/types/api'
 import type { KinshipResolve, TermSourceLevel } from '@/types/kinship'
 
 /**
@@ -52,7 +54,10 @@ async function refresh(force: boolean): Promise<void> {
 
 watch(
   () => [spaces.currentSpaceId, props.memberId] as const,
-  () => void refresh(true),
+  () => {
+    void refresh(true)
+    void loadSuggestions()
+  },
   { immediate: true },
 )
 
@@ -65,6 +70,7 @@ const SOURCE_LEVEL_LABELS: Record<TermSourceLevel, string> = {
   system: '标准称谓',
   structural: '结构描述',
   derived: '管家称谓',
+  steward: '管家称谓',
 }
 
 /** 来源层级越靠前越"贴身"：personal 实底主色 / space 确认色 / locale 提案色 /
@@ -144,6 +150,79 @@ async function saveCorrection(): Promise<void> {
 // ---- 我就这么叫（使用证据 → 两人可晋升空间叫法）----
 
 const callingUsage = ref(false)
+
+// ---- 管家称谓建议（B-R7：可选偏好入口；不逐条待办，无需处理）----
+
+const termSuggestions = ref<SuggestionItem[]>([])
+const suggestionBusy = ref(false)
+
+const REASON_LABELS: Record<string, string> = {
+  synonym: '同义叫法',
+  shorter_chain: '更简短叫法',
+  preferred_usage: '你用过的叫法',
+}
+
+async function loadSuggestions(): Promise<void> {
+  const spaceId = spaces.currentSpaceId
+  if (spaceId === null) return
+  try {
+    const page = await fetchSuggestions(spaceId, null, 50, 'term_preference')
+    termSuggestions.value = page.items.filter((item) => item.object_user_id === props.memberId)
+  } catch {
+    termSuggestions.value = []
+  }
+}
+
+async function keepSuggestion(item: SuggestionItem): Promise<void> {
+  const spaceId = spaces.currentSpaceId
+  if (spaceId === null || suggestionBusy.value) return
+  suggestionBusy.value = true
+  try {
+    await submitSuggestion(
+      spaceId,
+      item.id,
+      { expected_revision: item.revision, evidence_hash: item.evidence_hash, confirm: true },
+      crypto.randomUUID(),
+    )
+    message.success(`「${String(item.value.term ?? '')}」已保存为你的叫法（跨空间生效）`)
+    await loadSuggestions()
+    await refresh(true)
+  } catch {
+    message.error('保存未成功：建议可能已被处理，请稍后重试')
+  } finally {
+    suggestionBusy.value = false
+  }
+}
+
+async function restoreSuggestion(item: SuggestionItem): Promise<void> {
+  const spaceId = spaces.currentSpaceId
+  if (spaceId === null || suggestionBusy.value) return
+  const semanticHash =
+    typeof item.value.semantic_identity === 'string' ? item.value.semantic_identity : ''
+  const projectionRevision =
+    typeof item.value.projection_revision === 'number' ? item.value.projection_revision : 0
+  if (!semanticHash || projectionRevision <= 0) return
+  suggestionBusy.value = true
+  try {
+    await restoreSuggestionTerm(
+      spaceId,
+      item.id,
+      {
+        expected_revision: item.revision,
+        expected_projection_revision: projectionRevision,
+        semantic_hash: semanticHash,
+      },
+      crypto.randomUUID(),
+    )
+    message.success('已恢复默认叫法')
+    await loadSuggestions()
+    await refresh(true)
+  } catch {
+    message.error('恢复未成功：称谓依据可能已变化，请稍后重试')
+  } finally {
+    suggestionBusy.value = false
+  }
+}
 
 async function recordUsage(): Promise<void> {
   const spaceId = spaces.currentSpaceId
@@ -229,6 +308,45 @@ async function recordUsage(): Promise<void> {
         >
           我就这么叫
         </NButton>
+      </div>
+
+      <!-- 管家称谓建议（可选偏好；关闭面板/忽略不等于拒绝） -->
+      <div v-if="termSuggestions.length > 0" class="suggestions" data-test="kinship-suggestions">
+        <p class="suggestions-title">管家建议</p>
+        <div
+          v-for="item in termSuggestions"
+          :key="item.id"
+          class="suggestion"
+          data-test="kinship-suggestion"
+        >
+          <p class="suggestion-term">
+            「{{ String(item.value.term ?? '') }}」
+            <span class="fg-badge fg-badge--muted">
+              {{ REASON_LABELS[String(item.value.reason_code ?? '')] ?? '可选叫法' }}
+            </span>
+          </p>
+          <div class="suggestion-actions">
+            <NButton
+              size="tiny"
+              type="primary"
+              secondary
+              :loading="suggestionBusy"
+              data-test="kinship-keep-btn"
+              @click="keepSuggestion(item)"
+            >
+              保留为我的叫法
+            </NButton>
+            <NButton
+              size="tiny"
+              quaternary
+              :loading="suggestionBusy"
+              data-test="kinship-restore-btn"
+              @click="restoreSuggestion(item)"
+            >
+              恢复默认叫法
+            </NButton>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -330,6 +448,37 @@ async function recordUsage(): Promise<void> {
 .alt-tag:hover {
   border-color: var(--fg-accent);
   color: var(--fg-accent);
+}
+
+.suggestions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--fg-border, #e5e5e5);
+}
+
+.suggestions-title {
+  font-size: 12px;
+  color: var(--fg-text-secondary, #666);
+  margin: 0 0 4px;
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.suggestion-term {
+  margin: 0;
+  font-size: 13px;
+}
+
+.suggestion-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .actions {

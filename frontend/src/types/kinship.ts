@@ -7,7 +7,7 @@
  */
 
 /** 四级来源：personal > space > locale > system；structural = 无词条时的结构默认称谓 */
-export type TermSourceLevel = 'personal' | 'space' | 'locale' | 'system' | 'structural' | 'derived'
+export type TermSourceLevel = 'personal' | 'space' | 'locale' | 'system' | 'structural' | 'derived' | 'steward'
 
 /** 自由文本解析等级（KI-3）：只有 determined 允许直接更新展示层 */
 export type ResolutionClass = 'determined' | 'supported' | 'ambiguous' | 'conflicting'

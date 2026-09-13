@@ -137,13 +137,14 @@ def list_suggestions(
     space_id: int,
     cursor: int | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
+    kind: str | None = Query(default=None),
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SuggestionsPageOut:
     _gate()
     _user, account = identity
     payload = steward_suggestions.list_suggestions_page(
-        session, account=account, space_id=space_id, cursor=cursor, limit=limit
+        session, account=account, space_id=space_id, cursor=cursor, limit=limit, kind=kind
     )
     return SuggestionsPageOut.model_validate(payload)
 
@@ -211,6 +212,48 @@ def submit_suggestion(
     # 服务层返回的 payload 含 datetime；JSONResponse 原样 json.dumps 会失败。
     # 经 jsonable_encoder 归一（datetime→ISO 字符串），与列表端点及幂等重放
     # （submit_result_json 已 _jsonable）的响应形态保持一致。
+    return JSONResponse(status_code=status_code, content=jsonable_encoder(payload))
+
+
+class SuggestionRestoreIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    expected_projection_revision: int = Field(ge=1)
+    semantic_hash: str = Field(min_length=16, max_length=64)
+
+
+class SuggestionRestoreOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suggestion: SuggestionItemOut
+    projection: dict[str, Any]
+
+
+@router.post("/steward-suggestions/{suggestion_id}/restore-term")
+def restore_term(
+    suggestion_id: int,
+    request: SuggestionRestoreIn,
+    space_id: int = Query(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> Any:
+    """恢复默认叫法（B-R5）：仅本人；CAS + 稳定抑制；同键幂等。"""
+    _gate()
+    _user, account = identity
+    if idempotency_key is None or not idempotency_key.strip():
+        raise_api_error(422, VALIDATION_ERROR, "缺少 Idempotency-Key 请求头")
+    status_code, payload = steward_suggestions.restore_term(
+        session,
+        account=account,
+        space_id=space_id,
+        suggestion_id=suggestion_id,
+        expected_revision=request.expected_revision,
+        expected_projection_revision=request.expected_projection_revision,
+        semantic_hash=request.semantic_hash,
+        idempotency_key=idempotency_key,
+    )
     return JSONResponse(status_code=status_code, content=jsonable_encoder(payload))
 
 

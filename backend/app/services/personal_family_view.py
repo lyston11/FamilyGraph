@@ -258,6 +258,25 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
                 births=births,
             ),
         )
+        # 09-13 terminology：有效自动词覆盖（读取端个人/空间词条无条件优先，
+        # 自动投影只作用于可覆盖 baseline；覆盖后来源标记为 steward）。
+        effective_term = term_view["term"]
+        effective_source = term_view["source_level"]
+        from app.services import steward_terminology
+
+        override = steward_terminology.effective_override(
+            session,
+            account_id=account.id,
+            root_user_id=actor.id,
+            space_id=space_id,
+            target_user_id=target.id,
+            concept_code=resolution.concept_code,
+            baseline_term=term_view["term"],
+            baseline_source=term_view["source_level"],
+        )
+        if override is not None and override != effective_term:
+            effective_term = override
+            effective_source = "steward"
         session.add(
             PersonalFamilyViewEdge(
                 view_id=view.id,
@@ -269,12 +288,12 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
                 alternative_paths_json=alt_paths,
                 path_class=resolution.path_class,
                 concept_code=resolution.concept_code,
-                term=term_view["term"],
+                term=effective_term,
                 inclusion_reason_code="confirmed_path",
                 authorization_basis_json={
                     "space_id": space_id,
                     "visibility": level,
-                    "term_source_level": term_view["source_level"],
+                    "term_source_level": effective_source,
                 },
                 policy_version=POLICY_VERSION,
                 computation_version=COMPUTATION_VERSION,

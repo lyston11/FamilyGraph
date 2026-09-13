@@ -1075,6 +1075,25 @@ def _execute_locked(
         stats["inferred_superseded"] = 0
         stats["inferred_projected"] = 0
 
+    # 5.7 称谓自主生产（09-13 terminology；确定性来源，零模型调用）：
+    #     投影 + 可选偏好建议（notify=False，不逐条打扰）。与上面同一
+    #     SAVEPOINT 隔离纪律；模型产物由 assist 批次写回，不在此发生。
+    try:
+        from app.services import steward_terminology
+
+        with db.begin_nested():
+            term_stats = steward_terminology.run_deterministic_scan(db, job=job, now=now)
+        stats["terminology_projections"] = term_stats["projections"]
+        stats["terminology_suggestions"] = term_stats["suggestions"]
+    except Exception as exc:  # noqa: BLE001 — 称谓生产绝不拖垮确定性 core
+        logger.warning(
+            "steward terminology scan failed for job %s (error=%s)",
+            job.id,
+            type(exc).__name__,
+        )
+        stats["terminology_projections"] = 0
+        stats["terminology_suggestions"] = 0
+
     # 3. 推荐矩阵 → 出卡（先重验证旧卡再出新卡，避免陈旧卡阻塞去重）
     stats["cards_superseded"] += _revalidate_active_cards(db, space, now=now)
     stats["cards_created"] = _recommend_cards(db, space, visible, now=now)

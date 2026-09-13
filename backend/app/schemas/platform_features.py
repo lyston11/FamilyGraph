@@ -14,9 +14,11 @@ class StewardAssistSwitchesOut(BaseModel):
     candidate: bool
     ranking: bool
     explanation: bool
+    terminology: bool
     candidate_source: Literal["environment", "platform", "deployment"]
     ranking_source: Literal["environment", "platform", "deployment"]
     explanation_source: Literal["environment", "platform", "deployment"]
+    terminology_source: Literal["environment", "platform", "deployment"]
 
 
 class PlatformFeatureFlagsOut(BaseModel):
@@ -40,3 +42,4 @@ class PlatformFeatureUpdateRequest(BaseModel):
     steward_assist_candidate: bool | None = None
     steward_assist_ranking: bool | None = None
     steward_assist_explanation: bool | None = None
+    steward_assist_terminology: bool | None = None

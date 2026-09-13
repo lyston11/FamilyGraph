@@ -29,7 +29,9 @@ class PersonalTermPutRequest(_Strict):
 
 class ResolvedTermOut(BaseModel):
     term: str | None
-    source_level: Literal["personal", "space", "locale", "system", "structural", "derived"] | None
+    source_level: (
+        Literal["personal", "space", "locale", "system", "structural", "derived", "steward"] | None
+    )
     entry_id: int | None
 
 
@@ -60,7 +62,7 @@ class AltPathOut(BaseModel):
     concept_code: str | None
     term: str | None
     term_source_level: (
-        Literal["personal", "space", "locale", "system", "structural", "derived"] | None
+        Literal["personal", "space", "locale", "system", "structural", "derived", "steward"] | None
     ) = None
     term_entry_id: int | None = None
 
@@ -75,7 +77,7 @@ class KinshipResolveOut(BaseModel):
     explanation_structural: str | None
     term: str | None
     term_source_level: (
-        Literal["personal", "space", "locale", "system", "structural", "derived"] | None
+        Literal["personal", "space", "locale", "system", "structural", "derived", "steward"] | None
     )
     term_entry_id: int | None
     main_path: list[dict[str, Any]]
@@ -98,7 +100,7 @@ class ParseCandidateOut(BaseModel):
     concept_code: str | None
     term: str | None
     term_source_level: (
-        Literal["personal", "space", "locale", "system", "structural", "derived"] | None
+        Literal["personal", "space", "locale", "system", "structural", "derived", "steward"] | None
     )
 
 

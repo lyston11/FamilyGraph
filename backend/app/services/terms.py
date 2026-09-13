@@ -742,6 +742,8 @@ def _pair_fact_state(
 _VARIANT_ELIGIBLE_LEVELS = (TERM_LEVEL_LOCALE, TERM_LEVEL_SYSTEM)
 # 泛化产物（最长命名前缀 + 残链）的来源标记（非存储层级）
 SOURCE_LEVEL_DERIVED = "derived"
+# 管家自动投影来源（09-13 terminology；非存储层级，同 derived 语义）
+SOURCE_LEVEL_STEWARD = "steward"
 
 # 长幼可比的出生数据：(cal_type, year)；混合日历不比较（保守回退泛化词）
 BirthPair = tuple[str, int]
@@ -939,6 +941,47 @@ def _generalized_term(
     return None
 
 
+def residual_word_for(token: str) -> str | None:
+    """概念码单步 token 的残链小词（公开封装；无词返回 None）。"""
+    return _RESIDUAL_WORDS.get(_parse_token(token))
+
+
+def sibling_base_hop(code_tokens: list[str]) -> tuple[int, bool] | None:
+    """长幼消歧类基跳识别（公开封装；非消歧类返回 None）。"""
+    return _sibling_base_hop(code_tokens)
+
+
+def term_registry_hash(session: Session, *, space_id: int, account_id: int | None = None) -> str:
+    """适用词典版本指纹：system/locale/space（本空间）+ 可选本人 personal 词条。"""
+    import hashlib
+
+    stmt = select(TermEntry.concept_code, TermEntry.term, TermEntry.level).where(
+        TermEntry.status == "active",
+        TermEntry.level.in_(("system", "locale")),
+    )
+    parts = [tuple(row) for row in session.execute(stmt).all()]
+    space_rows = session.execute(
+        select(TermEntry.concept_code, TermEntry.term, TermEntry.level).where(
+            TermEntry.status == "active",
+            TermEntry.level == TERM_LEVEL_SPACE,
+            TermEntry.space_id == space_id,
+        )
+    ).all()
+    parts.extend(tuple(row) for row in space_rows)
+    if account_id is not None:
+        personal_rows = session.execute(
+            select(TermEntry.concept_code, TermEntry.term, TermEntry.level).where(
+                TermEntry.status == "active",
+                TermEntry.level == TERM_LEVEL_PERSONAL,
+                TermEntry.owner_account_id == account_id,
+            )
+        ).all()
+        parts.extend(tuple(row) for row in personal_rows)
+    parts.sort()
+    canonical = repr(parts).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def resolve_term_or_structural(
     session: Session,
     *,
@@ -1076,6 +1119,27 @@ def compose_resolution_view(
             births=births,
         ),
     )
+
+    # 09-13 terminology：有效自动词覆盖（个人/空间显式词条无条件优先，
+    # 选择器只对 locale/system/derived/structural baseline 生效）。
+    def _apply_override(view: dict[str, Any], path_json: list[dict[str, Any]]) -> dict[str, Any]:
+        from app.services import steward_terminology
+
+        override = steward_terminology.effective_override(
+            session,
+            account_id=account_id,
+            root_user_id=viewer_user_id,
+            space_id=space_id,
+            target_user_id=target_user_id,
+            concept_code=view["concept_code"] if "concept_code" in view else result.concept_code,
+            baseline_term=view["term"],
+            baseline_source=view["source_level"],
+        )
+        if override is not None and override != view["term"]:
+            return {**view, "term": override, "source_level": SOURCE_LEVEL_STEWARD}
+        return view
+
+    main_view = _apply_override(main_view, result.main_path_json)
     alt_views: list[dict[str, Any]] = []
     for index, path_json in enumerate(result.alt_paths_json):
         steps = steps_from_json(path_json)
@@ -1097,6 +1161,7 @@ def compose_resolution_view(
                 births=births,
             ),
         )
+        alt_term_view = _apply_override(alt_term_view, path_json)
         alt_views.append(
             {
                 "path": path_json,

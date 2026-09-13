@@ -92,10 +92,12 @@ def _setting_out(
         assist_candidate=bool(row.assist_candidate),
         assist_ranking=bool(row.assist_ranking),
         assist_explanation=bool(row.assist_explanation),
+        assist_terminology=bool(row.assist_terminology),
         # 生效 = 平台配置 ∧ 空间级；空间开而平台关 → 前端据 False 显示可解释提示
         assist_candidate_effective=bool(effective.get("candidate", False)),
         assist_ranking_effective=bool(effective.get("ranking", False)),
         assist_explanation_effective=bool(effective.get("explanation", False)),
+        assist_terminology_effective=bool(effective.get("terminology", False)),
         inferred_tree=bool(row.inferred_tree),
         # 生效 = 平台 AND 空间；空间开而平台关 → 前端据 False 显示可解释提示
         inferred_effective=inferred_effective,
@@ -174,7 +176,7 @@ def get_space_model_settings(
                 inferred_effective=steward_inferred.effective_enabled(session, space_id),
                 assist_effective={
                     kind: steward_assist.assist_enabled(session, space_id, kind)
-                    for kind in ("candidate", "ranking", "explanation")
+                    for kind in ("candidate", "ranking", "explanation", "terminology")
                 },
             ),
         ),
@@ -199,7 +201,12 @@ def put_space_model_settings(
     actor, _account = identity
     _require_space_manager(session, space_id, actor.id)
 
-    assist_values = (body.assist_candidate, body.assist_ranking, body.assist_explanation)
+    assist_values = (
+        body.assist_candidate,
+        body.assist_ranking,
+        body.assist_explanation,
+        body.assist_terminology,
+    )
     if body.agent_kind != "steward" and (
         any(v is not None for v in assist_values) or body.inferred_tree is not None
     ):
@@ -243,6 +250,8 @@ def put_space_model_settings(
             row.assist_ranking = body.assist_ranking
         if body.assist_explanation is not None:
             row.assist_explanation = body.assist_explanation
+        if body.assist_terminology is not None:
+            row.assist_terminology = body.assist_terminology
         if body.inferred_tree is not None:
             row.inferred_tree = body.inferred_tree
     session.commit()

@@ -17,9 +17,11 @@ const stewardAssist = {
   candidate: false,
   ranking: false,
   explanation: false,
+  terminology: false,
   candidate_source: 'environment' as const,
   ranking_source: 'environment' as const,
   explanation_source: 'environment' as const,
+  terminology_source: 'environment' as const,
 }
 
 const baseState: AdminPlatformFeatureState = {
@@ -78,6 +80,8 @@ describe('PlatformFeaturesView 管家辅助开关治理（09-13）', () => {
         candidate_source: 'environment',
         ranking_source: 'environment',
         explanation_source: 'environment',
+      terminology: false,
+      terminology_source: 'environment',
       },
     })
   })
@@ -102,6 +106,8 @@ describe('PlatformFeaturesView 管家辅助开关治理（09-13）', () => {
         candidate_source: 'environment',
         ranking_source: 'platform',
         explanation_source: 'environment',
+      terminology: false,
+      terminology_source: 'environment',
       },
     })
     const wrapper = mount(PlatformFeaturesView)
@@ -116,6 +122,7 @@ describe('PlatformFeaturesView 管家辅助开关治理（09-13）', () => {
       steward_assist_candidate: true,
       steward_assist_ranking: true,
       steward_assist_explanation: false,
+      steward_assist_terminology: false,
     })
   })
 })

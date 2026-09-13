@@ -27,6 +27,7 @@ export interface SpaceModelSettingPayload {
   assist_candidate?: boolean
   assist_ranking?: boolean
   assist_explanation?: boolean
+  assist_terminology?: boolean
   /** 09-13 推测层空间级开关（仅 steward 维度） */
   inferred_tree?: boolean
 }

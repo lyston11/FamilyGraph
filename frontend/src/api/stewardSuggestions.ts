@@ -177,14 +177,15 @@ function decodeSuggestionsPage(value: unknown): SuggestionsPage {
   }
 }
 
-/** 分页读取建议列表（keyset cursor；首页 cursor 传 null） */
+/** 分页读取建议列表（keyset cursor；首页 cursor 传 null；可按 kind 过滤） */
 export async function fetchSuggestions(
   spaceId: number,
   cursor?: number | null,
   limit = 20,
+  kind?: SuggestionKind,
 ): Promise<SuggestionsPage> {
   const { data } = await apiClient.get<unknown>('/steward-suggestions', {
-    params: { space_id: spaceId, ...(cursor ? { cursor } : {}), limit },
+    params: { space_id: spaceId, ...(cursor ? { cursor } : {}), limit, ...(kind ? { kind } : {}) },
   })
   return decodeSuggestionsPage(data)
 }
@@ -293,6 +294,23 @@ export async function submitSuggestion(
     },
   )
   return decodeSubmitPayload(response.data, response.status)
+}
+
+/** 恢复默认叫法（B-R5，仅本人）：CAS + 稳定抑制；同键幂等 */
+export async function restoreSuggestionTerm(
+  spaceId: number,
+  suggestionId: number,
+  body: {
+    expected_revision: number
+    expected_projection_revision: number
+    semantic_hash: string
+  },
+  idempotencyKey: string,
+): Promise<void> {
+  await apiClient.post(`/steward-suggestions/${suggestionId}/restore-term`, body, {
+    params: { space_id: spaceId },
+    headers: { 'Idempotency-Key': idempotencyKey },
+  })
 }
 
 /** 确认关系提案（仅有权当事人；owner 非端点会被服务端 404 拒绝） */

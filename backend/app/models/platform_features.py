@@ -23,6 +23,7 @@ class PlatformFeatureConfig(Base):
     steward_assist_candidate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     steward_assist_ranking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     steward_assist_explanation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    steward_assist_terminology: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_by_system_admin_id: Mapped[int | None] = mapped_column(
         ForeignKey("system_admins.id", ondelete="SET NULL"), nullable=True
