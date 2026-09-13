@@ -1,0 +1,14 @@
+{
+  "same_explicit_path_insertion_as_harness": true,
+  "process_import_verification_only": true,
+  "all_imports_from_e_worktree": true,
+  "module_files": {
+    "app": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan/backend/app/__init__.py",
+    "app.config": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan/backend/app/config.py",
+    "app.services.steward_assist": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan/backend/app/services/steward_assist.py",
+    "app.services.steward_suggestions": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan/backend/app/services/steward_suggestions.py",
+    "app.services.steward": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan/backend/app/services/steward.py",
+    "app.services.family_recommendations": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan/backend/app/services/family_recommendations.py"
+  },
+  "business_probe_rerun": false
+}

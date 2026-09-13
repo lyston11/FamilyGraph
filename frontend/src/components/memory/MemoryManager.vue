@@ -9,19 +9,23 @@
 // - 所有写入/撤销/删除/确认完成后由 store 重读服务端状态（无乐观本地副本）；
 // - scope 标签是对已授权数据的展示层过滤，不做前端授权推导；
 // - 数据全部经 memory store（服务端真源），组件不发请求。
-import { NAlert, NButton, NEmpty, NSpin, NSwitch, useDialog } from 'naive-ui'
-import { computed, onMounted, ref, watch } from 'vue'
+import { NAlert, NButton, NEmpty, NSpin, NSwitch, useDialog, useMessage } from 'naive-ui'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import MemoryCandidateConfirmDialog from './MemoryCandidateConfirmDialog.vue'
 import MemoryCardItem from './MemoryCardItem.vue'
 import MemoryEditorDialog, { type MemoryEditorInitial } from './MemoryEditorDialog.vue'
 import MemoryRagPanel from './MemoryRagPanel.vue'
+import { ApiError } from '@/api/errors'
+import { friendlyMemoryError } from '@/api/memory'
 import { useMemoryStore } from '@/stores/memory'
 import { useSpacesStore } from '@/stores/spaces'
 import {
   MEMORY_CANDIDATE_STATUS_LABELS,
   MEMORY_SCOPE_LABELS,
   MEMORY_SENSITIVITY_LABELS,
+  MEMORY_SOURCE_STATUS_LABELS,
+  memorySourceReadable,
   type Memory,
   type MemoryCandidate,
 } from '@/types/memory'
@@ -38,14 +42,20 @@ const TAB_LABELS: Record<Exclude<MemoryTabId, 'pending'>, string> = {
 const memory = useMemoryStore()
 const spaces = useSpacesStore()
 const dialog = useDialog()
+const message = useMessage()
 
 /** null = 尚未按默认规则初始化（候选加载完成后决定默认标签） */
 const activeTab = ref<MemoryTabId | null>(null)
 const showHistory = ref(false)
-const confirmCandidate = ref<MemoryCandidate | null>(null)
+const confirmCandidateId = ref<number | null>(null)
+const confirmCandidate = computed(() => memory.memoryEnabled
+  ? memory.candidates.find((candidate) => candidate.id === confirmCandidateId.value) ?? null
+  : null,
+)
 const editorOpen = ref(false)
 const editorInitial = ref<MemoryEditorInitial | null>(null)
 const candidateActionId = ref<number | null>(null)
+let loadRequestId = 0
 
 const currentSpace = computed(() => spaces.currentSpace)
 const pendingCandidates = computed(() =>
@@ -57,7 +67,7 @@ const pendingTabLabel = computed(() => {
 })
 
 /** 左侧分区导航（与设置页 settings-tabs 同构）；待确认标签携带候选数 */
-const memoryTabs = computed(() => [
+const memoryTabs = computed(() => memory.featureStateKnown ? [
   ...(memory.memoryEnabled
     ? [
         { key: 'pending' as MemoryTabId, label: pendingTabLabel.value },
@@ -67,7 +77,7 @@ const memoryTabs = computed(() => [
       ]
     : []),
   { key: 'rag' as MemoryTabId, label: TAB_LABELS.rag },
-])
+] : [])
 
 // ---- 各标签的记忆列表（对已授权数据的展示层过滤，不做前端授权推导） ----
 const privateMemories = computed<Memory[]>(() =>
@@ -90,6 +100,7 @@ const lineageMemories = computed(() =>
 onMounted(() => {
   void load()
 })
+onBeforeUnmount(() => { loadRequestId += 1 })
 
 watch(
   () => currentSpace.value?.id,
@@ -100,11 +111,13 @@ watch(
 )
 
 async function load(): Promise<void> {
+  const requestId = ++loadRequestId
   try {
     await memory.loadFeatureState()
   } catch {
     return
   }
+  if (requestId !== loadRequestId) return
   if (!memory.memoryEnabled) {
     activeTab.value = memory.ragEnabled ? 'rag' : null
     return
@@ -116,6 +129,7 @@ async function load(): Promise<void> {
       ? memory.ensureMemories(currentSpace.value.id).catch(() => undefined)
       : Promise.resolve(),
   ])
+  if (requestId !== loadRequestId) return
   // 默认标签规则（PRD §2.5）：有待确认候选 → 待确认，否则 → 私有
   if (activeTab.value === null) {
     activeTab.value = memory.pendingCandidates.length > 0 ? 'pending' : 'private'
@@ -129,16 +143,18 @@ function onHistorySwitch(value: boolean): void {
 
 // ---- 候选（待确认标签）----
 function openCandidate(candidate: MemoryCandidate): void {
-  confirmCandidate.value = candidate
+  if (!memory.memoryEnabled || candidate.source_status !== 'available') return
+  confirmCandidateId.value = candidate.id
 }
 
 async function dismissCandidate(candidate: MemoryCandidate): Promise<void> {
+  if (!memory.memoryEnabled || candidateActionId.value !== null) return
   candidateActionId.value = candidate.id
   try {
     await memory.dismissCandidate(candidate.id)
   } catch (reason) {
     // 服务端拒绝不静默（V2.5 合同）：保留可观测错误记录，列表保持服务端原状
-    console.error(reason)
+    showActionError(reason)
   } finally {
     candidateActionId.value = null
   }
@@ -146,21 +162,24 @@ async function dismissCandidate(candidate: MemoryCandidate): Promise<void> {
 
 // ---- 私有记忆（新增 = 只能新建候选）----
 function openEditor(): void {
+  if (!memory.memoryEnabled) return
   editorInitial.value = null
   editorOpen.value = true
 }
 
 // ---- 撤销 / 删除（正式记忆；store 成功后重读服务端状态）----
 function revokeMemory(item: Memory): void {
+  if (!memory.memoryEnabled) return
   void memory.revoke(item.id, item.space_id).catch((reason: unknown) => {
-    console.error(reason)
+    showActionError(reason)
   })
 }
 
 function removeMemory(item: Memory): void {
+  if (!memory.memoryEnabled) return
   dialog.warning({
     title: '删除确认',
-    content: '删除后这条内容会立即从检索结果中失效，且无法恢复。',
+    content: '删除后这条记忆不再参与检索，审计记录仍会保留；历史对话中的文字不会因此清除。',
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: () => {
@@ -168,11 +187,18 @@ function removeMemory(item: Memory): void {
         try {
           await memory.remove(item.id, item.space_id)
         } catch (reason) {
-          console.error(reason)
+          showActionError(reason)
         }
       })()
     },
   })
+}
+
+function showActionError(reason: unknown): void {
+  message.error(reason instanceof ApiError
+    ? friendlyMemoryError(reason.code, reason.message)
+    : '记忆操作失败，请稍后重试',
+  )
 }
 
 // 页头「刷新」动作经 MemoryManager ref 触发（MemoryView 调用）
@@ -207,7 +233,7 @@ defineExpose({ load })
           能力状态暂时无法确认，未显示记忆操作。请刷新或稍后重试。
         </NAlert>
         <NAlert
-          v-else-if="memory.features && !memory.memoryEnabled"
+          v-else-if="memory.featureStateKnown && !memory.memoryEnabled"
           type="info"
           :show-icon="true"
           :closable="false"
@@ -217,7 +243,7 @@ defineExpose({ load })
           记忆功能尚未启用。你的已有数据不会因此丢失；如需启用，请联系系统管理员。
         </NAlert>
         <NAlert
-          v-if="memory.features && !memory.ragEnabled"
+          v-if="memory.featureStateKnown && !memory.ragEnabled"
           type="info"
           :show-icon="true"
           :closable="false"
@@ -293,20 +319,26 @@ defineExpose({ load })
                   敏感等级：{{ MEMORY_SENSITIVITY_LABELS[candidate.sensitivity] }}
                 </span>
               </div>
-              <h4>{{ candidate.summary }}</h4>
-              <blockquote>“{{ candidate.raw_quote }}”</blockquote>
+              <p v-if="candidate.source_status !== 'available'" class="meta" data-test="candidate-source-status">
+                {{ MEMORY_SOURCE_STATUS_LABELS[candidate.source_status] }}
+              </p>
+              <template v-if="memorySourceReadable(candidate.source_status)">
+                <h4>{{ candidate.summary }}</h4>
+                <blockquote>“{{ candidate.raw_quote }}”</blockquote>
+              </template>
               <div class="candidate-meta">
-                <span>用途：{{ candidate.purpose }}</span>
+                <span v-if="memorySourceReadable(candidate.source_status)">用途：{{ candidate.purpose }}</span>
                 <span>建议：{{ MEMORY_SCOPE_LABELS[candidate.suggested_scope] }}</span>
               </div>
               <div v-if="candidate.status === 'pending'" class="candidate-actions">
-                <NButton size="small" type="primary" data-test="confirm-candidate" @click="openCandidate(candidate)">
+                <NButton size="small" type="primary" :disabled="candidate.source_status !== 'available' || candidate.allowed_scopes.length === 0 || candidateActionId !== null" data-test="confirm-candidate" @click="openCandidate(candidate)">
                   选择范围并确认
                 </NButton>
                 <NButton
                   size="small"
                   secondary
                   :loading="candidateActionId === candidate.id"
+                  :disabled="candidateActionId !== null"
                   data-test="dismiss-candidate"
                   @click="dismissCandidate(candidate)"
                 >
@@ -339,6 +371,7 @@ defineExpose({ load })
               v-for="item in privateMemories"
               :key="item.id"
               :item="item"
+              :write-enabled="memory.memoryEnabled"
               @revoke="revokeMemory(item)"
               @remove="removeMemory(item)"
             />
@@ -362,6 +395,7 @@ defineExpose({ load })
               v-for="item in householdMemories"
               :key="item.id"
               :item="item"
+              :write-enabled="memory.memoryEnabled"
               @revoke="revokeMemory(item)"
               @remove="removeMemory(item)"
             />
@@ -385,6 +419,7 @@ defineExpose({ load })
               v-for="item in lineageMemories"
               :key="item.id"
               :item="item"
+              :write-enabled="memory.memoryEnabled"
               @revoke="revokeMemory(item)"
               @remove="removeMemory(item)"
             />
@@ -392,7 +427,7 @@ defineExpose({ load })
         </section>
 
         <!-- 分区 5：检索与引用（只读 + 保存只能新建候选） -->
-        <section v-show="activeTab === 'rag'" class="section" data-test="rag-section">
+        <section v-if="memory.featureStateKnown" v-show="activeTab === 'rag'" class="section" data-test="rag-section">
           <h2 class="section-title">检索与引用</h2>
           <p class="meta">检索当前空间允许的已确认知识；结果只读，「保存」只能新建候选。</p>
           <NAlert
@@ -412,7 +447,7 @@ defineExpose({ load })
     <!-- 候选确认弹层（抽取组件）：原话/摘要/用途/敏感等级/scope/隐私影响确认前可见 -->
     <MemoryCandidateConfirmDialog
       :candidate="confirmCandidate"
-      @close="confirmCandidate = null"
+      @close="confirmCandidateId = null"
     />
 
     <!-- 新增记忆（私有标签）：提交只能新建候选，进入待确认流程 -->

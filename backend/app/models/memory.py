@@ -19,6 +19,14 @@ MEMORY_CANDIDATE_STATUSES = ("pending", "dismissed", "confirmed")
 MEMORY_SCOPES = ("private", "household", "lineage")
 MEMORY_STATUSES = ("active", "revoked", "deleted")
 SENSITIVITY_LEVELS = ("normal", "sensitive", "high", "local_required")
+MEMORY_SOURCE_KINDS = ("manual", "agent_message", "rag_chunk", "legacy")
+SOURCE_SNAPSHOT_CHECK = (
+    "source_verification = 'unverified' OR (source_kind != 'legacy' "
+    "AND source_type IS NOT NULL AND source_id IS NOT NULL "
+    "AND source_revision IS NOT NULL AND source_revision > 0 "
+    "AND coalesce(json_extract(source_span_json, '$.version') = 1, 0) "
+    "AND coalesce(json_extract(source_span_json, '$.kind') = source_kind, 0))"
+)
 
 
 def _check_in(column: str, values: tuple[str, ...], name: str) -> CheckConstraint:
@@ -33,11 +41,16 @@ class MemoryCandidate(Base):
         _check_in("status", MEMORY_CANDIDATE_STATUSES, "ck_memory_candidates_status"),
         _check_in("sensitivity", SENSITIVITY_LEVELS, "ck_memory_candidates_sensitivity"),
         _check_in("suggested_scope", MEMORY_SCOPES, "ck_memory_candidates_scope"),
-        CheckConstraint(
-            "source_message_id IS NOT NULL OR source_document_ref IS NOT NULL",
-            name="ck_memory_candidates_source",
+        _check_in("source_kind", MEMORY_SOURCE_KINDS, "ck_memory_candidates_source_kind"),
+        _check_in(
+            "source_verification",
+            ("verified", "unverified"),
+            "ck_memory_candidates_source_verification",
         ),
+        CheckConstraint(SOURCE_SNAPSHOT_CHECK, name="ck_memory_candidates_source"),
         Index("ix_memory_candidates_author_status", "author_account_id", "status"),
+        Index("uq_memory_candidates_request", "author_account_id", "idempotency_key", unique=True),
+        Index("ix_memory_candidates_source", "source_type", "source_id", "source_revision"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -49,6 +62,18 @@ class MemoryCandidate(Base):
     )
     source_document_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_span_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    source_kind: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
+    source_verification: Mapped[str] = mapped_column(
+        String(16), default="unverified", server_default="unverified"
+    )
+    source_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Durable provenance, not a live FK: deletion must not erase the original scope.
+    source_space_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confirmation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_quote: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     suggested_scope: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -81,8 +106,15 @@ class Memory(Base):
             name="ck_memories_scope_space",
         ),
         CheckConstraint("length(trim(raw_quote)) > 0", name="ck_memories_source_quote"),
+        _check_in("source_kind", MEMORY_SOURCE_KINDS, "ck_memories_source_kind"),
+        _check_in(
+            "source_verification", ("verified", "unverified"), "ck_memories_source_verification"
+        ),
+        CheckConstraint(SOURCE_SNAPSHOT_CHECK, name="ck_memories_source"),
         Index("ix_memories_author_status", "author_account_id", "status"),
         Index("ix_memories_space_status", "space_id", "status"),
+        Index("uq_memories_source_candidate", "source_candidate_id", unique=True),
+        Index("ix_memories_source", "source_type", "source_id", "source_revision"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -97,6 +129,17 @@ class Memory(Base):
     )
     source_document_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_span_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    source_kind: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
+    source_verification: Mapped[str] = mapped_column(
+        String(16), default="unverified", server_default="unverified"
+    )
+    source_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_space_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmation_request_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default="{}"
+    )
     raw_quote: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     scope: Mapped[str] = mapped_column(String(16), nullable=False)

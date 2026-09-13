@@ -1,9 +1,12 @@
 <script lang="ts">
 /** 编辑器初始值：新增记忆（空）与检索结果「保存」（预填原文）共用 */
 export interface MemoryEditorInitial {
+  source: MemoryCandidateSource
   raw_quote?: string
   summary?: string
   suggested_scope?: MemoryScopeKind
+  sensitivity?: MemorySensitivity
+  allowed_scopes?: MemoryScope[]
 }
 </script>
 
@@ -24,6 +27,8 @@ import { useSpacesStore } from '@/stores/spaces'
 import {
   MEMORY_SCOPE_LABELS,
   MEMORY_SENSITIVITY_LABELS,
+  type MemoryCandidateSource,
+  type MemoryScope,
   type MemoryScopeKind,
   type MemorySensitivity,
 } from '@/types/memory'
@@ -43,6 +48,10 @@ const form = reactive({
   suggested_scope: 'private' as MemoryScopeKind,
 })
 const saving = ref(false)
+const source = ref<MemoryCandidateSource>({ kind: 'manual' })
+const quoteReadonly = computed(() => source.value.kind !== 'manual')
+const submitError = ref<string | null>(null)
+let lastSubmission: { fingerprint: string; key: string } | null = null
 
 const sensitivityOptions = computed<SelectOption[]>(() =>
   (Object.keys(MEMORY_SENSITIVITY_LABELS) as MemorySensitivity[]).map((value) => ({
@@ -52,12 +61,15 @@ const sensitivityOptions = computed<SelectOption[]>(() =>
 )
 
 const scopeKindOptions = computed<SelectOption[]>(() => {
-  const options: SelectOption[] = [{ value: 'private', label: MEMORY_SCOPE_LABELS.private }]
-  if (spaces.currentSpace) {
-    options.push(
-      { value: 'household', label: `${MEMORY_SCOPE_LABELS.household}（确认时选择目标空间）` },
-      { value: 'lineage', label: `${MEMORY_SCOPE_LABELS.lineage}（确认时选择目标空间）` },
-    )
+  const allowedScopes = source.value.kind === 'rag_chunk' ? props.initial?.allowed_scopes ?? [] : null
+  const options: SelectOption[] = [{
+    value: 'private',
+    label: MEMORY_SCOPE_LABELS.private,
+    disabled: allowedScopes !== null && !allowedScopes.includes('private'),
+  }]
+  const space = spaces.currentSpace
+  if (space && (!allowedScopes || allowedScopes.includes(`${space.kind}:${space.id}`))) {
+    options.push({ value: space.kind, label: `${MEMORY_SCOPE_LABELS[space.kind]}（${space.name}）` })
   }
   return options
 })
@@ -70,16 +82,23 @@ watch(
     form.raw_quote = props.initial?.raw_quote ?? ''
     form.summary = props.initial?.summary ?? ''
     form.purpose = ''
-    form.sensitivity = 'normal'
+    form.sensitivity = props.initial?.sensitivity ?? 'normal'
     form.suggested_scope = props.initial?.suggested_scope ?? 'private'
+    source.value = props.initial ? { ...props.initial.source } : { kind: 'manual' }
+    submitError.value = null
+    lastSubmission = null
   },
+  { immediate: true },
 )
 
 const canSubmit = computed(
   () =>
+    memory.memoryEnabled &&
+    (source.value.kind !== 'rag_chunk' || source.value.space_id === spaces.currentSpaceId) &&
+    scopeKindOptions.value.some((option) => option.value === form.suggested_scope && !option.disabled) &&
     form.raw_quote.trim().length > 0 &&
     form.summary.trim().length > 0 &&
-    form.purpose.trim().length > 0,
+    form.purpose.trim().length > 0 && form.purpose.trim().length <= 120,
 )
 
 function close(): void {
@@ -88,24 +107,33 @@ function close(): void {
 
 async function submit(): Promise<void> {
   if (!canSubmit.value || saving.value) return
+  const payload = {
+    source: { ...source.value },
+    // Non-manual quotes are read from the precise source by the server.
+    ...(source.value.kind === 'manual' ? { raw_quote: form.raw_quote.trim() } : {}),
+    summary: form.summary.trim(),
+    purpose: form.purpose.trim(),
+    suggested_scope: form.suggested_scope,
+    sensitivity: form.sensitivity,
+  }
+  const fingerprint = JSON.stringify(payload)
+  if (lastSubmission?.fingerprint !== fingerprint) {
+    lastSubmission = { fingerprint, key: crypto.randomUUID() }
+  }
   saving.value = true
+  submitError.value = null
   try {
     await memory.createCandidate({
-      raw_quote: form.raw_quote.trim(),
-      summary: form.summary.trim(),
-      purpose: form.purpose.trim().slice(0, 120),
-      suggested_scope: form.suggested_scope,
-      sensitivity: form.sensitivity,
+      ...payload,
+      idempotency_key: lastSubmission.key,
     })
     message.success('已创建候选，请在「待确认」中确认保存范围')
     emit('update:show', false)
   } catch (reason) {
     // 服务端拒绝不静默：保留可解释错误（quality-guidelines.md V2.5）
-    message.error(
-      reason instanceof ApiError
-        ? friendlyMemoryError(reason.code, reason.message)
-        : '创建候选失败，请稍后重试',
-    )
+    submitError.value = reason instanceof ApiError
+      ? friendlyMemoryError(reason.code, reason.message)
+      : '创建候选失败，请稍后重试'
   } finally {
     saving.value = false
   }
@@ -129,12 +157,23 @@ async function submit(): Promise<void> {
     >
       保存的内容会先进入「待确认」候选，不会立即进入知识检索；你确认保存范围后才生效。
     </NAlert>
+    <NAlert v-if="quoteReadonly" type="info" :closable="false" class="editor-hint" data-test="memory-editor-source-hint">
+      原文来自当前获权来源，只读保存；摘要和用途由你整理，保存后仍受原来源权限约束。
+    </NAlert>
+    <NAlert v-if="!memory.memoryEnabled" type="warning" :closable="false" class="editor-hint" data-test="memory-editor-disabled">
+      {{ memory.featureStateKnown ? '记忆功能当前未启用，暂时不能保存。' : '能力状态暂时无法确认，请刷新后重试。' }}
+    </NAlert>
+    <NAlert v-if="submitError" type="error" :closable="false" class="editor-hint" data-test="memory-editor-error">
+      {{ submitError }}
+    </NAlert>
     <NForm class="editor-form" :show-feedback="false" @submit.prevent="submit">
       <NFormItem label="原话内容" :label-props="{ for: 'memory-editor-quote' }">
         <NInput
           v-model:value="form.raw_quote"
           type="textarea"
           :rows="3"
+          :readonly="quoteReadonly"
+          :disabled="saving"
           placeholder="要记住的内容原文"
           :input-props="{ id: 'memory-editor-quote' }"
           data-test="memory-editor-quote"
@@ -143,6 +182,7 @@ async function submit(): Promise<void> {
       <NFormItem label="摘要" :label-props="{ for: 'memory-editor-summary' }">
         <NInput
           v-model:value="form.summary"
+          :disabled="saving"
           placeholder="一句话摘要"
           :input-props="{ id: 'memory-editor-summary' }"
           data-test="memory-editor-summary"
@@ -151,6 +191,8 @@ async function submit(): Promise<void> {
       <NFormItem label="用途" :label-props="{ for: 'memory-editor-purpose' }">
         <NInput
           v-model:value="form.purpose"
+          :maxlength="120"
+          :disabled="saving"
           placeholder="这条记忆的用途（必填，最多 120 字）"
           :input-props="{ id: 'memory-editor-purpose' }"
           data-test="memory-editor-purpose"
@@ -160,6 +202,7 @@ async function submit(): Promise<void> {
         <NSelect
           v-model:value="form.sensitivity"
           :options="sensitivityOptions"
+          :disabled="saving || quoteReadonly"
           data-test="memory-editor-sensitivity"
           aria-label="敏感等级"
         />
@@ -168,6 +211,7 @@ async function submit(): Promise<void> {
         <NSelect
           v-model:value="form.suggested_scope"
           :options="scopeKindOptions"
+          :disabled="saving"
           data-test="memory-editor-scope"
           aria-label="建议保存范围"
         />
@@ -181,7 +225,7 @@ async function submit(): Promise<void> {
         <NButton
           type="primary"
           :loading="saving"
-          :disabled="!canSubmit"
+          :disabled="!canSubmit || saving"
           data-test="memory-editor-submit"
           @click="submit"
         >

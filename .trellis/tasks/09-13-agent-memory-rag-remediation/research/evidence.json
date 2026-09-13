@@ -1,0 +1,135 @@
+{
+  "audit_date": "2026-09-13",
+  "baseline_head": "b7bd368",
+  "scope": "Current working tree, real Alembic temporary databases, local installed Pi 0.84.3; no live model or production-state verification.",
+  "evidence_provenance": "Recorded from the preceding audit turn in the same conversation. Not rerun during planning.",
+  "test_results": {
+    "backend": {
+      "passed": 147,
+      "seconds": 9.27,
+      "command": "cd backend && .venv/bin/pytest -q tests/test_memory_rag_models.py tests/test_memory_rag_service.py tests/test_platform_features.py tests/test_internal_agent_api.py tests/test_steward.py tests/test_steward_assist.py tests/test_steward_guard.py tests/test_policy_guard.py"
+    },
+    "sidecar": {
+      "passed": 45,
+      "command": "cd agent && npm test -- test/worker.integration.test.ts test/session-resolve.test.ts test/prompt.test.ts test/policy.test.ts test/tools.test.ts"
+    },
+    "frontend": {
+      "passed": 19,
+      "command": "cd frontend && npm test -- src/stores/__tests__/memory.spec.ts src/components/memory/__tests__/MemoryManager.spec.ts"
+    },
+    "total_passed": 211
+  },
+  "memory_api": {
+    "actual_ui_payload": {
+      "status": 422,
+      "error_code": "MEMORY_STATE_CONFLICT",
+      "message": "记忆候选必须关联原消息或授权文档"
+    },
+    "with_source_document_ref": {
+      "status": 500,
+      "row_committed": true,
+      "validation_error": {
+        "field": "raw_quote",
+        "type": "missing"
+      }
+    },
+    "pending_list_with_row": {
+      "status": 500
+    },
+    "confirmation_by_known_candidate_id": {
+      "status": 200
+    },
+    "default_extractor": {
+      "input": "请记住，我喜欢清淡饮食。",
+      "candidates": 0
+    }
+  },
+  "retrieval": {
+    "stored_content": "今年春节在上海聚餐，外婆喜欢清淡饮食。",
+    "queries": [
+      {
+        "query": "春节",
+        "hits": 0
+      },
+      {
+        "query": "上海",
+        "hits": 0
+      },
+      {
+        "query": "在上海",
+        "hits": 1
+      },
+      {
+        "query": "春节在上海",
+        "hits": 1
+      },
+      {
+        "query": "今年春节在哪里聚餐？",
+        "hits": 0
+      },
+      {
+        "query": "过年聚会地点",
+        "hits": 0
+      },
+      {
+        "query": "今年春节在上海聚餐，外婆喜欢清淡饮食。",
+        "hits": 1
+      }
+    ]
+  },
+  "enable_backfill": {
+    "document_count_when_saved_off": 0,
+    "hits_after_enable": 0,
+    "hits_after_explicit_rebuild": 1
+  },
+  "pi_compaction": {
+    "sdk_version": "0.84.3",
+    "mode": "offline forced/manual compaction with real buildRunSession; fake streamOverride; global fetch blocked",
+    "restored": {
+      "stateMessageCount": 2,
+      "managerMessageCount": 0,
+      "stateContainsOldDialogue": true,
+      "managerContainsOldDialogue": false,
+      "compactionSettings": {
+        "enabled": true,
+        "reserveTokens": 16384,
+        "keepRecentTokens": 20000
+      }
+    },
+    "initialCompactError": "Nothing to compact (session too small)",
+    "beforeCompaction": {
+      "stateMessageCount": 4,
+      "managerMessageCount": 2,
+      "stateContainsOldDialogue": true
+    },
+    "afterCompaction": {
+      "stateMessageCount": 2,
+      "stateContainsOldDialogue": false,
+      "hasCompactionEntry": true
+    },
+    "providerRequests": [
+      {
+        "kind": "normal",
+        "seesOldDialogue": true
+      },
+      {
+        "kind": "summary",
+        "seesOldDialogue": false
+      }
+    ],
+    "limitation": "Does not reproduce production automatic-trigger frequency or evaluate real summaries. Does not delete database history."
+  },
+  "planning_only_static_followups": [
+    "MR-23",
+    "MR-25",
+    "MR-26"
+  ],
+  "not_verified": [
+    "live feature state",
+    "live provider response quality",
+    "production latency/occurrence rates",
+    "full project build/lint in audit turn",
+    "automatic Pi trigger in original probe"
+  ],
+  "no_product_code_changes": true
+}

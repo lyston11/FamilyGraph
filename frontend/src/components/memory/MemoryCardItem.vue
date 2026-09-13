@@ -6,12 +6,14 @@ import { NButton } from 'naive-ui'
 import {
   MEMORY_SCOPE_LABELS,
   MEMORY_SENSITIVITY_LABELS,
+  MEMORY_SOURCE_STATUS_LABELS,
+  memorySourceReadable,
   type Memory,
   type MemoryScopeKind,
   type MemorySensitivity,
 } from '@/types/memory'
 
-defineProps<{ item: Memory }>()
+defineProps<{ item: Memory; writeEnabled: boolean }>()
 defineEmits<{ (event: 'revoke'): void; (event: 'remove'): void }>()
 
 function formatRetention(value: string | null): string {
@@ -41,14 +43,17 @@ function scopeBadgeClass(item: Memory): string {
   <article class="memory-card" data-test="memory-card">
     <div class="memory-topline">
       <div class="memory-main">
-        <span class="memory-title">{{ item.content }}</span>
+        <span class="memory-title">{{ memorySourceReadable(item.source_status) ? item.content : MEMORY_SOURCE_STATUS_LABELS[item.source_status] }}</span>
         <p class="memory-scope">修订 {{ item.revision }} · {{ formatRetention(item.retention_until) }}</p>
       </div>
       <span class="fg-badge" :class="sensitivityBadge(item.sensitivity)">
         敏感等级：{{ MEMORY_SENSITIVITY_LABELS[item.sensitivity] }}
       </span>
     </div>
-    <blockquote>原话：“{{ item.raw_quote }}”</blockquote>
+    <p v-if="item.source_status !== 'available'" class="memory-scope" data-test="memory-source-status">
+      {{ MEMORY_SOURCE_STATUS_LABELS[item.source_status] }}
+    </p>
+    <blockquote v-if="memorySourceReadable(item.source_status)">原话：“{{ item.raw_quote }}”</blockquote>
     <div class="memory-meta">
       <span class="fg-badge memory-scope-badge" :class="scopeBadgeClass(item)">
         <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
@@ -56,9 +61,9 @@ function scopeBadgeClass(item: Memory): string {
         </svg>
         范围：{{ scopeLabel(item) }}{{ item.space_id === null ? '' : ` · #${item.space_id}` }}
       </span>
-      <span>用途：{{ item.purpose }}</span>
+      <span v-if="memorySourceReadable(item.source_status)">用途：{{ item.purpose }}</span>
     </div>
-    <div class="memory-actions">
+    <div v-if="writeEnabled" class="memory-actions">
       <NButton size="small" secondary data-test="revoke-memory" @click="$emit('revoke')">撤销检索</NButton>
       <NButton size="small" type="error" secondary data-test="delete-memory" @click="$emit('remove')">删除</NButton>
     </div>

@@ -15,5 +15,7 @@
 | [Relationship Intelligence](./relationship-intelligence.md) | SourceFact/DerivedFact/概念码/TermRegistry 四级/Extractor/API 隐私红线 | V2.3 |
 | [Steward and ActionCard](./steward-action-card.md) | space-scoped Steward jobs、DomainEvent/BehaviorProjection、ActionCard FSM、推荐资格矩阵与执行重校验 | V2.4 |
 | [Controlled Web](./controlled-web.md) | 双层开关/工具披露、Egress/SSRF、approved token、query PII 最小化、配额审计与引用 | V2.6 |
+| [Memory Contract](./memory-contract.md) | 2026-09-13 A 实现合同记录：来源、幂等、响应授权与缓存回归 | Implementation record |
+| [Assistant History Restoration](./assistant-history-restoration.md) | 2026-09-13 C 实现记录：同一 Pi manager 的历史预填与自动/手动压缩 | Implementation record |
 
 > 状态说明：Initial draft = 基于锁定技术栈与架构决策制定的初始规范。M0 完成后必须用真实代码实例校正并补充示例。
