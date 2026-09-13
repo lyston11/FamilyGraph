@@ -302,6 +302,10 @@ class SpaceAgentSettingOut(BaseModel):
     assist_candidate: bool = False
     assist_ranking: bool = False
     assist_explanation: bool = False
+    # 09-13 推测层：空间级开关 + 有效开关（平台 AND 空间；平台未开启时前端
+    # 据此显示可解释提示，不暴露 env 细节）
+    inferred_tree: bool = False
+    inferred_effective: bool = False
 
 
 class SpaceModelSettingsKindsOut(BaseModel):
@@ -389,3 +393,5 @@ class AgentSpaceModelSettingsRequest(_Strict):
     assist_candidate: bool | None = None
     assist_ranking: bool | None = None
     assist_explanation: bool | None = None
+    # 推测层空间级开关（仅 steward 维度；assistant 维度非 None → 422）
+    inferred_tree: bool | None = None

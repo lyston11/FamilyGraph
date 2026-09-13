@@ -57,6 +57,9 @@ from app.models.steward import (
     StewardLlmCandidate,
     StewardModelCall,
 )
+from app.models.steward_inferred import (  # noqa: F401 (ORM 注册)
+    StewardInferredEdge,
+)
 from app.models.steward_suggestion import (  # noqa: F401 (ORM 注册)
     StewardSuggestion,
     StewardSuggestionRecipient,

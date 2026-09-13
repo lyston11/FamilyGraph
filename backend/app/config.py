@@ -185,6 +185,19 @@ STEWARD_ASSIST_MAX_CONCURRENT_BATCHES: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", "1")
 )
 
+# ---- 09-13 Steward 推测层（inferred tree；fail-closed 默认关）----
+# 推测边 = LLM 候选经管家作业投影的「建议关系」，只在 PFV 以虚线/角标呈现，
+# 绝不写 confirmed 事实。有效开关 = 平台级（此处）AND 空间级
+# （agent_space_provider_settings.inferred_tree 列）；任一关闭时投影与 PFV
+# 推测区块均不发生，行为与现状逐字节等价（回滚形态 = 关开关）。
+STEWARD_INFERRED_TREE_ENABLED: bool = os.environ.get(
+    "STEWARD_INFERRED_TREE_ENABLED", ""
+).lower() in ("1", "true")
+# 单空间活跃（proposed）推测边上限：投影与 PFV 图增广共用，created_at 升序截断
+STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE: int = int(
+    os.environ.get("STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE", "50")
+)
+
 # ---- 09-11 Steward 生产调度（周期扫描与有限恢复；正数 + 上界校验见 ensure_ready）----
 # 空间周期扫描间隔（首次启用/重新启用/policy_version 变化时该空间被置为立即到期追补）
 STEWARD_SCAN_INTERVAL_SECONDS: int = int(os.environ.get("STEWARD_SCAN_INTERVAL_SECONDS", "300"))
@@ -295,6 +308,7 @@ def _validate_steward_scheduling() -> None:
         ("STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB, 1, 64),
         ("STEWARD_ASSIST_MAX_TOKENS_PER_JOB", STEWARD_ASSIST_MAX_TOKENS_PER_JOB, 100, 1_000_000),
         ("STEWARD_ASSIST_MAX_CARDS_PER_JOB", STEWARD_ASSIST_MAX_CARDS_PER_JOB, 1, 100),
+        ("STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE", STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE, 1, 500),
     )
     if not (0.1 <= STEWARD_ASSIST_TIMEOUT_SECONDS <= 300):
         raise RuntimeError(

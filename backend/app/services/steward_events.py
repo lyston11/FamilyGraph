@@ -30,6 +30,14 @@ EVENT_STEWARD_JOB_FAILED = "steward.job_failed"
 EVENT_STEWARD_CONFLICT_DETECTED = "steward.conflict_detected"  # confirmed 事实互相矛盾
 EVENT_STEWARD_GAP_DETECTED = "steward.gap_detected"  # 缺失（如 sibling 无共同父母），只报告
 
+# ---- Steward 推测层（09-13；steward_inferred_edges 生命周期）----
+EVENT_STEWARD_INFERRED_PROJECTED = "steward.inferred_projected"
+EVENT_STEWARD_INFERRED_SUPERSEDED = "steward.inferred_superseded"
+EVENT_STEWARD_INFERRED_CONFIRMED = "steward.inferred_confirmed"
+EVENT_STEWARD_INFERRED_DISMISSED = "steward.inferred_dismissed"
+EVENT_STEWARD_INFERRED_REINSTATED = "steward.inferred_reinstated"
+
 # ---- 聚合类型 ----
 AGGREGATE_ACTION_CARD = "action_card"
 AGGREGATE_STEWARD_JOB = "steward_job"
+AGGREGATE_STEWARD_INFERRED_EDGE = "steward_inferred_edge"

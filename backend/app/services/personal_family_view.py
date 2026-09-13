@@ -33,11 +33,22 @@ from app.models.personal_family_view import (
 )
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
+from app.models.steward_inferred import StewardInferredEdge
 from app.models.term_registry import TermEntry
 from app.models.user import User
-from app.services import visibility
-from app.services.relationship_graph import birth_from_user, load_graph
-from app.services.relationship_resolver import resolve_relationship, steps_to_json
+from app.services import steward_inferred, visibility
+from app.services.relationship_graph import (
+    ExtraEdge,
+    birth_from_user,
+    load_birth_years,
+    load_graph,
+)
+from app.services.relationship_resolver import (
+    PathStep,
+    concept_code_for_path,
+    resolve_relationship,
+    steps_to_json,
+)
 from app.services.source_facts import FACT_CONFIRMED
 from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
 from app.utils.timeutil import utcnow
@@ -179,6 +190,7 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
     session.flush()
     session.query(PersonalFamilyViewNode).filter(PersonalFamilyViewNode.view_id == view.id).delete()
     session.query(PersonalFamilyViewEdge).filter(PersonalFamilyViewEdge.view_id == view.id).delete()
+    confirmed_reached: set[int] = set()
     for target_id in sorted(graph.node_genders):
         target = session.get(User, target_id)
         if target is None:
@@ -191,6 +203,7 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
             )
             if not resolution.found:
                 continue
+            confirmed_reached.add(target.id)
         display, level, node_decision = _node_display(
             session,
             actor,
@@ -265,6 +278,20 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
                 computation_version=COMPUTATION_VERSION,
             )
         )
+    # ---- 推测层（09-13）：增广图二次解析，推测节点/边以 inferred_path 落库 ----
+    # 推测边永不写事实层；此处只物化「显示投影行」，GET 按 inclusion_reason_code
+    # 拆分 edges / inferred_edges，并逐行重验推测边仍处 proposed。
+    _emit_inferred_projection(
+        session,
+        account=account,
+        actor=actor,
+        view=view,
+        graph=graph,
+        space_id=space_id,
+        confirmed_reached=confirmed_reached,
+        now=now,
+    )
+
     view.status = "current"
     view.view_version += 1
     view.input_hash = _current_input_hash(
@@ -278,6 +305,194 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
     view.updated_at = now
     session.flush()
     return view
+
+
+_INFERRED_SUBTYPE_BY_KIND = {
+    "biological_parent": "biological",
+    "adoptive_parent": "adoptive",
+    "step_parent": "step",
+    "guardian": "guardian",
+}
+_PATH_CLASS_INFERRED = "inferred"
+
+
+def _inferred_hop_step(edge: Any, genders: dict[int, str]) -> tuple[PathStep, dict[str, Any]]:
+    """推测单跳的规范化步（subject→object 方向）与 JSON 形状。
+
+    parent 类：subject 是 object 的家长 → direction=down（token = D+性别）；
+    对称类：direction=sym。fact_id = -(推测边 id) 标记推测步。
+    """
+    if edge.relation_kind in _INFERRED_SUBTYPE_BY_KIND:
+        step = PathStep(
+            from_id=edge.subject_user_id,
+            to_id=edge.object_user_id,
+            edge_type="parent",
+            subtype=_INFERRED_SUBTYPE_BY_KIND[edge.relation_kind],
+            direction="down",
+            fact_id=-int(edge.id),
+        )
+    else:
+        edge_type = (
+            "spouse"
+            if edge.relation_kind == "spouse"
+            else "partner"
+            if edge.relation_kind == "partner"
+            else "sibling"
+        )
+        step = PathStep(
+            from_id=edge.subject_user_id,
+            to_id=edge.object_user_id,
+            edge_type=edge_type,
+            subtype=None,
+            direction="sym",
+            fact_id=-int(edge.id),
+        )
+    return step, step.to_json()
+
+
+def _emit_inferred_projection(
+    session: Session,
+    *,
+    account: Account,
+    actor: User,
+    view: PersonalFamilyView,
+    graph: Any,
+    space_id: int,
+    confirmed_reached: set[int],
+    now: Any,
+) -> None:
+    """推测层显示投影（rebuild_view 事务内；开关关闭或无活跃边时零操作）。
+
+    - 逐条活跃推测边物化一行 inferred_path 边（subject/object + 单跳步 +
+      确定性单跳称谓）；
+    - 端点中「尚无 confirmed 路径」者以 inferred_path 节点上树，其 viewer 视角
+      称谓经增广图确定性解析（含长幼消歧），存入边的 authorization_basis_json
+      （viewer_term/viewer_path/new_user_id）；
+    - 推测边永不写 SourceFact；确认转正走 relationship_proposals 合同。
+    """
+    if not steward_inferred.effective_enabled(session, space_id):
+        return
+    active = steward_inferred.active_edges(session, space_id)
+    if not active:
+        return
+    known = confirmed_reached | {actor.id}
+    extra = tuple(
+        ExtraEdge(
+            edge_id=edge.id,
+            subject_user_id=edge.subject_user_id,
+            object_user_id=edge.object_user_id,
+            relation_kind=edge.relation_kind,
+        )
+        for edge in active
+    )
+    genders = graph.node_genders
+    nodes_added: set[int] = set()
+    for edge in active:
+        step, step_json = _inferred_hop_step(edge, genders)
+        hop_code = concept_code_for_path((step,), genders)
+        hop_term_view = resolve_term_or_structural(
+            session,
+            account_id=account.id,
+            space_id=space_id,
+            concept_code=hop_code,
+            structural_description="",
+        )
+        endpoints = {edge.subject_user_id, edge.object_user_id}
+        new_users = endpoints - known
+        new_user_id = next(iter(new_users)) if len(new_users) == 1 else None
+        viewer_term: str | None = None
+        viewer_path: list[dict[str, Any]] = []
+        if new_user_id is not None:
+            resolution = resolve_relationship(
+                session,
+                viewer_user_id=actor.id,
+                target_user_id=new_user_id,
+                space_id=space_id,
+                extra_edges=extra,
+            )
+            if resolution.found:
+                main_path = steps_to_json(resolution.main_path)
+                inferred_steps = [
+                    s for s in main_path if isinstance(s.get("fact_id"), int) and s["fact_id"] <= 0
+                ]
+                if len(inferred_steps) == 1 and inferred_steps[0]["fact_id"] == -int(edge.id):
+                    viewer_path = main_path
+                    persons = {actor.id, new_user_id}
+                    for step_json in main_path:
+                        persons.add(int(step_json["from"]))
+                        persons.add(int(step_json["to"]))
+                    births = load_birth_years(
+                        session,
+                        viewer_user_id=actor.id,
+                        space_id=space_id,
+                        user_ids=persons,
+                    )
+                    term_view = resolve_term_or_structural(
+                        session,
+                        account_id=account.id,
+                        space_id=space_id,
+                        concept_code=resolution.concept_code,
+                        structural_description=resolution.explanation_structural or "",
+                        variant_context=VariantContext(
+                            viewer_user_id=actor.id,
+                            path=main_path,
+                            births=births,
+                        ),
+                    )
+                    viewer_term = term_view["term"]
+        # 端点中尚无 confirmed 路径者以 inferred_path 节点上树
+        for user_id in sorted(endpoints - known):
+            if user_id in nodes_added:
+                continue
+            target = session.get(User, user_id)
+            if target is None:
+                continue
+            display, level, _decision = _node_display(session, actor, target, space_id)
+            session.add(
+                PersonalFamilyViewNode(
+                    view_id=view.id,
+                    user_id=target.id,
+                    display_json=display,
+                    visibility_level=level,
+                    inclusion_reason_code="inferred_path",
+                    source_fact_ids_json=[],
+                    authorization_basis_json={"space_id": space_id, "visibility": level},
+                    policy_version=POLICY_VERSION,
+                    computation_version=COMPUTATION_VERSION,
+                )
+            )
+            nodes_added.add(user_id)
+        evidence_fact_ids = [
+            int(f[0])
+            for f in (edge.evidence_json or {}).get("facts", [])
+            if isinstance(f, list | tuple) and f and isinstance(f[0], int)
+        ]
+        session.add(
+            PersonalFamilyViewEdge(
+                view_id=view.id,
+                from_user_id=edge.subject_user_id,
+                to_user_id=edge.object_user_id,
+                edge_kind=edge.relation_kind,
+                source_fact_id=None,
+                path_json=[step_json],
+                alternative_paths_json=[],
+                path_class=_PATH_CLASS_INFERRED,
+                concept_code=hop_code,
+                term=hop_term_view["term"],
+                inclusion_reason_code="inferred_path",
+                authorization_basis_json={
+                    "space_id": space_id,
+                    "inferred_edge_id": int(edge.id),
+                    "evidence_fact_ids": evidence_fact_ids,
+                    "new_user_id": new_user_id,
+                    "viewer_term": viewer_term,
+                    "viewer_path": viewer_path,
+                    "term_source_level": hop_term_view["source_level"],
+                },
+                policy_version=POLICY_VERSION,
+                computation_version=COMPUTATION_VERSION,
+            )
+        )
 
 
 def get_current_view(
@@ -314,6 +529,7 @@ def empty_view_payload(*, space_id: int) -> dict[str, Any]:
         "view_version": 0,
         "computed_at": None,
         "nodes": [],
+        "inferred_edges": [],
         "edges": [],
         "truncated": False,
         "next_cursor": None,
@@ -471,7 +687,39 @@ def _view_payload_for_view(
         )
         visible_ids.add(node.user_id)
     served_edges: list[tuple[PersonalFamilyViewEdge, list[list[dict[str, Any]]]]] = []
+    inferred_edges: list[dict[str, Any]] = []
     for edge in edges:
+        if edge.inclusion_reason_code == "inferred_path":
+            # 推测边（09-13）：逐行重验推测边仍处 proposed + 两端当前可见；
+            # 已转正/驳回/失效的推测边不再渲染（确认后的信息由 confirmed 边承载）。
+            raw_basis = edge.authorization_basis_json
+            basis: dict[str, Any] = raw_basis if isinstance(raw_basis, dict) else {}
+            edge_id = basis.get("inferred_edge_id")
+            row = (
+                session.get(StewardInferredEdge, int(edge_id)) if isinstance(edge_id, int) else None
+            )
+            if row is None or row.status != "proposed":
+                continue
+            if edge.from_user_id not in visible_ids or edge.to_user_id not in visible_ids:
+                continue
+            assert isinstance(edge_id, int)  # row 非 None 已保证
+            inferred_edges.append(
+                {
+                    "id": edge_id,
+                    "subject_user_id": edge.from_user_id,
+                    "object_user_id": edge.to_user_id,
+                    "relation_kind": edge.edge_kind,
+                    "term": edge.term,
+                    "path": edge.path_json or [],
+                    "viewer_term": basis.get("viewer_term"),
+                    "viewer_path": basis.get("viewer_path") or [],
+                    "new_user_id": basis.get("new_user_id"),
+                    "evidence_fact_ids": basis.get("evidence_fact_ids") or [],
+                    "revision": int(row.revision),
+                    "created_at": row.created_at,
+                }
+            )
+            continue
         if edge.from_user_id not in visible_ids or edge.to_user_id not in visible_ids:
             continue
         # R3：主路径与替代路径分别重验；主路径失效整条边不输出，
@@ -492,6 +740,7 @@ def _view_payload_for_view(
         "view_version": view.view_version,
         "computed_at": view.computed_at,
         "nodes": authorized_nodes,
+        "inferred_edges": inferred_edges,
         "edges": [
             {
                 "from_user_id": edge.from_user_id,

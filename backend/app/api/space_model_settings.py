@@ -41,7 +41,7 @@ from app.schemas.agent import (
     SpaceModelSettingsKindsOut,
     SpaceModelSettingsOut,
 )
-from app.services import agent_provider, audit, space_fsm
+from app.services import agent_provider, audit, space_fsm, steward_inferred
 
 router = APIRouter(tags=["space-model-settings"])
 
@@ -73,7 +73,9 @@ def _setting_row(
     )
 
 
-def _setting_out(row: AgentSpaceProviderSetting | None) -> SpaceAgentSettingOut | None:
+def _setting_out(
+    row: AgentSpaceProviderSetting | None, *, inferred_effective: bool = False
+) -> SpaceAgentSettingOut | None:
     if row is None:
         return None
     return SpaceAgentSettingOut(
@@ -86,6 +88,9 @@ def _setting_out(row: AgentSpaceProviderSetting | None) -> SpaceAgentSettingOut 
         assist_candidate=bool(row.assist_candidate),
         assist_ranking=bool(row.assist_ranking),
         assist_explanation=bool(row.assist_explanation),
+        inferred_tree=bool(row.inferred_tree),
+        # 生效 = 平台 AND 空间；空间开而平台关 → 前端据 False 显示可解释提示
+        inferred_effective=inferred_effective,
     )
 
 
@@ -156,7 +161,10 @@ def get_space_model_settings(
         space_id=space_id,
         settings=SpaceModelSettingsKindsOut(
             assistant=_setting_out(_setting_row(session, space_id, "assistant")),
-            steward=_setting_out(_setting_row(session, space_id, "steward")),
+            steward=_setting_out(
+                _setting_row(session, space_id, "steward"),
+                inferred_effective=steward_inferred.effective_enabled(session, space_id),
+            ),
         ),
         catalog=_catalog_out(session),
         platform_default=_valid_platform_defaults_out(session),
@@ -180,11 +188,13 @@ def put_space_model_settings(
     _require_space_manager(session, space_id, actor.id)
 
     assist_values = (body.assist_candidate, body.assist_ranking, body.assist_explanation)
-    if body.agent_kind != "steward" and any(v is not None for v in assist_values):
+    if body.agent_kind != "steward" and (
+        any(v is not None for v in assist_values) or body.inferred_tree is not None
+    ):
         raise_api_error(
             422,
             VALIDATION_ERROR,
-            "assist_* 开关仅对 steward 维度有意义",
+            "assist_* / inferred_tree 开关仅对 steward 维度有意义",
             {"agent_kind": body.agent_kind},
         )
 
@@ -221,6 +231,8 @@ def put_space_model_settings(
             row.assist_ranking = body.assist_ranking
         if body.assist_explanation is not None:
             row.assist_explanation = body.assist_explanation
+        if body.inferred_tree is not None:
+            row.inferred_tree = body.inferred_tree
     session.commit()
     audit.write_audit(
         session,
