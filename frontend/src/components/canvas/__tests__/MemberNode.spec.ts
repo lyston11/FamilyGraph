@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vitest'
 
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import {
+  HANDLE_SOURCE_BOTTOM,
   HANDLE_SOURCE_RIGHT,
   HANDLE_TARGET_LEFT,
+  HANDLE_TARGET_TOP,
 } from '@/composables/useFamilyTreeCanvas'
 import type { PersonalFamilyViewDisplay } from '@/types/api'
 
@@ -111,7 +113,7 @@ describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
     expect(wrapper.emitted('select')).toEqual([[7], [7]])
   })
 
-  it('结构端口：上下默认端口（亲子）与左右对称端口并存，id 与画布边单一来源', () => {
+  it('结构端口：四个端口全部显式 id（亲子上下、对称左右），与画布边单一来源', () => {
     const wrapper = mount(MemberNode, {
       props: {
         id: 'n-7',
@@ -127,17 +129,17 @@ describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
       },
     })
     const handles = wrapper.findAll('.mock-handle')
+    // 四个端口 id 全部来自 useFamilyTreeCanvas 单一来源；Vue Flow 对未指定
+    // handle 的边取「类型内第一个端口」，因此不允许任何无 id 端口存在
     const ids = handles.map((handle) => handle.attributes('data-handle-id'))
-    // 对称边端口 id 来自 useFamilyTreeCanvas 单一来源（画布边选端口用同一常量）
-    expect(ids).toContain(HANDLE_SOURCE_RIGHT)
-    expect(ids).toContain(HANDLE_TARGET_LEFT)
-    // 亲子默认端口（无 id）：顶部 target + 底部 source
-    expect(handles.filter((handle) => !handle.attributes('data-handle-id'))).toHaveLength(2)
-    const leftTarget = handles.find((handle) => handle.attributes('data-handle-id') === HANDLE_TARGET_LEFT)
-    expect(leftTarget?.attributes('data-handle-type')).toBe('target')
-    expect(leftTarget?.attributes('data-handle-position')).toBe('left')
-    const rightSource = handles.find((handle) => handle.attributes('data-handle-id') === HANDLE_SOURCE_RIGHT)
-    expect(rightSource?.attributes('data-handle-type')).toBe('source')
-    expect(rightSource?.attributes('data-handle-position')).toBe('right')
+    expect(ids).toEqual([HANDLE_TARGET_TOP, HANDLE_TARGET_LEFT, HANDLE_SOURCE_RIGHT, HANDLE_SOURCE_BOTTOM])
+    expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true)
+    const byId = new Map(handles.map((handle) => [handle.attributes('data-handle-id'), handle]))
+    expect(byId.get(HANDLE_TARGET_TOP)?.attributes('data-handle-type')).toBe('target')
+    expect(byId.get(HANDLE_TARGET_TOP)?.attributes('data-handle-position')).toBe('top')
+    expect(byId.get(HANDLE_SOURCE_BOTTOM)?.attributes('data-handle-type')).toBe('source')
+    expect(byId.get(HANDLE_SOURCE_BOTTOM)?.attributes('data-handle-position')).toBe('bottom')
+    expect(byId.get(HANDLE_TARGET_LEFT)?.attributes('data-handle-position')).toBe('left')
+    expect(byId.get(HANDLE_SOURCE_RIGHT)?.attributes('data-handle-position')).toBe('right')
   })
 })

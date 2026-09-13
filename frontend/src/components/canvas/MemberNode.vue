@@ -5,8 +5,10 @@ import { LockKeyhole, Network } from 'lucide-vue-next'
 
 import MaskedField from '@/components/common/MaskedField.vue'
 import {
+  HANDLE_SOURCE_BOTTOM,
   HANDLE_SOURCE_RIGHT,
   HANDLE_TARGET_LEFT,
+  HANDLE_TARGET_TOP,
   type FamilyCanvasNodeData,
 } from '@/composables/useFamilyTreeCanvas'
 
@@ -67,7 +69,9 @@ function select(): void {
     @keyup.enter="select"
     @keydown.space.prevent="select"
   >
-    <Handle type="target" :position="Position.Top" class="handle" />
+    <!-- 端口仅用于展示结构连线，全部显式 id（Vue Flow 按「类型内第一个端口」
+         解析未指定 handle 的边，空 id 依赖会导致亲子边从同代端口出线） -->
+    <Handle type="target" :id="HANDLE_TARGET_TOP" :position="Position.Top" class="handle" />
     <Handle
       type="target"
       :id="HANDLE_TARGET_LEFT"
@@ -97,7 +101,12 @@ function select(): void {
       <LockKeyhole v-else-if="data.visibilityLevel === 'self_private'" class="badge-icon" :size="12" aria-hidden="true" />
       {{ levelBadge.text }}
     </span>
-    <Handle type="source" :position="Position.Bottom" class="handle" />
+    <Handle
+      type="source"
+      :id="HANDLE_SOURCE_BOTTOM"
+      :position="Position.Bottom"
+      class="handle"
+    />
   </div>
 </template>
 

@@ -18,8 +18,10 @@ import {
   applyFreeCanvasLayout,
   applyTreeViewLayout,
   buildFamilyCanvas,
+  HANDLE_SOURCE_BOTTOM,
   HANDLE_SOURCE_RIGHT,
   HANDLE_TARGET_LEFT,
+  HANDLE_TARGET_TOP,
   type FamilyStructuralEdge,
 } from '@/composables/useFamilyTreeCanvas'
 import { useAuthStore } from '@/stores/auth'
@@ -193,11 +195,14 @@ const flowEdges = computed<FlowEdge[]>(() =>
       labelBgBorderRadius: 4,
     }
     if (spec.orientation === 'vertical') {
-      // 亲子：家长底部 source → 子女顶部 target（Vue Flow smoothstep）
+      // 亲子：家长底部 source → 子女顶部 target（Vue Flow smoothstep）。
+      // 端口必须显式绑定：未指定 handle 的边会被绑到「该类型第一个端口」。
       return {
         ...common,
         source: `n-${spec.sourceUserId}`,
+        sourceHandle: HANDLE_SOURCE_BOTTOM,
         target: `n-${spec.targetUserId}`,
+        targetHandle: HANDLE_TARGET_TOP,
         type: 'smoothstep',
         class: 'fg-struct-edge fg-struct-edge--parent',
       }

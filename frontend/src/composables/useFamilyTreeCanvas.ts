@@ -70,9 +70,16 @@ export interface FamilyCanvasModel {
 export const ROW_SPACING = 240
 export const COL_SPACING = 280
 
-/** 对称结构边的端口 id（MemberNode 与画布边共用，单一来源） */
-export const HANDLE_SOURCE_RIGHT = 'fg-handle-src-right'
+/**
+ * 结构边端口 id（MemberNode 与画布边共用，单一来源）。
+ * 四个端口全部显式 id：Vue Flow 对未指定 handle 的边取「该类型第一个端口」
+ * 而非无 id 端口（vue-flow-core handleBounds[0]），因此每条边必须显式绑定，
+ * 否则亲子边会从左右同代端口出线（视觉上把同代成员连起来）。
+ */
+export const HANDLE_TARGET_TOP = 'fg-handle-tgt-top'
+export const HANDLE_SOURCE_BOTTOM = 'fg-handle-src-bottom'
 export const HANDLE_TARGET_LEFT = 'fg-handle-tgt-left'
+export const HANDLE_SOURCE_RIGHT = 'fg-handle-src-right'
 
 /**
  * 构造画布模型：nodes 来自已解码快照；edges 只来自 confirmed 结构边。
