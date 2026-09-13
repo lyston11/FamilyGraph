@@ -203,6 +203,9 @@ def _authorize_run(
     if (
         claims["account_id"] != agent_session.account_id
         or claims["space_id"] != agent_session.space_id
+        # Lease-time attempt binding: a token issued for an earlier lease of
+        # this run can never be replayed against the current execution.
+        or claims["attempt"] != run.attempt
         or claims["agent_kind"] != run.kind
         or claims["job_id"] != run.job_id
         or sorted(claims["tool_allowlist"]) != sorted(run.tool_allowlist_json or [])
@@ -295,6 +298,7 @@ def lease_job(
     run_token = agent_tokens.issue_run_token(
         run_id=grant.run.id,
         job_id=grant.job.id,
+        attempt=grant.job.attempt,
         agent_kind=grant.run.kind,
         account_id=grant.job.account_id or 0,
         space_id=grant.job.space_id or 0,
@@ -463,6 +467,7 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
                 run_id=run.id,
                 provider_kind=resolution.kind,
                 policy_version=run.policy_version,
+                attempt=run.attempt,
             )
             context_build_id = built.build_id
             context_blocks = (

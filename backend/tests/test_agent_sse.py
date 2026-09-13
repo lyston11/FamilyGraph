@@ -3,6 +3,12 @@
 import threading
 import time
 
+from sqlalchemy.orm import Session
+
+from app import config
+from app.models.agent import AgentRun, AgentSession
+from app.services import agent_events, agent_queue
+from app.services.agent_events import EventEntry
 from conftest import (
     auth_header,
     create_agent_fixture,
@@ -11,12 +17,6 @@ from conftest import (
     create_space_member,
     login,
 )
-from sqlalchemy.orm import Session
-
-from app import config
-from app.models.agent import AgentRun, AgentSession
-from app.services import agent_events, agent_queue
-from app.services.agent_events import EventEntry
 
 
 def _seed_run(db: Session, name: str) -> tuple[object, object, AgentSession, AgentRun]:

@@ -6,9 +6,8 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from conftest import create_user_with_pin
-
 from app.backup import create_backup, verify_restore
+from conftest import create_user_with_pin
 
 
 def test_backup_restore_roundtrip(db_session, tmp_path: Path):

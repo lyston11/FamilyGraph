@@ -11,11 +11,11 @@
 """
 
 import pytest
-from conftest import create_user_with_pin
 from fastapi import HTTPException
 
 from app.errors import extract_api_error
 from app.services import custody
+from conftest import create_user_with_pin
 
 
 def _creator_and_target(db_session, *, privacy_mode: str, claimed: bool):

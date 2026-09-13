@@ -5,6 +5,7 @@ import type {
   AgentMessageOut,
   AgentRun,
   AgentSession,
+  RunEventCitations,
 } from '@/types/agent'
 
 /**
@@ -59,6 +60,20 @@ export async function createAgentMessage(
 export async function fetchAgentRun(runId: number): Promise<AgentRun> {
   const { data } = await apiClient.get<AgentRun>(`/agent/runs/${runId}`)
   return data
+}
+
+/**
+ * 引用固定后备读取：16 KiB 公开事件装不下完整引用元数据时，按 (run_id, seq)
+ * 授权补取。服务端重验当前读者权限；旧消息/无引用返回空集合。
+ */
+export async function fetchRunEventCitations(
+  runId: number,
+  seq: number,
+): Promise<RunEventCitations> {
+  const response = await apiClient.get<RunEventCitations>(
+    `/agent/runs/${runId}/events/${seq}/citations`,
+  )
+  return response.data
 }
 
 export async function cancelAgentRun(runId: number): Promise<AgentRun> {

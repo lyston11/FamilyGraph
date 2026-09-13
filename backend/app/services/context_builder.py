@@ -11,13 +11,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
 from app.errors import POLICY_CONTEXT_INVALID, POLICY_LOCAL_REQUIRED, raise_api_error
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.user import User
-from app.services import platform_features
+from app.services import memory_sources, platform_features
 from app.services.memory_rag import RAGHit, query_hash, search_rag
 from app.services.policy_consumer import is_policy_consumer_kind
 from app.utils.timeutil import utcnow
@@ -91,6 +92,7 @@ class ContextBuilder:
         token_budget: int = 2000,
         provider_kind: str | None = None,
         policy_version: str = config.POLICY_VERSION,
+        attempt: int | None = None,
     ) -> BuiltContext:
         if token_budget < 1 or token_budget > 32_000:
             raise_api_error(422, POLICY_CONTEXT_INVALID, "token_budget 超出范围")
@@ -157,9 +159,71 @@ class ContextBuilder:
             provider_policy = "local_required"
 
         build_id: int | None = None
+        if self.db is not None and run_id is not None and attempt is not None:
+            existing = self.db.scalar(
+                select(ContextBuild)
+                .where(ContextBuild.run_id == run_id, ContextBuild.attempt == attempt)
+                .order_by(ContextBuild.id.desc())
+                .limit(1)
+                .execution_options(populate_existing=True)
+            )
+            if existing is not None:
+                # One build per (run, attempt): replay after re-authorizing
+                # every stored source; never generate a competing build.
+                from app.errors import AGENT_CONTEXT_INVALIDATED
+                from app.models.rag import RAG_SOURCE_TYPES, RAGDocument
+
+                replayed: list[ContextSource] = []
+                for block in existing.blocks_json or []:
+                    document = self.db.scalar(
+                        select(RAGDocument).where(
+                            RAGDocument.source_type.in_(RAG_SOURCE_TYPES),
+                            RAGDocument.source_id == str(block["source_id"]),
+                            RAGDocument.status == "active",
+                        )
+                    )
+                    if document is None or not memory_sources.document_readable(
+                        self.db,
+                        document,
+                        actor=actor,
+                        account=actor.account,
+                        space_id=space_id,
+                        agent_kind=agent_kind,
+                    ):
+                        raise_api_error(
+                            409,
+                            AGENT_CONTEXT_INVALIDATED,
+                            "先前构建的 context 来源已变化，需要新的 attempt 重建",
+                            {"context_build_id": existing.id},
+                        )
+                    replayed.append(
+                        ContextSource(
+                            source_type=str(document.source_type),
+                            source_id=str(block["source_id"]),
+                            text=str(block["text"]),
+                            scope=str(document.scope),
+                            sensitivity=str(document.sensitivity),
+                            revision=int(document.revision),
+                            citation_handle=str(block["citation_handle"]),
+                            trust=str(block.get("trust", "untrusted_data")),
+                        )
+                    )
+                provider_policy = (
+                    "local_required"
+                    if any(s.sensitivity in ("high", "local_required") for s in replayed)
+                    else "allowed"
+                )
+                return BuiltContext(
+                    build_id=existing.id,
+                    identity=identity,
+                    sources=tuple(replayed),
+                    excluded=(),
+                    provider_policy=provider_policy,
+                )
         if self.db is not None and run_id is not None:
             build = ContextBuild(
                 run_id=run_id,
+                attempt=attempt,
                 account_id=actor.account.id,
                 space_id=space_id,
                 agent_kind=agent_kind,
@@ -196,6 +260,16 @@ class ContextBuilder:
                         },
                     )
                 )
+            build.blocks_json = [
+                {
+                    "source_id": source.source_id,
+                    "text": source.text,
+                    "token_estimate": max(1, len(source.text) // 4),
+                    "citation_handle": source.citation_handle,
+                    "trust": source.trust,
+                }
+                for source in included
+            ]
             self.db.flush()
         return BuiltContext(
             build_id=build_id,

@@ -21,7 +21,12 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { InternalClient, type ProviderPolicyResult } from "../src/client.js";
+import {
+  InternalClient,
+  type ProviderPolicyResult,
+  type RunContextBlock,
+  type RunContextMessage,
+} from "../src/client.js";
 import type { AgentConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { providerWireName } from "../src/tools.js";
@@ -44,6 +49,8 @@ interface MockJob {
   leasedAt?: number;
   /** Override for the context projection's provider resolution. */
   provider?: Record<string, unknown>;
+  messages?: RunContextMessage[];
+  contextBlocks?: RunContextBlock[];
 }
 
 interface MockState {
@@ -70,6 +77,36 @@ const state: MockState = {
 };
 
 let idCounter = 0;
+const CURRENT_PROMPT = "Please echo 'ping' then say done.";
+const HISTORY_FACT = "The blue tin is kept in the attic cupboard.";
+
+function historyMessages(): RunContextMessage[] {
+  return [
+    {
+      id: 1,
+      role: "user",
+      content_json: { text: HISTORY_FACT },
+      created_at: "2026-09-01T00:00:00Z",
+    },
+    {
+      id: 2,
+      role: "assistant",
+      created_at: "2026-09-01T00:00:01Z",
+      content_json: {
+        text: "Acknowledged.",
+        thinking: "old-private-thinking",
+        tool_results: [{ text: "old-tool-result" }],
+        citations: [{ content: "old-rag-citation" }],
+      },
+    },
+    {
+      id: 3,
+      role: "user",
+      content_json: { text: CURRENT_PROMPT },
+      created_at: "2026-09-01T00:00:02Z",
+    },
+  ];
+}
 
 function makeConfig(port: number): AgentConfig {
   return {
@@ -301,6 +338,8 @@ function enqueueJob(options: {
   allowlist: string[];
   provider?: Record<string, unknown>;
   agentKind?: "assistant" | "unexpected";
+  messages?: RunContextMessage[];
+  contextBlocks?: RunContextBlock[];
 }): string {
   idCounter += 1;
   const jobId = 4000 + idCounter;
@@ -315,13 +354,15 @@ function enqueueJob(options: {
     run_token: `run-token-${runId}`,
     allowlist: [...options.allowlist],
     ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(options.messages !== undefined ? { messages: options.messages } : {}),
+    ...(options.contextBlocks !== undefined ? { contextBlocks: options.contextBlocks } : {}),
   });
   // Backend enqueue owns message.user_added at seq 0 (interactive assistant run).
   state.eventsByRun.set(String(runId), [
     {
       seq: 0,
       type: "message.user_added",
-      public_payload: { role: "user", text: "Please echo 'ping' then say done." },
+      public_payload: { role: "user", text: CURRENT_PROMPT },
     },
   ]);
   return String(runId);
@@ -338,14 +379,15 @@ function contextProjection(job: MockJob): Record<string, unknown> {
     attempt: job.attempt,
     policy_version: job.policy_version,
     tool_allowlist: [...job.allowlist],
-    messages: [
+    messages: job.messages ?? [
       {
         id: 11,
         role: "user",
-        content_json: { text: "Please echo 'ping' then say done." },
+        content_json: { text: CURRENT_PROMPT },
         created_at: new Date().toISOString(),
       },
     ],
+    ...(job.contextBlocks !== undefined ? { context_blocks: job.contextBlocks } : {}),
     provider:
       job.provider ??
       ({
@@ -390,6 +432,8 @@ interface ScriptOptions {
   leakSecretInPayload?: boolean;
   /** Captures the post-onPayload request payloads (what would hit the wire). */
   wirePayloads?: unknown[];
+  /** Snapshot the real Pi context before the scripted response. */
+  modelContexts?: Context[];
   /** Keep the provider stream open until the worker's AbortSignal fires. */
   waitForAbort?: boolean;
 }
@@ -403,6 +447,7 @@ function scriptedStream(
   streamOptions?: SimpleStreamOptions,
 ) => AssistantMessageEventStream {
   return (_model, context, streamOptions) => {
+    options.modelContexts?.push({ ...context, messages: structuredClone(context.messages) });
     const stream = createAssistantMessageEventStream();
     void (async () => {
       // Assemble a provider-shaped request payload; invoking onPayload runs
@@ -446,7 +491,13 @@ function scriptedStream(
       }
 
       const turnIndex = context.messages.filter((m) => m.role === "toolResult").length;
-      const message = turns[Math.min(turnIndex, turns.length - 1)]![0]!;
+      const message: AssistantMessage = {
+        ...turns[Math.min(turnIndex, turns.length - 1)]![0]!,
+        api: _model.api,
+        provider: _model.provider,
+        model: _model.id,
+        timestamp: Date.now(),
+      };
       stream.push({ type: "start", partial: message });
       for (const [index, block] of message.content.entries()) {
         if (block.type === "text") {
@@ -473,11 +524,15 @@ function scriptedStream(
           });
         }
       }
-      stream.push({
-        type: "done",
-        reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-        message,
-      });
+      if (message.stopReason === "error") {
+        stream.push({ type: "error", reason: "error", error: message });
+      } else {
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+      }
       stream.end(message);
     })();
     return stream;
@@ -651,6 +706,105 @@ describe("worker full cycle against mock FastAPI", () => {
     await expect(client.leaseJob()).rejects.toThrow("non-assistant");
   });
 
+  it("restores history and sends the current user and RAG block once without replaying events", async () => {
+    resetState();
+    const runKey = enqueueJob({
+      allowlist: ["familygraph.echo"],
+      messages: historyMessages(),
+      contextBlocks: [
+        {
+          source_id: "current-source",
+          source_type: "memory",
+          scope: "private",
+          sensitivity: "normal",
+          revision: 1,
+          citation: "[R1]",
+          content: "current-authorized-rag-data",
+        },
+      ],
+    });
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([textTurn("done")], { modelContexts }),
+    );
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(modelContexts).toHaveLength(1);
+    expect(modelContexts[0]!.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    const requestText = JSON.stringify(modelContexts[0]!.messages);
+    expect(requestText).toContain(HISTORY_FACT);
+    expect(requestText).toContain("Acknowledged.");
+    expect(requestText.split(CURRENT_PROMPT)).toHaveLength(2);
+    expect(requestText.split("current-authorized-rag-data")).toHaveLength(2);
+    expect(requestText).not.toMatch(/old-(private|tool|rag)/);
+    expect(state.toolCalls).toHaveLength(0);
+    const events = state.eventsByRun.get(runKey) ?? [];
+    expect(events.filter((event) => event.type === "message.user_added")).toHaveLength(1);
+    expect(
+      events
+        .filter((event) => event.type === "message.assistant_added")
+        .map((event) => event.public_payload),
+    ).toEqual([{ role: "assistant", text: "done" }]);
+    expect(state.settles[0]).toMatchObject({ run_id: runKey, status: "succeeded" });
+  });
+
+  it("settles a persistent context overflow as a provider failure with restored history intact", async () => {
+    resetState();
+    const messages = historyMessages();
+    const current = { ...messages[2]!, id: 5 };
+    const recentText = "Recent synthetic note. ".repeat(4_000);
+    const runKey = enqueueJob({
+      allowlist: ["familygraph.echo"],
+      messages: [
+        ...messages.slice(0, 2),
+        {
+          id: 3,
+          role: "user",
+          content_json: { text: recentText },
+          created_at: "2026-09-01T00:00:02Z",
+        },
+        {
+          id: 4,
+          role: "assistant",
+          content_json: { text: "Ready." },
+          created_at: "2026-09-01T00:00:03Z",
+        },
+        current,
+      ],
+    });
+    const failed: AssistantMessage = {
+      ...textTurn("")[0]!,
+      stopReason: "error",
+      errorMessage: "maximum context length exceeded",
+    };
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([[failed]], { modelContexts }),
+    );
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(modelContexts).toHaveLength(2);
+    expect(JSON.stringify(modelContexts[0]!.messages)).toContain(HISTORY_FACT);
+    expect(JSON.stringify(modelContexts[0]!.messages)).toContain(recentText);
+    expect(modelContexts[1]!.systemPrompt).toContain("context summarization assistant");
+    expect(JSON.stringify(modelContexts[1]!.messages)).toContain(HISTORY_FACT);
+    expect(state.settles).toEqual([
+      {
+        run_id: runKey,
+        status: "failed",
+        error_code: "PROVIDER_STREAM_ERROR",
+        error: { message: "maximum context length exceeded" },
+      },
+    ]);
+    expect(
+      (state.eventsByRun.get(runKey) ?? []).filter((event) => event.type === "run.settled"),
+    ).toHaveLength(0);
+  });
+
   it("blocks non-allowlisted tools without touching execute endpoint", async () => {
     resetState();
     const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
@@ -718,6 +872,7 @@ describe("worker full cycle against mock FastAPI", () => {
     resetState();
     const runKey = enqueueJob({
       allowlist: ["familygraph.echo"],
+      messages: historyMessages(),
       provider: {
         provider_id: 9,
         model: null,
@@ -760,7 +915,7 @@ describe("worker full cycle against mock FastAPI", () => {
 
   it("propagates server cancellation to the Pi stream and skips settle", async () => {
     resetState();
-    enqueueJob({ allowlist: ["familygraph.echo"] });
+    enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
     state.cancelOnNextHeartbeat = true;
     const { worker } = makeWorker(
       (cfg) => {
@@ -777,7 +932,7 @@ describe("worker full cycle against mock FastAPI", () => {
 
   it("aborts the Pi stream when heartbeat authorization is revoked", async () => {
     resetState();
-    enqueueJob({ allowlist: ["familygraph.echo"] });
+    enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
     state.heartbeatStatus = 403;
     const { worker } = makeWorker(
       (cfg) => {

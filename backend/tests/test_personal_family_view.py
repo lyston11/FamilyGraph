@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.personal_family_view import PersonalFamilyViewNode
 from app.services import personal_family_view
 from app.services import source_facts as sf
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 def _confirm(session, fact_type: str, subject_id: int, object_id: int, space_id: int) -> None:

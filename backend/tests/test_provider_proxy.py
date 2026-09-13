@@ -176,9 +176,8 @@ def test_proxy_requires_run_token(internal_client, db_session, monkeypatch):
     """无 token / 用户 JWT / token 与 run 不匹配一律 fail-closed。"""
     _install_fake(monkeypatch, [b"{}"])
     user, space, _provider = _seed_provider(db_session, name="proxy-auth")
-    from conftest import create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_session
 
     session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
     run = agent_queue.enqueue_run(
@@ -215,9 +214,8 @@ def test_proxy_rejects_non_active_run(internal_client, db_session, monkeypatch):
     """Run 未 lease（queued）→ 409；模型调用仅活跃期允许。"""
     _install_fake(monkeypatch, [b"{}"])
     user, space, _provider = _seed_provider(db_session, name="proxy-state")
-    from conftest import create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_session
 
     session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
     run = agent_queue.enqueue_run(
@@ -255,10 +253,9 @@ def test_proxy_fail_closed_when_provider_unresolved(internal_client, db_session,
     """无 Provider 配置/解密失败 → 503 可解释拒绝，绝不回退 env。"""
     _install_fake(monkeypatch, [b"{}"])
     user = __import__("conftest").create_user_with_pin(db_session, "proxy-none-u", "123456")
-    from conftest import create_agent_session
-
     from app.models.space import FamilySpace
     from app.services import agent_queue
+    from conftest import create_agent_session
 
     space = FamilySpace(
         name="proxy-none-space", kind="household", owner_id=user.id, created_at=user.created_at
@@ -307,9 +304,8 @@ def test_proxy_redacts_upstream_error_body(internal_client, db_session, monkeypa
         status_code=500,
     )
     user, space, _provider = _seed_provider(db_session, name="proxy-err")
-    from conftest import create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_session
 
     session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
     agent_queue.enqueue_run(
@@ -342,9 +338,8 @@ def test_proxy_maps_network_failure_to_502(internal_client, db_session, monkeypa
     _FakeAsyncClient.response = _FakeUpstream([b"{}"])
     monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _FakeAsyncClient)
     user, space, _provider = _seed_provider(db_session, name="proxy-net")
-    from conftest import create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_session
 
     session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
     agent_queue.enqueue_run(
@@ -368,9 +363,8 @@ def test_proxy_maps_network_failure_to_502(internal_client, db_session, monkeypa
 
 def test_proxy_rejects_empty_body_before_upstream(internal_client, db_session, monkeypatch):
     """空 body fail-closed，不能创建上游 client 或发出请求。"""
-    from conftest import create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_session
 
     user, space, _provider = _seed_provider(db_session, name="proxy-empty-real")
     session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
 from app.models.space import SpaceMember
+from conftest import auth_header, create_user_with_pin, login
 
 MASKED = {"__masked__": True}
 

@@ -9,6 +9,7 @@ import {
   deleteAgentSession,
   fetchAgentMessages,
   fetchAgentRun,
+  fetchRunEventCitations,
   fetchAgentSessions,
   friendlyAgentError,
   renameAgentSession,
@@ -49,6 +50,8 @@ export interface AgentMessageView {
   cardIds?: number[]
   /** Assistant 结构化回复中的安全 RAG 引用投影；不信任消息中的任意对象。 */
   citations?: MemoryCitation[]
+  /** 因来源失效/失权而未列入 citations 的引用数量（服务端授权投影）。 */
+  unavailableCitationCount?: number
   /** Assistant 结构化回复中的受控联网外部引用（trust=external）。 */
   webCitations?: WebCitation[]
   /** 由 SSE 回放合并产生的消息（刷新恢复去重标记） */
@@ -168,8 +171,7 @@ function payloadCardIds(payload: AgentEventPayload): number[] | undefined {
   return ids.length > 0 ? [...new Set(ids)] : undefined
 }
 
-function payloadCitations(payload: AgentEventPayload): MemoryCitation[] | undefined {
-  const raw = payload.citations
+function parseCitationArray(raw: unknown): MemoryCitation[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const citations = raw.flatMap((value): MemoryCitation[] => {
     if (typeof value !== 'object' || value === null) return []
@@ -203,6 +205,10 @@ function payloadCitations(payload: AgentEventPayload): MemoryCitation[] | undefi
     return [citation]
   })
   return citations.length > 0 ? citations : undefined
+}
+
+function payloadCitations(payload: AgentEventPayload): MemoryCitation[] | undefined {
+  return parseCitationArray(payload.citations)
 }
 
 function payloadWebCitations(payload: AgentEventPayload): WebCitation[] | undefined {
@@ -241,7 +247,10 @@ function toMessageView(message: AgentMessageOut): AgentMessageView {
     createdAt: message.created_at,
     status: 'sent',
     cardIds: payloadCardIds(message.content_json),
-    citations: payloadCitations(message.content_json),
+    // 历史读取面：citations 已由服务端按当前读者授权投影（受限来源不回显，
+    // 仅计数）。不再从 content_json 读取引用。
+    citations: parseCitationArray(message.citations),
+    unavailableCitationCount: message.unavailable_citation_count ?? 0,
     webCitations: payloadWebCitations(message.content_json),
   }
 }
@@ -299,7 +308,7 @@ export const useAgentStore = defineStore('agent', () => {
     cardIds?: number[],
     citations?: MemoryCitation[],
     webCitations?: WebCitation[],
-  ): void {
+  ): AgentMessageView {
     for (let i = Math.min(partition.replayCursor, partition.messages.length); i < partition.messages.length; i += 1) {
       const existing = partition.messages[i]
       if (existing && !existing.fromReplay && existing.role === role && existing.text === text) {
@@ -308,10 +317,10 @@ export const useAgentStore = defineStore('agent', () => {
         if (citations !== undefined) existing.citations = citations
         if (webCitations !== undefined) existing.webCitations = webCitations
         partition.replayCursor = i + 1
-        return
+        return existing
       }
     }
-    partition.messages.push({
+    const view: AgentMessageView = {
       id: null,
       role,
       text,
@@ -321,10 +330,12 @@ export const useAgentStore = defineStore('agent', () => {
       citations,
       webCitations,
       fromReplay: true,
-    })
+    }
+    partition.messages.push(view)
+    return view
   }
 
-  function applyStreamEvent(event: { type: string; payload: AgentEventPayload }): void {
+  function applyStreamEvent(event: { seq?: number; type: string; payload: AgentEventPayload }): void {
     if (streamCtx === null) return
     const partition = partitions.value.get(streamCtx.spaceId)
     if (!partition || partition.run === null || partition.run.id !== streamCtx.runId) return
@@ -361,8 +372,8 @@ export const useAgentStore = defineStore('agent', () => {
         }
         break
       }
-      case 'message.assistant_added':
-        mergeReplayedMessage(
+      case 'message.assistant_added': {
+        const view = mergeReplayedMessage(
           partition,
           'assistant',
           payloadText(event.payload),
@@ -370,7 +381,22 @@ export const useAgentStore = defineStore('agent', () => {
           payloadCitations(event.payload),
           payloadWebCitations(event.payload),
         )
+        // 公开事件不携带记忆引用元数据（16 KiB 合同）；按 (run_id, seq) 补取
+        // 服务端已认证的引用。失败保持正文可读，不把未加载来源当作已核验。
+        if (view !== null && view.citations === undefined && typeof event.seq === 'number') {
+          const runId = Number(streamCtx.runId)
+          const seq = event.seq
+          void fetchRunEventCitations(runId, seq)
+            .then((result) => {
+              view.citations = parseCitationArray(result.citations)
+              view.unavailableCitationCount = result.unavailable_citation_count
+            })
+            .catch(() => {
+              // 补取失败：保留可重试状态（引用列表缺省，正文不受影响）。
+            })
+        }
         break
+      }
       case 'turn.completed':
         break
       case 'run.settled':

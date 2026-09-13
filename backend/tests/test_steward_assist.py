@@ -22,7 +22,6 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from conftest import auth_header, create_agent_fixture, login
 from sqlalchemy import select
 from test_steward import _confirm, _emit_fact_event, _person, _run_job, _space
 
@@ -40,6 +39,7 @@ from app.services import steward as steward_service
 from app.services import steward_assist, steward_guard
 from app.utils import timeutil
 from app.utils.secretbox import encrypt_secret
+from conftest import auth_header, create_agent_fixture, login
 
 # ---- 造数辅助 ----
 

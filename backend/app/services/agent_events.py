@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,7 +28,8 @@ from app.errors import (
     AGENT_RUN_NOT_RUNNING,
     raise_api_error,
 )
-from app.models.agent import AgentJob, AgentRun, AgentRunEvent
+from app.models.agent import AgentJob, AgentRun, AgentRunEvent, AgentSession
+from app.models.rag import RAGDocument
 from app.utils import timeutil
 
 # notes.md 事件类型注册表（首版）
@@ -68,6 +71,17 @@ class EventEntry:
     type: str
     public_payload: dict[str, Any]
 
+    @property
+    def request_fingerprint(self) -> str:
+        """规范化原始请求指纹（type + 首次收到的候选 payload，与认证结果无关）。"""
+        canonical = json.dumps(
+            {"type": self.type, "public_payload": self.public_payload},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 
 def next_seq(db: Session, run_id: int) -> int:
     """当前最大 seq + 1；空流从 0 开始。"""
@@ -88,6 +102,8 @@ def insert_event(
     event_type: str,
     public_payload: dict[str, Any],
     created_at: datetime | None = None,
+    request_fingerprint: str | None = None,
+    context_reference: dict[str, Any] | None = None,
 ) -> AgentRunEvent:
     """低层插入：供服务内部（入队首个事件 / settle 终态事件）与 append_events 复用。"""
     if event_type not in EVENT_TYPES:
@@ -97,6 +113,8 @@ def insert_event(
         seq=seq,
         type=event_type,
         public_payload=public_payload,
+        request_fingerprint=request_fingerprint,
+        context_reference_json=context_reference,
         created_at=created_at or timeutil.utcnow(),
     )
     db.add(row)
@@ -140,8 +158,15 @@ def append_events(
             )
         )
         if prior is not None:
-            # 幂等重放：同 seq 同内容视为重复；不同内容属协议违规
-            if prior.type == entry.type and prior.public_payload == entry.public_payload:
+            # 幂等重放：同 seq 且同原始请求指纹（旧事件无指纹时退化为 payload
+            # 全等）视为重复；指纹不比较服务端认证后的结果，异指纹同 seq 属
+            # 协议违规。
+            prior_fingerprint = prior.request_fingerprint
+            if prior_fingerprint is not None:
+                same = prior_fingerprint == entry.request_fingerprint
+            else:
+                same = prior.type == entry.type and prior.public_payload == entry.public_payload
+            if same:
                 duplicates.append(entry.seq)
                 continue
             raise_api_error(
@@ -165,6 +190,14 @@ def append_events(
                 "仅 leased 状态可开始执行",
                 detail={"status": run.status},
             )
+        # Citation authentication happens for not-yet-committed events only;
+        # replayed duplicates above never re-generate persistent payloads.
+        context_reference: dict[str, Any] | None = None
+        authenticated_citations: list[dict[str, Any]] | None = None
+        if entry.type == "message.assistant_added" and isinstance(
+            entry.public_payload.get("text"), str
+        ):
+            context_reference, authenticated_citations = _authenticate_citations(db, run, entry)
         accepted.append(
             insert_event(
                 db,
@@ -172,13 +205,17 @@ def append_events(
                 seq=entry.seq,
                 event_type=entry.type,
                 public_payload=entry.public_payload,
+                request_fingerprint=entry.request_fingerprint,
+                context_reference=context_reference,
             )
         )
         if entry.type == "message.assistant_added":
             # Promote the public assistant projection into session history so
             # subsequent Pi turns can restore the full conversation.  Only the
             # bounded text/citation projection is persisted; provider-private
-            # payloads never cross this boundary.
+            # payloads never cross this boundary.  Memory citations are
+            # authenticated server-side from the attempt's context build —
+            # the model text alone never turns into a verified citation.
             payload = entry.public_payload
             text = payload.get("text")
             if isinstance(text, str):
@@ -186,18 +223,16 @@ def append_events(
                 if session is not None:
                     from app.models.agent import AgentMessage
 
+                    content_json: dict[str, Any] = {"text": text}
+                    if authenticated_citations:
+                        content_json["citations"] = authenticated_citations
+                    if isinstance(payload.get("web_citations"), list):
+                        content_json["web_citations"] = payload["web_citations"]
                     db.add(
                         AgentMessage(
                             session_id=session.session_id,
                             role="assistant",
-                            content_json={
-                                "text": text,
-                                **(
-                                    {"web_citations": payload["web_citations"]}
-                                    if isinstance(payload.get("web_citations"), list)
-                                    else {}
-                                ),
-                            },
+                            content_json=content_json,
                             idempotency_key=f"run:{run.id}:event:{entry.seq}",
                             created_at=timeutil.utcnow(),
                         )
@@ -207,6 +242,120 @@ def append_events(
         if entry.type == "run.started":
             _promote_to_running(db, run)
     return accepted, duplicates
+
+
+# Citation handles look like ``rag:<source_id>:r<rev>:c<chunk>``.
+_CITATION_HANDLE_RE = re.compile(r"rag:[^\s:]+:r\d+:c\d+")
+_MAX_USED_HANDLES = 32
+
+
+def _revision_from_handle(citation_handle: str) -> int | None:
+    segment = citation_handle.split(":r", 1)[1] if ":r" in citation_handle else ""
+    segment = segment.split(":", 1)[0]
+    try:
+        return int(segment)
+    except ValueError:
+        return None
+
+
+def _authenticate_citations(
+    db: Session, run: AgentRun, entry: EventEntry
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Authenticate the citation handles the answer actually used.
+
+    A handle becomes a verified citation only when it belongs to an included
+    item of this run/attempt's context build and the source is still readable
+    for the acting account.  Fabricated, other-build, revoked or
+    wrong-revision handles stay unauthenticated: the text remains unverified
+    text, never a confirmed fact.  Returns (context_reference, citations).
+    """
+    from app.models.account import Account
+    from app.models.context import ContextBuild, ContextBuildItem
+    from app.services import memory_sources
+
+    text_value = entry.public_payload.get("text")
+    if not isinstance(text_value, str):
+        return None, None
+    current_run = db.get(AgentRun, run.id)
+    if current_run is None:
+        return None, None
+    run = current_run
+    build = db.scalar(
+        select(ContextBuild)
+        .where(ContextBuild.run_id == run.id, ContextBuild.attempt == run.attempt)
+        .order_by(ContextBuild.id.desc())
+        .limit(1)
+    )
+    if build is None:
+        return None, None
+    handles: list[str] = []
+    seen: set[str] = set()
+    for match in _CITATION_HANDLE_RE.findall(text_value):
+        if match not in seen:
+            seen.add(match)
+            handles.append(match)
+        if len(handles) >= _MAX_USED_HANDLES:
+            break
+    if not handles:
+        return {"context_build_id": build.id, "attempt": run.attempt, "used_handles": []}, None
+    agent_session = db.get(AgentSession, run.session_id)
+    account = db.get(Account, agent_session.account_id) if agent_session is not None else None
+    actor = account.user if account is not None else None
+    if actor is None or account is None or agent_session is None:
+        return {"context_build_id": build.id, "attempt": run.attempt, "used_handles": []}, None
+    items = {
+        item.citation_handle: item
+        for item in db.scalars(
+            select(ContextBuildItem).where(
+                ContextBuildItem.build_id == build.id,
+                ContextBuildItem.included.is_(True),
+            )
+        ).all()
+    }
+    citations: list[dict[str, Any]] = []
+    used_handles: list[str] = []
+    for handle in handles:
+        item = items.get(handle)
+        if item is None:
+            continue
+        document = db.scalar(
+            select(RAGDocument).where(
+                RAGDocument.source_type == item.source_type,
+                RAGDocument.source_id == item.source_id,
+                RAGDocument.status == "active",
+            )
+        )
+        handle_revision = _revision_from_handle(handle)
+        if (
+            document is None
+            or (handle_revision is not None and document.revision != handle_revision)
+            or not memory_sources.document_readable(
+                db,
+                document,
+                actor=actor,
+                account=account,
+                space_id=agent_session.space_id,
+                agent_kind=run.kind,
+            )
+        ):
+            continue
+        used_handles.append(handle)
+        citations.append(
+            {
+                "source_type": item.source_type,
+                "source_id": item.source_id,
+                "scope": str(item.metadata_json.get("scope", document.scope)),
+                "sensitivity": str(item.metadata_json.get("sensitivity", document.sensitivity)),
+                "revision": int(document.revision),
+                "citation_handle": handle,
+            }
+        )
+    context_reference = {
+        "context_build_id": build.id,
+        "attempt": run.attempt,
+        "used_handles": used_handles,
+    }
+    return context_reference, citations
 
 
 def _promote_to_running(db: Session, run: AgentRun) -> None:

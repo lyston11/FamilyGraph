@@ -11,7 +11,6 @@ import threading
 from datetime import timedelta
 
 import pytest
-from conftest import create_user_with_pin
 from fastapi import HTTPException
 from sqlalchemy import select
 
@@ -25,6 +24,7 @@ from app.models.space import PENDING_EXPIRY_DAYS, FamilySpace, SpaceMember
 from app.models.user import User
 from app.models.v2_foundation import DomainEvent, OwnershipTransfer
 from app.utils.timeutil import utcnow
+from conftest import create_user_with_pin
 
 
 def _ctx(user) -> ActorContext:

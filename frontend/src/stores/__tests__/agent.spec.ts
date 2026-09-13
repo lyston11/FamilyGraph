@@ -29,6 +29,12 @@ vi.mock('@/api/agent', () => ({
   cancelAgentRun: vi.fn(),
   renameAgentSession: vi.fn(),
   deleteAgentSession: vi.fn(),
+  fetchRunEventCitations: vi.fn().mockResolvedValue({
+    run_id: 1,
+    seq: 1,
+    citations: [],
+    unavailable_citation_count: 0,
+  }),
 }))
 
 // 可控的假流：捕获回调，测试中手动投喂事件
@@ -357,6 +363,34 @@ describe('agent store（V2.2 Block C3）', () => {
     expect(p1?.error?.code).toBe('AGENT_RUN_SESSION_BUSY')
     expect(p1?.sessions.map((s) => s.id)).toEqual([11])
     expect(p1?.activeSessionId).toBe(11)
+  })
+
+  it('assistant_added 无引用时按 (run_id, seq) 补取并合并 citations', async () => {
+    const { fetchRunEventCitations } = await import('@/api/agent')
+    vi.mocked(fetchRunEventCitations).mockResolvedValueOnce({
+      run_id: 100,
+      seq: 1,
+      citations: [
+        {
+          source_type: 'memory',
+          source_id: '7',
+          scope: 'private',
+          sensitivity: 'normal',
+          revision: 1,
+          citation_handle: 'rag:7:r1:c1',
+        },
+      ],
+      unavailable_citation_count: 2,
+    })
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'message.assistant_added', { role: 'assistant', text: '带引用的回答' }))
+    await vi.waitFor(() => {
+      const view = store.partitions.get(1)?.messages.find((m) => m.text === '带引用的回答')
+      expect(view?.citations?.[0]?.citation_handle).toBe('rag:7:r1:c1')
+      expect(view?.unavailableCitationCount).toBe(2)
+    })
   })
 
   it('auth.clearSession() 联动清空 agent store（AC-AS7）', async () => {

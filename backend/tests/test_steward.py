@@ -27,10 +27,6 @@ from datetime import timedelta
 
 import fastapi
 import pytest
-from conftest import (
-    create_space_member,
-    create_user_with_pin,
-)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -48,6 +44,10 @@ from app.services import source_facts as sf
 from app.services.domain_events import emit as emit_event
 from app.services.platform_roles import ROLE_PLATFORM_OPERATOR
 from app.utils import timeutil
+from conftest import (
+    create_space_member,
+    create_user_with_pin,
+)
 
 # ---- 造数辅助 ----
 

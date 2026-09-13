@@ -31,7 +31,6 @@ import type {
   AssistantMessageEventStream,
   AssistantMessage,
   Context,
-  Message,
   Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
@@ -363,24 +362,11 @@ export async function buildRunSession(
     { providerWireNames: true },
   );
 
-  const { session } = await createAgentSession({
-    cwd: agentDir,
-    agentDir,
-    modelRuntime,
-    model,
-    noTools: "all",
-    // Pi uses these names when constructing provider requests. Keep the
-    // server-issued allowlist canonical, but emit provider-safe wire names.
-    tools: projection.tool_allowlist.map((name) => providerWireName(name as DomainToolName)),
-    customTools: domainTools,
-    resourceLoader: loader,
-    sessionManager: SessionManager.inMemory(agentDir),
-    settingsManager: SettingsManager.inMemory(),
-  });
-
-  // Rehydrate the persisted transcript before the current prompt.  The latest
-  // user message is sent by worker.prompt(); older turns are assigned to the
-  // Pi agent state so provider requests contain the complete conversation.
+  // Pi restores model context AND reads compaction input from this manager.
+  // Prefill it before session creation, without replaying prompts or events.
+  // The backend projects messages in durable ID order; preserve that order and
+  // deduplicate by ID, never by text. The latest user is sent by worker.prompt().
+  const sessionManager = SessionManager.inMemory(agentDir);
   const latestUserId = [...projection.messages]
     .reverse()
     .find(
@@ -394,31 +380,51 @@ export async function buildRunSession(
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
-  const history: Message[] = projection.messages
-    .filter((message) => message.id !== latestUserId)
-    .flatMap((message): Message[] => {
-      const text = message.content_json["text"];
-      if ((message.role !== "user" && message.role !== "assistant") || typeof text !== "string")
-        return [];
-      const timestamp = Date.parse(message.created_at) || Date.now();
-      if (message.role === "user") {
-        return [{ role: "user" as const, content: text, timestamp }];
-      }
+  const seenMessageIds = new Set<number>();
+  for (const message of projection.messages) {
+    const text = message.content_json["text"];
+    if (
+      message.id === latestUserId ||
+      seenMessageIds.has(message.id) ||
+      (message.role !== "user" && message.role !== "assistant") ||
+      typeof text !== "string"
+    )
+      continue;
+    seenMessageIds.add(message.id);
+    const timestamp = Date.parse(message.created_at) || Date.now();
+    if (message.role === "user") {
+      sessionManager.appendMessage({ role: "user", content: text, timestamp });
+    } else {
       const assistant: AssistantMessage = {
         role: "assistant",
         content: [{ type: "text", text }],
         api,
         provider: providerName,
         model: modelId,
+        // Persisted text has no provider usage. Zero means unknown to Pi's
+        // estimator; it must not be treated as a fabricated usage/billing record.
         usage: zeroUsage(),
         stopReason: "stop",
         timestamp,
       };
-      return [assistant];
-    });
-  if (history.length > 0) {
-    session.agent.state.messages = history as unknown as typeof session.agent.state.messages;
+      sessionManager.appendMessage(assistant);
+    }
   }
+
+  const { session } = await createAgentSession({
+    cwd: agentDir,
+    agentDir,
+    modelRuntime,
+    model,
+    noTools: "all",
+    // Pi uses these names when constructing provider requests. Keep the
+    // server-issued allowlist canonical, but emit provider-safe wire names.
+    tools: projection.tool_allowlist.map((name) => providerWireName(name as DomainToolName)),
+    customTools: domainTools,
+    resourceLoader: loader,
+    sessionManager,
+    settingsManager: SettingsManager.inMemory(),
+  });
 
   return { session, events: new RunEventBuffer(), policyGuard };
 }

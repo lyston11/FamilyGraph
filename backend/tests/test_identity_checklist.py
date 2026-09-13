@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi import HTTPException
 
 from app.commands import identity as identity_commands
@@ -17,6 +16,7 @@ from app.commands.context import ActorContext
 from app.errors import extract_api_error
 from app.models.v2_foundation import DomainEvent, ProfileFactReview
 from app.services.identity_fsm import recommendation_eligible
+from conftest import auth_header, create_user_with_pin, login
 
 
 def _ctx(user) -> ActorContext:

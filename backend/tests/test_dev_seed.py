@@ -17,7 +17,6 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-from conftest import create_user_with_pin
 from sqlalchemy import select
 
 from app import config, dev_seed
@@ -30,6 +29,7 @@ from app.models.user import User
 from app.models.v2_foundation import DisclosurePreference
 from app.services import admin_bootstrap
 from app.utils import security
+from conftest import create_user_with_pin
 
 _DEMO_NAMES = {
     # 明皇室 household + 朱氏皇族 lineage（六世帝系 + 旁系 + 姻亲）

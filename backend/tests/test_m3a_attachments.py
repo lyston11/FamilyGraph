@@ -5,11 +5,11 @@ from __future__ import annotations
 import io
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import UPLOADS_DIR
+from conftest import auth_header, create_user_with_pin, login
 
 
 def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:

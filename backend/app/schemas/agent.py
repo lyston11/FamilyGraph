@@ -189,13 +189,39 @@ class AgentMessageCreateRequest(_Strict):
     content: str = Field(min_length=1, max_length=config.AGENT_MESSAGE_MAX_LENGTH)
 
 
+class CitationOut(BaseModel):
+    """最小引用元数据合同（六字段；无摘录正文）。"""
+
+    source_type: str
+    source_id: str
+    scope: str
+    sensitivity: str
+    revision: int
+    citation_handle: str
+
+
 class AgentMessageOut(BaseModel):
-    """历史投影：不含 idempotency_key 等系统内部字段。"""
+    """历史投影：不含 idempotency_key 等系统内部字段。
+
+    citations 只包含当前读者仍可读的来源；unavailable_citation_count 表达
+    因来源失效/失权而不在 citations 中的引用数量（可选，旧消息缺省 0）。
+    """
 
     id: int
     role: str
     content_json: dict[str, Any]
     created_at: datetime
+    citations: list[CitationOut] = []
+    unavailable_citation_count: int = 0
+
+
+class RunEventCitationsOut(BaseModel):
+    """引用固定后备读取（GET /runs/{id}/events/{seq}/citations）。"""
+
+    run_id: int
+    seq: int
+    citations: list[CitationOut]
+    unavailable_citation_count: int
 
 
 class AgentRunRefOut(BaseModel):

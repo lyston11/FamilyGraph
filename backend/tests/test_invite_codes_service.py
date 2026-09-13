@@ -9,7 +9,6 @@ import threading
 from datetime import timedelta
 
 import pytest
-from conftest import create_space_member, create_user_with_pin, seed_space_with_owner
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
@@ -23,6 +22,7 @@ from app.models.space import SpaceMember
 from app.models.user import User
 from app.services import invite_codes
 from app.utils import timeutil
+from conftest import create_space_member, create_user_with_pin, seed_space_with_owner
 
 _SYNC_TIMEOUT = 10.0
 

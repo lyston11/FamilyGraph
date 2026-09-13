@@ -13,7 +13,6 @@ import os
 import stat
 
 import pytest
-from conftest import admin_header, admin_login, create_system_admin, create_user_with_pin
 from sqlalchemy import select
 
 from app import config
@@ -21,6 +20,7 @@ from app.models.audit_log import AuditLog
 from app.models.system_admin import SystemAdmin, SystemAdminAccount, SystemAdminRefreshSession
 from app.services import admin_bootstrap
 from app.utils import security
+from conftest import admin_header, admin_login, create_system_admin, create_user_with_pin
 
 
 def test_status_false_when_empty(client) -> None:

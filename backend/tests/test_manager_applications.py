@@ -19,13 +19,6 @@ from __future__ import annotations
 from threading import Barrier, Thread
 
 import pytest
-from conftest import (
-    create_space_member,
-    create_system_admin,
-    create_user_with_pin,
-    login,
-    seed_space_with_owner,
-)
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -44,6 +37,13 @@ from app.models.space import (
 )
 from app.models.user import User
 from app.models.v2_foundation import DomainEvent
+from conftest import (
+    create_space_member,
+    create_system_admin,
+    create_user_with_pin,
+    login,
+    seed_space_with_owner,
+)
 
 APPLICATIONS_URL = "/api/spaces/manager-applications"
 CONSENTS_URL = "/api/spaces/manager-transfer-consents"

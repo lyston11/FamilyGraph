@@ -20,14 +20,73 @@ from app.schemas.memory import (
     RAGSearchOut,
 )
 from app.services import memory as memory_service
-from app.services import platform_features, rag
+from app.services import memory_sources, platform_features, rag
 from app.services.space_fsm import is_active_member
 
 router = APIRouter(tags=["memory-rag"])
 
 
-def _candidate_out(row: MemoryCandidate) -> MemoryCandidateOut:
-    return MemoryCandidateOut.model_validate(row)
+def _candidate_out(
+    db: Session, row: MemoryCandidate, identity: tuple[User, Account]
+) -> MemoryCandidateOut:
+    access = memory_sources.source_access(db, row, actor=identity[0], account=identity[1])
+    return MemoryCandidateOut.model_validate(
+        dict(
+            id=row.id,
+            source_message_id=row.source_message_id if access.readable else None,
+            source_document_ref=row.source_document_ref if access.readable else None,
+            source_span_json=memory_sources.public_source_snapshot(row) if access.readable else {},
+            source_kind=row.source_kind,
+            source_status=access.status,
+            allowed_scopes=list(access.allowed_scopes),
+            raw_quote=row.source_quote if access.readable else None,
+            summary=row.summary if access.readable else None,
+            purpose=row.purpose if access.readable else None,
+            suggested_scope=row.suggested_scope,
+            sensitivity=row.sensitivity,
+            extractor_version=row.extractor_version,
+            status=row.status,
+            memory_id=row.memory_id,
+            created_at=row.created_at,
+            decided_at=row.decided_at,
+        )
+    )
+
+
+def _memory_out(
+    db: Session,
+    row: Memory,
+    identity: tuple[User, Account],
+    space_id: int | None = None,
+) -> MemoryOut:
+    access = memory_sources.memory_access(
+        db, row, actor=identity[0], account=identity[1], space_id=space_id
+    )
+    return MemoryOut.model_validate(
+        dict(
+            id=row.id,
+            source_candidate_id=row.source_candidate_id,
+            source_message_id=row.source_message_id if access.readable else None,
+            source_document_ref=row.source_document_ref if access.readable else None,
+            source_span_json=memory_sources.public_source_snapshot(row) if access.readable else {},
+            source_kind=row.source_kind,
+            source_status=access.status,
+            allowed_scopes=list(access.allowed_scopes),
+            raw_quote=row.raw_quote if access.readable else None,
+            content=row.content if access.readable else None,
+            purpose=row.purpose if access.readable else None,
+            scope=row.scope,
+            space_id=row.space_id,
+            sensitivity=row.sensitivity,
+            confirmation_status=row.confirmation_status,
+            revision=row.revision,
+            retention_until=row.retention_until,
+            status=row.status,
+            revoked_at=row.revoked_at,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+    )
 
 
 @router.post("/memory-candidates", status_code=201, response_model=MemoryCandidateOut)
@@ -47,9 +106,14 @@ def create_memory_candidate(
         sensitivity=body.sensitivity,
         source_message_id=body.source_message_id,
         source_document_ref=body.source_document_ref,
+        source=body.source.model_dump() if body.source is not None else None,
+        idempotency_key=body.idempotency_key,
     )
+    db.flush()
+    result = _candidate_out(db, row, identity)
+    result.model_dump_json()
     db.commit()
-    return _candidate_out(row)
+    return result
 
 
 @router.get("/memory-candidates", response_model=list[MemoryCandidateOut])
@@ -64,7 +128,7 @@ def list_memory_candidates(
     if not include_decided:
         stmt = stmt.where(MemoryCandidate.status == "pending")
     rows = db.scalars(stmt.order_by(MemoryCandidate.id.desc())).all()
-    return [_candidate_out(row) for row in rows]
+    return [_candidate_out(db, row, identity) for row in rows]
 
 
 @router.post("/memory-candidates/{candidate_id}/confirm", response_model=MemoryOut)
@@ -82,8 +146,11 @@ def confirm_memory_candidate(
         scope=body.scope,
         retention_days=body.retention_days,
     )
+    db.flush()
+    result = _memory_out(db, row, identity)
+    result.model_dump_json()
     db.commit()
-    return MemoryOut.model_validate(row)
+    return result
 
 
 @router.post("/memory-candidates/{candidate_id}/dismiss", response_model=MemoryCandidateOut)
@@ -93,8 +160,11 @@ def dismiss_memory_candidate(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemoryCandidateOut:
     row = memory_service.dismiss_candidate(db, candidate_id=candidate_id, account_id=identity[1].id)
+    db.flush()
+    result = _candidate_out(db, row, identity)
+    result.model_dump_json()
     db.commit()
-    return _candidate_out(row)
+    return result
 
 
 @router.get("/memories", response_model=list[MemoryOut])
@@ -112,7 +182,6 @@ def list_memories(
         if not is_active_member(db, space_id, actor.id):
             return []
         memory_service.expire_due_memories(db, account_id=account.id, space_id=space_id)
-    db.commit()
     stmt = select(Memory).where(
         Memory.status == "active", Memory.confirmation_status == "confirmed"
     )
@@ -123,7 +192,18 @@ def list_memories(
         shared = (Memory.space_id == space_id) & Memory.scope.in_(("household", "lineage"))
         stmt = stmt.where(or_(private, shared))
     rows = db.scalars(stmt.order_by(Memory.id.desc())).all()
-    return [MemoryOut.model_validate(row) for row in rows]
+    result = []
+    for row in rows:
+        projected = _memory_out(db, row, identity, space_id)
+        # Only the owner can see quarantined metadata; other readers receive no row.
+        if row.author_account_id == account.id or projected.source_status in (
+            "available",
+            "deleted_snapshot",
+        ):
+            projected.model_dump_json()
+            result.append(projected)
+    db.commit()
+    return result
 
 
 @router.post("/memories/{memory_id}/revoke", response_model=MemoryOut)
@@ -133,8 +213,11 @@ def revoke_memory(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> MemoryOut:
     row = memory_service.revoke_memory(db, memory_id=memory_id, account_id=identity[1].id)
+    db.flush()
+    result = _memory_out(db, row, identity)
+    result.model_dump_json()
     db.commit()
-    return MemoryOut.model_validate(row)
+    return result
 
 
 @router.delete("/memories/{memory_id}", status_code=204)
@@ -157,5 +240,8 @@ def search_rag(
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[RAGSearchOut]:
     rows = rag.search(db, actor=identity[0], space_id=space_id, query=q, limit=limit)
+    result = [RAGSearchOut(**row.__dict__) for row in rows]
+    for item in result:
+        item.model_dump_json()
     db.commit()
-    return [RAGSearchOut(**row.__dict__) for row in rows]
+    return result

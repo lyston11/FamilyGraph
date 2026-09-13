@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
 from app.models.relation import Relation
 from app.utils.timeutil import utcnow
+from conftest import auth_header, create_user_with_pin, login
 
 
 def _login(client: TestClient, name: str, pin: str) -> dict[str, str]:

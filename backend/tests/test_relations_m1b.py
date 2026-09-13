@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.models.relation import Relation
 from app.services import relation_fsm
 from app.services.kinship import display_relation
+from conftest import auth_header, create_user_with_pin, login
 
 
 @pytest.fixture()

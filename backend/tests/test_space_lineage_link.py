@@ -15,6 +15,10 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from app.models.space import FamilySpace
 from conftest import (
     auth_header,
     create_space_member,
@@ -22,10 +26,6 @@ from conftest import (
     login,
     seed_space_with_owner,
 )
-from fastapi.testclient import TestClient
-from sqlalchemy import text
-
-from app.models.space import FamilySpace
 
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0035_space_lineage_link.py"

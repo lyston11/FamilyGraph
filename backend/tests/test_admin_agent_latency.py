@@ -10,7 +10,6 @@ from datetime import timedelta
 
 import pytest
 import sqlalchemy as sa
-from conftest import admin_session_headers, create_agent_fixture, create_system_admin
 from fastapi.testclient import TestClient
 
 from app import config
@@ -18,6 +17,7 @@ from app.models.agent import AgentSession
 from app.models.steward import StewardModelCall
 from app.services import agent_queue, steward
 from app.utils.timeutil import utcnow
+from conftest import admin_session_headers, create_agent_fixture, create_system_admin
 
 
 @pytest.fixture()

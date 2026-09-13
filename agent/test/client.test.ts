@@ -116,6 +116,7 @@ describe("InternalClient protocol behavior", () => {
               api_key: null,
             },
             next_event_seq: 1,
+            context_build_id: 11,
             cancel_requested: false,
           });
         }
@@ -221,8 +222,11 @@ describe("InternalClient protocol behavior", () => {
     expect(projection.provider?.api_key).toBeNull();
     expect(projection.messages[0]?.content_json["text"]).toBe("hi");
     expect(projection.context_blocks?.[0]?.citation).toBe("rag:memory-1:r1:c1");
+    expect(projection.context_build_id).toBe(11);
     expect(projection.cancel_requested).toBe(false);
   });
+
+
 
   it("aborts an in-flight internal request and its retry backoff", async () => {
     const controller = new AbortController();
@@ -306,6 +310,52 @@ describe("InternalClient protocol behavior", () => {
         )) as typeof fetch,
     });
     await expect(client.getRunContext("r1", "run-tok")).rejects.toMatchObject({
+      code: "invalid_context_projection",
+    });
+  });
+
+  it("keeps context_build_id and rejects malformed values", async () => {
+    const base = {
+      run_id: 42,
+      session_id: 7,
+      agent_kind: "assistant",
+      account_id: 900,
+      space_id: 800,
+      status: "running",
+      attempt: 2,
+      policy_version: "pv-9",
+      tool_allowlist: ["familygraph.echo"],
+      messages: [],
+      context_blocks: [],
+      provider: null,
+      next_event_seq: 1,
+      cancel_requested: false,
+    };
+    const okClient = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ ...base, context_build_id: 11 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+    const okProjection = await okClient.getRunContext("r1", "run-tok");
+    expect(okProjection.context_build_id).toBe(11);
+    const nullClient = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ ...base, context_build_id: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+    expect((await nullClient.getRunContext("r1", "run-tok")).context_build_id).toBeNull();
+    const badClient = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ ...base, context_build_id: "bogus" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+    await expect(badClient.getRunContext("r1", "run-tok")).rejects.toMatchObject({
       code: "invalid_context_projection",
     });
   });

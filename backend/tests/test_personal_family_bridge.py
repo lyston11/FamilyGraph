@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from conftest import create_space_member, create_user_with_pin
 from fastapi import HTTPException
 
 from app.models.space import FamilySpace
 from app.services import personal_family_bridge, personal_family_view
 from app.services import source_facts as sf
 from app.utils.timeutil import utcnow
+from conftest import create_space_member, create_user_with_pin
 
 
 def _lineage_space(session, owner_id: int, name: str) -> FamilySpace:

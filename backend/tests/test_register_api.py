@@ -6,7 +6,6 @@
 
 import uuid
 
-from conftest import create_user_with_pin, seed_space_with_owner
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -18,6 +17,7 @@ from app.models.invite_code import InviteCode
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
 from app.services import rate_limit
+from conftest import create_user_with_pin, seed_space_with_owner
 
 
 def _ctx(user) -> ActorContext:

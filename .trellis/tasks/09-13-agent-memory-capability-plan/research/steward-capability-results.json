@@ -1,0 +1,4911 @@
+{
+  "source_commit_reported_by_main": "20d03084df341f6cc5fc8fcc18042757c07d822a",
+  "temp_dir": "/private/tmp/fg-steward-capability-eval-jrb1sqcp",
+  "versions": {
+    "python": "3.12.12",
+    "sqlite": "3.51.1",
+    "packages": {
+      "SQLAlchemy": "2.0.36",
+      "alembic": "1.14.1",
+      "fastapi": "0.115.6",
+      "httpx": "0.28.1"
+    },
+    "source_sha256": {
+      "backend/app/services/steward.py": "b3de8efc30fceff3ea59eb3b8faef395e703b6669bb8fbaaa8826a16d1bc2186",
+      "backend/app/services/steward_assist.py": "e3f5a8a40975e0e37adec93e4ccf016abd1496553c9a9745411f3a95f3444f1f",
+      "backend/app/services/steward_guard.py": "c6c68715a3c4969e7531945ee4177ca5287173ebc9a64e385b81a1c687e12c72",
+      "backend/app/services/steward_suggestions.py": "cedd9b73a1fbb43f1fd5a58c93806c82768608cbd98b13e542dbd3abfe3ccd83",
+      "backend/app/services/family_recommendations.py": "60e07ea8e82aafaa207126772afc032791bf8b2eb56d32d655c84dca544a142f",
+      "backend/app/services/source_facts.py": "228430184a68e39a61cf88289e9ce95eea40333bdd6eb482635d6bf2f6329c38",
+      "backend/app/services/personal_family_view.py": "2934cd7fe40710e98eaceb2070be5ee8b896405bcf01443d07b4afa766f3bb71",
+      "backend/app/services/domain_events.py": "cdf87d20976323bd1d5b34c825dad2f448a9567ee80d5f07a2228c3cf1b914ff",
+      "backend/app/models/steward.py": "6f4afe1f533a1ee25f8f5688deba7e693de1691ec247cd1860b2ede0f211c4bf",
+      "backend/app/models/steward_suggestion.py": "30437c3a4c7e93769aebbd2ae34000858c7609fc3ced9fdaa5b1acdacaeda098"
+    },
+    "harness_sha256": "fea29b0360175b746baf335c502bf102f6a403800981432d67d6dcf28c24e875"
+  },
+  "isolation": {
+    "database_is_within_private_temp": true,
+    "worker_started": false,
+    "network": "all socket connect/DNS attempts denied; candidate transport is fake",
+    "production_sources_modified": false,
+    "provider_profile_gate": "explicit test-only False, matching conftest",
+    "clock_start": "2026-09-13T00:00:00",
+    "migration": "real Alembic upgrade head from empty temporary database"
+  },
+  "alembic_heads": [
+    "0041_term_pack_expansion"
+  ],
+  "mr23": [
+    {
+      "fixture": {
+        "mode": "related",
+        "space_id": 1,
+        "candidate": {
+          "kind": "direct_sibling",
+          "subject_user_id": 1,
+          "object_user_id": 2
+        },
+        "expected_support_fact_ids_before": [
+          1,
+          2
+        ],
+        "expected_support_fact_ids_after": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "proposed_related_fact_ids": [
+          3,
+          4
+        ],
+        "proposed_unrelated_fact_ids": [
+          5
+        ],
+        "annotation_basis": "shared parent P supports siblings; Q is additional shared parent; X/Y disconnected",
+        "annotation_written_before_first_core": true
+      },
+      "stages": [
+        {
+          "phase": "initial:core",
+          "expected_support_fact_ids": [
+            1,
+            2
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 1,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 2,
+            "last_event_cursor": 2,
+            "summary": {
+              "floor_cursor": 0,
+              "trigger_cursor": 2,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 1,
+            "job_id": 1,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "b4aa63833e2d8c64ab1ddc0e95d12b9c0b08855a5ec40c7ef9a2a7d69234b7cf"
+          },
+          "attempts": [],
+          "candidates": [],
+          "suggestions": [],
+          "recipients": []
+        },
+        {
+          "phase": "initial:assist",
+          "expected_support_fact_ids": [
+            1,
+            2
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 1,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 2,
+            "last_event_cursor": 2,
+            "summary": null
+          },
+          "batch": {
+            "id": 1,
+            "job_id": 1,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "b4aa63833e2d8c64ab1ddc0e95d12b9c0b08855a5ec40c7ef9a2a7d69234b7cf"
+          },
+          "attempts": [
+            {
+              "id": 1,
+              "batch_id": 1,
+              "job_id": 1,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "b01701e1d3947a3adc359f8d52a7847caa7c064237c6d2279008dd5f700c07bd",
+              "provider_id": 1,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 1,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [],
+          "recipients": []
+        },
+        {
+          "phase": "first_projection:core",
+          "expected_support_fact_ids": [
+            1,
+            2
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 2,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 4,
+            "last_event_cursor": 4,
+            "summary": {
+              "floor_cursor": 2,
+              "trigger_cursor": 4,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 1
+              }
+            }
+          },
+          "batch": {
+            "id": 2,
+            "job_id": 2,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "b4aa63833e2d8c64ab1ddc0e95d12b9c0b08855a5ec40c7ef9a2a7d69234b7cf"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "proposed",
+              "revision": 1,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "first_projection:assist",
+          "expected_support_fact_ids": [
+            1,
+            2
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 2,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 4,
+            "last_event_cursor": 4,
+            "summary": null
+          },
+          "batch": {
+            "id": 2,
+            "job_id": 2,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "b4aa63833e2d8c64ab1ddc0e95d12b9c0b08855a5ec40c7ef9a2a7d69234b7cf"
+          },
+          "attempts": [
+            {
+              "id": 2,
+              "batch_id": 2,
+              "job_id": 2,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "b01701e1d3947a3adc359f8d52a7847caa7c064237c6d2279008dd5f700c07bd",
+              "provider_id": 1,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 1,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "proposed",
+              "revision": 1,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "dismiss",
+          "expected_support_fact_ids": [
+            1,
+            2
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 2,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 4,
+            "last_event_cursor": 4,
+            "summary": null
+          },
+          "batch": {
+            "id": 2,
+            "job_id": 2,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "b4aa63833e2d8c64ab1ddc0e95d12b9c0b08855a5ec40c7ef9a2a7d69234b7cf"
+          },
+          "attempts": [
+            {
+              "id": 2,
+              "batch_id": 2,
+              "job_id": 2,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "b01701e1d3947a3adc359f8d52a7847caa7c064237c6d2279008dd5f700c07bd",
+              "provider_id": 1,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 1,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:core",
+          "expected_support_fact_ids": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 3,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 7,
+            "last_event_cursor": 7,
+            "summary": {
+              "floor_cursor": 4,
+              "trigger_cursor": 7,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 3,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 3,
+            "job_id": 3,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "c915485b5ace8cf275a396b5c1471b3356d60afa08c002e37134f88f81e3e0c6"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:assist",
+          "expected_support_fact_ids": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 3,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 7,
+            "last_event_cursor": 7,
+            "summary": null
+          },
+          "batch": {
+            "id": 3,
+            "job_id": 3,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "c915485b5ace8cf275a396b5c1471b3356d60afa08c002e37134f88f81e3e0c6"
+          },
+          "attempts": [
+            {
+              "id": 3,
+              "batch_id": 3,
+              "job_id": 3,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "199b3458b3418e6ac2ee5dede5adff3fa3985be41087bd3e47526deaf909a7bf",
+              "provider_id": 1,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 1,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:applied_batch_replay",
+          "job_id": 3,
+          "batch_id": 3,
+          "status": "applied",
+          "additional_transport_calls": 0
+        },
+        {
+          "phase": "later_projection:core",
+          "expected_support_fact_ids": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 4,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 9,
+            "last_event_cursor": 9,
+            "summary": {
+              "floor_cursor": 7,
+              "trigger_cursor": 9,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 4,
+            "job_id": 4,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "c915485b5ace8cf275a396b5c1471b3356d60afa08c002e37134f88f81e3e0c6"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "later_projection:assist",
+          "expected_support_fact_ids": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 4,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 9,
+            "last_event_cursor": 9,
+            "summary": null
+          },
+          "batch": {
+            "id": 4,
+            "job_id": 4,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "c915485b5ace8cf275a396b5c1471b3356d60afa08c002e37134f88f81e3e0c6"
+          },
+          "attempts": [
+            {
+              "id": 4,
+              "batch_id": 4,
+              "job_id": 4,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "199b3458b3418e6ac2ee5dede5adff3fa3985be41087bd3e47526deaf909a7bf",
+              "provider_id": 1,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 1,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:core",
+          "expected_support_fact_ids": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 5,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 11,
+            "last_event_cursor": 11,
+            "summary": {
+              "floor_cursor": 9,
+              "trigger_cursor": 11,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 5,
+            "job_id": 5,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "c915485b5ace8cf275a396b5c1471b3356d60afa08c002e37134f88f81e3e0c6"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:assist",
+          "expected_support_fact_ids": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 5,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 11,
+            "last_event_cursor": 11,
+            "summary": null
+          },
+          "batch": {
+            "id": 5,
+            "job_id": 5,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "c915485b5ace8cf275a396b5c1471b3356d60afa08c002e37134f88f81e3e0c6"
+          },
+          "attempts": [
+            {
+              "id": 5,
+              "batch_id": 5,
+              "job_id": 5,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "199b3458b3418e6ac2ee5dede5adff3fa3985be41087bd3e47526deaf909a7bf",
+              "provider_id": 1,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 1,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 1,
+              "job_id": 1,
+              "digest": "459ab875b1803763cb6f1f68118fc302123dd32f1b685a602fea3dfb53701a0d",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 1,
+                "object_user_id": 2
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 1,
+              "evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 1,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 1
+                  },
+                  {
+                    "id": 2,
+                    "revision": 2,
+                    "subject_user_id": 3,
+                    "object_user_id": 2
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 1,
+              "source_job_id": 2,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 1,
+              "account_id": 1,
+              "dismissed_at": "2026-09-13T00:00:02",
+              "cooldown_until": "2026-09-20T00:00:02",
+              "cooldown_evidence_hash": "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+            },
+            {
+              "suggestion_id": 1,
+              "account_id": 2,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:applied_batch_replay",
+          "job_id": 5,
+          "batch_id": 5,
+          "status": "applied",
+          "additional_transport_calls": 0
+        }
+      ],
+      "fake_transport_calls": [
+        {
+          "phase": "initial",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "first_projection",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "after_mutation",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "later_projection",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "same_evidence_replay",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 1,
+              "revision": 2
+            },
+            {
+              "id": 2,
+              "revision": 2
+            },
+            {
+              "id": 3,
+              "revision": 2
+            },
+            {
+              "id": 4,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        }
+      ],
+      "assessment": {
+        "initial_candidate_id": 1,
+        "initial_suggestion_id": 1,
+        "final_candidate_count": 1,
+        "final_model_suggestion_count": 1,
+        "final_evidence_hashes": [
+          "f1cce08347d474593a8a0fc3ad73633c54a0aaa7f484781ed270a1e42cc880b6"
+        ],
+        "final_subject_states": [
+          "dismissed"
+        ],
+        "expected_support_changed": true,
+        "final_suggestion_contains_expected_new_support": false,
+        "transport_calls": 5,
+        "real_provider_calls": 0
+      }
+    },
+    {
+      "fixture": {
+        "mode": "unrelated",
+        "space_id": 2,
+        "candidate": {
+          "kind": "direct_sibling",
+          "subject_user_id": 7,
+          "object_user_id": 8
+        },
+        "expected_support_fact_ids_before": [
+          6,
+          7
+        ],
+        "expected_support_fact_ids_after": [
+          6,
+          7
+        ],
+        "proposed_related_fact_ids": [
+          8,
+          9
+        ],
+        "proposed_unrelated_fact_ids": [
+          10
+        ],
+        "annotation_basis": "shared parent P supports siblings; Q is additional shared parent; X/Y disconnected",
+        "annotation_written_before_first_core": true
+      },
+      "stages": [
+        {
+          "phase": "initial:core",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 6,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 14,
+            "last_event_cursor": 14,
+            "summary": {
+              "floor_cursor": 0,
+              "trigger_cursor": 14,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 6,
+            "job_id": 6,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "a17c4a191f4b4b5228dfbe0c249dd1d01862e7b4bf98722f98d3ae0c3b8a6db0"
+          },
+          "attempts": [],
+          "candidates": [],
+          "suggestions": [],
+          "recipients": []
+        },
+        {
+          "phase": "initial:assist",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 6,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 14,
+            "last_event_cursor": 14,
+            "summary": null
+          },
+          "batch": {
+            "id": 6,
+            "job_id": 6,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "a17c4a191f4b4b5228dfbe0c249dd1d01862e7b4bf98722f98d3ae0c3b8a6db0"
+          },
+          "attempts": [
+            {
+              "id": 6,
+              "batch_id": 6,
+              "job_id": 6,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "b466a4756714a321972278986fa9fdee5058719281509d12c1e3bee497045b7f",
+              "provider_id": 2,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 7,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [],
+          "recipients": []
+        },
+        {
+          "phase": "first_projection:core",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 7,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 16,
+            "last_event_cursor": 16,
+            "summary": {
+              "floor_cursor": 14,
+              "trigger_cursor": 16,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 1
+              }
+            }
+          },
+          "batch": {
+            "id": 7,
+            "job_id": 7,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "a17c4a191f4b4b5228dfbe0c249dd1d01862e7b4bf98722f98d3ae0c3b8a6db0"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "proposed",
+              "revision": 1,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "first_projection:assist",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 7,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 16,
+            "last_event_cursor": 16,
+            "summary": null
+          },
+          "batch": {
+            "id": 7,
+            "job_id": 7,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "a17c4a191f4b4b5228dfbe0c249dd1d01862e7b4bf98722f98d3ae0c3b8a6db0"
+          },
+          "attempts": [
+            {
+              "id": 7,
+              "batch_id": 7,
+              "job_id": 7,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "b466a4756714a321972278986fa9fdee5058719281509d12c1e3bee497045b7f",
+              "provider_id": 2,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 7,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "proposed",
+              "revision": 1,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "dismiss",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 7,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 16,
+            "last_event_cursor": 16,
+            "summary": null
+          },
+          "batch": {
+            "id": 7,
+            "job_id": 7,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "a17c4a191f4b4b5228dfbe0c249dd1d01862e7b4bf98722f98d3ae0c3b8a6db0"
+          },
+          "attempts": [
+            {
+              "id": 7,
+              "batch_id": 7,
+              "job_id": 7,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "b466a4756714a321972278986fa9fdee5058719281509d12c1e3bee497045b7f",
+              "provider_id": 2,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 7,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:core",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 8,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 18,
+            "last_event_cursor": 18,
+            "summary": {
+              "floor_cursor": 16,
+              "trigger_cursor": 18,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 8,
+            "job_id": 8,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "407f479b598c0a02c6126b63d0646ee19ef6f4236c7d6524a25dbe8dc19655f2"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:assist",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 8,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 18,
+            "last_event_cursor": 18,
+            "summary": null
+          },
+          "batch": {
+            "id": 8,
+            "job_id": 8,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "407f479b598c0a02c6126b63d0646ee19ef6f4236c7d6524a25dbe8dc19655f2"
+          },
+          "attempts": [
+            {
+              "id": 8,
+              "batch_id": 8,
+              "job_id": 8,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e5453ee0d9cfc90fca0779357e8bae2d367b075b6c081659c495657c46fd1856",
+              "provider_id": 2,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 7,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:applied_batch_replay",
+          "job_id": 8,
+          "batch_id": 8,
+          "status": "applied",
+          "additional_transport_calls": 0
+        },
+        {
+          "phase": "later_projection:core",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 9,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 20,
+            "last_event_cursor": 20,
+            "summary": {
+              "floor_cursor": 18,
+              "trigger_cursor": 20,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 9,
+            "job_id": 9,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "407f479b598c0a02c6126b63d0646ee19ef6f4236c7d6524a25dbe8dc19655f2"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "later_projection:assist",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 9,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 20,
+            "last_event_cursor": 20,
+            "summary": null
+          },
+          "batch": {
+            "id": 9,
+            "job_id": 9,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "407f479b598c0a02c6126b63d0646ee19ef6f4236c7d6524a25dbe8dc19655f2"
+          },
+          "attempts": [
+            {
+              "id": 9,
+              "batch_id": 9,
+              "job_id": 9,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e5453ee0d9cfc90fca0779357e8bae2d367b075b6c081659c495657c46fd1856",
+              "provider_id": 2,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 7,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:core",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 10,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 22,
+            "last_event_cursor": 22,
+            "summary": {
+              "floor_cursor": 20,
+              "trigger_cursor": 22,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 10,
+            "job_id": 10,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "407f479b598c0a02c6126b63d0646ee19ef6f4236c7d6524a25dbe8dc19655f2"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:assist",
+          "expected_support_fact_ids": [
+            6,
+            7
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 10,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 22,
+            "last_event_cursor": 22,
+            "summary": null
+          },
+          "batch": {
+            "id": 10,
+            "job_id": 10,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "407f479b598c0a02c6126b63d0646ee19ef6f4236c7d6524a25dbe8dc19655f2"
+          },
+          "attempts": [
+            {
+              "id": 10,
+              "batch_id": 10,
+              "job_id": 10,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e5453ee0d9cfc90fca0779357e8bae2d367b075b6c081659c495657c46fd1856",
+              "provider_id": 2,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 7,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 2,
+              "job_id": 6,
+              "digest": "4225dc913bd1040ee0516ea037f1e7d79a5b2494eb7a0ae43569665b95aed2ce",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 7,
+                "object_user_id": 8
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 2,
+              "evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 6,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 7
+                  },
+                  {
+                    "id": 7,
+                    "revision": 2,
+                    "subject_user_id": 9,
+                    "object_user_id": 8
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 2,
+              "source_job_id": 7,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 2,
+              "account_id": 7,
+              "dismissed_at": "2026-09-13T00:00:08",
+              "cooldown_until": "2026-09-20T00:00:08",
+              "cooldown_evidence_hash": "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+            },
+            {
+              "suggestion_id": 2,
+              "account_id": 8,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:applied_batch_replay",
+          "job_id": 10,
+          "batch_id": 10,
+          "status": "applied",
+          "additional_transport_calls": 0
+        }
+      ],
+      "fake_transport_calls": [
+        {
+          "phase": "initial",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "first_projection",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "after_mutation",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "later_projection",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "same_evidence_replay",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 6,
+              "revision": 2
+            },
+            {
+              "id": 7,
+              "revision": 2
+            },
+            {
+              "id": 10,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        }
+      ],
+      "assessment": {
+        "initial_candidate_id": 2,
+        "initial_suggestion_id": 2,
+        "final_candidate_count": 1,
+        "final_model_suggestion_count": 1,
+        "final_evidence_hashes": [
+          "f455422c310d38570e9d94265bef26e7740573fb2ec19b461acce5a3db15a6e6"
+        ],
+        "final_subject_states": [
+          "dismissed"
+        ],
+        "expected_support_changed": false,
+        "final_suggestion_contains_expected_new_support": true,
+        "transport_calls": 5,
+        "real_provider_calls": 0
+      }
+    },
+    {
+      "fixture": {
+        "mode": "no_new_evidence",
+        "space_id": 3,
+        "candidate": {
+          "kind": "direct_sibling",
+          "subject_user_id": 13,
+          "object_user_id": 14
+        },
+        "expected_support_fact_ids_before": [
+          11,
+          12
+        ],
+        "expected_support_fact_ids_after": [
+          11,
+          12
+        ],
+        "proposed_related_fact_ids": [
+          13,
+          14
+        ],
+        "proposed_unrelated_fact_ids": [
+          15
+        ],
+        "annotation_basis": "shared parent P supports siblings; Q is additional shared parent; X/Y disconnected",
+        "annotation_written_before_first_core": true
+      },
+      "stages": [
+        {
+          "phase": "initial:core",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 11,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 25,
+            "last_event_cursor": 25,
+            "summary": {
+              "floor_cursor": 0,
+              "trigger_cursor": 25,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 11,
+            "job_id": 11,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [],
+          "candidates": [],
+          "suggestions": [],
+          "recipients": []
+        },
+        {
+          "phase": "initial:assist",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 11,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 25,
+            "last_event_cursor": 25,
+            "summary": null
+          },
+          "batch": {
+            "id": 11,
+            "job_id": 11,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [
+            {
+              "id": 11,
+              "batch_id": 11,
+              "job_id": 11,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e7bb5a0a7ef3bebc7f544909478b17720eeefc0c1497bb58b3748ff6c7b06f81",
+              "provider_id": 3,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 13,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [],
+          "recipients": []
+        },
+        {
+          "phase": "first_projection:core",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 12,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 27,
+            "last_event_cursor": 27,
+            "summary": {
+              "floor_cursor": 25,
+              "trigger_cursor": 27,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 1
+              }
+            }
+          },
+          "batch": {
+            "id": 12,
+            "job_id": 12,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "proposed",
+              "revision": 1,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "first_projection:assist",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 12,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 27,
+            "last_event_cursor": 27,
+            "summary": null
+          },
+          "batch": {
+            "id": 12,
+            "job_id": 12,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [
+            {
+              "id": 12,
+              "batch_id": 12,
+              "job_id": 12,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e7bb5a0a7ef3bebc7f544909478b17720eeefc0c1497bb58b3748ff6c7b06f81",
+              "provider_id": 3,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 13,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "proposed",
+              "revision": 1,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "dismiss",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 12,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 27,
+            "last_event_cursor": 27,
+            "summary": null
+          },
+          "batch": {
+            "id": 12,
+            "job_id": 12,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [
+            {
+              "id": 12,
+              "batch_id": 12,
+              "job_id": 12,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e7bb5a0a7ef3bebc7f544909478b17720eeefc0c1497bb58b3748ff6c7b06f81",
+              "provider_id": 3,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 13,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:core",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 13,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 29,
+            "last_event_cursor": 29,
+            "summary": {
+              "floor_cursor": 27,
+              "trigger_cursor": 29,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 13,
+            "job_id": 13,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:assist",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 13,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 29,
+            "last_event_cursor": 29,
+            "summary": null
+          },
+          "batch": {
+            "id": 13,
+            "job_id": 13,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [
+            {
+              "id": 13,
+              "batch_id": 13,
+              "job_id": 13,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e7bb5a0a7ef3bebc7f544909478b17720eeefc0c1497bb58b3748ff6c7b06f81",
+              "provider_id": 3,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 13,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "after_mutation:applied_batch_replay",
+          "job_id": 13,
+          "batch_id": 13,
+          "status": "applied",
+          "additional_transport_calls": 0
+        },
+        {
+          "phase": "later_projection:core",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 14,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 31,
+            "last_event_cursor": 31,
+            "summary": {
+              "floor_cursor": 29,
+              "trigger_cursor": 31,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 14,
+            "job_id": 14,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "later_projection:assist",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 14,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 31,
+            "last_event_cursor": 31,
+            "summary": null
+          },
+          "batch": {
+            "id": 14,
+            "job_id": 14,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [
+            {
+              "id": 14,
+              "batch_id": 14,
+              "job_id": 14,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e7bb5a0a7ef3bebc7f544909478b17720eeefc0c1497bb58b3748ff6c7b06f81",
+              "provider_id": 3,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 13,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:core",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 15,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 33,
+            "last_event_cursor": 33,
+            "summary": {
+              "floor_cursor": 31,
+              "trigger_cursor": 33,
+              "finding_signatures": [],
+              "stats": {
+                "events_consumed": 2,
+                "derived_recomputed": 30,
+                "cards_created": 0,
+                "cards_superseded": 0,
+                "findings_emitted": 0,
+                "cards_expired": 0,
+                "personal_family_views_rebuilt": 0,
+                "suggestions_projected": 0
+              }
+            }
+          },
+          "batch": {
+            "id": 15,
+            "job_id": 15,
+            "status": "pending",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:assist",
+          "expected_support_fact_ids": [
+            11,
+            12
+          ],
+          "current_confirmed_facts": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "flags": {
+            "steward": true,
+            "platform_candidate": true,
+            "space_candidate": true,
+            "effective_candidate": true,
+            "ranking": false,
+            "explanation": false
+          },
+          "job": {
+            "id": 15,
+            "status": "succeeded",
+            "attempt": 1,
+            "trigger_cursor": 33,
+            "last_event_cursor": 33,
+            "summary": null
+          },
+          "batch": {
+            "id": 15,
+            "job_id": 15,
+            "status": "applied",
+            "error_code": null,
+            "evidence_hash": "d6f8fa5b01d1995edb14b969ae6335f05cc1d639635c87ace81f7624e84c8647"
+          },
+          "attempts": [
+            {
+              "id": 15,
+              "batch_id": 15,
+              "job_id": 15,
+              "kind": "candidate",
+              "status": "succeeded",
+              "error_code": null,
+              "input_hash": "e7bb5a0a7ef3bebc7f544909478b17720eeefc0c1497bb58b3748ff6c7b06f81",
+              "provider_id": 3,
+              "model": "gpt-5.6-sol",
+              "validated_output": {
+                "items": [
+                  {
+                    "kind": "direct_sibling",
+                    "subject_user_id": 13,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "billed_tokens_synthetic_usage": 15
+            }
+          ],
+          "candidates": [
+            {
+              "id": 3,
+              "job_id": 11,
+              "digest": "c712535417818557671e7c120f0addd1fc2a25d126ee038346696d7dc37ccca5",
+              "status": "proposed",
+              "payload": {
+                "kind": "direct_sibling",
+                "subject_user_id": 13,
+                "object_user_id": 14
+              }
+            }
+          ],
+          "suggestions": [
+            {
+              "id": 3,
+              "evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a",
+              "evidence": {
+                "facts": [
+                  {
+                    "id": 11,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 13
+                  },
+                  {
+                    "id": 12,
+                    "revision": 2,
+                    "subject_user_id": 15,
+                    "object_user_id": 14
+                  }
+                ]
+              },
+              "status": "proposed",
+              "subject_list_state": "dismissed",
+              "revision": 2,
+              "source_candidate_id": 3,
+              "source_job_id": 12,
+              "superseded_by_id": null
+            }
+          ],
+          "recipients": [
+            {
+              "suggestion_id": 3,
+              "account_id": 13,
+              "dismissed_at": "2026-09-13T00:00:14",
+              "cooldown_until": "2026-09-20T00:00:14",
+              "cooldown_evidence_hash": "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+            },
+            {
+              "suggestion_id": 3,
+              "account_id": 14,
+              "dismissed_at": null,
+              "cooldown_until": null,
+              "cooldown_evidence_hash": null
+            }
+          ]
+        },
+        {
+          "phase": "same_evidence_replay:applied_batch_replay",
+          "job_id": 15,
+          "batch_id": 15,
+          "status": "applied",
+          "additional_transport_calls": 0
+        }
+      ],
+      "fake_transport_calls": [
+        {
+          "phase": "initial",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "first_projection",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "after_mutation",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "later_projection",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        },
+        {
+          "phase": "same_evidence_replay",
+          "model": "gpt-5.6-sol",
+          "node_count": 6,
+          "fact_ids_revisions": [
+            {
+              "id": 11,
+              "revision": 2
+            },
+            {
+              "id": 12,
+              "revision": 2
+            }
+          ],
+          "timeout_seconds": 30.0
+        }
+      ],
+      "assessment": {
+        "initial_candidate_id": 3,
+        "initial_suggestion_id": 3,
+        "final_candidate_count": 1,
+        "final_model_suggestion_count": 1,
+        "final_evidence_hashes": [
+          "db92df2f1c2fc90cce3151756fdc33de7956de9b596a02b94a9b45c8e819526a"
+        ],
+        "final_subject_states": [
+          "dismissed"
+        ],
+        "expected_support_changed": false,
+        "final_suggestion_contains_expected_new_support": true,
+        "transport_calls": 5,
+        "real_provider_calls": 0
+      }
+    }
+  ],
+  "mr23_disabled_control": {
+    "job_id": 16,
+    "core_status": "succeeded",
+    "effective_candidate": false,
+    "batch_ids": [],
+    "model_call_ids": [],
+    "summary": {
+      "floor_cursor": 11,
+      "trigger_cursor": 35,
+      "finding_signatures": [],
+      "stats": {
+        "events_consumed": 2,
+        "derived_recomputed": 30,
+        "cards_created": 0,
+        "cards_superseded": 0,
+        "findings_emitted": 0,
+        "cards_expired": 0,
+        "personal_family_views_rebuilt": 0,
+        "suggestions_projected": 0
+      }
+    }
+  },
+  "mr26": [
+    {
+      "enabled": false,
+      "scope": "account",
+      "space_id": 4,
+      "actor_account_id": 19,
+      "observer_account_id": 21,
+      "events": [
+        38,
+        39,
+        40,
+        41
+      ],
+      "event_producer": "synthetic allow-listed events via real domain_events.emit",
+      "family_key_producer": "real personal_family_view.rebuild_view + dismiss_recommendation",
+      "before": {
+        "rows": [
+          {
+            "id": 1,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 2,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 4,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "kinship_recommendation_dismissed:20",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 3,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 5,
+            "space_id": 4,
+            "account_id": 21,
+            "key": "kinship_recommendation_dismissed:19",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": false
+      },
+      "after_first": {
+        "rows": [
+          {
+            "id": 1,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 2,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 4,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "kinship_recommendation_dismissed:20",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 3,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 5,
+            "space_id": 4,
+            "account_id": 21,
+            "key": "kinship_recommendation_dismissed:19",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": false
+      },
+      "after_second": {
+        "rows": [
+          {
+            "id": 1,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 2,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 4,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "kinship_recommendation_dismissed:20",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 3,
+            "space_id": 4,
+            "account_id": 19,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 5,
+            "space_id": 4,
+            "account_id": 21,
+            "key": "kinship_recommendation_dismissed:19",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": false
+      },
+      "replayed_event_counts": [
+        0,
+        0
+      ],
+      "nonowned_rows_preserved_first": true,
+      "owned_replay_semantics_stable": true,
+      "all_rows_preserved_when_disabled": true
+    },
+    {
+      "enabled": false,
+      "scope": "space",
+      "space_id": 5,
+      "actor_account_id": 22,
+      "observer_account_id": 24,
+      "events": [
+        43,
+        44,
+        45,
+        46
+      ],
+      "event_producer": "synthetic allow-listed events via real domain_events.emit",
+      "family_key_producer": "real personal_family_view.rebuild_view + dismiss_recommendation",
+      "before": {
+        "rows": [
+          {
+            "id": 6,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 7,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 9,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "kinship_recommendation_dismissed:23",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 8,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 10,
+            "space_id": 5,
+            "account_id": 24,
+            "key": "kinship_recommendation_dismissed:22",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": false
+      },
+      "after_first": {
+        "rows": [
+          {
+            "id": 6,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 7,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 9,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "kinship_recommendation_dismissed:23",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 8,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 10,
+            "space_id": 5,
+            "account_id": 24,
+            "key": "kinship_recommendation_dismissed:22",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": false
+      },
+      "after_second": {
+        "rows": [
+          {
+            "id": 6,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 7,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 9,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "kinship_recommendation_dismissed:23",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 8,
+            "space_id": 5,
+            "account_id": 22,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 10,
+            "space_id": 5,
+            "account_id": 24,
+            "key": "kinship_recommendation_dismissed:22",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": false
+      },
+      "replayed_event_counts": [
+        0,
+        0
+      ],
+      "nonowned_rows_preserved_first": true,
+      "owned_replay_semantics_stable": true,
+      "all_rows_preserved_when_disabled": true
+    },
+    {
+      "enabled": true,
+      "scope": "account",
+      "space_id": 6,
+      "actor_account_id": 25,
+      "observer_account_id": 27,
+      "events": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "event_producer": "synthetic allow-listed events via real domain_events.emit",
+      "family_key_producer": "real personal_family_view.rebuild_view + dismiss_recommendation",
+      "before": {
+        "rows": [
+          {
+            "id": 11,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 12,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 14,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "kinship_recommendation_dismissed:26",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 13,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 15,
+            "space_id": 6,
+            "account_id": 27,
+            "key": "kinship_recommendation_dismissed:25",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": true
+      },
+      "after_first": {
+        "rows": [
+          {
+            "id": 16,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 17,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 18,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 15,
+            "space_id": 6,
+            "account_id": 27,
+            "key": "kinship_recommendation_dismissed:25",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": false,
+        "card_cooldown_active": true
+      },
+      "after_second": {
+        "rows": [
+          {
+            "id": 16,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 17,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 18,
+            "space_id": 6,
+            "account_id": 25,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 15,
+            "space_id": 6,
+            "account_id": 27,
+            "key": "kinship_recommendation_dismissed:25",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": false,
+        "card_cooldown_active": true
+      },
+      "replayed_event_counts": [
+        4,
+        4
+      ],
+      "nonowned_rows_preserved_first": false,
+      "owned_replay_semantics_stable": true,
+      "all_rows_preserved_when_disabled": null
+    },
+    {
+      "enabled": true,
+      "scope": "space",
+      "space_id": 7,
+      "actor_account_id": 28,
+      "observer_account_id": 30,
+      "events": [
+        53,
+        54,
+        55,
+        56
+      ],
+      "event_producer": "synthetic allow-listed events via real domain_events.emit",
+      "family_key_producer": "real personal_family_view.rebuild_view + dismiss_recommendation",
+      "before": {
+        "rows": [
+          {
+            "id": 19,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 20,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 22,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "kinship_recommendation_dismissed:29",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 21,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 23,
+            "space_id": 7,
+            "account_id": 30,
+            "key": "kinship_recommendation_dismissed:28",
+            "value": {
+              "until": "2026-09-20T00:00:19",
+              "category": "confirmed_kinship"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": true,
+        "card_cooldown_active": true
+      },
+      "after_first": {
+        "rows": [
+          {
+            "id": 19,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 20,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 21,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": false,
+        "card_cooldown_active": true
+      },
+      "after_second": {
+        "rows": [
+          {
+            "id": 19,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "card_cooldown:household_link",
+            "value": {
+              "until": "2026-09-20T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 20,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "correction_preference:mother",
+            "value": {
+              "entry_id": 101,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          },
+          {
+            "id": 21,
+            "space_id": 7,
+            "account_id": 28,
+            "key": "term_usage:mother",
+            "value": {
+              "count": 2,
+              "updated_at": "2026-09-13T00:00:19"
+            },
+            "updated_at": "2026-09-13T00:00:19"
+          }
+        ],
+        "family_cooldown_active": false,
+        "card_cooldown_active": true
+      },
+      "replayed_event_counts": [
+        4,
+        4
+      ],
+      "nonowned_rows_preserved_first": false,
+      "owned_replay_semantics_stable": true,
+      "all_rows_preserved_when_disabled": null
+    }
+  ],
+  "network_attempts": 0,
+  "real_provider_calls": 0,
+  "elapsed_seconds": 2.676,
+  "completed": true
+}

@@ -8,7 +8,6 @@ operator break-glass 决议、删除请求冻结事件 → 执行 → tombstone 
 from __future__ import annotations
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi import HTTPException
 
 from app.commands import data_rights as dr_commands
@@ -20,6 +19,7 @@ from app.errors import extract_api_error
 from app.models.node_position import NodePosition
 from app.models.v2_foundation import ClaimDispute, DataRightRequest, DomainEvent
 from app.utils.timeutil import utcnow
+from conftest import auth_header, create_user_with_pin, login
 
 
 def _ctx(user) -> ActorContext:

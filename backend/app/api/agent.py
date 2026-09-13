@@ -23,7 +23,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Any
 
 import anyio
 from fastapi import APIRouter, Depends, Header, Query
@@ -72,6 +72,8 @@ from app.schemas.agent import (
     AgentSessionCreateRequest,
     AgentSessionOut,
     AgentSessionRenameRequest,
+    CitationOut,
+    RunEventCitationsOut,
 )
 from app.services import agent_events, agent_provider, agent_queue, audit, policy_guard
 from app.services.agent_events import TERMINAL_STREAM_EVENT_TYPES
@@ -118,12 +120,80 @@ def _own_run_or_404(db: Session, account_id: int, run_id: int) -> tuple[AgentRun
     return run, agent_session
 
 
-def _message_out(message: AgentMessage) -> AgentMessageOut:
+def _message_citations(
+    db: Session, message: AgentMessage, account: Account
+) -> tuple[list[dict[str, Any]], int]:
+    """Project stored citations through the *current* reader's authorization.
+
+    The stored content is the server-authenticated record; this read-side
+    projection never widens it: revoked/invalidated sources leave the array
+    and are only counted, and their identifiers are not echoed back.
+    """
+    from app.models.rag import RAGDocument
+    from app.services import memory_sources
+
+    stored = message.content_json.get("citations")
+    if message.role != "assistant" or not isinstance(stored, list):
+        return [], 0
+    actor = account.user
+    session_row = db.get(AgentSession, message.session_id)
+    if session_row is None:
+        return [], len(stored)
+    readable: list[dict[str, Any]] = []
+    unavailable = 0
+    for entry in stored:
+        if not isinstance(entry, dict):
+            continue
+        document = db.scalar(
+            select(RAGDocument).where(
+                RAGDocument.source_type == str(entry.get("source_type", "")),
+                RAGDocument.source_id == str(entry.get("source_id", "")),
+                RAGDocument.status == "active",
+            )
+        )
+        ok = (
+            document is not None
+            and document.revision == entry.get("revision")
+            and memory_sources.document_readable(
+                db,
+                document,
+                actor=actor,
+                account=account,
+                space_id=session_row.space_id,
+                agent_kind=session_row.agent_kind,
+            )
+        )
+        if ok and document is not None:
+            readable.append(
+                {
+                    "source_type": str(entry["source_type"]),
+                    "source_id": str(entry["source_id"]),
+                    "scope": str(entry.get("scope", document.scope)),
+                    "sensitivity": str(entry.get("sensitivity", document.sensitivity)),
+                    "revision": int(entry["revision"]),
+                    "citation_handle": str(entry["citation_handle"]),
+                }
+            )
+        else:
+            unavailable += 1
+    return readable, unavailable
+
+
+def _message_out(db: Session, message: AgentMessage, account: Account) -> AgentMessageOut:
+    content_json = message.content_json
+    raw_citations = content_json.get("citations")
+    projected, unavailable = _message_citations(db, message, account)
+    if isinstance(raw_citations, list):
+        # Raw stored citations (incl. identifiers of unreadable sources) are
+        # never echoed; the projected view replaces them.
+        content_json = {k: v for k, v in content_json.items() if k != "citations"}
     return AgentMessageOut(
         id=message.id,
         role=message.role,
-        content_json=message.content_json,
+        content_json=content_json,
         created_at=message.created_at,
+        citations=[CitationOut(**item) for item in projected],
+        unavailable_citation_count=unavailable,
     )
 
 
@@ -339,7 +409,7 @@ def create_agent_message(
                 {"session_id": agent_session.id},
             )
         return AgentMessageCreatedOut(
-            message=_message_out(prior),
+            message=_message_out(db, prior, account),
             run=_run_ref(_latest_run_for_message(db, prior.id)),
             replayed=True,
         )
@@ -394,7 +464,7 @@ def create_agent_message(
     if replayed:
         # 并发窗口内先到者已提交：与幂等快路径同构返回
         return AgentMessageCreatedOut(
-            message=_message_out(message), run=_run_ref(run), replayed=True
+            message=_message_out(db, message, account), run=_run_ref(run), replayed=True
         )
     # 会话展示态：updated_at 随消息前进；标题只在首条用户消息时派生一次（此后仅重命名可改）。
     agent_session.updated_at = message.created_at
@@ -408,7 +478,9 @@ def create_agent_message(
         detail={"message_id": message.id, "run_id": run.id if run else None},
     )
     db.commit()
-    return AgentMessageCreatedOut(message=_message_out(message), run=_run_ref(run), replayed=False)
+    return AgentMessageCreatedOut(
+        message=_message_out(db, message, account), run=_run_ref(run), replayed=False
+    )
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[AgentMessageOut])
@@ -425,7 +497,7 @@ def list_agent_messages(
         .where(AgentMessage.session_id == agent_session.id)
         .order_by(AgentMessage.id.asc())
     ).all()
-    return [_message_out(m) for m in rows]
+    return [_message_out(db, m, account) for m in rows]
 
 
 # ---- Run ----
@@ -454,6 +526,50 @@ def cancel_agent_run(
     run, _agent_session = _own_run_or_404(db, account.id, run_id)
     updated = agent_queue.request_cancel(db, run, actor_id=user.id)
     return _run_out(updated)
+
+
+# ---- 引用固定后备读取 ----
+
+
+@router.get("/runs/{run_id}/events/{seq}/citations", response_model=RunEventCitationsOut)
+def get_run_event_citations(
+    run_id: int,
+    seq: int,
+    db: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> RunEventCitationsOut:
+    """按 (run_id, seq) 授权补取完整引用（16 KiB 事件装不下时的固定读取路径）。
+
+    通过服务端生成的消息幂等键定位对应 assistant 消息，重验当前来源权限后
+    返回与历史读取相同的投影；不返回摘录，不枚举来源，旧消息返回空集合。
+    """
+    _user, account = identity
+    run, _agent_session = _own_run_or_404(db, account.id, run_id)
+    if seq < 0:
+        raise_api_error(404, AGENT_RUN_NOT_FOUND, "事件不存在")
+    event = db.scalar(
+        select(AgentRunEvent).where(
+            AgentRunEvent.run_id == run.id,
+            AgentRunEvent.seq == seq,
+            AgentRunEvent.type == "message.assistant_added",
+        )
+    )
+    if event is None:
+        raise_api_error(404, AGENT_RUN_NOT_FOUND, "事件不存在")
+    message = db.scalar(
+        select(AgentMessage).where(AgentMessage.idempotency_key == f"run:{run.id}:event:{seq}")
+    )
+    if message is None:
+        return RunEventCitationsOut(
+            run_id=run.id, seq=seq, citations=[], unavailable_citation_count=0
+        )
+    projected, unavailable = _message_citations(db, message, account)
+    return RunEventCitationsOut(
+        run_id=run.id,
+        seq=seq,
+        citations=[CitationOut(**item) for item in projected],
+        unavailable_citation_count=unavailable,
+    )
 
 
 # ---- SSE ----

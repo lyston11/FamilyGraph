@@ -7,10 +7,9 @@ challenge、refresh token 永不入日志；姓名/生卒等 PII 只允许进 au
 
 import logging
 
-from conftest import admin_header, admin_login, auth_header, create_user_with_pin, login
-
 from app.logctx import JsonFormatter
 from app.services import admin_bootstrap
+from conftest import admin_header, admin_login, auth_header, create_user_with_pin, login
 
 SECRET_PIN = "741258"
 

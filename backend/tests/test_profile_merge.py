@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from conftest import create_user_with_pin
 from fastapi import HTTPException
 
 from app.commands import members as member_commands
@@ -10,6 +9,7 @@ from app.models.relation import Relation
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.utils.timeutil import utcnow
+from conftest import create_user_with_pin
 
 
 def _space(db, owner, *users):
