@@ -30,13 +30,23 @@
 
 ## 2. 长幼消歧（R2）
 
-### 2.1 数据：图谱携带出生年
+### 2.1 数据：展示口径（PURPOSE_GRAPH）收集出生年
 
-`relationship_graph.load_graph` 增加 `node_birth_years: dict[int, int | None]`
-（从 `users.birth` JSON 容错提取年份数字；缺失/非法 → None）。可见性：消歧只在
-服务端解析时使用年份差，**不下发任何日期到称谓文本**；birth 字段对 viewer 脱敏
-的节点（visibility 管线 FIELD_MASKED）一律视为未知 → 走泛化词（保守方向，
-不因消歧泄露年龄信息）。
+**实现修正（2026-09-13，实现期发现）**：原计划把 `node_birth_years` 挂在
+`relationship_graph.load_graph` 上，但图装载的节点可见性用 `PURPOSE_AGENT`
+（上限 lineage_summary，birth 字段对旁系成员一律 masked），照此实现会让截图
+黄金用例（妹妹/妹夫）永远拿不到出生年。称谓消歧是**展示层**关注点，改跟
+PFV 展示同一口径：
+
+- `personal_family_view.rebuild_view`：`_node_display` 已逐节点算
+  PURPOSE_GRAPH 决定，改为同时返回决定对象，循环内收集
+  `births[uid] = birth_from_user(target) if birth FIELD_CLEAR else None`；
+- `relationship_graph.load_birth_years(session, viewer, space_id, user_ids)`：
+  组合层（`compose_resolution_view` 主/替代路径）用同一 PURPOSE_GRAPH 口径
+  的独立助手；`birth_from_user` 解析 `users.birth` JSON（仅 solar/lunar，
+  取 ISO 年份）；
+- 出生年只用于服务端长幼比较，**不下发任何日期到 payload/日志/称谓文本**；
+  脱敏节点（未成年人 overlay、lineage 层）视为未知 → 泛化词。
 
 ### 2.2 消歧规则（services/terms.py，表驱动）
 
@@ -56,13 +66,15 @@ Uf-Dm/Uf-Df` 等）+ 其单个配偶后缀（`-Sm/-Sf`）：
 
 词典未覆盖的超长码（>4 跳旁系等）新增第 5 级解析：**最长命名前缀 + 残链小词**——
 
-- 例：`Um-Df-Sm-Um` → 命名前缀 `Um-Df-Sm`=妹夫，残链 `Um`=父亲 → 「妹夫的父亲」；
-- 残链小词表：U→父亲/长辈、D→子女、B→兄弟、S→丈夫、P→伴侣（带性别位取
-  父亲/母亲/儿子/女儿等）；逐跳连接「的」；
-- 命名前缀命中层级不限（locale/system/消歧结果均可）；仍无法命名 → 维持现有
-  结构描述（SOURCE_LEVEL_STRUCTURAL）不变；
-- 纯函数、表驱动、可单测；输出永远 ≤64 字（`_TERM_MAX_LENGTH`，超长截断策略：
-  保留最长命名前缀词 + 尾跳）。
+- 例：`Um-Um-Sf` → 前缀 `Um-Um`=爷爷，残链 `Sf`=妻子 → 「爷爷的妻子」；
+  `Um-Df-Sm-Um` → 前缀 `Um-Df-Sm`=姐妹的丈夫（包内泛化词），残链 `Um`=父亲 →
+  「姐妹的丈夫的父亲」（泛化不嵌套长幼消歧，实现期定案）；
+- 残链小词表：U→父亲/母亲/家长、D→子女系、B→兄弟/姐妹、S→丈夫/妻子、
+  P→伴侣、X→跨空间亲人（含 s/a/g 亚型词，`services/terms.py::_RESIDUAL_WORDS`）；
+- 命名前缀沿用四级解析优先级（用户 personal/space 词条命中前缀同样尊重）；
+  仍无法命名（无任何可命名前缀或残链含不可命名 hop）→ 维持现有结构描述
+  （SOURCE_LEVEL_STRUCTURAL）不变；泛化产物标记 `SOURCE_LEVEL_DERIVED`；
+- 纯函数、表驱动、可单测；组合超过 64 字（`_TERM_MAX_LENGTH`）→ 回退结构描述。
 
 ## 4. 自愈传播（R3 的实现形态）
 

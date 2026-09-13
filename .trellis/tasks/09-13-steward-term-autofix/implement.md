@@ -64,3 +64,23 @@
 
 - 步骤 1 完成后：词典清单人工评审（称谓正确性是本任务核心资产）。
 - 步骤 3-4 完成后：红线核对（§6 设计对照表）+ 全量回归再收尾。
+
+## 执行记录（2026-09-13）
+
+- 步骤 1-6 全部完成；词典清单经 `gen_term_pack.py` 枚举与种子差集核对（111 条 zh-CN /
+  25 条 system），隔离库（`DATA_DIR=/tmp/fg-mig-data`）`alembic upgrade head` +
+  downgrade/upgrade 往返通过。
+- 门禁：`ruff check` / `ruff format --check` / `mypy app` 全绿；受影响套件
+  （term_autofix 新增 12 用例、terms、relationship_resolver、personal_family_view、
+  intake_extractor、agent_query_tools）98 用例全绿；全量 pytest 1009 passed /
+  3 skipped / 1 failed——唯一失败 `test_system_admin_boundary` 归属并行会话提交
+  ba445a2（新增 /admin-api/v1/agent/latency 路由未更新边界测试白名单），main 上即
+  失败，与本项目无关。
+- **并行会话事件**：共享工作树期间 main 被并行提交推进（assistant-session 等），
+  迁移 0040 曾在工作树中丢失（git 历史可溯，已从 main 恢复）；经用户指示迁移至独立
+  worktree `/Users/lyston/PycharmProjects/familygraph-term-autofix`（分支
+  feat/steward-term-autofix，提交 3b39a6b + merge main），主工作区交还 main。
+- 前端门禁跳过：本任务零前端改动（payload 与称谓文本均走既有通道）。
+- smoke 未跑：需要运行中的 dev 环境；退出码 2 = 环境阻塞，按约定不算通过。
+- spec 更新评估：.trellis/spec 已声明弃用（历史资料），relationship-intelligence
+  等不再作为门禁；解析第 5 级与消歧语义已写入本任务 design.md 备查。

@@ -470,3 +470,28 @@ def test_pfv_golden_terms_from_screenshot(db_session) -> None:
 def test_pfv_computation_version_bumped(db_session) -> None:
     """词典/解析升级触发全量重算：computation_version 升至 pfv-v3。"""
     assert personal_family_view.COMPUTATION_VERSION == "pfv-v3"
+
+
+def test_compose_resolution_view_sibling_terms(db_session) -> None:
+    """kinship resolve 组合层与 PFV 同语义：妹妹/姐夫实时解析。"""
+    _account, space = create_agent_fixture(db_session, name="compose-golden")
+    viewer = create_user_with_pin(db_session, "cg-viewer", "123456", gender="m", birth=_birth(1953))
+    father = create_user_with_pin(db_session, "cg-father", "123456", gender="m", birth=_birth(1930))
+    sister = create_user_with_pin(db_session, "cg-sister", "123456", gender="f", birth=_birth(1962))
+    create_space_member(db_session, space.id, viewer.id)
+    for user in (father, sister):
+        create_space_member(db_session, space.id, user.id)
+    _confirm(db_session, "biological_parent", father.id, viewer.id, space.id)
+    _confirm(db_session, "biological_parent", father.id, sister.id, space.id)
+
+    view = terms.compose_resolution_view(
+        db_session,
+        viewer_user_id=viewer.id,
+        target_user_id=sister.id,
+        space_id=space.id,
+        account_id=viewer.account.id,
+    )
+    assert view["found"] is True
+    assert view["concept_code"] == "Um-Df"
+    assert view["term"] == "妹妹"
+    assert view["term_source_level"] == "locale"
