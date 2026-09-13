@@ -3,10 +3,11 @@ import { defineStore } from 'pinia'
 
 import {
   dismissSuggestion,
+  fetchSuggestionDetail,
   fetchSuggestions,
   submitSuggestion,
 } from '@/api/stewardSuggestions'
-import type { SuggestionsPage } from '@/types/api'
+import type { SuggestionItem, SuggestionsPage } from '@/types/api'
 
 /**
  * Steward 建议审核状态（09-11 candidate-review）：按账号 + 明确 space_id 保存
@@ -22,6 +23,8 @@ import type { SuggestionsPage } from '@/types/api'
  */
 export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () => {
   const bySpace = ref<Map<number, SuggestionsPage>>(new Map())
+  /** 按 ID 详情缓存：键 `${spaceId}:${suggestionId}`；切空间/清理时随列表一并清除 */
+  const detailBySpaceAndId = ref<Map<string, SuggestionItem>>(new Map())
   const loadingSpaceIds = ref<Set<number>>(new Set())
   const errorBySpace = ref<Map<number, unknown>>(new Map())
   /** 请求代际：clear/clearSpace 递增，late response 校验后丢弃 */
@@ -101,11 +104,28 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
     await load(spaceId).catch(() => undefined)
   }
 
+  /** 按 ID 读取详情（超过首页缓存的旧建议也能打开）；epoch 隔离旧响应 */
+  async function loadDetail(spaceId: number, suggestionId: number): Promise<SuggestionItem> {
+    const cached = detailBySpaceAndId.value.get(`${spaceId}:${suggestionId}`)
+    if (cached) return cached
+    const item = await fetchSuggestionDetail(spaceId, suggestionId)
+    detailBySpaceAndId.value = new Map(detailBySpaceAndId.value).set(
+      `${spaceId}:${suggestionId}`,
+      item,
+    )
+    return item
+  }
+
   function clearSpace(spaceId: number): void {
     epoch += 1
     const nextSpaces = new Map(bySpace.value)
     nextSpaces.delete(spaceId)
     bySpace.value = nextSpaces
+    const nextDetails = new Map(detailBySpaceAndId.value)
+    for (const key of Array.from(nextDetails.keys())) {
+      if (key.startsWith(`${spaceId}:`)) nextDetails.delete(key)
+    }
+    detailBySpaceAndId.value = nextDetails
     setLoading(spaceId, false)
     setError(spaceId, null)
   }
@@ -113,6 +133,7 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
   function clear(): void {
     epoch += 1
     bySpace.value = new Map()
+    detailBySpaceAndId.value = new Map()
     loadingSpaceIds.value = new Set()
     errorBySpace.value = new Map()
   }
@@ -126,6 +147,7 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
     forSpace,
     activeForSpace,
     load,
+    loadDetail,
     dismiss,
     submit,
     clearSpace,

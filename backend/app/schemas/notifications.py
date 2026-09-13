@@ -49,6 +49,8 @@ class NotificationSuggestionRefOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     suggestion_id: int
+    # 本人有效状态（忽略/过期/终态读时生效；与列表/详情同源）
+    state: str | None = None
 
 
 class NotificationItemOut(BaseModel):

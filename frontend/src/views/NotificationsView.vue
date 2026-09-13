@@ -123,11 +123,22 @@ function openSuggestion(item: NotificationItem): void {
     void notifications.markRead(spaceId.value, item.id).catch(() => undefined)
   }
   const id = item.suggestion?.suggestion_id
-  if (id === undefined) return
-  const found =
-    suggestions.forSpace(spaceId.value ?? 0)?.items.find((s) => s.id === id) ?? null
-  reviewSuggestion.value = found
-  reviewOpened.value = true
+  if (id === undefined || spaceId.value === null) return
+  // 按 ID 拉取详情：首页 20 条缓存之外的旧建议同样可打开（A-R5）。
+  const cached =
+    suggestions.forSpace(spaceId.value)?.items.find((s) => s.id === id) ?? null
+  if (cached !== null) {
+    reviewSuggestion.value = cached
+    reviewOpened.value = true
+    return
+  }
+  void suggestions
+    .loadDetail(spaceId.value, id)
+    .then((detail) => {
+      reviewSuggestion.value = detail
+      reviewOpened.value = true
+    })
+    .catch(() => undefined)
 }
 
 function markAllRead(): void {

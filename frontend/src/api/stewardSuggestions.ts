@@ -1,4 +1,5 @@
 import type {
+  KinshipPresentation,
   SuggestionAction,
   SuggestionDismissResult,
   SuggestionItem,
@@ -44,6 +45,27 @@ const SUGGESTION_STATES: readonly SuggestionState[] = [
 ]
 
 const SUGGESTION_ACTIONS: readonly SuggestionAction[] = ['open_details', 'submit', 'dismiss']
+
+const EVIDENCE_KINDS = [
+  'confirmed_path',
+  'inferred_path',
+  'unverified_candidate',
+  'unavailable',
+] as const
+
+/** 呈现载荷宽松透传：结构不完整时安全降级为 null（不回退 raw enum 解码） */
+function decodePresentation(value: unknown): KinshipPresentation | null {
+  if (
+    !isRecord(value) ||
+    typeof value.version !== 'number' ||
+    typeof value.summary !== 'string' ||
+    !isRecord(value.evidence) ||
+    !isOneOf(EVIDENCE_KINDS)(value.evidence.kind)
+  ) {
+    return null
+  }
+  return value as unknown as KinshipPresentation
+}
 
 const isSuggestionKind = isOneOf(SUGGESTION_KINDS)
 const isSuggestionOrigin = isOneOf(SUGGESTION_ORIGINS)
@@ -109,11 +131,29 @@ function decodeSuggestionItem(value: unknown): SuggestionItem | null {
     object_name:
       typeof value.object_name === 'string' ? value.object_name : (null as string | null),
     value: value.value,
+    presentation: decodePresentation(value.presentation),
+    subject_display: isRecord(value.subject_display) ? value.subject_display : null,
+    object_display: isRecord(value.object_display) ? value.object_display : null,
+    source_state: typeof value.source_state === 'string' ? value.source_state : null,
+    recipient_state: typeof value.recipient_state === 'string' ? value.recipient_state : null,
     evidence_summary: evidence,
     allowed_actions: actions,
     expires_at: typeof value.expires_at === 'string' ? value.expires_at : null,
     created_at: value.created_at,
   }
+}
+
+/** 按 ID 读取详情（旧通知不依赖首页缓存；与列表同授权/状态/序列化） */
+export async function fetchSuggestionDetail(
+  spaceId: number,
+  suggestionId: number,
+): Promise<SuggestionItem> {
+  const { data } = await apiClient.get<unknown>(`/steward-suggestions/${suggestionId}`, {
+    params: { space_id: spaceId },
+  })
+  const item = decodeSuggestionItem(data)
+  if (item === null) throw new Error('建议详情响应格式无效')
+  return item
 }
 
 function decodeSuggestionsPage(value: unknown): SuggestionsPage {

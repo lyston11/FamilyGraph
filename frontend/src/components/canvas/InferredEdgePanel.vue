@@ -46,16 +46,30 @@ const outcome = ref<InferredEdgeConfirmResult | null>(null)
 const subjectName = computed(() => props.resolveName(props.edge.subject_user_id) ?? '某位成员')
 const objectName = computed(() => props.resolveName(props.edge.object_user_id) ?? '某位成员')
 
-const relationText = computed(() => {
-  const term = props.edge.term ?? props.edge.relation_kind
-  return `${subjectName.value} — ${term} — ${objectName.value}`
-})
+// A-R1：方向句由服务端 presentation 同源给出；旧载荷降级为中性线索，
+// 不再输出 “A — kind — B” 的歧义连线文案。
+const relationText = computed(
+  () => props.edge.presentation?.summary ?? `${subjectName.value}与${objectName.value}之间存在待核实的推测关系`,
+)
 
 const newUserName = computed(() =>
   props.edge.new_user_id === null ? null : props.resolveName(props.edge.new_user_id) ?? '某位成员',
 )
 
 const viewerTermText = computed(() => props.edge.viewer_term ?? null)
+
+// AC-10：只有可核验的相关路径才显示依据数量；无相关证据的候选明确“待核实”，
+// 绝不把空快照说成“N 条已确认事实的确定性推断”。
+const evidenceText = computed(() => {
+  const kind = props.edge.presentation?.evidence.kind
+  if (kind === 'confirmed_path' || kind === 'inferred_path') {
+    const count = props.edge.presentation?.evidence.related_fact_count
+    if (count !== null && count !== undefined && count > 0) {
+      return `${count} 条可核验的相关已确认事实的确定性推断，待核实。`
+    }
+  }
+  return '暂无可核验的相关事实，待核实。'
+})
 
 const outcomeText = computed(() => {
   const result = outcome.value
@@ -155,7 +169,7 @@ function onDismiss(): void {
 
       <div class="field" data-test="inferred-evidence">
         <dt>依据</dt>
-        <dd>{{ edge.evidence_fact_ids.length }} 条已确认事实的确定性推断</dd>
+        <dd data-test="inferred-evidence-text">{{ evidenceText }}</dd>
       </div>
     </dl>
 

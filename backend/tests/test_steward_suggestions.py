@@ -703,7 +703,7 @@ def test_notification_read_does_not_mutate_and_no_duplicates(client, db_session)
     assert len(matching) == 1
     assert matching[0]["payload"]["title"] == "发现资料缺口待核实"
     assert matching[0]["domain_status"] == "pending"
-    assert matching[0]["suggestion"] == {"suggestion_id": s.id}
+    assert matching[0]["suggestion"] == {"suggestion_id": s.id, "state": "proposed"}
     notif_id = matching[0]["id"]
 
     # 已读只改 read_at：建议状态/revision 不变

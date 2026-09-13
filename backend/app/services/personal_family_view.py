@@ -36,7 +36,7 @@ from app.models.space import FamilySpace, SpaceMember
 from app.models.steward_inferred import StewardInferredEdge
 from app.models.term_registry import TermEntry
 from app.models.user import User
-from app.services import steward_inferred, visibility
+from app.services import kinship_presentation, steward_inferred, visibility
 from app.services.relationship_graph import (
     ExtraEdge,
     birth_from_user,
@@ -707,6 +707,18 @@ def _view_payload_for_view(
             if edge.from_user_id not in visible_ids or edge.to_user_id not in visible_ids:
                 continue
             assert isinstance(edge_id, int)  # row 非 None 已保证
+            evidence_fact_ids = basis.get("evidence_fact_ids") or []
+            # A-R1：推测面板与通知同源的方向化呈现（“X 可能是你的 Y”）；
+            # 结构端点仍由 subject/object 承载，证据计数只认可核验相关事实。
+            edge_presentation = kinship_presentation.build_inferred_edge_presentation(
+                session,
+                viewer=actor,
+                space_id=space_id,
+                subject_user_id=edge.from_user_id,
+                object_user_id=edge.to_user_id,
+                term=edge.term,
+                evidence_fact_count=len(evidence_fact_ids),
+            )
             inferred_edges.append(
                 {
                     "id": edge_id,
@@ -718,7 +730,8 @@ def _view_payload_for_view(
                     "viewer_term": basis.get("viewer_term"),
                     "viewer_path": basis.get("viewer_path") or [],
                     "new_user_id": basis.get("new_user_id"),
-                    "evidence_fact_ids": basis.get("evidence_fact_ids") or [],
+                    "evidence_fact_ids": evidence_fact_ids,
+                    "presentation": edge_presentation,
                     "revision": int(row.revision),
                     "created_at": row.created_at,
                 }

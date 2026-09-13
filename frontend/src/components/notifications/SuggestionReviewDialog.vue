@@ -33,16 +33,6 @@ const KIND_LABELS: Record<SuggestionItem['kind'], string> = {
   missing_information: '资料缺口',
 }
 
-const RELATION_LABELS: Record<string, string> = {
-  biological_parent: '生物学亲子',
-  adoptive_parent: '收养亲子',
-  step_parent: '继亲',
-  guardian: '监护',
-  spouse: '配偶',
-  partner: '伴侣',
-  direct_sibling: '兄弟姐妹',
-}
-
 const pairText = computed(() => {
   const s = suggestion.value
   if (s === null) return ''
@@ -51,17 +41,35 @@ const pairText = computed(() => {
   return `${subject} · ${object}`
 })
 
+// A-R1：方向/称谓语义由服务端 presentation 承载；前端绝不从 fact_type
+// 构造展示（旧载荷安全降级为中性文案，不回退 raw enum 映射）。
 const relationText = computed(() => {
   const s = suggestion.value
   if (s === null) return null
-  if (s.kind === 'relation_proposal') {
-    const factType = typeof s.value.fact_type === 'string' ? s.value.fact_type : ''
-    return RELATION_LABELS[factType] ?? factType
-  }
+  if (s.presentation !== null) return s.presentation.summary
   if (s.kind === 'term_preference') {
     return typeof s.value.term === 'string' ? s.value.term : null
   }
-  return typeof s.value.code === 'string' ? s.value.code : null
+  return null
+})
+
+const evidenceText = computed(() => {
+  const s = suggestion.value
+  if (s === null) return null
+  if (s.presentation !== null) {
+    const kind = s.presentation.evidence.kind
+    if (kind === 'confirmed_path') {
+      return `依据：${s.presentation.evidence.related_fact_count ?? 0} 条可核验的相关已确认事实。`
+    }
+    if (kind === 'inferred_path') {
+      return `依据：确定性推测路径（${s.presentation.evidence.related_fact_count ?? 0} 条相关事实），待核实。`
+    }
+    if (kind === 'unverified_candidate') {
+      return '依据：模型线索，暂无可核验的相关事实，待核实。'
+    }
+    return '依据：当前不可用。'
+  }
+  return `证据：基于 ${s.evidence_summary.fact_count} 条已确认的家庭事实生成。`
 })
 
 const canSubmit = computed(
@@ -139,11 +147,9 @@ async function onDismiss(): Promise<void> {
       <p class="sug-kind">{{ KIND_LABELS[suggestion.kind] }}</p>
       <h3 class="sug-pair" data-test="suggestion-pair">{{ pairText }}</h3>
       <p v-if="relationText !== null" class="sug-relation" data-test="suggestion-relation">
-        建议：{{ relationText }}
+        {{ relationText }}
       </p>
-      <p class="sug-evidence" data-test="suggestion-evidence">
-        证据：基于 {{ suggestion.evidence_summary.fact_count }} 条已确认的家庭事实生成。
-      </p>
+      <p class="sug-evidence" data-test="suggestion-evidence">{{ evidenceText }}</p>
       <p class="sug-privacy">
         该建议只是线索：接受后会先发起需要当事人确认的申请，不会直接修改家庭关系。
       </p>

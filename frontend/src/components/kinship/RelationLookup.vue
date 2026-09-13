@@ -45,7 +45,8 @@ const SOURCE_LEVEL_LABELS: Record<TermSourceLevel, string> = {
   space: '空间叫法',
   locale: '地区叫法',
   system: '标准称谓',
-  structural: '结构默认',
+  structural: '结构描述',
+  derived: '管家称谓',
 }
 
 function sourceLabel(level: TermSourceLevel | null | undefined): string {

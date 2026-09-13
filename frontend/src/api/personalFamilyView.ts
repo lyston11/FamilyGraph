@@ -1,6 +1,7 @@
 import type {
   ClaimStatus,
   GenderType,
+  KinshipPresentation,
   Maskable,
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
@@ -332,9 +333,26 @@ function decodeInferredEdge(
     viewer_path: viewerPath,
     new_user_id: value.new_user_id,
     evidence_fact_ids: value.evidence_fact_ids,
+    presentation: decodeInferredPresentation(value.presentation),
     revision: value.revision,
     created_at: typeof value.created_at === 'string' ? value.created_at : '',
   }
+}
+
+/**
+ * 推测边呈现（09-13-steward-kinship-presentation）：宽松透传；结构不完整的
+ * 旧载荷降级为 null（面板用中性文案，不恢复 raw enum/连线拼接）。
+ */
+function decodeInferredPresentation(value: unknown): KinshipPresentation | null {
+  if (
+    !isRecord(value) ||
+    typeof value.version !== 'number' ||
+    typeof value.summary !== 'string' ||
+    !isRecord(value.evidence)
+  ) {
+    return null
+  }
+  return value as unknown as KinshipPresentation
 }
 
 export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData {

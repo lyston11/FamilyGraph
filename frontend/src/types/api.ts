@@ -346,6 +346,8 @@ export interface PersonalFamilyViewInferredEdge {
   viewer_path: PersonalFamilyViewPathStep[]
   new_user_id: number | null
   evidence_fact_ids: number[]
+  /** 服务端同源方向化呈现（“X 可能是你的 Y”）；旧后端缺省为 null */
+  presentation?: KinshipPresentation | null
   revision: number
   created_at: string
 }
@@ -818,6 +820,29 @@ export type SuggestionKind =
 
 export type SuggestionOrigin = 'deterministic' | 'model'
 
+/** 服务端同源称谓呈现（09-13-steward-kinship-presentation；version 1） */
+export interface KinshipPresentationEvidence {
+  kind: 'confirmed_path' | 'inferred_path' | 'unverified_candidate' | 'unavailable'
+  related_fact_count: number | null
+}
+
+export interface KinshipPresentation {
+  version: number
+  availability: 'ready' | 'refreshing' | 'unavailable'
+  reference_user_id: number | null
+  target_user_id: number | null
+  subject_user_id: number
+  object_user_id: number
+  term: string | null
+  term_source_level: string | null
+  term_source_label: string | null
+  summary: string
+  relation_state: 'confirmed' | 'inferred' | 'proposal'
+  inferred: boolean
+  evidence: KinshipPresentationEvidence
+  requires_action: boolean
+}
+
 export type SuggestionState = 'proposed' | 'submitted' | 'resolved' | 'dismissed' | 'expired'
 
 export type SuggestionAction = 'open_details' | 'submit' | 'dismiss'
@@ -840,6 +865,14 @@ export interface SuggestionItem {
   object_user_id: number | null
   subject_name: string | null
   object_name: string | null
+  /** 当前 viewer 的可见性展示载荷（A-R1；旧后端缺省 null） */
+  subject_display?: Record<string, unknown> | null
+  object_display?: Record<string, unknown> | null
+  /** 服务端方向化呈现；旧载荷安全降级为 null（前端不得回退 raw enum） */
+  presentation: KinshipPresentation | null
+  /** 共享状态与本人状态的分离表达（A-R5） */
+  source_state?: string | null
+  recipient_state?: string | null
   /** 结构化建议值（relation 的 fact_type / finding 的 code 等；封闭字段） */
   value: Record<string, unknown>
   evidence_summary: SuggestionEvidenceSummary

@@ -61,6 +61,11 @@ class SuggestionItemOut(BaseModel):
     object_user_id: int | None
     subject_name: str | None
     object_name: str | None
+    subject_display: dict[str, Any] | None = None
+    object_display: dict[str, Any] | None = None
+    presentation: dict[str, Any] | None = None
+    source_state: str | None = None
+    recipient_state: str | None = None
     value: dict[str, Any]
     evidence_summary: dict[str, Any]
     allowed_actions: list[str]
@@ -141,6 +146,22 @@ def list_suggestions(
         session, account=account, space_id=space_id, cursor=cursor, limit=limit
     )
     return SuggestionsPageOut.model_validate(payload)
+
+
+@router.get("/steward-suggestions/{suggestion_id}", response_model=SuggestionItemOut)
+def get_suggestion_detail(
+    suggestion_id: int,
+    space_id: int = Query(...),
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SuggestionItemOut:
+    """按 ID 详情（A-R5）：旧通知不依赖首页缓存；与列表同授权/状态/序列化。"""
+    _gate()
+    _user, account = identity
+    payload = steward_suggestions.get_suggestion_detail(
+        session, account=account, space_id=space_id, suggestion_id=suggestion_id
+    )
+    return SuggestionItemOut.model_validate(payload)
 
 
 @router.post("/steward-suggestions/{suggestion_id}/dismiss", response_model=SuggestionDismissOut)

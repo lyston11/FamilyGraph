@@ -63,7 +63,8 @@ const SOURCE_LEVEL_LABELS: Record<TermSourceLevel, string> = {
   space: '空间叫法',
   locale: '地区叫法',
   system: '标准称谓',
-  structural: '结构默认',
+  structural: '结构描述',
+  derived: '管家称谓',
 }
 
 /** 来源层级越靠前越"贴身"：personal 实底主色 / space 确认色 / locale 提案色 /

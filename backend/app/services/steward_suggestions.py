@@ -481,7 +481,88 @@ def _evidence_summary(session: Session, suggestion: StewardSuggestion) -> dict[s
         for f in suggestion.evidence_json.get("facts", [])
         if isinstance(f, dict) and isinstance(f.get("id"), int)
     ]
-    return {"fact_count": len(facts), "facts": facts}
+    # F08/AC-10：整空间快照不能冒充本线索的依据。相关计数只统计与建议
+    # 端点相交的事实；无相关事实的模型线索显示为待核实（unverified_candidate）。
+    endpoints = {
+        int(uid)
+        for uid in (suggestion.subject_user_id, suggestion.object_user_id)
+        if uid is not None
+    }
+    related = [f for f in facts if _fact_touches(suggestion.evidence_json, f["fact_id"], endpoints)]
+    if related:
+        kind = "confirmed_path"
+    elif suggestion.origin == "model":
+        kind = "unverified_candidate"
+    else:
+        kind = "unavailable"
+    return {
+        "fact_count": len(facts),
+        "facts": facts,
+        "related_fact_count": len(related),
+        "kind": kind,
+    }
+
+
+def _fact_touches(evidence_json: dict[str, Any], fact_id: int, endpoints: set[int]) -> bool:
+    """证据事实是否与建议端点相交（evidence_json.facts 保存了端点快照）。"""
+    for f in evidence_json.get("facts", []):
+        if not isinstance(f, dict) or f.get("id") != fact_id:
+            continue
+        subject = f.get("subject_user_id")
+        object_id = f.get("object_user_id")
+        if isinstance(subject, int) and subject in endpoints:
+            return True
+        if isinstance(object_id, int) and object_id in endpoints:
+            return True
+    return False
+
+
+def _related_fact_count(session: Session, suggestion: StewardSuggestion) -> int | None:
+    summary = _evidence_summary(session, suggestion)
+    return int(summary["related_fact_count"])
+
+
+def effective_state(
+    session: Session,
+    *,
+    viewer: User,
+    account: Account,
+    suggestion: StewardSuggestion,
+    recipient: StewardSuggestionRecipient | None = None,
+) -> str:
+    """本人有效状态读模型（A-R5）：共享状态 ∩ 本人忽略/过期，读时即生效。
+
+    list/detail/notifications/allowed_actions 使用同一结果；命令仍在事务内
+    重验，本函数只用于展示与动作过滤。
+    """
+    if suggestion.status in ("resolved", "expired", "superseded"):
+        return suggestion.status
+    if suggestion.expires_at is not None and suggestion.expires_at <= utcnow():
+        return "expired"
+    if recipient is None:
+        recipient = _recipient_row(session, suggestion.id, account.id)
+    if (
+        recipient is not None
+        and recipient.dismissed_at is not None
+        and "dismiss" in allowed_actions(session, viewer, account, suggestion)
+    ):
+        return "dismissed"
+    return str(suggestion.status)
+
+
+def display_actions(
+    session: Session,
+    viewer: User,
+    account: Account,
+    suggestion: StewardSuggestion,
+    state: str,
+) -> list[str]:
+    """有效状态过滤后的展示动作：终态/过期/本人忽略不再给 pending 处理入口。"""
+    actions = list(allowed_actions(session, viewer, account, suggestion))
+    if state != suggestion.status or state in ("dismissed", "expired"):
+        if state in ("dismissed", "resolved", "expired", "superseded"):
+            actions = [a for a in actions if a in ("open_details",)]
+    return actions
 
 
 def allowed_actions(
@@ -546,20 +627,17 @@ def list_suggestions_page(
             if not _endpoints_visible(session, viewer, suggestion):
                 continue
             try:
-                allowed = allowed_actions(session, viewer, account, suggestion)
+                state = effective_state(
+                    session, viewer=viewer, account=account, suggestion=suggestion
+                )
             except Exception:  # noqa: BLE001 — 端点消失等异常按 404 语义丢弃该行
-                allowed = []
+                continue
+            allowed = display_actions(session, viewer, account, suggestion, state)
             if not allowed:
                 continue
-            if "dismiss" in allowed:
-                recipient = _recipient_row(session, suggestion.id, account.id)
-                if recipient is not None and recipient.dismissed_at is not None:
-                    state = "dismissed"
-                else:
-                    state = suggestion.status
-            else:
-                state = suggestion.status
-            items.append(_serialize(session, suggestion, allowed, state))
+            items.append(
+                _serialize(session, suggestion, allowed, state, viewer=viewer, account=account)
+            )
             if len(items) >= limit:
                 break
         # 每批消费后都推进内部游标；否则整批被过滤时会重复查询同一批并循环。
@@ -577,27 +655,114 @@ def _serialize(
     suggestion: StewardSuggestion,
     allowed_actions_list: list[str],
     state: str,
+    *,
+    viewer: User | None = None,
+    account: Account | None = None,
 ) -> dict[str, Any]:
-    subject = session.get(User, suggestion.subject_user_id)
-    object_row = session.get(User, suggestion.object_user_id) if suggestion.object_user_id else None
+    # A-R1/F11：人物展示值经当前 viewer 的可见性投影；不可见端点遮罩，
+    # 绝不直接输出 ORM name。旧 subject_name/object_name 字段保留兼容，
+    # 但取值改为可见性脱敏后的显示值。
+    subject_display: dict[str, Any] | None = None
+    object_display: dict[str, Any] | None = None
+    if viewer is not None:
+        subject_user = session.get(User, suggestion.subject_user_id)
+        if subject_user is not None:
+            decision = visibility.evaluate(
+                session, viewer, subject_user, purpose=visibility.PURPOSE_PROFILE
+            )
+            if decision.visible:
+                subject_display = visibility.payload_from_decision(decision, subject_user)
+        if suggestion.object_user_id is not None:
+            object_user = session.get(User, suggestion.object_user_id)
+            if object_user is not None:
+                decision = visibility.evaluate(
+                    session, viewer, object_user, purpose=visibility.PURPOSE_PROFILE
+                )
+                if decision.visible:
+                    object_display = visibility.payload_from_decision(decision, object_user)
+
+    def _masked_name(payload: dict[str, Any] | None) -> str | None:
+        if isinstance(payload, dict) and isinstance(payload.get("name"), str) and payload["name"]:
+            return str(payload["name"])
+        return None
+
+    presentation: dict[str, Any] | None = None
+    if (
+        viewer is not None
+        and account is not None
+        and suggestion.object_user_id is not None
+        and subject_display is not None
+        and object_display is not None
+        and suggestion.kind in ("relation_proposal", "term_preference")
+    ):
+        from app.services import kinship_presentation
+
+        if suggestion.kind == "relation_proposal":
+            presentation = kinship_presentation.build_relation_presentation(
+                session,
+                viewer=viewer,
+                account=account,
+                space_id=suggestion.space_id,
+                subject_user_id=suggestion.subject_user_id,
+                object_user_id=suggestion.object_user_id,
+                relation_state="proposal",
+                inferred=True,
+                related_fact_count=_related_fact_count(session, suggestion),
+            )
+        else:
+            presentation = {
+                "version": kinship_presentation.PRESENTATION_VERSION,
+                "availability": "ready",
+                "reference_user_id": viewer.id,
+                "target_user_id": suggestion.subject_user_id,
+                "subject_user_id": suggestion.subject_user_id,
+                "object_user_id": suggestion.object_user_id,
+                "term": suggestion.value_json.get("term"),
+                "term_source_level": None,
+                "term_source_label": kinship_presentation.source_label("personal"),
+                "summary": "可选的称谓偏好建议，无需处理",
+                "relation_state": "proposal",
+                "inferred": False,
+                "evidence": {"kind": "unavailable", "related_fact_count": None},
+                "requires_action": False,
+            }
+
     return {
         "id": suggestion.id,
         "space_id": suggestion.space_id,
         "kind": suggestion.kind,
         "origin": suggestion.origin,
         "state": state,
+        "source_state": suggestion.status,
+        "recipient_state": "dismissed" if state == "dismissed" else None,
         "revision": suggestion.revision,
         "evidence_hash": suggestion.evidence_hash,
         "subject_user_id": suggestion.subject_user_id,
         "object_user_id": suggestion.object_user_id,
-        "subject_name": subject.name if subject is not None else None,
-        "object_name": object_row.name if object_row is not None else None,
+        "subject_name": _masked_name(subject_display),
+        "object_name": _masked_name(object_display),
+        "subject_display": subject_display,
+        "object_display": object_display,
+        "presentation": presentation,
         "value": dict(suggestion.value_json),
         "evidence_summary": _evidence_summary(session, suggestion),
         "allowed_actions": allowed_actions_list,
         "expires_at": suggestion.expires_at,
         "created_at": suggestion.created_at,
     }
+
+
+def get_suggestion_detail(
+    session: Session, *, account: Account, space_id: int, suggestion_id: int
+) -> dict[str, Any]:
+    """按 ID 详情（A-R5）：与列表完全同授权/状态/序列化；旧通知不再依赖
+    首页 20 条缓存。"""
+    viewer, suggestion = visible_suggestion_or_404(
+        session, account=account, space_id=space_id, suggestion_id=suggestion_id
+    )
+    state = effective_state(session, viewer=viewer, account=account, suggestion=suggestion)
+    actions = display_actions(session, viewer, account, suggestion, state)
+    return _serialize(session, suggestion, actions, state, viewer=viewer, account=account)
 
 
 # ---- dismiss（按收件人；CAS revision；同证据版本冷却）----
@@ -742,7 +907,14 @@ def submit_suggestion(
             suggestion.linked_fact_id = proposal.id
             suggestion.submit_key = key
             payload = {
-                "suggestion": _serialize(session, suggestion, ["open_details"], suggestion.status),
+                "suggestion": _serialize(
+                    session,
+                    suggestion,
+                    ["open_details"],
+                    suggestion.status,
+                    viewer=viewer,
+                    account=account,
+                ),
                 "linked_proposal": {
                     "source_fact_id": proposal.id,
                     "revision": proposal.revision,
@@ -773,7 +945,14 @@ def submit_suggestion(
             suggestion.linked_term_id = entry.id
             suggestion.submit_key = key
             payload = {
-                "suggestion": _serialize(session, suggestion, ["open_details"], "resolved"),
+                "suggestion": _serialize(
+                    session,
+                    suggestion,
+                    ["open_details"],
+                    "resolved",
+                    viewer=viewer,
+                    account=account,
+                ),
                 "linked_preference": {
                     "term_id": entry.id,
                     "concept_code": concept_code,
@@ -808,6 +987,9 @@ def resolve_for_linked_fact(session: Session, *, fact_id: int) -> None:
 __all__ = [
     "SUGGESTION_DOMAIN_STATUS",
     "allowed_actions",
+    "display_actions",
+    "effective_state",
+    "get_suggestion_detail",
     "compute_dedupe_key",
     "default_expires_at",
     "dismiss_suggestion",

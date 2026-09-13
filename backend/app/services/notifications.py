@@ -24,7 +24,10 @@ from app.models.account import Account
 from app.models.notification import Notification
 from app.models.space import FamilySpace, SpaceMember
 from app.models.steward import ActionCard
-from app.models.steward_suggestion import StewardSuggestion
+from app.models.steward_suggestion import (
+    StewardSuggestion,
+    StewardSuggestionRecipient,
+)
 from app.models.user import User
 from app.services import visibility
 from app.services.action_cards import CARD_KIND_META
@@ -163,9 +166,14 @@ def record_membership_request_notification(
 
 
 def _project_item(
-    session: Session, viewer: User, row: Notification, space_name: str
+    session: Session,
+    viewer: User,
+    account: Account,
+    row: Notification,
+    space_name: str,
 ) -> dict[str, Any] | None:
     domain_status: str | None
+    suggestion_state: str | None = None
     action_card: dict[str, int] | None = None
     if row.kind == "action_card":
         card = session.get(ActionCard, row.action_card_id) if row.action_card_id else None
@@ -190,6 +198,19 @@ def _project_item(
         domain_status = suggestion_service.SUGGESTION_DOMAIN_STATUS.get(suggestion.status)
         if domain_status is None:  # pragma: no cover - 状态枚举扩展时的防线
             return None
+        # A-R6/R-05：本人有效状态（忽略/过期/终态）读时即生效，与列表/详情/动作
+        # 同源；本人忽略是个人 dismissed，不伪装成共享关系被驳回之外的语义。
+        recipient = session.scalar(
+            select(StewardSuggestionRecipient).where(
+                StewardSuggestionRecipient.suggestion_id == suggestion.id,
+                StewardSuggestionRecipient.account_id == row.recipient_account_id,
+            )
+        )
+        suggestion_state = suggestion_service.effective_state(
+            session, viewer=viewer, account=account, suggestion=suggestion, recipient=recipient
+        )
+        if suggestion_state == "dismissed":
+            domain_status = "rejected"
     elif row.kind == "space_membership":
         from app.services import space_fsm
 
@@ -223,7 +244,12 @@ def _project_item(
         "domain_status": domain_status,
         "action_card": action_card,
         "suggestion": (
-            {"suggestion_id": row.suggestion_id} if row.kind == "steward_suggestion" else None
+            {
+                "suggestion_id": row.suggestion_id,
+                "state": suggestion_state,
+            }
+            if row.kind == "steward_suggestion" and row.suggestion_id
+            else None
         ),
         "created_at": row.created_at,
         "read_at": row.read_at,
@@ -243,7 +269,7 @@ def list_notifications_page(session: Session, *, account: Account, space_id: int
     ).all()
     items: list[dict[str, Any]] = []
     for row in rows:
-        item = _project_item(session, viewer, row, space.name)
+        item = _project_item(session, viewer, account, row, space.name)
         if item is not None:
             items.append(item)
     unread = sum(1 for item in items if item["read_at"] is None)
