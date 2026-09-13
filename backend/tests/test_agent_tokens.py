@@ -25,6 +25,7 @@ def test_run_token_roundtrip_and_ttl_cap():
     raw = issue_run_token(
         run_id=7,
         job_id=9,
+        attempt=0,
         agent_kind="assistant",
         account_id=11,
         space_id=13,
@@ -52,6 +53,7 @@ def test_tampered_token_rejected():
     raw = issue_run_token(
         run_id=1,
         job_id=1,
+        attempt=0,
         agent_kind="assistant",
         account_id=1,
         space_id=1,
@@ -73,6 +75,7 @@ def test_token_type_confusion_rejected():
     run_raw = issue_run_token(
         run_id=1,
         job_id=1,
+        attempt=0,
         agent_kind="assistant",
         account_id=1,
         space_id=1,
@@ -87,6 +90,7 @@ def test_unsupported_run_kind_rejected_at_issue_boundary():
         issue_run_token(
             run_id=1,
             job_id=1,
+            attempt=0,
             agent_kind="steward",
             account_id=1,
             space_id=1,

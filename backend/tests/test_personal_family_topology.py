@@ -14,13 +14,6 @@
 from __future__ import annotations
 
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_space_member,
-    create_user_with_pin,
-    login,
-)
 from sqlalchemy import select
 
 from app import config
@@ -29,6 +22,13 @@ from app.models.space import FamilySpace
 from app.services import personal_family_bridge, personal_family_view
 from app.services import source_facts as sf
 from app.utils.timeutil import utcnow
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_space_member,
+    create_user_with_pin,
+    login,
+)
 
 # ---- 公共辅助（与 consistency 契约测试同款） ----
 

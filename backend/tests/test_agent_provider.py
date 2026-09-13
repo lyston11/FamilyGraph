@@ -1,7 +1,6 @@
 """Provider 配置与 Policy 推导测试（RT-5）+ secretbox 密文 roundtrip。"""
 
 import pytest
-from conftest import create_agent_fixture
 from sqlalchemy import select
 
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
@@ -15,6 +14,7 @@ from app.services.agent_provider import (
 )
 from app.utils import timeutil
 from app.utils.secretbox import SecretBoxError, decrypt_secret, encrypt_secret
+from conftest import create_agent_fixture
 
 
 def _provider(db, *, name="p1", kind="openai_compatible", enabled=True, models=None):
@@ -191,9 +191,8 @@ def test_standard_liu_dada_profile_is_enforced_in_strict_mode(db_session, monkey
 
 def test_denied_runtime_snapshot_cannot_be_revived_by_later_setting_change(db_session):
     """A queued Run keeps its original denied policy even after reconfiguration."""
-    from conftest import create_agent_message, create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_message, create_agent_session
 
     owner, space = create_agent_fixture(db_session, name="snapshot-denied")
     provider = _provider(db_session)
@@ -225,9 +224,8 @@ def test_denied_runtime_snapshot_cannot_be_revived_by_later_setting_change(db_se
 
 def test_denied_no_provider_snapshot_cannot_be_revived(db_session):
     """A no-setting denial is also immutable after a provider is configured."""
-    from conftest import create_agent_message, create_agent_session
-
     from app.services import agent_queue
+    from conftest import create_agent_message, create_agent_session
 
     owner, space = create_agent_fixture(db_session, name="snapshot-no-provider")
     session = create_agent_session(db_session, account_id=owner.account.id, space_id=space.id)

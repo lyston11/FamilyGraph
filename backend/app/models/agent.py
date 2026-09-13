@@ -184,6 +184,13 @@ class AgentRunEvent(Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     public_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    # Canonical fingerprint of the sidecar's original request (type+payload as
+    # first received).  Idempotent replay compares fingerprints, never the
+    # server-authenticated result against a later candidate payload.
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Bounded internal record: {context_build_id, attempt, used_handles}.
+    # Participates in storage/schema checks; never copied into public_payload.
+    context_reference_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover

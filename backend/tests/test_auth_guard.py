@@ -3,11 +3,11 @@
 from datetime import timedelta
 
 import pytest
-from conftest import create_user_with_pin
 
 from app import config
 from app.services import auth_guard
 from app.utils import timeutil
+from conftest import create_user_with_pin
 
 
 @pytest.fixture()

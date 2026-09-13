@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from conftest import create_user_with_pin
 from sqlalchemy import select
 
 from app import config
@@ -18,6 +17,7 @@ from app.models.space import FamilySpace
 from app.models.steward import StewardJob, StewardSpaceSchedule
 from app.services import maintenance, steward
 from app.utils import timeutil
+from conftest import create_user_with_pin
 
 
 def _space(session, name: str) -> FamilySpace:

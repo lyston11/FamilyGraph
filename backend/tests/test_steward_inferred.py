@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
 from sqlalchemy import select
 
 from app import config
@@ -22,6 +21,7 @@ from app.models.steward_inferred import StewardInferredEdge
 from app.services import personal_family_view, steward_inferred
 from app.services import source_facts as sf
 from app.utils import timeutil
+from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
 
 
 @pytest.fixture(autouse=True)

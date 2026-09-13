@@ -4,7 +4,6 @@ disclosure 校验 / 删除级联与审计快照（implement.md #5）。
 
 import itertools
 
-from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
 from app.models.account import Account
@@ -14,6 +13,7 @@ from app.models.relation import Relation
 from app.models.relationship_facts import SourceFact
 from app.models.user import User
 from app.models.v2_foundation import MemberCreationRequest
+from conftest import auth_header, create_user_with_pin, login
 
 _key_counter = itertools.count(1)
 

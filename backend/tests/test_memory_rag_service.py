@@ -1,7 +1,6 @@
 """Behavioral contracts for explicit memory confirmation and scope isolation."""
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from fastapi import HTTPException
 from sqlalchemy import select
 
@@ -19,6 +18,7 @@ from app.services.memory_rag import (
     revoke_memory,
     search_rag,
 )
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 def test_candidate_is_not_retrievable_until_explicit_confirmation(db_session):

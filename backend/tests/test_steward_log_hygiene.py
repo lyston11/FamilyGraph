@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 
 import pytest
-from conftest import admin_session_headers, create_system_admin, create_user_with_pin
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from test_steward import _emit_fact_event, _fact, _person
@@ -19,6 +18,7 @@ from app import config
 from app.models.space import FamilySpace
 from app.models.steward import StewardJob
 from app.services import maintenance, steward, steward_suggestions
+from conftest import admin_session_headers, create_system_admin, create_user_with_pin
 
 # 合成哨兵：故意同时包含 token 形态、SQL 形态与中文姓名形态
 SENTINEL_TOKEN = "SUPER-SECRET-TOKEN-9f8e7d6c-sk-live"

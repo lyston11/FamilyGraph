@@ -9,13 +9,6 @@ provisional 非成员空间 404、零空间账号建陌生人码、空间管理�
 from datetime import timedelta
 
 import pytest
-from conftest import (
-    auth_header,
-    create_space_member,
-    create_user_with_pin,
-    login,
-    seed_space_with_owner,
-)
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -27,6 +20,13 @@ from app.models.invite_code import InviteCode
 from app.models.space import SpaceMember
 from app.models.user import User
 from app.utils import timeutil
+from conftest import (
+    auth_header,
+    create_space_member,
+    create_user_with_pin,
+    login,
+    seed_space_with_owner,
+)
 
 
 def _ctx(user) -> ActorContext:

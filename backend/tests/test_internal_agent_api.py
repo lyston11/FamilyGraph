@@ -1,5 +1,11 @@
 """Internal Agent HTTP 协议测试：两级认证、fail-closed 审计、feature flag。"""
 
+from sqlalchemy import select
+
+from app import config
+from app.models.audit_log import AuditLog
+from app.services import agent_queue
+from app.services.agent_tokens import decode_run_token, issue_run_token, issue_service_token
 from conftest import (
     auth_header,
     create_agent_fixture,
@@ -7,12 +13,6 @@ from conftest import (
     create_agent_session,
     login,
 )
-from sqlalchemy import select
-
-from app import config
-from app.models.audit_log import AuditLog
-from app.services import agent_queue
-from app.services.agent_tokens import decode_run_token, issue_run_token, issue_service_token
 
 
 def _seed(db, *, name: str):
@@ -368,6 +368,7 @@ def test_run_token_from_other_run_denied_on_tools(internal_client, db_session):
     forged = issue_run_token(
         run_id=run.id,
         job_id=run.job_id or 0,
+        attempt=legit_claims["attempt"],
         agent_kind="assistant",
         account_id=legit_claims["account_id"],
         space_id=legit_claims["space_id"],

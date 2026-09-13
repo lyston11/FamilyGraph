@@ -19,13 +19,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_space_member,
-    create_user_with_pin,
-    login,
-)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,6 +30,13 @@ from app.models.v2_foundation import DomainEvent
 from app.services import source_facts as sf
 from app.services import terms
 from app.utils.timeutil import utcnow
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_space_member,
+    create_user_with_pin,
+    login,
+)
 
 # ---- 造数辅助 ----
 

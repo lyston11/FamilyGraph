@@ -3,11 +3,11 @@
 from datetime import datetime
 
 import pytest
-from conftest import admin_session_headers, create_system_admin, create_user_with_pin
 
 from app import config
 from app.models.platform_features import PlatformFeatureConfig
 from app.services.platform_features import get_platform_feature_state
+from conftest import admin_session_headers, create_system_admin, create_user_with_pin
 
 
 @pytest.mark.parametrize(

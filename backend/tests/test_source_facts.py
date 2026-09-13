@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import pytest
-from conftest import create_user_with_pin, create_v1_relation, seed_structural_edge_to_fact
 from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +27,7 @@ from app.models.relationship_facts import (
 from app.models.v2_foundation import DomainEvent
 from app.services import source_facts as sf
 from app.utils.timeutil import utcnow
+from conftest import create_user_with_pin, create_v1_relation, seed_structural_edge_to_fact
 
 
 def _make_pair(session, prefix: str):

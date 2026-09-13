@@ -1,13 +1,13 @@
 """Agent Run 公开事件流测试：幂等追加、seq 连续性、未知类型拒绝、leased→running 提升。"""
 
 import pytest
-from conftest import create_agent_fixture, create_agent_message, create_agent_session
 from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.agent import AgentJob, AgentRunEvent
 from app.services import agent_events, agent_queue
 from app.services.agent_events import EventEntry
+from conftest import create_agent_fixture, create_agent_message, create_agent_session
 
 
 def _enqueue(db, session):

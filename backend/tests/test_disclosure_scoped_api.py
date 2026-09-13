@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi.testclient import TestClient
+
+from conftest import auth_header, create_user_with_pin, login
 
 BASIC_FALSE = {"avatar": False, "photos": False, "dates": False, "bio": False, "attachments": False}
 

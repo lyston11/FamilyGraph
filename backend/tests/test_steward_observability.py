@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from conftest import admin_session_headers, create_system_admin
 from fastapi.testclient import TestClient
 from test_steward import _space
 
@@ -19,6 +18,7 @@ from app import config
 from app.models.steward import StewardAssistBatch, StewardJob, StewardModelCall
 from app.services import steward
 from app.utils import timeutil
+from conftest import admin_session_headers, create_system_admin
 
 
 @pytest.fixture()

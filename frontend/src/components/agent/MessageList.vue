@@ -118,6 +118,7 @@ const items = computed(() =>
       ...message,
       cards,
       citations: message.citations ?? [],
+      unavailable: message.unavailableCitationCount ?? 0,
       webCitations: message.webCitations ?? [],
       key: `${index}-${message.id ?? 'local'}`,
     }
@@ -147,6 +148,13 @@ const items = computed(() =>
         <div v-if="item.citations.length > 0" class="message-citations" data-test="message-citations">
           <CitationList :citations="item.citations" compact />
         </div>
+        <p
+          v-if="item.citations.length === 0 && item.unavailable > 0"
+          class="message-citations-unavailable"
+          data-test="message-citations-unavailable"
+        >
+          部分来源已不可用（{{ item.unavailable }}）
+        </p>
         <div v-if="item.webCitations.length > 0" class="message-citations" data-test="message-web-citations">
           <WebCitationList :citations="item.webCitations" compact />
         </div>
@@ -189,6 +197,12 @@ const items = computed(() =>
 </template>
 
 <style scoped>
+.message-citations-unavailable {
+  margin: 4px 0 0;
+  color: var(--fg-ink-secondary);
+  font-size: 12px;
+}
+
 .message-list {
   flex: 1;
   overflow-y: auto;

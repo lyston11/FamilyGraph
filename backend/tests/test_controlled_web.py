@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from sqlalchemy import select
 
 from app import config
@@ -39,6 +38,7 @@ from app.services.controlled_web import (
     _ensure_text_content_type,
     _validate_public_url,
 )
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 # ---- 造数辅助 ---------------------------------------------------------------
 

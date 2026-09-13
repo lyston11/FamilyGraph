@@ -8,12 +8,6 @@ V2.1 协议校验对新工具仍然生效。
 import json
 
 import pytest
-from conftest import (
-    create_agent_fixture,
-    create_agent_session,
-    create_space_member,
-    create_user_with_pin,
-)
 from fastapi import HTTPException
 from sqlalchemy import text
 
@@ -26,6 +20,12 @@ from app.services import agent_events, agent_query, agent_queue, agent_tools, vi
 from app.services.agent_query import enforce_output_limit
 from app.services.agent_tokens import issue_service_token
 from app.utils import timeutil
+from conftest import (
+    create_agent_fixture,
+    create_agent_session,
+    create_space_member,
+    create_user_with_pin,
+)
 
 # ---- 世界构造（implement.md E2E fixture 要求的最小形态） ----
 

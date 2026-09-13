@@ -6,16 +6,16 @@
 
 ## 执行顺序
 
-- [ ] 固定核心中文、英文回归、扩展集和权限反例；记录旧实现 Recall@5/排名与扫描量，禁止读真实家庭正文凑样本。
-- [ ] 实现内部 QueryPlan、规范化/有限词项/受控别名和明确追问解析；上下文不足有明确降级。
-- [ ] 为所有召回分支复用 A resolver，补短词和二次过滤后的有界补足，测试异常/特殊字符。
-- [ ] 引入确定性句段切块、有限重叠、index_version 与定位稳定合同；与 D 明确有效版本切换。
-- [ ] 修 RAG 子预算/排除理由，单列仍未解决的全请求预算，不随便 recent-N 截历史。
-- [ ] 定义 attempt/context_build_id/included item/citation_handle 合同与同 attempt context 幂等；补 signed attempt、当前执行核验及旧 token 兼容方案，再同步 client/worker/events。
-- [ ] 以原始请求指纹实现认证后事件的幂等，不拿认证结果比较候选输入；测丢响应、撤权后重试和异参冲突。
-- [ ] 在 api/agent.py 的历史与 SSE 读取面复用当前授权投影，把有效引用接到既有 UI；同步 unavailable_citation_count parser/显示，覆盖未使用/编造/错误绑定/撤销/失权/重放。
-- [ ] 实现按 run_id/seq 授权补取完整引用的固定后备，统一消息存储/历史/SSE 投影；测 16 KiB UTF-8 总 payload、web 引用并存、正文占满和补取失败，不截断正文。
-- [ ] 执行受影响包检查；将 index_version、稳定 chunk、兼容策略及测试结果交接 D。
+- [x] 固定核心中文、英文回归、扩展集和权限反例；记录旧实现 Recall@5/排名与扫描量，禁止读真实家庭正文凑样本。
+- [x] 实现内部 QueryPlan、规范化/有限词项/受控别名和明确追问解析；上下文不足有明确降级。
+- [x] 为所有召回分支复用 A resolver，补短词和二次过滤后的有界补足，测试异常/特殊字符。
+- [x] 引入确定性句段切块、有限重叠、index_version 与定位稳定合同；与 D 明确有效版本切换。
+- [x] 修 RAG 子预算/排除理由，单列仍未解决的全请求预算，不随便 recent-N 截历史。
+- [x] 定义 attempt/context_build_id/included item/citation_handle 合同与同 attempt context 幂等；补 signed attempt、当前执行核验及旧 token 兼容方案，再同步 client/worker/events。
+- [x] 以原始请求指纹实现认证后事件的幂等，不拿认证结果比较候选输入；测丢响应、撤权后重试和异参冲突。
+- [x] 在 api/agent.py 的历史与 SSE 读取面复用当前授权投影，把有效引用接到既有 UI；同步 unavailable_citation_count parser/显示，覆盖未使用/编造/错误绑定/撤销/失权/重放。
+- [x] 实现按 run_id/seq 授权补取完整引用的固定后备，统一消息存储/历史/SSE 投影；测 16 KiB UTF-8 总 payload、web 引用并存、正文占满和补取失败，不截断正文。
+- [x] 执行受影响包检查；将 index_version、稳定 chunk、兼容策略及测试结果交接 D。
 
 ## 验证命令
 

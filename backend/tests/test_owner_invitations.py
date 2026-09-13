@@ -9,7 +9,6 @@ from __future__ import annotations
 import threading
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi import HTTPException
 from sqlalchemy import select
 
@@ -19,6 +18,7 @@ from app.db import SessionLocal
 from app.errors import extract_api_error
 from app.models.space import FamilySpace, SpaceMember
 from app.models.v2_foundation import DomainEvent, OwnerInvitation
+from conftest import auth_header, create_user_with_pin, login
 
 
 def _ctx(user) -> ActorContext:

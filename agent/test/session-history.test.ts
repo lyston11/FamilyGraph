@@ -46,6 +46,7 @@ function projection(messages: RunContextMessage[]): RunContextProjection {
     tool_allowlist: ["familygraph.echo"],
     messages,
     next_event_seq: 1,
+    context_build_id: null,
     provider: {
       provider_id: "3",
       provider_name: "history-test-provider",

@@ -32,6 +32,12 @@ vi.mock('@/api/agent', () => ({
   createAgentSession: vi.fn(),
   fetchAgentSessions: vi.fn().mockResolvedValue([]),
   fetchAgentMessages: vi.fn().mockResolvedValue([]),
+  fetchRunEventCitations: vi.fn().mockResolvedValue({
+    run_id: 1,
+    seq: 1,
+    citations: [],
+    unavailable_citation_count: 0,
+  }),
   createAgentMessage: vi.fn(),
   fetchAgentRun: vi.fn(),
   cancelAgentRun: vi.fn(),

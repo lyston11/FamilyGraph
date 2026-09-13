@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from conftest import create_agent_fixture, create_agent_session
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.memory_rag import RAGChunk, RAGDocument
 from app.utils import timeutil
+from conftest import create_agent_fixture, create_agent_session
 
 
 def test_rag_fts_is_trigram_index_but_lifecycle_filter_is_required(db_session):

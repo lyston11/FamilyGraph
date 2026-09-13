@@ -12,7 +12,6 @@ from __future__ import annotations
 import threading
 
 import pytest
-from conftest import auth_header, create_user_with_pin, login
 from fastapi import HTTPException
 
 from app.commands import members as member_commands
@@ -22,6 +21,7 @@ from app.errors import PERSON_DUPLICATE_AMBIGUOUS, PERSON_DUPLICATE_IN_SPACE, ex
 from app.models.space import FamilySpace, SpaceMember
 from app.services import person_identity as pid
 from app.utils.timeutil import utcnow
+from conftest import auth_header, create_user_with_pin, login
 
 _SOLAR = {"cal_type": "solar", "date": "1948-03-12"}
 _SOLAR_OTHER = {"cal_type": "solar", "date": "1950-01-01"}

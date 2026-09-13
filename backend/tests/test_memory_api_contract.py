@@ -7,16 +7,6 @@ from threading import Barrier, local
 from uuid import uuid4
 
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_agent_message,
-    create_agent_session,
-    create_space_member,
-    create_user_with_pin,
-    login,
-    seed_space_with_owner,
-)
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
@@ -31,6 +21,16 @@ from app.models.user import User
 from app.models.v2_foundation import DomainEvent
 from app.services import context_builder, memory_rag, memory_sources
 from app.utils.timeutil import utcnow
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_agent_message,
+    create_agent_session,
+    create_space_member,
+    create_user_with_pin,
+    login,
+    seed_space_with_owner,
+)
 
 
 def _identity(client, db, name="memory-api-owner"):
@@ -481,7 +481,7 @@ def test_legacy_unverified_content_is_quarantined_and_can_only_recover_from_real
         space_id=None,
         sensitivity="normal",
         confirmation_status="confirmed",
-        index_version="fts5-trigram-v1",
+        index_version=memory_rag.RAG_INDEX_VERSION,
         created_at=now,
         updated_at=now,
     )
@@ -492,7 +492,8 @@ def test_legacy_unverified_content_is_quarantined_and_can_only_recover_from_real
             document_id=document.id,
             chunk_index=0,
             text=memory.content,
-            token_estimate=10,
+            token_estimate=memory_rag._estimate_tokens(memory.content),
+            index_version=memory_rag.RAG_INDEX_VERSION,
             created_at=now,
         )
     )

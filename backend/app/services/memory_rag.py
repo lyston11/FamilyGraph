@@ -42,9 +42,15 @@ from app.services import memory_sources, platform_features
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.services.policy_consumer import is_policy_consumer_kind
+from app.services.rag_query import plan_query
 from app.utils.timeutil import utcnow
 
-RAG_INDEX_VERSION = "fts5-trigram-v1"
+# v2: deterministic sentence/paragraph chunking with bounded overlap.  The
+# chunk algorithm version is part of chunk identity; a switch materializes a
+# new document version instead of silently re-pointing old handles.
+RAG_INDEX_VERSION = "fts5-trigram-v2"
+_CHUNK_MAX_CHARS = 800
+_CHUNK_OVERLAP_CHARS = 100
 _CANDIDATE_TEXT_LIMIT = 12_000
 _SHARED_SCOPES = ("household", "lineage")
 
@@ -593,9 +599,67 @@ def dismiss_candidate(db: Session, *, candidate_id: int, account_id: int) -> Mem
     return candidate
 
 
-def _chunk_text(value: str, size: int = 1200) -> list[str]:
+def _estimate_tokens(text_value: str) -> int:
+    """Conservative UTF-8 based estimate.
+
+    CJK text is roughly one token per character (three UTF-8 bytes); latin
+    text is roughly two bytes per token.  ``utf8_bytes // 2`` overestimates
+    both, which is the safe direction for a budget: it can exclude a block
+    early but never silently overstuff the model window.  The old
+    ``len(text) // 4`` estimate undercounted Chinese by ~8x.
+    """
+    return max(1, len(text_value.encode("utf-8")) // 2)
+
+
+def _split_sentences(paragraph: str) -> list[str]:
+    """Split one paragraph into sentence-bounded pieces (deterministic)."""
+    pieces: list[str] = []
+    current: list[str] = []
+    for char in paragraph:
+        current.append(char)
+        if char in "。！？!?；;\n":
+            pieces.append("".join(current))
+            current = []
+    if current:
+        pieces.append("".join(current))
+    return pieces
+
+
+def _chunk_text(value: str, max_chars: int = _CHUNK_MAX_CHARS) -> list[str]:
+    """Sentence/paragraph-first chunking with bounded, deterministic overlap.
+
+    Very long sentences are hard-split only when a single sentence exceeds
+    ``max_chars``; the split point is char-aligned but chunks carry overlap so
+    cross-boundary facts remain retrievable from a complete chunk.
+    """
     clean = value.strip()
-    return [clean[pos : pos + size] for pos in range(0, len(clean), size)] or [""]
+    if not clean:
+        return []
+    chunks: list[str] = []
+    current = ""
+    for paragraph in clean.split("\n"):
+        for sentence in _split_sentences(paragraph):
+            while len(sentence) > max_chars:
+                # Hard-split an oversized sentence, keeping the tail as the
+                # start of the next piece (bounded overlap by construction).
+                if current:
+                    chunks.append(current)
+                    current = ""
+                head = sentence[:max_chars]
+                # Prefer not to cut a chunk at zero length; always make progress.
+                chunks.append(head)
+                sentence = sentence[max_chars - _CHUNK_OVERLAP_CHARS :]
+            if not current:
+                current = sentence
+            elif len(current) + len(sentence) <= max_chars:
+                current += sentence
+            else:
+                chunks.append(current)
+                overlap = current[-_CHUNK_OVERLAP_CHARS:] if _CHUNK_OVERLAP_CHARS else ""
+                current = overlap + sentence
+    if current.strip():
+        chunks.append(current)
+    return [chunk.strip() for chunk in chunks if chunk.strip()]
 
 
 def index_memory(db: Session, memory: Memory) -> RAGDocument:
@@ -635,23 +699,60 @@ def index_memory(db: Session, memory: Memory) -> RAGDocument:
         db.flush()
     else:
         document.status = "active"
+        document.index_version = RAG_INDEX_VERSION
         document.updated_at = now
-        db.query(RAGChunk).filter(RAGChunk.document_id == document.id).delete(
-            synchronize_session=False
-        )
-    for index, chunk in enumerate(_chunk_text(memory.content)):
-        db.add(
-            RAGChunk(
-                document_id=document.id,
-                chunk_index=index,
-                source_revision=memory.revision,
-                text=chunk,
-                token_estimate=max(1, len(chunk) // 4),
-                created_at=now,
-            )
-        )
+    _materialize_chunks(db, document, memory.content, memory.revision)
     db.flush()
     return document
+
+
+def _materialize_chunks(db: Session, document: RAGDocument, text_value: str, revision: int) -> None:
+    """Upsert chunks so same-version re-indexing keeps chunk IDs stable.
+
+    Citation handles embed ``chunk_id``; deleting and re-inserting rows on
+    every re-index would silently re-point old handles at different text.
+    Within one index_version: unchanged chunks keep their row, changed chunks
+    are updated in place, extra chunks are tombstoned, and a different
+    algorithm version (RAG_INDEX_VERSION bump) is a new document lifecycle
+    owned by the maintenance task (D).
+    """
+    pieces = _chunk_text(text_value)
+    existing = {
+        int(chunk.chunk_index): chunk
+        for chunk in db.scalars(select(RAGChunk).where(RAGChunk.document_id == document.id)).all()
+    }
+    kept_indexes: set[int] = set()
+    for index, chunk_text_value in enumerate(pieces):
+        kept_indexes.add(index)
+        row = existing.get(index)
+        if row is None:
+            db.add(
+                RAGChunk(
+                    document_id=document.id,
+                    chunk_index=index,
+                    source_revision=revision,
+                    text=chunk_text_value,
+                    token_estimate=_estimate_tokens(chunk_text_value),
+                    index_version=RAG_INDEX_VERSION,
+                    status="active",
+                    created_at=utcnow(),
+                )
+            )
+        elif row.text == chunk_text_value and row.status == "active":
+            row.token_estimate = _estimate_tokens(chunk_text_value)
+            row.updated_at = utcnow()
+        else:
+            row.text = chunk_text_value
+            row.token_estimate = _estimate_tokens(chunk_text_value)
+            row.index_version = RAG_INDEX_VERSION
+            row.status = "active"
+            row.source_revision = revision
+            row.updated_at = utcnow()
+    now = utcnow()
+    for index, row in existing.items():
+        if index not in kept_indexes and row.status == "active":
+            row.status = "deleted"
+            row.updated_at = now
 
 
 def ingest_authorized_document(
@@ -701,17 +802,7 @@ def ingest_authorized_document(
     )
     db.add(document)
     db.flush()
-    for index, chunk in enumerate(_chunk_text(text_value)):
-        db.add(
-            RAGChunk(
-                document_id=document.id,
-                chunk_index=index,
-                source_revision=revision,
-                text=chunk,
-                token_estimate=max(1, len(chunk) // 4),
-                created_at=now,
-            )
-        )
+    _materialize_chunks(db, document, text_value, revision)
     db.flush()
     emit_domain_event(
         db,
@@ -729,6 +820,231 @@ def _fts_match(value: str) -> str:
     # Match as one quoted phrase. This prevents FTS operators from changing the
     # query while retaining trigram matching for CJK and short text.
     return '"' + value.replace('"', '""') + '"'
+
+
+# SQL eligibility predicates shared by the FTS path and the short-word fallback
+# so a two-character query can never reach raw rows the FTS path cannot.
+_ELIGIBILITY_SQL = """
+  c.status = 'active'
+  AND d.status = 'active'
+  AND d.index_version = :index_version
+  AND d.confirmation_status IN ('confirmed', 'authorized')
+  AND (d.source_type != 'memory' OR EXISTS (
+    SELECT 1 FROM memories m WHERE CAST(m.id AS TEXT) = d.source_id
+      AND m.status = 'active' AND m.confirmation_status = 'confirmed'
+      AND m.source_verification = 'verified' AND m.revision = d.revision
+  ))
+  {sensitivity}
+  AND (
+    (d.scope = 'private' AND d.author_account_id = :account_id AND :is_assistant = 1)
+    OR
+    (d.scope IN ('household', 'lineage') AND d.space_id = :space_id
+     AND EXISTS (
+       SELECT 1 FROM space_members sm
+       WHERE sm.space_id = d.space_id AND sm.user_id = :user_id AND sm.status = 'active'
+     ))
+    OR
+    (d.scope = 'public' AND :is_assistant = 1)
+  )
+"""
+
+_HIT_SQL = """
+    SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
+           c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version
+    FROM rag_chunks AS c
+    JOIN rag_documents AS d ON d.id = c.document_id
+    WHERE {condition}
+      AND {eligibility}
+    ORDER BY {ordering}
+    LIMIT :limit
+"""
+
+# Bounded scan budget for the parameterized short-word fallback: it reads only
+# eligibility-filtered rows, and never degrades into an unbounded table scan.
+_FALLBACK_SCAN_LIMIT = 200
+
+
+def _rows_to_hits(
+    db: Session,
+    rows: Any,
+    *,
+    actor: User,
+    account: Account,
+    space_id: int,
+    agent_kind: str,
+    rank_by_order: bool,
+) -> tuple[list[RAGHit], int]:
+    """Project rows through the visibility policy once more; count denials."""
+    hits: list[RAGHit] = []
+    denied = 0
+    for position, row in enumerate(rows):
+        document_id = int(row["document_id"])
+        document = db.get(RAGDocument, document_id)
+        if document is None or not memory_sources.document_readable(
+            db,
+            document,
+            actor=actor,
+            account=account,
+            space_id=space_id,
+            agent_kind=agent_kind,
+        ):
+            denied += 1
+            continue
+        hits.append(
+            RAGHit(
+                document_id=document_id,
+                chunk_id=int(row["chunk_id"]),
+                source_id=str(row["source_id"]),
+                text=str(row["text"]),
+                token_estimate=int(row["token_estimate"]),
+                # Lexical branches are fused by explicit order rank, never by
+                # comparing incompatible raw bm25 scores across branches.
+                rank=float(position if rank_by_order else row["rank"]),
+                citation_handle=f"rag:{row['source_id']}:r{row['revision']}:c{row['chunk_id']}",
+                scope=str(row["scope"]),
+                sensitivity=str(row["sensitivity"]),
+                revision=int(row["revision"]),
+                source_type=str(row["source_type"]),
+                index_version=str(row["index_version"]),
+                space_id=document.space_id,
+                allowed_scopes=memory_sources.document_allowed_scopes(db, document, actor),
+            )
+        )
+    return hits, denied
+
+
+def search_rag(
+    db: Session,
+    *,
+    actor: User,
+    account: Account,
+    space_id: int,
+    query: str,
+    agent_kind: str = "assistant",
+    limit: int = 20,
+    provider_kind: str | None = None,
+    raise_on_restricted: bool = False,
+    for_model: bool = True,
+) -> list[RAGHit]:
+    """Search with SQL scope/confirmation/status predicates before results escape.
+
+    Retrieval is planned (``rag_query.plan_query``): the FTS branch ORs the
+    exact phrase and bounded terms; two-character Chinese terms that cannot
+    trigram-match take a parameterized LIKE fallback restricted to the same
+    eligibility predicates with a bounded scan budget.
+    """
+    _require_rag_enabled(db)
+    if not is_policy_consumer_kind(agent_kind):
+        raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "policy consumer 不受支持")
+    # Steward is a shared-data policy consumer only.  The SQL predicates below
+    # intentionally use is_assistant for private/public branches, so it can
+    # never read private memory or unrestricted public material.
+    is_assistant = int(agent_kind == "assistant")
+    plan = plan_query(query)
+    if not plan.normalized_query:
+        return []
+    if not _active_space_member(db, user_id=actor.id, space_id=space_id):
+        return []
+    expire_due_memories(db, account_id=account.id, space_id=space_id)
+    limit = max(1, min(limit, 100))
+    if for_model and raise_on_restricted and provider_kind != "local":
+        restricted_hits = search_rag(
+            db,
+            actor=actor,
+            account=account,
+            space_id=space_id,
+            query=plan.normalized_query,
+            agent_kind=agent_kind,
+            limit=limit,
+            provider_kind="local",
+        )
+        if any(hit.sensitivity in ("high", "local_required") for hit in restricted_hits):
+            raise_api_error(
+                409,
+                PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
+                "敏感 Context 需要可用的本地 Provider",
+            )
+    # Restricted material is eligible only when the selected provider is local.
+    sensitivity_predicate = (
+        "AND d.sensitivity IN ('normal','sensitive')"
+        if for_model and provider_kind != "local"
+        else ""
+    )
+    params: dict[str, Any] = {
+        "account_id": account.id,
+        "user_id": actor.id,
+        "space_id": space_id,
+        "is_assistant": is_assistant,
+        "index_version": RAG_INDEX_VERSION,
+    }
+    eligibility = _ELIGIBILITY_SQL.format(sensitivity=sensitivity_predicate)
+
+    # Branch 1: FTS trigram over phrase and terms (>= 3 chars), OR'ed inside
+    # the single MATCH expression (FTS5 does not allow SQL-level MATCH ORs).
+    match_values = ([_fts_match(plan.phrase)] if plan.phrase else []) + [
+        _fts_match(term) for term in plan.fts_terms
+    ]
+    if match_values:
+        params["match"] = " OR ".join(match_values)
+        sql = text(
+            f"""
+            SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
+                   c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version,
+                   bm25(rag_chunks_fts) AS rank
+            FROM rag_chunks_fts
+            JOIN rag_chunks AS c ON c.id = rag_chunks_fts.rowid
+            JOIN rag_documents AS d ON d.id = c.document_id
+            WHERE rag_chunks_fts MATCH :match
+              AND {eligibility}
+            ORDER BY rank ASC, c.id ASC
+            LIMIT :limit
+            """
+        )
+        rows = db.execute(sql, {**params, "limit": limit}).mappings().all()
+    else:
+        rows = []
+    hits, _denied = _rows_to_hits(
+        db,
+        rows,
+        actor=actor,
+        account=account,
+        space_id=space_id,
+        agent_kind=agent_kind,
+        rank_by_order=False,
+    )
+    seen_chunk_ids = {hit.chunk_id for hit in hits}
+
+    # Branch 2: bounded short-word fallback for two-character terms.
+    if len(hits) < limit and plan.fallback_terms:
+        fallback_terms = plan.fallback_terms[: 8 - len(plan.fts_terms)] or plan.fallback_terms[:1]
+        like_clauses = " OR ".join(f"c.text LIKE :like{idx}" for idx in range(len(fallback_terms)))
+        for idx, term in enumerate(fallback_terms):
+            params[f"like{idx}"] = f"%{term}%"
+        sql = text(
+            _HIT_SQL.format(
+                condition=f"({like_clauses})",
+                eligibility=eligibility,
+                ordering="c.id ASC",
+            )
+        )
+        rows = db.execute(sql, {**params, "limit": _FALLBACK_SCAN_LIMIT}).mappings().all()
+        fallback_hits, _denied = _rows_to_hits(
+            db,
+            rows,
+            actor=actor,
+            account=account,
+            space_id=space_id,
+            agent_kind=agent_kind,
+            rank_by_order=True,
+        )
+        for hit in fallback_hits:
+            if hit.chunk_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(hit.chunk_id)
+            hits.append(hit)
+            if len(hits) >= limit:
+                break
+    return hits
 
 
 def expire_due_memories(
@@ -780,136 +1096,6 @@ def expire_due_memories(
     if rows:
         db.flush()
     return len(rows)
-
-
-def search_rag(
-    db: Session,
-    *,
-    actor: User,
-    account: Account,
-    space_id: int,
-    query: str,
-    agent_kind: str = "assistant",
-    limit: int = 20,
-    provider_kind: str | None = None,
-    raise_on_restricted: bool = False,
-    for_model: bool = True,
-) -> list[RAGHit]:
-    """Search with SQL scope/confirmation/status predicates before FTS results escape."""
-    _require_rag_enabled(db)
-    if not is_policy_consumer_kind(agent_kind):
-        raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "policy consumer 不受支持")
-    # Steward is a shared-data policy consumer only.  The SQL predicates below
-    # intentionally use is_assistant for private/public branches, so it can
-    # never read private memory or unrestricted public material.
-    is_assistant = int(agent_kind == "assistant")
-    clean_query = query.strip()
-    if not clean_query:
-        return []
-    if not _active_space_member(db, user_id=actor.id, space_id=space_id):
-        return []
-    expire_due_memories(db, account_id=account.id, space_id=space_id)
-    limit = max(1, min(limit, 100))
-    if for_model and raise_on_restricted and provider_kind != "local":
-        restricted_hits = search_rag(
-            db,
-            actor=actor,
-            account=account,
-            space_id=space_id,
-            query=clean_query,
-            agent_kind=agent_kind,
-            limit=limit,
-            provider_kind="local",
-        )
-        if any(hit.sensitivity in ("high", "local_required") for hit in restricted_hits):
-            raise_api_error(
-                409,
-                PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
-                "敏感 Context 需要可用的本地 Provider",
-            )
-    # Restricted material is eligible only when the selected provider is local.
-    sensitivity_predicate = (
-        "AND d.sensitivity IN ('normal','sensitive')"
-        if for_model and provider_kind != "local"
-        else ""
-    )
-    # never starts with an unrestricted similarity result set.
-    sql = text(
-        f"""
-        SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
-               c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version,
-               bm25(rag_chunks_fts) AS rank
-        FROM rag_chunks_fts
-        JOIN rag_chunks AS c ON c.id = rag_chunks_fts.rowid
-        JOIN rag_documents AS d ON d.id = c.document_id
-        WHERE rag_chunks_fts MATCH :match
-          AND c.status = 'active'
-          AND d.status = 'active'
-            AND d.confirmation_status IN ('confirmed', 'authorized')
-          AND (d.source_type != 'memory' OR EXISTS (
-            SELECT 1 FROM memories m WHERE CAST(m.id AS TEXT) = d.source_id
-              AND m.status = 'active' AND m.confirmation_status = 'confirmed'
-              AND m.source_verification = 'verified' AND m.revision = d.revision
-          ))
-          {sensitivity_predicate}
-          AND (
-            (d.scope = 'private' AND d.author_account_id = :account_id AND :is_assistant = 1)
-            OR
-            (d.scope IN ('household', 'lineage') AND d.space_id = :space_id
-             AND EXISTS (
-               SELECT 1 FROM space_members sm
-               WHERE sm.space_id = d.space_id AND sm.user_id = :user_id AND sm.status = 'active'
-             ))
-            OR
-            (d.scope = 'public' AND :is_assistant = 1)
-          )
-        ORDER BY rank ASC, c.id ASC
-        LIMIT :limit
-        """
-    )
-    rows = db.execute(
-        sql,
-        {
-            "match": _fts_match(clean_query),
-            "account_id": account.id,
-            "user_id": actor.id,
-            "space_id": space_id,
-            "is_assistant": is_assistant,
-            "limit": limit,
-        },
-    ).mappings()
-    hits: list[RAGHit] = []
-    for row in rows:
-        document_id = int(row["document_id"])
-        document = db.get(RAGDocument, document_id)
-        if document is None or not memory_sources.document_readable(
-            db,
-            document,
-            actor=actor,
-            account=account,
-            space_id=space_id,
-            agent_kind=agent_kind,
-        ):
-            continue
-        hits.append(
-            RAGHit(
-                document_id=document_id,
-                chunk_id=int(row["chunk_id"]),
-                source_id=str(row["source_id"]),
-                text=str(row["text"]),
-                token_estimate=int(row["token_estimate"]),
-                rank=float(row["rank"]),
-                citation_handle=f"rag:{row['source_id']}:r{row['revision']}:c{row['chunk_id']}",
-                scope=str(row["scope"]),
-                sensitivity=str(row["sensitivity"]),
-                revision=int(row["revision"]),
-                source_type=str(row["source_type"]),
-                index_version=str(row["index_version"]),
-                space_id=document.space_id,
-                allowed_scopes=memory_sources.document_allowed_scopes(db, document, actor),
-            )
-        )
-    return hits
 
 
 def invalidate_for_domain_event(
@@ -1041,17 +1227,36 @@ def build_context(
     query: str,
     token_budget: int = 2_000,
     policy_version: str | None = None,
+    attempt: int | None = None,
 ) -> ContextProjection:
-    """Build an auditable, budgeted data-only context from prefiltered hits."""
+    """Build an auditable, budgeted data-only context from prefiltered hits.
+
+    One attempt has exactly one valid build.  A repeated GET for the same
+    (run, attempt) replays the stored build after re-authorizing every
+    included source — it never generates a second competing build.  If any
+    included source lost readability, the replay raises
+    ``AGENT_CONTEXT_INVALIDATED`` and a new attempt must rebuild.
+    """
     budget = max(1, min(token_budget, 32_000))
     space_id = run_session_space(db, run)
     provider = resolve_for_space(db, space_id)
+    resolved_attempt = attempt if attempt is not None else run.attempt
+    existing = db.scalar(
+        select(ContextBuild)
+        .where(ContextBuild.run_id == run.id, ContextBuild.attempt == resolved_attempt)
+        .order_by(ContextBuild.id.desc())
+        .limit(1)
+        .execution_options(populate_existing=True)
+    )
+    if existing is not None:
+        return _replay_context_build(db, existing, actor=actor, account=account, space_id=space_id)
+    plan = plan_query(query)
     hits = search_rag(
         db,
         actor=actor,
         account=account,
         space_id=space_id,
-        query=query,
+        query=plan.normalized_query or query,
         agent_kind=run.kind,
         provider_kind=provider.kind,
         raise_on_restricted=True,
@@ -1065,6 +1270,7 @@ def build_context(
         )
     build = ContextBuild(
         run_id=run.id,
+        attempt=resolved_attempt,
         account_id=account.id,
         space_id=space_id,
         agent_kind=run.kind,
@@ -1078,7 +1284,8 @@ def build_context(
     blocks: list[ContextBlock] = []
     used = 0
     for rank, hit in enumerate(hits):
-        include = used + hit.token_estimate <= budget
+        estimate = hit.token_estimate
+        include = used + estimate <= budget
         db.add(
             ContextBuildItem(
                 build_id=build.id,
@@ -1088,7 +1295,7 @@ def build_context(
                 included=include,
                 exclusion_reason=None if include else "token_budget",
                 rank=rank if include else None,
-                token_estimate=hit.token_estimate,
+                token_estimate=estimate,
                 policy_version=policy_version or run.policy_version or config.POLICY_VERSION,
                 metadata_json={
                     "scope": hit.scope,
@@ -1099,11 +1306,73 @@ def build_context(
             )
         )
         if include:
-            blocks.append(
-                ContextBlock(hit.source_id, hit.text, hit.token_estimate, hit.citation_handle)
-            )
-            used += hit.token_estimate
+            blocks.append(ContextBlock(hit.source_id, hit.text, estimate, hit.citation_handle))
+            used += estimate
+    # The authorized block payload is stored once so a replayed GET returns the
+    # identical context instead of re-running a competing retrieval.
+    build.blocks_json = [
+        {
+            "source_id": block.source_id,
+            "text": block.text,
+            "token_estimate": block.token_estimate,
+            "citation_handle": block.citation_handle,
+            "trust": block.trust,
+        }
+        for block in blocks
+    ]
     db.flush()
+    return ContextProjection(build.id, tuple(blocks), provider, local_required)
+
+
+def _replay_context_build(
+    db: Session,
+    build: ContextBuild,
+    *,
+    actor: User,
+    account: Account,
+    space_id: int,
+) -> ContextProjection:
+    """Replay the attempt's stored build after re-authorizing each source."""
+    from app.models.rag import RAG_SOURCE_TYPES
+
+    blocks: list[ContextBlock] = []
+    sensitivities: list[str] = []
+    for block in build.blocks_json or []:
+        document = db.scalar(
+            select(RAGDocument).where(
+                RAGDocument.source_type.in_(RAG_SOURCE_TYPES),
+                RAGDocument.source_id == str(block["source_id"]),
+                RAGDocument.status == "active",
+            )
+        )
+        if document is None or not memory_sources.document_readable(
+            db,
+            document,
+            actor=actor,
+            account=account,
+            space_id=space_id,
+            agent_kind=build.agent_kind,
+        ):
+            from app.errors import AGENT_CONTEXT_INVALIDATED
+
+            raise_api_error(
+                409,
+                AGENT_CONTEXT_INVALIDATED,
+                "先前构建的 context 来源已变化，需要新的 attempt 重建",
+                {"context_build_id": build.id},
+            )
+        blocks.append(
+            ContextBlock(
+                source_id=str(block["source_id"]),
+                text=str(block["text"]),
+                token_estimate=int(block["token_estimate"]),
+                citation_handle=str(block["citation_handle"]),
+                trust=str(block.get("trust", "untrusted_data")),
+            )
+        )
+        sensitivities.append(str(document.sensitivity))
+    provider = resolve_for_space(db, space_id)
+    local_required = any(value in ("high", "local_required") for value in sensitivities)
     return ContextProjection(build.id, tuple(blocks), provider, local_required)
 
 

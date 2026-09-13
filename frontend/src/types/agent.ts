@@ -24,6 +24,18 @@ export interface AgentMessageOut {
   role: string
   content_json: { text?: string } & Record<string, unknown>
   created_at: string
+  /** 服务端按当前读者授权投影后的引用（不回显受限来源标识）。 */
+  citations?: unknown[]
+  /** 因来源失效/失权而未列入 citations 的引用数量（可选，缺省 0）。 */
+  unavailable_citation_count?: number
+}
+
+/** GET /api/agent/runs/{run_id}/events/{seq}/citations 固定后备读取。 */
+export interface RunEventCitations {
+  run_id: number
+  seq: number
+  citations: unknown[]
+  unavailable_citation_count: number
 }
 
 export interface AgentRunRef {

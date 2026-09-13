@@ -1,8 +1,7 @@
 """api/auth.py 全流程集成测试：登录/锁定/消歧/刷新/登出（implement.md #5、#10）。"""
 
-from conftest import auth_header, create_user_with_pin, login
-
 from app.models.audit_log import AuditLog
+from conftest import auth_header, create_user_with_pin, login
 
 
 def test_login_success_returns_token_pair(client, db_session) -> None:

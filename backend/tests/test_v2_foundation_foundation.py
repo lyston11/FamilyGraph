@@ -11,12 +11,12 @@
 from __future__ import annotations
 
 import pytest
-from conftest import create_user_with_pin
 from fastapi import HTTPException
 from sqlalchemy import text
 
 from app.errors import extract_api_error
 from app.services import identity_fsm
+from conftest import create_user_with_pin
 
 # ---- 状态机 ----
 
@@ -241,8 +241,9 @@ def test_ownership_transfer_single_pending_per_space(db_session) -> None:
 
 def test_owner_delete_blocked_space_not_cascaded(db_session, client) -> None:
     """AC-F5：删除空间所有者被阻止并引导移交；空间不被 FK 静默删除。"""
-    from conftest import auth_header, login
     from fastapi.testclient import TestClient
+
+    from conftest import auth_header, login
 
     del TestClient
     from app.models.space import FamilySpace
