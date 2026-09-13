@@ -115,3 +115,64 @@ if guest_count:
 
 - Alembic 迁移重建 SQLite 表时，不得在迁移函数内无条件切换连接级 `PRAGMA foreign_keys`。该设置在已有事务中可能被 SQLite 忽略，迁移结束后还可能改变调用方连接的预期状态；迁移应直接依赖项目启动时已经配置好的外键开关，并通过显式 FK 定义保持删除动作。
 - 迁移回归必须覆盖连接原本 `foreign_keys=ON` 与 `OFF` 两种状态，确认 upgrade/downgrade 不会替调用方改变该状态；同时断言重建后的索引、唯一约束和每条 FK 的 `ON DELETE` 行为。
+
+## Scenario: 平台级 Memory / RAG 开关（2026-09-13）
+
+### 1. Scope / Trigger
+
+当用户端暴露 Memory 或 RAG 能力、但能力需要平台统一治理时，不能只依赖不可发现的环境变量或让家庭端承受裸 503；应提供独立系统管理员配置入口，同时保留部署级 fail-closed 兜底。
+
+### 2. Signatures
+
+- DB：`platform_feature_configs(id=1, memory_enabled, rag_enabled, updated_at, updated_by_system_admin_id)`；迁移创建空表，不插入默认行。
+- 家庭 API：`GET /api/platform-features` → `{memory_enabled: bool, rag_enabled: bool}`。
+- Admin API：`GET/PUT /admin-api/v1/platform-features`；PUT 请求必须完整包含两个布尔字段，`extra='forbid'`。
+- 服务：`get_platform_feature_state(db)`、`is_memory_enabled(db)`、`is_rag_enabled(db)`、`set_platform_feature_state(...)`。
+
+### 3. Contracts
+
+- 无配置行时分别回退 `MEMORY_ENABLED` / `RAG_ENABLED`；有配置行时以平台值为产品开关。
+- 环境变量仍是 hard-off：对应环境值为 false 时有效状态必为 false，Admin 响应以 `memory_source` / `rag_source='deployment'` 标识，不能在 UI 强行打开。
+- Admin 响应只包含两个状态、两个来源和更新时间；不得返回家庭记忆、候选原文、RAG 文本、秘密或部署路径。
+- 只有独立 `system_admin` 认证可写；家庭 listener 不挂载写端点。
+
+### 4. Validation & Error Matrix
+
+- 未认证或家庭 JWT → admin API 认证失败；家庭 PUT 路径不存在/不允许。
+- PUT 额外字段或非布尔字段 → 422，数据库不变。
+- Memory 关闭 → Memory 业务 API 保持 503 fail-closed；RAG 可独立工作。
+- RAG 关闭 → RAG 搜索/索引 API 保持 503 fail-closed；Memory 可独立工作。
+- 状态端点网络/服务错误 → 前端显示“状态无法确认”，不得伪报为 disabled。
+
+### 5. Good/Base/Bad Cases
+
+- Good：四种开关组合均能独立读取和门禁；Admin 保存后重新读取仍与数据库一致。
+- Base：迁移后空表继续使用旧环境配置；首次 Admin 写入才建立单例。
+- Bad：把环境变量当成前端状态、把任意 503 当成未启用，或让空间管理员写平台开关。
+
+### 6. Tests Required
+
+- 迁移 upgrade/downgrade 与空表 bootstrap。
+- 服务层环境回退、平台值优先级、hard-off 与四种组合。
+- 家庭状态安全投影、Admin 认证/严格 schema/审计及家庭写拒绝。
+- Memory/RAG 业务门禁独立性；家庭端关闭态操作隐藏和错误分类；Admin 页面保存失败回弹、刷新真源和移动端可达性。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+if config.MEMORY_ENABLED is False:
+    # 前端继续渲染所有写操作，并把任意请求失败都显示成同一条黄色提示
+    pass
+```
+
+#### Correct
+
+```python
+state = get_platform_feature_state(db)
+if not state.memory_enabled:
+    raise_api_error(503, MEMORY_DISABLED, "Memory 功能未开启")
+```
+
+家庭端先读取只读状态并隐藏必然失败的操作；平台开关写入只允许独立系统管理员完成。

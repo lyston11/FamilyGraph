@@ -12,6 +12,7 @@ import { useSpacesStore } from '@/stores/spaces'
 import type { Memory, MemoryCandidate } from '@/types/memory'
 
 vi.mock('@/api/memory', () => ({
+  fetchPlatformFeatures: vi.fn(),
   fetchMemoryCandidates: vi.fn(),
   fetchMemories: vi.fn(),
   confirmMemoryCandidate: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@/api/spaces', () => ({
   fetchOwnershipTransfers: vi.fn().mockResolvedValue([]),
 }))
 
+const mockedFeatureState = vi.mocked(memoryApi.fetchPlatformFeatures)
 const mockedCandidates = vi.mocked(memoryApi.fetchMemoryCandidates)
 const mockedMemories = vi.mocked(memoryApi.fetchMemories)
 const mockedConfirm = vi.mocked(memoryApi.confirmMemoryCandidate)
@@ -107,7 +109,9 @@ async function mountManager(): Promise<ReturnType<typeof mount>> {
     global: { plugins: [pinia] },
     attachTo: document.body,
   })
-  await vi.waitFor(() => expect(mockedCandidates).toHaveBeenCalled())
+  await vi.waitFor(() => expect(mockedFeatureState).toHaveBeenCalled())
+  const feature = await mockedFeatureState.mock.results[0]!.value
+  if (feature.memory_enabled) await vi.waitFor(() => expect(mockedCandidates).toHaveBeenCalled())
   return wrapper
 }
 
@@ -123,6 +127,7 @@ describe('MemoryManager（五分区，PRD §2.5 / design §5.4）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
+    mockedFeatureState.mockResolvedValue({ memory_enabled: true, rag_enabled: true })
     mockedCandidates.mockResolvedValue([candidate])
     mockedMemories.mockResolvedValue([savedMemory])
     mockedConfirm.mockResolvedValue(savedMemory)
@@ -130,6 +135,28 @@ describe('MemoryManager（五分区，PRD §2.5 / design §5.4）', () => {
     mockedSearch.mockResolvedValue([])
   })
 
+  it('Memory 关闭时显示可行动说明并隐藏 Memory 写操作', async () => {
+    mockedFeatureState.mockResolvedValue({ memory_enabled: false, rag_enabled: true })
+    const wrapper = await mountManager()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-test="memory-disabled-state"]').exists()).toBe(true))
+    expect(wrapper.find('[data-test="add-memory"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="confirm-candidate"]').exists()).toBe(false)
+    expect(mockedCandidates).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('RAG 关闭时 Memory 可用但检索操作呈独立关闭态', async () => {
+    mockedFeatureState.mockResolvedValue({ memory_enabled: true, rag_enabled: false })
+    mockedCandidates.mockResolvedValue([])
+    const wrapper = await mountManager()
+
+    await vi.waitFor(() => expect(wrapper.find('[data-test="private-section"]').isVisible()).toBe(true))
+    await switchTab(wrapper, '检索与引用')
+    expect(wrapper.find('[data-test="rag-section-disabled"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="rag-panel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('五分区渲染；有待确认候选时默认进入待确认（候选视觉状态 = icon+文字）', async () => {
     const wrapper = await mountManager()
 

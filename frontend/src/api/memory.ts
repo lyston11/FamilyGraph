@@ -1,5 +1,18 @@
 import { apiClient } from '@/api/client'
-import type { Memory, MemoryCandidate, MemoryCitation, MemoryScope, MemoryScopeKind, MemorySensitivity } from '@/types/memory'
+import type {
+  Memory,
+  MemoryCandidate,
+  MemoryCitation,
+  MemoryScope,
+  MemoryScopeKind,
+  MemorySensitivity,
+  PlatformFeatureFlags,
+} from '@/types/memory'
+
+export async function fetchPlatformFeatures(): Promise<PlatformFeatureFlags> {
+  const { data } = await apiClient.get<PlatformFeatureFlags>('/platform-features')
+  return data
+}
 
 export interface ConfirmMemoryCandidatePayload {
   scope: MemoryScope

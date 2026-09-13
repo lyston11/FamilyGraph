@@ -1,5 +1,10 @@
 /** Browser-facing contracts for reviewable memories and explicit scopes. */
 
+export type PlatformFeatureFlags = {
+  memory_enabled: boolean
+  rag_enabled: boolean
+}
+
 export type MemoryScope = 'private' | `household:${number}` | `lineage:${number}`
 export type MemoryScopeKind = 'private' | 'household' | 'lineage'
 export type MemorySensitivity = 'normal' | 'sensitive' | 'high' | 'local_required'

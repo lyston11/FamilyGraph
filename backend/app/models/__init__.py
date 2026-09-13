@@ -38,6 +38,7 @@ from app.models.personal_family_view import (
     PersonalFamilyViewEdge,
     PersonalFamilyViewNode,
 )
+from app.models.platform_features import PlatformFeatureConfig
 from app.models.rag import RAGChunk, RAGDocument
 from app.models.refresh_session import RefreshSession
 from app.models.relation import Relation
@@ -114,6 +115,7 @@ __all__ = [
     "PersonalFamilyView",
     "PersonalFamilyViewEdge",
     "PersonalFamilyViewNode",
+    "PlatformFeatureConfig",
     "PlatformRoleAssignment",
     "ProfileFactReview",
     "RAGChunk",

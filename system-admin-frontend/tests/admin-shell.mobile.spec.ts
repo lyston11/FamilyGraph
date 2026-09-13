@@ -24,7 +24,7 @@ vi.mock('@/stores/auth', () => ({
 function mountShell() {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: ['overview', 'space-admins', 'anomaly-queue', 'operations', 'agent-monitor', 'agent-providers', 'access-audit'].map(
+    routes: ['overview', 'space-admins', 'anomaly-queue', 'operations', 'agent-monitor', 'agent-providers', 'platform-features', 'access-audit'].map(
       (name) => ({ path: `/${name}`, name, component: { template: '<div />' } }),
     ),
   })

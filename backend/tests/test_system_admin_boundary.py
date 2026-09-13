@@ -68,6 +68,7 @@ ADMIN_V1_ROUTES = {
     "/admin-api/v1/steward/status",
     "/admin-api/v1/steward/jobs",
     "/admin-api/v1/steward/spaces/{space_id}/rerun",
+    "/admin-api/v1/platform-features",
 }
 
 LEGACY_BREAK_GLASS_PATHS = {
@@ -159,6 +160,7 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
         "/admin-api/v1/agent/platform-defaults",
         # 09-11：admin steward 唯一写端点（单空间重跑，STEWARD_ENABLED 门禁 + 幂等键）
         "/admin-api/v1/steward/spaces/{space_id}/rerun",
+        "/admin-api/v1/platform-features",
     }
 
 

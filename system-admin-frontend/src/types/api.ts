@@ -392,6 +392,19 @@ export interface AgentPlatformDefaultsOut {
   updated_at: string | null
 }
 
+export interface AdminPlatformFeatureState {
+  memory_enabled: boolean
+  rag_enabled: boolean
+  memory_source: 'environment' | 'platform' | 'deployment'
+  rag_source: 'environment' | 'platform' | 'deployment'
+  updated_at: string | null
+}
+
+export interface AdminPlatformFeaturePayload {
+  memory_enabled: boolean
+  rag_enabled: boolean
+}
+
 /** 空间单维度行级设置（enabled=false 且 provider/model 空 = 显式停用）。 */
 export interface AgentSpaceSettingRowOut {
   agent_kind: AgentModelKind

@@ -82,6 +82,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/platform-features',
+    name: 'platform-features',
+    component: () => import('@/views/PlatformFeaturesView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/audit',
     name: 'access-audit',
     component: () => import('@/views/AccessAuditView.vue'),

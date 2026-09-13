@@ -110,6 +110,7 @@ _TABLES = (
     # 09-06 治理迁移：平台默认单行表引用 agent_providers/system_admins，先于其父表删
     "agent_platform_defaults",
     "agent_providers",
+    "platform_feature_configs",
     # v2.6 controlled web: tokens/citations/usage must be cleared before accounts/spaces
     "web_citations",
     "web_request_usage",

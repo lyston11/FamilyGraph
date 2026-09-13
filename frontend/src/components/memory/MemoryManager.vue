@@ -58,10 +58,14 @@ const pendingTabLabel = computed(() => {
 
 /** 左侧分区导航（与设置页 settings-tabs 同构）；待确认标签携带候选数 */
 const memoryTabs = computed(() => [
-  { key: 'pending' as MemoryTabId, label: pendingTabLabel.value },
-  { key: 'private' as MemoryTabId, label: TAB_LABELS.private },
-  { key: 'household' as MemoryTabId, label: TAB_LABELS.household },
-  { key: 'lineage' as MemoryTabId, label: TAB_LABELS.lineage },
+  ...(memory.memoryEnabled
+    ? [
+        { key: 'pending' as MemoryTabId, label: pendingTabLabel.value },
+        { key: 'private' as MemoryTabId, label: TAB_LABELS.private },
+        { key: 'household' as MemoryTabId, label: TAB_LABELS.household },
+        { key: 'lineage' as MemoryTabId, label: TAB_LABELS.lineage },
+      ]
+    : []),
   { key: 'rag' as MemoryTabId, label: TAB_LABELS.rag },
 ])
 
@@ -91,11 +95,20 @@ watch(
   () => currentSpace.value?.id,
   (spaceId, previousId) => {
     if (typeof previousId === 'number' && previousId !== spaceId) memory.resetForSpace(previousId)
-    if (typeof spaceId === 'number') void memory.ensureMemories(spaceId).catch(() => undefined)
+    if (typeof spaceId === 'number' && memory.memoryEnabled) void memory.ensureMemories(spaceId).catch(() => undefined)
   },
 )
 
 async function load(): Promise<void> {
+  try {
+    await memory.loadFeatureState()
+  } catch {
+    return
+  }
+  if (!memory.memoryEnabled) {
+    activeTab.value = memory.ragEnabled ? 'rag' : null
+    return
+  }
   await Promise.all([
     memory.loadCandidates(showHistory.value).catch(() => undefined),
     memory.loadPrivateMemories().catch(() => undefined),
@@ -184,7 +197,37 @@ defineExpose({ load })
       <div class="memory-grid">
         <!-- Policy Guard / 服务端错误不静默（V2.5 合同）：保留可解释的错误状态 -->
         <NAlert
-          v-if="memory.error"
+          v-if="memory.featureStateError"
+          type="error"
+          :show-icon="true"
+          :closable="false"
+          class="error-alert"
+          data-test="memory-feature-state-error"
+        >
+          能力状态暂时无法确认，未显示记忆操作。请刷新或稍后重试。
+        </NAlert>
+        <NAlert
+          v-else-if="memory.features && !memory.memoryEnabled"
+          type="info"
+          :show-icon="true"
+          :closable="false"
+          class="feature-state-alert"
+          data-test="memory-disabled-state"
+        >
+          记忆功能尚未启用。你的已有数据不会因此丢失；如需启用，请联系系统管理员。
+        </NAlert>
+        <NAlert
+          v-if="memory.features && !memory.ragEnabled"
+          type="info"
+          :show-icon="true"
+          :closable="false"
+          class="feature-state-alert"
+          data-test="rag-disabled-state"
+        >
+          检索与引用尚未启用。请联系系统管理员；记忆开关与此能力彼此独立。
+        </NAlert>
+        <NAlert
+          v-if="memory.error && !memory.featureStateError"
           type="warning"
           :show-icon="true"
           :closable="false"
@@ -195,7 +238,7 @@ defineExpose({ load })
         </NAlert>
 
         <!-- 分区 1：待确认（候选；只能确认/拒绝/稍后处理） -->
-        <section v-show="activeTab === 'pending'" class="section" data-test="candidate-section">
+        <section v-if="memory.memoryEnabled" v-show="activeTab === 'pending'" class="section" data-test="candidate-section">
           <div class="section-head">
             <div>
               <h2 class="section-title">待确认</h2>
@@ -275,7 +318,7 @@ defineExpose({ load })
         </section>
 
         <!-- 分区 2：我的私有记忆（默认 scope=private；新增/撤销/删除） -->
-        <section v-show="activeTab === 'private'" class="section" data-test="private-section">
+        <section v-if="memory.memoryEnabled" v-show="activeTab === 'private'" class="section" data-test="private-section">
           <div class="section-head">
             <div>
               <h2 class="section-title">我的私有记忆</h2>
@@ -303,7 +346,7 @@ defineExpose({ load })
         </section>
 
         <!-- 分区 3：当前家庭共享 -->
-        <section v-show="activeTab === 'household'" class="section" data-test="household-shared-section">
+        <section v-if="memory.memoryEnabled" v-show="activeTab === 'household'" class="section" data-test="household-shared-section">
           <h2 class="section-title">当前家庭共享</h2>
           <p class="meta">
             当前家庭空间（{{ currentSpace?.name ?? '未选择' }}）的共享记忆；由候选确认时的目标 scope 决定。
@@ -326,7 +369,7 @@ defineExpose({ load })
         </section>
 
         <!-- 分区 4：当前家族共享 -->
-        <section v-show="activeTab === 'lineage'" class="section" data-test="lineage-shared-section">
+        <section v-if="memory.memoryEnabled" v-show="activeTab === 'lineage'" class="section" data-test="lineage-shared-section">
           <h2 class="section-title">当前家族共享</h2>
           <p class="meta">
             当前家族空间（{{ currentSpace?.name ?? '未选择' }}）的共享记忆；由候选确认时的目标 scope 决定。
@@ -352,7 +395,16 @@ defineExpose({ load })
         <section v-show="activeTab === 'rag'" class="section" data-test="rag-section">
           <h2 class="section-title">检索与引用</h2>
           <p class="meta">检索当前空间允许的已确认知识；结果只读，「保存」只能新建候选。</p>
-          <MemoryRagPanel />
+          <NAlert
+            v-if="!memory.ragEnabled"
+            type="info"
+            :show-icon="true"
+            :closable="false"
+            data-test="rag-section-disabled"
+          >
+            检索与引用当前不可用，已有记忆和授权数据不会被删除。
+          </NAlert>
+          <MemoryRagPanel v-else />
         </section>
       </div>
     </div>

@@ -96,7 +96,8 @@ async function onAccountAction(key: string): Promise<void> {
         <RouterLink :to="{ name: 'operations' }"><span>04</span>运营治理</RouterLink>
         <RouterLink :to="{ name: 'agent-monitor' }"><span>05</span>Agent 监控</RouterLink>
         <RouterLink :to="{ name: 'agent-providers' }"><span>06</span>模型治理</RouterLink>
-        <RouterLink :to="{ name: 'access-audit' }"><span>07</span>读取审计</RouterLink>
+        <RouterLink :to="{ name: 'platform-features' }"><span>07</span>平台能力</RouterLink>
+        <RouterLink :to="{ name: 'access-audit' }"><span>08</span>读取审计</RouterLink>
       </nav>
       <div class="admin-sidebar-footer">
         <span class="admin-sidebar-footer-label">当前管理员</span>

@@ -3,7 +3,13 @@ import { defineStore } from 'pinia'
 
 import { ApiError } from '@/api/errors'
 import * as memoryApi from '@/api/memory'
-import type { Memory, MemoryCandidate, MemoryCitation, MemoryScope } from '@/types/memory'
+import type {
+  Memory,
+  MemoryCandidate,
+  MemoryCitation,
+  MemoryScope,
+  PlatformFeatureFlags,
+} from '@/types/memory'
 
 export interface MemoryStoreError {
   code: string
@@ -45,6 +51,12 @@ function sharedSpaceId(scope: MemoryScope): number | null {
  * another space's private or shared data.
  */
 export const useMemoryStore = defineStore('memory', () => {
+  const features = ref<PlatformFeatureFlags | null>(null)
+  const featureStateLoading = ref(false)
+  const featureStateError = ref<MemoryStoreError | null>(null)
+  const memoryEnabled = computed(() => features.value?.memory_enabled === true)
+  const ragEnabled = computed(() => features.value?.rag_enabled === true)
+
   const candidates = ref<MemoryCandidate[]>([])
   const privateMemories = ref<Memory[]>([])
   const partitions = ref<Map<number, MemoryPartition>>(new Map())
@@ -71,6 +83,20 @@ export const useMemoryStore = defineStore('memory', () => {
     return partition
   }
 
+  async function loadFeatureState(): Promise<PlatformFeatureFlags> {
+    featureStateLoading.value = true
+    featureStateError.value = null
+    try {
+      const result = await memoryApi.fetchPlatformFeatures()
+      features.value = result
+      return result
+    } catch (reason) {
+      featureStateError.value = toStoreError(reason)
+      throw reason
+    } finally {
+      featureStateLoading.value = false
+    }
+  }
   async function loadCandidates(includeDecided = false): Promise<void> {
     const requestId = ++candidateRequestId
     candidatesLoading.value = true
@@ -84,6 +110,7 @@ export const useMemoryStore = defineStore('memory', () => {
       if (requestId === candidateRequestId) candidatesLoading.value = false
     }
   }
+
 
   async function loadPrivateMemories(): Promise<void> {
     const generation = storeGeneration
@@ -200,6 +227,8 @@ export const useMemoryStore = defineStore('memory', () => {
   function clear(): void {
     storeGeneration += 1
     candidateRequestId += 1
+    features.value = null
+    featureStateError.value = null
     candidates.value = []
     privateMemories.value = []
     partitions.value.clear()
@@ -209,6 +238,12 @@ export const useMemoryStore = defineStore('memory', () => {
   }
 
   return {
+    features,
+    memoryEnabled,
+    ragEnabled,
+    featureStateLoading,
+    featureStateError,
+    loadFeatureState,
     candidates,
     pendingCandidates,
     memories,

@@ -7,7 +7,6 @@ from fastapi.responses import Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app import config
 from app.api.deps import get_db, require_authenticated_user
 from app.errors import MEMORY_DISABLED, raise_api_error
 from app.models.account import Account
@@ -21,7 +20,7 @@ from app.schemas.memory import (
     RAGSearchOut,
 )
 from app.services import memory as memory_service
-from app.services import rag
+from app.services import platform_features, rag
 from app.services.space_fsm import is_active_member
 
 router = APIRouter(tags=["memory-rag"])
@@ -59,7 +58,7 @@ def list_memory_candidates(
     db: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[MemoryCandidateOut]:
-    if not config.MEMORY_ENABLED:
+    if not platform_features.is_memory_enabled(db):
         raise_api_error(503, MEMORY_DISABLED, "Memory 功能未开启")
     stmt = select(MemoryCandidate).where(MemoryCandidate.author_account_id == identity[1].id)
     if not include_decided:
@@ -104,7 +103,7 @@ def list_memories(
     db: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[MemoryOut]:
-    if not config.MEMORY_ENABLED:
+    if not platform_features.is_memory_enabled(db):
         raise_api_error(503, MEMORY_DISABLED, "Memory 功能未开启")
     actor, account = identity
     if space_id is None:

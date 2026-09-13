@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与回归检查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint/type-check/build/移动端检查"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "平台开关审计、敏感信息和日志红线"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端 API 响应解码和严格类型合同"}

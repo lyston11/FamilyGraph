@@ -35,7 +35,7 @@ from app.models.memory import MEMORY_SCOPES, SENSITIVITY_LEVELS, Memory, MemoryC
 from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
-from app.services import platform_roles, visibility
+from app.services import platform_features, platform_roles, visibility
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.services.policy_consumer import is_policy_consumer_kind
@@ -46,13 +46,13 @@ _CANDIDATE_TEXT_LIMIT = 12_000
 _SHARED_SCOPES = ("household", "lineage")
 
 
-def _require_memory_enabled() -> None:
-    if not config.MEMORY_ENABLED:
+def _require_memory_enabled(db: Session) -> None:
+    if not platform_features.is_memory_enabled(db):
         raise_api_error(503, MEMORY_DISABLED, "Memory 功能未开启")
 
 
-def _require_rag_enabled() -> None:
-    if not config.RAG_ENABLED:
+def _require_rag_enabled(db: Session) -> None:
+    if not platform_features.is_rag_enabled(db):
         raise_api_error(503, RAG_DISABLED, "RAG 功能未开启")
 
 
@@ -194,7 +194,7 @@ def propose_candidate(
     extractor_version: str = "manual-v1",
 ) -> MemoryCandidate:
     """Persist a review card only; no RAG document is created here."""
-    _require_memory_enabled()
+    _require_memory_enabled(db)
     if not source_quote.strip() or not summary.strip():
         raise_api_error(422, MEMORY_STATE_CONFLICT, "记忆候选原文和摘要不能为空")
     if len(source_quote) > _CANDIDATE_TEXT_LIMIT:
@@ -304,7 +304,7 @@ def confirm_candidate(
     The suggested scope is informational only. It can never widen the user's
     explicit selection, and high-sensitivity material cannot be shared.
     """
-    _require_memory_enabled()
+    _require_memory_enabled(db)
     candidate = db.get(MemoryCandidate, candidate_id)
     if candidate is None or candidate.author_account_id != confirmer_account.id:
         raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆候选不存在")
@@ -376,7 +376,7 @@ def confirm_candidate(
     candidate.decided_at = now
     candidate.updated_at = now
     candidate.memory_id = memory.id
-    if config.RAG_ENABLED:
+    if platform_features.is_rag_enabled(db):
         index_memory(db, memory)
     emit_domain_event(
         db,
@@ -391,7 +391,7 @@ def confirm_candidate(
 
 
 def dismiss_candidate(db: Session, *, candidate_id: int, account_id: int) -> MemoryCandidate:
-    _require_memory_enabled()
+    _require_memory_enabled(db)
     candidate = db.get(MemoryCandidate, candidate_id)
     if candidate is None or candidate.author_account_id != account_id:
         raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆候选不存在")
@@ -419,7 +419,7 @@ def _chunk_text(value: str, size: int = 1200) -> list[str]:
 
 def index_memory(db: Session, memory: Memory) -> RAGDocument:
     """Create/update the sole RAG representation for a confirmed memory."""
-    _require_rag_enabled()
+    _require_rag_enabled(db)
     now = utcnow()
     document = db.scalar(
         select(RAGDocument).where(
@@ -485,7 +485,7 @@ def ingest_authorized_document(
     visibility_snapshot_key: str = "authorized-v1",
 ) -> RAGDocument:
     """Ingest only an explicitly authorized non-chat source."""
-    _require_rag_enabled()
+    _require_rag_enabled(db)
     if source_type not in RAG_SOURCE_TYPES or source_type == "memory":
         raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "该来源类型不能通过文档入口索引")
     if not text_value.strip():
@@ -630,6 +630,7 @@ def search_rag(
     raise_on_restricted: bool = False,
 ) -> list[RAGHit]:
     """Search with SQL scope/confirmation/status predicates before FTS results escape."""
+    _require_rag_enabled(db)
     if not is_policy_consumer_kind(agent_kind):
         raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "policy consumer 不受支持")
     # Steward is a shared-data policy consumer only.  The SQL predicates below
@@ -798,7 +799,7 @@ def invalidate_source(
 
 
 def delete_memory(db: Session, *, memory_id: int, account_id: int) -> None:
-    _require_memory_enabled()
+    _require_memory_enabled(db)
     memory = db.get(Memory, memory_id)
     if memory is None or memory.author_account_id != account_id:
         raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆不存在")
@@ -819,7 +820,7 @@ def delete_memory(db: Session, *, memory_id: int, account_id: int) -> None:
 
 
 def revoke_memory(db: Session, *, memory_id: int, account_id: int) -> Memory:
-    _require_memory_enabled()
+    _require_memory_enabled(db)
     memory = db.get(Memory, memory_id)
     if memory is None or memory.author_account_id != account_id:
         raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆不存在")
@@ -924,7 +925,7 @@ def query_hash(query: str) -> str:
 
 def rebuild_index(db: Session) -> int:
     """Rebuild FTS and materialize active memories missing an index document."""
-    _require_rag_enabled()
+    _require_rag_enabled(db)
     active_memories = db.scalars(select(Memory).where(Memory.status == "active")).all()
     for memory in active_memories:
         document = db.scalar(

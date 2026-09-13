@@ -130,6 +130,7 @@ describe('模块图隔离（system-admin-frontend 独立性）', () => {
       // 09-06 治理迁移：Provider 注册/更新（POST/PATCH）与平台默认覆盖（PUT）
       '/v1/agent/providers',
       '/v1/agent/platform-defaults',
+      '/v1/platform-features',
     ]
     for (const file of sourceFiles) {
       const content = readFileSync(file, 'utf8')

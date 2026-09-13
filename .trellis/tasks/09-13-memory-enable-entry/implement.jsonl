@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "统一后端错误合同、disabled 状态与安全错误文案"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "平台配置单例迁移、SQLite 事务和隔离迁移验证"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "家庭端和管理端开关组件、关闭态与可达性约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "服务端真源、状态加载与缓存失效约定"}

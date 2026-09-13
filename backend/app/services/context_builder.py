@@ -17,6 +17,7 @@ from app import config
 from app.errors import POLICY_CONTEXT_INVALID, POLICY_LOCAL_REQUIRED, raise_api_error
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.user import User
+from app.services import platform_features
 from app.services.memory_rag import RAGHit, query_hash, search_rag
 from app.services.policy_consumer import is_policy_consumer_kind
 from app.utils.timeutil import utcnow
@@ -109,7 +110,7 @@ class ContextBuilder:
             # RAG 关闭时助手仍需可运行：不把会话全文当隐式补偿上下文，只产出空
             # context（结构化 Assistant 工具路径保留）。RAG 检索由浏览器面
             # /rag/search 端点独立门禁（503 RAG_DISABLED），此处不硬阻断 Run。
-            if config.RAG_ENABLED:
+            if platform_features.is_rag_enabled(self.db):
                 sources = tuple(
                     ContextSource.from_hit(hit)
                     for hit in search_rag(
