@@ -15,8 +15,8 @@
 
 | 子任务 | 状态 | 已产生的可核验材料 |
 |---|---|---|
-| A | 实施与验收完成，待本地提交 | 后端 1050 passed/3 skipped、39 项 API/并发/迁移专项；前端 56 passed；三 listener smoke 56/56（Memory 26）；legacy 越界与前端竞态已修复 |
-| C | 等待 A 完成 | 已批准的 SDK 历史恢复与自动/手动压缩回归方案 |
+| A | 实施验收完成，提交 d1f43a5 | 后端 1050 passed/3 skipped、39 项 API/并发/迁移专项；前端 56 passed；三 listener smoke 56/56（Memory 26）；legacy 越界与前端竞态已修复 |
+| C | 实施与验收完成，待提交 | agent 108 passed（SDK 专项 19 + worker 2）；lint/type-check/build 通过；红测→修复证据与 C-AC1~6 映射落 research/implementation.md 与 notes.md |
 | B | 等待 A/C 完成 | 已冻结中文样本、引用认证和 16 KiB 事件合同 |
 | D | 等待 A/B 完成 | 已批准的稳定索引身份、防复活和有界维护方案 |
 | E | 研究验收完成，本地提交 bc6b500 | MR-23/MR-26 合成生产链、对照与哈希核验完成；12 项决策已记录，18 项预算研究断言通过；未改 Steward 生产能力 |

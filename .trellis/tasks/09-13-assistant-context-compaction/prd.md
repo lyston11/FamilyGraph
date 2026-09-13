@@ -4,7 +4,7 @@
 
 让 Assistant 恢复的旧对话进入 Pi 真正使用的压缩上下文，避免长会话压缩后本轮遗忘旧事实。
 
-父任务：[治理总任务](../09-13-agent-memory-rag-remediation/prd.md)。所有者 C；P1/MR-11，兼顾 MR-12 的边界。仅规划，尚未实施。
+父任务：[治理总任务](../09-13-agent-memory-rag-remediation/prd.md)。所有者 C；P1/MR-11，兼顾 MR-12 的边界。用户已批准执行；A 已验证并提交，本任务从 A 提交串行实施。
 
 ## Background
 
