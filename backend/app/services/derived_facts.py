@@ -117,6 +117,119 @@ def _result_from_row(row: DerivedFact) -> DerivedFactResult:
     )
 
 
+def compute_pair(
+    session: Session,
+    *,
+    viewer_user_id: int,
+    target_user_id: int,
+    space_id: int,
+) -> tuple[RelationshipResolution, DerivedFact | None, str | None]:
+    """纯读取阶段：解析路径 + 读取既有缓存行，不做任何写入（不 flush）。
+
+    返回 (resolution, 既有缓存行或 None, 当前 evidence_hash 或 None)。
+    供短事务执行器把「CPU 计算（无写锁）」与「缓存行 upsert（短写事务）」
+    分离：计算可以长时间进行而不占有 SQLite 写锁。
+    """
+    resolution = resolve_relationship(
+        session, viewer_user_id=viewer_user_id, target_user_id=target_user_id, space_id=space_id
+    )
+    row = session.scalar(
+        select(DerivedFact).where(
+            DerivedFact.viewer_user_id == viewer_user_id,
+            DerivedFact.target_user_id == target_user_id,
+            DerivedFact.space_id == space_id,
+        )
+    )
+    current_hash = evidence_hash_for(resolution.snapshot_hash) if resolution.found else None
+    return resolution, row, current_hash
+
+
+def apply_pair_result(
+    session: Session,
+    resolution: RelationshipResolution,
+    row: DerivedFact | None,
+    current_hash: str | None,
+) -> DerivedFactResult:
+    """写入阶段：把 compute_pair 的结果 upsert/删除进缓存（调用方决定事务边界）。
+
+    与 get_or_compute 共用同一 upsert/删除语义：无路径不落缓存行并清除既有行；
+    哈希一致且算法版本未变时保持命中（无写入）。
+    """
+    viewer_user_id = resolution.viewer_user_id
+    target_user_id = resolution.target_user_id
+    space_id = resolution.space_id
+    if not resolution.found:
+        if row is not None:
+            session.delete(row)
+            session.flush()
+        return DerivedFactResult(
+            cache_hit=False,
+            found=False,
+            viewer_user_id=viewer_user_id,
+            target_user_id=target_user_id,
+            space_id=space_id,
+            concept_code=None,
+            path_class=resolution.path_class,
+            main_path_json=[],
+            alt_paths_json=[],
+            alt_descriptions=(),
+            explanation_structural=None,
+            evidence_fact_ids=[],
+            evidence_hash=None,
+            algorithm_version=KINSHIP_ALGO_VERSION,
+            term_version=None,
+            resolution=resolution,
+        )
+
+    assert current_hash is not None
+    main_json = steps_to_json(resolution.main_path)
+    alts_json = [steps_to_json(path) for path in resolution.alt_paths]
+    now = utcnow()
+    if row is None:
+        row = DerivedFact(
+            viewer_user_id=viewer_user_id,
+            target_user_id=target_user_id,
+            space_id=space_id,
+            concept_code=resolution.concept_code or "",
+            main_path_json=main_json,
+            alt_paths_json=alts_json,
+            evidence_fact_ids_json=_fact_ids(resolution),
+            evidence_hash=current_hash,
+            algorithm_version=KINSHIP_ALGO_VERSION,
+            term_version=None,  # E3 TermRegistry 接入后填充
+            computed_at=now,
+        )
+        session.add(row)
+    else:
+        row.concept_code = resolution.concept_code or ""
+        row.main_path_json = main_json
+        row.alt_paths_json = alts_json
+        row.evidence_fact_ids_json = _fact_ids(resolution)
+        row.evidence_hash = current_hash
+        row.algorithm_version = KINSHIP_ALGO_VERSION
+        row.computed_at = now
+    session.flush()
+
+    return DerivedFactResult(
+        cache_hit=False,
+        found=True,
+        viewer_user_id=viewer_user_id,
+        target_user_id=target_user_id,
+        space_id=space_id,
+        concept_code=resolution.concept_code,
+        path_class=resolution.path_class,
+        main_path_json=main_json,
+        alt_paths_json=alts_json,
+        alt_descriptions=resolution.alt_descriptions,
+        explanation_structural=resolution.explanation_structural,
+        evidence_fact_ids=_fact_ids(resolution),
+        evidence_hash=current_hash,
+        algorithm_version=KINSHIP_ALGO_VERSION,
+        term_version=row.term_version,
+        resolution=resolution,
+    )
+
+
 def get_or_compute(
     session: Session,
     *,
@@ -130,15 +243,8 @@ def get_or_compute(
     无路径（found=false）不落缓存行并清除既有行（不泄露存在性）；
     force_rebuild 供 rebuild_space/运维强制全量重算。
     """
-    resolution = resolve_relationship(
+    resolution, row, current_hash = compute_pair(
         session, viewer_user_id=viewer_user_id, target_user_id=target_user_id, space_id=space_id
-    )
-    row = session.scalar(
-        select(DerivedFact).where(
-            DerivedFact.viewer_user_id == viewer_user_id,
-            DerivedFact.target_user_id == target_user_id,
-            DerivedFact.space_id == space_id,
-        )
     )
 
     if not resolution.found:
@@ -164,7 +270,8 @@ def get_or_compute(
             resolution=resolution,
         )
 
-    current_evidence_hash = evidence_hash_for(resolution.snapshot_hash)
+    current_evidence_hash = current_hash
+    assert current_evidence_hash is not None  # found=True 保证有指纹
     if (
         not force_rebuild
         and row is not None

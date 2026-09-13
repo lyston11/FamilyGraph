@@ -94,6 +94,7 @@ function select(): void {
         推测·{{ data.inferredTerm }}
       </span>
       <span v-else-if="data.term" class="term-chip" data-test="view-label">{{ data.term }}</span>
+      <span v-else-if="!data.inferred && !data.isSelf" class="term-chip term-chip--pending" data-test="term-pending-chip">整理中</span>
       <span v-if="display.birth !== null && !('__masked__' in display.birth)" class="birth" data-test="node-birth">
         {{ display.birth.date ?? '不详' }}
       </span>
@@ -153,6 +154,10 @@ function select(): void {
 .self-chip { flex-shrink: 0; padding: 0 6px; font-size: 10px; }
 .card-meta { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .term-chip { font-size: 12px; color: var(--fg-canvas-ink); }
+.term-chip--pending {
+  color: var(--fg-canvas-muted);
+  font-style: italic;
+}
 .term-chip--inferred {
   padding: 1px 6px; border: 1px dashed color-mix(in srgb, var(--fg-canvas-muted) 80%, transparent);
   border-radius: 4px; color: var(--fg-canvas-muted);

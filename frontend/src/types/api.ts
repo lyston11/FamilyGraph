@@ -417,6 +417,30 @@ export interface PersonalFamilyViewData {
   truncated: boolean
   next_cursor: string | null
   stale_reason: string | null
+  /** 渐进读取进度块（09-13 progressive=true 显式启用；旧载荷/未启用时为 null） */
+  progress?: PersonalFamilyViewProgress | null
+}
+
+/** 渐进读取进度（09-13 design §7.1 MVP 合同；服务端 pfv-progress-v1） */
+export type PersonalFamilyViewProgressPhase =
+  | 'queued'
+  | 'preparing'
+  | 'building'
+  | 'ready'
+  | 'retrying'
+  | 'failed'
+
+export interface PersonalFamilyViewProgress {
+  contract_version: string
+  phase: PersonalFamilyViewProgressPhase
+  /** viewer 内单调代次；客户端据此拒绝倒退响应 */
+  generation: number
+  revision: number
+  /** 只统计当前查看者已授权目标；完成数来自已保存验证结果，不是耗时百分比 */
+  completed_count: number
+  total_count: number
+  /** 服务端建议轮询间隔；ready/failed 为 0（停止高频轮询） */
+  next_poll_ms: number
 }
 
 /** 带 ETag 的安全快照：304 时复用上一份 data，不重建对象 */

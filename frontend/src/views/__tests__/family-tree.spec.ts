@@ -278,7 +278,7 @@ describe('FamilyTreeView 数据边界', () => {
       }),
     })
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null)
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
     // 红线：家族树页面禁止请求或读取旧 graph store 的 /api/graph/me
     expect(mockedFetchMyGraph).not.toHaveBeenCalled()
   })

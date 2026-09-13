@@ -31,6 +31,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -75,7 +76,6 @@ from app.services import (
     steward_suggestions,
 )
 from app.services.action_cards import ACTION_SUPERSEDE
-from app.services.derived_facts import get_or_compute
 from app.services.disclosure import disclosed_categories
 from app.services.domain_events import emit as emit_domain_event
 from app.services.recommendation_matrix import (
@@ -821,13 +821,25 @@ def run_steward_job(
     worker_id: str | None = None,
     expected_attempt: int | None = None,
 ) -> dict[str, Any]:
-    """执行一次 steward 作业（运行 + 结算同一立即事务，崩溃即整体回滚）。
+    """执行一次 steward 作业（09-13 短事务流水线）。
 
-    租约栅栏（F17）：验证 job id + attempt + lease owner + lease deadline；
-    执行水位上界在 lease 时固定（checkpoint_json.execution_cursor）——运行期间
-    更高的 trigger_cursor 只请求后继作业，结算不宣告未处理水位。
+    事务模型（09-13 R1：重算不得持续占有 SQLite 写锁）：
+
+    1. 开始（短立即事务）：租约栅栏验证（job id + attempt + owner + deadline），
+       置 running 并提交；
+    2. 计算：消费窗口/派生缓存/视图重建/检测出卡全部在写锁外进行，
+       只用有界短写事务分批落库（每批一次 BEGIN IMMEDIATE），期间由独立心跳
+       线程按租约 TTL 的 1/3 周期短事务续租——计算不再受 lease TTL 上限约束；
+    3. 发布（短立即事务）：fresh-read 后复查完整租约栅栏，置 succeeded、提交
+       消费水位、写完成事件并登记后继需求。发布与批次保存不再同事务——
+       已保存批次按输入指纹幂等复用，崩溃重试不会重复结算。
+
+    租约栅栏（F17）：旧执行者/过期租约在开始与发布两处都被拒绝；执行中途
+    失去租约时发布失败，作业由 reaper/新执行者接管，已提交批次不回滚但
+    也绝不冒充新租约的结果。
     """
     _require_enabled()
+    moment = now or utcnow()
     with _immediate_tx(db):
         if job.status not in ("leased", "running"):
             raise_api_error(
@@ -836,7 +848,6 @@ def run_steward_job(
                 "作业不在可执行状态",
                 detail={"status": job.status},
             )
-        moment = now or utcnow()
         if expected_attempt is not None and job.attempt != expected_attempt:
             raise_api_error(
                 409,
@@ -849,75 +860,157 @@ def run_steward_job(
         job.status = "running"
         job.heartbeat_at = moment
         job.updated_at = moment
-        # lease 时固定的执行水位上界（缺失时退回 trigger_cursor，兼容直调路径）
         raw_upper = (job.checkpoint_json or {}).get("execution_cursor")
         exec_upper = (
             job.trigger_cursor
             if not isinstance(raw_upper, int)
             else min(raw_upper, job.trigger_cursor)
         )
-        summary = _execute_locked(db, job, now=moment, upper=exec_upper)
-        # 结算前复查租约 deadline（F17 完整合同）：大空间重算可能超过租约 TTL，
-        # 过期执行者不得提交成功结果——整体回滚（含本事务内派生写入），作业由
-        # reaper 按过期回收重队。容量证据已证明该形态真实存在（200 人全矩阵
-        # 估算 4.6h ≫ 300s），是独立 worker/增量计算后续项的触发依据。
-        settled_moment = utcnow()
-        if job.lease_expires_at is not None and job.lease_expires_at <= settled_moment:
+        db.flush()
+    heartbeat = _LeaseHeartbeat(job_id=int(job.id), worker_id=worker_id)
+    try:
+        heartbeat.start()
+        summary = _execute_locked(db, job, now=utcnow(), upper=exec_upper)
+    finally:
+        heartbeat.stop()
+    _publish_success(db, job, exec_upper=exec_upper, summary=summary, worker_id=worker_id)
+    return summary
+
+
+class _LeaseHeartbeat:
+    """计算期间的独立租约心跳线程（短事务续租，不与计算共享 Session）。
+
+    周期 = 租约 TTL 的 1/3（下限 5s）；续租走 heartbeat_steward_job 的
+    完整租约栅栏——失去租约（过期/易主/终态）时置 lost 标志，发布阶段
+    因 fresh-read 栅栏失败同样被拒，双保险。线程绝不抛出：异常只记日志。
+    """
+
+    def __init__(self, *, job_id: int, worker_id: str | None) -> None:
+        self._job_id = job_id
+        self._worker_id = worker_id
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.lost = False
+
+    def start(self) -> None:
+        interval = max(config.STEWARD_LEASE_TTL_SECONDS / 3.0, 5.0)
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(interval,),
+            name=f"steward-heartbeat-{self._job_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self, interval: float) -> None:
+        from app.db import SessionLocal
+
+        while not self._stop.wait(interval):
+            try:
+                with SessionLocal() as session:
+                    row = session.get(StewardJob, self._job_id)
+                    if row is None:
+                        self.lost = True
+                        return
+                    heartbeat_steward_job(
+                        session, row, worker_id=self._worker_id, ttl_seconds=None, now=None
+                    )
+                    session.commit()
+            except Exception as exc:  # noqa: BLE001 — 心跳失败不中断计算
+                logger.warning(
+                    "steward lease heartbeat failed for job %s (error=%s)",
+                    self._job_id,
+                    type(exc).__name__,
+                )
+                api_error = extract_api_error(getattr(exc, "detail", None))
+                if api_error is not None and str(api_error.get("code")) == STEWARD_LEASE_STALE:
+                    self.lost = True
+                    return
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=10.0)
+
+
+def _publish_success(
+    db: Session,
+    job: StewardJob,
+    *,
+    exec_upper: int,
+    summary: dict[str, Any],
+    worker_id: str | None,
+) -> None:
+    """发布阶段（短立即事务）：fresh-read 复查租约栅栏后置 succeeded。
+
+    发布与计算分离后，此处核验的是数据库当前租约而非计算开始时的旧实例；
+    heartbeat.lost / 新 attempt / 过期 deadline 任一成立都拒绝发布（409），
+    已提交批次保留待指纹复用，作业交由 reaper 或新执行者收敛。
+    """
+    settled_moment = utcnow()
+    with _immediate_tx(db):
+        current = db.get(StewardJob, job.id)
+        assert current is not None
+        if current.status not in ("leased", "running"):
             raise_api_error(
                 409,
-                STEWARD_LEASE_STALE,
-                "执行期间租约到期，结果不结算；作业将按过期回收",
-                detail={"lease_expires_at": job.lease_expires_at.isoformat()},
+                STEWARD_JOB_NOT_ACTIVE,
+                "作业不在可发布状态",
+                detail={"status": current.status},
             )
-        job.status = "succeeded"
-        job.last_event_cursor = exec_upper
-        job.error_code = None
-        job.available_at = None
-        job.checkpoint_json = {
+        if _lease_stale(current, worker_id=worker_id, now=settled_moment):
+            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，发布被拒绝")
+        current.status = "succeeded"
+        current.last_event_cursor = exec_upper
+        current.error_code = None
+        current.available_at = None
+        current.checkpoint_json = {
             "last_event_cursor": exec_upper,
-            "policy_version": job.policy_version,
+            "policy_version": current.policy_version,
             "finding_signatures": summary["finding_signatures"],
             "stats": summary["stats"],
         }
-        job.settled_at = settled_moment
-        job.updated_at = settled_moment
+        current.settled_at = settled_moment
+        current.updated_at = settled_moment
         db.flush()
         emit_domain_event(
             db,
             event_type=steward_events.EVENT_STEWARD_JOB_COMPLETED,
             aggregate_type=steward_events.AGGREGATE_STEWARD_JOB,
-            aggregate_id=job.id,
+            aggregate_id=current.id,
             payload={
-                "job_id": job.id,
-                "space_id": job.space_id,
-                "cause": job.cause,
+                "job_id": current.id,
+                "space_id": current.space_id,
+                "cause": current.cause,
                 "status": "succeeded",
                 "trigger_cursor": exec_upper,
                 "stats": summary["stats"],
             },
-            space_id=job.space_id,
+            space_id=current.space_id,
             actor_account_id=None,
         )
         # 运行期间到来的更高水位：只请求后继工作（新 queued 行），不由本次
         # 结算宣告完成；本作业已终态，插入不违反每空间单活跃约束。
-        if job.trigger_cursor > exec_upper:
-            follow_up_cause = job.cause if job.cause in STEWARD_JOB_CAUSES else "domain_event"
+        if current.trigger_cursor > exec_upper:
+            follow_up_cause = (
+                current.cause if current.cause in STEWARD_JOB_CAUSES else "domain_event"
+            )
             db.add(
                 StewardJob(
-                    space_id=job.space_id,
+                    space_id=current.space_id,
                     cause=follow_up_cause,
-                    trigger_cursor=job.trigger_cursor,
+                    trigger_cursor=current.trigger_cursor,
                     status="queued",
                     attempt=0,
-                    max_attempts=job.max_attempts,
-                    policy_version=job.policy_version,
+                    max_attempts=current.max_attempts,
+                    policy_version=current.policy_version,
                     checkpoint_json={},
-                    created_at=moment,
-                    updated_at=moment,
+                    created_at=settled_moment,
+                    updated_at=settled_moment,
                 )
             )
             db.flush()
-        return summary
 
 
 def execute_steward_job(
@@ -999,6 +1092,22 @@ def _completed_cursor_floor(db: Session, job: StewardJob) -> int:
 def _execute_locked(
     db: Session, job: StewardJob, *, now: datetime, upper: int | None = None
 ) -> dict[str, Any]:
+    """执行主体（09-13 短事务版；名称沿用旧执行器供故障注入补丁）。
+
+    CPU 计算在写锁外，落库只用有界短写事务。
+
+    阶段切分（每阶段之间 db.commit() 释放写锁）：
+    1. 事件窗口消费（纯读取）；
+    2. 派生缓存重算——路径解析（纯 CPU 读取）与缓存行 upsert 分离，
+       按 STEWARD_DERIVED_COMMIT_CHUNK 对分批短事务提交；
+    3. 个人家族视图逐视图短事务重建（单视图失败不污染空间）；
+    4. finding/建议/推测/卡片/辅助登记合并为一个短写事务（其内部 SAVEPOINT
+       隔离可选层失败）。
+
+    一致性边界：分块提交意味着计算期间读到的是「截止当前已提交」的输入；
+    缓存行 evidence_hash 指纹守护保证后续扫描对漂移输入自然重算，发布阶段
+    仍以完整租约栅栏核验——不会把半程结果冒充成功作业。
+    """
     space = db.get(FamilySpace, job.space_id)
     assert space is not None  # FK 保证存在
     stats: dict[str, int] = {
@@ -1016,86 +1125,82 @@ def _execute_locked(
     floor = _completed_cursor_floor(db, job)
     exec_upper = job.trigger_cursor if upper is None else min(upper, job.trigger_cursor)
 
-    # 1. 事件窗口消费 + 本空间派生缓存重算（窗口 = (floor, lease 时固定的上界]）
+    # 1. 事件窗口消费（纯读取；窗口 = (floor, lease 时固定的上界]）
     touched = _consume_window(db, space, floor=floor, upper=exec_upper)
     stats["events_consumed"] = len(touched.events)
+    db.commit()
+
+    # 2. 派生缓存重算（分块短事务落库；解析在写锁外）
     stats["derived_recomputed"] = _rebuild_space_derived(db, space, visible)
+
+    # 3. 个人家族视图逐视图短事务重建
     from app.services.personal_family_view import rebuild_space_views
 
-    stats["personal_family_views_rebuilt"] = rebuild_space_views(db, space_id=space.id)
+    stats["personal_family_views_rebuilt"] = rebuild_space_views(
+        db, space_id=space.id, per_view_commit=True
+    )
+    db.commit()
 
-    # 2. 冲突/缺失检测（只报告）
+    # 4. 冲突/缺失检测（读取）+ 全部报告/投影/出卡/辅助（单个短写事务）
     findings = _detect_findings(db, space, visible)
     prior_signatures = _prior_finding_signatures(db, job.space_id)
-    emitted = _emit_new_findings(db, job, findings, prior_signatures, now=now)
-    stats["findings_emitted"] = emitted
+    with _immediate_tx(db):
+        stats["findings_emitted"] = _emit_new_findings(db, job, findings, prior_signatures, now=now)
 
-    # 5.5 建议审核投影（09-11 candidate-review）：把有证据的模型候选与本批
-    # findings 投影为可审核 StewardSuggestion（同事务；投影失败不回滚 core
-    # 确定性结果，由调用方 SAVEPOINT 语义隔离）。
-    try:
-        with db.begin_nested():
-            stats["suggestions_projected"] = steward_suggestions.project_for_job(
-                db,
-                job,
-                findings=findings,
-                facts=_applicable_confirmed_facts(db, space, visible),
-                now=now,
+        # 5.5 建议审核投影（09-11 candidate-review）：投影失败不回滚 core。
+        try:
+            with db.begin_nested():
+                stats["suggestions_projected"] = steward_suggestions.project_for_job(
+                    db,
+                    job,
+                    findings=findings,
+                    facts=_applicable_confirmed_facts(db, space, visible),
+                    now=now,
+                )
+        except Exception as exc:  # noqa: BLE001 — 辅助投影绝不拖垮确定性 core
+            logger.warning(
+                "steward suggestion projection failed for job %s (error=%s)",
+                job.id,
+                type(exc).__name__,
             )
-    except Exception as exc:  # noqa: BLE001 — 辅助投影绝不拖垮确定性 core
-        # 日志脱敏（09-11 R3）：异常原文可能携带 SQL 参数/字段 repr，只记
-        # job_id 与异常类名（safe error 分类见 classify_execution_error）。
-        logger.warning(
-            "steward suggestion projection failed for job %s (error=%s)",
-            job.id,
-            type(exc).__name__,
+            stats["suggestions_projected"] = 0
+
+        # 5.6 推测层投影（09-13）：失败仅记日志，不拖垮确定性 core。
+        try:
+            with db.begin_nested():
+                stats["inferred_superseded"] = steward_inferred.supersede_evidence_changed(
+                    db, job.space_id, now=now
+                )
+                stats["inferred_projected"] = steward_inferred.project_for_job(
+                    db,
+                    job,
+                    facts=_applicable_confirmed_facts(db, space, visible),
+                    visible=visible,
+                    now=now,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "steward inferred projection failed for job %s (error=%s)",
+                job.id,
+                type(exc).__name__,
+            )
+            stats["inferred_superseded"] = 0
+            stats["inferred_projected"] = 0
+
+        # 3. 推荐矩阵 → 出卡（先重验证旧卡再出新卡）+ 惰性过期
+        stats["cards_superseded"] += _revalidate_active_cards(db, space, now=now)
+        stats["cards_created"] = _recommend_cards(db, space, visible, now=now)
+        stats["cards_expired"] = action_cards.expire_due_cards(db, space_id=space.id, now=now)
+
+        # 5. 模型辅助层：仅登记辅助批次行；HTTP 绝不在本写事务内。
+        cards = action_cards.active_cards_in_space(db, space.id)
+        steward_assist.register_batch_for_job(
+            db,
+            job=job,
+            facts_brief=_confirmed_facts_brief(db, space, visible),
+            visible=visible,
+            cards=cards,
         )
-        stats["suggestions_projected"] = 0
-
-    # 5.6 推测层投影（09-13）：LLM 候选 → 推测边（显示层投影，永不写事实）。
-    #     与建议投影同一 SAVEPOINT 隔离纪律：失败仅记日志，不拖垮确定性 core。
-    try:
-        with db.begin_nested():
-            stats["inferred_superseded"] = steward_inferred.supersede_evidence_changed(
-                db, job.space_id, now=now
-            )
-            stats["inferred_projected"] = steward_inferred.project_for_job(
-                db,
-                job,
-                facts=_applicable_confirmed_facts(db, space, visible),
-                visible=visible,
-                now=now,
-            )
-    except Exception as exc:  # noqa: BLE001 — 推测投影绝不拖垮确定性 core
-        logger.warning(
-            "steward inferred projection failed for job %s (error=%s)",
-            job.id,
-            type(exc).__name__,
-        )
-        stats["inferred_superseded"] = 0
-        stats["inferred_projected"] = 0
-
-    # 3. 推荐矩阵 → 出卡（先重验证旧卡再出新卡，避免陈旧卡阻塞去重）
-    stats["cards_superseded"] += _revalidate_active_cards(db, space, now=now)
-    stats["cards_created"] = _recommend_cards(db, space, visible, now=now)
-
-    # 4. 惰性过期
-    stats["cards_expired"] = action_cards.expire_due_cards(db, space_id=space.id, now=now)
-
-    # 5. 模型辅助层（09-11 R1/R2 重构）：仅在同一短事务内登记辅助批次行
-    #    （StewardAssistBatch，R2：canonical job 的受限子阶段）。HTTP 绝不出现在
-    #    本写事务内——辅助执行由 maintenance 在事务外的受限线程按批次 lease
-    #    进行，辅助失败不回滚已提交的 core，也不阻塞其他空间调度。三类产物均
-    #    不改变任何确定性结论。
-    cards = action_cards.active_cards_in_space(db, space.id)
-    steward_assist.register_batch_for_job(
-        db,
-        job=job,
-        facts_brief=_confirmed_facts_brief(db, space, visible),
-        visible=visible,
-        cards=cards,
-    )
-
     return {
         "floor_cursor": floor,
         "trigger_cursor": exec_upper,
@@ -1216,19 +1321,40 @@ def _consume_window(db: Session, space: FamilySpace, *, floor: int, upper: int) 
 
 
 def _rebuild_space_derived(db: Session, space: FamilySpace, visible: set[int]) -> int:
-    """本空间可见配对的全量 DerivedFact 重算（get_or_compute 自带哈希守卫）。
+    """本空间可见配对的 DerivedFact 重算（evidence_hash 指纹守卫）。
 
-    采用全量扫描而非增量：中间节点上的事实变化会影响两端点均未触及的路径，
-    家族空间规模（几十人）下全量是最不易出错的正确选择；更大规模属后续优化。
+    09-13 短事务形态：``compute_pair`` 只做路径解析（纯读取，无写锁）；
+    每 STEWARD_DERIVED_COMMIT_CHUNK 对在单个立即事务内 ``apply_pair_result``
+    落库并提交。分块提交期间其他写者（登录/lease/maintenance）可在块间
+    获得写锁——这正是本改造的可用性目标；代价是全量扫描不构成单一致快照，
+    由指纹守卫 + 后继扫描收敛（漂移输入下一轮自然重算）。
     """
+    from app.services.derived_facts import apply_pair_result, compute_pair
+
     count = 0
+    chunk_size = max(config.STEWARD_DERIVED_COMMIT_CHUNK, 1)
+    buffer: list[tuple[Any, Any, Any]] = []
+
+    def flush_buffer() -> None:
+        if not buffer:
+            return
+        with _immediate_tx(db):
+            for resolution, row, current_hash in buffer:
+                apply_pair_result(db, resolution, row, current_hash)
+        buffer.clear()
+
     ordered = sorted(visible)
     for viewer in ordered:
         for target in ordered:
             if viewer == target:
                 continue
-            get_or_compute(db, viewer_user_id=viewer, target_user_id=target, space_id=space.id)
+            buffer.append(
+                compute_pair(db, viewer_user_id=viewer, target_user_id=target, space_id=space.id)
+            )
             count += 1
+            if len(buffer) >= chunk_size:
+                flush_buffer()
+    flush_buffer()
     return count
 
 

@@ -20,7 +20,7 @@ import logging
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app import config
@@ -540,6 +540,86 @@ def empty_view_payload(*, space_id: int) -> dict[str, Any]:
     }
 
 
+# ---- 渐进读取合同（09-13：先骨架后称谓的轮询协议）----
+
+PROGRESS_CONTRACT_VERSION = "pfv-progress-v1"
+_PROGRESS_NEXT_POLL_MS = {"queued": 250, "building": 1000, "retrying": 1000}
+
+
+def _phase_for_status(status: str) -> str:
+    if status in ("never_computed", "queued"):
+        return "queued"
+    if status == "running":
+        return "building"
+    if status == "current":
+        return "ready"
+    if status == "stale":
+        return "retrying"
+    return "failed"
+
+
+def progress_for(
+    session: Session,
+    *,
+    account: Account,
+    space_id: int,
+    view: PersonalFamilyView | None,
+) -> dict[str, Any]:
+    """构造渐进轮询 progress 块（design §7.1 的 MVP 合同）。
+
+    - phase：view.status 的安全映射（retrying=stale 可重试，failed=终态）；
+    - total_count：当前授权图内除本人外的可见目标上界（只统计授权目标）；
+    - completed_count：已完整保存的 confirmed 路径摘要边数（含称谓）；
+      无路径目标不计入完成，也不伪装成失败——它们只是不在分母的已达成集合；
+    - generation/revision：viewer 内单调（view_version + updated_at）。
+    """
+    status = view.status if view is not None else "never_computed"
+    phase = _phase_for_status(status)
+    completed = 0
+    total = 0
+    if view is not None:
+        # 完成数只来自当前有效代次的已保存结果：stale/running 期间的旧行
+        # 未经验证，不计入完成（绝不把失效路径冒充完成）。
+        if status == "current":
+            completed = (
+                session.scalar(
+                    select(func.count(PersonalFamilyViewEdge.id)).where(
+                        PersonalFamilyViewEdge.view_id == view.id,
+                        PersonalFamilyViewEdge.inclusion_reason_code == "confirmed_path",
+                    )
+                )
+                or 0
+            )
+        actor = session.get(User, account.user_id)
+        if actor is not None:
+            graph = load_graph(session, viewer_user_id=actor.id, space_id=space_id)
+            total = max(len(graph.node_genders) - 1, 0)
+    updated_at = view.updated_at if view is not None else None
+    return {
+        "contract_version": PROGRESS_CONTRACT_VERSION,
+        "phase": phase,
+        "generation": view.view_version if view is not None else 0,
+        "revision": int(updated_at.timestamp()) if updated_at is not None else 0,
+        "completed_count": int(completed),
+        "total_count": int(total),
+        "next_poll_ms": _PROGRESS_NEXT_POLL_MS.get(phase, 0),
+    }
+
+
+def attach_progress(
+    session: Session,
+    *,
+    account: Account,
+    space_id: int,
+    payload: dict[str, Any],
+    view: PersonalFamilyView | None,
+) -> dict[str, Any]:
+    """给响应载荷附加 progress 块（progressive=true 显式启用；旧合同不变）。"""
+    payload = dict(payload)
+    payload["progress"] = progress_for(session, account=account, space_id=space_id, view=view)
+    return payload
+
+
 def view_is_current(
     session: Session, *, view: PersonalFamilyView, account: Account, space_id: int
 ) -> bool:
@@ -913,11 +993,16 @@ def request_view_recompute(*, space_id: int) -> None:
         )
 
 
-def rebuild_space_views(session: Session, *, space_id: int) -> int:
+def rebuild_space_views(session: Session, *, space_id: int, per_view_commit: bool = False) -> int:
     """Rebuild stale projections for a Steward space job.
 
-    每份视图在独立 SAVEPOINT 内重建（R5：一份视图失败不污染 Session、
-    不导致整个空间回滚；失败视图标记 failed 终态原因）。
+    缺省（per_view_commit=False）：每份视图在独立 SAVEPOINT 内重建，由调用方
+    事务统一提交（兼容测试与既有调用点）。
+
+    per_view_commit=True（09-13 短事务执行器路径）：每份视图独立提交——单视图
+    的删除/插入写锁上界为一次视图重建，重算期间不再整空间长期占有 SQLite 写锁；
+    单视图失败回滚自身并标记 failed，不污染其他视图。该路径下调用方不得持有
+    未提交的外层写事务。
     """
     rows = session.scalars(
         select(PersonalFamilyView).where(
@@ -930,22 +1015,39 @@ def rebuild_space_views(session: Session, *, space_id: int) -> int:
             ),
         )
     ).all()
+    view_ids = [row.id for row in rows]
     rebuilt = 0
-    for row in rows:
+    for view_id in view_ids:
+        row = session.get(PersonalFamilyView, view_id)
+        if row is None:
+            continue
         account = session.get(Account, row.viewer_account_id)
         if account is None:
             continue
-        view_id = row.id
         try:
-            with session.begin_nested():
+            if per_view_commit:
                 rebuild_view(session, account=account, space_id=space_id)
-        except Exception as exc:  # keep one malformed projection from blocking the space
-            failed = session.get(PersonalFamilyView, view_id)
-            if failed is not None:
-                failed.status = "failed"
-                failed.failed_reason = type(exc).__name__
-                failed.updated_at = utcnow()
+                session.commit()
+            else:
+                with session.begin_nested():
+                    rebuild_view(session, account=account, space_id=space_id)
                 session.flush()
+        except Exception as exc:  # keep one malformed projection from blocking the space
+            if per_view_commit:
+                session.rollback()
+                failed = session.get(PersonalFamilyView, view_id)
+                if failed is not None:
+                    failed.status = "failed"
+                    failed.failed_reason = type(exc).__name__
+                    failed.updated_at = utcnow()
+                session.commit()
+            else:
+                failed = session.get(PersonalFamilyView, view_id)
+                if failed is not None:
+                    failed.status = "failed"
+                    failed.failed_reason = type(exc).__name__
+                    failed.updated_at = utcnow()
+                    session.flush()
         else:
             rebuilt += 1
     return rebuilt
@@ -954,6 +1056,8 @@ def rebuild_space_views(session: Session, *, space_id: int) -> int:
 __all__ = [
     "COMPUTATION_VERSION",
     "POLICY_VERSION",
+    "PROGRESS_CONTRACT_VERSION",
+    "attach_progress",
     "current_view_payload",
     "empty_view_payload",
     "etag_for",
@@ -962,6 +1066,7 @@ __all__ = [
     "initialize_account_views",
     "invalidate_space_views",
     "invalidate_view_scopes",
+    "progress_for",
     "rebuild_space_views",
     "rebuild_view",
     "request_view_recompute",

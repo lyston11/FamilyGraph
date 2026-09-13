@@ -256,7 +256,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
       }),
     })
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null)
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="profile-name"]').text()).toBe('成员2')
     expect(wrapper.find('[data-test="profile-identity"]').text()).toContain('家庭详情可见')
@@ -284,7 +284,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
       { userId: '2', currentSpaceId: 9, spaces: [makeLineageSpace(), household] },
     )
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null)
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
     expect(wrapper.find('[data-test="profile-name"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
   })
@@ -345,7 +345,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
       { userId: '2', currentSpaceId: null },
     )
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null)
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
     expect(useSpacesStore(pinia).currentSpaceId).toBe(9)
     expect(wrapper.find('[data-test="profile-name"]').text()).toBe('成员2')
   })

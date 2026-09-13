@@ -79,6 +79,28 @@ class InferredEdgeOut(BaseModel):
     created_at: datetime
 
 
+class PFVProgress(BaseModel):
+    """渐进读取进度块（09-13 progressive=true 显式启用；design §7.1 MVP 合同）。
+
+    - phase：queued/preparing 前置、building 重算中、ready 本人结果齐全、
+      retrying 输入漂移待重算、failed 终态；
+    - completed_count/total_count：只统计当前查看者已授权目标；完成数来自
+      已完整保存的 confirmed 摘要边，不是耗时百分比；
+    - next_poll_ms：服务端建议的轮询间隔（ready/failed 为 0，停止高频轮询）；
+    - generation/revision：viewer 内单调，客户端据此拒绝倒退响应。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: str
+    phase: Literal["queued", "preparing", "building", "ready", "retrying", "failed"]
+    generation: int
+    revision: int
+    completed_count: int
+    total_count: int
+    next_poll_ms: int
+
+
 class PersonalFamilyViewOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +115,7 @@ class PersonalFamilyViewOut(BaseModel):
     truncated: bool = False
     next_cursor: str | None = None
     stale_reason: str | None = None
+    progress: PFVProgress | None = None
 
 
 class PersonalFamilyBridgeCreate(BaseModel):
@@ -128,6 +151,7 @@ class PersonalFamilyBridgeOut(BaseModel):
 
 __all__ = [
     "BridgeStatus",
+    "PFVProgress",
     "PersonalFamilyBridgeConsent",
     "PersonalFamilyBridgeCreate",
     "PersonalFamilyBridgeOut",

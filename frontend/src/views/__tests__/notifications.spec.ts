@@ -263,7 +263,7 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     )
     const wrapper = await mountNotifications()
 
-    await vi.waitFor(() => expect(mockedFetchPersonalFamilyView).toHaveBeenCalledWith(7, null))
+    await vi.waitFor(() => expect(mockedFetchPersonalFamilyView).toHaveBeenCalledWith(7, null, { progressive: true }))
     // 只读重载：只有 GET 投影请求，无任何 Bridge 写操作
     expect(mockedFetchPersonalFamilyView).toHaveBeenCalledTimes(1)
     wrapper.unmount()

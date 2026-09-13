@@ -134,6 +134,9 @@ STEWARD_ENABLED: bool = os.environ.get("STEWARD_ENABLED", "").lower() in ("1", "
 STEWARD_LEASE_TTL_SECONDS: int = int(os.environ.get("STEWARD_LEASE_TTL_SECONDS", "300"))
 # 进程内 Steward worker 泵（与 STEWARD_ENABLED 双开关；测试/单进程默认关）
 STEWARD_WORKER_ENABLED: bool = os.environ.get("STEWARD_WORKER_ENABLED", "").lower() in ("1", "true")
+# 09-13 短事务执行器：派生缓存重算的分块提交对数（每块一个短写事务，
+# 写锁上界≈块内 upsert 耗时；路径解析全部在写锁外进行）
+STEWARD_DERIVED_COMMIT_CHUNK: int = int(os.environ.get("STEWARD_DERIVED_COMMIT_CHUNK", "50"))
 # 后台维护循环周期（agent reaper + steward pump）
 MAINTENANCE_INTERVAL_SECONDS: float = float(os.environ.get("MAINTENANCE_INTERVAL_SECONDS", "5"))
 STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))

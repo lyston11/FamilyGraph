@@ -53,11 +53,12 @@ export const usePersonalFamilyViewStore = defineStore('personalFamilyView', () =
 
   /**
    * 读取指定空间的投影。`force` 跳过 ETag 条件请求（用户显式刷新）；
-   * 否则带上已有 etag，304 时保留同一快照对象。
+   * 否则带上已有 etag，304 时保留同一快照对象。`progressive` 显式启用
+   * 渐进轮询合同（09-13；缺省启用——载荷多一个 progress 块，其余合同不变）。
    */
   async function load(
     spaceId: number,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; progressive?: boolean } = {},
   ): Promise<PersonalFamilyViewData | null> {
     const requestEpoch = epoch
     const cached = bySpace.value.get(spaceId) ?? null
@@ -67,6 +68,7 @@ export const usePersonalFamilyViewStore = defineStore('personalFamilyView', () =
       const snapshot = await fetchPersonalFamilyView(
         spaceId,
         options.force ? null : cached?.etag ?? null,
+        { progressive: options.progressive ?? true },
       )
       // 空间已切走或缓存已清：这条响应属于旧上下文，不得回写
       if (requestEpoch !== epoch) return null

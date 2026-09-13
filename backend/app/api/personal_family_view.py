@@ -37,12 +37,14 @@ def _bridge_out(row: PersonalFamilyBridge) -> PersonalFamilyBridgeOut:
 @router.get(
     "/personal-family-view",
     response_model=PersonalFamilyViewOut,
+    response_model_exclude_unset=True,
     dependencies=[Depends(_require_enabled)],
 )
 def read_personal_family_view(
     space_id: int,
     response: Response,
     if_none_match: str | None = Header(default=None),
+    progressive: bool = False,
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> PersonalFamilyViewOut | Response:
@@ -55,13 +57,20 @@ def read_personal_family_view(
     if view is None:
         # 尚无投影行：安全空态 + 显式短事务登记后台重算
         personal_family_view.request_view_recompute(space_id=space_id)
-        return PersonalFamilyViewOut.model_validate(
-            personal_family_view.empty_view_payload(space_id=space_id)
-        )
+        payload = personal_family_view.empty_view_payload(space_id=space_id)
+        if progressive:
+            payload = personal_family_view.attach_progress(
+                session, account=account, space_id=space_id, payload=payload, view=None
+            )
+        return PersonalFamilyViewOut.model_validate(payload)
     # 2. 先构造最终响应（topology_edges 是响应期从当前事实生成的，旧投影行
     #    ETag 覆盖不了它），再对实际序列化 JSON 计算 ETag；view_payload 内部
     #    完成新鲜度复核，非 current 一律安全空态（stale_reason 非空）。
     payload = personal_family_view.view_payload(session, account=account, space_id=space_id)
+    if progressive:
+        payload = personal_family_view.attach_progress(
+            session, account=account, space_id=space_id, payload=payload, view=view
+        )
     result = PersonalFamilyViewOut.model_validate(payload)
     # 盐值绑定合同版本 + token epoch + 原投影指纹（view 版本/状态/input_hash/
     # 策略与计算版本）；任一变化或载荷变化都使旧 If-None-Match 失效。

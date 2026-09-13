@@ -106,7 +106,9 @@ def upgrade() -> None:
     ).fetchall()
     existing_keys = {(row[0], row[1], row[2]) for row in existing}
     missing = [
-        row for row in rows if (row["level"], row["locale"], row["concept_code"]) not in existing_keys
+        row
+        for row in rows
+        if (row["level"], row["locale"], row["concept_code"]) not in existing_keys
     ]
     if missing:
         op.bulk_insert(_entries_table, missing)

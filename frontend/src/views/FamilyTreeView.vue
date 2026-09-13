@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NAlert, NButton, NPopover, NRadioButton, NRadioGroup, NSpin } from 'naive-ui'
 import { House, List, LocateFixed, Maximize, Network, RefreshCw } from 'lucide-vue-next'
@@ -122,7 +122,7 @@ async function loadView(force = false): Promise<void> {
 onMounted(() => {
   // 家族树不替用户更换空间；当前仍是 household 时保留上下文，等待用户
   // 在壳层的「当前家族空间」选择器中明确选择目标 lineage。
-  void loadView()
+  void loadView().then(() => scheduleProgressPoll())
 })
 
 watch([spaceId, isLineageContext], () => {
@@ -351,8 +351,49 @@ async function backToHousehold(): Promise<void> {
   await spaceContext.switchSpace(target.id)
 }
 
+// ---- 渐进轮询（09-13 R3/R4）：结果未就绪时按服务端建议间隔重读 ----
+// 授权投影返回 queued/running/never_computed（或无数据）→ 继续轮询；
+// ready/current/stale-with-data 停止高频轮询；切空间/卸载清理定时器。
+let pollTimer: number | null = null
+
+function stopProgressPolling(): void {
+  if (pollTimer !== null) {
+    window.clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+function scheduleProgressPoll(): void {
+  stopProgressPolling()
+  const d = data.value
+  if (d === null || spaceId.value === null) return
+  const notReady =
+    d.status === 'never_computed' || d.status === 'queued' || d.status === 'running'
+  if (!notReady) return
+  const delay =
+    d.progress?.next_poll_ms ?? (d.status === 'running' ? 1000 : 250)
+  pollTimer = window.setTimeout(() => {
+    void loadView(false).then(() => scheduleProgressPoll())
+  }, delay)
+}
+
+watch(data, () => scheduleProgressPoll())
+
+watch(spaceId, () => {
+  // 切空间：停旧轮询，首屏 fit 机会重置（新空间首个可渲染布局才适应画布）
+  stopProgressPolling()
+  hasAutoFitted.value = false
+})
+
+onBeforeUnmount(stopProgressPolling)
+
+// ---- fitView 只发生在首屏（或显式「适应画布」）：称谓批次补齐不重排视口 ----
+const hasAutoFitted = ref(false)
+
 watch([positionedNodes, viewMode], () => {
   if (!hasRenderableNodes.value) return
+  if (hasAutoFitted.value) return
+  hasAutoFitted.value = true
   setTimeout(fitToMembers, 30)
 })
 

@@ -9,6 +9,7 @@ import type {
   PersonalFamilyViewInferredEdge,
   PersonalFamilyViewNode,
   PersonalFamilyViewPathStep,
+  PersonalFamilyViewProgress,
   PersonalFamilyViewSnapshot,
   PersonalFamilyViewStatus,
   PersonalFamilyViewTopologyEdge,
@@ -355,6 +356,42 @@ function decodeInferredPresentation(value: unknown): KinshipPresentation | null 
   return value as unknown as KinshipPresentation
 }
 
+/**
+ * 渐进进度块解码（09-13 progressive=true）：载荷缺失（旧后端/未启用）→ null；
+ * 字段不完整视为脏数据整体丢弃（安全降级，不产生半块进度）。
+ */
+function decodeProgress(value: unknown): PersonalFamilyViewProgress | null {
+  if (value === undefined || value === null) return null
+  if (!isRecord(value)) return null
+  if (
+    typeof value.contract_version !== 'string' ||
+    !isOneOf([
+      'queued',
+      'preparing',
+      'building',
+      'ready',
+      'retrying',
+      'failed',
+    ] as const)(value.phase) ||
+    typeof value.generation !== 'number' ||
+    typeof value.revision !== 'number' ||
+    typeof value.completed_count !== 'number' ||
+    typeof value.total_count !== 'number' ||
+    typeof value.next_poll_ms !== 'number'
+  ) {
+    return null
+  }
+  return {
+    contract_version: value.contract_version,
+    phase: value.phase,
+    generation: value.generation,
+    revision: value.revision,
+    completed_count: value.completed_count,
+    total_count: value.total_count,
+    next_poll_ms: value.next_poll_ms,
+  }
+}
+
 export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData {
   if (!isRecord(value)) throw new Error('个人家族视图响应格式无效')
   if (
@@ -412,6 +449,7 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
     truncated: value.truncated,
     next_cursor: value.next_cursor,
     stale_reason: typeof value.stale_reason === 'string' ? value.stale_reason : null,
+    progress: decodeProgress(value.progress),
   }
 }
 
@@ -422,9 +460,14 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
 export async function fetchPersonalFamilyView(
   spaceId: number,
   etag?: string | null,
+  options: { progressive?: boolean } = {},
 ): Promise<PersonalFamilyViewSnapshot | null> {
   const response = await apiClient.get<unknown>('/personal-family-view', {
-    params: { space_id: spaceId },
+    params: {
+      space_id: spaceId,
+      // progressive=true 显式启用渐进轮询合同（缺省保持旧合同）
+      ...(options.progressive ? { progressive: 'true' } : {}),
+    },
     headers: etag ? { 'If-None-Match': etag } : undefined,
     // 304 不是错误：交由调用方复用既有快照
     validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
