@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
 import CitationList from '@/components/memory/CitationList.vue'
@@ -26,6 +26,61 @@ const actionCards = useActionCardsStore()
 
 const runActive = computed(() => props.run !== null && !props.run.terminal)
 
+// ---- 09-13-agent-latency-tuning：长时间 queued/running 的用户可见提示 ----
+// queued 超过阈值指向执行器（sidecar）离线等运维问题；推理中超阈值说明仍在生成。
+const QUEUED_HINT_AFTER_SECONDS = 10
+const RUNNING_HINT_AFTER_SECONDS = 30
+
+const nowMs = ref(Date.now())
+let tickHandle: ReturnType<typeof setInterval> | null = null
+const runStartedAtMs = ref<number | null>(null)
+
+watch(
+  () => props.run?.id ?? null,
+  (id) => {
+    runStartedAtMs.value = id === null ? null : Date.now()
+  },
+  { immediate: true },
+)
+
+watch(
+  runActive,
+  (active) => {
+    if (active && tickHandle === null) {
+      tickHandle = setInterval(() => {
+        nowMs.value = Date.now()
+      }, 1000)
+    } else if (!active && tickHandle !== null) {
+      clearInterval(tickHandle)
+      tickHandle = null
+    }
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  if (tickHandle !== null) {
+    clearInterval(tickHandle)
+    tickHandle = null
+  }
+})
+
+const activeSeconds = computed(() => {
+  if (!runActive.value || runStartedAtMs.value === null) return 0
+  return Math.max(0, Math.floor((nowMs.value - runStartedAtMs.value) / 1000))
+})
+
+const runHint = computed(() => {
+  if (!runActive.value) return ''
+  if (props.run?.status === 'queued' && activeSeconds.value >= QUEUED_HINT_AFTER_SECONDS) {
+    return `仍在排队（已 ${activeSeconds.value} 秒）。长时间排队通常是服务端执行器离线，请联系系统管理员。`
+  }
+  if (props.run?.status !== 'queued' && activeSeconds.value >= RUNNING_HINT_AFTER_SECONDS) {
+    return `回复生成需要较长时间（已 ${activeSeconds.value} 秒），仍在进行中。`
+  }
+  return ''
+})
+
 /** 等待首个助手回复时显示进行中指示 */
 const showPendingIndicator = computed(
   () => runActive.value && !props.messages.some((m) => m.role === 'assistant'),
@@ -34,7 +89,7 @@ const showPendingIndicator = computed(
 /** 屏幕阅读器非打断播报：最新动态一句话 */
 const announcement = computed(() => {
   const last = props.messages[props.messages.length - 1]
-  if (showPendingIndicator.value) return '助手正在思考'
+  if (showPendingIndicator.value) return runHint.value || '助手正在思考'
   if (last && last.role === 'assistant') {
     const text = Array.from(last.text)
     return text.length > 50 ? `助手回复：${text.slice(0, 50).join('')}…` : `助手回复：${last.text}`
@@ -124,6 +179,9 @@ const items = computed(() =>
     <div v-if="showPendingIndicator" class="thinking" data-test="thinking-indicator" aria-hidden="true">
       <span></span><span></span><span></span>
     </div>
+
+    <!-- 长时间 queued/running 的原因提示（09-13-agent-latency-tuning AC-4） -->
+    <p v-if="runHint" class="run-hint" data-test="run-hint">{{ runHint }}</p>
 
     <!-- 非打断 live region -->
     <div class="sr-only" aria-live="polite" data-test="live-region">{{ announcement }}</div>
@@ -235,6 +293,14 @@ const items = computed(() =>
   display: flex;
   gap: 4px;
   padding: 4px 2px;
+}
+
+.run-hint {
+  color: var(--fg-ink-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0 2px;
 }
 
 .thinking span {
