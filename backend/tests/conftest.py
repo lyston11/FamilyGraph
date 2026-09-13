@@ -393,8 +393,13 @@ def create_agent_session(session, *, account_id: int, space_id: int, kind: str =
     from app.models.agent import AgentSession
     from app.utils import timeutil
 
+    now = timeutil.utcnow()
     row = AgentSession(
-        account_id=account_id, space_id=space_id, agent_kind=kind, created_at=timeutil.utcnow()
+        account_id=account_id,
+        space_id=space_id,
+        agent_kind=kind,
+        created_at=now,
+        updated_at=now,
     )
     session.add(row)
     session.commit()

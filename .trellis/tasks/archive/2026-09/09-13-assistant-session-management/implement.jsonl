@@ -1,0 +1,4 @@
+{"file": "AGENTS.md", "reason": "仓库级开发/验证/安全约束（规范目录已弃用，以此为准）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite WAL/PRAGMA/迁移红线，0040 迁移需遵循"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Agent 运行时六端点合同与 token/事件背景（历史版本，参考语义）"}
+{"file": ".trellis/tasks/09-13-assistant-session-management/design.md", "reason": "本任务技术设计与字段/端点/组件契约"}

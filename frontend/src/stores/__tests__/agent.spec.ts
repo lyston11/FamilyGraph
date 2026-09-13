@@ -27,6 +27,8 @@ vi.mock('@/api/agent', () => ({
   createAgentMessage: vi.fn(),
   fetchAgentRun: vi.fn(),
   cancelAgentRun: vi.fn(),
+  renameAgentSession: vi.fn(),
+  deleteAgentSession: vi.fn(),
 }))
 
 // 可控的假流：捕获回调，测试中手动投喂事件
@@ -55,6 +57,8 @@ const mockedFetchSessions = vi.mocked(agentApi.fetchAgentSessions)
 const mockedFetchMessages = vi.mocked(agentApi.fetchAgentMessages)
 const mockedCreateMessage = vi.mocked(agentApi.createAgentMessage)
 const mockedFetchRun = vi.mocked(agentApi.fetchAgentRun)
+const mockedRenameSession = vi.mocked(agentApi.renameAgentSession)
+const mockedDeleteSession = vi.mocked(agentApi.deleteAgentSession)
 
 function makeEvent(seq: number, type: string, payload: Record<string, unknown> = {}): AgentRunEvent {
   return { run_id: 100, seq, type, payload, created_at: '2026-08-26T00:00:00' }
@@ -68,6 +72,8 @@ async function seedSpaceWithRun(store: ReturnType<typeof useAgentStore>, spaceId
     space_id: spaceId,
     agent_kind: 'assistant',
     created_at: '2026-08-26T00:00:00',
+    title: null,
+    updated_at: '2026-08-26T00:00:00',
   })
   mockedCreateMessage.mockResolvedValue({
     message: { id: 21, role: 'user', content_json: { text: '谁是我的长辈？' }, created_at: '2026-08-26T00:00:01' },
@@ -167,7 +173,14 @@ describe('agent store（V2.2 Block C3）', () => {
   it('刷新恢复：selectSession 重订阅非终态 Run 并对历史去重合流（AC-AS6）', async () => {
     const store = useAgentStore()
     mockedFetchSessions.mockResolvedValue([
-      { id: 11, space_id: 1, agent_kind: 'assistant', created_at: '2026-08-26T00:00:00' },
+      {
+        id: 11,
+        space_id: 1,
+        agent_kind: 'assistant',
+        created_at: '2026-08-26T00:00:00',
+        title: null,
+        updated_at: '2026-08-26T00:00:00',
+      },
     ])
     await store.ensureSpace(1)
     // 模拟刷新前的现场：游标存在 + 历史里已有用户消息（助手回复未持久化）
@@ -211,6 +224,8 @@ describe('agent store（V2.2 Block C3）', () => {
       space_id: 2,
       agent_kind: 'assistant',
       created_at: '2026-08-26T00:00:00',
+      title: null,
+      updated_at: '2026-08-26T00:00:00',
     })
     await store.ensureSpace(2)
     await store.newSession(2)
@@ -235,6 +250,113 @@ describe('agent store（V2.2 Block C3）', () => {
     expect(store.partitions.size).toBe(0)
     expect(streamClose).toHaveBeenCalled()
     expect(sessionStorage.getItem('fg.agent.run.11')).toBeNull()
+  })
+
+  it('renameSession：原地更新会话列表项并同步标题缓存；失败写入 error', async () => {
+    const store = useAgentStore()
+    mockedFetchSessions.mockResolvedValue([
+      {
+        id: 11,
+        space_id: 1,
+        agent_kind: 'assistant',
+        created_at: '2026-08-26T00:00:00',
+        title: '旧标题',
+        updated_at: '2026-08-26T00:00:00',
+      },
+    ])
+    await store.ensureSpace(1)
+    mockedRenameSession.mockResolvedValueOnce({
+      id: 11,
+      space_id: 1,
+      agent_kind: 'assistant',
+      created_at: '2026-08-26T00:00:00',
+      title: '家谱问答',
+      updated_at: '2026-08-26T00:00:00',
+    })
+    await store.renameSession(1, 11, '家谱问答')
+
+    const p1 = store.partitions.get(1)
+    expect(p1?.sessions[0]?.title).toBe('家谱问答')
+    expect(p1?.titles[11]).toBe('家谱问答')
+    expect(p1?.error).toBeNull()
+
+    mockedRenameSession.mockRejectedValueOnce(
+      new (await import('@/api/errors')).ApiError(422, 'AGENT_SESSION_TITLE_INVALID', '标题无效'),
+    )
+    await store.renameSession(1, 11, ' ')
+    expect(p1?.error?.code).toBe('AGENT_SESSION_TITLE_INVALID')
+    expect(p1?.sessions[0]?.title).toBe('家谱问答')
+  })
+
+  it('deleteSession：删除当前会话后清场并切换到剩余会话；空列表回到空状态', async () => {
+    const store = useAgentStore()
+    mockedFetchSessions.mockResolvedValue([
+      {
+        id: 11,
+        space_id: 1,
+        agent_kind: 'assistant',
+        created_at: '2026-08-26T00:00:00',
+        title: null,
+        updated_at: '2026-08-26T00:00:00',
+      },
+      {
+        id: 12,
+        space_id: 1,
+        agent_kind: 'assistant',
+        created_at: '2026-08-26T01:00:00',
+        title: '迁徙史',
+        updated_at: '2026-08-26T01:00:00',
+      },
+    ])
+    await store.ensureSpace(1)
+    await store.selectSession(1, 11)
+    mockedFetchMessages.mockResolvedValue([
+      { id: 31, role: 'user', content_json: { text: '迁徙史问一句' }, created_at: '2026-08-26T01:00:01' },
+    ])
+    sessionStorage.setItem('fg.agent.run.11', '100')
+
+    await store.deleteSession(1, 11)
+
+    const p1 = store.partitions.get(1)
+    expect(mockedDeleteSession).toHaveBeenCalledWith(11)
+    expect(p1?.sessions.map((s) => s.id)).toEqual([12])
+    expect(p1?.activeSessionId).toBe(12)
+    expect(p1?.messages.map((m) => m.text)).toEqual(['迁徙史问一句'])
+    expect(p1?.run).toBeNull()
+    expect(p1?.draft).toBe('')
+    expect(sessionStorage.getItem('fg.agent.run.11')).toBeNull()
+
+    // 删除最后一个会话：activeSessionId 置空（PanelContent 回到「开始新会话」分支）
+    await store.deleteSession(1, 12)
+    expect(p1?.sessions).toEqual([])
+    expect(p1?.activeSessionId).toBeNull()
+    expect(p1?.messages).toEqual([])
+  })
+
+  it('deleteSession：409（有进行中 Run）写入 error 横幅且不清场', async () => {
+    const store = useAgentStore()
+    mockedFetchSessions.mockResolvedValue([
+      {
+        id: 11,
+        space_id: 1,
+        agent_kind: 'assistant',
+        created_at: '2026-08-26T00:00:00',
+        title: null,
+        updated_at: '2026-08-26T00:00:00',
+      },
+    ])
+    await store.ensureSpace(1)
+    await store.selectSession(1, 11)
+    mockedDeleteSession.mockRejectedValueOnce(
+      new (await import('@/api/errors')).ApiError(409, 'AGENT_RUN_SESSION_BUSY', '会话忙'),
+    )
+
+    await store.deleteSession(1, 11)
+
+    const p1 = store.partitions.get(1)
+    expect(p1?.error?.code).toBe('AGENT_RUN_SESSION_BUSY')
+    expect(p1?.sessions.map((s) => s.id)).toEqual([11])
+    expect(p1?.activeSessionId).toBe(11)
   })
 
   it('auth.clearSession() 联动清空 agent store（AC-AS7）', async () => {

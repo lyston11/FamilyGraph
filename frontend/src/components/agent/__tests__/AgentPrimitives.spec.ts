@@ -264,30 +264,96 @@ describe('ScopeBanner', () => {
 })
 
 describe('SessionList', () => {
-  it('新建会话按钮上抛 create；标题回退时间格式', () => {
-    const sessions: AgentSession[] = [
-      { id: 11, space_id: 1, agent_kind: 'assistant', created_at: '2026-08-26T09:30:00' },
-    ]
+  const makeSession = (id: number, overrides: Partial<AgentSession> = {}): AgentSession => ({
+    id,
+    space_id: 1,
+    agent_kind: 'assistant',
+    created_at: '2026-08-26T09:30:00',
+    title: null,
+    updated_at: '2026-08-26T10:00:00',
+    ...overrides,
+  })
+
+  it('新建会话按钮上抛 create；无标题时回退创建时间格式', () => {
     const wrapper = mount(SessionList, {
-      props: { sessions, activeSessionId: 11, titles: {} },
+      props: { sessions: [makeSession(11)], activeSessionId: 11, titles: {} },
     })
-    expect(wrapper.text()).not.toContain('谁是我的长辈') // 未加载历史 → 用回退标题
-    const btn = wrapper.find('[data-test="new-session-btn"]')
-    btn.trigger('click')
+    expect(wrapper.text()).not.toContain('谁是我的长辈') // 无服务端标题且未加载历史 → 回退
+    expect(wrapper.find('[data-test="session-toggle"]').text()).toContain('08-26')
+    wrapper.find('[data-test="new-session-btn"]').trigger('click')
     expect(wrapper.emitted('create')).toHaveLength(1)
   })
 
-  it('已加载历史的会话优先使用传入标题（store 层截断，见 agent.spec）', async () => {
-    const sessions: AgentSession[] = [
-      { id: 11, space_id: 1, agent_kind: 'assistant', created_at: '2026-08-26T09:30:00' },
-    ]
+  it('标题解析：服务端 title 优先于内存 titles', () => {
     const wrapper = mount(SessionList, {
-      props: { sessions, activeSessionId: 11, titles: { 11: '谁是我的长辈？' } },
+      props: {
+        sessions: [makeSession(11, { title: '家谱问答' })],
+        activeSessionId: 11,
+        titles: { 11: '内存标题' },
+      },
     })
-    // n-select 选中项标签渲染在 base-selection 内：等待一次渲染队列
-    await wrapper.vm.$nextTick()
-    await wrapper.vm.$nextTick()
-    expect(wrapper.text()).toContain('谁是我的长辈？')
+    expect(wrapper.find('[data-test="session-toggle"]').text()).toContain('家谱问答')
+    expect(wrapper.text()).not.toContain('内存标题')
+  })
+
+  it('展开列表：渲染条目/相对时间、当前会话高亮，点击条目上抛 select 并收起', async () => {
+    const wrapper = mount(SessionList, {
+      props: {
+        sessions: [
+          makeSession(11, { title: '家谱问答', updated_at: new Date(Date.now() - 10_000).toISOString() }),
+          makeSession(12, { title: '迁徙史', updated_at: '2026-08-26T10:00:00' }),
+        ],
+        activeSessionId: 11,
+        titles: {},
+      },
+    })
+    expect(wrapper.find('[data-test="session-items"]').exists()).toBe(false)
+    await wrapper.find('[data-test="session-toggle"]').trigger('click')
+    const items = wrapper.findAll('[data-test="session-item"]')
+    expect(items).toHaveLength(2)
+    expect(items[0].attributes('aria-current')).toBe('true')
+    expect(items[1].attributes('aria-current')).toBeUndefined()
+    expect(wrapper.text()).toContain('刚刚')
+    // 超过 7 天回退 MM-DD 格式
+    expect(wrapper.text()).toContain('08-26')
+
+    await items[1].trigger('click')
+    expect(wrapper.emitted('select')).toEqual([[12]])
+    expect(wrapper.find('[data-test="session-items"]').exists()).toBe(false)
+  })
+
+  it('重命名：行内编辑回填当前标题，Enter 提交 trim 后的值', async () => {
+    const wrapper = mount(SessionList, {
+      props: {
+        sessions: [makeSession(11, { title: '旧标题' })],
+        activeSessionId: 11,
+        titles: {},
+      },
+    })
+    await wrapper.find('[data-test="session-toggle"]').trigger('click')
+    await wrapper.find('[data-test="session-item-rename"]').trigger('click')
+    const input = wrapper.find('[data-test="session-rename-input"]')
+    expect((input.element as unknown as HTMLInputElement).value).toBe('旧标题')
+    await input.setValue('  新标题  ')
+    await input.trigger('keydown.enter')
+    expect(wrapper.emitted('rename')).toEqual([[11, '新标题']])
+    // 空标题不提交（视为取消）
+    await wrapper.find('[data-test="session-item-rename"]').trigger('click')
+    const again = wrapper.find('[data-test="session-rename-input"]')
+    await again.setValue('   ')
+    await again.trigger('keydown.enter')
+    expect(wrapper.emitted('rename')).toHaveLength(1)
+  })
+
+  it('删除：两步确认后上抛 delete', async () => {
+    const wrapper = mount(SessionList, {
+      props: { sessions: [makeSession(11)], activeSessionId: 11, titles: {} },
+    })
+    await wrapper.find('[data-test="session-toggle"]').trigger('click')
+    expect(wrapper.find('[data-test="session-item-delete-confirm"]').exists()).toBe(false)
+    await wrapper.find('[data-test="session-item-delete"]').trigger('click')
+    await wrapper.find('[data-test="session-item-delete-confirm"]').trigger('click')
+    expect(wrapper.emitted('delete')).toEqual([[11]])
   })
 })
 
