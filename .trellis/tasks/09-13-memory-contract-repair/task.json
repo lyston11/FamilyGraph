@@ -1,0 +1,32 @@
+{
+  "id": "memory-contract-repair",
+  "name": "memory-contract-repair",
+  "title": "记忆候选与管理端到端契约修复",
+  "description": "修复候选来源缺失与序列化故障，补齐确认、开关、权限和真实接口回归。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-13",
+  "completedAt": null,
+  "branch": "feat/09-13-memory-contract-repair",
+  "base_branch": "main",
+  "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-memory-contract-repair",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-13-agent-memory-rag-remediation",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_only": "false",
+    "workstream": "A",
+    "implementation_dependencies": "none",
+    "audit_issue_scope": "MR-01,MR-02,MR-16; MR-17 lifecycle boundary; MR-24",
+    "implementation_approved": "2026-09-13: parent plan approved; execute A first"
+  }
+}
