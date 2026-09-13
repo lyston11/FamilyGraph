@@ -69,6 +69,8 @@ ADMIN_V1_ROUTES = {
     "/admin-api/v1/steward/jobs",
     "/admin-api/v1/steward/spaces/{space_id}/rerun",
     "/admin-api/v1/platform-features",
+    # 09-13 观测：agent 延迟指标（只读，admin listener）
+    "/admin-api/v1/agent/latency",
 }
 
 LEGACY_BREAK_GLASS_PATHS = {
