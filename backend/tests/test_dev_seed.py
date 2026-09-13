@@ -1,10 +1,10 @@
 """dev 种子模块合同（09-05 dev-seed-demo-data + 09-13 明皇室数据集 + 增量收敛）。
 
 - DEV_SEED_DEMO_DATA 未开启（默认 "0"）→ maybe_seed_demo_data 零写入；
-- env=1 + 空库 → 全量播种：36 用户（含出生日期）/6 空间（household×3 + lineage×3，
-  三个 household 显式配对所属 lineage）/50 成员行/55 关系/55 confirmed SourceFact
-  （全局一份）/基础五类披露全局开放，PIN 123456 校验通过；进程内重复调用
-  （_SEED_DONE）幂等跳过；
+- env=1 + 空库 → 全量播种：51 用户（含出生日期）/20 空间（household×10 +
+  lineage×10，十个 household 显式配对所属 lineage）/92 成员行/74 关系/74
+  confirmed SourceFact（全局一份）/基础五类披露全局开放，PIN 123456 校验通过；
+  进程内重复调用（_SEED_DONE）幂等跳过；
 - env=1 + 非空库 → insert-only 增量补缺：清单缺失行自动补齐（用户按姓名 /
   空间按名 / 成员行按 (space,user) / 关系边按两人任一方向 pending|active 匹配），
   既有行（含清单外用户）零改动，返回 True；清单已完全收敛 → 返回 False 且零写入；
@@ -71,6 +71,28 @@ _DEMO_NAMES = {
     "谢氏",
     "徐辉祖",
     "徐增寿",
+    # 常氏家族（常遇春本家）
+    "常遇春",
+    "蓝氏",
+    "常茂",
+    "常升",
+    # 吕氏家族（吕本本家）
+    "吕本",
+    # 梅氏家族（梅思祖本家）
+    "梅思祖",
+    # 张氏家族（张麒本家）
+    "张麒",
+    "张昶",
+    # 孙氏家族（孙忠本家）
+    "孙忠",
+    "孙继宗",
+    # 钱氏家族（钱贵本家）
+    "钱贵",
+    # 李氏家族（曹国长公主朱佛女⇄李贞本家）
+    "李贞",
+    "朱佛女",
+    "李文忠",
+    "李景隆",
 }
 
 # v1 边方向语义：to_user 是 from_user 的 dir_class（elder 指向长辈）
@@ -86,6 +108,8 @@ _SEED_SPOUSE_PAIRS = {
     ("朱祁镇", "钱皇后"),
     ("马公", "郑氏"),
     ("徐达", "谢氏"),
+    ("常遇春", "蓝氏"),
+    ("李贞", "朱佛女"),
 }
 _SEED_ELDER_PAIRS = {
     ("朱兴隆", "朱世珍"),
@@ -132,6 +156,23 @@ _SEED_ELDER_PAIRS = {
     ("徐辉祖", "谢氏"),
     ("徐增寿", "徐达"),
     ("徐增寿", "谢氏"),
+    ("常氏", "常遇春"),
+    ("常氏", "蓝氏"),
+    ("常茂", "常遇春"),
+    ("常茂", "蓝氏"),
+    ("常升", "常遇春"),
+    ("常升", "蓝氏"),
+    ("吕氏", "吕本"),
+    ("张皇后", "张麒"),
+    ("张昶", "张麒"),
+    ("孙皇后", "孙忠"),
+    ("孙继宗", "孙忠"),
+    ("钱皇后", "钱贵"),
+    ("朱佛女", "朱世珍"),
+    ("朱佛女", "陈氏"),
+    ("李文忠", "李贞"),
+    ("李文忠", "朱佛女"),
+    ("李景隆", "李文忠"),
 }
 
 
@@ -158,7 +199,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     assert dev_seed.maybe_seed_demo_data(db_session) is True
 
     users = db_session.query(User).all()
-    assert len(users) == 36
+    assert len(users) == 51
     by_name = {user.name: user for user in users}
     assert set(by_name) == _DEMO_NAMES
     for user in users:
@@ -180,7 +221,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     assert by_name["朱元璋"].id == min(user.id for user in users)
 
     spaces = db_session.query(FamilySpace).all()
-    assert len(spaces) == 6
+    assert len(spaces) == 20
     by_space_name = {space.name: space for space in spaces}
     household = by_space_name["明皇室"]
     lineage = by_space_name["朱氏皇族"]
@@ -188,27 +229,76 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     ma_lineage = by_space_name["马氏家族"]
     xu_household = by_space_name["徐达家"]
     xu_lineage = by_space_name["徐氏家族"]
+    chang_household = by_space_name["常府"]
+    chang_lineage = by_space_name["常氏家族"]
+    lv_household = by_space_name["吕府"]
+    lv_lineage = by_space_name["吕氏家族"]
+    mei_household = by_space_name["梅府"]
+    mei_lineage = by_space_name["梅氏家族"]
+    zhang_household = by_space_name["张家"]
+    zhang_lineage = by_space_name["张氏家族"]
+    sun_household = by_space_name["孙家"]
+    sun_lineage = by_space_name["孙氏家族"]
+    qian_household = by_space_name["钱家"]
+    qian_lineage = by_space_name["钱氏家族"]
+    li_household = by_space_name["李家"]
+    li_lineage = by_space_name["李氏家族"]
     assert household.kind == "household" and lineage.kind == "lineage"
     assert ma_household.kind == "household" and ma_lineage.kind == "lineage"
     assert xu_household.kind == "household" and xu_lineage.kind == "lineage"
+    assert chang_household.kind == "household" and chang_lineage.kind == "lineage"
+    assert lv_household.kind == "household" and lv_lineage.kind == "lineage"
+    assert mei_household.kind == "household" and mei_lineage.kind == "lineage"
+    assert zhang_household.kind == "household" and zhang_lineage.kind == "lineage"
+    assert sun_household.kind == "household" and sun_lineage.kind == "lineage"
+    assert qian_household.kind == "household" and qian_lineage.kind == "lineage"
+    assert li_household.kind == "household" and li_lineage.kind == "lineage"
     assert household.owner_id == by_name["朱元璋"].id
     assert lineage.owner_id == by_name["朱元璋"].id
     assert ma_household.owner_id == by_name["马皇后"].id
     assert ma_lineage.owner_id == by_name["马皇后"].id
     assert xu_household.owner_id == by_name["徐达"].id
     assert xu_lineage.owner_id == by_name["徐达"].id
+    assert chang_household.owner_id == by_name["常遇春"].id
+    assert chang_lineage.owner_id == by_name["常遇春"].id
+    assert lv_household.owner_id == by_name["吕本"].id
+    assert lv_lineage.owner_id == by_name["吕本"].id
+    assert mei_household.owner_id == by_name["梅思祖"].id
+    assert mei_lineage.owner_id == by_name["梅思祖"].id
+    assert zhang_household.owner_id == by_name["张麒"].id
+    assert zhang_lineage.owner_id == by_name["张麒"].id
+    assert sun_household.owner_id == by_name["孙忠"].id
+    assert sun_lineage.owner_id == by_name["孙忠"].id
+    assert qian_household.owner_id == by_name["钱贵"].id
+    assert qian_lineage.owner_id == by_name["钱贵"].id
+    assert li_household.owner_id == by_name["李贞"].id
+    assert li_lineage.owner_id == by_name["李贞"].id
     assert {space.owner_id for space in spaces} == {
         by_name["朱元璋"].id,
         by_name["马皇后"].id,
         by_name["徐达"].id,
+        by_name["常遇春"].id,
+        by_name["吕本"].id,
+        by_name["梅思祖"].id,
+        by_name["张麒"].id,
+        by_name["孙忠"].id,
+        by_name["钱贵"].id,
+        by_name["李贞"].id,
     }
     # 家族配对：本次新建 household 显式挂入所属 lineage（「当前家族空间」切换数据基础）
     assert household.lineage_space_id == lineage.id
     assert ma_household.lineage_space_id == ma_lineage.id
     assert xu_household.lineage_space_id == xu_lineage.id
+    assert chang_household.lineage_space_id == chang_lineage.id
+    assert lv_household.lineage_space_id == lv_lineage.id
+    assert mei_household.lineage_space_id == mei_lineage.id
+    assert zhang_household.lineage_space_id == zhang_lineage.id
+    assert sun_household.lineage_space_id == sun_lineage.id
+    assert qian_household.lineage_space_id == qian_lineage.id
+    assert li_household.lineage_space_id == li_lineage.id
 
-    # 明皇室 6 人 / 朱氏皇族 30 人（旁系与姻亲只进家族空间）/ 马府 2 人 /
-    # 马氏家族 4 人 / 徐达家 2 人 / 徐氏家族 6 人（跨空间成员见下方专项断言）
+    # 明皇室 6 人 / 朱氏皇族 30 人（旁系与姻亲只进家族空间）；外戚本家 household
+    # 2 人 + lineage 收全族；跨空间成员见下方专项断言
     expected_rosters = (
         (household, 6, by_name["朱元璋"].id),
         (lineage, 30, by_name["朱元璋"].id),
@@ -216,6 +306,20 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         (ma_lineage, 4, by_name["马皇后"].id),
         (xu_household, 2, by_name["徐达"].id),
         (xu_lineage, 6, by_name["徐达"].id),
+        (chang_household, 2, by_name["常遇春"].id),
+        (chang_lineage, 6, by_name["常遇春"].id),
+        (lv_household, 2, by_name["吕本"].id),
+        (lv_lineage, 3, by_name["吕本"].id),
+        (mei_household, 2, by_name["梅思祖"].id),
+        (mei_lineage, 3, by_name["梅思祖"].id),
+        (zhang_household, 2, by_name["张麒"].id),
+        (zhang_lineage, 4, by_name["张麒"].id),
+        (sun_household, 2, by_name["孙忠"].id),
+        (sun_lineage, 4, by_name["孙忠"].id),
+        (qian_household, 2, by_name["钱贵"].id),
+        (qian_lineage, 3, by_name["钱贵"].id),
+        (li_household, 2, by_name["李贞"].id),
+        (li_lineage, 5, by_name["李贞"].id),
     )
     for space, size, admin_id in expected_rosters:
         members = db_session.query(SpaceMember).filter_by(space_id=space.id).all()
@@ -225,10 +329,9 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         assert len(admin_rows) == 1
         assert admin_rows[0].user_id == admin_id
         assert sum(1 for member in members if member.role == "member") == size - 1
-    assert db_session.query(SpaceMember).count() == 50
+    assert db_session.query(SpaceMember).count() == 92
 
-    # 跨空间成员资格：朱元璋以 member 身份进马府与马氏家族（马皇后本家），
-    # 朱棣以 member 身份进徐达家与徐氏家族（徐皇后本家）
+    # 跨空间成员资格：帝室成员以 member 身份进入各外戚本家
     def _member_ids(space: FamilySpace) -> set[int]:
         return {
             member.user_id
@@ -251,19 +354,68 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         by_name["徐增寿"].id,
         by_name["徐皇后"].id,
     }
+    assert _member_ids(chang_household) == {by_name["常遇春"].id, by_name["朱标"].id}
+    assert _member_ids(chang_lineage) == {
+        by_name["常遇春"].id,
+        by_name["朱标"].id,
+        by_name["蓝氏"].id,
+        by_name["常茂"].id,
+        by_name["常升"].id,
+        by_name["常氏"].id,
+    }
+    assert _member_ids(lv_household) == {by_name["吕本"].id, by_name["朱标"].id}
+    assert _member_ids(lv_lineage) == {
+        by_name["吕本"].id,
+        by_name["朱标"].id,
+        by_name["吕氏"].id,
+    }
+    assert _member_ids(mei_household) == {by_name["梅思祖"].id, by_name["宁国公主"].id}
+    assert _member_ids(mei_lineage) == {
+        by_name["梅思祖"].id,
+        by_name["宁国公主"].id,
+        by_name["梅殷"].id,
+    }
+    assert _member_ids(zhang_household) == {by_name["张麒"].id, by_name["朱高炽"].id}
+    assert _member_ids(zhang_lineage) == {
+        by_name["张麒"].id,
+        by_name["朱高炽"].id,
+        by_name["张昶"].id,
+        by_name["张皇后"].id,
+    }
+    assert _member_ids(sun_household) == {by_name["孙忠"].id, by_name["朱瞻基"].id}
+    assert _member_ids(sun_lineage) == {
+        by_name["孙忠"].id,
+        by_name["朱瞻基"].id,
+        by_name["孙继宗"].id,
+        by_name["孙皇后"].id,
+    }
+    assert _member_ids(qian_household) == {by_name["钱贵"].id, by_name["朱祁镇"].id}
+    assert _member_ids(qian_lineage) == {
+        by_name["钱贵"].id,
+        by_name["朱祁镇"].id,
+        by_name["钱皇后"].id,
+    }
+    assert _member_ids(li_household) == {by_name["李贞"].id, by_name["朱元璋"].id}
+    assert _member_ids(li_lineage) == {
+        by_name["李贞"].id,
+        by_name["朱元璋"].id,
+        by_name["朱佛女"].id,
+        by_name["李文忠"].id,
+        by_name["李景隆"].id,
+    }
 
     relations = db_session.query(Relation).all()
-    assert len(relations) == 55
+    assert len(relations) == 74
     assert {relation.status for relation in relations} == {"active"}
     spouse_edges = [r for r in relations if r.dir_class == "spouse"]
     elder_edges = [r for r in relations if r.dir_class == "elder"]
-    assert len(spouse_edges) == 11 and len(elder_edges) == 44
+    assert len(spouse_edges) == 13 and len(elder_edges) == 61
     by_id = {user.id: user.name for user in users}
     assert {(by_id[r.from_user], by_id[r.to_user]) for r in spouse_edges} == _SEED_SPOUSE_PAIRS
     assert {(by_id[r.from_user], by_id[r.to_user]) for r in elder_edges} == _SEED_ELDER_PAIRS
 
     facts = db_session.query(SourceFact).all()
-    assert len(facts) == 55  # 全局事实（space_id=NULL），六空间共享投影
+    assert len(facts) == 74  # 全局事实（space_id=NULL），十对空间共享投影
     assert {fact.state for fact in facts} == {"confirmed"}
     assert {fact.fact_type for fact in facts} == {"spouse", "biological_parent"}
     assert {fact.space_id for fact in facts} == {None}
@@ -283,7 +435,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
 
     # R6：基础五类披露全局开放（成员互见）；高敏感五类保持关闭（Q4=b 仅为可开）
     prefs = db_session.query(DisclosurePreference).all()
-    assert len(prefs) == 36 * 5  # 36 用户 × 基础五类
+    assert len(prefs) == 51 * 5  # 51 用户 × 基础五类
     assert all(pref.scope == "global" and pref.allowed for pref in prefs)
     assert {pref.category for pref in prefs} == {
         "avatar",
@@ -295,12 +447,12 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
 
     # 幂等（路径一）：_SEED_DONE 单例跳过
     assert dev_seed.maybe_seed_demo_data(db_session) is False
-    assert db_session.query(User).count() == 36
+    assert db_session.query(User).count() == 51
     # 幂等（路径二）：清掉单例后再跑 → 清单已完全收敛，零写入返回 False
     dev_seed._SEED_DONE = False
     assert dev_seed.maybe_seed_demo_data(db_session) is False
-    assert db_session.query(User).count() == 36
-    assert db_session.query(SourceFact).count() == 55
+    assert db_session.query(User).count() == 51
+    assert db_session.query(SourceFact).count() == 74
 
 
 def test_full_seed_initializes_personal_family_view_rows(db_session, monkeypatch) -> None:
@@ -366,14 +518,14 @@ def test_non_empty_db_backfills_manifest_and_preserves_existing_user(
     )
     assert db_session.query(DisclosurePreference).filter_by(profile_id=existing.id).count() == 0
 
-    # 固定清单全部补齐：36 演示用户 / 6 空间 / 50 成员行 / 55 关系 / 55 fact
+    # 固定清单全部补齐：51 演示用户 / 20 空间 / 92 成员行 / 74 关系 / 74 fact
     demo_users = db_session.query(User).filter(User.name != "既有用户").all()
     assert {user.name for user in demo_users} == _DEMO_NAMES
-    assert len(demo_users) == 36
-    assert db_session.query(FamilySpace).count() == 6
-    assert db_session.query(SpaceMember).count() == 50
-    assert db_session.query(Relation).count() == 55
-    assert db_session.query(SourceFact).count() == 55
+    assert len(demo_users) == 51
+    assert db_session.query(FamilySpace).count() == 20
+    assert db_session.query(SpaceMember).count() == 92
+    assert db_session.query(Relation).count() == 74
+    assert db_session.query(SourceFact).count() == 74
 
 
 def test_manifest_extension_backfills_missing_rows_only(db_session, monkeypatch) -> None:
@@ -388,7 +540,7 @@ def test_manifest_extension_backfills_missing_rows_only(db_session, monkeypatch)
         user.name: (user.id, user.gender, user.birth, user.profile_status, user.privacy_mode)
         for user in db_session.query(User).all()
     }
-    assert len(before) == 36
+    assert len(before) == 51
 
     # 清单扩展：朱氏皇族名册追加朱文奎（朱允炆之子，1394 年生）+ 一条亲子结构边
     rosters = dict(dev_seed._SEED_SPACE_MEMBERS)
@@ -404,12 +556,12 @@ def test_manifest_extension_backfills_missing_rows_only(db_session, monkeypatch)
     dev_seed._SEED_DONE = False
     assert dev_seed.maybe_seed_demo_data(db_session) is True
 
-    # 只增：37 用户 / 51 成员行 / 56 关系 / 56 fact
-    assert db_session.query(User).count() == 37
-    assert db_session.query(SpaceMember).count() == 51
-    assert db_session.query(Relation).count() == 56
-    assert db_session.query(SourceFact).count() == 56
-    # 既有 36 用户行 id 与关键字段零变动
+    # 只增：52 用户 / 93 成员行 / 75 关系 / 75 fact
+    assert db_session.query(User).count() == 52
+    assert db_session.query(SpaceMember).count() == 93
+    assert db_session.query(Relation).count() == 75
+    assert db_session.query(SourceFact).count() == 75
+    # 既有 51 用户行 id 与关键字段零变动
     for user in db_session.query(User).all():
         if user.name == "朱文奎":
             continue
@@ -437,8 +589,8 @@ def test_manifest_extension_backfills_missing_rows_only(db_session, monkeypatch)
     assert fact.fact_type == "biological_parent"
     assert fact.state == "confirmed"
     assert fact.space_id is None
-    # 披露偏好只补新成员的 5 行（37×5），既有用户披露不动
-    assert db_session.query(DisclosurePreference).count() == 37 * 5
+    # 披露偏好只补新成员的 5 行（52×5），既有用户披露不动
+    assert db_session.query(DisclosurePreference).count() == 52 * 5
 
 
 def test_converged_manifest_returns_false_and_writes_nothing(db_session, monkeypatch) -> None:
@@ -449,12 +601,12 @@ def test_converged_manifest_returns_false_and_writes_nothing(db_session, monkeyp
     dev_seed._SEED_DONE = False
     assert dev_seed.maybe_seed_demo_data(db_session) is False
 
-    assert db_session.query(User).count() == 36
-    assert db_session.query(FamilySpace).count() == 6
-    assert db_session.query(SpaceMember).count() == 50
-    assert db_session.query(Relation).count() == 55
-    assert db_session.query(SourceFact).count() == 55
-    assert db_session.query(DisclosurePreference).count() == 36 * 5
+    assert db_session.query(User).count() == 51
+    assert db_session.query(FamilySpace).count() == 20
+    assert db_session.query(SpaceMember).count() == 92
+    assert db_session.query(Relation).count() == 74
+    assert db_session.query(SourceFact).count() == 74
+    assert db_session.query(DisclosurePreference).count() == 51 * 5
 
 
 def test_seed_never_touches_system_admins(db_session, monkeypatch) -> None:
