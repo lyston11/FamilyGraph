@@ -161,6 +161,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
     view_version: 3,
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
+    inferred_edges: [],
     edges: [],
     truncated: false,
     next_cursor: null,
@@ -253,6 +254,7 @@ describe('FamilyTreeView 数据边界', () => {
     await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')])],
       }),
     })
@@ -266,6 +268,7 @@ describe('FamilyTreeView 数据边界', () => {
     const { wrapper } = await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2), makeNode(3, 'lineage_summary')],
+        inferred_edges: [],
         edges: [],
       }),
     })
@@ -283,6 +286,7 @@ describe('FamilyTreeView 数据边界', () => {
     const { wrapper, router } = await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [],
       }),
     })
@@ -303,6 +307,7 @@ describe('FamilyTreeView 数据边界', () => {
     const { wrapper } = await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')])],
       }),
     })
@@ -323,6 +328,7 @@ describe('FamilyTreeView 数据边界', () => {
     const { wrapper, router } = await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')])],
       }),
     })
@@ -371,6 +377,7 @@ describe('FamilyTreeView 布局与状态机 UI', () => {
         status: 'stale',
         stale_reason: '成员资格发生变化',
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [],
       }),
     })
@@ -389,6 +396,7 @@ describe('FamilyTreeView 布局与状态机 UI', () => {
       data: makeData({
         status: 'failed',
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [],
       }),
     })
@@ -416,6 +424,7 @@ describe('FamilyTreeView 布局与状态机 UI', () => {
       data: makeData({
         truncated: true,
         nodes: [makeNode(1, 'self_private'), makeNode(2), makeNode(3)],
+        inferred_edges: [],
         edges: [],
       }),
     })

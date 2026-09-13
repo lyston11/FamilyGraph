@@ -50,11 +50,15 @@ function enabledRow(
     assist_candidate: false,
     assist_ranking: false,
     assist_explanation: false,
+    inferred_tree: false,
+    inferred_effective: false,
     ...overrides,
   }
 }
 
-function settingsFixture(): SpaceModelSettings {
+function settingsFixture(
+  stewardOverrides: Partial<SpaceAgentSetting> = {},
+): SpaceModelSettings {
   return {
     space_id: 7,
     settings: {
@@ -69,6 +73,9 @@ function settingsFixture(): SpaceModelSettings {
         assist_candidate: true,
         assist_ranking: false,
         assist_explanation: false,
+        inferred_tree: false,
+        inferred_effective: false,
+        ...stewardOverrides,
       },
     },
     catalog: [cloudEntry()],
@@ -125,10 +132,10 @@ describe('SpaceModelSettingsPanel（管家模型辅助开关）', () => {
     const stewardFlags = wrapper.find('[data-test="assist-flags-steward"]')
     expect(stewardFlags.exists()).toBe(true)
     const switches = stewardFlags.findAll('.n-switch')
-    expect(switches.length).toBe(3)
-    // 候选开、排序关、解释关（初值来自行级设置；naive-ui 用 n-switch--active 表达开态）
+    expect(switches.length).toBe(4)
+    // 候选开、排序关、解释关、推测层关（初值来自行级设置；naive-ui 用 n-switch--active 表达开态）
     const states = switches.map((node) => node.classes().includes('n-switch--active'))
-    expect(states).toEqual([true, false, false])
+    expect(states).toEqual([true, false, false, false])
 
     const assistantBlock = wrapper.find('[data-test="model-settings-assistant"]')
     expect(assistantBlock.find('[data-test="assist-flags-assistant"]').exists()).toBe(false)
@@ -149,6 +156,7 @@ describe('SpaceModelSettingsPanel（管家模型辅助开关）', () => {
     expect(payload.assist_candidate).toBe(true)
     expect(payload.assist_ranking).toBe(false)
     expect(payload.assist_explanation).toBe(false)
+    expect(payload.inferred_tree).toBe(false)
   })
 })
 
@@ -245,6 +253,7 @@ describe('SpaceModelSettingsPanel（开关即保存与未保存徽标，09-06 UX
       assist_candidate: true,
       assist_ranking: true,
       assist_explanation: false,
+      inferred_tree: false,
     })
   })
 
@@ -286,5 +295,46 @@ describe('SpaceModelSettingsPanel（开关即保存与未保存徽标，09-06 UX
       expect(wrapper.find('[data-test="model-settings-assistant"]').exists()).toBe(true)
     })
     expect(wrapper.find('[data-test="model-unsaved-assistant"]').exists()).toBe(false)
+  })
+})
+
+describe('SpaceModelSettingsPanel（推测层开关，09-13）', () => {
+  beforeEach(() => {
+    pinia = createPinia()
+    vi.clearAllMocks()
+  })
+
+  it('推测关系上树开关初值来自行级设置；翻开即随载荷提交 inferred_tree', async () => {
+    mockedFetch.mockResolvedValue(settingsFixture())
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="assist-flags-steward"]').exists()).toBe(true)
+    })
+    const inferredSwitch = wrapper.find('[data-test="assist-switch-inferred"]')
+    expect(inferredSwitch.exists()).toBe(true)
+    await inferredSwitch.trigger('click')
+    await vi.waitFor(() => {
+      expect(mockedUpdate).toHaveBeenCalled()
+    })
+    const payload = mockedUpdate.mock.calls[0][1]
+    expect(payload.agent_kind).toBe('steward')
+    expect(payload.inferred_tree).toBe(true)
+  })
+
+  it('空间级开而平台级未开 → 显示可解释的平台提示', async () => {
+    mockedFetch.mockResolvedValue(settingsFixture({ inferred_tree: true, inferred_effective: false }))
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="inferred-platform-hint"]').exists()).toBe(true)
+    })
+  })
+
+  it('推测层生效（平台已开）→ 不显示平台提示', async () => {
+    mockedFetch.mockResolvedValue(settingsFixture({ inferred_effective: true }))
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="model-settings-steward"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="inferred-platform-hint"]').exists()).toBe(false)
   })
 })

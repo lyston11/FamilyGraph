@@ -86,6 +86,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
     view_version: 2,
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
+    inferred_edges: [],
     edges: [],
     truncated: false,
     next_cursor: null,
@@ -102,6 +103,7 @@ describe('buildFamilyCanvas', () => {
         makeNode(2),
         makeNode(3, 'lineage_summary'),
       ],
+      inferred_edges: [],
       edges: [],
     })
 
@@ -119,6 +121,7 @@ describe('buildFamilyCanvas', () => {
     const path = [makeStep(VIEWER_ID, 2, 'up')]
     const data = makeData({
       nodes: [makeNode(VIEWER_ID), makeNode(2)],
+      inferred_edges: [],
       edges: [makeEdge(VIEWER_ID, 2, path, { term: '父亲' })],
     })
 
@@ -136,6 +139,7 @@ describe('buildFamilyCanvas', () => {
   it('同一输入两次构造结果逐字段一致（无隐藏随机源/旧位置数据）', () => {
     const data = makeData({
       nodes: [makeNode(VIEWER_ID), makeNode(2)],
+      inferred_edges: [],
       edges: [makeEdge(VIEWER_ID, 2, [makeStep(VIEWER_ID, 2, 'up')])],
     })
     expect(buildFamilyCanvas(data, VIEWER_ID)).toEqual(buildFamilyCanvas(data, VIEWER_ID))
@@ -148,6 +152,7 @@ describe('applyTreeViewLayout（默认树状）', () => {
   const spouse = makeNode(4)
   const data = makeData({
     nodes: [makeNode(VIEWER_ID), father, child, spouse],
+    inferred_edges: [],
     edges: [
       // viewer 的父亲：up → 长辈带（y < 0）
       makeEdge(VIEWER_ID, 2, [makeStep(VIEWER_ID, 2, 'up')]),
@@ -179,6 +184,7 @@ describe('applyTreeViewLayout（默认树状）', () => {
   it('多步路径累计世代差（祖父母 -2、孙辈 +2）', () => {
     const nested = makeData({
       nodes: [makeNode(VIEWER_ID), makeNode(5), makeNode(6)],
+      inferred_edges: [],
       edges: [
         makeEdge(VIEWER_ID, 5, [
           makeStep(VIEWER_ID, 2, 'up'),
@@ -206,6 +212,7 @@ describe('applyFreeCanvasLayout（自由画布）', () => {
   it('viewer 固定在原点，其余成员获得确定的非重叠环形位置', () => {
     const data = makeData({
       nodes: [makeNode(VIEWER_ID), makeNode(2), makeNode(3), makeNode(4)],
+      inferred_edges: [],
       edges: [],
     })
     const model = buildFamilyCanvas(data, VIEWER_ID)
@@ -219,5 +226,118 @@ describe('applyFreeCanvasLayout（自由画布）', () => {
     const keys = new Set(others.map((node) => `${node.x}:${node.y}`))
     expect(keys.size).toBe(others.length)
     expect(applyFreeCanvasLayout(model)).toEqual(nodes)
+  })
+})
+
+describe('buildFamilyCanvas 推测层（09-13）', () => {
+  it('推测边进入独立 inferredEdges 规格（虚线渲染依据），confirmed 边不受影响', () => {
+    const data = makeData({
+      nodes: [
+        makeNode(VIEWER_ID, 'self_private'),
+        makeNode(2),
+        {
+          user_id: 3,
+          display: makeDisplay(3),
+          visibility_level: 'household_detail',
+          inclusion_reason_code: 'inferred_path',
+        },
+      ],
+      edges: [makeEdge(VIEWER_ID, 2, [makeStep(VIEWER_ID, 2, 'up')])],
+      inferred_edges: [
+        {
+          id: 7,
+          subject_user_id: 2,
+          object_user_id: 3,
+          relation_kind: 'spouse',
+          term: '妻子',
+          path: [],
+          viewer_term: null,
+          viewer_path: [],
+          new_user_id: 3,
+          evidence_fact_ids: [11, 12],
+          revision: 1,
+          created_at: '2026-09-13T08:00:00',
+        },
+      ],
+    })
+
+    const model = buildFamilyCanvas(data, VIEWER_ID)
+    expect(model.edges).toHaveLength(1)
+    expect(model.inferredEdges).toHaveLength(1)
+    expect(model.inferredEdges[0]).toMatchObject({
+      key: 'i-7',
+      label: '妻子',
+      sourceUserId: 2,
+      targetUserId: 3,
+    })
+    // 新上树成员：inferred 标记 + viewer 视角推测称谓
+    const newNode = model.nodes.find((node) => node.userId === 3)
+    expect(newNode?.inferred).toBe(true)
+    expect(newNode?.inferredTerm).toBeNull() // viewer_term 为空 → 仅角标无称谓
+  })
+
+  it('端点不在节点集合的推测边被丢弃（防御：解码已保证，画布二次防御）', () => {
+    const data = makeData({
+      nodes: [makeNode(VIEWER_ID, 'self_private'), makeNode(2)],
+      inferred_edges: [
+        {
+          id: 8,
+          subject_user_id: 2,
+          object_user_id: 99,
+          relation_kind: 'spouse',
+          term: null,
+          path: [],
+          viewer_term: null,
+          viewer_path: [],
+          new_user_id: null,
+          evidence_fact_ids: [],
+          revision: 1,
+          created_at: '2026-09-13T08:00:00',
+        },
+      ],
+    })
+
+    const model = buildFamilyCanvas(data, VIEWER_ID)
+    expect(model.inferredEdges).toHaveLength(0)
+  })
+
+  it('推测层节点摆位：parent 类推测单跳把新成员放到下一世代带（只做几何摆位）', () => {
+    const data = makeData({
+      nodes: [
+        makeNode(VIEWER_ID, 'self_private'),
+        makeNode(2),
+        {
+          user_id: 3,
+          display: makeDisplay(3),
+          visibility_level: 'household_detail',
+          inclusion_reason_code: 'inferred_path',
+        },
+      ],
+      inferred_edges: [
+        {
+          id: 9,
+          subject_user_id: 2,
+          object_user_id: 3,
+          relation_kind: 'biological_parent',
+          term: '儿子',
+          path: [],
+          viewer_term: '儿子的推测亲属',
+          viewer_path: [],
+          new_user_id: 3,
+          evidence_fact_ids: [11],
+          revision: 1,
+          created_at: '2026-09-13T08:00:00',
+        },
+      ],
+      edges: [makeEdge(VIEWER_ID, 2, [makeStep(VIEWER_ID, 2, 'up')])],
+    })
+
+    const model = buildFamilyCanvas(data, VIEWER_ID)
+    const positioned = applyTreeViewLayout(model, VIEWER_ID)
+    const subject = positioned.find((node) => node.userId === 2)
+    const object = positioned.find((node) => node.userId === 3)
+    expect(subject).toBeDefined()
+    expect(object).toBeDefined()
+    expect(object!.y).toBe((subject!.y ?? 0) + ROW_SPACING)
   })
 })

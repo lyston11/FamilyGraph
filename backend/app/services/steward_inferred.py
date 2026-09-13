@@ -205,17 +205,22 @@ def _edge_from_candidate(
         return None  # 已有同结构 confirmed 事实
 
     evidence_hash = str(evidence["evidence_hash"])
+    candidate_keys = _triple_keys(raw_subject, raw_object, raw_kind)
     existing = list(
         db.scalars(
             select(StewardInferredEdge).where(
                 StewardInferredEdge.space_id == job.space_id,
-                StewardInferredEdge.subject_user_id == raw_subject,
-                StewardInferredEdge.object_user_id == raw_object,
                 StewardInferredEdge.relation_kind == raw_kind,
             )
         )
     )
     for row in existing:
+        # 对称关系两方向归一（design §2.1）：反方向候选与既有行视为同三元组
+        if not (
+            _triple_keys(row.subject_user_id, row.object_user_id, row.relation_kind)
+            & candidate_keys
+        ):
+            continue
         if row.status == INFERRED_ACTIVE_STATE:
             return None  # 活跃唯一索引兜底；正常流程不可达
         if row.status == "rejected" and row.evidence_hash == evidence_hash:

@@ -5,6 +5,7 @@ import type {
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
+  PersonalFamilyViewInferredEdge,
   PersonalFamilyViewNode,
   PersonalFamilyViewPathStep,
   PersonalFamilyViewSnapshot,
@@ -208,6 +209,56 @@ function decodeEdge(value: unknown): PersonalFamilyViewEdge | null {
   }
 }
 
+/**
+ * 推测边解码（09-13 推测层）：逐字段运行时校验；任一字段不合法整条丢弃。
+ * 端点必须命中已解码节点集合（推测边两端永远可见）。
+ */
+function decodeInferredEdge(
+  value: unknown,
+  visibleIds: Set<number>,
+): PersonalFamilyViewInferredEdge | null {
+  if (!isRecord(value)) return null
+  if (
+    typeof value.id !== 'number' ||
+    typeof value.subject_user_id !== 'number' ||
+    typeof value.object_user_id !== 'number' ||
+    typeof value.relation_kind !== 'string' ||
+    !isNullableString(value.term) ||
+    !isNullableString(value.viewer_term) ||
+    typeof value.revision !== 'number' ||
+    (value.new_user_id !== null && typeof value.new_user_id !== 'number') ||
+    !Array.isArray(value.evidence_fact_ids) ||
+    !value.evidence_fact_ids.every((v) => typeof v === 'number')
+  ) {
+    return null
+  }
+  const path = decodePath(value.path)
+  if (path === null) return null
+  const viewerPath = decodePath(value.viewer_path)
+  if (viewerPath === null) return null
+  if (
+    !visibleIds.has(value.subject_user_id) ||
+    !visibleIds.has(value.object_user_id) ||
+    (value.new_user_id !== null && !visibleIds.has(value.new_user_id))
+  ) {
+    return null
+  }
+  return {
+    id: value.id,
+    subject_user_id: value.subject_user_id,
+    object_user_id: value.object_user_id,
+    relation_kind: value.relation_kind,
+    term: value.term,
+    path,
+    viewer_term: value.viewer_term,
+    viewer_path: viewerPath,
+    new_user_id: value.new_user_id,
+    evidence_fact_ids: value.evidence_fact_ids,
+    revision: value.revision,
+    created_at: typeof value.created_at === 'string' ? value.created_at : '',
+  }
+}
+
 export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData {
   if (!isRecord(value)) throw new Error('个人家族视图响应格式无效')
   if (
@@ -242,12 +293,23 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
     edges.push(edge)
   }
 
+  // 推测边（09-13）：载荷缺失/开关关闭 → 空数组；逐条校验，坏条目静默丢弃
+  const inferredEdges: PersonalFamilyViewInferredEdge[] = []
+  if (Array.isArray(value.inferred_edges)) {
+    for (const raw of value.inferred_edges) {
+      const inferred = decodeInferredEdge(raw, visibleIds)
+      if (inferred === null) continue
+      inferredEdges.push(inferred)
+    }
+  }
+
   return {
     space_id: value.space_id,
     status: value.status,
     view_version: value.view_version,
     computed_at: typeof value.computed_at === 'string' ? value.computed_at : null,
     nodes,
+    inferred_edges: inferredEdges,
     edges,
     truncated: value.truncated,
     next_cursor: value.next_cursor,

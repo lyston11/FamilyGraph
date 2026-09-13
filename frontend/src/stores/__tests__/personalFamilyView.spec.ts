@@ -36,6 +36,7 @@ function makeData(spaceId: number, overrides: Partial<PersonalFamilyViewData> = 
     view_version: 1,
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
+    inferred_edges: [],
     edges: [],
     truncated: false,
     next_cursor: null,
@@ -212,6 +213,7 @@ describe('personalFamilyView store（design.md §4.1）', () => {
   it('getRelationshipDetail：两端任一顺序命中同一条边', async () => {
     mockedFetch.mockResolvedValue(
       makeSnapshot(7, 'W/"v1"', {
+        inferred_edges: [],
         edges: [
           {
             from_user_id: 10,

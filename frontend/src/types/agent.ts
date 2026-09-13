@@ -127,6 +127,10 @@ export interface SpaceAgentSetting {
   assist_candidate: boolean
   assist_ranking: boolean
   assist_explanation: boolean
+  /** 09-13 推测层空间级开关（仅 steward 维度；assistant 行恒 false） */
+  inferred_tree: boolean
+  /** 推测层生效 = 平台 AND 空间；空间开而平台关 → 前端显示可解释提示 */
+  inferred_effective: boolean
 }
 
 /** 管理员允许目录条目（仅 enabled Provider；无任何密钥形态字段） */

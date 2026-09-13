@@ -11,6 +11,7 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import type { Edge as FlowEdge, EdgeMouseEvent, Node as FlowNode } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 
+import InferredEdgePanel from '@/components/canvas/InferredEdgePanel.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
@@ -19,6 +20,7 @@ import {
   applyTreeViewLayout,
   buildFamilyCanvas,
   type FamilyCanvasEdge,
+  type FamilyCanvasInferredEdgeSpec,
 } from '@/composables/useFamilyTreeCanvas'
 import { useAuthStore } from '@/stores/auth'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
@@ -50,6 +52,7 @@ const { fitView, setCenter } = useVueFlow()
 
 const viewMode = ref<'tree' | 'canvas'>('tree')
 const selectedEdge = ref<FamilyCanvasEdge | null>(null)
+const selectedInferred = ref<FamilyCanvasInferredEdgeSpec | null>(null)
 
 const spaceId = computed(() => spaces.currentSpaceId)
 const isLineageContext = computed(() => spaces.currentSpace?.kind === 'lineage')
@@ -114,6 +117,7 @@ onMounted(() => {
 watch([spaceId, isLineageContext], () => {
   // 切换空间：清面板选择并按新上下文读取投影（旧请求由 store epoch 丢弃）
   selectedEdge.value = null
+  selectedInferred.value = null
   void loadView()
 })
 
@@ -122,7 +126,7 @@ watch([spaceId, isLineageContext], () => {
 const canvasModel = computed(() =>
   data.value
     ? buildFamilyCanvas(data.value, viewerId.value)
-    : { nodes: [], edges: [] as FamilyCanvasEdge[] },
+    : { nodes: [], edges: [] as FamilyCanvasEdge[], inferredEdges: [] as FamilyCanvasInferredEdgeSpec[] },
 )
 
 const positionedNodes = computed(() =>
@@ -141,6 +145,8 @@ const flowNodes = computed<FlowNode[]>(() =>
       visibilityLevel: node.visibilityLevel,
       isSelf: node.isSelf,
       term: node.term,
+      inferred: node.inferred,
+      inferredTerm: node.inferredTerm,
     },
     draggable: viewMode.value === 'canvas',
   })),
@@ -154,6 +160,20 @@ const flowEdges = computed<FlowEdge[]>(() =>
     label: spec.label ?? undefined,
     class: 'fg-view-edge',
     labelStyle: { fill: 'var(--fg-canvas-ink)', fontSize: '11px' },
+    labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
+    labelBgPadding: [6, 2] as [number, number],
+    labelBgBorderRadius: 4,
+  })),
+)
+
+const inferredFlowEdges = computed<FlowEdge[]>(() =>
+  canvasModel.value.inferredEdges.map((spec) => ({
+    id: spec.key,
+    source: `n-${spec.sourceUserId}`,
+    target: `n-${spec.targetUserId}`,
+    label: spec.label === null ? undefined : `推测·${spec.label}`,
+    class: 'fg-view-edge fg-view-edge-inferred',
+    labelStyle: { fill: 'var(--fg-canvas-muted)', fontSize: '11px' },
     labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
     labelBgPadding: [6, 2] as [number, number],
     labelBgBorderRadius: 4,
@@ -183,7 +203,21 @@ function openRelationshipPanel(edgeKey: string): void {
 
 function onEdgeClick(event: EdgeMouseEvent): void {
   const edgeId = event.edge?.id
-  if (typeof edgeId === 'string') openRelationshipPanel(edgeId)
+  if (typeof edgeId !== 'string') return
+  if (edgeId.startsWith('i-')) {
+    selectedEdge.value = null
+    selectedInferred.value =
+      canvasModel.value.inferredEdges.find((candidate) => candidate.key === edgeId) ?? null
+    return
+  }
+  selectedInferred.value = null
+  openRelationshipPanel(edgeId)
+}
+
+/** 推测边动作完成（确认/驳回）：强制重载授权投影（无乐观更新红线），关面板 */
+async function onInferredAction(): Promise<void> {
+  selectedInferred.value = null
+  await loadView(true)
 }
 
 /** 面板「申请更正/查看待办」安全跳转：只导航待办区，不产生任何写操作 */
@@ -395,7 +429,7 @@ function resolveName(userId: number): string | null {
           <div class="canvas-wrap">
             <VueFlow
               :nodes="flowNodes"
-              :edges="flowEdges"
+              :edges="[...flowEdges, ...inferredFlowEdges]"
               fit-view-on-init
               :fit-view-params="{ padding: 0.22 }"
               :min-zoom="0.2"
@@ -415,6 +449,17 @@ function resolveName(userId: number): string | null {
                 />
               </template>
             </VueFlow>
+
+            <!-- 推测边操作面板：虚线边点击入口；动作后强制刷新投影 -->
+            <InferredEdgePanel
+              v-if="selectedInferred"
+              :space-id="spaceId ?? 0"
+              :edge="selectedInferred.edge"
+              :resolve-name="resolveName"
+              @close="selectedInferred = null"
+              @confirmed="onInferredAction"
+              @dismissed="onInferredAction"
+            />
 
             <!-- 只读关系说明面板：覆盖层，画布位置与缩放保持不变 -->
             <RelationshipDetailPanel
@@ -479,6 +524,9 @@ function resolveName(userId: number): string | null {
 .canvas-wrap :deep(.fg-view-edge.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
 .canvas-wrap :deep(.vue-flow__edge-text) { font-family: var(--fg-font-body); }
 .canvas-wrap :deep(.vue-flow__edge-textbg) { stroke: var(--fg-canvas-line); stroke-width: 0.5; }
+.canvas-wrap :deep(.fg-view-edge-inferred .vue-flow__edge-path) { stroke: var(--fg-canvas-muted); stroke-width: 1.15; stroke-dasharray: 6 5; opacity: 0.85; transition: stroke-width 0.2s ease, opacity 0.2s ease; }
+.canvas-wrap :deep(.fg-view-edge-inferred:hover .vue-flow__edge-path),
+.canvas-wrap :deep(.fg-view-edge-inferred.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
 .canvas-wrap :deep(.vue-flow__controls) {
   position: absolute; top: auto; bottom: 6px; left: 32px; z-index: 5; display: flex;
   flex-direction: column; background: color-mix(in srgb, var(--fg-canvas-surface-raised) 90%, transparent);

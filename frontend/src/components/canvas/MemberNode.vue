@@ -67,12 +67,16 @@ function select(): void {
       <span v-if="data.isSelf" class="fg-badge fg-badge--accent self-chip" data-test="self-chip">我</span>
     </div>
     <div class="card-meta">
-      <span v-if="data.term" class="term-chip" data-test="view-label">{{ data.term }}</span>
+      <span v-if="data.inferred && data.inferredTerm" class="term-chip term-chip--inferred" data-test="inferred-term-chip">
+        推测·{{ data.inferredTerm }}
+      </span>
+      <span v-else-if="data.term" class="term-chip" data-test="view-label">{{ data.term }}</span>
       <span v-if="display.birth !== null && !('__masked__' in display.birth)" class="birth" data-test="node-birth">
         {{ display.birth.date ?? '不详' }}
       </span>
       <MaskedField v-else-if="display.birth !== null" :value="display.birth" />
     </div>
+    <span v-if="data.inferred" class="inferred-badge" data-test="inferred-badge">推测</span>
     <span class="level-badge" :class="levelBadge.cls" data-test="visibility-badge">
       <Network v-if="data.visibilityLevel === 'lineage_summary'" class="badge-icon" :size="12" aria-hidden="true" />
       <LockKeyhole v-else-if="data.visibilityLevel === 'self_private'" class="badge-icon" :size="12" aria-hidden="true" />
@@ -120,6 +124,15 @@ function select(): void {
 .self-chip { flex-shrink: 0; padding: 0 6px; font-size: 10px; }
 .card-meta { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .term-chip { font-size: 12px; color: var(--fg-canvas-ink); }
+.term-chip--inferred {
+  padding: 1px 6px; border: 1px dashed color-mix(in srgb, var(--fg-canvas-muted) 80%, transparent);
+  border-radius: 4px; color: var(--fg-canvas-muted);
+}
+.inferred-badge {
+  position: absolute; top: 10px; right: 12px; padding: 0 6px; font-size: 10px;
+  color: var(--fg-canvas-muted); border: 1px dashed color-mix(in srgb, var(--fg-canvas-muted) 80%, transparent);
+  border-radius: 4px;
+}
 .birth { color: var(--fg-canvas-muted); font-size: 11px; white-space: nowrap; }
 .level-badge { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; padding: 0; border: none; background: none; color: var(--fg-canvas-muted); font-size: 10px; }
 .is-self .term-chip { color: var(--fg-accent); }

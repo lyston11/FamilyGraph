@@ -128,6 +128,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
     view_version: 3,
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
+    inferred_edges: [],
     edges: [],
     truncated: false,
     next_cursor: null,
@@ -249,6 +250,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
     const { wrapper } = await mountProfile({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, '母女')],
       }),
     })
@@ -395,6 +397,7 @@ describe('PersonProfileView 只读公示内容', () => {
     const { wrapper } = await mountProfile({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2), makeNode(3)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, '母女'), makeEdge(2, 3, '母女')],
       }),
     })
@@ -510,6 +513,7 @@ describe('PersonProfileView 只读与 Bridge 边界', () => {
     const { wrapper } = await mountProfile({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, '母女')],
       }),
     })
@@ -525,6 +529,7 @@ describe('PersonProfileView 只读与 Bridge 边界', () => {
     const { wrapper } = await mountProfile({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        inferred_edges: [],
         edges: [makeEdge(1, 2, '母女')],
       }),
     })

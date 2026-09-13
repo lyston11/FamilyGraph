@@ -2,6 +2,7 @@ import type {
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
+  PersonalFamilyViewInferredEdge,
 } from '@/types/api'
 
 /**
@@ -24,6 +25,10 @@ export interface FamilyCanvasNodeData {
   isSelf: boolean
   /** 服务端解析的 viewer→该成员称谓；null = 暂无 */
   term: string | null
+  /** 推测层：该成员仅经推测边上树（inclusion_reason_code=inferred_path） */
+  inferred: boolean
+  /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
+  inferredTerm: string | null
 }
 
 export interface FamilyCanvasNode {
@@ -33,6 +38,10 @@ export interface FamilyCanvasNode {
   isSelf: boolean
   /** 服务端解析的 viewer→该成员称谓；null = 暂无 */
   term: string | null
+  /** 推测层成员：节点卡片渲染「推测」角标 */
+  inferred: boolean
+  /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
+  inferredTerm: string | null
   x: number
   y: number
 }
@@ -46,9 +55,20 @@ export interface FamilyCanvasEdge {
   targetUserId: number
 }
 
+/** 推测边画布规格（09-13 推测层）：虚线渲染 + 一键确认/驳回 */
+export interface FamilyCanvasInferredEdgeSpec {
+  key: string
+  edge: PersonalFamilyViewInferredEdge
+  /** 虚线边标签：单跳确定性称谓（subject→object 方向） */
+  label: string | null
+  sourceUserId: number
+  targetUserId: number
+}
+
 export interface FamilyCanvasModel {
   nodes: FamilyCanvasNode[]
   edges: FamilyCanvasEdge[]
+  inferredEdges: FamilyCanvasInferredEdgeSpec[]
 }
 
 /** 世代带行距 / 同带宽列距（谱卷节奏，与旧画布一致量级） */
@@ -97,6 +117,7 @@ function termTowardViewer(
 /**
  * 构造画布模型（不含位置）：nodes/edges 均来自已解码快照。
  * key 稳定可复现，供画布事件与关系面板联动。
+ * 推测边（09-13）：独立 inferredEdges 规格，虚线渲染；端点必须已在节点集合。
  */
 export function buildFamilyCanvas(
   data: PersonalFamilyViewData,
@@ -110,17 +131,39 @@ export function buildFamilyCanvas(
     targetUserId: edge.to_user_id,
   }))
 
+  const nodeUserIds = new Set(data.nodes.map((node) => node.user_id))
+  const inferredEdges: FamilyCanvasInferredEdgeSpec[] = data.inferred_edges
+    .filter(
+      (edge) => nodeUserIds.has(edge.subject_user_id) && nodeUserIds.has(edge.object_user_id),
+    )
+    .map((edge) => ({
+      key: `i-${edge.id}`,
+      edge,
+      label: edge.term,
+      sourceUserId: edge.subject_user_id,
+      targetUserId: edge.object_user_id,
+    }))
+
+  const inferredTermByUser = new Map<number, string | null>()
+  for (const edge of data.inferred_edges) {
+    if (edge.new_user_id !== null && !inferredTermByUser.has(edge.new_user_id)) {
+      inferredTermByUser.set(edge.new_user_id, edge.viewer_term)
+    }
+  }
+
   const nodes: FamilyCanvasNode[] = data.nodes.map((node) => ({
     userId: node.user_id,
     display: node.display,
     visibilityLevel: node.visibility_level,
     isSelf: viewerId !== null && node.user_id === viewerId,
     term: viewerId === null ? null : termTowardViewer(node.user_id, viewerId, data.edges),
+    inferred: node.inclusion_reason_code === 'inferred_path',
+    inferredTerm: inferredTermByUser.get(node.user_id) ?? null,
     x: 0,
     y: 0,
   }))
 
-  return { nodes, edges }
+  return { nodes, edges, inferredEdges }
 }
 
 /** 树状布局（默认）：viewer 所在行为 0 代带，按世代差纵向分带、同带横向排开。 */
@@ -131,19 +174,46 @@ export function applyTreeViewLayout(
   const deltaByUser = new Map<number, number>()
   for (const node of model.nodes) deltaByUser.set(node.userId, 0)
 
+  const touched = new Set<number>(viewerId !== null ? [viewerId] : [])
   if (viewerId !== null) {
-    const seen = new Set<number>()
     for (const edge of model.edges) {
       const delta = deltaTowardViewer(edge.edge, viewerId)
       if (delta === null) continue
       const other =
         edge.sourceUserId === viewerId ? edge.targetUserId : edge.sourceUserId
       // 同一成员多条边时取首次结果，保证确定性
-      if (!seen.has(other)) {
-        seen.add(other)
+      if (!touched.has(other)) {
+        touched.add(other)
         deltaByUser.set(other, delta)
       }
     }
+  }
+
+  // 推测层节点摆位（09-13）：沿推测单跳方向传播世代差（parent 类 subject 是
+  // object 的家长 → object 低一带；对称类同带）。链式推测逐轮传播直至稳定，
+  // 上限 = 推测边数（确定性；只影响几何摆位，不产生关系语义结论）。
+  for (let round = 0; round <= model.inferredEdges.length; round += 1) {
+    let changed = false
+    for (const spec of model.inferredEdges) {
+      const subjectId = spec.edge.subject_user_id
+      const objectId = spec.edge.object_user_id
+      const sym =
+        spec.edge.relation_kind === 'spouse' ||
+        spec.edge.relation_kind === 'partner' ||
+        spec.edge.relation_kind === 'direct_sibling'
+      const deltaSubject = deltaByUser.get(subjectId)
+      const deltaObject = deltaByUser.get(objectId)
+      if (deltaSubject !== undefined && deltaObject === undefined) {
+        deltaByUser.set(objectId, sym ? deltaSubject : deltaSubject + 1)
+        touched.add(objectId)
+        changed = true
+      } else if (deltaObject !== undefined && deltaSubject === undefined) {
+        deltaByUser.set(subjectId, sym ? deltaObject : deltaObject - 1)
+        touched.add(subjectId)
+        changed = true
+      }
+    }
+    if (!changed) break
   }
 
   const bands = new Map<number, number[]>()

@@ -53,6 +53,7 @@ interface KindFormState {
   assistCandidate: boolean
   assistRanking: boolean
   assistExplanation: boolean
+  inferredTree: boolean
 }
 
 function emptyForm(): KindFormState {
@@ -63,6 +64,7 @@ function emptyForm(): KindFormState {
     assistCandidate: false,
     assistRanking: false,
     assistExplanation: false,
+    inferredTree: false,
   }
 }
 
@@ -99,6 +101,7 @@ function syncForms(): void {
         assistCandidate: row.assist_candidate,
         assistRanking: row.assist_ranking,
         assistExplanation: row.assist_explanation,
+        inferredTree: row.inferred_tree,
       }
     } else if (fallbackDefault !== null) {
       forms.value[kind] = {
@@ -195,6 +198,7 @@ async function saveKind(kind: AgentConfigKind, overrides?: Partial<KindFormState
             assist_candidate: state.assistCandidate,
             assist_ranking: state.assistRanking,
             assist_explanation: state.assistExplanation,
+            inferred_tree: state.inferredTree,
           }
         : {}),
     })
@@ -321,6 +325,18 @@ async function toggleAssistFlag(flag: AssistFlagKey, next: boolean): Promise<voi
   overrides[flag] = next
   await saveKind('steward', overrides)
 }
+
+/** 09-13 推测层空间级开关（生效 = 平台 AND 空间；保存后 inferred_effective 随行刷新） */
+async function toggleInferredTree(next: boolean): Promise<void> {
+  if (savingKind.value !== null) return
+  await saveKind('steward', { inferredTree: next })
+}
+
+/** 空间级开而平台级未开：可解释提示（不暴露 env 细节，指向管理员） */
+const inferredPlatformBlocked = computed<boolean>(() => {
+  const row = rowFor('steward')
+  return row !== null && row.inferred_tree && !row.inferred_effective
+})
 </script>
 
 <template>
@@ -432,8 +448,27 @@ async function toggleAssistFlag(flag: AssistFlagKey, next: boolean): Promise<voi
               />
               <span>卡片解释</span>
             </label>
+            <label class="assist-flag" data-test="assist-flag-inferred">
+              <NSwitch
+                :value="forms[kind].inferredTree"
+                size="small"
+                :loading="savingKind === kind"
+                :disabled="stewardAssistLocked"
+                aria-label="推测关系上树"
+                data-test="assist-switch-inferred"
+                @update:value="(value: boolean) => toggleInferredTree(value)"
+              />
+              <span>推测关系上树</span>
+            </label>
             <span v-if="stewardAssistLocked" class="assist-hint" data-test="assist-guard-hint">
               先配置管家模型
+            </span>
+            <span
+              v-if="kind === 'steward' && inferredPlatformBlocked"
+              class="assist-hint"
+              data-test="inferred-platform-hint"
+            >
+              推测层需要平台管理员开启平台级开关后才会生效
             </span>
           </div>
 
