@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "internal agent 协议与 sidecar 环境变量合同，部署注入需与之对齐"}
+{"file": ".trellis/spec/architecture.md", "reason": "整体部署形态（listener 划分、sidecar 职责边界）"}
