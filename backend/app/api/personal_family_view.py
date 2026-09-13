@@ -17,9 +17,12 @@ from app.schemas.personal_family_view import (
     PersonalFamilyBridgeOut,
     PersonalFamilyViewOut,
 )
-from app.services import personal_family_bridge, personal_family_view
+from app.services import family_projection, personal_family_bridge, personal_family_view
 
 router = APIRouter(tags=["personal-family-view"])
+
+# 最终载荷 ETag 的合同版本：topology_edges 进入响应后递增（design §4）。
+_PFV_PAYLOAD_CONTRACT_VERSION = "personal-family-view-v2-topology"
 
 
 def _require_enabled() -> None:
@@ -55,20 +58,28 @@ def read_personal_family_view(
         return PersonalFamilyViewOut.model_validate(
             personal_family_view.empty_view_payload(space_id=space_id)
         )
-    etag = personal_family_view.etag_for(view, account=account)
-    current = personal_family_view.view_is_current(
-        session, view=view, account=account, space_id=space_id
+    # 2. 先构造最终响应（topology_edges 是响应期从当前事实生成的，旧投影行
+    #    ETag 覆盖不了它），再对实际序列化 JSON 计算 ETag；view_payload 内部
+    #    完成新鲜度复核，非 current 一律安全空态（stale_reason 非空）。
+    payload = personal_family_view.view_payload(session, account=account, space_id=space_id)
+    result = PersonalFamilyViewOut.model_validate(payload)
+    # 盐值绑定合同版本 + token epoch + 原投影指纹（view 版本/状态/input_hash/
+    # 策略与计算版本）；任一变化或载荷变化都使旧 If-None-Match 失效。
+    etag = family_projection.etag_for_json(
+        (
+            f"{_PFV_PAYLOAD_CONTRACT_VERSION}:{account.token_version}:"
+            f"{personal_family_view.etag_for(view, account=account)}"
+        ),
+        result.model_dump_json(),
     )
-    # 2. 只有完整权限复核 + 新鲜度（事实/词典/策略/计算版本）通过才允许 304；
-    #    stale/版本漂移的旧 ETag 绝不命中（R5）。
-    if if_none_match == etag and current:
+    # 3. 仅最终状态 current（新鲜度已通过）才允许 304；stale/queued/failed/
+    #    版本漂移的旧 ETag 绝不命中（R5）。
+    if if_none_match == etag and payload["status"] == "current":
         return Response(status_code=304, headers={"ETag": etag})
-    if not current:
+    if payload["status"] != "current":
         # 显式短事务登记重算（独立事务；GET 自身事务不承担入队写）
         personal_family_view.request_view_recompute(space_id=space_id)
-    payload = personal_family_view.view_payload(session, account=account, space_id=space_id)
     response.headers["ETag"] = etag
-    result = PersonalFamilyViewOut.model_validate(payload)
     return result
 
 

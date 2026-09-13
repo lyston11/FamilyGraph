@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 ViewStatus = Literal["never_computed", "queued", "running", "current", "stale", "failed"]
 BridgeStatus = Literal["pending", "active", "revoked", "expired", "rejected"]
 VisibilityLevel = Literal["self_private", "household_detail", "lineage_summary"]
+TopologyEdgeKind = Literal["parent", "spouse", "partner", "sibling"]
+TopologyEdgeSubtype = Literal["biological", "adoptive", "step", "guardian"]
 
 
 class PersonalFamilyViewNodeOut(BaseModel):
@@ -35,6 +37,22 @@ class PersonalFamilyViewEdgeOut(BaseModel):
     inclusion_reason_code: str
 
 
+class PersonalFamilyViewTopologyEdgeOut(BaseModel):
+    """confirmed 直接亲属结构边：家族树世代/同辈布局的唯一依据。
+
+    parent 一律 from=家长、to=子女并保留 subtype；spouse/partner/sibling
+    对称无向（from 为较小 user_id，仅作规范化，不表达方向）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    from_user_id: int
+    to_user_id: int
+    edge_kind: TopologyEdgeKind
+    subtype: TopologyEdgeSubtype | None = None
+
+
 class PersonalFamilyViewOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -44,6 +62,7 @@ class PersonalFamilyViewOut(BaseModel):
     computed_at: datetime | None
     nodes: list[PersonalFamilyViewNodeOut]
     edges: list[PersonalFamilyViewEdgeOut]
+    topology_edges: list[PersonalFamilyViewTopologyEdgeOut] = Field(default_factory=list)
     truncated: bool = False
     next_cursor: str | None = None
     stale_reason: str | None = None
@@ -88,6 +107,9 @@ __all__ = [
     "PersonalFamilyViewEdgeOut",
     "PersonalFamilyViewNodeOut",
     "PersonalFamilyViewOut",
+    "PersonalFamilyViewTopologyEdgeOut",
+    "TopologyEdgeKind",
+    "TopologyEdgeSubtype",
     "ViewStatus",
     "VisibilityLevel",
 ]

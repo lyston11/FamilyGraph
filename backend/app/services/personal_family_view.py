@@ -36,7 +36,12 @@ from app.models.space import FamilySpace, SpaceMember
 from app.models.term_registry import TermEntry
 from app.models.user import User
 from app.services import visibility
-from app.services.relationship_graph import birth_from_user, load_graph
+from app.services.relationship_graph import (
+    birth_from_user,
+    load_graph,
+    scoped_confirmed_facts,
+    topology_edges_from_facts,
+)
 from app.services.relationship_resolver import resolve_relationship, steps_to_json
 from app.services.source_facts import FACT_CONFIRMED
 from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
@@ -315,6 +320,7 @@ def empty_view_payload(*, space_id: int) -> dict[str, Any]:
         "computed_at": None,
         "nodes": [],
         "edges": [],
+        "topology_edges": [],
         "truncated": False,
         "next_cursor": None,
         "stale_reason": None,
@@ -411,6 +417,7 @@ def _safe_empty_payload(
         "computed_at": view.computed_at,
         "nodes": [],
         "edges": [],
+        "topology_edges": [],
         "truncated": False,
         "next_cursor": None,
         "stale_reason": reason,
@@ -486,6 +493,12 @@ def _view_payload_for_view(
             if _path_evidence_valid(session, path=path, space_id=space_id, visible_ids=visible_ids)
         ]
         served_edges.append((edge, verified_alts))
+    # 结构拓扑：confirmed 直接亲属事实（当前空间或全局、两端点均在本次授权
+    # 可见集合内），与个人摘要 edges 并列输出。不从 ORM 摘要边反推结构——
+    # 该表只保存本人起点的路径摘要（推测层可能另行写入其中）。
+    topology_edges = topology_edges_from_facts(
+        scoped_confirmed_facts(session, space_ids={space_id}, visible_ids=visible_ids)
+    )
     return {
         "space_id": space_id,
         "status": view.status,
@@ -506,6 +519,7 @@ def _view_payload_for_view(
             }
             for edge, verified_alts in served_edges
         ],
+        "topology_edges": topology_edges,
         "truncated": False,
         "next_cursor": None,
         "stale_reason": None,
