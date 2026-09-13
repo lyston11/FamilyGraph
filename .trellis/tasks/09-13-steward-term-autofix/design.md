@@ -61,6 +61,12 @@ Uf-Dm/Uf-Df` 等）+ 其单个配偶后缀（`-Sm/-Sf`）：
   `variant_context`——基码长幼判定所需的两端出生年；调用方
   `personal_family_view.rebuild_view` / `compose_resolution_view` /
   `agent_query` 等从图快照取数。缺省 None = 行为与现状一致，全部调用方逐一核对）。
+- **调用方核对结果（实现收尾定案）**：① `rebuild_view` 主路径已接（展示口径决定
+  随 `_node_display` 收集）；② `compose_resolution_view` 主/替代路径已接
+  （`load_birth_years`，PURPOSE_GRAPH）；③ `intake_extractor._candidate_view`
+  **保持缺省 None**——intake 候选只有概念码、末跳常无对应人物（supported/
+  ambiguous 语义），无可比较出生数据的具体人，消歧无对象，入包泛化词兜底
+  即为正确行为；kinship API（`api/kinship.py`）经 ② 覆盖。
 
 ## 3. 长链泛化（R4 兜底，替代管家落词）
 
