@@ -27,7 +27,7 @@ def test_candidate_is_not_retrievable_until_explicit_confirmation(db_session):
     candidate = propose_candidate(
         db_session,
         author_account_id=owner.account.id,
-        source_document_ref="authorized-note-1",
+        source={"kind": "manual"},
         source_quote="Our family recipe is kept in the blue notebook.",
         summary="The family recipe is kept in the blue notebook.",
         suggested_scope="household",
@@ -72,7 +72,7 @@ def test_private_memory_is_available_to_assistant_context(db_session):
     candidate = propose_candidate(
         db_session,
         author_account_id=owner.account.id,
-        source_document_ref="private-note-rag",
+        source={"kind": "manual"},
         source_quote="The private note mentions a silver locket.",
         summary="A silver locket is mentioned in a private note.",
         suggested_scope="private",
@@ -115,7 +115,7 @@ def test_shared_memory_scope_matches_space_kind(db_session):
     candidate = propose_candidate(
         db_session,
         author_account_id=owner.account.id,
-        source_document_ref="scope-kind-note",
+        source={"kind": "manual"},
         source_quote="A scope-kind test note.",
         summary="A scope-kind test note.",
         suggested_scope="household",
@@ -194,7 +194,7 @@ def test_private_memory_event_does_not_enqueue_steward_job(db_session, monkeypat
     candidate = propose_candidate(
         db_session,
         author_account_id=owner.account.id,
-        source_document_ref="private-session-1",
+        source={"kind": "manual"},
         source_quote="A private note that must not become Steward input.",
         summary="A private note.",
         suggested_scope="private",
@@ -338,7 +338,7 @@ def test_shared_memory_isolation_and_revoke_tombstone(db_session):
     candidate = propose_candidate(
         db_session,
         author_account_id=owner.account.id,
-        source_document_ref="authorized-note-2",
+        source={"kind": "manual"},
         source_quote="The private family archive uses a cedar box.",
         summary="The family archive uses a cedar box.",
         suggested_scope="household",
@@ -425,7 +425,7 @@ def test_cross_space_confirmation_from_session_source_rejected(db_session):
     create_space_member(db_session, space_b.id, owner.id, role="owner")
 
     session_a = create_agent_session(db_session, account_id=owner.account.id, space_id=space_a.id)
-    message = create_agent_message(db_session, session_a, content="space A chat")
+    message = create_agent_message(db_session, session_a, content={"text": "Space A only secret."})
     db_session.commit()
 
     candidate = propose_candidate(

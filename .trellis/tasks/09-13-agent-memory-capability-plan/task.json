@@ -1,0 +1,39 @@
+{
+  "id": "agent-memory-capability-plan",
+  "name": "agent-memory-capability-plan",
+  "title": "Agent 记忆与知识能力扩展准入",
+  "description": "记录自动候选、授权导入、语义检索与 Steward 知识及反馈优化的评估方案和实施门槛。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-13",
+  "completedAt": null,
+  "branch": "feat/09-13-agent-memory-capability-plan",
+  "base_branch": "main",
+  "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan",
+  "commit": "bc6b500",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-13-steward-memory-evidence-projections"
+  ],
+  "parent": "09-13-agent-memory-rag-remediation",
+  "relatedFiles": [],
+  "notes": "研究交付已完成，12项能力均记录明确采用/延期条件。MR-23/MR-26已复现但未修生产代码；18项预算断言仅证明合成方案。研究已本地提交 bc6b500，主分支集成不在本轮范围。",
+  "meta": {
+    "planning_only": "false",
+    "workstream": "E",
+    "implementation_dependencies": "read-only design independent; evaluation uses A/B/C/D stable baseline",
+    "audit_issue_scope": "MR-05,MR-06,MR-07,MR-08,MR-18,MR-19,MR-20,MR-21,MR-22,MR-23,MR-26; MR-10 total budget; MR-12 summary; MR-15 capability state; MR-17 retention; MR-24",
+    "implementation_approved": "2026-09-13: user execute; read-only capability evaluation and isolated synthetic reproductions",
+    "implementation_status": "research_complete",
+    "verification": "MR-23/MR-26 synthetic production-path probes; 18 synthetic budget-plan cases; main source/hash/module-path review passed",
+    "integration_status": "not_merged; main merge excluded from approved execution scope",
+    "followup_owner": "09-13-steward-memory-evidence-projections",
+    "local_commit": "bc6b500"
+  }
+}

@@ -1,10 +1,11 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NDialogProvider, NMessageProvider } from 'naive-ui'
 import { defineComponent, h } from 'vue'
 
 import * as memoryApi from '@/api/memory'
+import { ApiError } from '@/api/errors'
 import CitationList from '@/components/memory/CitationList.vue'
 import MemoryManager from '@/components/memory/MemoryManager.vue'
 import { useMemoryStore } from '@/stores/memory'
@@ -43,6 +44,9 @@ const candidate: MemoryCandidate = {
   source_message_id: 9,
   source_document_ref: null,
   source_span_json: { start: 0, end: 2 },
+  source_kind: 'agent_message',
+  source_status: 'available',
+  allowed_scopes: ['private', 'household:5'],
   raw_quote: '每年春节一起包饺子。',
   summary: '春节包饺子',
   suggested_scope: 'household',
@@ -60,6 +64,9 @@ const savedMemory: Memory = {
   source_candidate_id: 1,
   source_message_id: 9,
   source_document_ref: null,
+  source_kind: 'agent_message',
+  source_status: 'available',
+  allowed_scopes: ['private', 'household:5'],
   raw_quote: candidate.raw_quote,
   content: candidate.summary,
   purpose: candidate.purpose,
@@ -110,8 +117,8 @@ async function mountManager(): Promise<ReturnType<typeof mount>> {
     attachTo: document.body,
   })
   await vi.waitFor(() => expect(mockedFeatureState).toHaveBeenCalled())
-  const feature = await mockedFeatureState.mock.results[0]!.value
-  if (feature.memory_enabled) await vi.waitFor(() => expect(mockedCandidates).toHaveBeenCalled())
+  await flushPromises()
+  if (useMemoryStore(pinia).memoryEnabled) await vi.waitFor(() => expect(mockedCandidates).toHaveBeenCalled())
   return wrapper
 }
 
@@ -157,6 +164,136 @@ describe('MemoryManager（五分区，PRD §2.5 / design §5.4）', () => {
     expect(wrapper.find('[data-test="rag-panel"]').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('两个开关都关闭时没有写入或搜索操作', async () => {
+    mockedFeatureState.mockResolvedValue({ memory_enabled: false, rag_enabled: false })
+    const wrapper = await mountManager()
+
+    expect(wrapper.find('[data-test="memory-disabled-state"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="rag-disabled-state"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="add-memory"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="rag-search-input"]').exists()).toBe(false)
+    expect(mockedCandidates).not.toHaveBeenCalled()
+    expect(mockedMemories).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('能力状态请求失败明确显示未知状态，不假装功能关闭', async () => {
+    mockedFeatureState.mockRejectedValue(new ApiError(503, 'HTTP_ERROR', '服务暂不可用'))
+    const wrapper = await mountManager()
+
+    expect(wrapper.find('[data-test="memory-feature-state-error"]').text()).toContain('暂时无法确认')
+    expect(wrapper.find('[data-test="memory-disabled-state"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="rag-disabled-state"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="candidate-section"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="rag-section"]').exists()).toBe(false)
+    expect(mockedCandidates).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('已启用后的状态刷新失败也会收起旧写入口', async () => {
+    const wrapper = await mountManager()
+    expect(wrapper.find('[data-test="confirm-candidate"]').exists()).toBe(true)
+    mockedFeatureState.mockRejectedValue(new ApiError(503, 'HTTP_ERROR', '刷新失败'))
+    await useMemoryStore(pinia).loadFeatureState().catch(() => undefined)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="memory-feature-state-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="confirm-candidate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="add-memory"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="rag-disabled-state"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('旧页面卸载后的能力响应不会用新会话继续加载记忆', async () => {
+    let resolveFeatures!: (features: { memory_enabled: boolean; rag_enabled: boolean }) => void
+    mockedFeatureState.mockReturnValueOnce(new Promise((resolve) => { resolveFeatures = resolve }))
+    const wrapper = await mountManager()
+    wrapper.unmount()
+    const memory = useMemoryStore(pinia)
+    memory.clear()
+    // A newly authenticated page may have already loaded its feature flags.
+    memory.features = { memory_enabled: true, rag_enabled: true }
+    resolveFeatures({ memory_enabled: true, rag_enabled: true })
+    await flushPromises()
+
+    expect(mockedCandidates).not.toHaveBeenCalled()
+    expect(mockedMemories).not.toHaveBeenCalled()
+    expect(memory.candidates).toEqual([])
+  })
+
+  it.each(['unavailable', 'unverified'] as const)('来源 %s 的候选和记忆只显示状态，不显示旧正文', async (sourceStatus) => {
+    mockedCandidates.mockResolvedValue([{ ...candidate, source_status: sourceStatus, allowed_scopes: [] }])
+    mockedMemories.mockResolvedValue([{
+      ...savedMemory, scope: 'private', space_id: null, source_status: sourceStatus,
+      allowed_scopes: [], content: '应被遮蔽的记忆摘要', raw_quote: '应被遮蔽的原文', purpose: '应被遮蔽的用途',
+    }])
+    const wrapper = await mountManager()
+
+    expect(wrapper.find('[data-test="candidate-source-status"]').text()).toContain('内容暂不显示')
+    expect(wrapper.find('[data-test="candidate-card"]').text()).not.toContain('春节包饺子')
+    expect(wrapper.find('[data-test="confirm-candidate"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    expect(document.querySelector('[data-test="confirm-memory-dialog"]')).toBeNull()
+
+    await switchTab(wrapper, '我的私有记忆')
+    expect(wrapper.find('[data-test="memory-source-status"]').text()).toContain('内容暂不显示')
+    expect(wrapper.find('[data-test="memory-card"]').text()).not.toContain('应被遮蔽')
+    // 本人仍可管理不可用条目的生命周期。
+    expect(wrapper.find('[data-test="delete-memory"]').exists()).toBe(true)
+    expect(mockedConfirm).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('来源状态更新时，已打开的确认弹层同步隐藏正文并禁止确认', async () => {
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-test="confirm-memory-dialog"]')?.textContent).toContain('春节包饺子')
+
+    useMemoryStore(pinia).candidates = [{
+      ...candidate, source_status: 'unavailable', allowed_scopes: [],
+      raw_quote: null, summary: null, purpose: null,
+    }]
+    await flushPromises()
+
+    expect(document.querySelector('[data-test="confirm-memory-dialog"]')?.textContent).not.toContain('春节包饺子')
+    expect(document.querySelector('[data-test="confirm-memory-source-status"]')?.textContent).toContain('来源不可用')
+    expect((document.querySelector('[data-test="confirm-memory-submit"]') as HTMLButtonElement).disabled).toBe(true)
+    clickDocument('[data-test="confirm-memory-submit"]')
+    expect(mockedConfirm).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('确认 API 拒绝时保留弹层及候选，并显示真实错误', async () => {
+    mockedConfirm.mockRejectedValue(new ApiError(409, 'MEMORY_STATE_CONFLICT', '这条候选已经由另一请求处理'))
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await flushPromises()
+    clickDocument('[data-test="confirm-memory-submit"]')
+
+    await vi.waitFor(() => expect(document.querySelector('[data-test="confirm-memory-error"]')?.textContent).toContain('另一请求处理'))
+    expect(useMemoryStore(pinia).pendingCandidates).toHaveLength(1)
+    expect(document.querySelector('[data-test="confirm-memory-dialog"]')).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('RAG 候选不能共享到 allowed_scopes 之外的当前空间', async () => {
+    mockedCandidates.mockResolvedValue([{ ...candidate, source_kind: 'rag_chunk', allowed_scopes: ['private'] }])
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="confirm-candidate"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-test="memory-privacy-impact"]')?.textContent).toContain('仍受原来源权限约束')
+
+    ;(document.querySelector('.n-base-selection') as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    const sharedOption = [...document.querySelectorAll('.n-base-select-option')].find((el) => el.textContent?.includes('家庭共享'))
+    expect(sharedOption?.classList.contains('n-base-select-option--disabled')).toBe(true)
+    clickDocument('[data-test="confirm-memory-submit"]')
+    await vi.waitFor(() => expect(mockedConfirm).toHaveBeenCalledWith(1, { scope: 'private' }))
+    wrapper.unmount()
+  })
+
   it('五分区渲染；有待确认候选时默认进入待确认（候选视觉状态 = icon+文字）', async () => {
     const wrapper = await mountManager()
 
@@ -331,6 +468,7 @@ describe('MemoryManager 检索与引用（只读 + 保存只能新建候选）',
   beforeEach(() => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
+    mockedFeatureState.mockResolvedValue({ memory_enabled: true, rag_enabled: true })
     mockedCandidates.mockResolvedValue([])
     mockedMemories.mockResolvedValue([])
     mockedConfirm.mockResolvedValue(savedMemory)
@@ -346,6 +484,8 @@ describe('MemoryManager 检索与引用（只读 + 保存只能新建候选）',
         sensitivity: 'normal',
         revision: 1,
         index_version: 'v1',
+        space_id: 5,
+        allowed_scopes: ['private', 'household:5'],
         citation_handle: 'rag:3:r1:c7',
       },
     ])
@@ -370,6 +510,7 @@ describe('MemoryManager 检索与引用（只读 + 保存只能新建候选）',
     await new Promise((resolve) => setTimeout(resolve))
     const dialog = document.querySelector('[data-test="memory-editor-dialog"]')
     expect(dialog).not.toBeNull()
+    expect((document.querySelector('[data-test="memory-editor-quote"] textarea') as HTMLTextAreaElement).readOnly).toBe(true)
 
     const purposeInput = document.querySelector(
       '[data-test="memory-editor-purpose"] input',
@@ -382,14 +523,51 @@ describe('MemoryManager 检索与引用（只读 + 保存只能新建候选）',
     await vi.waitFor(() =>
       expect(mockedCreateCandidate).toHaveBeenCalledWith(
         expect.objectContaining({
-          raw_quote: '每年春节一起包饺子。',
+          source: {
+            kind: 'rag_chunk', document_id: 2, chunk_id: 1,
+            revision: 1, index_version: 'v1', space_id: 5,
+          },
+          idempotency_key: expect.any(String),
           suggested_scope: 'private',
           sensitivity: 'normal',
         }),
       ),
     )
+    expect(mockedCreateCandidate.mock.calls[0]?.[0]).not.toHaveProperty('raw_quote')
     // 检索结果保存绝不直接写记忆（无绕过审计的直接发布）
     expect(mockedConfirm).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('Memory 关闭、RAG 开启时仍可检索，但结果无保存动作', async () => {
+    mockedFeatureState.mockResolvedValue({ memory_enabled: false, rag_enabled: true })
+    const wrapper = await mountManager()
+    await wrapper.find('[data-test="rag-search-input"] input').setValue('春节')
+    await vi.waitFor(() => expect(wrapper.find('[data-test="rag-result"]').exists()).toBe(true))
+
+    expect(mockedSearch).toHaveBeenCalledWith(5, '春节')
+    expect(wrapper.find('[data-test="rag-save-disabled-state"]').text()).toContain('暂时不能保存')
+    expect(wrapper.find('[data-test="rag-save-candidate"]').exists()).toBe(false)
+    expect(mockedCreateCandidate).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('检索结果缺少有效片段定位时禁止保存，不退化成手工来源', async () => {
+    mockedSearch.mockResolvedValue([{
+      chunk_id: 0, document_id: 2, source_type: 'memory', source_id: '3',
+      text: '可读结果', scope: 'private', sensitivity: 'normal', revision: 1,
+      index_version: '', space_id: null, allowed_scopes: ['private'], citation_handle: 'rag:invalid',
+    }])
+    const wrapper = await mountManager()
+    await switchTab(wrapper, '检索与引用')
+    await wrapper.find('[data-test="rag-search-input"] input').setValue('可读')
+    await vi.waitFor(() => expect(wrapper.find('[data-test="rag-result"]').exists()).toBe(true))
+
+    expect(wrapper.find('[data-test="rag-save-candidate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="rag-source-incomplete"]').text()).toContain('重新检索')
+    await wrapper.find('[data-test="rag-save-candidate"]').trigger('click')
+    expect(document.querySelector('[data-test="memory-editor-dialog"]')).toBeNull()
+    expect(mockedCreateCandidate).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

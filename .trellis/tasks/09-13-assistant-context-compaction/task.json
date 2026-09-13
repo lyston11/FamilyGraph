@@ -1,0 +1,31 @@
+{
+  "id": "assistant-context-compaction",
+  "name": "assistant-context-compaction",
+  "title": "Assistant 历史恢复与压缩一致性",
+  "description": "修复 Pi 历史状态与压缩源不同步，明确会话恢复、上下文预算和持久摘要边界。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-13-agent-memory-rag-remediation",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_only": "true",
+    "workstream": "C",
+    "implementation_dependencies": "none; default after A and before B to keep sidecar edits serial",
+    "audit_issue_scope": "MR-11; MR-12 restoration boundary; MR-24"
+  }
+}

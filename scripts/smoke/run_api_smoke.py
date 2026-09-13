@@ -2,7 +2,7 @@
 """FamilyGraph 真实 API smoke（09-11 frontend-system-admin-audit-remediation Phase B）。
 
 以隔离环境启动真实三 listener（app.serve）：
-- 随机可用端口（默认 8000/8002 语义映射到动态端口，不触碰开发端口占用）；
+- 随机可用端口（三个 listener 均使用动态端口，不触碰开发端口占用）；
 - 一次性临时 DATA_DIR（mkdtemp），运行结束整体删除，绝不触碰业务库或用户 .env；
 - DEV_SEED_DEMO_DATA=1 合成演示数据（王德海家等，PIN 为公开 dev 演示值）；
 - 独立随机 SECRET_KEY / ADMIN_JWT_SECRET（不同签发域，支撑交叉拒绝用例）。
@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,10 +52,14 @@ EXIT_BLOCKED = 2
 TIMEOUT = httpx.Timeout(15.0)
 
 
-def free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def free_ports(count: int) -> list[int]:
+    # Hold every socket until all ports are allocated so the OS cannot return
+    # the same ephemeral port for two listeners in this process.
+    with ExitStack() as stack:
+        sockets = [stack.enter_context(socket.socket()) for _ in range(count)]
+        for sock in sockets:
+            sock.bind(("127.0.0.1", 0))
+        return [int(sock.getsockname()[1]) for sock in sockets]
 
 
 @dataclass
@@ -144,6 +149,187 @@ def parse_credentials(path: Path) -> tuple[str, str]:
     return username.group(1), password.group(1)
 
 
+def run_memory_cases(
+    suite: Suite,
+    client: httpx.Client,
+    family: str,
+    headers: dict[str, str],
+    space_id: int,
+) -> None:
+    """Exercise real memory writes and source revocation in the synthetic DB."""
+
+    def request(
+        case_id: str,
+        method: str,
+        path: str,
+        expected_status: int,
+        *,
+        route: str | None = None,
+        payload: dict[str, object] | None = None,
+        params: dict[str, str | int] | None = None,
+    ) -> httpx.Response:
+        started = time.monotonic()
+        response = client.request(
+            method, f"{family}/api{path}", headers=headers, json=payload, params=params
+        )
+        record(
+            suite, f"family-memory-{case_id}", "family", method, route or path,
+            response, started, expected_status,
+        )
+        return response
+
+    def check(case_id: str, passed: bool, route: str, note: str) -> bool:
+        suite.add(Result(
+            f"family-memory-{case_id}", "family", "CHECK", route,
+            note=note, passed=passed,
+        ))
+        return passed
+
+    original_text = "Smoke memory contract: the keepsake is in the amber box."
+    payload: dict[str, object] = {
+        "source": {"kind": "manual"},
+        "raw_quote": original_text,
+        "summary": original_text,
+        "suggested_scope": "private",
+        "purpose": "isolated smoke verification",
+        "sensitivity": "normal",
+        "idempotency_key": secrets.token_hex(16),
+    }
+    request(
+        "missing-source", "POST", "/memory-candidates", 422,
+        payload={key: value for key, value in payload.items() if key != "source"},
+    )
+    response = request("create", "POST", "/memory-candidates", 201, payload=payload)
+    if response.status_code != 201:
+        return
+    candidate = response.json()
+    candidate_id = candidate.get("id") if isinstance(candidate, dict) else None
+    if not check(
+        "candidate-contract",
+        isinstance(candidate_id, int)
+        and candidate.get("raw_quote") == original_text
+        and candidate.get("source_kind") == "manual"
+        and candidate.get("source_status") == "available",
+        "/memory-candidates", "explicit source and raw_quote projection",
+    ):
+        return
+    response = request("create-retry", "POST", "/memory-candidates", 201, payload=payload)
+    check(
+        "create-idempotent", response.status_code == 201
+        and response.json().get("id") == candidate_id,
+        "/memory-candidates", "same request returns original candidate",
+    )
+    request(
+        "key-conflict", "POST", "/memory-candidates", 409,
+        payload={**payload, "summary": "A different requested summary."},
+    )
+    response = request("pending", "GET", "/memory-candidates", 200)
+    check(
+        "pending-visible", response.status_code == 200
+        and any(item.get("id") == candidate_id for item in response.json()),
+        "/memory-candidates", "candidate list serializes the committed row",
+    )
+    response = request(
+        "pending-not-indexed", "GET", "/rag/search", 200,
+        params={"space_id": space_id, "q": "amber box"},
+    )
+    check(
+        "pending-no-hits", response.status_code == 200 and response.json() == [],
+        "/rag/search", "unconfirmed candidate is not searchable",
+    )
+    confirm_path = f"/memory-candidates/{candidate_id}/confirm"
+    confirmation: dict[str, object] = {"scope": "private", "retention_days": 7}
+    response = request(
+        "confirm", "POST", confirm_path, 200,
+        route="/memory-candidates/{id}/confirm", payload=confirmation,
+    )
+    if response.status_code != 200:
+        return
+    memory = response.json()
+    memory_id = memory.get("id") if isinstance(memory, dict) else None
+    if not check(
+        "confirmed-contract", isinstance(memory_id, int)
+        and memory.get("raw_quote") == original_text,
+        "/memory-candidates/{id}/confirm", "confirmation returns a readable memory",
+    ):
+        return
+    response = request(
+        "confirm-retry", "POST", confirm_path, 200,
+        route="/memory-candidates/{id}/confirm", payload=confirmation,
+    )
+    check(
+        "confirm-idempotent", response.status_code == 200
+        and response.json().get("id") == memory_id
+        and response.json().get("retention_until") == memory.get("retention_until"),
+        "/memory-candidates/{id}/confirm", "retry preserves memory and retention",
+    )
+    response = request(
+        "search-confirmed", "GET", "/rag/search", 200,
+        params={"space_id": space_id, "q": "amber box"},
+    )
+    hits = response.json() if response.status_code == 200 else []
+    hit = next((item for item in hits if item.get("source_id") == str(memory_id)), None)
+    if not check(
+        "confirmed-search-hit", hit is not None,
+        "/rag/search", "confirmed memory supplies a versioned source",
+    ):
+        return
+    assert hit is not None
+    copy_text = "Smoke copied memory contract remains source dependent."
+    response = request(
+        "rag-save", "POST", "/memory-candidates", 201,
+        payload={
+            "source": {
+                "kind": "rag_chunk", "document_id": hit["document_id"],
+                "chunk_id": hit["chunk_id"], "revision": hit["revision"],
+                "index_version": hit["index_version"], "space_id": space_id,
+            },
+            "summary": copy_text,
+            "suggested_scope": "private",
+            "purpose": "isolated source dependency verification",
+            "sensitivity": "normal",
+            "idempotency_key": secrets.token_hex(16),
+        },
+    )
+    if response.status_code != 201:
+        return
+    copy_candidate_id = response.json()["id"]
+    response = request(
+        "rag-confirm", "POST", f"/memory-candidates/{copy_candidate_id}/confirm", 200,
+        route="/memory-candidates/{id}/confirm", payload={"scope": "private"},
+    )
+    if response.status_code != 200:
+        return
+    copy_memory_id = response.json()["id"]
+    request(
+        "revoke-source", "POST", f"/memories/{memory_id}/revoke", 200,
+        route="/memories/{id}/revoke",
+    )
+    response = request("source-dependent-list", "GET", "/memories", 200)
+    memories = response.json() if response.status_code == 200 else []
+    copied = next((item for item in memories if item.get("id") == copy_memory_id), None)
+    check(
+        "source-revocation-redacts-copy", copied is not None
+        and copied.get("source_status") == "unavailable"
+        and copied.get("raw_quote") is None and copied.get("content") is None,
+        "/memories", "owner metadata remains while source-dependent text is hidden",
+    )
+    for case_id, query in (("original-no-longer-indexed", "amber box"),
+                           ("copy-no-longer-indexed", "copied memory contract")):
+        response = request(
+            case_id, "GET", "/rag/search", 200,
+            params={"space_id": space_id, "q": query},
+        )
+        check(
+            f"{case_id}-empty", response.status_code == 200 and response.json() == [],
+            "/rag/search", "revoked source and its copy are not retrievable",
+        )
+    request(
+        "delete-copy", "DELETE", f"/memories/{copy_memory_id}", 204,
+        route="/memories/{id}",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", default=None, help="脱敏 JSON 报告输出路径")
@@ -154,13 +340,18 @@ def main() -> int:
         return EXIT_BLOCKED
 
     data_dir = Path(tempfile.mkdtemp(prefix="fg-smoke-"))
-    public_port, admin_port = free_port(), free_port()
+    public_port, internal_port, admin_port = free_ports(3)
     env = os.environ.copy()
     env.update(
         {
             "DATA_DIR": str(data_dir),
+            # A linked dependency environment may contain an editable install
+            # of another checkout. Every app subprocess must use this source.
+            "PYTHONPATH": str(BACKEND),
             "PUBLIC_API_PORT": str(public_port),
             "PUBLIC_API_HOST": "127.0.0.1",
+            "INTERNAL_AGENT_API_PORT": str(internal_port),
+            "INTERNAL_AGENT_API_HOST": "127.0.0.1",
             "ADMIN_API_PORT": str(admin_port),
             "ADMIN_API_HOST": "127.0.0.1",
             "SECRET_KEY": secrets.token_hex(32),
@@ -229,6 +420,7 @@ def main() -> int:
         "verdict": verdict,
         "listeners": {
             "family": f"127.0.0.1:{public_port}",
+            "internal": f"127.0.0.1:{internal_port}",
             "admin": f"127.0.0.1:{admin_port}",
         },
         "counts": {
@@ -322,6 +514,7 @@ def run_cases(suite: Suite, family: str, admin: str, data_dir: Path) -> None:
     started = time.monotonic()
     resp = client.get(f"{family}/api/memories", params={"space_id": space_id}, headers=fam_headers)
     record(suite, "family-memories", "family", "GET", "/memories", resp, started, 200)
+    run_memory_cases(suite, client, family, fam_headers, space_id)
 
     # ---- Agent 会话 + SSE 终态（未启用 provider：SSE 对未知 run 为统一 404 终态） ----
     started = time.monotonic()

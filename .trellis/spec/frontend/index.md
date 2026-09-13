@@ -13,5 +13,6 @@
 | [ActionCard](./action-card.md) | ActionCard 类型、按空间 store、Inbox/Assistant 共享渲染、两步确认与错误降级 | V2.4 |
 | [Type Safety](./type-safety.md) | strict TS/运行时校验/遮罩类型判别 | Initial draft |
 | [Quality Guidelines](./quality-guidelines.md) | 门禁命令/禁止模式/主题与组件库门禁/移动端与性能基线 | v1 |
+| [Memory Contract](../backend/memory-contract.md) | 2026-09-13 A 接口与缓存实现记录，含来源 payload/旧异步响应回归 | Implementation record |
 
 > 状态说明：Initial draft = 基于锁定技术栈与架构决策制定的初始规范。M0 完成后必须用真实代码实例校正并补充示例。v1 = 08-29 前端重设计（naive-ui + 双主题）后按真实实现校正。

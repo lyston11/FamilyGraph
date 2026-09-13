@@ -1,0 +1,1298 @@
+{
+  "scope": "offline design prototype only; no production implementation",
+  "meter": "synthetic serialized UTF-8 byte units, not actual provider tokens",
+  "actual_tokenizer_validated": false,
+  "summary_generator": "hand-authored synthetic fixture, not an LLM",
+  "actual_summary_quality_validated": false,
+  "network_calls": 0,
+  "production_modules_imported": false,
+  "persisted_cross_run_summary": false,
+  "harness_sha256": "1a62719e93d96d6775378c68de023a320e47466cd6771c45f464469a7ea4a915",
+  "windows": [
+    {
+      "capacity_units": 32768,
+      "output_reserve_units": 4096,
+      "cases": [
+        {
+          "case": "all_request_parts",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 593,
+              "output_reserve_units": 4096,
+              "total_units": 4689,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 593,
+              "output_reserve_units": 4096,
+              "total_units": 4689,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 4689
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 4689
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [
+              "fixture:c1"
+            ],
+            "summarized_history_ids": [],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "long_chinese_history_compacts",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 66785,
+              "output_reserve_units": 4096,
+              "total_units": 70881,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 66347,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 708,
+              "output_reserve_units": 4096,
+              "total_units": 4804,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 270,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 70881
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0",
+                  "m1",
+                  "m2",
+                  "m3",
+                  "m4",
+                  "m5",
+                  "m6",
+                  "m7",
+                  "m8",
+                  "m9",
+                  "m10",
+                  "m11",
+                  "m12",
+                  "m13",
+                  "m14",
+                  "m15",
+                  "m16",
+                  "m17",
+                  "m18",
+                  "m19"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 4804
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 4804
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5",
+              "m6",
+              "m7",
+              "m8",
+              "m9",
+              "m10",
+              "m11",
+              "m12",
+              "m13",
+              "m14",
+              "m15",
+              "m16",
+              "m17",
+              "m18",
+              "m19"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "bounded_rag_reduction",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 66233,
+              "output_reserve_units": 4096,
+              "total_units": 70329,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 65721,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 16943,
+              "output_reserve_units": 4096,
+              "total_units": 21039,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 16431,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 70329
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c3",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c2",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c1",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 21039
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [
+              "fixture:c0"
+            ],
+            "summarized_history_ids": [],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "oversized_current_input_after_old_history_fits",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "CURRENT_INPUT_TOO_LARGE",
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 33629,
+              "output_reserve_units": 4096,
+              "total_units": 37725,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 33068,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 33639,
+              "output_reserve_units": 4096,
+              "total_units": 37735,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 165,
+                "current_user": 33068,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 37725
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c1",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 37735
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 37735
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "oversized_tool_result_rechecks",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "TOOL_RESULT_TOO_LARGE",
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 33644,
+              "output_reserve_units": 4096,
+              "total_units": 37740,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 33106,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 33654,
+              "output_reserve_units": 4096,
+              "total_units": 37750,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 165,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 33106,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 37740
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c1",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 37750
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 37750
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": "accepted"
+        },
+        {
+          "case": "tool_result_fits_only_after_compaction",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 36538,
+              "output_reserve_units": 4096,
+              "total_units": 40634,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 23827,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 12328,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 12921,
+              "output_reserve_units": 4096,
+              "total_units": 17017,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 210,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 12328,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 40634
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0",
+                  "m1",
+                  "m2",
+                  "m3",
+                  "m4",
+                  "m5",
+                  "m6",
+                  "m7",
+                  "m8",
+                  "m9"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 17017
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 17017
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5",
+              "m6",
+              "m7",
+              "m8",
+              "m9"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": "accepted"
+        },
+        {
+          "case": "summary_still_oversized_requires_refusal",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "CONTEXT_TOO_LARGE_AFTER_COMPACTION",
+            "capacity_units": 32768,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 66785,
+              "output_reserve_units": 4096,
+              "total_units": 70881,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 66347,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 49845,
+              "output_reserve_units": 4096,
+              "total_units": 53941,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 49407,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 70881
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0",
+                  "m1",
+                  "m2",
+                  "m3",
+                  "m4",
+                  "m5",
+                  "m6",
+                  "m7",
+                  "m8",
+                  "m9",
+                  "m10",
+                  "m11",
+                  "m12",
+                  "m13",
+                  "m14",
+                  "m15",
+                  "m16",
+                  "m17",
+                  "m18",
+                  "m19"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 53941
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 53941
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5",
+              "m6",
+              "m7",
+              "m8",
+              "m9",
+              "m10",
+              "m11",
+              "m12",
+              "m13",
+              "m14",
+              "m15",
+              "m16",
+              "m17",
+              "m18",
+              "m19"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "summary_wrong_coverage_requires_refusal",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "SUMMARY_COVERAGE_INVALID",
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 66785,
+              "output_reserve_units": 4096,
+              "total_units": 70881,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 66347,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 66785,
+              "output_reserve_units": 4096,
+              "total_units": 70881,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 66347,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 177
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 70881
+              }
+            ],
+            "current_user_preserved": true
+          },
+          "preflight_before_tool_result": null
+        }
+      ]
+    },
+    {
+      "capacity_units": 272000,
+      "output_reserve_units": 16384,
+      "cases": [
+        {
+          "case": "all_request_parts",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 594,
+              "output_reserve_units": 16384,
+              "total_units": 16978,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 594,
+              "output_reserve_units": 16384,
+              "total_units": 16978,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 16978
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 16978
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [
+              "fixture:c1"
+            ],
+            "summarized_history_ids": [],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "long_chinese_history_compacts",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 545226,
+              "output_reserve_units": 16384,
+              "total_units": 561610,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 544787,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 709,
+              "output_reserve_units": 16384,
+              "total_units": 17093,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 270,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 561610
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0",
+                  "m1",
+                  "m2",
+                  "m3",
+                  "m4",
+                  "m5",
+                  "m6",
+                  "m7",
+                  "m8",
+                  "m9",
+                  "m10",
+                  "m11",
+                  "m12",
+                  "m13",
+                  "m14",
+                  "m15",
+                  "m16",
+                  "m17",
+                  "m18",
+                  "m19"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 17093
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 17093
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5",
+              "m6",
+              "m7",
+              "m8",
+              "m9",
+              "m10",
+              "m11",
+              "m12",
+              "m13",
+              "m14",
+              "m15",
+              "m16",
+              "m17",
+              "m18",
+              "m19"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "bounded_rag_reduction",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 544698,
+              "output_reserve_units": 16384,
+              "total_units": 561082,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 544185,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 136560,
+              "output_reserve_units": 16384,
+              "total_units": 152944,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 136047,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 561082
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c3",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c2",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c1",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 152944
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [
+              "fixture:c0"
+            ],
+            "summarized_history_ids": [],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "oversized_current_input_after_old_history_fits",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "CURRENT_INPUT_TOO_LARGE",
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 272862,
+              "output_reserve_units": 16384,
+              "total_units": 289246,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 272300,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 272872,
+              "output_reserve_units": 16384,
+              "total_units": 289256,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 165,
+                "current_user": 272300,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 289246
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c1",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 289256
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 289256
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "oversized_tool_result_rechecks",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "TOOL_RESULT_TOO_LARGE",
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 272877,
+              "output_reserve_units": 16384,
+              "total_units": 289261,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 76,
+                "current_user": 32,
+                "rag": 81,
+                "tools": 93,
+                "tool_results": 272338,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 272887,
+              "output_reserve_units": 16384,
+              "total_units": 289271,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 165,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 272338,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 289261
+              },
+              {
+                "stage": "exclude_rag",
+                "handle": "fixture:c1",
+                "reason": "request_budget"
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 289271
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 289271
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": "accepted"
+        },
+        {
+          "case": "tool_result_fits_only_after_compaction",
+          "passed": true,
+          "result": {
+            "decision": "accepted",
+            "code": null,
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 297131,
+              "output_reserve_units": 16384,
+              "total_units": 313515,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 194707,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 102040,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 102634,
+              "output_reserve_units": 16384,
+              "total_units": 119018,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 210,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 102040,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 313515
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0",
+                  "m1",
+                  "m2",
+                  "m3",
+                  "m4",
+                  "m5",
+                  "m6",
+                  "m7",
+                  "m8",
+                  "m9"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 119018
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 119018
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5",
+              "m6",
+              "m7",
+              "m8",
+              "m9"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": "accepted"
+        },
+        {
+          "case": "summary_still_oversized_requires_refusal",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "CONTEXT_TOO_LARGE_AFTER_COMPACTION",
+            "capacity_units": 272000,
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 545226,
+              "output_reserve_units": 16384,
+              "total_units": 561610,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 544787,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 408694,
+              "output_reserve_units": 16384,
+              "total_units": 425078,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 408255,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 561610
+              },
+              {
+                "stage": "explicit_summary",
+                "covered_ids": [
+                  "m0",
+                  "m1",
+                  "m2",
+                  "m3",
+                  "m4",
+                  "m5",
+                  "m6",
+                  "m7",
+                  "m8",
+                  "m9",
+                  "m10",
+                  "m11",
+                  "m12",
+                  "m13",
+                  "m14",
+                  "m15",
+                  "m16",
+                  "m17",
+                  "m18",
+                  "m19"
+                ]
+              },
+              {
+                "stage": "remeasure_after_compaction",
+                "total": 425078
+              },
+              {
+                "stage": "final_full_request_check",
+                "total": 425078
+              }
+            ],
+            "current_user_preserved": true,
+            "tool_results_preserved": true,
+            "included_rag_handles": [],
+            "summarized_history_ids": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "m4",
+              "m5",
+              "m6",
+              "m7",
+              "m8",
+              "m9",
+              "m10",
+              "m11",
+              "m12",
+              "m13",
+              "m14",
+              "m15",
+              "m16",
+              "m17",
+              "m18",
+              "m19"
+            ],
+            "synthetic_fact_present": true
+          },
+          "preflight_before_tool_result": null
+        },
+        {
+          "case": "summary_wrong_coverage_requires_refusal",
+          "passed": true,
+          "result": {
+            "decision": "refused",
+            "code": "SUMMARY_COVERAGE_INVALID",
+            "before": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 545226,
+              "output_reserve_units": 16384,
+              "total_units": 561610,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 544787,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "after": {
+              "unit": "synthetic_serialized_utf8_bytes",
+              "input_units": 545226,
+              "output_reserve_units": 16384,
+              "total_units": 561610,
+              "components": {
+                "system": 20,
+                "policy": 59,
+                "history": 544787,
+                "current_user": 32,
+                "rag": 2,
+                "tools": 93,
+                "tool_results": 55,
+                "provider_envelope_overhead": 178
+              }
+            },
+            "trace": [
+              {
+                "stage": "measure_full_request",
+                "total": 561610
+              }
+            ],
+            "current_user_preserved": true
+          },
+          "preflight_before_tool_result": null
+        }
+      ]
+    }
+  ],
+  "global_cases": [
+    {
+      "decision": "refused",
+      "code": "UNKNOWN_CONTEXT_WINDOW",
+      "trace": []
+    },
+    {
+      "decision": "refused",
+      "code": "INVALID_OUTPUT_RESERVE",
+      "trace": []
+    }
+  ],
+  "passed_cases": 18
+}

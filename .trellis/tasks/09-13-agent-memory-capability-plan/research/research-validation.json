@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "mr23_cases": 3,
+  "mr23_successful_fake_attempts": 15,
+  "mr23_applied_batch_replays": 6,
+  "mr23_platform_disabled_core_control": 1,
+  "mr26_on_off_scope_cases": 4,
+  "mr26_rebuild_invocations": 8,
+  "budget_design_cases": 18,
+  "production_source_hashes_match": true,
+  "harness_hashes_match": true,
+  "module_resolution_from_e_worktree": true,
+  "python_ast_files": 2,
+  "markdown_documents_checked": 6,
+  "broken_links": [],
+  "all_e_o_and_e_ac_present": true,
+  "product_fixes_implemented": false,
+  "real_model_quality_or_cost_measured": false
+}

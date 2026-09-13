@@ -3,16 +3,46 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ManualMemorySource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["manual"]
+
+
+class AgentMessageMemorySource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["agent_message"]
+    message_id: int = Field(gt=0)
+
+
+class RAGChunkMemorySource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["rag_chunk"]
+    document_id: int = Field(gt=0)
+    chunk_id: int = Field(gt=0)
+    revision: int = Field(gt=0)
+    index_version: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
+    space_id: int = Field(gt=0)
+
+
+MemorySource = Annotated[
+    ManualMemorySource | AgentMessageMemorySource | RAGChunkMemorySource,
+    Field(discriminator="kind"),
+]
+
+
 class MemoryCandidateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: MemorySource | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     source_message_id: int | None = Field(default=None, gt=0)
     source_document_ref: str | None = Field(default=None, max_length=255)
     source_span: dict[str, Any] = Field(default_factory=dict)
-    raw_quote: str = Field(min_length=1, max_length=20_000)
+    raw_quote: str | None = Field(default=None, min_length=1, max_length=12_000)
     summary: str = Field(min_length=1, max_length=20_000)
     suggested_scope: Literal["private", "household", "lineage"] = "private"
     purpose: str = Field(min_length=1, max_length=120)
@@ -26,10 +56,13 @@ class MemoryCandidateOut(BaseModel):
     source_message_id: int | None
     source_document_ref: str | None
     source_span_json: dict[str, Any]
-    raw_quote: str
-    summary: str
+    source_kind: Literal["manual", "agent_message", "rag_chunk", "legacy"]
+    source_status: Literal["available", "deleted_snapshot", "unavailable", "unverified"]
+    allowed_scopes: list[str]
+    raw_quote: str | None
+    summary: str | None
     suggested_scope: str
-    purpose: str
+    purpose: str | None
     sensitivity: str
     extractor_version: str
     status: Literal["pending", "dismissed", "confirmed"]
@@ -39,6 +72,7 @@ class MemoryCandidateOut(BaseModel):
 
 
 class MemoryConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     scope: str = Field(min_length=1, max_length=64)
     retention_days: int | None = Field(default=None, ge=1, le=3650)
 
@@ -50,12 +84,16 @@ class MemoryOut(BaseModel):
     source_candidate_id: int | None
     source_message_id: int | None
     source_document_ref: str | None
-    raw_quote: str
-    content: str
+    source_span_json: dict[str, Any]
+    source_kind: Literal["manual", "agent_message", "rag_chunk", "legacy"]
+    source_status: Literal["available", "deleted_snapshot", "unavailable", "unverified"]
+    allowed_scopes: list[str]
+    raw_quote: str | None
+    content: str | None
     scope: str
     space_id: int | None
     sensitivity: str
-    purpose: str
+    purpose: str | None
     confirmation_status: Literal["confirmed"]
     revision: int
     retention_until: datetime | None
@@ -76,3 +114,5 @@ class RAGSearchOut(BaseModel):
     revision: int
     index_version: str
     citation_handle: str
+    space_id: int | None
+    allowed_scopes: list[str]
