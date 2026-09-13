@@ -48,7 +48,11 @@ _AGENT_KIND_CHECK_SQL = "agent_kind = 'assistant'"
 
 
 class AgentSession(Base):
-    """Agent 会话：scope 三元组创建后不可变（DB trigger 强制 + 服务层无更新路径）。"""
+    """Agent 会话：scope 三元组创建后不可变（DB trigger 强制 + 服务层无更新路径）。
+
+    title/updated_at 属展示态：title 为首条用户消息派生或用户重命名结果，
+    updated_at 随消息创建前进；二者更新不触碰 scope 不可变 trigger。
+    """
 
     __tablename__ = "agent_sessions"
     __table_args__ = (CheckConstraint(_AGENT_KIND_CHECK_SQL, name="ck_agent_sessions_kind"),)
@@ -67,6 +71,8 @@ class AgentSession(Base):
         Boolean, default=False, server_default=sa.false(), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

@@ -172,11 +172,17 @@ class AgentSessionCreateRequest(_Strict):
     space_id: int = Field(ge=1)
 
 
+class AgentSessionRenameRequest(_Strict):
+    title: str = Field(min_length=1, max_length=120)
+
+
 class AgentSessionOut(BaseModel):
     id: int
     space_id: int
     agent_kind: AgentKind
     created_at: datetime
+    title: str | None = None
+    updated_at: datetime
 
 
 class AgentMessageCreateRequest(_Strict):

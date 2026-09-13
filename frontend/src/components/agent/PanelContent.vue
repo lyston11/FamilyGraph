@@ -102,6 +102,16 @@ function onCreateSession(): void {
   if (current !== null) void agent.newSession(current.id)
 }
 
+function onRenameSession(sessionId: number, title: string): void {
+  const current = space.value
+  if (current !== null) void agent.renameSession(current.id, sessionId, title)
+}
+
+function onDeleteSession(sessionId: number): void {
+  const current = space.value
+  if (current !== null) void agent.deleteSession(current.id, sessionId)
+}
+
 function onSend(): void {
   const current = space.value
   if (current !== null) void agent.sendMessage(current.id)
@@ -167,12 +177,15 @@ function onDraftUpdate(value: string): void {
         :disabled="partition.sending"
         @select="onSelectSession"
         @create="onCreateSession"
+        @rename="onRenameSession"
+        @delete="onDeleteSession"
       />
       <NButton
         v-else
         size="small"
         type="primary"
         secondary
+        class="empty-new-btn"
         data-test="new-session-btn-empty"
         :disabled="!partition || partition.sending"
         @click="onCreateSession"
@@ -279,10 +292,13 @@ function onDraftUpdate(value: string): void {
 
 .toolbar {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  align-items: flex-start;
   gap: 8px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--fg-line);
+}
+
+.empty-new-btn {
+  margin-left: auto;
 }
 </style>

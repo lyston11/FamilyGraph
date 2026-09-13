@@ -12,6 +12,10 @@ export interface AgentSession {
   /** assistant | steward（浏览器只会创建 assistant） */
   agent_kind: string
   created_at: string
+  /** 服务端展示标题（首条用户消息派生或重命名）；null = 尚无用户消息且未重命名 */
+  title: string | null
+  /** 最近一次用户消息时间；无消息等于 created_at */
+  updated_at: string
 }
 
 /** 会话历史消息投影（不含系统内部字段） */

@@ -35,6 +35,8 @@ vi.mock('@/api/agent', () => ({
   createAgentMessage: vi.fn(),
   fetchAgentRun: vi.fn(),
   cancelAgentRun: vi.fn(),
+  renameAgentSession: vi.fn(),
+  deleteAgentSession: vi.fn(),
 }))
 
 // 可控的假流：捕获回调，测试中手动投喂事件（模拟流分片）
@@ -190,6 +192,8 @@ describe('AssistantPanel：SSE 流式渲染回归（组件级，模拟流分片�
       space_id: 1,
       agent_kind: 'assistant',
       created_at: '2026-08-26T00:00:00',
+      title: null,
+      updated_at: '2026-08-26T00:00:00',
     })
     vi.mocked(agentApi.createAgentMessage).mockResolvedValue({
       message: { id: 21, role: 'user', content_json: { text: '谁是我的长辈？' }, created_at: '2026-08-26T00:00:01' },

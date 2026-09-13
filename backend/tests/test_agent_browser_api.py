@@ -10,7 +10,7 @@ from conftest import (
 from sqlalchemy import func, select
 
 from app import config
-from app.models.agent import AgentRun, AgentRunEvent, AgentSession
+from app.models.agent import AgentMessage, AgentRun, AgentRunEvent, AgentSession
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.audit_log import AuditLog
 from app.models.space import FamilySpace
@@ -84,12 +84,20 @@ def test_create_session_requires_active_membership(client, db_session):
 def test_session_kind_fixed_assistant_and_no_update_endpoint(client, db_session):
     _user, _space, headers, created = _member_session(client, db_session, "fixedkind")
     assert created["agent_kind"] == "assistant"
-    # steward 会话不接受浏览器创建；scope 更新类端点不存在（404/405）
-    for method in ("put", "patch"):
-        response = getattr(client, method)(
-            f"/api/agent/sessions/{created['id']}", json={"space_id": 2}, headers=headers
-        )
-        assert response.status_code in (404, 405)
+    # steward 会话不接受浏览器创建；scope 更新类端点不存在（PUT 405；
+    # PATCH 仅允许重命名 title，scope 字段被 _Strict schema 拒绝 → 422）
+    put = client.put(f"/api/agent/sessions/{created['id']}", json={"space_id": 2}, headers=headers)
+    assert put.status_code == 405
+    patch = client.patch(
+        f"/api/agent/sessions/{created['id']}", json={"space_id": 2}, headers=headers
+    )
+    assert patch.status_code == 422
+    renamed = client.patch(
+        f"/api/agent/sessions/{created['id']}", json={"title": "改名"}, headers=headers
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["space_id"] == created["space_id"]
+    assert renamed.json()["agent_kind"] == "assistant"
 
 
 def test_session_scope_immutable_at_db_level(db_session):
@@ -99,6 +107,7 @@ def test_session_scope_immutable_at_db_level(db_session):
         space_id=space.id,
         agent_kind="assistant",
         created_at=user.created_at,
+        updated_at=user.created_at,
     )
     db_session.add(row)
     db_session.commit()
@@ -323,3 +332,133 @@ def test_feature_flag_disabled_returns_503(client, db_session, monkeypatch):
         response = case()
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "AGENT_RUNTIME_DISABLED"
+
+
+# ---- 会话展示态：title / updated_at / 重命名 / 删除 ----
+
+
+def test_list_sessions_projection_orders_by_activity(client, db_session):
+    _user, _space, headers, first_session = _member_session(client, db_session, "listorder")
+    second = client.post("/api/agent/sessions", json={"space_id": _space.id}, headers=headers)
+    assert second.status_code == 201
+    second_session = second.json()
+
+    listing = client.get("/api/agent/sessions", headers=headers)
+    assert listing.status_code == 200
+    rows = {row["id"]: row for row in listing.json()}
+    # 新建会话：无标题（None），updated_at == created_at
+    assert rows[first_session["id"]]["title"] is None
+    assert rows[first_session["id"]]["updated_at"] == rows[first_session["id"]]["created_at"]
+
+    # 旧会话发消息后按 updated_at 排到最前（id desc 排序会给出相反顺序）
+    _post_message(client, headers, first_session["id"], "排序   用例", "key-order")
+    relisted = client.get("/api/agent/sessions", headers=headers).json()
+    assert [row["id"] for row in relisted][:2] == [first_session["id"], second_session["id"]]
+    assert relisted[0]["title"] == "排序 用例"
+
+
+def test_list_sessions_limit(client, db_session):
+    _user, space, headers, _first = _member_session(client, db_session, "listlimit")
+    for _ in range(2):
+        created = client.post("/api/agent/sessions", json={"space_id": space.id}, headers=headers)
+        assert created.status_code == 201
+    rows = client.get("/api/agent/sessions?limit=2", headers=headers).json()
+    assert len(rows) == 2
+
+
+def test_first_message_derives_title_second_message_keeps_it(client, db_session):
+    _user, _space, headers, session_row = _member_session(client, db_session, "titlederive")
+    first = _post_message(client, headers, session_row["id"], "谁是我的长辈", "key-t1")
+    assert first.status_code == 200
+    row = client.get("/api/agent/sessions", headers=headers).json()[0]
+    assert row["id"] == session_row["id"]
+    assert row["title"] == "谁是我的长辈"
+    updated_after_first = row["updated_at"]
+
+    # 每会话至多一个 active Run：先取消再发第二条（终态不影响展示态断言）
+    run_id = first.json()["run"]["id"]
+    cancelled = client.post(f"/api/agent/runs/{run_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    second = _post_message(client, headers, session_row["id"], "再问一个", "key-t2")
+    assert second.status_code == 200
+    row = client.get("/api/agent/sessions", headers=headers).json()[0]
+    assert row["title"] == "谁是我的长辈"
+    assert row["updated_at"] > updated_after_first
+
+
+def test_idempotent_replay_keeps_session_display_state(client, db_session):
+    _user, _space, headers, session_row = _member_session(client, db_session, "titlereplay")
+    _post_message(client, headers, session_row["id"], "首条", "key-r1")
+    before = client.get("/api/agent/sessions", headers=headers).json()[0]
+    replay = _post_message(client, headers, session_row["id"], "首条", "key-r1")
+    assert replay.json()["replayed"] is True
+    after = client.get("/api/agent/sessions", headers=headers).json()[0]
+    assert after["updated_at"] == before["updated_at"]
+
+
+def test_rename_session_success_validation_and_ownership(client, db_session):
+    _user, _space, headers, session_row = _member_session(client, db_session, "rename")
+    renamed = client.patch(
+        f"/api/agent/sessions/{session_row['id']}", json={"title": "  家谱 问答  "}, headers=headers
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "家谱 问答"
+
+    blank = client.patch(
+        f"/api/agent/sessions/{session_row['id']}", json={"title": "   "}, headers=headers
+    )
+    assert blank.status_code == 422
+    assert blank.json()["error"]["code"] == "AGENT_SESSION_TITLE_INVALID"
+    too_long = client.patch(
+        f"/api/agent/sessions/{session_row['id']}", json={"title": "字" * 121}, headers=headers
+    )
+    assert too_long.status_code == 422
+
+    _other_user, _other_space, _other_headers, other_session = _member_session(
+        client, db_session, "renameother"
+    )
+    foreign = client.patch(
+        f"/api/agent/sessions/{other_session['id']}", json={"title": "别人的"}, headers=headers
+    )
+    assert foreign.status_code == 404
+
+
+def test_delete_session_cascades_and_guards_active_run(client, db_session):
+    _user, _space, headers, session_row = _member_session(client, db_session, "delete")
+    created = _post_message(client, headers, session_row["id"], "删除我", "key-d")
+    run_id = created.json()["run"]["id"]
+    message_id = created.json()["message"]["id"]
+
+    busy = client.delete(f"/api/agent/sessions/{session_row['id']}", headers=headers)
+    assert busy.status_code == 409
+    assert busy.json()["error"]["code"] == "AGENT_RUN_SESSION_BUSY"
+
+    cancelled = client.post(f"/api/agent/runs/{run_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    deleted = client.delete(f"/api/agent/sessions/{session_row['id']}", headers=headers)
+    assert deleted.status_code == 204
+
+    assert db_session.get(AgentSession, session_row["id"]) is None
+    assert db_session.get(AgentMessage, message_id) is None
+    assert db_session.get(AgentRun, run_id) is None
+    events = db_session.scalars(select(AgentRunEvent).where(AgentRunEvent.run_id == run_id)).all()
+    assert events == []
+    remaining = client.get("/api/agent/sessions", headers=headers).json()
+    assert all(row["id"] != session_row["id"] for row in remaining)
+    audit_row = db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "agent_session_deleted",
+            AuditLog.target_id == session_row["id"],
+        )
+    )
+    assert audit_row is not None
+
+
+def test_delete_session_ownership_404(client, db_session):
+    _user, _space, headers, _session_row = _member_session(client, db_session, "delown")
+    _other_user, _other_space, _other_headers, other_session = _member_session(
+        client, db_session, "delownother"
+    )
+    foreign = client.delete(f"/api/agent/sessions/{other_session['id']}", headers=headers)
+    assert foreign.status_code == 404
+    assert foreign.json()["error"]["code"] == "AGENT_SESSION_NOT_FOUND"

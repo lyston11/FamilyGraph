@@ -6,10 +6,12 @@ import {
   cancelAgentRun,
   createAgentMessage,
   createAgentSession,
+  deleteAgentSession,
   fetchAgentMessages,
   fetchAgentRun,
   fetchAgentSessions,
   friendlyAgentError,
+  renameAgentSession,
 } from '@/api/agent'
 import { ApiError } from '@/api/errors'
 import { useAgentStream } from '@/composables/useAgentStream'
@@ -88,7 +90,7 @@ interface SessionPartition {
   replayCursor: number
   /** 流断开且未恢复（显示重试入口） */
   streamLost: boolean
-  /** 已加载过历史的会话标题（首条用户消息截断，纯展示） */
+  /** 无服务端标题会话的兜底标题（乐观首条消息截断，纯展示） */
   titles: Record<number, string>
 }
 
@@ -547,11 +549,72 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function rememberSessionTitle(partition: SessionPartition, sessionId: number): void {
-    // 标题纯展示：取该会话首条用户消息截断（无则回退时间戳格式，由组件兜底）
+    // 标题纯展示：优先服务端落库标题；无则取该会话首条用户消息截断（组件再兜底时间戳）
     if (!partition.titles) partition.titles = {}
     if (partition.titles[sessionId]) return
+    const session = partition.sessions.find((s) => s.id === sessionId)
+    if (session?.title) {
+      partition.titles[sessionId] = session.title
+      return
+    }
     const firstUser = partition.messages.find((m) => m.role === 'user')
     if (firstUser) partition.titles[sessionId] = truncateSessionTitle(firstUser.text)
+  }
+
+  /** 重命名会话：服务端落库后原地更新列表项（保持排序），并同步标题兜底缓存。 */
+  async function renameSession(spaceId: number, sessionId: number, title: string): Promise<void> {
+    const partition = requirePartition(spaceId)
+    if (!partition) return
+    try {
+      const updated = await renameAgentSession(sessionId, title)
+      const index = partition.sessions.findIndex((s) => s.id === sessionId)
+      if (index >= 0) partition.sessions[index] = updated
+      if (updated.title) partition.titles[sessionId] = updated.title
+    } catch (error) {
+      partition.error = describeApiError(error)
+    }
+  }
+
+  /**
+   * 删除会话：服务端级联清理消息/Run/事件。
+   * 删除当前会话时关流清场，并切换到最近一个剩余会话（无则回到「开始新会话」空状态）；
+   * 409（有进行中 Run）等错误经 describeApiError 写入 error 横幅。
+   */
+  async function deleteSession(spaceId: number, sessionId: number): Promise<void> {
+    const partition = requirePartition(spaceId)
+    if (!partition) return
+    try {
+      await deleteAgentSession(sessionId)
+    } catch (error) {
+      partition.error = describeApiError(error)
+      return
+    }
+    partition.error = null
+    const wasActive = partition.activeSessionId === sessionId
+    partition.sessions = partition.sessions.filter((s) => s.id !== sessionId)
+    forgetActiveRunId(sessionId)
+    if (streamCtx !== null && streamCtx.sessionId === sessionId) {
+      stream.close()
+      streamCtx = null
+    }
+    if (!wasActive) return
+    partition.run = null
+    partition.messages = []
+    partition.toolSummaries = []
+    partition.replayCursor = 0
+    partition.streamLost = false
+    partition.draft = ''
+    const next = partition.sessions[0] ?? null
+    partition.activeSessionId = next?.id ?? null
+    if (next === null) return
+    partition.loadingHistory = true
+    try {
+      const history = await fetchAgentMessages(next.id)
+      partition.messages = history.map(toMessageView)
+      rememberSessionTitle(partition, next.id)
+    } finally {
+      partition.loadingHistory = false
+    }
   }
 
   // ---- 发送 ----
@@ -590,6 +653,10 @@ export const useAgentStore = defineStore('agent', () => {
       optimistic.id = response.message.id
       optimistic.createdAt = response.message.created_at
       optimistic.status = 'sent'
+      // 首条用户消息乐观写标题（与服务端派生规则一致；组件优先展示服务端 title）
+      if (!response.replayed && partition.titles[sessionId] === undefined) {
+        partition.titles[sessionId] = truncateSessionTitle(content)
+      }
       if (
         response.run !== null &&
         ACTIVE_RUN_STATUSES.has(response.run.status) &&
@@ -653,6 +720,8 @@ export const useAgentStore = defineStore('agent', () => {
     ensureSpace,
     newSession,
     selectSession,
+    renameSession,
+    deleteSession,
     sendMessage,
     cancelRun,
     reattachRun,

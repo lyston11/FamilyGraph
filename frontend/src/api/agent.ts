@@ -26,6 +26,17 @@ export async function fetchAgentSessions(spaceId?: number): Promise<AgentSession
   return data
 }
 
+/** 重命名会话（1..120 字符，端点内 strip）；非本人会话 404。 */
+export async function renameAgentSession(sessionId: number, title: string): Promise<AgentSession> {
+  const { data } = await apiClient.patch<AgentSession>(`/agent/sessions/${sessionId}`, { title })
+  return data
+}
+
+/** 删除会话（消息/Run/事件服务端级联清理）；有进行中 Run 时 409 AGENT_RUN_SESSION_BUSY。 */
+export async function deleteAgentSession(sessionId: number): Promise<void> {
+  await apiClient.delete(`/agent/sessions/${sessionId}`)
+}
+
 export async function fetchAgentMessages(sessionId: number): Promise<AgentMessageOut[]> {
   const { data } = await apiClient.get<AgentMessageOut[]>(`/agent/sessions/${sessionId}/messages`)
   return data
@@ -65,6 +76,8 @@ const AGENT_ERROR_COPY: Record<string, string> = {
   PROVIDER_LOCAL_REQUIRED_UNAVAILABLE: '该空间要求本地模型执行，但本地服务暂不可用',
   IDEMPOTENCY_PAYLOAD_CONFLICT: '请求校验冲突，请刷新页面后重试',
   AGENT_SESSION_NOT_FOUND: '会话不存在或无权访问',
+  AGENT_SESSION_TITLE_INVALID: '会话标题须为 1..120 个字符',
+  AGENT_RUN_SESSION_BUSY: '会话有进行中的任务，请先取消或等待完成后再删除',
   AGENT_RUN_NOT_FOUND: '任务不存在或无权访问',
   SPACE_FORBIDDEN_ACTOR: '你已不是该空间的活跃成员，无法继续使用助手',
   SPACE_NOT_FOUND: '空间不存在或无权访问',

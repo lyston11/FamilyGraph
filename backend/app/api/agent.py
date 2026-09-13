@@ -28,7 +28,7 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi import HTTPException as FastAPIHTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,7 @@ from app.errors import (
     AGENT_RUN_SESSION_BUSY,
     AGENT_RUNTIME_DISABLED,
     AGENT_SESSION_NOT_FOUND,
+    AGENT_SESSION_TITLE_INVALID,
     IDEMPOTENCY_KEY_REQUIRED,
     IDEMPOTENCY_PAYLOAD_CONFLICT,
     PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
@@ -53,6 +54,7 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import (
+    RUN_ACTIVE_STATUSES,
     RUN_TERMINAL_STATUSES,
     AgentMessage,
     AgentRun,
@@ -69,6 +71,7 @@ from app.schemas.agent import (
     AgentRunRefOut,
     AgentSessionCreateRequest,
     AgentSessionOut,
+    AgentSessionRenameRequest,
 )
 from app.services import agent_events, agent_provider, agent_queue, audit, policy_guard
 from app.services.agent_events import TERMINAL_STREAM_EVENT_TYPES
@@ -124,6 +127,30 @@ def _message_out(message: AgentMessage) -> AgentMessageOut:
     )
 
 
+# 展示标题长度与前端 truncateSessionTitle 对齐（纯展示，两侧各自实现）。
+SESSION_TITLE_DISPLAY_LENGTH = 24
+
+
+def derive_session_title(text: str) -> str:
+    """会话展示标题：折叠空白后截取首 24 字符，超出补省略号（不参与记忆/事实）。"""
+    compact = " ".join(text.split())
+    chars = list(compact)
+    if len(chars) <= SESSION_TITLE_DISPLAY_LENGTH:
+        return compact
+    return "".join(chars[:SESSION_TITLE_DISPLAY_LENGTH]) + "…"
+
+
+def _session_out(session: AgentSession) -> AgentSessionOut:
+    return AgentSessionOut(
+        id=session.id,
+        space_id=session.space_id,
+        agent_kind=session.agent_kind,
+        created_at=session.created_at,
+        title=session.title,
+        updated_at=session.updated_at,
+    )
+
+
 def _run_ref(run: AgentRun | None) -> AgentRunRefOut | None:
     if run is None:
         return None
@@ -176,11 +203,13 @@ def create_agent_session(
         raise_api_error(404, SPACE_NOT_FOUND, "空间不存在")
     if not is_active_member(db, body.space_id, user.id):
         raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "仅空间 active 成员可创建 Agent 会话")
+    now = timeutil.utcnow()
     row = AgentSession(
         account_id=account.id,
         space_id=body.space_id,
         agent_kind="assistant",
-        created_at=timeutil.utcnow(),
+        created_at=now,
+        updated_at=now,
     )
     db.add(row)
     db.commit()
@@ -192,33 +221,78 @@ def create_agent_session(
         detail={"space_id": row.space_id, "agent_kind": row.agent_kind},
     )
     db.commit()
-    return AgentSessionOut(
-        id=row.id, space_id=row.space_id, agent_kind=row.agent_kind, created_at=row.created_at
-    )
+    return _session_out(row)
 
 
 @router.get("/sessions", response_model=list[AgentSessionOut])
 def list_agent_sessions(
     space_id: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[AgentSessionOut]:
-    """列出本人会话，可按 space_id 过滤。"""
+    """列出本人会话，可按 space_id 过滤；按最近活跃排序，limit 封顶。"""
     _user, account = identity
     query = (
         select(AgentSession)
         .where(AgentSession.account_id == account.id)
-        .order_by(AgentSession.id.desc())
+        .order_by(AgentSession.updated_at.desc(), AgentSession.id.desc())
+        .limit(limit)
     )
     if space_id is not None:
         query = query.where(AgentSession.space_id == space_id)
     rows = db.scalars(query).all()
-    return [
-        AgentSessionOut(
-            id=r.id, space_id=r.space_id, agent_kind=r.agent_kind, created_at=r.created_at
+    return [_session_out(r) for r in rows]
+
+
+@router.patch("/sessions/{session_id}", response_model=AgentSessionOut)
+def rename_agent_session(
+    session_id: int,
+    body: AgentSessionRenameRequest,
+    db: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> AgentSessionOut:
+    """重命名本人会话：标题去空白后须非空（1..120 字符）。"""
+    _user, account = identity
+    agent_session = _own_session_or_404(db, account.id, session_id)
+    title = body.title.strip()
+    if not title or len(title) > 120:
+        raise_api_error(422, AGENT_SESSION_TITLE_INVALID, "标题须为 1..120 个字符")
+    agent_session.title = title
+    db.commit()
+    return _session_out(agent_session)
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+def delete_agent_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> Response:
+    """删除本人会话：存在非终态 Run 时 409；消息/Run/事件经 FK 级联清理。"""
+    user, account = identity
+    agent_session = _own_session_or_404(db, account.id, session_id)
+    active_run = db.scalar(
+        select(AgentRun.id).where(
+            AgentRun.session_id == agent_session.id,
+            AgentRun.status.in_(RUN_ACTIVE_STATUSES),
         )
-        for r in rows
-    ]
+    )
+    if active_run is not None:
+        raise_api_error(409, AGENT_RUN_SESSION_BUSY, "会话有进行中的 Run，请先取消再删除")
+    space_id = agent_session.space_id
+    agent_kind = agent_session.agent_kind
+    db.delete(agent_session)
+    db.commit()
+    audit.write_audit(
+        db,
+        action="agent_session_deleted",
+        actor_id=user.id,
+        target_id=session_id,
+        detail={"space_id": space_id, "agent_kind": agent_kind},
+    )
+    db.commit()
+    return Response(status_code=204)
 
 
 # ---- 消息与幂等 ----
@@ -322,6 +396,10 @@ def create_agent_message(
         return AgentMessageCreatedOut(
             message=_message_out(message), run=_run_ref(run), replayed=True
         )
+    # 会话展示态：updated_at 随消息前进；标题只在首条用户消息时派生一次（此后仅重命名可改）。
+    agent_session.updated_at = message.created_at
+    if agent_session.title is None:
+        agent_session.title = derive_session_title(body.content)
     audit.write_audit(
         db,
         action="agent_message_submitted",
