@@ -41,13 +41,29 @@ STEWARD_ASSIST_RANKING / STEWARD_ASSIST_EXPLANATION` 只能通过服务器环境
 
 ## Acceptance Criteria
 
-- [ ] 管理员可在系统管理后台查看并切换三个平台级开关，变更写审计。
-- [ ] 平台级关闭时，家庭端模型设置面板对已开启的空间级开关显示可解释的平台级未开启提示。
-- [ ] `/admin-api/v1/steward/status` switch 展示与实际生效语义一致。
-- [ ] 后端测试覆盖：平台级/空间级组合真值表、admin 写路径审计、家庭端提示 detail。
-- [ ] admin-web 相关组件测试与 lint/type-check 通过；spec（agent-runtime / steward 相关）更新。
+- [x] 管理员可在系统管理后台查看并切换三个平台级开关，变更写审计。
+- [x] 平台级关闭时，家庭端模型设置面板对已开启的空间级开关显示可解释的平台级未开启提示。
+- [x] `/admin-api/v1/steward/status` switch 展示与实际生效语义一致。
+- [x] 后端测试覆盖：平台级/空间级组合真值表、admin 写路径审计、家庭端提示 detail。
+- [x] admin-web 相关组件测试与 lint/type-check 通过；spec 已弃用（历史资料），治理语义记录于本文件与 platform_features 服务 docstring。
 
 ## Notes
 
 - 相关过程证据（延迟、超时数据）见 `09-13-agent-latency-tuning`；部署层问题见
   `09-13-sidecar-server-deployment`。
+
+
+## 执行记录（2026-09-13）
+
+- 治理面镜像 memory/rag：`platform_feature_configs` 加三列（迁移 0043），
+  行缺失 = env 回退、env 关 = 部署 kill-switch、DB 覆盖 env；`set` 对三开关
+  采用 None 保留语义（旧客户端只写 memory/rag 不会静默重置）。
+- `steward_assist._platform_flag` 改经平台配置解析（每 kind），assist_enabled
+  组合真值表无需重启即生效；`/steward/status` 的 model_assist_platform 反映
+  治理后生效值。
+- admin API：GET/PUT `/admin-api/v1/platform-features` 携带三开关 + 审计
+  filters；管理端「平台能力」页新增管家辅助三开关卡（全量 PUT）。
+- 家庭端：`/api/spaces/{id}/model-settings` 的 steward 行新增
+  assist_*_effective；面板在空间级开而平台未开时显示可解释提示。
+- 门禁：后端 1028 passed/3 skipped + ruff/mypy 全绿；system-admin-frontend
+  lint/type-check/95 测试/build 全绿；frontend lint/549 测试/build 全绿。
