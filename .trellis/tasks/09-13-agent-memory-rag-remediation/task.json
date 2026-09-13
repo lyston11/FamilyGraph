@@ -3,7 +3,7 @@
   "name": "agent-memory-rag-remediation",
   "title": "双 Agent RAG 与记忆修复及能力优化",
   "description": "保存完整审计证据，规划记忆契约、中文召回、上下文压缩、索引与引用修复，并定义后续知识能力的准入条件。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
