@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "核验解析层级/词典机制未破坏 KI 合同"}
+{"file": ".trellis/spec/architecture.md", "reason": "核验出生年仅服务端使用、无 PII 下发或日志泄露"}
+{"file": ".trellis/tasks/09-13-steward-term-autofix/prd.md", "reason": "逐条核对验收标准与黄金用例"}
+{"file": ".trellis/tasks/09-13-steward-term-autofix/design.md", "reason": "核对红线对照表 §6 与缺省关闭语义"}

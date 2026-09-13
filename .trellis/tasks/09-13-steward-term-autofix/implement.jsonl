@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "SourceFact/概念码/TermRegistry 四级与 KI 红线的权威背景，词典补全与消歧必须对齐"}
+{"file": ".trellis/spec/architecture.md", "reason": "全局契约：可见性分级与 PII 红线，出生年用于消歧的脱敏约束"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "resolve_term_or_structural 签名扩展涉及多调用方，先过跨层清单"}
+{"file": ".trellis/tasks/09-13-steward-term-autofix/prd.md", "reason": "黄金用例与验收标准"}
+{"file": ".trellis/tasks/09-13-steward-term-autofix/design.md", "reason": "解析层修复取向、消歧表设计、红线对照"}

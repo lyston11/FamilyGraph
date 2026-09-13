@@ -82,6 +82,49 @@ class RelationshipGraph:
     bridge_user_ids: frozenset[int] = frozenset()
 
 
+def birth_from_user(user: User) -> tuple[str, int] | None:
+    """解析结构化出生日期为 (cal_type, 年份)；无法解析返回 None。
+
+    cal_type 仅接受 visibility.is_minor 同款 solar/lunar；年份数字在日历内
+    单调，可用于长幼比较（混合日历的比较由消费方拒绝）。
+    仅供展示层长幼消歧使用（脱敏判定由调用方的可见性决定承载），不下发。
+    """
+    birth = user.birth if isinstance(user.birth, dict) else {}
+    date_str = birth.get("date") if birth.get("cal_type") in ("solar", "lunar") else None
+    if not date_str or len(date_str) < 4:
+        return None
+    try:
+        return (str(birth["cal_type"]), int(str(date_str)[:4]))
+    except ValueError:
+        return None
+
+
+def load_birth_years(
+    session: Session, *, viewer_user_id: int, space_id: int, user_ids: set[int] | list[int]
+) -> dict[int, tuple[str, int] | None]:
+    """按 (viewer, 各目标) 的展示口径（PURPOSE_GRAPH）可见性决定收集出生数据。
+
+    与 PFV 展示同一语义：birth 字段对 viewer 非 FIELD_CLEAR（含未成年人
+    overlay / lineage 脱敏）或不可解析 → None。组合层称谓长幼消歧消费。
+    """
+    viewer = session.get(User, viewer_user_id)
+    if viewer is None:
+        return {}
+    result: dict[int, tuple[str, int] | None] = {}
+    for uid in sorted({int(u) for u in user_ids}):
+        target = session.get(User, uid)
+        if target is None:
+            continue
+        decision = visibility.evaluate(
+            session, viewer, target, space_context=space_id, purpose=visibility.PURPOSE_GRAPH
+        )
+        if not decision.visible or decision.fields.get("birth") != visibility.FIELD_CLEAR:
+            result[uid] = None
+            continue
+        result[uid] = birth_from_user(target)
+    return result
+
+
 def _visible_node_ids(session: Session, *, viewer_user_id: int, space_id: int) -> set[int]:
     """viewer 在 space 内可见人集合（active 成员 ∪ active 引用 ∪ 本人）。
 

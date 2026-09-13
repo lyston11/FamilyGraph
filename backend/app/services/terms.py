@@ -50,6 +50,7 @@ from app.services.derived_facts import (
     steps_from_json,
 )
 from app.services.domain_events import emit as emit_domain_event
+from app.services.relationship_graph import load_birth_years
 from app.services.relationship_resolver import concept_code_for_path, describe_path
 from app.services.space_fsm import is_active_member
 from app.utils.timeutil import utcnow
@@ -735,6 +736,209 @@ def _pair_fact_state(
     }
 
 
+# ---- 长幼消歧与长链泛化（09-13-steward-term-autofix；全程确定性，零模型调用）----
+
+# 消歧只升级 locale/system 内置词；personal/space 是用户自定义叫法，永不覆盖
+_VARIANT_ELIGIBLE_LEVELS = (TERM_LEVEL_LOCALE, TERM_LEVEL_SYSTEM)
+# 泛化产物（最长命名前缀 + 残链）的来源标记（非存储层级）
+SOURCE_LEVEL_DERIVED = "derived"
+
+# 长幼可比的出生数据：(cal_type, year)；混合日历不比较（保守回退泛化词）
+BirthPair = tuple[str, int]
+
+
+@dataclass(frozen=True)
+class VariantContext:
+    """长幼消歧上下文：viewer→target 主路径步 + 相关人员的出生数据。
+
+    path 为 steps_to_json 形状（{"from","to","edge_type","subtype","direction",
+    "fact_id"}）；births 为 uid → (cal_type, year) | None（birth 字段对 viewer
+    脱敏或不可解析时为 None）。缺省 None 的调用方行为与升级前逐字节一致。
+    """
+
+    viewer_user_id: int
+    path: list[dict[str, Any]]
+    births: dict[int, BirthPair | None]
+
+
+def _parse_token(token: str) -> tuple[str, str | None, str | None]:
+    """概念码单步 token → (域字母, 亚型字母, 性别字母)。
+
+    token 合同（relationship_resolver._step_token）：[A-Z][sga]?[mf]?。
+    """
+    domain = token[0]
+    subtype: str | None = None
+    gender: str | None = None
+    rest = token[1:]
+    if rest[:1] in ("s", "a", "g"):
+        subtype = rest[0]
+        rest = rest[1:]
+    if rest[:1] in ("m", "f"):
+        gender = rest[0]
+    return domain, subtype, gender
+
+
+# 残链小词表：泛化时把未命名 hop 翻译为「关系词」（「妹夫的父亲」的「父亲」）
+_RESIDUAL_WORDS: dict[tuple[str, str | None, str | None], str] = {
+    ("U", None, "m"): "父亲",
+    ("U", None, "f"): "母亲",
+    ("U", "s", "m"): "继父",
+    ("U", "s", "f"): "继母",
+    ("U", "a", "m"): "养父",
+    ("U", "a", "f"): "养母",
+    ("U", "g", None): "监护人",
+    ("U", None, None): "家长",
+    ("D", None, "m"): "儿子",
+    ("D", None, "f"): "女儿",
+    ("D", "s", "m"): "继子",
+    ("D", "s", "f"): "继女",
+    ("D", "a", "m"): "养子",
+    ("D", "a", "f"): "养女",
+    ("D", None, None): "子女",
+    ("B", None, "m"): "兄弟",
+    ("B", None, "f"): "姐妹",
+    ("B", None, None): "兄弟",
+    ("S", None, "m"): "丈夫",
+    ("S", None, "f"): "妻子",
+    ("S", None, None): "配偶",
+    ("P", None, "m"): "伴侣",
+    ("P", None, "f"): "伴侣",
+    ("P", None, None): "伴侣",
+    ("X", None, None): "跨空间亲人",
+}
+
+# 兄弟/姐妹类基码 → 长幼具体词（基码泛化词已入内置包，消歧命中即升级）
+_SIBLING_AGE_TERMS: dict[str, dict[str, str]] = {
+    "m": {"elder": "哥哥", "younger": "弟弟"},
+    "f": {"elder": "姐姐", "younger": "妹妹"},
+}
+# 基码性别 × 配偶后缀 → 长幼具体词（嫂子/弟媳、姐夫/妹夫）
+_SIBLING_SPOUSE_AGE_TERMS: dict[tuple[str, str], dict[str, str]] = {
+    ("m", "Sf"): {"elder": "嫂子", "younger": "弟媳"},
+    ("f", "Sm"): {"elder": "姐夫", "younger": "妹夫"},
+}
+
+_SUFFIX_GENDERS = ("Sm", "Sf")
+
+
+def _sibling_base_hop(
+    code_tokens: list[str],
+) -> tuple[int, bool] | None:
+    """识别长幼消歧类基跳：返回 (基跳下标, 是否带配偶后缀)；非消歧类返回 None。
+
+    消歧类（与内置包泛化词条一一对应）：
+    - 1 跳 B（直接同胞事实）：Bm/Bf；
+    - 2 跳 U-D（经父母链的同胞）：Um-Dm/Um-Df/Uf-Dm/Uf-Df；
+    - 2 跳 B-S（同胞的配偶）：Bm-Sf/Bf-Sm/...；
+    - 3 跳 U-D-S（经父母链同胞的配偶）：Um-Df-Sm/...
+    伯/叔、堂表长幼依赖父辈或旁支长幼链，v1 不消歧（保持泛化词）。
+    """
+    n = len(code_tokens)
+    if n == 1:
+        domain, _, _ = _parse_token(code_tokens[0])
+        return (0, False) if domain == "B" else None
+    if n == 2:
+        first_domain, _, _ = _parse_token(code_tokens[0])
+        last_domain, _, _ = _parse_token(code_tokens[1])
+        if first_domain == "U" and last_domain == "D":
+            return (1, False)
+        if first_domain == "B" and code_tokens[1] in _SUFFIX_GENDERS:
+            return (0, True)
+        return None
+    if n == 3:
+        d0, _, _ = _parse_token(code_tokens[0])
+        d1, _, _ = _parse_token(code_tokens[1])
+        d2, _, _ = _parse_token(code_tokens[2])
+        if d0 == "U" and d1 == "U" and d2 == "D":
+            return None  # 曾祖辈长幼链，不消歧
+        if d0 == "U" and d1 == "D" and code_tokens[2] in _SUFFIX_GENDERS:
+            return (1, True)
+    return None
+
+
+def _age_order(births: dict[int, BirthPair | None], a_id: int, b_id: int) -> str | None:
+    """比较两人出生数据：返回 **b 相对 a** 的长幼——b 年长 → "elder"，b 年幼 →
+    "younger"，不可比 → None。
+
+    两人日历类型必须一致（混合 solar/lunar 比较可能差一岁，保守放弃）；
+    同年（无论日历）不判长幼。
+    """
+    a = births.get(a_id)
+    b = births.get(b_id)
+    if a is None or b is None:
+        return None
+    if a[0] != b[0] or a[1] == b[1]:
+        return None
+    return "younger" if a[1] < b[1] else "elder"
+
+
+def _sibling_variant_term(code: str, context: VariantContext) -> str | None:
+    """长幼消歧：消歧类概念码 + 可比出生数据 → 具体长幼称谓；否则 None。
+
+    纯函数：相同 (码, 路径, 出生数据) 恒产出相同结果。
+    """
+    code_tokens = code.split("-")
+    base = _sibling_base_hop(code_tokens)
+    if base is None:
+        return None
+    base_index, has_spouse_suffix = base
+    if base_index >= len(context.path):
+        return None
+    step = context.path[base_index]
+    sibling_id = step.get("to")
+    reference_id = context.viewer_user_id if base_index > 0 else step.get("from")
+    if sibling_id is None or reference_id is None:
+        return None
+    base_token = code_tokens[base_index]
+    _, _, base_gender = _parse_token(base_token)
+    suffix_token = code_tokens[base_index + 1] if has_spouse_suffix else None
+    if base_gender is None:
+        return None
+    if has_spouse_suffix:
+        assert suffix_token is not None  # _sibling_base_hop 合同保证
+        table = _SIBLING_SPOUSE_AGE_TERMS.get((base_gender, suffix_token))
+    else:
+        table = _SIBLING_AGE_TERMS.get(base_gender)
+    if table is None:
+        return None
+    order = _age_order(context.births, reference_id, int(sibling_id))
+    if order is None:
+        return None
+    return table[order]
+
+
+def _generalized_term(
+    session: Session, *, account_id: int, space_id: int, concept_code: str
+) -> str | None:
+    """第 5 级泛化：最长已命名前缀 + 残链小词（「妹夫的父亲」）。
+
+    - 前缀沿用四级解析优先级（用户 personal/space 词条若命中前缀，同样尊重）；
+    - 残链逐跳经 _RESIDUAL_WORDS 翻译，以「的」连接；
+    - 组合超长（>64 字）或残链存在不可命名 hop → None（维持结构描述）。
+    """
+    code_tokens = concept_code.split("-")
+    for cut in range(len(code_tokens) - 1, 0, -1):
+        prefix = "-".join(code_tokens[:cut])
+        if prefix == "SELF":  # pragma: no cover - SELF 只可能是全码
+            continue
+        resolved = resolve_term(
+            session, account_id=account_id, space_id=space_id, concept_code=prefix
+        )
+        if resolved.term is None:
+            continue
+        residual_words: list[str] = []
+        for token in code_tokens[cut:]:
+            word = _RESIDUAL_WORDS.get(_parse_token(token))
+            if word is None:
+                return None
+            residual_words.append(word)
+        term = "的".join([resolved.term, *residual_words])
+        if len(term) > _TERM_MAX_LENGTH:
+            return None
+        return term
+    return None
+
+
 def resolve_term_or_structural(
     session: Session,
     *,
@@ -742,8 +946,18 @@ def resolve_term_or_structural(
     space_id: int,
     concept_code: str | None,
     structural_description: str,
+    variant_context: VariantContext | None = None,
 ) -> dict[str, Any]:
-    """词条解析 + 结构回退：未命中任何词条时用确定性结构描述展示。"""
+    """词条解析 + 长幼消歧 + 长链泛化 + 结构回退。
+
+    解析顺序（09-13-steward-term-autofix）：
+    1. 四级词典（personal > space > locale > system）；命中且属于长幼消歧类、
+       且 variant_context 提供了可比出生数据 → 升级为具体长幼称谓
+       （哥哥/弟弟/姐姐/妹妹/嫂子/弟媳/姐夫/妹夫）。personal/space 层用户的
+       自定义词条永不升级（用户叫法优先）。
+    2. 词典未命中 → 第 5 级泛化：最长已命名前缀 + 残链小词（「妹夫的父亲」）。
+    3. 仍无法命名 → 结构描述（SOURCE_LEVEL_STRUCTURAL，与既有行为一致）。
+    """
     if concept_code is None:
         return {
             "term": structural_description,
@@ -753,16 +967,36 @@ def resolve_term_or_structural(
     resolved = resolve_term(
         session, account_id=account_id, space_id=space_id, concept_code=concept_code
     )
-    if resolved.source_level is None or resolved.term is None:
+    if resolved.source_level is not None and resolved.term is not None:
+        variant = (
+            _sibling_variant_term(concept_code, variant_context)
+            if variant_context is not None
+            else None
+        )
+        if variant is not None and resolved.source_level in _VARIANT_ELIGIBLE_LEVELS:
+            return {
+                "term": variant,
+                "source_level": resolved.source_level,
+                "entry_id": resolved.entry_id,
+            }
         return {
-            "term": structural_description,
-            "source_level": SOURCE_LEVEL_STRUCTURAL,
+            "term": resolved.term,
+            "source_level": resolved.source_level,
+            "entry_id": resolved.entry_id,
+        }
+    generalized = _generalized_term(
+        session, account_id=account_id, space_id=space_id, concept_code=concept_code
+    )
+    if generalized is not None:
+        return {
+            "term": generalized,
+            "source_level": SOURCE_LEVEL_DERIVED,
             "entry_id": None,
         }
     return {
-        "term": resolved.term,
-        "source_level": resolved.source_level,
-        "entry_id": resolved.entry_id,
+        "term": structural_description,
+        "source_level": SOURCE_LEVEL_STRUCTURAL,
+        "entry_id": None,
     }
 
 
@@ -817,16 +1051,31 @@ def compose_resolution_view(
         session, viewer_user_id=viewer_user_id, target_user_id=target_user_id, space_id=space_id
     )
     main_description, alt_descriptions = describe_result(session, result)
+
+    all_paths_json = [result.main_path_json, *result.alt_paths_json]
+    genders = _genders_for_paths(session, all_paths_json)
+    # 长幼消歧上下文：路径涉及人员的出生数据（脱敏/不可解析 → None）。
+    person_ids: set[int] = {viewer_user_id, target_user_id}
+    for path_json in all_paths_json:
+        for step_json in path_json:
+            person_ids.add(int(step_json["from"]))
+            person_ids.add(int(step_json["to"]))
+    births = load_birth_years(
+        session, viewer_user_id=viewer_user_id, space_id=space_id, user_ids=person_ids
+    )
+
     main_view = resolve_term_or_structural(
         session,
         account_id=account_id,
         space_id=space_id,
         concept_code=result.concept_code,
         structural_description=main_description,
+        variant_context=VariantContext(
+            viewer_user_id=viewer_user_id,
+            path=result.main_path_json,
+            births=births,
+        ),
     )
-
-    all_paths_json = [result.main_path_json, *result.alt_paths_json]
-    genders = _genders_for_paths(session, all_paths_json)
     alt_views: list[dict[str, Any]] = []
     for index, path_json in enumerate(result.alt_paths_json):
         steps = steps_from_json(path_json)
@@ -842,6 +1091,11 @@ def compose_resolution_view(
             space_id=space_id,
             concept_code=alt_code,
             structural_description=alt_description,
+            variant_context=VariantContext(
+                viewer_user_id=viewer_user_id,
+                path=path_json,
+                births=births,
+            ),
         )
         alt_views.append(
             {

@@ -36,13 +36,13 @@ from app.models.space import FamilySpace, SpaceMember
 from app.models.term_registry import TermEntry
 from app.models.user import User
 from app.services import visibility
-from app.services.relationship_graph import load_graph
+from app.services.relationship_graph import birth_from_user, load_graph
 from app.services.relationship_resolver import resolve_relationship, steps_to_json
 from app.services.source_facts import FACT_CONFIRMED
-from app.services.terms import resolve_term_or_structural, space_locale
+from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
 from app.utils.timeutil import utcnow
 
-COMPUTATION_VERSION = "pfv-v2"
+COMPUTATION_VERSION = "pfv-v3"
 POLICY_VERSION = config.POLICY_VERSION
 
 logger = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ def _node_display(
     space_id: int,
     *,
     bridge_authorized: bool = False,
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], str, visibility.VisibilityDecision]:
     decision = visibility.evaluate(
         session, actor, target, space_context=space_id, purpose=visibility.PURPOSE_GRAPH
     )
@@ -156,7 +156,11 @@ def _node_display(
         )
     if not decision.visible:
         raise ValueError("invisible node cannot enter PersonalFamilyView")
-    return jsonable_encoder(visibility.payload_from_decision(decision, target)), decision.level
+    return (
+        jsonable_encoder(visibility.payload_from_decision(decision, target)),
+        decision.level,
+        decision,
+    )
 
 
 def rebuild_view(session: Session, *, account: Account, space_id: int) -> PersonalFamilyView:
@@ -166,6 +170,9 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
     if actor is None:  # pragma: no cover - account FK guarantees this
         raise_api_error(404, PERSONAL_FAMILY_VIEW_NOT_FOUND, "个人家族视图不存在")
     graph = load_graph(session, viewer_user_id=actor.id, space_id=space_id)
+    # 长幼消歧出生数据：展示口径（PURPOSE_GRAPH）的可见性决定随 _node_display
+    # 逐节点取得；birth 字段脱敏（含未成年人 overlay / lineage 层）→ None。
+    births: dict[int, tuple[str, int] | None] = {}
     now = utcnow()
     view.status = "running"
     view.updated_at = now
@@ -184,12 +191,17 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
             )
             if not resolution.found:
                 continue
-        display, level = _node_display(
+        display, level, node_decision = _node_display(
             session,
             actor,
             target,
             space_id,
             bridge_authorized=target.id in graph.bridge_user_ids,
+        )
+        births[target.id] = (
+            birth_from_user(target)
+            if node_decision.fields.get("birth") == visibility.FIELD_CLEAR
+            else None
         )
         session.add(
             PersonalFamilyViewNode(
@@ -216,13 +228,20 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
             }
         )
         # R4：四级词典解析（personal > space > locale > system），结构描述仅兜底；
-        # 不修改 SourceFact / raw_relation_inputs 原文。
+        # 不修改 SourceFact / raw_relation_inputs 原文。09-13：传入长幼消歧
+        # 上下文（展示口径出生数据，脱敏节点为 None），词典泛化词升级为
+        # 兄弟姐妹类具体长幼称谓。
         term_view = resolve_term_or_structural(
             session,
             account_id=account.id,
             space_id=space_id,
             concept_code=resolution.concept_code,
             structural_description=resolution.explanation_structural or "",
+            variant_context=VariantContext(
+                viewer_user_id=actor.id,
+                path=main_path,
+                births=births,
+            ),
         )
         session.add(
             PersonalFamilyViewEdge(

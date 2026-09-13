@@ -199,10 +199,16 @@ def test_priority_space_over_locale_and_personal_over_all(db_session: Session) -
 
 
 def test_priority_no_hit_returns_none_for_structural_fallback(db_session: Session) -> None:
-    """四级全未命中 → source_level=None；组合层用结构描述兜底。"""
+    """四级全未命中 → source_level=None；组合层用结构描述兜底。
+
+    09-13 词典补全后 ≤4 跳常用码均已入包；5 跳旁系码不在内置包，仍未命中。
+    """
     user, space = create_agent_fixture(db_session, name="系4")
     resolved = terms.resolve_term(
-        db_session, account_id=user.account.id, space_id=space.id, concept_code="Um-Um-Um-Um"
+        db_session,
+        account_id=user.account.id,
+        space_id=space.id,
+        concept_code="Um-Um-Um-Um-Um",
     )
     assert resolved.term is None and resolved.source_level is None and resolved.entry_id is None
 

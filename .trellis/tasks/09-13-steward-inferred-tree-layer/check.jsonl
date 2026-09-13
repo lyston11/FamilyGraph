@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/architecture.md", "reason": "核验推测边确认流未绕过授权矩阵与 consent 合同"}
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "核验 steward core 事务边界/SAVEPOINT 隔离/事件落点与既有合同一致"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "核验称谓解析走确定性管线、LLM 未产出派生概念、隐私红线未破"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "核验前端无乐观更新、space 绑定与 epoch 丢弃语义未被破坏"}
+{"file": ".trellis/tasks/09-13-steward-inferred-tree-layer/prd.md", "reason": "逐条核对验收标准"}
+{"file": ".trellis/tasks/09-13-steward-inferred-tree-layer/design.md", "reason": "核对红线对照表 §7 与回滚形态 §8"}
