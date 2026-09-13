@@ -34,3 +34,4 @@ board.html
 .steward-eval-report.json
 .steward-*-evidence.json
 backend/.venv
+frontend/node_modules
