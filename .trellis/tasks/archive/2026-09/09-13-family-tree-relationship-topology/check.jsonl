@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/09-13-family-tree-relationship-topology/research/current-contracts.md", "reason": "Independent review anchors for topology correctness, authorization, ETag and compatible rendering"}
+{"file": ".trellis/tasks/09-13-family-tree-relationship-topology/research/planning-review.md", "reason": "Planning review finding: bridge wall-clock expiry must invalidate nodes, topology and conditional cache without an event"}
