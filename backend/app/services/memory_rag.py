@@ -697,8 +697,22 @@ def index_memory(db: Session, memory: Memory) -> RAGDocument:
         )
         db.add(document)
         db.flush()
-    else:
+    elif document.status != "active":
+        # MR-25: a tombstoned document is only resurrectable when the
+        # tombstone was an index-version supersede, never a source-level one.
+        if document.invalidation_reason != "index_superseded":
+            raise_api_error(
+                409,
+                RAG_SOURCE_NOT_ALLOWED,
+                "来源已失效或撤销，索引不能复活",
+                {"document_id": document.id, "reason": document.invalidation_reason},
+            )
+        if not memory_sources.memory_materializable(db, memory):
+            raise_api_error(409, RAG_SOURCE_NOT_ALLOWED, "来源未验证或已失效，不能建立索引")
         document.status = "active"
+        document.invalidation_reason = None
+        document.updated_at = now
+    else:
         document.index_version = RAG_INDEX_VERSION
         document.updated_at = now
     _materialize_chunks(db, document, memory.content, memory.revision)
@@ -717,9 +731,16 @@ def _materialize_chunks(db: Session, document: RAGDocument, text_value: str, rev
     owned by the maintenance task (D).
     """
     pieces = _chunk_text(text_value)
+    # Version-scoped: rows of another index_version belong to a staged or
+    # superseded chunk set and are managed by the version-switch flow (D).
     existing = {
         int(chunk.chunk_index): chunk
-        for chunk in db.scalars(select(RAGChunk).where(RAGChunk.document_id == document.id)).all()
+        for chunk in db.scalars(
+            select(RAGChunk).where(
+                RAGChunk.document_id == document.id,
+                RAGChunk.index_version == document.index_version,
+            )
+        ).all()
     }
     kept_indexes: set[int] = set()
     for index, chunk_text_value in enumerate(pieces):
@@ -827,6 +848,7 @@ def _fts_match(value: str) -> str:
 _ELIGIBILITY_SQL = """
   c.status = 'active'
   AND d.status = 'active'
+  AND c.index_version = d.index_version
   AND d.index_version = :index_version
   AND d.confirmation_status IN ('confirmed', 'authorized')
   AND (d.source_type != 'memory' OR EXISTS (
@@ -1155,6 +1177,7 @@ def invalidate_source(
     now = utcnow()
     for row in rows:
         row.status = "invalidated"
+        row.invalidation_reason = "source_invalidated"
         row.invalidated_at = now
         row.updated_at = now
         db.query(RAGChunk).filter(
@@ -1380,42 +1403,75 @@ def query_hash(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
 
-def rebuild_index(db: Session) -> int:
-    """Rebuild FTS and materialize active memories missing an index document."""
+def repair_fts(db: Session) -> int:
+    """FTS physical repair only: rebuild the search projection from the
+    currently legal chunk rows.  Never touches Memory/document business state,
+    confirmation records or tombstones (D-R5 / D-AC6)."""
     _require_rag_enabled(db)
-    active_memories = db.scalars(select(Memory).where(Memory.status == "active")).all()
-    for memory in active_memories:
-        if not memory_sources.memory_materializable(db, memory):
-            continue
-        document = db.scalar(
-            select(RAGDocument).where(
-                RAGDocument.source_type == "memory",
-                RAGDocument.source_id == str(memory.id),
-                RAGDocument.revision == memory.revision,
-                RAGDocument.status == "active",
-            )
-        )
-        if document is None:
-            index_memory(db, memory)
     db.execute(text("DELETE FROM rag_chunks_fts"))
     db.execute(
         text(
             "INSERT INTO rag_chunks_fts(rowid, chunk_id, text) "
-            "SELECT id, id, text FROM rag_chunks "
-            "WHERE status = 'active' AND document_id IN "
-            "(SELECT id FROM rag_documents WHERE status = 'active')"
+            "SELECT c.id, c.id, c.text FROM rag_chunks AS c "
+            "JOIN rag_documents AS d ON d.id = c.document_id "
+            "WHERE c.status = 'active' AND d.status = 'active' "
+            "AND c.index_version = d.index_version"
         )
     )
     return int(
         db.scalar(
             text(
-                "SELECT count(*) FROM rag_chunks "
-                "WHERE status = 'active' AND document_id IN "
-                "(SELECT id FROM rag_documents WHERE status = 'active')"
+                "SELECT count(*) FROM rag_chunks AS c "
+                "JOIN rag_documents AS d ON d.id = c.document_id "
+                "WHERE c.status = 'active' AND d.status = 'active' "
+                "AND c.index_version = d.index_version"
             )
         )
         or 0
     )
+
+
+def ensure_memory_index(db: Session, memory: Memory) -> RAGDocument:
+    """Idempotent materialization of one legal memory (maintenance entry).
+
+    Unlike ``index_memory`` this is a no-op when the current projection is
+    already complete, which is what the bounded maintenance loop calls; the
+    FTS triggers keep the search projection in sync.
+    """
+    _require_rag_enabled(db)
+    if not memory_sources.memory_materializable(db, memory):
+        raise_api_error(409, RAG_SOURCE_NOT_ALLOWED, "来源未验证或已失效，不能建立索引")
+    document = db.scalar(
+        select(RAGDocument).where(
+            RAGDocument.source_type == "memory",
+            RAGDocument.source_id == str(memory.id),
+            RAGDocument.revision == memory.revision,
+            RAGDocument.status == "active",
+        )
+    )
+    if document is not None and document.index_version == RAG_INDEX_VERSION:
+        complete = db.scalar(
+            select(RAGChunk.id)
+            .where(
+                RAGChunk.document_id == document.id,
+                RAGChunk.index_version == document.index_version,
+                RAGChunk.status == "active",
+            )
+            .limit(1)
+        )
+        if complete is not None:
+            return document
+    return index_memory(db, memory)
+
+
+def rebuild_index(db: Session) -> int:
+    """Deprecated combined entry kept for callers; now FTS repair only.
+
+    Materialization of missing memories is owned by the bounded maintenance
+    loop (``rag_maintenance.run_maintenance_batch``) — the old behavior here
+    re-activated tombstoned documents (MR-25) and is intentionally gone.
+    """
+    return repair_fts(db)
 
 
 def run_session_space(db: Session, run: AgentRun) -> int:
@@ -1444,4 +1500,6 @@ __all__ = [
     "revoke_memory",
     "query_hash",
     "rebuild_index",
+    "repair_fts",
+    "ensure_memory_index",
 ]

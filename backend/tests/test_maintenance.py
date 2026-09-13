@@ -99,6 +99,9 @@ def test_tick_noop_when_worker_disabled(db_session, monkeypatch):
         "steward_failed": 0,
         "steward_assist_recovered": 0,
         "steward_assist_scheduled": 0,
+        "rag_index_scanned": 0,
+        "rag_index_materialized": 0,
+        "rag_index_failed": 0,
     }
     assert db_session.scalar(select(StewardJob.status)) == "queued"
 

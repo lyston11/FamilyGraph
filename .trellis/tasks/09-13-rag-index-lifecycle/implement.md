@@ -6,15 +6,15 @@
 
 ## 执行顺序
 
-- [ ] 先构造 MR-25 的隔离回归：同 revision invalidated document 被旧 rebuild 激活、重复重建换 chunk；这是尚需执行的验证，不把静态分析称为已经发生。
-- [ ] 固定 document 唯一身份、source tombstone/index_superseded 区别和 chunk/index_version 契约。
-- [ ] 修 index_memory/rebuild 的状态判定、幂等、条件更新与并发约束；旧数据重复和未知失效原因生成报告。
-- [ ] 在隔离库验证新增迁移、失效/retention/legacy/依赖与来源删除情形。
-- [ ] 实现有界维护职责、可恢复全轮游标、失败退避与 RAG-only/平台晚开启；物化/失败/游标原子提交，补过期 lease/旧策略不能回写的竞争测试。
-- [ ] 验证关闭→保存→开启→补齐、重启、并发、来源撤销竞争；开关 PUT 不执行全库索引。
-- [ ] 分离 FTS repair 和业务物化；新搜索只读活动版本，历史引用/保存依赖精确读取原片段；覆盖 staging 不外露、换版/回滚、实际 RAGHit 版本及解除来源隔离后的恢复。
-- [ ] 增加安全进度/错误元数据；必要前端入口与既有管理任务确定唯一所有者后再动。
-- [ ] 执行检查，回填 D-AC1～8、批次参数、迁移结果及已知限制。
+- [x] 先构造 MR-25 的隔离回归：同 revision invalidated document 被旧 rebuild 激活、重复重建换 chunk；这是尚需执行的验证，不把静态分析称为已经发生。
+- [x] 固定 document 唯一身份、source tombstone/index_superseded 区别和 chunk/index_version 契约。
+- [x] 修 index_memory/rebuild 的状态判定、幂等、条件更新与并发约束；旧数据重复和未知失效原因生成报告。
+- [x] 在隔离库验证新增迁移、失效/retention/legacy/依赖与来源删除情形。
+- [x] 实现有界维护职责、可恢复全轮游标、失败退避与 RAG-only/平台晚开启；物化/失败/游标原子提交，补过期 lease/旧策略不能回写的竞争测试。
+- [x] 验证关闭→保存→开启→补齐、重启、并发、来源撤销竞争；开关 PUT 不执行全库索引。
+- [x] 分离 FTS repair 和业务物化；新搜索只读活动版本，历史引用/保存依赖精确读取原片段；覆盖 staging 不外露、换版/回滚、实际 RAGHit 版本及解除来源隔离后的恢复。
+- [x] 增加安全进度/错误元数据；必要前端入口与既有管理任务确定唯一所有者后再动。
+- [x] 执行检查，回填 D-AC1～8、批次参数、迁移结果及已知限制。
 
 ## 验证
 

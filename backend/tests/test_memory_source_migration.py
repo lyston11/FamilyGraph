@@ -22,7 +22,7 @@ from conftest import (
 
 BACKEND = Path(__file__).parents[1]
 OLD_HEAD = "0041_term_pack_expansion"
-NEW_HEAD = "0044_rag_citation_contract"
+NEW_HEAD = "0045_rag_index_lifecycle"
 
 
 def _migrate(data_dir, *args):
@@ -238,9 +238,9 @@ def test_real_alembic_chain_and_nonempty_downgrade_guard(tmp_path):
             ).all()
             == original
         )
-        # The guarded 0042 downgrade aborted after 0044/0043 were reverted:
-        # provenance columns and rows are intact and the version stops at the
-        # guarded 0042 revision.
+        # The guarded 0042 downgrade aborted after 0045/0044/0043 were
+        # reverted: provenance columns and rows are intact and the version
+        # stops at the guarded 0042 revision.
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
             == "0042_memory_source_contract"

@@ -28,7 +28,7 @@ from sqlalchemy import select
 from app import config
 from app.db import SessionLocal
 from app.models.steward import StewardJob
-from app.services import agent_queue, steward, steward_assist
+from app.services import agent_queue, rag_maintenance, steward, steward_assist
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,9 @@ def run_maintenance_tick() -> dict[str, int]:
         "steward_failed": 0,
         "steward_assist_recovered": 0,
         "steward_assist_scheduled": 0,
+        "rag_index_scanned": 0,
+        "rag_index_materialized": 0,
+        "rag_index_failed": 0,
     }
     db = SessionLocal()
     try:
@@ -98,6 +101,21 @@ def run_maintenance_tick() -> dict[str, int]:
                 # 只记异常类名；辅助自身状态机保留安全错误码。
                 logger.warning(
                     "steward assist dispatch failed; core tick unaffected (error=%s)",
+                    type(exc).__name__,
+                )
+        # RAG-only 部署：部署允许（env）时即推进有界补建批次；平台 DB 开关的
+        # 有效状态在批次内部重估（关闭→无新批次）。与 Steward/Agent 完全独立。
+        if config.RAG_ENABLED:
+            try:
+                rag_counters = rag_maintenance.run_maintenance_batch(
+                    db, worker_id="inproc-rag-maintenance"
+                )
+                counters["rag_index_scanned"] = int(rag_counters.get("scanned", 0) or 0)
+                counters["rag_index_materialized"] = int(rag_counters.get("materialized", 0) or 0)
+                counters["rag_index_failed"] = int(rag_counters.get("failed", 0) or 0)
+            except Exception as exc:  # noqa: BLE001 — 补建失败不影响 core tick
+                logger.warning(
+                    "rag index maintenance failed; core tick unaffected (error=%s)",
                     type(exc).__name__,
                 )
         db.commit()
@@ -147,7 +165,7 @@ def start_maintenance_loop() -> asyncio.Task[None] | None:
     """
     global _task, _holders
     _holders += 1
-    if not (config.AGENT_RUNTIME_ENABLED or config.STEWARD_ENABLED):
+    if not (config.AGENT_RUNTIME_ENABLED or config.STEWARD_ENABLED or config.RAG_ENABLED):
         return None
     if _task is not None and not _task.done():
         return _task

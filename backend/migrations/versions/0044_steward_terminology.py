@@ -84,7 +84,9 @@ def upgrade() -> None:
             name="uq_stp_scope",
         ),
     )
-    op.create_index("ix_stp_semantic", "steward_term_projections", ["viewer_account_id", "semantic_hash"])
+    op.create_index(
+        "ix_stp_semantic", "steward_term_projections", ["viewer_account_id", "semantic_hash"]
+    )
     op.create_index("ix_stp_checked", "steward_term_projections", ["last_checked_hash"])
 
     op.create_table(
@@ -137,9 +139,7 @@ def upgrade() -> None:
 
     with op.batch_alter_table("steward_space_schedules") as batch:
         batch.add_column(
-            sa.Column(
-                "assist_kind_cursor", sa.Integer(), nullable=False, server_default="0"
-            )
+            sa.Column("assist_kind_cursor", sa.Integer(), nullable=False, server_default="0")
         )
 
     with op.batch_alter_table("steward_suggestion_recipients") as batch:
@@ -148,9 +148,7 @@ def upgrade() -> None:
 
     with op.batch_alter_table("agent_space_provider_settings") as batch:
         batch.add_column(
-            sa.Column(
-                "assist_terminology", sa.Boolean(), nullable=False, server_default=sa.false()
-            )
+            sa.Column("assist_terminology", sa.Boolean(), nullable=False, server_default=sa.false())
         )
 
     with op.batch_alter_table("platform_feature_configs") as batch:

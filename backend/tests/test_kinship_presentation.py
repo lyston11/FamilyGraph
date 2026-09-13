@@ -13,7 +13,6 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
 
 from app import config
 from app.models.account import Account
@@ -22,6 +21,7 @@ from app.models.steward import StewardJob, StewardLlmCandidate
 from app.models.steward_suggestion import StewardSuggestion
 from app.services import steward_suggestions
 from app.utils import timeutil
+from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
 
 
 @pytest.fixture(autouse=True)

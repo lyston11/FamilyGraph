@@ -86,6 +86,9 @@ class RAGDocument(Base):
     index_version: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Distinguishes a source-level tombstone (never resurrectable) from an
+    # index-version supersede (reactivatable only by the upgrade flow).
+    invalidation_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
@@ -102,7 +105,13 @@ class RAGChunk(Base):
             "embedding_status IN ('disabled','not_configured','pending','ready','failed')",
             name="ck_rag_chunks_embedding",
         ),
-        Index("ix_rag_chunks_document", "document_id", "chunk_index", unique=True),
+        Index(
+            "ix_rag_chunks_document_version",
+            "document_id",
+            "index_version",
+            "chunk_index",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -126,9 +135,42 @@ class RAGChunk(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow_naive)
 
 
+class RAGIndexMaintenanceState(Base):
+    """Singleton cursor/lease row for bounded RAG index backfill rounds."""
+
+    __tablename__ = "rag_index_maintenance_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cursor_memory_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    round: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class RAGIndexMaintenanceFailure(Base):
+    """Bounded retry ledger: source id + stable error code + backoff, no text."""
+
+    __tablename__ = "rag_index_maintenance_failures"
+
+    memory_id: Mapped[int] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True
+    )
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_retry_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_error_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 __all__ = [
     "RAGChunk",
     "RAGDocument",
+    "RAGIndexMaintenanceFailure",
+    "RAGIndexMaintenanceState",
     "RAG_DOCUMENT_STATUSES",
     "RAG_SENSITIVITIES",
     "RAG_SOURCE_TYPES",
