@@ -390,10 +390,10 @@ describe('AppShell navigation（统一家庭壳）', () => {
     const { wrapper, pinia } = await mountShell({ path: '/family-tree' })
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [
-      makeSpace({ id: 7, name: '王德海家', kind: 'household', lineage_space_id: 12 }),
-      makeSpace({ id: 12, name: '王氏家族', kind: 'lineage', owner_id: 1 }),
-      makeSpace({ id: 8, name: '李国强家', kind: 'household', owner_id: 9, lineage_space_id: 14 }),
-      makeSpace({ id: 14, name: '李氏家族', kind: 'lineage', owner_id: 9 }),
+      makeSpace({ id: 7, name: '明皇室', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '朱氏皇族', kind: 'lineage', owner_id: 1 }),
+      makeSpace({ id: 8, name: '徐达家', kind: 'household', owner_id: 9, lineage_space_id: 14 }),
+      makeSpace({ id: 14, name: '徐氏家族', kind: 'lineage', owner_id: 9 }),
     ]
     spaces.currentSpaceId = 12
     spaces.members = [makeMember({ space_id: 12 })]
@@ -409,8 +409,8 @@ describe('AppShell navigation（统一家庭壳）', () => {
     const { wrapper, pinia } = await mountShell({ path: '/family-tree' })
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [
-      makeSpace({ id: 7, name: '王德海家', kind: 'household', lineage_space_id: 12 }),
-      makeSpace({ id: 12, name: '王氏家族', kind: 'lineage', owner_id: 1 }),
+      makeSpace({ id: 7, name: '明皇室', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '朱氏皇族', kind: 'lineage', owner_id: 1 }),
     ]
     spaces.currentSpaceId = 7
     spaces.members = [makeMember({ space_id: 7 })]
@@ -424,10 +424,10 @@ describe('AppShell navigation（统一家庭壳）', () => {
     const { wrapper, pinia, router } = await mountShell({ path: '/settings' })
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [
-      makeSpace({ id: 7, name: '王德海家', kind: 'household', lineage_space_id: 12 }),
-      makeSpace({ id: 12, name: '王氏家族', kind: 'lineage', owner_id: 1 }),
-      makeSpace({ id: 8, name: '李国强家', kind: 'household', owner_id: 9, lineage_space_id: 14 }),
-      makeSpace({ id: 14, name: '李氏家族', kind: 'lineage', owner_id: 9 }),
+      makeSpace({ id: 7, name: '明皇室', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '朱氏皇族', kind: 'lineage', owner_id: 1 }),
+      makeSpace({ id: 8, name: '徐达家', kind: 'household', owner_id: 9, lineage_space_id: 14 }),
+      makeSpace({ id: 14, name: '徐氏家族', kind: 'lineage', owner_id: 9 }),
     ]
     spaces.currentSpaceId = 12
     spaces.members = [makeMember({ space_id: 12 })]

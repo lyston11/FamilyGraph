@@ -4,7 +4,7 @@
 以隔离环境启动真实三 listener（app.serve）：
 - 随机可用端口（默认 8000/8002 语义映射到动态端口，不触碰开发端口占用）；
 - 一次性临时 DATA_DIR（mkdtemp），运行结束整体删除，绝不触碰业务库或用户 .env；
-- DEV_SEED_DEMO_DATA=1 合成演示数据（王德海家等，PIN 为公开 dev 演示值）；
+- DEV_SEED_DEMO_DATA=1 合成演示数据（明皇室等，PIN 为公开 dev 演示值）；
 - 独立随机 SECRET_KEY / ADMIN_JWT_SECRET（不同签发域，支撑交叉拒绝用例）。
 
 用例覆盖（PRD R2/R3/R7）：
@@ -254,7 +254,7 @@ def run_cases(suite: Suite, family: str, admin: str, data_dir: Path) -> None:
     started = time.monotonic()
     resp = client.post(
         f"{family}/api/auth/login",
-        json={"name": "王德海", "pin": "123456"},
+        json={"name": "朱元璋", "pin": "123456"},
     )
     record(suite, "family-login", "family", "POST", "/auth/login", resp, started, 200)
     family_tokens = resp.json() if resp.status_code == 200 else {}

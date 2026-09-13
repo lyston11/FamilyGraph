@@ -1,4 +1,4 @@
-"""开发演示数据种子与一次性清库 CLI（09-05 dev-seed-demo-data）。
+"""开发演示数据种子与一次性清库 CLI（09-05 dev-seed-demo-data；09-13 明皇室数据集）。
 
 自动播种（app.main lifespan 在 admin bootstrap 之后调用，进程级单次）：
 - 门控：``DEV_SEED_DEMO_DATA=1``（默认 "0" 关闭）+ 进程级单次防重入；未开启或
@@ -7,16 +7,17 @@
   在同一 ``BEGIN IMMEDIATE`` 事务内把固定清单与库内现状逐行比对，缺什么补什么；
   任何已存在行绝不 UPDATE/DELETE（红线）——常量清单里新加成员/关系后重启即自动
   补齐，无需清库重播；要彻底重置仍走 ``--reset``；
-- 演示数据集「王德海家 + 王氏家族 + 李国强家 + 李氏家族」：14 名可登录成员
-  （PIN 统一 123456，公开 dev 演示值，含结构化出生日期——王小虎/王朵朵/李念为
-  未成年人，演示未成年保护 overlay）、spouse/elder 结构边及其 confirmed
-  SourceFact 映射（全局一份，家庭卡与家族树均可投影渲染）、四个空间——
-  household「王德海家」（6 人，配对→王氏家族）、lineage「王氏家族」（11 人：
-  核心 6 人 + 旁系亲属，演示双空间投影差异）、household「李国强家」（2 人：
-  李国强 admin + 王德海 member，演示第二空间管理员与跨空间成员资格，配对→
-  李氏家族）、lineage「李氏家族」（4 人：李国强/王德海/孙桂芳/李念，演示
-  「当前家族空间」在王氏/李氏之间切换）；基础五类披露全局开放（高敏感保持
-  关闭）；
+- 演示数据集「明皇室 + 朱氏皇族 + 马府 + 马氏家族 + 徐达家 + 徐氏家族」：
+  36 名可登录成员（PIN 统一 123456，公开 dev 演示值，全部含结构化出生日期；
+  生卒为演示用近似换算，全员历史人物、无未成年人）、spouse/elder 结构边及其
+  confirmed SourceFact 映射（全局一份，家庭卡与家族树均可投影渲染）、六个
+  空间——household「明皇室」（6 人：朱元璋/马皇后/朱标/朱棣/朱世珍/朱允炆，
+  配对→「朱氏皇族」）、lineage「朱氏皇族」（30 人：六世帝系 + 旁系朱文正 +
+  诸位皇后/驸马姻亲，演示双空间投影差异）、household「马府」（2 人：马皇后
+  admin + 朱元璋 member，演示跨空间成员资格，配对→「马氏家族」）、lineage
+  「马氏家族」（4 人：马皇后本家）、household「徐达家」（2 人：徐达 admin +
+  朱棣 member，演示婿系跨空间，配对→「徐氏家族」）、lineage「徐氏家族」
+  （6 人：徐皇后本家 + 跨空间朱棣）；基础五类披露全局开放（高敏感保持关闭）；
   全部经 SQLAlchemy 模型与既有 security / source_facts / disclosure 设施写入，
   不使用裸 SQL，不创建/修改 system_admins（admin bootstrap 的专属职责，09-04
   合同）。
@@ -31,9 +32,12 @@
 seed_space_with_owner / create_v1_relation / seed_structural_edge_to_fact 保持
 同步（conftest 是测试件，生产模块不 import，故此处内聚同构实现；两侧改动须
 人工同步）。演示家庭谱系按 v1 边方向语义（to_user 是 from_user 的 dir_class）：
-王远山/赵桂兰 是 王德海 与 王秀兰 的父母；王德海⇄周秀英 为配偶；王建军/王小雨
-是 王德海 与 周秀英 的子女；王小虎/王朵朵 是 王建军 与 刘婷婷 的子女；
-王秀兰⇄张伟 为配偶——四代结构；李国强⇄孙桂芳 为配偶，李念 是二人之子。
+朱世珍/陈氏 是 朱元璋 与 朱兴隆 的父母；朱元璋⇄马皇后 为配偶；朱标/朱樉/朱棡/
+朱棣/朱橚/宁国公主/安庆公主 是 朱元璋 与 马皇后 的子女；朱文正 是 朱兴隆 之子；
+朱允炆（母吕氏）/朱允熥（母常氏）是 朱标 之子；朱高炽/朱高煦/朱高燧 是 朱棣 与
+徐皇后 之子；朱瞻基/朱瞻墡 是 朱高炽 与 张皇后 之子；朱祁镇 是 朱瞻基 与
+孙皇后 之子、朱祁钰 是 朱瞻基 之子；马皇后 是 马公 与 郑氏 之女；徐皇后/徐辉祖/
+徐增寿 是 徐达 与 谢氏 的子女——六世结构。
 """
 
 from __future__ import annotations
@@ -65,86 +69,201 @@ logger = logging.getLogger(__name__)
 # 进程级防重入（与 services/admin_bootstrap._BOOTSTRAP_DONE 同款语义）
 _SEED_DONE = False
 
-# ---- 演示数据集常量（PRD 2.2 + 09-05 family-profile-nav-disclosure R3/R6 + 多空间扩展）----
+# ---- 演示数据集常量（09-13 起为明皇室数据集）----
 
-_SEED_SPACE_NAME = "王德海家"
-_SEED_LINEAGE_SPACE_NAME = "王氏家族"
-_SEED_SECOND_SPACE_NAME = "李国强家"
-_SEED_SECOND_LINEAGE_SPACE_NAME = "李氏家族"
 _SEED_PIN = "123456"  # 公开 dev 演示值（PRD 红线 4：允许出现在日志）
-_SEED_OWNER_NAME = "王德海"
-# household「王德海家」核心成员；(姓名, 性别)；gender 枚举见 app.schemas.user.GenderType
-_SEED_HOUSEHOLD_MEMBERS: tuple[tuple[str, str], ...] = (
-    ("王德海", "m"),
-    ("周秀英", "f"),
-    ("王建军", "m"),
-    ("王小雨", "f"),
-    ("王远山", "m"),
-    ("王小虎", "m"),
+
+# 空间配对清单：(household 名, lineage 名, 空间管理员)。household=家庭卡投影、
+# lineage=家族树投影；本次新建的 household 会显式配对所属 lineage
+# （lineage_space_id，「当前家族空间」切换的数据基础）。
+_SEED_SPACE_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("明皇室", "朱氏皇族", "朱元璋"),
+    ("马府", "马氏家族", "马皇后"),
+    ("徐达家", "徐氏家族", "徐达"),
 )
-# lineage「王氏家族」在核心成员之外追加的旁系亲属（只进家族空间，演示双空间投影差异）
-_SEED_LINEAGE_EXTRA_MEMBERS: tuple[tuple[str, str], ...] = (
-    ("赵桂兰", "f"),
-    ("王秀兰", "f"),
-    ("张伟", "m"),
-    ("刘婷婷", "f"),
-    ("王朵朵", "f"),
-)
-# 第二位家庭空间管理员：自有 household 空间并纳入王德海（演示跨空间成员资格；
-# 王德海已在 _SEED_HOUSEHOLD_MEMBERS 中建户，用户全集只补李国强本人）
-_SEED_SECOND_ADMIN_NAME = "李国强"
-_SEED_SECOND_SPACE_MEMBERS: tuple[tuple[str, str], ...] = (
-    (_SEED_SECOND_ADMIN_NAME, "m"),
-    (_SEED_OWNER_NAME, "m"),
-)
-# lineage「李氏家族」成员：李国强（admin）+ 王德海（跨家族成员资格，演示
-# 「当前家族空间」在王氏/李氏间切换）+ 李家两人；孙桂芳/李念只进李氏家族。
-_SEED_SECOND_LINEAGE_EXTRA_MEMBERS: tuple[tuple[str, str], ...] = (
-    ("孙桂芳", "f"),
-    ("李念", "m"),
-)
-# 用户全集不设 import 期派生常量：播种函数内由名册常量现算（四空间成员
-# 并集，全部可登录，不得重复建户）——避免将来只改名册、全集派生不同步的坑。
-# 结构化出生日期（solar）；王小虎 2018 / 王朵朵 2021 / 李念 2012 年生 = 未成年人
-# （演示 minor 保护 overlay）
-_SEED_BIRTHS: dict[str, tuple[int, int, int]] = {
-    "王远山": (1940, 5, 12),
-    "赵桂兰": (1942, 8, 21),
-    "张伟": (1961, 3, 17),
-    "王秀兰": (1962, 10, 6),
-    "李国强": (1963, 2, 11),
-    "王德海": (1965, 3, 8),
-    "孙桂芳": (1968, 4, 17),
-    "周秀英": (1967, 7, 19),
-    "王建军": (1990, 11, 2),
-    "刘婷婷": (1992, 6, 30),
-    "王小雨": (1993, 4, 25),
-    "李念": (2012, 9, 23),
-    "王小虎": (2018, 9, 14),
-    "王朵朵": (2021, 5, 9),
+
+# 每空间名册 (姓名, 性别)；gender 枚举见 app.schemas.user.GenderType。同一用户
+# 可进多个空间（跨空间成员资格），用户全集按名去重、按首见序建户（朱元璋为
+# 1 号演示用户，smoke 附件用例依赖此约定）。「明皇室」= 帝后核心家庭卡 6 人
+# （皇考+帝后+太子/燕王+皇太孙）；「朱氏皇族」= 六世宗室全集（其余旁系与姻亲
+# 只进家族空间，演示双空间投影差异）；「马府」/「徐达家」各 2 人：本家 admin
+# + 帝室 member（跨空间成员资格演示）。
+_SEED_SPACE_MEMBERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "明皇室": (
+        ("朱元璋", "m"),
+        ("马皇后", "f"),
+        ("朱标", "m"),
+        ("朱棣", "m"),
+        ("朱世珍", "m"),
+        ("朱允炆", "m"),
+    ),
+    "朱氏皇族": (
+        ("朱元璋", "m"),
+        ("马皇后", "f"),
+        ("朱标", "m"),
+        ("朱棣", "m"),
+        ("朱世珍", "m"),
+        ("朱允炆", "m"),
+        ("陈氏", "f"),
+        ("朱兴隆", "m"),
+        ("朱文正", "m"),
+        ("朱樉", "m"),
+        ("朱棡", "m"),
+        ("朱橚", "m"),
+        ("宁国公主", "f"),
+        ("安庆公主", "f"),
+        ("常氏", "f"),
+        ("吕氏", "f"),
+        ("徐皇后", "f"),
+        ("梅殷", "m"),
+        ("欧阳伦", "m"),
+        ("朱允熥", "m"),
+        ("朱高炽", "m"),
+        ("朱高煦", "m"),
+        ("朱高燧", "m"),
+        ("张皇后", "f"),
+        ("朱瞻基", "m"),
+        ("朱瞻墡", "m"),
+        ("孙皇后", "f"),
+        ("朱祁镇", "m"),
+        ("朱祁钰", "m"),
+        ("钱皇后", "f"),
+    ),
+    "马府": (
+        ("马皇后", "f"),
+        ("朱元璋", "m"),
+    ),
+    "马氏家族": (
+        ("马皇后", "f"),
+        ("朱元璋", "m"),
+        ("马公", "m"),
+        ("郑氏", "f"),
+    ),
+    "徐达家": (
+        ("徐达", "m"),
+        ("朱棣", "m"),
+    ),
+    "徐氏家族": (
+        ("徐达", "m"),
+        ("朱棣", "m"),
+        ("谢氏", "f"),
+        ("徐辉祖", "m"),
+        ("徐增寿", "m"),
+        ("徐皇后", "f"),
+    ),
 }
+
+# 用户全集不设 import 期派生常量：播种函数内由名册常量现算（跨空间成员并集
+# 按名去重，全部可登录，不得重复建户）——避免将来只改名册、全集派生不同步的坑。
+# 结构化出生日期（solar）；生卒为演示用近似换算（明代纪年各源存在差异），
+# 全员历史人物、无未成年人（minor 保护 overlay 由测试夹具单独覆盖）。
+_SEED_BIRTHS: dict[str, tuple[int, int, int]] = {
+    "朱世珍": (1283, 9, 25),
+    "陈氏": (1286, 3, 18),
+    "朱兴隆": (1310, 5, 21),
+    "马公": (1305, 3, 3),
+    "郑氏": (1308, 9, 9),
+    "朱元璋": (1328, 10, 21),
+    "马皇后": (1332, 8, 19),
+    "朱文正": (1336, 8, 11),
+    "朱标": (1355, 10, 10),
+    "常氏": (1355, 12, 3),
+    "朱樉": (1356, 12, 3),
+    "朱棡": (1358, 12, 18),
+    "吕氏": (1358, 10, 1),
+    "朱棣": (1360, 5, 2),
+    "梅殷": (1360, 11, 17),
+    "朱橚": (1361, 10, 8),
+    "徐皇后": (1362, 3, 6),
+    "欧阳伦": (1363, 6, 25),
+    "宁国公主": (1364, 10, 20),
+    "安庆公主": (1366, 2, 8),
+    "朱允炆": (1377, 12, 5),
+    "朱允熥": (1378, 11, 9),
+    "朱高炽": (1378, 8, 16),
+    "张皇后": (1379, 4, 12),
+    "朱高煦": (1380, 12, 30),
+    "朱高燧": (1383, 1, 19),
+    "朱瞻基": (1398, 3, 16),
+    "孙皇后": (1399, 5, 21),
+    "朱瞻墡": (1406, 4, 4),
+    "朱祁镇": (1427, 11, 29),
+    "钱皇后": (1426, 8, 12),
+    "朱祁钰": (1428, 9, 11),
+    "徐达": (1332, 11, 11),
+    "谢氏": (1335, 7, 4),
+    "徐辉祖": (1368, 4, 17),
+    "徐增寿": (1372, 5, 23),
+}
+
 # v1 结构边 (from_name, to_name, dir_class)，方向语义同 Relation 模型 docstring
+# （elder=to_user 是 from_user 的长辈/父辈；spouse 对称）
 _SEED_EDGES: tuple[tuple[str, str, str], ...] = (
-    # 核心三代：王德海家
-    ("王德海", "周秀英", "spouse"),
-    ("王德海", "王远山", "elder"),
-    ("王建军", "王德海", "elder"),
-    ("王小雨", "王德海", "elder"),
-    ("王小虎", "王建军", "elder"),
-    # 祖辈 + 旁系：王氏家族
-    ("王远山", "赵桂兰", "spouse"),
-    ("王德海", "赵桂兰", "elder"),
-    ("王秀兰", "王远山", "elder"),
-    ("王秀兰", "赵桂兰", "elder"),
-    ("王秀兰", "张伟", "spouse"),
-    ("王建军", "刘婷婷", "spouse"),
-    ("王小虎", "刘婷婷", "elder"),
-    ("王朵朵", "王建军", "elder"),
-    ("王朵朵", "刘婷婷", "elder"),
-    # 李氏家族：李国强一家三口
-    ("李国强", "孙桂芳", "spouse"),
-    ("李念", "李国强", "elder"),
-    ("李念", "孙桂芳", "elder"),
+    # 祖辈与旁系：朱世珍/陈氏 二子（朱元璋、朱兴隆），朱文正是朱兴隆之子
+    ("朱兴隆", "朱世珍", "elder"),
+    ("朱兴隆", "陈氏", "elder"),
+    ("朱元璋", "朱世珍", "elder"),
+    ("朱元璋", "陈氏", "elder"),
+    ("朱文正", "朱兴隆", "elder"),
+    # 帝后：朱元璋⇄马皇后
+    ("朱元璋", "马皇后", "spouse"),
+    # 帝后子女（明皇室核心）
+    ("朱标", "朱元璋", "elder"),
+    ("朱标", "马皇后", "elder"),
+    ("朱樉", "朱元璋", "elder"),
+    ("朱樉", "马皇后", "elder"),
+    ("朱棡", "朱元璋", "elder"),
+    ("朱棡", "马皇后", "elder"),
+    ("朱棣", "朱元璋", "elder"),
+    ("朱棣", "马皇后", "elder"),
+    ("朱橚", "朱元璋", "elder"),
+    ("朱橚", "马皇后", "elder"),
+    ("宁国公主", "朱元璋", "elder"),
+    ("宁国公主", "马皇后", "elder"),
+    ("安庆公主", "朱元璋", "elder"),
+    ("安庆公主", "马皇后", "elder"),
+    # 太子朱标两房：元妃常氏（朱允熥）、继妃吕氏（朱允炆）
+    ("朱标", "常氏", "spouse"),
+    ("朱标", "吕氏", "spouse"),
+    ("朱允炆", "朱标", "elder"),
+    ("朱允炆", "吕氏", "elder"),
+    ("朱允熥", "朱标", "elder"),
+    ("朱允熥", "常氏", "elder"),
+    # 燕王朱棣一系：⇄徐皇后，三子
+    ("朱棣", "徐皇后", "spouse"),
+    ("朱高炽", "朱棣", "elder"),
+    ("朱高炽", "徐皇后", "elder"),
+    ("朱高煦", "朱棣", "elder"),
+    ("朱高煦", "徐皇后", "elder"),
+    ("朱高燧", "朱棣", "elder"),
+    ("朱高燧", "徐皇后", "elder"),
+    # 公主联姻
+    ("梅殷", "宁国公主", "spouse"),
+    ("欧阳伦", "安庆公主", "spouse"),
+    # 仁宗朱高炽⇄诚孝张皇后，二子
+    ("朱高炽", "张皇后", "spouse"),
+    ("朱瞻基", "朱高炽", "elder"),
+    ("朱瞻基", "张皇后", "elder"),
+    ("朱瞻墡", "朱高炽", "elder"),
+    ("朱瞻墡", "张皇后", "elder"),
+    # 宣宗朱瞻基⇄孙皇后；英宗朱祁镇⇄钱皇后（代宗朱祁钰生母不落事实）
+    ("朱瞻基", "孙皇后", "spouse"),
+    ("朱祁镇", "朱瞻基", "elder"),
+    ("朱祁镇", "孙皇后", "elder"),
+    ("朱祁钰", "朱瞻基", "elder"),
+    ("朱祁镇", "钱皇后", "spouse"),
+    # 马氏家族：马皇后本家
+    ("马皇后", "马公", "elder"),
+    ("马皇后", "郑氏", "elder"),
+    ("马公", "郑氏", "spouse"),
+    # 徐氏家族：徐皇后本家
+    ("徐达", "谢氏", "spouse"),
+    ("徐皇后", "徐达", "elder"),
+    ("徐皇后", "谢氏", "elder"),
+    ("徐辉祖", "徐达", "elder"),
+    ("徐辉祖", "谢氏", "elder"),
+    ("徐增寿", "徐达", "elder"),
+    ("徐增寿", "谢氏", "elder"),
 )
 
 
@@ -156,10 +275,7 @@ class _SeedOutcome(NamedTuple):
     added_spaces: int
     added_memberships: int
     added_relations: int
-    household_id: int
-    lineage_id: int
-    second_space_id: int
-    second_lineage_id: int
+    space_ids: tuple[tuple[str, int], ...]
 
     @property
     def wrote_anything(self) -> bool:
@@ -199,13 +315,9 @@ def maybe_seed_demo_data(session: Session) -> bool:
         # 全量播种（空库快路径）：沿用原摘要形态（计数 / space_id / 公开演示 PIN）；
         # 姓名等 PII 不进应用日志（logging-guidelines），演示集固定可按 space_id 查库核对
         logger.info(
-            "dev seed completed (full): household_id=%d lineage_id=%d second_space_id=%d "
-            "second_lineage_id=%d members=%d relations=%d source_facts=%d; "
+            "dev seed completed (full): %s members=%d relations=%d source_facts=%d; "
             "demo PIN=%s (public dev value)",
-            outcome.household_id,
-            outcome.lineage_id,
-            outcome.second_space_id,
-            outcome.second_lineage_id,
+            " ".join(f"{name}={space_id}" for name, space_id in outcome.space_ids),
             outcome.manifest_users,
             len(_SEED_EDGES),
             len(_SEED_EDGES),
@@ -240,7 +352,7 @@ def _find_seed_user(session: Session, name: str) -> User | None:
 
 
 def _find_seed_space(session: Session, name: str) -> FamilySpace | None:
-    """按空间名精确匹配既有空间（四个种子空间名足够独特，取 id 最小者）。"""
+    """按空间名精确匹配既有空间（六个种子空间名足够独特，取 id 最小者）。"""
     return session.scalar(
         select(FamilySpace).where(FamilySpace.name == name).order_by(FamilySpace.id).limit(1)
     )
@@ -296,7 +408,7 @@ def _global_fact_exists(
 def _seed_demo_user(session: Session, *, name: str, gender: str, now: datetime) -> User:
     """单个演示成员；形态契约与 tests/conftest.py create_user_with_pin 保持同步
     （claimed + identity_confirmed + pin_must_change=False，家庭端 PIN 统一；
-    birth 用 solar 结构化日期——王小虎/王朵朵为未成年人，演示 minor 保护 overlay）。"""
+    birth 用 solar 结构化日期——明皇室数据集全员历史人物，无未成年人）。"""
     y, m, d = _SEED_BIRTHS[name]
     user = User(
         name=name,
@@ -381,33 +493,33 @@ def _seed_demo_family(session: Session) -> _SeedOutcome:
     - 用户：按姓名精确匹配（未删行，取 id 最小者）；缺失才建户（含 Account、
       结构化 birth），既有用户原样复用 id，其 birth/gender/PIN/profile_status/
       披露偏好一律不动；
-    - 空间：按 name 精确匹配；缺失才按常量创建（owner 用同名用户 id），
-      既有空间不动（含 owner_id）；**本次新建**的 household 在同事务内显式
-      挂入配对 lineage（lineage_space_id），既有空间即使未配对也不改
+    - 空间：按 name 精确匹配；缺失才按常量创建（owner 用配对管理员同名用户
+      id），既有空间不动（含 owner_id）；**本次新建**的 household 在同事务内
+      显式挂入配对 lineage（lineage_space_id），既有空间即使未配对也不改
       （存量回填由迁移 0035 + 前端 owner 回退兜底）；
-    - 成员行：按 (space_id, user_id) 匹配；无行才插入，role 按常量（admin 名单
-      →space_admin，其余 member），已有行哪怕 role 不同也不动；
+    - 成员行：按 (space_id, user_id) 匹配；无行才插入，role 按常量（配对管理员
+      名单 → space_admin，其余 member），已有行哪怕 role 不同也不动；
     - 关系边：任一方向已有 pending/active 边即视为已覆盖（口径覆盖两条
       partial unique 索引），跳过且不为既有边补建 fact；缺失才插入 Relation
       并随新建一起落 confirmed 全局 SourceFact（同元组全局事实已存在时只补
       关系，避免 create_source_fact 409 回滚整个事务）；
     - 披露：基础五类全局开放只对**本次新建**的用户设置。
 
-    写入顺序 User+Account → 四空间（household 王德海家 / lineage 王氏家族 /
-    household 李国强家 / lineage 李氏家族，新建 household 即时落配对）+成员行
-    → Relation → confirmed SourceFact（**全局事实**
-    space_id=NULL，一份喂饱所有空间投影）。全部走模型约束与 source_facts /
-    disclosure 服务（含 parent 成环检测），无裸 SQL。
+    写入顺序 User+Account → 三对空间（明皇室/朱氏皇族、马府/马氏家族、
+    徐达家/徐氏家族，新建 household 即时落配对）+成员行 → Relation →
+    confirmed SourceFact（**全局事实** space_id=NULL，一份喂饱所有空间投影）。
+    全部走模型约束与 source_facts / disclosure 服务（含 parent 成环检测），
+    无裸 SQL。
     """
     now = timeutil.utcnow()
-    # 用户全集由名册常量现算（household 核心 + 王氏旁系 + 第二管理员 + 李氏家族；
-    # 王德海已在 _SEED_HOUSEHOLD_MEMBERS 中，不重复）
-    all_members: tuple[tuple[str, str], ...] = (
-        _SEED_HOUSEHOLD_MEMBERS
-        + _SEED_LINEAGE_EXTRA_MEMBERS
-        + ((_SEED_SECOND_ADMIN_NAME, "m"),)
-        + _SEED_SECOND_LINEAGE_EXTRA_MEMBERS
-    )
+    # 用户全集：跨空间名册按名去重（首见序建户；同姓名册性别以首见为准）
+    all_members: list[tuple[str, str]] = []
+    seen_names: set[str] = set()
+    for roster in _SEED_SPACE_MEMBERS.values():
+        for name, gender in roster:
+            if name not in seen_names:
+                seen_names.add(name)
+                all_members.append((name, gender))
 
     added_users = 0
     users: dict[str, User] = {}
@@ -422,70 +534,51 @@ def _seed_demo_family(session: Session) -> _SeedOutcome:
     session.flush()  # 取得 users.id 供空间/成员/关系引用
 
     added_spaces = 0
-    space_specs: tuple[tuple[str, str, int], ...] = (
-        (_SEED_SPACE_NAME, "household", users[_SEED_OWNER_NAME].id),
-        (_SEED_LINEAGE_SPACE_NAME, "lineage", users[_SEED_OWNER_NAME].id),
-        (_SEED_SECOND_SPACE_NAME, "household", users[_SEED_SECOND_ADMIN_NAME].id),
-        (_SEED_SECOND_LINEAGE_SPACE_NAME, "lineage", users[_SEED_SECOND_ADMIN_NAME].id),
-    )
     spaces: dict[str, FamilySpace] = {}
     new_space_names: set[str] = set()
-    for name, kind, owner_id in space_specs:
-        space = _find_seed_space(session, name)
-        if space is None:
-            # 四个空间：家庭卡（household）/ 家族树（lineage）/ 第二管理员
-            # household 空间 / 李氏家族 lineage——多空间模型（PRD R3 + 跨空间
-            # 成员资格 + 家族切换场景）
-            space = FamilySpace(name=name, kind=kind, owner_id=owner_id, created_at=now)
-            session.add(space)
-            added_spaces += 1
-            new_space_names.add(name)
-        spaces[name] = space
+    for household_name, lineage_name, admin_name in _SEED_SPACE_PAIRS:
+        for space_name, kind in ((household_name, "household"), (lineage_name, "lineage")):
+            space = _find_seed_space(session, space_name)
+            if space is None:
+                # 三对空间：家庭卡（household）/ 家族树（lineage）× 明皇室、
+                # 马氏、徐氏——多空间模型（跨空间成员资格 + 家族切换场景）
+                space = FamilySpace(
+                    name=space_name, kind=kind, owner_id=users[admin_name].id, created_at=now
+                )
+                session.add(space)
+                added_spaces += 1
+                new_space_names.add(space_name)
+            spaces[space_name] = space
     session.flush()
 
     # 家族配对（仅本次新建的 household；既有行绝不 UPDATE——insert-only 红线）
-    for household_name, lineage_name in (
-        (_SEED_SPACE_NAME, _SEED_LINEAGE_SPACE_NAME),
-        (_SEED_SECOND_SPACE_NAME, _SEED_SECOND_LINEAGE_SPACE_NAME),
-    ):
+    for household_name, lineage_name, _admin_name in _SEED_SPACE_PAIRS:
         household = spaces[household_name]
         if household_name in new_space_names and household.lineage_space_id is None:
             household.lineage_space_id = spaces[lineage_name].id
-    space_rosters: tuple[tuple[FamilySpace, tuple[tuple[str, str], ...], str], ...] = (
-        (spaces[_SEED_SPACE_NAME], _SEED_HOUSEHOLD_MEMBERS, _SEED_OWNER_NAME),
-        (
-            spaces[_SEED_LINEAGE_SPACE_NAME],
-            _SEED_HOUSEHOLD_MEMBERS + _SEED_LINEAGE_EXTRA_MEMBERS,
-            _SEED_OWNER_NAME,
-        ),
-        (spaces[_SEED_SECOND_SPACE_NAME], _SEED_SECOND_SPACE_MEMBERS, _SEED_SECOND_ADMIN_NAME),
-        (
-            spaces[_SEED_SECOND_LINEAGE_SPACE_NAME],
-            ((_SEED_SECOND_ADMIN_NAME, "m"), (_SEED_OWNER_NAME, "m"))
-            + _SEED_SECOND_LINEAGE_EXTRA_MEMBERS,
-            _SEED_SECOND_ADMIN_NAME,
-        ),
-    )
+
     added_memberships = 0
-    for space, roster, admin_name in space_rosters:
-        for name, _gender in roster:
-            user_id = users[name].id
-            exists = session.scalar(
-                select(SpaceMember.id)
-                .where(SpaceMember.space_id == space.id, SpaceMember.user_id == user_id)
-                .limit(1)
-            )
-            if exists is not None:
-                continue  # 既有成员行不动（哪怕 role 不同）
-            _seed_space_member(
-                session,
-                space_id=space.id,
-                user_id=user_id,
-                added_by=users[admin_name].id,
-                role="space_admin" if name == admin_name else "member",
-                now=now,
-            )
-            added_memberships += 1
+    for household_name, lineage_name, admin_name in _SEED_SPACE_PAIRS:
+        for space_name in (household_name, lineage_name):
+            space = spaces[space_name]
+            for name, _gender in _SEED_SPACE_MEMBERS[space_name]:
+                user_id = users[name].id
+                exists = session.scalar(
+                    select(SpaceMember.id)
+                    .where(SpaceMember.space_id == space.id, SpaceMember.user_id == user_id)
+                    .limit(1)
+                )
+                if exists is not None:
+                    continue  # 既有成员行不动（哪怕 role 不同）
+                _seed_space_member(
+                    session,
+                    space_id=space.id,
+                    user_id=user_id,
+                    added_by=users[admin_name].id,
+                    role="space_admin" if name == admin_name else "member",
+                    now=now,
+                )
+                added_memberships += 1
     session.flush()
 
     # 结构边 + confirmed SourceFact：**全局事实（space_id=NULL）**。
@@ -533,10 +626,11 @@ def _seed_demo_family(session: Session) -> _SeedOutcome:
         added_spaces=added_spaces,
         added_memberships=added_memberships,
         added_relations=added_relations,
-        household_id=spaces[_SEED_SPACE_NAME].id,
-        lineage_id=spaces[_SEED_LINEAGE_SPACE_NAME].id,
-        second_space_id=spaces[_SEED_SECOND_SPACE_NAME].id,
-        second_lineage_id=spaces[_SEED_SECOND_LINEAGE_SPACE_NAME].id,
+        space_ids=tuple(
+            (space_name, spaces[space_name].id)
+            for household_name, lineage_name, _admin_name in _SEED_SPACE_PAIRS
+            for space_name in (household_name, lineage_name)
+        ),
     )
 
 
