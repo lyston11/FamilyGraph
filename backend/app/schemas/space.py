@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.v2_foundation import TransferOut
+
 SpaceRole = Literal["space_admin", "member"]
 
 
@@ -40,6 +42,8 @@ class SpaceOut(BaseModel):
     created_at: datetime
     pending_count: int = 0
     member_count: int = 0
+    # 当前认证账号在该空间的能力投影；不作为后端授权依据。
+    current_role: SpaceRole | None = None
 
 
 class SpaceMemberOut(BaseModel):
@@ -61,6 +65,17 @@ class SpaceProfileRefOut(BaseModel):
     profile_id: int
     name: str
     added_at: datetime
+
+
+class SpaceManagementBootstrapOut(BaseModel):
+    """空间管理页首屏授权与数据快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    space: SpaceOut
+    members: list[SpaceMemberOut]
+    transfers: list[TransferOut]
+    profile_refs: list[SpaceProfileRefOut]
 
 
 class SpaceInviteCreate(BaseModel):

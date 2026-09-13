@@ -36,6 +36,7 @@ vi.mock('@/api/spaces', () => ({
   createSpace: vi.fn(),
   updateSpace: vi.fn(),
   fetchSpaceMembers: vi.fn(),
+  fetchSpaceManagementBootstrap: vi.fn(),
   fetchSpaceProfileRefs: vi.fn(),
   inviteToSpace: vi.fn(),
   removeOrWithdrawMembership: vi.fn(),
@@ -86,6 +87,7 @@ vi.mock('@/api/actionCards', () => ({
 }))
 
 const mockedFetchSpaceMembers = vi.mocked(spacesApi.fetchSpaceMembers)
+const mockedFetchSpaceManagementBootstrap = vi.mocked(spacesApi.fetchSpaceManagementBootstrap)
 const mockedFetchSpaceProfileRefs = vi.mocked(spacesApi.fetchSpaceProfileRefs)
 const mockedFetchOwnershipTransfers = vi.mocked(spacesApi.fetchOwnershipTransfers)
 const mockedFetchSpaces = vi.mocked(spacesApi.fetchSpaces)
@@ -155,6 +157,7 @@ async function mountManagement(
     etag: null,
   },
   initialPath = '/spaces/7/manage',
+  preloadMembers = false,
 ): Promise<{ wrapper: ReturnType<typeof mount>; router: ReturnType<typeof createRouter> }> {
   const auth = useAuthStore(pinia)
   auth.user = {
@@ -169,15 +172,29 @@ async function mountManagement(
   const spaces = useSpacesStore(pinia)
   spaces.spaces = [makeSpace()]
   spaces.currentSpaceId = 7
-  mockedFetchSpaceMembers.mockResolvedValue([
+  const members = [
     makeMember({ role }),
     makeMember({ id: 2, user_id: 2, user_name: '另一位成员', role: 'member' }),
     makeMember({ id: 3, user_id: 3, user_name: '待确认成员', role: 'member', status: 'pending' }),
-  ])
+  ]
+  mockedFetchSpaceMembers.mockResolvedValue(members)
   mockedFetchOwnershipTransfers.mockResolvedValue([])
   mockedFetchSpaceProfileRefs.mockResolvedValue([
     { profile_id: 9, name: '待确档长辈', added_at: '2026-08-29T00:00:00' },
   ])
+  if (role === 'space_admin') {
+    mockedFetchSpaceManagementBootstrap.mockResolvedValue({
+      space: makeSpace({ current_role: 'space_admin' }),
+      members,
+      transfers: [],
+      profile_refs: [{ profile_id: 9, name: '待确档长辈', added_at: '2026-08-29T00:00:00' }],
+    })
+  } else {
+    mockedFetchSpaceManagementBootstrap.mockRejectedValue(
+      new ApiError(403, 'SPACE_FORBIDDEN_ACTOR', '当前账号没有管理权限'),
+    )
+  }
+
   mockedFetchSpaces.mockResolvedValue([makeSpace()])
   if (notificationsResult instanceof Error) {
     mockedFetchNotifications.mockRejectedValue(notificationsResult)
@@ -198,7 +215,9 @@ async function mountManagement(
     global: { plugins: [pinia, router] },
     attachTo: document.body,
   })
-  await vi.waitFor(() => expect(mockedFetchSpaceMembers).toHaveBeenCalledWith(7))
+  if (!preloadMembers) {
+    await vi.waitFor(() => expect(mockedFetchSpaceManagementBootstrap).toHaveBeenCalledWith(7))
+  }
   return { wrapper, router }
 }
 
@@ -252,6 +271,15 @@ describe('SpaceManagementView 六分区侧栏（design §5.5；09-06 增模型�
 
     await openSection(wrapper, 'settings')
     expect(wrapper.find('[data-test="space-name-input"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('页面使用一次管理 Bootstrap 快照，不再重复请求成员接口', async () => {
+    const pinia = createPinia()
+    const { wrapper } = await mountManagement(pinia, 'space_admin', {}, undefined, '/spaces/7/manage', true)
+
+    expect(mockedFetchSpaceManagementBootstrap).toHaveBeenCalledTimes(1)
+    expect(mockedFetchSpaceMembers).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

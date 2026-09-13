@@ -201,6 +201,37 @@ describe('spaces store（AD-3）', () => {
     expect(store.profileRefs).toEqual([])
   })
 
+  it('路由守卫预检目标成员时不污染当前空间授权上下文', async () => {
+    const store = useSpacesStore()
+    store.currentSpaceId = 1
+    store.members = [{
+      id: 1,
+      space_id: 1,
+      user_id: 1,
+      added_by: 1,
+      role: 'space_admin',
+      status: 'active',
+      updated_at: '2026-08-29T00:00:00',
+    }]
+    const targetMembers = [{
+      id: 2,
+      space_id: 2,
+      user_id: 1,
+      added_by: 1,
+      role: 'member' as const,
+      status: 'active' as const,
+      updated_at: '2026-08-29T00:00:00',
+    }]
+    mockedMembers.mockResolvedValueOnce(targetMembers)
+
+    const result = await store.loadMembers(2, { setCurrentSpace: false })
+
+    expect(result).toEqual(targetMembers)
+    expect(store.currentSpaceId).toBe(1)
+    expect(store.members[0]?.space_id).toBe(1)
+    expect(mockedProfileRefs).not.toHaveBeenCalled()
+  })
+
   it('成员重校验在途期间保留旧成员并记录失败态', async () => {
     const store = useSpacesStore()
     store.currentSpaceId = 1

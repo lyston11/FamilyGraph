@@ -62,7 +62,7 @@ export const useSpacesStore = defineStore('spaces', {
       )
     },
     currentRole(): SpaceMemberInfo['role'] | null {
-      return this.currentMembership?.role ?? null
+      return this.currentMembership?.role ?? this.currentSpace?.current_role ?? null
     },
     /**
      * 当前空间管理员：产品层唯一管理员角色，按当前 space_id 的成员关系判定。
@@ -164,7 +164,7 @@ export const useSpacesStore = defineStore('spaces', {
         if (generation === this.generation) this.loading = false
       }
     },
-    async loadMembers(spaceId: number, options: { setCurrentSpace?: boolean } = {}) {
+    async loadMembers(spaceId: number, options: { setCurrentSpace?: boolean } = {}): Promise<SpaceMemberInfo[]> {
       const generation = this.generation
       const setCurrentSpace = options.setCurrentSpace ?? true
       const previousSpaceId = this.currentSpaceId
@@ -174,23 +174,27 @@ export const useSpacesStore = defineStore('spaces', {
         this.transfers = []
         this.profileRefs = []
       }
-      this.membersError = null
+      if (setCurrentSpace) this.membersError = null
+      let loadedMembers: SpaceMemberInfo[] = []
       try {
-        const members = await fetchSpaceMembers(spaceId)
-        if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return
-        this.members = members
+        loadedMembers = await fetchSpaceMembers(spaceId)
+        if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return []
+        // 路由守卫只做目标空间授权预检：不得把目标成员投影写进当前空间上下文。
+        if (!setCurrentSpace) return loadedMembers
+        this.members = loadedMembers
       } catch (error) {
-        if (generation === this.generation) {
+        if (generation === this.generation && setCurrentSpace) {
           this.membersError = error instanceof Error ? error.message : '成员加载失败'
         }
         throw error
       }
       const transfers = await fetchOwnershipTransfers(spaceId).catch(() => [])
-      if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return
+      if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return []
       this.transfers = transfers
       const refs = await fetchSpaceProfileRefs(spaceId).catch(() => [])
-      if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return
+      if (generation !== this.generation || (setCurrentSpace && this.currentSpaceId !== spaceId)) return []
       this.profileRefs = refs
+      return loadedMembers
     },
     async create(name: string, kind: 'household' | 'lineage' = 'household') {
       const space = await createSpace(name, kind)

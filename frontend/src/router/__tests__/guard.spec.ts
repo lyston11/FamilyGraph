@@ -59,6 +59,7 @@ const mockedFetchSpaceMembers = vi.mocked(spacesApi.fetchSpaceMembers)
 // 动态引入真实路由（守卫逻辑是被测对象）；路由为模块单例，跨测试需重置位置
 const { default: router } = await import('@/router')
 const { useAuthStore } = await import('@/stores/auth')
+const { useSpacesStore } = await import('@/stores/spaces')
 
 function makePair(overrides: Partial<TokenPairResponse['user']> = {}): TokenPairResponse {
   return {
@@ -162,73 +163,44 @@ describe('router guards', () => {
     expect(await navigate('/admin-api/health')).toBe('not-found')
   })
 
-  it('当前空间管理员可访问目标空间管理页', async () => {
+  it('空间管理路由切换不等待成员接口，页面负责完成管理权限加载', async () => {
     const auth = useAuthStore()
     mockedLogin.mockResolvedValue(makePair())
     await auth.login('张三', '123456')
-    mockedFetchSpaces.mockResolvedValue([
-      {
-        id: 7,
-        name: '我的空间',
-        owner_id: 1,
-        kind: 'household',
-        created_at: '2026-08-25T00:00:00',
-        pending_count: 0,
-        member_count: 2,
-      },
-    ])
-    mockedFetchSpaceMembers.mockResolvedValue([
-      {
-        id: 1,
-        space_id: 7,
-        user_id: 1,
-        added_by: 1,
-        role: 'space_admin',
-        status: 'active',
-        updated_at: '2026-08-25T00:00:00',
-      },
-    ])
 
     await resetToOnboarding()
     expect(await navigate('/spaces/7/manage')).toBe('space-management')
+    expect(mockedFetchSpaces).not.toHaveBeenCalled()
+    expect(mockedFetchSpaceMembers).not.toHaveBeenCalled()
   })
 
-  it('member 和无 membership 拒绝进入空间管理页', async () => {
-    const roles = ['member'] as const
-    for (const role of roles) {
-      const auth = useAuthStore()
-      mockedLogin.mockResolvedValue(makePair())
-      await auth.login('张三', '123456')
-      mockedFetchSpaces.mockResolvedValue([
-        {
-          id: 7,
-          name: '成员空间',
-          owner_id: 99,
-          kind: 'household',
-          created_at: '2026-08-25T00:00:00',
-          pending_count: 0,
-          member_count: 2,
-        },
-      ])
-      mockedFetchSpaceMembers.mockResolvedValue([
-        {
-          id: 1,
-          space_id: 7,
-          user_id: 1,
-          added_by: 99,
-          role,
-          status: 'active',
-          updated_at: '2026-08-25T00:00:00',
-        },
-      ])
-      await resetToOnboarding()
-      expect(await navigate('/spaces/7/manage')).toBe('family-space')
-      auth.clearSession()
-      await resetToOnboarding()
-    }
+  it('跨空间进入管理页不在守卫阶段切换当前上下文', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+    const spaces = useSpacesStore()
+    spaces.currentSpaceId = 1
+
+    await resetToOnboarding()
+    expect(await navigate('/spaces/7/manage')).toBe('space-management')
+    expect(spaces.currentSpaceId).toBe(1)
+    expect(mockedFetchSpaceMembers).not.toHaveBeenCalled()
   })
+
+  it('成员也可进入管理页路由，由页面 Bootstrap 返回安全拒绝态', async () => {
+    const auth = useAuthStore()
+    mockedLogin.mockResolvedValue(makePair())
+    await auth.login('张三', '123456')
+
+    await resetToOnboarding()
+    expect(await navigate('/spaces/7/manage')).toBe('space-management')
+    expect(mockedFetchSpaceMembers).not.toHaveBeenCalled()
+  })
+
 
   it('未登录空间管理深链保留安全 redirect', async () => {
+    useAuthStore().clearSession()
+    await resetToOnboarding()
     expect(await navigate('/spaces/7/manage')).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/spaces/7/manage')
   })

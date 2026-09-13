@@ -1,14 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
-import { useSpacesStore } from '@/stores/spaces'
 import { getSafeInternalRedirect } from '@/router/redirect'
 
 declare module 'vue-router' {
   interface RouteMeta {
     /** 'blank'：沉浸页（登录/引导/改 PIN/确档），App.vue 不渲染应用壳 */
     chrome?: 'blank'
-    /** 仅目标空间 active owner/space_admin 可访问。 */
+    /** 管理页的最终权限与首屏数据由页面 Bootstrap 请求向后端确认。 */
     spaceManagerOnly?: boolean
   }
 }
@@ -160,36 +159,13 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.spaceManagerOnly) {
-    const spaces = useSpacesStore()
     const rawSpaceId = to.params.spaceId
     const targetSpaceId = typeof rawSpaceId === 'string' ? Number(rawSpaceId) : NaN
-    // 路由守卫只依赖已加载的 active membership。
     if (!Number.isInteger(targetSpaceId) || targetSpaceId <= 0) {
       return { name: 'family-space' }
     }
-    if (spaces.spaces.length === 0) {
-      await spaces.load().catch(() => undefined)
-    }
-    if (!spaces.spaces.some((space) => space.id === targetSpaceId)) {
-      return { name: 'family-space' }
-    }
-    // 每次进入都重新确认目标空间的 active membership，避免旧空间/旧会话缓存放行。
-    // 成员请求失败时也必须拒绝（fail-closed），不能拿旧缓存继续做授权判断。
-    try {
-      await spaces.loadMembers(targetSpaceId, { setCurrentSpace: false })
-    } catch {
-      return { name: 'family-space' }
-    }
-    const userId = useAuthStore().user?.id
-    const targetMembership = spaces.members.find(
-      (member) =>
-        member.space_id === targetSpaceId &&
-        member.user_id === userId &&
-        member.status === 'active',
-    )
-    if (!targetMembership || targetMembership.role !== 'space_admin') {
-      return { name: 'family-space' }
-    }
+    // 管理页不在这里发成员请求：网络授权与首屏数据加载在页面内完成，
+    // 让用户先得到路由反馈；真正的授权边界仍是后端 management-bootstrap。
   }
 
   const redirect = getSafeInternalRedirect(to.query.redirect)

@@ -15,8 +15,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db, require_authenticated_user
 from app.commands import manager_applications as manager_application_commands
 from app.commands import members as member_commands
+from app.commands import ownership as ownership_commands
 from app.commands import spaces as space_commands
 from app.commands.context import ActorContext
+from app.errors import SPACE_FORBIDDEN_ACTOR, SPACE_NOT_FOUND, raise_api_error
 from app.models.account import Account
 from app.models.space import FamilySpace, ManagerTransferConsent, SpaceMember
 from app.models.user import User
@@ -33,11 +35,13 @@ from app.schemas.space import (
     SpaceCreate,
     SpaceInviteCreate,
     SpaceLineageLinkUpdate,
+    SpaceManagementBootstrapOut,
     SpaceMemberOut,
     SpaceOut,
     SpaceProfileRefOut,
     SpaceUpdate,
 )
+from app.schemas.v2_foundation import TransferOut
 from app.services import space_fsm
 
 router = APIRouter(tags=["spaces"])
@@ -206,14 +210,83 @@ def list_my_spaces(
         if active_space_ids
         else []
     )
+    memberships_by_space = {m.space_id: m for m in memberships if m.space_id in active_space_ids}
     outs: list[SpaceOut] = []
     for space in spaces:
         all_members = session.query(SpaceMember).filter(SpaceMember.space_id == space.id).all()
         out = SpaceOut.model_validate(space)
         out.member_count = sum(1 for m in all_members if space_fsm.effective_status(m) == "active")
         out.pending_count = sum(1 for m in all_members if m.status == "pending")
+        member = memberships_by_space[space.id]
+        out.current_role = "space_admin" if member.role in {"owner", "space_admin"} else "member"
         outs.append(out)
     return outs
+
+
+@router.get(
+    "/spaces/{space_id}/management-bootstrap",
+    response_model=SpaceManagementBootstrapOut,
+)
+def get_space_management_bootstrap(
+    space_id: int,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SpaceManagementBootstrapOut:
+    """管理页首屏授权与投影的一次性读取。
+
+    路由切换不应等待这个请求；本端点是管理页的唯一首屏授权边界，
+    后端每次都重新校验当前空间的 active 管理员关系。
+    """
+    actor, _account = identity
+    space = session.get(FamilySpace, space_id)
+    if space is None:
+        raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
+
+    manager = space_fsm.find_membership(session, space_id, actor.id)
+    if (
+        manager is None
+        or space_fsm.effective_status(manager) != "active"
+        or manager.role not in {"owner", "space_admin"}
+    ):
+        raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "当前账号没有管理这个家庭空间的权限")
+
+    members = (
+        session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space_id)
+        .order_by(SpaceMember.id)
+        .all()
+    )
+    member_outs = [_member_out_with_name(session, member) for member in members]
+
+    from app.models.space import SpaceProfileRef
+
+    profile_rows = (
+        session.query(SpaceProfileRef, User)
+        .join(User, User.id == SpaceProfileRef.user_id)
+        .filter(SpaceProfileRef.space_id == space_id, SpaceProfileRef.status == "active")
+        .order_by(SpaceProfileRef.id)
+        .all()
+    )
+    profile_refs = [
+        SpaceProfileRefOut(profile_id=ref.user_id, name=user.name, added_at=ref.created_at)
+        for ref, user in profile_rows
+    ]
+
+    all_members = members
+    space_out = SpaceOut.model_validate(space)
+    space_out.member_count = sum(
+        1 for member in all_members if space_fsm.effective_status(member) == "active"
+    )
+    space_out.pending_count = sum(1 for member in all_members if member.status == "pending")
+    space_out.current_role = "space_admin"
+
+    transfers = ownership_commands.list_transfers_for_space(session, space_id)
+    return SpaceManagementBootstrapOut(
+        space=space_out,
+        members=member_outs,
+        transfers=[TransferOut.model_validate(transfer) for transfer in transfers],
+        profile_refs=profile_refs,
+    )
 
 
 @router.patch("/spaces/{space_id}", response_model=SpaceOut)

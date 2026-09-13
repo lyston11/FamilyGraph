@@ -6,6 +6,7 @@ import type {
   ManagerTransferConsent,
   OwnershipTransfer,
   SpaceManagerApplication,
+  SpaceManagementBootstrap,
   SpaceMemberInfo,
   SpaceProfileRefInfo,
 } from '@/types/api'
@@ -31,8 +32,8 @@ export async function createSpace(
 }
 
 /**
- * 空间基本设置（既有 PATCH /spaces/{space_id} 合同）：目前仅空间名一个既有字段，
- * 不新增任何授权/成员字段（授权只由服务端 space_admin 关系判定）。
+ * 空间设置（既有 PATCH /spaces/{space_id} 合同）：请求仍仅包含空间名；
+ * current_role 只作为列表读取投影返回，不接受客户端写入，也不能替代服务端授权。
  */
 export async function updateSpace(spaceId: number, name: string): Promise<FamilySpace> {
   const { data } = await apiClient.patch<FamilySpace>(`/spaces/${spaceId}`, { name })
@@ -108,6 +109,14 @@ export async function fetchMyManagerApplications(
   return data
 }
 
+export async function fetchSpaceManagementBootstrap(
+  spaceId: number,
+): Promise<SpaceManagementBootstrap> {
+  const { data } = await apiClient.get<SpaceManagementBootstrap>(
+    `/spaces/${spaceId}/management-bootstrap`,
+  )
+  return data
+}
 export async function fetchSpaceMembers(spaceId: number): Promise<SpaceMemberInfo[]> {
   const { data } = await apiClient.get<SpaceMemberInfo[]>(`/spaces/${spaceId}/members`)
   return data

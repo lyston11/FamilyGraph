@@ -1,9 +1,12 @@
 <script setup lang="ts">
 // 当前空间管理（design.md §5.5，09-01 Phase 6；09-06 增模型设置分区）：
 // - 六分区侧栏（桌面侧栏 / 移动端顶部标签）：概览、成员、邀请与申请、Bridge 通知、模型设置、空间设置；
-// - 入口只由当前 space 的 active space_admin 关系决定（router 守卫 fail-closed 已拦截
-//   越权直达），页面内对非管理员仍渲染安全拒绝态（双保险）；
+// - 入口显示使用空间列表中的服务端 current_role 投影；页面 Bootstrap 请求再次向后端确认
+//   active space_admin，并一次加载管理页首屏数据；前端投影不作为授权依据；
+// - 管理页路由切换不等待网络请求；页面负责 loading / denied / error / ready 状态，
+//   后端 management-bootstrap 是最终授权边界；
 // - 成员/邀请/申请全部复用既有流程组件与 spaces store 命令（操作后服务端 reload），
+//   management-bootstrap 返回的成员、移交和待确档引用作为首屏快照；
 //   不新增直接编辑 SourceFact / SpaceMember / PersonalFamilyView 的前端路径；
 // - Bridge 通知分区只读：仅安全状态与通知时间，无 approve/reject/consent/revoke 控件
 //   （管理员对跨 LineageSpace bridge 只有通知查看权，PRD §2.6）；
@@ -13,10 +16,11 @@
 //   SpaceModelSettingsPanel 自管数据，权限同 PATCH /spaces 的 space_admin 语义）；
 // - 分区深链：?section= 合法 key 直达对应分区，切 tab 时 replace 写回（09-06 R5）。
 import { NAlert, NButton, NEmpty, NInput, NSelect, NSpin, useMessage } from 'naive-ui'
-import { computed, onMounted, ref, watch, type InputHTMLAttributes } from 'vue'
+import { computed, ref, watch, type InputHTMLAttributes } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/errors'
+import { fetchSpaceManagementBootstrap } from '@/api/spaces'
 import { describeLoadError } from '@/api/loadError'
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import InviteMemberDialog from '@/components/member/InviteMemberDialog.vue'
@@ -69,22 +73,68 @@ function selectSection(section: ManagementSection): void {
   void router.replace({ query: { ...route.query, section } })
 }
 
-const loading = computed(() => spaces.loading)
+const managementState = ref<'loading' | 'ready' | 'denied' | 'error'>('loading')
+const managementError = ref<string | null>(null)
 const targetSpaceId = computed(() => Number(route.params.spaceId))
 const space = computed(() => spaces.spaces.find((item) => item.id === targetSpaceId.value) ?? null)
-const hasAccess = computed(() => spaces.currentSpaceId === targetSpaceId.value && spaces.canManageSpace)
+const hasAccess = computed(() => managementState.value === 'ready' && space.value !== null)
 const roleLabel = computed(() =>
   spaces.currentRole === 'space_admin' ? '空间管理员' : '无空间管理权限',
 )
 const pendingCount = computed(() => spaces.members.filter((member) => member.status === 'pending').length)
 
-onMounted(async () => {
-  await spaces.loadMembers(targetSpaceId.value).catch(() => undefined)
-  // AppShell 已按空间预取通知；此处仅在无缓存时补拉一次（带 ETag，304 复用快照）
-  if (targetSpaceId.value > 0 && notifications.forSpace(targetSpaceId.value) === null) {
-    void notifications.load(targetSpaceId.value).catch(() => undefined)
+let managementRequestId = 0
+
+async function loadManagement(spaceId: number): Promise<void> {
+  const requestId = ++managementRequestId
+  managementState.value = 'loading'
+  managementError.value = null
+
+  if (!Number.isInteger(spaceId) || spaceId <= 0) {
+    managementState.value = 'denied'
+    return
   }
-})
+
+  try {
+    const bootstrap = await fetchSpaceManagementBootstrap(spaceId)
+    if (requestId !== managementRequestId) return
+
+    const existingIndex = spaces.spaces.findIndex((item) => item.id === spaceId)
+    if (existingIndex >= 0) {
+      spaces.spaces[existingIndex] = bootstrap.space
+    } else {
+      spaces.spaces.push(bootstrap.space)
+    }
+    spaces.currentSpaceId = spaceId
+    spaces.members = bootstrap.members
+    spaces.transfers = bootstrap.transfers
+    spaces.profileRefs = bootstrap.profile_refs
+    spaces.membersError = null
+    managementState.value = 'ready'
+
+    // 通知不属于管理页授权快照，不阻塞首屏。
+    if (notifications.forSpace(spaceId) === null) {
+      void notifications.load(spaceId).catch(() => undefined)
+    }
+  } catch (error) {
+    if (requestId !== managementRequestId) return
+    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+      managementState.value = 'denied'
+      return
+    }
+    managementError.value = error instanceof ApiError ? error.message : '空间管理页面加载失败'
+    managementState.value = 'error'
+  }
+}
+
+watch(targetSpaceId, (spaceId) => {
+  void loadManagement(spaceId)
+}, { immediate: true })
+
+function retryManagement(): void {
+  void loadManagement(targetSpaceId.value)
+}
+
 
 function goFamilySpace(): void {
   void router.push({ name: 'family-space' })
@@ -175,13 +225,34 @@ async function onLineageLinkChange(value: number | null): Promise<void> {
       <NButton data-test="management-back" @click="goFamilySpace">返回家族树</NButton>
     </header>
 
-    <NSpin :show="loading">
-      <!-- 双保险：守卫已 fail-closed 拦截越权直达，页面内非管理员仍渲染安全拒绝态 -->
-      <NAlert v-if="!hasAccess || !space" type="warning" :show-icon="true" data-test="management-denied">
+    <NSpin :show="managementState === 'loading'">
+      <NAlert
+        v-if="managementState === 'loading'"
+        type="info"
+        :show-icon="true"
+        data-test="management-loading"
+      >
+        正在加载空间管理信息…
+      </NAlert>
+      <NAlert
+        v-else-if="managementState === 'denied'"
+        type="warning"
+        :show-icon="true"
+        data-test="management-denied"
+      >
         当前账号没有管理这个家庭空间的权限。
         <NButton size="small" secondary class="inline-action" @click="goFamilySpace">回到家族树</NButton>
       </NAlert>
-      <div v-else class="management-layout">
+      <NAlert
+        v-else-if="managementState === 'error'"
+        type="error"
+        :show-icon="true"
+        data-test="management-load-error"
+      >
+        {{ managementError }}
+        <NButton size="small" secondary class="inline-action" @click="retryManagement">重试</NButton>
+      </NAlert>
+      <div v-else-if="hasAccess && space" class="management-layout">
         <nav class="management-nav" aria-label="空间管理分区" data-test="management-nav">
           <button
             v-for="section in SECTIONS"

@@ -388,6 +388,8 @@ export interface FamilySpace {
   created_at: string
   pending_count: number
   member_count: number
+  /** 当前认证账号在该空间的能力投影；服务端数据源，不能替代后端授权。 */
+  current_role?: SpaceRole | null
 }
 
 export interface SpaceMemberInfo {
@@ -402,7 +404,14 @@ export interface SpaceMemberInfo {
   updated_at: string
 }
 
-// ---- 空间管理者申请（任务 08-30-space-manager-approval；与后端 schemas/space.py 对应） ----
+export interface SpaceManagementBootstrap {
+  space: FamilySpace
+  members: SpaceMemberInfo[]
+  transfers: OwnershipTransfer[]
+  profile_refs: SpaceProfileRefInfo[]
+}
+
+
 
 export type ManagerRequestKind = 'space_admin'
 export type ManagerApplicationStatus = 'pending' | 'approved' | 'rejected'
