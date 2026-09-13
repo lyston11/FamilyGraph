@@ -77,6 +77,34 @@ beforeEach(() => {
 })
 
 describe('AgentProviderAdminView（三区块治理页）', () => {
+  it('没有 Provider 时直接展示配置入口，并提供快捷接入', async () => {
+    mockedList.mockResolvedValueOnce([])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="provider-empty-cta"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="provider-empty-cta"]').trigger('click')
+    expect(wrapper.find('[data-testid="provider-form"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-labelledby="provider-registry-title"]').classes()).toContain('provider-registry-card')
+    expect(wrapper.find('[data-testid="quick-provider-liu-dada"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pd-open-provider"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="provider-form-cancel"]').trigger('click')
+    expect(wrapper.find('[aria-labelledby="provider-registry-title"]').classes()).not.toContain('provider-modal-open')
+  })
+
+  it('快捷接入预填服务商连接信息与模型', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="provider-open-create"]').trigger('click')
+    await wrapper.find('[data-testid="quick-provider-liu-dada"]').trigger('click')
+
+    expect((wrapper.find('[data-testid="provider-name"]').element as HTMLInputElement).value).toBe('liu-dada')
+    expect((wrapper.find('[data-testid="provider-base-url"]').element as HTMLInputElement).value).toBe(
+      'https://api.liu-dada.com/v1',
+    )
+    expect((wrapper.find('[data-testid="provider-models"]').element as HTMLInputElement).value).toContain(
+      'gpt-5.6-sol',
+    )
+  })
+
   it('Provider 列表渲染：名称/类型/密钥状态，响应无密钥形态字段', async () => {
     const wrapper = await mountView()
     const table = wrapper.find('[data-testid="provider-table"]')
@@ -159,6 +187,24 @@ describe('AgentProviderAdminView（三区块治理页）', () => {
       steward: null,
     })
     expect(wrapper.find('[data-testid="pd-current-assistant"]').text()).toContain('gpt-5.6-sol')
+  })
+
+  it('平台默认模型支持直接填写自定义模型 ID', async () => {
+    mockedPutDefaults.mockResolvedValueOnce({
+      assistant: { provider_id: 3, model: 'private-model-v2' },
+      steward: null,
+      updated_at: '2026-09-06T01:00:00Z',
+    })
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="pd-assistant-provider"]').setValue('3')
+    await wrapper.find('[data-testid="pd-assistant-model-manual"]').setValue('private-model-v2')
+    await wrapper.find('[data-testid="pd-save"]').trigger('click')
+    await flushPromises()
+
+    expect(mockedPutDefaults).toHaveBeenCalledWith({
+      assistant: { provider_id: 3, model: 'private-model-v2' },
+      steward: null,
+    })
   })
 
   it('错误 detail 呈现：allowed_models 白名单载荷结构化展示', async () => {

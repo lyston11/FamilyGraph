@@ -35,6 +35,14 @@ onMounted(load)
 
 <template>
   <div>
+    <nav class="ag-breadcrumb" aria-label="面包屑">
+      <RouterLink class="ag-back-link" :to="{ name: 'overview' }" data-testid="back-to-overview">
+        <span aria-hidden="true">←</span>
+        返回概览
+      </RouterLink>
+      <span>/</span>
+      <span>异常队列</span>
+    </nav>
     <h1 class="ag-page-title">异常队列</h1>
     <p class="ag-page-subtitle">
       异常空间单独告警、只读展示；修复需按治理流程线下处理，后台不提供自动修复。

@@ -150,6 +150,7 @@ adminApiClient.interceptors.response.use(
       const parsed = extractErrorBody(axiosError.response.data)
       const status = axiosError.response.status
       const config = axiosError.config as AdminRequestConfig | undefined
+      const isAuthRequest = Boolean(config?.url?.startsWith('/auth/'))
 
       // 会话失效统一 401 ADMIN_UNAUTHORIZED（登录失败是 ADMIN_INVALID_CREDENTIALS，
       // 不进入 refresh 流程）。票据失效是 403，由调用方处理重新授权。
@@ -158,6 +159,7 @@ adminApiClient.interceptors.response.use(
         parsed?.code === ADMIN_ERROR_CODES.UNAUTHORIZED &&
         wiring &&
         config &&
+        !isAuthRequest &&
         !config._adminRetried
       ) {
         const refreshed = await wiring.tryRefresh()

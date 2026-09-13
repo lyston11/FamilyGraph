@@ -39,7 +39,10 @@ onMounted(load)
 <template>
   <div>
     <nav class="ag-breadcrumb" aria-label="面包屑">
-      <RouterLink :to="{ name: 'space-admins' }">空间管理员</RouterLink>
+      <RouterLink class="ag-back-link" :to="{ name: 'space-admins' }" data-testid="back-to-space-admins">
+        <span aria-hidden="true">←</span>
+        返回空间管理员
+      </RouterLink>
       <span>/</span>
       <span>所管空间</span>
     </nav>

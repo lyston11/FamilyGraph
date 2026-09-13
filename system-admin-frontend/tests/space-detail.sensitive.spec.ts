@@ -109,6 +109,20 @@ async function settle(): Promise<void> {
 }
 
 describe('SpaceDetailView 敏感详情流程', () => {
+  it('详情页提供返回概览入口', async () => {
+    mockedAdminRequest.mockImplementation(async (config) => {
+      const url = config['url'] as string
+      if (url === '/v1/spaces/1') return SPACE
+      if (url === '/v1/spaces/1/members') return MEMBERS_PAGE
+      throw new Error(`unexpected url ${url}`)
+    })
+
+    const wrapper = await loginAndMount()
+    const backLink = wrapper.find('[data-testid="back-to-overview"]')
+    expect(backLink.exists()).toBe(true)
+    expect(backLink.text()).toContain('返回概览')
+  })
+
   it('查看档案先弹理由表单；提交理由后签发 user 票据并加载档案', async () => {
     // 序列：space detail → members → access-session → profile+attachments+avatar(blob)
     mockedAdminRequest.mockImplementation(async (config) => {
