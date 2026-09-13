@@ -45,6 +45,76 @@ describe('MessageList', () => {
     expect(wrapper.text()).not.toContain('policy_version')
   })
 
+  // ---- 09-13-agent-latency-tuning AC-4：长时间 queued/running 用户可见提示 ----
+
+  it('queued 超过 10s 显示排队提示并指向执行器问题', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(MessageList, {
+        props: {
+          messages: [],
+          toolSummaries: [],
+          run: { id: 1, status: 'queued', terminal: false },
+        },
+      })
+      expect(wrapper.find('[data-test="run-hint"]').exists()).toBe(false)
+      await vi.advanceTimersByTimeAsync(11000)
+      await wrapper.vm.$nextTick()
+      const hint = wrapper.find('[data-test="run-hint"]')
+      expect(hint.exists()).toBe(true)
+      expect(hint.text()).toContain('仍在排队')
+      expect(hint.text()).toContain('11 秒')
+      expect(hint.text()).toContain('执行器')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('推理中超 30s 显示生成耗时提示，未超阈值不显示', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(MessageList, {
+        props: {
+          messages: [],
+          toolSummaries: [],
+          run: { id: 2, status: 'running', terminal: false },
+        },
+      })
+      await vi.advanceTimersByTimeAsync(20000)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('[data-test="run-hint"]').exists()).toBe(false)
+      await vi.advanceTimersByTimeAsync(11000)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('[data-test="run-hint"]').text()).toContain('生成需要较长时间')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('run 进入终态后提示消失', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(MessageList, {
+        props: {
+          messages: [],
+          toolSummaries: [],
+          run: { id: 3, status: 'running', terminal: false },
+        },
+      })
+      await vi.advanceTimersByTimeAsync(31000)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('[data-test="run-hint"]').exists()).toBe(true)
+      await wrapper.setProps({ run: { id: 3, status: 'succeeded', terminal: true } })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('[data-test="run-hint"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('助手消息中的 card_ids 与空间 Inbox 共用 ActionCardItem', () => {
     const pinia = createPinia()
     setActivePinia(pinia)

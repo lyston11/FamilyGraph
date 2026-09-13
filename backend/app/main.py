@@ -23,6 +23,7 @@ from starlette.responses import Response
 from app import config, logctx
 from app.api.action_cards import router as action_cards_router
 from app.api.admin_agent import router as admin_agent_router
+from app.api.admin_agent_latency import router as admin_agent_latency_router
 from app.api.admin_auth import router as admin_auth_router
 from app.api.admin_governance import router as admin_governance_router
 from app.api.admin_platform_features import router as admin_platform_features_router
@@ -276,3 +277,5 @@ admin_app.include_router(admin_agent_router)
 # 09-11 Steward 运维（status/jobs 只读不受引擎门禁；rerun 受 STEWARD_ENABLED 门禁）。
 admin_app.include_router(admin_steward_router)
 admin_app.include_router(admin_platform_features_router)
+# 09-13 延迟观测（只读聚合元数据；口径注释见 admin_agent_latency 模块 docstring）。
+admin_app.include_router(admin_agent_latency_router)
