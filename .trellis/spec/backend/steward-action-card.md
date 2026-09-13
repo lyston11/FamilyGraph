@@ -159,3 +159,32 @@ request_lineage_membership(
 - 链路：代号投影（不发原始姓名）→ context/input policy → provider 设置/revision → `before_provider_request` 最终 payload 检查（复用 policy_guard，不经 ProviderProxy、不伪造 AgentRun）→ 有界 transport → 闭合 schema 校验（证据 ID 围栏、允许 kind、严格排列、受众范围）→ 写回栅栏 → 呈现/审核投影。
 - 读侧信任门：`reason_text_llm` 仅 schema_version=2 验证行外显；旧纯文本行视为 untrusted，读取回退模板并进后台重生成队列。
 - 评测：`tests/fixtures/steward_eval/` 版本化 fixtures（ST-5 矩阵 + 对抗例）；硬安全门禁（授权/事实约束用例）100% 通过才可开新策略的模型开关，候选召回阈值独立统计（≥0.9）；fake transport 证据只证明程序合同，真实 provider 质量分数不得伪造。
+
+## 9. 09-13 短事务重算与 generation 合同（现行实现）
+
+> 追加章节（2026-09-14，任务 09-13-steward-snapshot-progressive-recompute）。与上文 V2.4「单立即事务」描述冲突处，以本节为准。
+
+### 9.1 执行器事务模型（services/steward.py）
+
+- `run_steward_job` 不再把整族计算包进单个 `BEGIN IMMEDIATE`。阶段：开始栅栏（短事务置 running）→ 写锁外 CPU 计算 → 有界短写事务分批落库 → 发布事务（fresh-read 完整租约栅栏 + settle + generation 置 published + 消费水位 + 完成事件）。
+- 派生缓存重算用 `derived_facts.compute_pair`（纯读取解析）+ `apply_pair_result`（写入）；每 `STEWARD_DERIVED_COMMIT_CHUNK`（默认 50）对一个立即事务。写锁上界 ≈ 单块 upsert，而非整族计算。
+- 计算期间由 `_LeaseHeartbeat` 独立线程按 TTL/3 短事务续租（自有 SessionLocal；失去租约置 lost，发布仍会被 fresh-read 栅栏拒绝）。
+- PFV 重建 `rebuild_space_views(per_view_commit=True)`：每视图独立提交；单视图失败回滚自身并标记 failed。
+
+### 9.2 发布代次与进度（services/steward_generations.py + 迁移 0044）
+
+- `steward_generations`：空间发布代次（running/published/failed/superseded）+ 执行游标 + 空间输入指纹。开始时残留 running 代次原子置 superseded；执行失败收敛 failed。
+- `steward_generation_views`：per-viewer 真实进度（ready/failed + completed/total）。渐进 API 的 progress 块优先读这里；无代次行回退 PFV 行计数。running 代次超过 2×lease TTL 无更新按 retrying 处理。
+- `steward_retry_budgets`：按 (space, fingerprint, scope) 跨代持久的必需阶段重试预算——换 job/重启/扫描不清零；输入变化（新指纹）即新预算；失败达 `STEWARD_STAGE_MAX_ATTEMPTS` 整代失败（不发布、不推进水位）。
+- 无变化短路（R5）：`unchanged_since_published`（指纹一致且该代次无 failed/pending 视图）→ 跳过派生与视图重建，但到期检查/出卡/辅助登记照常执行。有失败视图的代次不算完整发布。
+
+### 9.3 渐进读取与 demand（api/personal_family_view.py）
+
+- `GET /api/personal-family-view?progressive=true` 附加 `progress`（contract pfv-progress-v1：phase/generation/revision/completed/total/next_poll_ms）；缺省响应不含该字段（`response_model_exclude_unset`）。304 仅限 current（与旧合同一致），200/304 均签发 `X-PFV-Display-Until`（epoch 秒，`PERSONAL_FAMILY_VIEW_DISPLAY_TTL_SECONDS` 默认 300）。
+- `POST /api/personal-family-view/demand`：认证身份即 viewer（`get_current_view` 复核成员资格，404 fail-closed）；`focus_user_id` 必须在当前授权骨架可见集内（422 拒绝越权/隐藏目标）；同空间活跃作业存在即合并（already_active），不推进输入版本。
+- 推测层输出前独立重验：`effective_enabled` 关闭即整层不输出；`viewer_path` 逐步重验，失效剥离 viewer_term/viewer_path。
+- 管理端 `/admin-api/steward/status` 新增 `delivery_backlog`（辅助批次 reserved/in_flight/failed 计数）与 `latest_generation`（最近代次状态 + 视图计数），区分「核心发布完成」与「交付积压」。
+
+### 9.4 基准脚本
+
+`scripts/benchmark-steward-recompute.py`：隔离 DATA_DIR 临时库，稀疏二叉谱系（30/50/200 人），输出冷/热重算墙钟与冷算期间独立连接并发写延迟分位数（AC1 证据；50 人 p99≈20ms）。max 偶发 >500ms 尖峰（macOS WAL checkpoint/fsync 疑似），整改方向为视图行分块应用与 checkpoint 调优。

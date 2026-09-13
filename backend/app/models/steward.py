@@ -26,6 +26,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -438,3 +439,118 @@ class StewardLlmCandidate(Base):
             f"<StewardLlmCandidate space={self.space_id} job={self.job_id}"
             f" {self.candidate_kind}/{self.status}>"
         )
+
+
+# ---- 09-13 短事务重算：generation 进度/审计与跨代重试预算（迁移 0044）----
+
+STEWARD_GENERATION_STATUSES = ("running", "published", "failed", "superseded")
+STEWARD_GENERATION_VIEW_STATUSES = ("pending", "ready", "failed")
+
+_GENERATION_STATUS_SQL = f"status IN ({', '.join(repr(v) for v in STEWARD_GENERATION_STATUSES)})"
+_GENERATION_VIEW_STATUS_SQL = (
+    f"status IN ({', '.join(repr(v) for v in STEWARD_GENERATION_VIEW_STATUSES)})"
+)
+
+
+class StewardGeneration(Base):
+    """一次空间重算的发布代次（09-13 design §3 StewardGeneration MVP 合同）。
+
+    - 作业开始（短事务）时创建 running 行：记录执行游标与空间输入指纹；
+    - 发布事务置 published；输入漂移/必需目标耗尽置 failed/superseded；
+    - progress/审计来源：per-viewer 状态在 StewardGenerationView。
+    本表不承载 staging 大载荷（视图行仍由 PFV live 表原子重建承载），
+    只承担发布边界、指纹与进度聚合——普通读者不读本表。
+    """
+
+    __tablename__ = "steward_generations"
+    __table_args__ = (
+        CheckConstraint(_GENERATION_STATUS_SQL, name="ck_sg_status"),
+        Index("ix_sg_space_created", "space_id", "created_at"),
+        Index("ix_sg_job", "job_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="running", nullable=False)
+    execution_cursor: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stats_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<StewardGeneration {self.id} space={self.space_id}"
+            f" {self.status} cursor={self.execution_cursor}>"
+        )
+
+
+class StewardGenerationView(Base):
+    """代次内单查看者的真实进度行（09-13 R4：完成数来自已保存验证结果）。
+
+    - 视图重建完成（逐视图短事务）时 upsert ready + 完成计数；
+    - 单视图失败 upsert failed + 安全原因码；进度读取经 generation 状态门控，
+      未 published 的 ready 仅表示「本人视图已重建」，不代表全作业成功。
+    """
+
+    __tablename__ = "steward_generation_views"
+    __table_args__ = (
+        CheckConstraint(_GENERATION_VIEW_STATUS_SQL, name="ck_sgv_status"),
+        sa.UniqueConstraint("generation_id", "viewer_account_id", name="uq_sgv_gen_viewer"),
+        Index("ix_sgv_viewer", "viewer_account_id", "space_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    generation_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_generations.id", ondelete="CASCADE"), nullable=False
+    )
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    viewer_account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    root_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class StewardRetryBudget(Base):
+    """按输入指纹跨代持久的重试预算（09-13 design §5.2：换 job/重启不清零）。
+
+    - (space_id, fingerprint, scope) 唯一；scope 如 'pfv'（个人视图重建阶段）；
+    - 失败自增 attempts；达到上限 exhausted=1：扫描遇到耗尽输入只做轻量维护
+      并报告失败，不重复执行同一重计算；相关输入变化（新指纹）即新预算；
+    - 人工重跑（admin_rerun）授予一次有界额外机会：调用方按 cause 放宽一次。
+    """
+
+    __tablename__ = "steward_retry_budgets"
+    __table_args__ = (
+        sa.UniqueConstraint("space_id", "fingerprint", "scope", name="uq_srb_scope"),
+        Index("ix_srb_space", "space_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[str] = mapped_column(String(48), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    exhausted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

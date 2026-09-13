@@ -118,6 +118,27 @@ class PersonalFamilyViewOut(BaseModel):
     progress: PFVProgress | None = None
 
 
+class PFVDemandIn(BaseModel):
+    """渐进按需重算登记（09-13 design §7.1）：认证身份即 viewer，不接受任意视角。
+
+    - space_id 必须是本人 active 成员空间；
+    - focus_user_id 可选：必须属于当前授权骨架（可见集合），只用于服务端
+      记录重点关注目标（提升下次重建的处理顺序参考），绝不扩大授权范围。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    space_id: int = Field(gt=0)
+    focus_user_id: int | None = Field(default=None, gt=0)
+
+
+class PFVDemandOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["queued", "already_active"]
+    focus_user_id: int | None = None
+
+
 class PersonalFamilyBridgeCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -151,6 +172,8 @@ class PersonalFamilyBridgeOut(BaseModel):
 
 __all__ = [
     "BridgeStatus",
+    "PFVDemandIn",
+    "PFVDemandOut",
     "PFVProgress",
     "PersonalFamilyBridgeConsent",
     "PersonalFamilyBridgeCreate",

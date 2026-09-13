@@ -39,6 +39,7 @@ from app.models.space import FamilySpace
 from app.models.steward import (
     STEWARD_JOB_STATUSES,
     ActionCard,
+    StewardGeneration,
     StewardJob,
     StewardModelCall,
     StewardSpaceSchedule,
@@ -262,6 +263,39 @@ def steward_status(
         core_queue_depth=queue_counts["queued"],
         oldest_queued_age_seconds=oldest_queued_seconds,
     )
+    # 09-13 R6/R8：核心发布完成 ≠ 交付完成。delivery_backlog 统计登记后尚未
+    # 落地的辅助批次（reserved/in_flight/待重试 failed），latest_generation
+    # 展示最近一次代次的发布状态与 per-viewer 进度聚合。
+    delivery_backlog: int | None = None
+    latest_generation: dict[str, Any] | None = None
+    if core:
+        from app.models.steward import StewardAssistBatch
+        from app.services import steward_generations
+
+        delivery_backlog = int(
+            db.scalar(
+                select(sa.func.count()).where(
+                    StewardAssistBatch.status.in_(("reserved", "in_flight", "failed"))
+                )
+            )
+            or 0
+        )
+        generation_row = db.scalar(
+            select(StewardGeneration).order_by(StewardGeneration.id.desc()).limit(1)
+        )
+        if generation_row is not None:
+            latest_generation = {
+                "id": generation_row.id,
+                "space_id": generation_row.space_id,
+                "status": generation_row.status,
+                "execution_cursor": generation_row.execution_cursor,
+                "published_at": generation_row.published_at.isoformat()
+                if generation_row.published_at
+                else None,
+                "views": steward_generations.generation_progress_counts(
+                    db, generation_id=generation_row.id
+                ),
+            }
     _audit(db, identity, request, action="steward.status", result_count=None)
     db.commit()
     return StewardStatusOut(
@@ -273,6 +307,8 @@ def steward_status(
         recent_error_codes=list(dict.fromkeys(recent_error_codes))[:5],
         metrics=metrics,
         alerts=alerts,
+        delivery_backlog=delivery_backlog,
+        latest_generation=latest_generation,
     )
 
 

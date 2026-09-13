@@ -6,7 +6,7 @@ prompt 或任何家庭内容（系统管理员是独立主体，元数据诊断�
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -92,3 +92,6 @@ class StewardStatusOut(BaseModel):
     recent_error_codes: list[str]
     metrics: StewardMetricsOut
     alerts: list[StewardAlertOut] = []
+    # 09-13 R6/R8：核心发布完成与后续交付分开表达
+    delivery_backlog: int | None = None
+    latest_generation: dict[str, Any] | None = None

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
@@ -33,10 +34,16 @@ from app.models.personal_family_view import (
 )
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
+from app.models.steward import StewardGeneration
 from app.models.steward_inferred import StewardInferredEdge
 from app.models.term_registry import TermEntry
 from app.models.user import User
-from app.services import kinship_presentation, steward_inferred, visibility
+from app.services import (
+    kinship_presentation,
+    steward_generations,
+    steward_inferred,
+    visibility,
+)
 from app.services.relationship_graph import (
     ExtraEdge,
     birth_from_user,
@@ -573,6 +580,41 @@ def progress_for(
       无路径目标不计入完成，也不伪装成失败——它们只是不在分母的已达成集合；
     - generation/revision：viewer 内单调（view_version + updated_at）。
     """
+    # 真实进度来源（09-13 R4）：最近非 superseded 代次的 per-viewer 进度行——
+    # 完成数来自已保存并验证的视图重建结果；无代次行（旧数据/开关前作业）时
+    # 回退到 PFV 行计数口径。running 代次超过 2×lease TTL 无更新按 retrying
+    # 处理（作业已被 reaper 回收或即将被后继代次取代，不无限 building）。
+    gen_view = steward_generations.view_progress_for_viewer(
+        session, space_id=space_id, viewer_account_id=account.id
+    )
+    if gen_view is not None:
+        generation_row = session.get(StewardGeneration, gen_view.generation_id)
+        stale_running = (
+            generation_row is not None
+            and generation_row.status == "running"
+            and generation_row.updated_at is not None
+            and (utcnow() - generation_row.updated_at).total_seconds()
+            > 2 * config.STEWARD_LEASE_TTL_SECONDS
+        )
+        if generation_row is not None and generation_row.status == "failed":
+            phase = "failed"
+        elif gen_view.status == "ready":
+            phase = "ready"
+        elif stale_running:
+            phase = "retrying"
+        else:
+            phase = "building"
+        gen_updated_at: datetime | None = gen_view.updated_at
+        return {
+            "contract_version": PROGRESS_CONTRACT_VERSION,
+            "phase": phase,
+            "generation": gen_view.generation_id,
+            "revision": int(gen_updated_at.timestamp()) if gen_updated_at is not None else 0,
+            "completed_count": gen_view.completed_count,
+            "total_count": gen_view.total_count,
+            "next_poll_ms": _PROGRESS_NEXT_POLL_MS.get(phase, 0),
+        }
+
     status = view.status if view is not None else "never_computed"
     phase = _phase_for_status(status)
     completed = 0
@@ -772,10 +814,16 @@ def _view_payload_for_view(
         visible_ids.add(node.user_id)
     served_edges: list[tuple[PersonalFamilyViewEdge, list[list[dict[str, Any]]]]] = []
     inferred_edges: list[dict[str, Any]] = []
+    # 推测层独立重验（09-13 A-R2 增强）：effective_enabled 与推测状态单独复核，
+    # 开关关闭/证据失效的推测层绝不随 confirmed 边一起输出。
+    inferred_enabled = steward_inferred.effective_enabled(session, space_id)
     for edge in edges:
         if edge.inclusion_reason_code == "inferred_path":
-            # 推测边（09-13）：逐行重验推测边仍处 proposed + 两端当前可见；
-            # 已转正/驳回/失效的推测边不再渲染（确认后的信息由 confirmed 边承载）。
+            # 推测边（09-13）：逐行重验推测边仍处 proposed + 两端当前可见 +
+            # 开关仍有效；已转正/驳回/失效的推测边不再渲染（确认后的信息由
+            # confirmed 边承载）。
+            if not inferred_enabled:
+                continue
             raw_basis = edge.authorization_basis_json
             basis: dict[str, Any] = raw_basis if isinstance(raw_basis, dict) else {}
             edge_id = basis.get("inferred_edge_id")
@@ -786,6 +834,15 @@ def _view_payload_for_view(
                 continue
             if edge.from_user_id not in visible_ids or edge.to_user_id not in visible_ids:
                 continue
+            # viewer 视角路径同样逐步重验（中间节点可见性 + 证据事实 confirmed）：
+            # 失效的 viewer_path/viewer_term 剥离为空，不回传未验证的保存内容。
+            viewer_path = basis.get("viewer_path") or []
+            viewer_term = basis.get("viewer_term")
+            if viewer_path and not _path_evidence_valid(
+                session, path=viewer_path, space_id=space_id, visible_ids=visible_ids
+            ):
+                viewer_path = []
+                viewer_term = None
             assert isinstance(edge_id, int)  # row 非 None 已保证
             evidence_fact_ids = basis.get("evidence_fact_ids") or []
             # A-R1：推测面板与通知同源的方向化呈现（“X 可能是你的 Y”）；
@@ -807,8 +864,8 @@ def _view_payload_for_view(
                     "relation_kind": edge.edge_kind,
                     "term": edge.term,
                     "path": edge.path_json or [],
-                    "viewer_term": basis.get("viewer_term"),
-                    "viewer_path": basis.get("viewer_path") or [],
+                    "viewer_term": viewer_term,
+                    "viewer_path": viewer_path,
                     "new_user_id": basis.get("new_user_id"),
                     "evidence_fact_ids": evidence_fact_ids,
                     "presentation": edge_presentation,
@@ -993,7 +1050,58 @@ def request_view_recompute(*, space_id: int) -> None:
         )
 
 
-def rebuild_space_views(session: Session, *, space_id: int, per_view_commit: bool = False) -> int:
+def request_demand(
+    *,
+    space_id: int,
+    focus_user_id: int | None = None,
+) -> str:
+    """认证按需重算登记（独立短 Session/事务；GET/POST 请求事务不承担入队写）。
+
+    幂等：同空间已有活跃作业 → already_active（同 scope 需求合并，不推进
+    输入版本）；无活跃作业 → 经 canonical enqueue 登记新作业（扫描语义：
+    不被 succeeded 水位短路，保证显式 demand 总会触发一次新鲜校验）。
+    focus_user_id 的授权校验在 API 层完成（当前授权骨架内可见），此处仅
+    记日志供审计；任何失败只记日志，绝不影响调用方的安全响应。
+    """
+    if not config.STEWARD_ENABLED:
+        return "queued"
+    from app.db import SessionLocal
+    from app.services.steward import current_event_watermark, enqueue_steward_job
+
+    try:
+        with SessionLocal() as session:
+            _job, created = enqueue_steward_job(
+                session,
+                space_id=space_id,
+                cause="integrity_scan",
+                trigger_cursor=current_event_watermark(session),
+            )
+            session.commit()
+            if focus_user_id is not None:
+                logger.info(
+                    "pfv demand registered space=%s focus=%s created=%s",
+                    space_id,
+                    focus_user_id,
+                    created,
+                )
+            return "queued" if created else "already_active"
+    except Exception as exc:
+        logger.warning(
+            "pfv demand enqueue failed for space %s (error=%s)",
+            space_id,
+            type(exc).__name__,
+        )
+        return "already_active"
+
+
+def rebuild_space_views(
+    session: Session,
+    *,
+    space_id: int,
+    per_view_commit: bool = False,
+    generation_id: int | None = None,
+    fingerprint: str | None = None,
+) -> int:
     """Rebuild stale projections for a Steward space job.
 
     缺省（per_view_commit=False）：每份视图在独立 SAVEPOINT 内重建，由调用方
@@ -1003,6 +1111,10 @@ def rebuild_space_views(session: Session, *, space_id: int, per_view_commit: boo
     的删除/插入写锁上界为一次视图重建，重算期间不再整空间长期占有 SQLite 写锁；
     单视图失败回滚自身并标记 failed，不污染其他视图。该路径下调用方不得持有
     未提交的外层写事务。
+
+    generation_id/fingerprint（执行器传入）：每份视图在同一短事务登记真实
+    进度行（09-13 R4）；失败按输入指纹记入跨代重试预算，耗尽时整代失败
+    （raise，不发布、不推进水位）。
     """
     rows = session.scalars(
         select(PersonalFamilyView).where(
@@ -1027,6 +1139,7 @@ def rebuild_space_views(session: Session, *, space_id: int, per_view_commit: boo
         try:
             if per_view_commit:
                 rebuild_view(session, account=account, space_id=space_id)
+                _record_view_progress_ready(session, view_id=view_id, generation_id=generation_id)
                 session.commit()
             else:
                 with session.begin_nested():
@@ -1040,6 +1153,27 @@ def rebuild_space_views(session: Session, *, space_id: int, per_view_commit: boo
                     failed.status = "failed"
                     failed.failed_reason = type(exc).__name__
                     failed.updated_at = utcnow()
+                if generation_id is not None:
+                    _record_view_progress_failed(
+                        session,
+                        view=failed,
+                        generation_id=generation_id,
+                        reason=type(exc).__name__,
+                    )
+                    # 必需阶段重试预算（09-13 design §5.2）：按输入指纹跨代持久；
+                    # 耗尽 → 整代失败（raise → 作业 failed，不发布、不推进水位）。
+                    if fingerprint is not None:
+                        exhausted = steward_generations.record_stage_failure(
+                            session,
+                            space_id=space_id,
+                            fingerprint=fingerprint,
+                            scope=steward_generations.SCOPE_PFV,
+                        )
+                        if exhausted:
+                            session.commit()
+                            raise StewardStageBudgetExhausted(
+                                f"pfv rebuild budget exhausted for space {space_id}"
+                            ) from exc
                 session.commit()
             else:
                 failed = session.get(PersonalFamilyView, view_id)
@@ -1051,6 +1185,60 @@ def rebuild_space_views(session: Session, *, space_id: int, per_view_commit: boo
         else:
             rebuilt += 1
     return rebuilt
+
+
+class StewardStageBudgetExhausted(RuntimeError):
+    """必需阶段重试预算耗尽（execute_steward_job 按确定性失败结算）。"""
+
+
+def _record_view_progress_ready(
+    session: Session, *, view_id: int, generation_id: int | None
+) -> None:
+    """单视图重建成功：同一短事务登记 ready 进度行（无 generation 时零操作）。"""
+    if generation_id is None:
+        return
+    view = session.get(PersonalFamilyView, view_id)
+    if view is None:
+        return
+    completed = session.scalar(
+        select(func.count(PersonalFamilyViewEdge.id)).where(
+            PersonalFamilyViewEdge.view_id == view_id,
+            PersonalFamilyViewEdge.inclusion_reason_code == "confirmed_path",
+        )
+    )
+    nodes = session.scalar(
+        select(func.count(PersonalFamilyViewNode.id)).where(
+            PersonalFamilyViewNode.view_id == view_id
+        )
+    )
+    steward_generations.record_view_progress(
+        session,
+        generation_id=generation_id,
+        space_id=view.space_id,
+        viewer_account_id=view.viewer_account_id,
+        root_user_id=view.root_user_id,
+        status="ready",
+        completed_count=int(completed or 0),
+        total_count=max(int(nodes or 0) - 1, 0),
+        revision=view.view_version,
+    )
+
+
+def _record_view_progress_failed(
+    session: Session, *, view: PersonalFamilyView | None, generation_id: int, reason: str
+) -> None:
+    """单视图失败：登记 failed 进度行（真实终态，不伪装 no_path/成功）。"""
+    if view is None:
+        return
+    steward_generations.record_view_progress(
+        session,
+        generation_id=generation_id,
+        space_id=view.space_id,
+        viewer_account_id=view.viewer_account_id,
+        root_user_id=view.root_user_id,
+        status="failed",
+        failed_reason=reason[:64],
+    )
 
 
 __all__ = [
@@ -1067,6 +1255,7 @@ __all__ = [
     "invalidate_space_views",
     "invalidate_view_scopes",
     "progress_for",
+    "request_demand",
     "rebuild_space_views",
     "rebuild_view",
     "request_view_recompute",

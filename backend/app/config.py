@@ -137,6 +137,12 @@ STEWARD_WORKER_ENABLED: bool = os.environ.get("STEWARD_WORKER_ENABLED", "").lowe
 # 09-13 短事务执行器：派生缓存重算的分块提交对数（每块一个短写事务，
 # 写锁上界≈块内 upsert 耗时；路径解析全部在写锁外进行）
 STEWARD_DERIVED_COMMIT_CHUNK: int = int(os.environ.get("STEWARD_DERIVED_COMMIT_CHUNK", "50"))
+# 09-13 短事务执行器：必需阶段（PFV 重建）按输入指纹跨代持久的重试上限
+STEWARD_STAGE_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_STAGE_MAX_ATTEMPTS", "3"))
+# 渐进读取展示有效期（秒）：200/304 响应头 X-PFV-Display-Until 的服务端上限
+PERSONAL_FAMILY_VIEW_DISPLAY_TTL_SECONDS: int = int(
+    os.environ.get("PERSONAL_FAMILY_VIEW_DISPLAY_TTL_SECONDS", "300")
+)
 # 后台维护循环周期（agent reaper + steward pump）
 MAINTENANCE_INTERVAL_SECONDS: float = float(os.environ.get("MAINTENANCE_INTERVAL_SECONDS", "5"))
 STEWARD_MAX_ATTEMPTS: int = int(os.environ.get("STEWARD_MAX_ATTEMPTS", "3"))

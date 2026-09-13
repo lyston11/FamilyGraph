@@ -72,6 +72,7 @@ from app.services import (
     recommendation_matrix,
     steward_assist,
     steward_events,
+    steward_generations,
     steward_inferred,
     steward_suggestions,
 )
@@ -871,6 +872,17 @@ def run_steward_job(
     try:
         heartbeat.start()
         summary = _execute_locked(db, job, now=utcnow(), upper=exec_upper)
+    except Exception:
+        # 执行主体失败：收敛本代为 failed（前提：无发布发生）。
+        # 已提交的批次保留待指纹复用；作业结算交由调用方/reaper。
+        try:
+            with _immediate_tx(db):
+                steward_generations.mark_failed(
+                    db, space_id=job.space_id, error_code=ERROR_EXECUTION_FAILED
+                )
+        except Exception:  # noqa: BLE001 — 收敛失败不影响原异常传播
+            pass
+        raise
     finally:
         heartbeat.stop()
     _publish_success(db, job, exec_upper=exec_upper, summary=summary, worker_id=worker_id)
@@ -948,6 +960,7 @@ def _publish_success(
     heartbeat.lost / 新 attempt / 过期 deadline 任一成立都拒绝发布（409），
     已提交批次保留待指纹复用，作业交由 reaper 或新执行者收敛。
     """
+    summary_generation_id = summary.get("generation_id")
     settled_moment = utcnow()
     with _immediate_tx(db):
         current = db.get(StewardJob, job.id)
@@ -974,6 +987,11 @@ def _publish_success(
         current.settled_at = settled_moment
         current.updated_at = settled_moment
         db.flush()
+        # 代次与作业结算同事务发布（09-13：发布边界原子；进度行已在前置阶段落库）
+        if isinstance(summary_generation_id, int):
+            steward_generations.mark_published(
+                db, generation_id=summary_generation_id, stats=summary["stats"]
+            )
         emit_domain_event(
             db,
             event_type=steward_events.EVENT_STEWARD_JOB_COMPLETED,
@@ -1044,6 +1062,13 @@ def execute_steward_job(
         code, retryable = classify_execution_error(exc)
         current = require_steward_job(db, job.id)
         moment = now or utcnow()
+        # 失败收敛（09-13）：本空间残留 running 代次置 failed——整代不发布、
+        # 消费水位不推进；已提交批次保留待指纹复用。
+        try:
+            steward_generations.mark_failed(db, space_id=job.space_id, error_code=code)
+            db.commit()
+        except Exception:  # noqa: BLE001 — 收敛失败不影响作业结算路径
+            db.rollback()
         if retryable and current.attempt < current.max_attempts:
             backoff_seconds = (
                 config.STEWARD_RETRY_BACKOFF_FIRST_SECONDS
@@ -1125,20 +1150,45 @@ def _execute_locked(
     floor = _completed_cursor_floor(db, job)
     exec_upper = job.trigger_cursor if upper is None else min(upper, job.trigger_cursor)
 
+    # 0.5 发布代次登记（短立即事务；同空间残留 running 代次原子置 superseded）
+    fingerprint = steward_generations.space_input_fingerprint(db, space_id=space.id)
+    with _immediate_tx(db):
+        generation = steward_generations.create_running_generation(
+            db,
+            space_id=space.id,
+            job_id=job.id,
+            execution_cursor=exec_upper,
+            fingerprint=fingerprint,
+            now=now,
+        )
+    generation_id = int(generation.id)
+
     # 1. 事件窗口消费（纯读取；窗口 = (floor, lease 时固定的上界]）
     touched = _consume_window(db, space, floor=floor, upper=exec_upper)
     stats["events_consumed"] = len(touched.events)
     db.commit()
 
-    # 2. 派生缓存重算（分块短事务落库；解析在写锁外）
-    stats["derived_recomputed"] = _rebuild_space_derived(db, space, visible)
-
-    # 3. 个人家族视图逐视图短事务重建
-    from app.services.personal_family_view import rebuild_space_views
-
-    stats["personal_family_views_rebuilt"] = rebuild_space_views(
-        db, space_id=space.id, per_view_commit=True
+    # 2/3. 派生缓存 + 个人视图重建（指纹命中的无变化图短路；到期检查/出卡/
+    #      辅助登记在阶段 4 照常执行——扫描不能以「没有新事件」跳过全部维护）
+    unchanged = steward_generations.unchanged_since_published(
+        db, space_id=space.id, fingerprint=fingerprint
     )
+    if unchanged:
+        stats["derived_recomputed"] = 0
+        stats["personal_family_views_rebuilt"] = 0
+        stats["fingerprint_short_circuit"] = 1
+    else:
+        stats["derived_recomputed"] = _rebuild_space_derived(db, space, visible)
+
+        from app.services.personal_family_view import rebuild_space_views
+
+        stats["personal_family_views_rebuilt"] = rebuild_space_views(
+            db,
+            space_id=space.id,
+            per_view_commit=True,
+            generation_id=generation_id,
+            fingerprint=fingerprint,
+        )
     db.commit()
 
     # 4. 冲突/缺失检测（读取）+ 全部报告/投影/出卡/辅助（单个短写事务）
@@ -1204,6 +1254,7 @@ def _execute_locked(
     return {
         "floor_cursor": floor,
         "trigger_cursor": exec_upper,
+        "generation_id": generation_id,
         "finding_signatures": sorted(f["signature"] for f in findings),
         "stats": stats,
     }
