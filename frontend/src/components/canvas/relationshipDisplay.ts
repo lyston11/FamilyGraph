@@ -7,6 +7,8 @@
  * - 未知码回退到通用安全文案，不把原始码含义渲染成断言。
  */
 
+import type { PersonalFamilyViewTopologyEdge } from '@/types/api'
+
 /** path_class 服务端枚举的安全中文摘要（不含授权细节） */
 export const PATH_CLASS_LABELS: Record<string, string> = {
   self: '本人',
@@ -31,4 +33,27 @@ export function pathClassLabel(pathClass: string): string {
 export function factStateLabel(inclusionReasonCode: string): string {
   if (inclusionReasonCode === 'confirmed_path') return '已确认的关系事实'
   return '服务端确认的关系事实'
+}
+
+const TOPOLOGY_SUBTYPE_LABELS: Record<string, string> = {
+  biological: '亲生',
+  adoptive: '收养',
+  step: '继亲',
+  guardian: '监护',
+}
+
+/**
+ * 结构边画布/面板标签：只描述两个端点之间的直接事实类型（亲子、配偶、
+ * 伴侣、兄弟姐妹及 parent 子类型），绝不使用「我的孙子」等 viewer 视角
+ * 称谓；未知 kind 回退通用文案。
+ */
+export function structuralEdgeLabel(edge: PersonalFamilyViewTopologyEdge): string {
+  if (edge.edge_kind === 'parent') {
+    const subtype = edge.subtype !== null ? TOPOLOGY_SUBTYPE_LABELS[edge.subtype] : null
+    return subtype === null ? '亲子' : `亲子·${subtype}`
+  }
+  if (edge.edge_kind === 'spouse') return '配偶'
+  if (edge.edge_kind === 'partner') return '伴侣'
+  if (edge.edge_kind === 'sibling') return '兄弟姐妹'
+  return '已确认关系'
 }

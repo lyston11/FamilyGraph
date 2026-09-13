@@ -312,6 +312,22 @@ export interface PersonalFamilyViewEdge {
   inclusion_reason_code: string
 }
 
+/**
+ * confirmed 直接亲属结构边（backend PersonalFamilyViewTopologyEdgeOut）。
+ * parent 一律 from=家长、to=子女；spouse/partner/sibling 对称无向，
+ * from 为较小 user_id（仅规范化，不表达方向）。
+ */
+export type TopologyEdgeKind = 'parent' | 'spouse' | 'partner' | 'sibling'
+export type TopologyEdgeSubtype = 'biological' | 'adoptive' | 'step' | 'guardian'
+
+export interface PersonalFamilyViewTopologyEdge {
+  id: string
+  from_user_id: number
+  to_user_id: number
+  edge_kind: TopologyEdgeKind
+  subtype: TopologyEdgeSubtype | null
+}
+
 export type PersonalFamilyViewStatus =
   | 'never_computed'
   | 'queued'
@@ -348,6 +364,11 @@ export interface PersonalFamilyViewData {
   computed_at: string | null
   nodes: PersonalFamilyViewNode[]
   edges: PersonalFamilyViewEdge[]
+  /**
+   * confirmed 结构边：解码器把「旧载荷缺字段」规范为 null（结构数据未提供，
+   * 画布显示安全降级提示），与合法空数组（确实没有已确认直接关系）区分。
+   */
+  topology_edges: PersonalFamilyViewTopologyEdge[] | null
   truncated: boolean
   next_cursor: string | null
   stale_reason: string | null

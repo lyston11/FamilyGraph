@@ -1,7 +1,12 @@
 import { mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import MemberNode from '@/components/canvas/MemberNode.vue'
+import {
+  HANDLE_SOURCE_RIGHT,
+  HANDLE_TARGET_LEFT,
+} from '@/composables/useFamilyTreeCanvas'
 import type { PersonalFamilyViewDisplay } from '@/types/api'
 
 /**
@@ -104,5 +109,35 @@ describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
     await wrapper.find('[data-test="canvas-member-card"]').trigger('click')
     await wrapper.find('[data-test="canvas-member-card"]').trigger('keyup.enter')
     expect(wrapper.emitted('select')).toEqual([[7], [7]])
+  })
+
+  it('结构端口：上下默认端口（亲子）与左右对称端口并存，id 与画布边单一来源', () => {
+    const wrapper = mount(MemberNode, {
+      props: {
+        id: 'n-7',
+        data: { display: makeDisplay(), visibilityLevel: 'household_detail', isSelf: false, term: null },
+      },
+      global: {
+        stubs: {
+          Handle: defineComponent({
+            props: { id: { type: String, default: null }, type: { type: String, default: null }, position: { type: String, default: null } },
+            template: '<div class="mock-handle" :data-handle-type="type" :data-handle-id="id" :data-handle-position="position" />',
+          }),
+        },
+      },
+    })
+    const handles = wrapper.findAll('.mock-handle')
+    const ids = handles.map((handle) => handle.attributes('data-handle-id'))
+    // 对称边端口 id 来自 useFamilyTreeCanvas 单一来源（画布边选端口用同一常量）
+    expect(ids).toContain(HANDLE_SOURCE_RIGHT)
+    expect(ids).toContain(HANDLE_TARGET_LEFT)
+    // 亲子默认端口（无 id）：顶部 target + 底部 source
+    expect(handles.filter((handle) => !handle.attributes('data-handle-id'))).toHaveLength(2)
+    const leftTarget = handles.find((handle) => handle.attributes('data-handle-id') === HANDLE_TARGET_LEFT)
+    expect(leftTarget?.attributes('data-handle-type')).toBe('target')
+    expect(leftTarget?.attributes('data-handle-position')).toBe('left')
+    const rightSource = handles.find((handle) => handle.attributes('data-handle-id') === HANDLE_SOURCE_RIGHT)
+    expect(rightSource?.attributes('data-handle-type')).toBe('source')
+    expect(rightSource?.attributes('data-handle-position')).toBe('right')
   })
 })

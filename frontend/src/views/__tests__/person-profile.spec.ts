@@ -129,6 +129,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
     edges: [],
+    topology_edges: [],
     truncated: false,
     next_cursor: null,
     stale_reason: null,

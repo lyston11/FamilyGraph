@@ -20,14 +20,17 @@ import type {
   PersonalFamilyViewNode,
   PersonalFamilyViewPathStep,
   PersonalFamilyViewSnapshot,
+  PersonalFamilyViewTopologyEdge,
   SpaceMemberInfo,
 } from '@/types/api'
 
 /**
- * FamilyTreeView（design.md §5.2 / 任务 Phase 3-C）：
+ * FamilyTreeView（09-01 design.md §5.2 / 09-13 design.md §5-6）：
  * - 不发起 graph 请求（/api/graph/me 红线），数据只来自 PersonalFamilyView store；
+ * - 画布连线只来自 confirmed topology_edges：摘要边绝不画成星形连线；
  * - 树状布局默认 + 自由画布切换，无列表布局入口；
- * - 点击自己 → 家庭卡、他人 → 公示页、关系边 → 只读说明面板；
+ * - 点击自己 → 家庭卡、他人 → 公示页、结构边 → 结构说明面板；
+ * - topology 缺失 → 连线未就绪提示；世代冲突 → 回退自由画布并提示；
  * - lineage_summary 节点不可展开；stale/failed/never_computed 与 truncated 状态 UI。
  */
 
@@ -154,6 +157,21 @@ function makeEdge(from: number, to: number, path: PersonalFamilyViewPathStep[]):
   }
 }
 
+function makeTopologyEdge(
+  edgeKind: PersonalFamilyViewTopologyEdge['edge_kind'],
+  from: number,
+  to: number,
+  subtype: PersonalFamilyViewTopologyEdge['subtype'] = null,
+): PersonalFamilyViewTopologyEdge {
+  return {
+    id: `${edgeKind}:${subtype ?? '-'}:${from}:${to}`,
+    from_user_id: from,
+    to_user_id: to,
+    edge_kind: edgeKind,
+    subtype,
+  }
+}
+
 function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFamilyViewData {
   return {
     space_id: 9,
@@ -162,6 +180,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
     computed_at: '2026-09-01T08:00:00',
     nodes: [],
     edges: [],
+    topology_edges: [],
     truncated: false,
     next_cursor: null,
     stale_reason: null,
@@ -299,43 +318,86 @@ describe('FamilyTreeView 数据边界', () => {
     expect(router.currentRoute.value.params.userId).toBe('2')
   })
 
-  it('关系边点击 → 只读关系说明面板（含称谓与版本时间）', async () => {
+  it('结构边点击 → 结构关系说明面板（两端、类型、已确认，无 viewer 称谓）', async () => {
     const { wrapper } = await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
         edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')])],
+        topology_edges: [makeTopologyEdge('spouse', 1, 2)],
       }),
     })
 
     const vm = wrapper.vm as unknown as { openRelationshipPanel: (key: string) => void }
-    vm.openRelationshipPanel('e-1-2-0')
+    vm.openRelationshipPanel('spouse:-:1:2')
     await flushPromises()
 
-    const panel = wrapper.find('[data-test="relation-panel"]')
+    const panel = wrapper.find('[data-test="structural-panel"]')
     expect(panel.exists()).toBe(true)
-    expect(panel.text()).toContain('称谓1-2')
+    // 两个实际端点 + 直接事实类型；不使用「称谓1-2」等 viewer 视角称谓
+    expect(panel.text()).toContain('成员1')
+    expect(panel.text()).toContain('成员2')
+    expect(panel.text()).toContain('配偶')
+    expect(panel.text()).toContain('已确认')
+    expect(panel.text()).not.toContain('称谓1-2')
     expect(panel.text()).toContain('v3')
-    await wrapper.find('[data-test="relation-panel-close"]').trigger('click')
-    expect(wrapper.find('[data-test="relation-panel"]').exists()).toBe(false)
+    await wrapper.find('[data-test="structural-panel-close"]').trigger('click')
+    expect(wrapper.find('[data-test="structural-panel"]').exists()).toBe(false)
+  })
+
+  it('个人摘要边绝不画成画布连线；confirmed 结构边正常传入画布', async () => {
+    const { wrapper } = await mountTree({
+      data: makeData({
+        nodes: [makeNode(1, 'self_private'), makeNode(2), makeNode(3)],
+        edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')]), makeEdge(1, 3, [makeStep(1, 3, 'down')])],
+        // 结构边只有 1—2 配偶：摘要边 1→2、1→3 都不产生星形连线
+        topology_edges: [makeTopologyEdge('spouse', 1, 2)],
+      }),
+    })
+
+    const flow = wrapper.findComponent(VueFlow)
+    const edges = flow.props('edges') as Array<{ id: string }>
+    expect(edges).toHaveLength(1)
+    expect(edges[0]!.id).toBe('spouse:-:1:2')
+  })
+
+  it('结构边随刷新消失时清空面板，避免残留旧端点信息', async () => {
+    const { wrapper } = await mountTree({
+      data: makeData({
+        nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        topology_edges: [makeTopologyEdge('spouse', 1, 2)],
+      }),
+    })
+    const vm = wrapper.vm as unknown as { openRelationshipPanel: (key: string) => void }
+    vm.openRelationshipPanel('spouse:-:1:2')
+    await flushPromises()
+    expect(wrapper.find('[data-test="structural-panel"]').exists()).toBe(true)
+
+    // 刷新后该结构边不再存在 → 面板自动清空
+    mockedFetchView.mockResolvedValue(
+      makeSnapshot(makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)] })),
+    )
+    await wrapper.find('[data-test="reload-view"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="structural-panel"]').exists()).toBe(false)
   })
 
   it('面板「查看待办」安全跳转 → /notifications（不产生任何写操作）', async () => {
     const { wrapper, router } = await mountTree({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
-        edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')])],
+        topology_edges: [makeTopologyEdge('spouse', 1, 2)],
       }),
     })
 
     const vm = wrapper.vm as unknown as { openRelationshipPanel: (key: string) => void }
-    vm.openRelationshipPanel('e-1-2-0')
+    vm.openRelationshipPanel('spouse:-:1:2')
     await flushPromises()
 
     // Bridge pending 只在通知/待办处理：面板/页面均无 Bridge 操作控件
     expect(wrapper.text()).not.toContain('同意')
     expect(wrapper.text()).not.toContain('拒绝')
 
-    await wrapper.find('[data-test="relation-view-todos"]').trigger('click')
+    await wrapper.find('[data-test="structural-view-todos"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('notifications')
   })
@@ -422,6 +484,40 @@ describe('FamilyTreeView 布局与状态机 UI', () => {
     const banner = wrapper.find('[data-test="truncated-banner"]')
     expect(banner.exists()).toBe(true)
     expect(banner.find('[data-test="truncated-count"]').text()).toBe('3')
+  })
+
+  it('旧载荷缺 topology_edges：显示连线未就绪提示，不绘制替代星形连线', async () => {
+    const { wrapper } = await mountTree({
+      data: makeData({
+        nodes: [makeNode(1, 'self_private'), makeNode(2)],
+        edges: [makeEdge(1, 2, [makeStep(1, 2, 'down')])],
+        topology_edges: null,
+      }),
+    })
+
+    expect(wrapper.find('[data-test="topology-missing-hint"]').exists()).toBe(true)
+    const flow = wrapper.findComponent(VueFlow)
+    expect((flow.props('edges') as unknown[]).length).toBe(0)
+    // 节点卡片仍然按安全投影显示
+    expect(wrapper.findAll('[data-test="canvas-member-card"]').length).toBe(2)
+  })
+
+  it('世代约束冲突：自动回退自由画布并提示，节点不丢失', async () => {
+    const { wrapper } = await mountTree({
+      data: makeData({
+        nodes: [makeNode(1, 'self_private'), makeNode(2), makeNode(3)],
+        topology_edges: [
+          makeTopologyEdge('parent', 1, 2, 'biological'),
+          makeTopologyEdge('spouse', 2, 3),
+          makeTopologyEdge('parent', 2, 3, 'biological'),
+        ],
+      }),
+    })
+
+    expect(wrapper.find('[data-test="layout-fallback-alert"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="layout-fallback-alert"]').text()).toContain('自由画布')
+    // 全部真实节点保留（不删除任何关系或人物）
+    expect(wrapper.findAll('[data-test="canvas-member-card"]').length).toBe(3)
   })
 
   it('403/404/网络错误：安全失败状态，不显示空间名/ID 细节', async () => {

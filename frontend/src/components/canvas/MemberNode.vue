@@ -4,14 +4,21 @@ import { Handle, Position } from '@vue-flow/core'
 import { LockKeyhole, Network } from 'lucide-vue-next'
 
 import MaskedField from '@/components/common/MaskedField.vue'
-import type { FamilyCanvasNodeData } from '@/composables/useFamilyTreeCanvas'
+import {
+  HANDLE_SOURCE_RIGHT,
+  HANDLE_TARGET_LEFT,
+  type FamilyCanvasNodeData,
+} from '@/composables/useFamilyTreeCanvas'
 
 /**
- * 家族树成员名牌（09-01 design.md §5.2，PersonalFamilyView 口径）：
+ * 家族树成员名牌（09-01 design.md §5.2 / 09-13 design.md §5.2）：
  *
  * - 纯展示组件：props 只接收已解码的 PersonalFamilyViewDisplay 与可见性层级
  *   （画布组件禁业务请求、禁读路由——红线），点击仅 emit select，由页面决定
  *   跳转目标（自己 → 家庭卡；他人 → 公示页）；
+ * - 端口仅用于展示结构连线：顶部 target / 底部 source 连接亲子（上代在上、
+ *   子女在下），左右端口连接配偶/伴侣/兄弟姐妹（同代横连）；端口不可拖线
+ *   创建任何事实；
  * - 节点状态用 icon + 文字表达（不只靠颜色）：自己强调、self_private、
  *   household_detail、lineage_summary；masked 字段复用 MaskedField 统一锁形章；
  * - lineage_summary 节点：虚线卡 + 「族谱摘要 · 不可展开」标记，无展开按钮、
@@ -61,6 +68,18 @@ function select(): void {
     @keydown.space.prevent="select"
   >
     <Handle type="target" :position="Position.Top" class="handle" />
+    <Handle
+      type="target"
+      :id="HANDLE_TARGET_LEFT"
+      :position="Position.Left"
+      class="handle handle-side"
+    />
+    <Handle
+      type="source"
+      :id="HANDLE_SOURCE_RIGHT"
+      :position="Position.Right"
+      class="handle handle-side"
+    />
     <div class="card-head">
       <span class="avatar" aria-hidden="true">{{ avatarChar }}</span>
       <span class="name">{{ display.name }}</span>
@@ -107,6 +126,7 @@ function select(): void {
 }
 .summary-card { border-style: dashed; }
 .handle { width: 6px; height: 6px; background: var(--fg-canvas-muted); border: 2px solid var(--fg-canvas-surface); }
+.handle-side { opacity: 0.8; }
 .card-head { display: flex; align-items: center; gap: 10px; }
 .avatar {
   display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;

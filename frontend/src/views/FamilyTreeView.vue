@@ -12,13 +12,15 @@ import type { Edge as FlowEdge, EdgeMouseEvent, Node as FlowNode } from '@vue-fl
 import '@vue-flow/core/dist/style.css'
 
 import MemberNode from '@/components/canvas/MemberNode.vue'
-import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
+import StructuralRelationshipPanel from '@/components/canvas/StructuralRelationshipPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import {
   applyFreeCanvasLayout,
   applyTreeViewLayout,
   buildFamilyCanvas,
-  type FamilyCanvasEdge,
+  HANDLE_SOURCE_RIGHT,
+  HANDLE_TARGET_LEFT,
+  type FamilyStructuralEdge,
 } from '@/composables/useFamilyTreeCanvas'
 import { useAuthStore } from '@/stores/auth'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
@@ -26,14 +28,19 @@ import { useSpacesStore } from '@/stores/spaces'
 import type { PersonalFamilyViewData } from '@/types/api'
 
 /**
- * 家族空间树 / FamilyTreeView（09-01 design.md §5.2）。
+ * 家族空间树 / FamilyTreeView（09-01 design.md §5.2 / 09-13 design.md §5-6）。
  *
  * 数据边界（红线）：
  * - 数据源只用 personalFamilyView store（按当前 lineage space_id load/refresh，
  *   304 复用同一安全快照）；禁止请求或读取旧 graph store 的 /api/graph/me，
  *   也不把旧 graph 位置数据混入画布；
- * - Vue Flow 数据构造在页面级 view-model（composables/useFamilyTreeCanvas.ts），
- *   MemberNode 纯展示、不发请求、不读路由；
+ * - 画布连线只来自 confirmed topology_edges（直接亲属事实）：父母在上一代
+ *   （底部→顶部端口），配偶/伴侣/兄弟姐妹同代横连（左右端口）；个人摘要
+ *   edges 只提供节点称谓，绝不画成星形连线（09-13 R1）；
+ * - topology_edges 缺失（旧载荷）→ 节点照常摆位 + 「连线未就绪」提示，
+ *   不绘制任何替代星形边；世代约束矛盾 → 回退自由画布并提示；
+ * - Vue Flow 数据构造在页面级 view-model（composables/useFamilyTreeCanvas.ts
+ *   与 composables/familyTreeLayout.ts），MemberNode 纯展示、不发请求、不读路由；
  * - 工具只保留：树状（默认）/自由画布切换、缩放（Controls）、适应画布、回到自己、
  *   重新加载、图例；列表布局入口已删除；
  * - 状态机：never_computed/queued/running 且无数据 → 状态面板；current → 画布；
@@ -49,7 +56,9 @@ const spaceContext = useSpaceContext()
 const { fitView, setCenter } = useVueFlow()
 
 const viewMode = ref<'tree' | 'canvas'>('tree')
-const selectedEdge = ref<FamilyCanvasEdge | null>(null)
+const selectedEdge = ref<FamilyStructuralEdge | null>(null)
+/** 世代布局冲突回退提示（切换空间/刷新后清除） */
+const layoutFallbackNotice = ref(false)
 
 const spaceId = computed(() => spaces.currentSpaceId)
 const isLineageContext = computed(() => spaces.currentSpace?.kind === 'lineage')
@@ -112,8 +121,9 @@ onMounted(() => {
 })
 
 watch([spaceId, isLineageContext], () => {
-  // 切换空间：清面板选择并按新上下文读取投影（旧请求由 store epoch 丢弃）
+  // 切换空间：清面板选择与回退提示，并按新上下文读取投影（旧请求由 store epoch 丢弃）
   selectedEdge.value = null
+  layoutFallbackNotice.value = false
   void loadView()
 })
 
@@ -122,14 +132,34 @@ watch([spaceId, isLineageContext], () => {
 const canvasModel = computed(() =>
   data.value
     ? buildFamilyCanvas(data.value, viewerId.value)
-    : { nodes: [], edges: [] as FamilyCanvasEdge[] },
+    : { nodes: [], edges: [] as FamilyStructuralEdge[], summaryEdges: [], topologyAvailable: false },
 )
 
-const positionedNodes = computed(() =>
-  viewMode.value === 'canvas'
-    ? applyFreeCanvasLayout(canvasModel.value)
-    : applyTreeViewLayout(canvasModel.value, viewerId.value),
+/** 树状模式的确定性世代布局结果（design.md §6）；仅 tree 模式计算 */
+const treeLayout = computed(() =>
+  viewMode.value === 'tree' ? applyTreeViewLayout(canvasModel.value, viewerId.value) : null,
 )
+
+const generationLayoutFailed = computed(() => treeLayout.value?.failed ?? false)
+
+watch(
+  generationLayoutFailed,
+  (failed) => {
+    // 世代约束矛盾：保留全部真实节点/边，回退自由画布并明确提示
+    if (failed && viewMode.value === 'tree') {
+      viewMode.value = 'canvas'
+      layoutFallbackNotice.value = true
+    }
+  },
+  { immediate: true },
+)
+
+const positionedNodes = computed(() => {
+  if (viewMode.value === 'canvas' || generationLayoutFailed.value) {
+    return applyFreeCanvasLayout(canvasModel.value)
+  }
+  return treeLayout.value?.nodes ?? applyFreeCanvasLayout(canvasModel.value)
+})
 
 const flowNodes = computed<FlowNode[]>(() =>
   positionedNodes.value.map((node) => ({
@@ -146,18 +176,49 @@ const flowNodes = computed<FlowNode[]>(() =>
   })),
 )
 
+const positionByUser = computed(() => {
+  const map = new Map<number, { x: number; y: number }>()
+  for (const node of positionedNodes.value) map.set(node.userId, { x: node.x, y: node.y })
+  return map
+})
+
 const flowEdges = computed<FlowEdge[]>(() =>
-  canvasModel.value.edges.map((spec) => ({
-    id: spec.key,
-    source: `n-${spec.sourceUserId}`,
-    target: `n-${spec.targetUserId}`,
-    label: spec.label ?? undefined,
-    class: 'fg-view-edge',
-    labelStyle: { fill: 'var(--fg-canvas-ink)', fontSize: '11px' },
-    labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
-    labelBgPadding: [6, 2] as [number, number],
-    labelBgBorderRadius: 4,
-  })),
+  canvasModel.value.edges.map((spec) => {
+    const common = {
+      id: spec.key,
+      label: spec.label,
+      labelStyle: { fill: 'var(--fg-canvas-ink)', fontSize: '11px' },
+      labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
+      labelBgPadding: [6, 2] as [number, number],
+      labelBgBorderRadius: 4,
+    }
+    if (spec.orientation === 'vertical') {
+      // 亲子：家长底部 source → 子女顶部 target（Vue Flow smoothstep）
+      return {
+        ...common,
+        source: `n-${spec.sourceUserId}`,
+        target: `n-${spec.targetUserId}`,
+        type: 'smoothstep',
+        class: 'fg-struct-edge fg-struct-edge--parent',
+      }
+    }
+    // 配偶/伴侣/兄弟姐妹：左右端口横连；按实际 x 位置选左右侧，
+    // 数据端点保持规范化（from≤to）不变，画面无方向箭头。
+    const sourcePos = positionByUser.value.get(spec.sourceUserId)
+    const targetPos = positionByUser.value.get(spec.targetUserId)
+    const sourceX = sourcePos?.x ?? 0
+    const targetX = targetPos?.x ?? 0
+    const leftIsSource = sourceX <= targetX
+    return {
+      ...common,
+      source: `n-${leftIsSource ? spec.sourceUserId : spec.targetUserId}`,
+      sourceHandle: HANDLE_SOURCE_RIGHT,
+      target: `n-${leftIsSource ? spec.targetUserId : spec.sourceUserId}`,
+      targetHandle: HANDLE_TARGET_LEFT,
+      type: 'straight',
+      class: 'fg-struct-edge fg-struct-edge--sym',
+    }
+  }),
 )
 
 // ---- 交互：节点/边点击 → 页面路由或只读面板；画布组件不参与路由 ----
@@ -185,6 +246,13 @@ function onEdgeClick(event: EdgeMouseEvent): void {
   const edgeId = event.edge?.id
   if (typeof edgeId === 'string') openRelationshipPanel(edgeId)
 }
+
+// 结构边随快照刷新/空间切换消失时清空面板，避免残留旧端点信息
+watch(canvasModel, (model) => {
+  if (selectedEdge.value && !model.edges.some((candidate) => candidate.key === selectedEdge.value?.key)) {
+    selectedEdge.value = null
+  }
+})
 
 /** 面板「申请更正/查看待办」安全跳转：只导航待办区，不产生任何写操作 */
 function goNotifications(): void {
@@ -314,6 +382,26 @@ function resolveName(userId: number): string | null {
           位成员。
         </NAlert>
 
+        <!-- 旧载荷缺结构数据：节点照常显示，但不绘制任何替代星形连线 -->
+        <NAlert
+          v-if="hasRenderableNodes && !canvasModel.topologyAvailable"
+          type="info"
+          :show-icon="true"
+          data-test="topology-missing-hint"
+        >
+          亲属连线暂未加载，请刷新重试。成员卡片仍按最新授权投影显示。
+        </NAlert>
+
+        <!-- 世代布局冲突回退：保留全部真实节点与连线，切换自由画布 -->
+        <NAlert
+          v-if="layoutFallbackNotice"
+          type="warning"
+          :show-icon="true"
+          data-test="layout-fallback-alert"
+        >
+          部分亲属关系暂时无法按世代排列，已切换自由画布。
+        </NAlert>
+
         <!-- 工具栏：树状（默认）/自由画布、适应画布、回到自己、重新加载、图例、返回家庭卡
              （操作收敛为居中悬浮胶囊 Dock 内的圆形小按钮，PRD §2.5） -->
         <div class="toolbar" data-test="canvas-toolbar">
@@ -416,8 +504,8 @@ function resolveName(userId: number): string | null {
               </template>
             </VueFlow>
 
-            <!-- 只读关系说明面板：覆盖层，画布位置与缩放保持不变 -->
-            <RelationshipDetailPanel
+            <!-- 只读结构关系说明面板：覆盖层，画布位置与缩放保持不变 -->
+            <StructuralRelationshipPanel
               v-if="selectedEdge"
               :edge="selectedEdge.edge"
               :view-version="data.view_version"
@@ -474,9 +562,11 @@ function resolveName(userId: number): string | null {
 .canvas-section { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 340px; margin: 0 -32px; }
 .canvas-wrap { position: relative; flex: 1; min-height: 340px; background: transparent; }
 .canvas-wrap :deep(.vue-flow) { position: absolute; inset: 0; }
-.canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) { stroke: var(--fg-canvas-muted); stroke-width: 1.15; opacity: 0.66; transition: stroke-width 0.2s ease, opacity 0.2s ease; }
-.canvas-wrap :deep(.fg-view-edge:hover .vue-flow__edge-path),
-.canvas-wrap :deep(.fg-view-edge.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
+/* 结构边（confirmed topology）：亲子纵向实线、对称横向实线；无方向箭头 */
+.canvas-wrap :deep(.fg-struct-edge .vue-flow__edge-path) { stroke: var(--fg-canvas-muted); stroke-width: 1.4; opacity: 0.72; transition: stroke-width 0.2s ease, opacity 0.2s ease; }
+.canvas-wrap :deep(.fg-struct-edge--parent .vue-flow__edge-path) { stroke: color-mix(in srgb, var(--fg-canvas-ink) 55%, var(--fg-canvas-muted)); }
+.canvas-wrap :deep(.fg-struct-edge:hover .vue-flow__edge-path),
+.canvas-wrap :deep(.fg-struct-edge.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
 .canvas-wrap :deep(.vue-flow__edge-text) { font-family: var(--fg-font-body); }
 .canvas-wrap :deep(.vue-flow__edge-textbg) { stroke: var(--fg-canvas-line); stroke-width: 0.5; }
 .canvas-wrap :deep(.vue-flow__controls) {
@@ -515,6 +605,6 @@ function resolveName(userId: number): string | null {
   .status-panel, .context-panel { padding: 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .canvas-wrap :deep(.fg-view-edge .vue-flow__edge-path) { transition: none; }
+  .canvas-wrap :deep(.fg-struct-edge .vue-flow__edge-path) { transition: none; }
 }
 </style>

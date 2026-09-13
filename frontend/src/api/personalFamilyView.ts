@@ -9,8 +9,11 @@ import type {
   PersonalFamilyViewPathStep,
   PersonalFamilyViewSnapshot,
   PersonalFamilyViewStatus,
+  PersonalFamilyViewTopologyEdge,
   PrivacyMode,
   StructuredDate,
+  TopologyEdgeKind,
+  TopologyEdgeSubtype,
   VisibilityLevel,
 } from '@/types/api'
 import { isMasked } from '@/types/api'
@@ -45,6 +48,14 @@ const VISIBILITY_LEVELS: readonly Exclude<VisibilityLevel, 'none'>[] = [
 const GENDERS: readonly GenderType[] = ['m', 'f', 'unknown']
 const PRIVACY_MODES: readonly PrivacyMode[] = ['perpetual', 'handover']
 const CLAIM_STATUSES: readonly ClaimStatus[] = ['managed', 'claimed']
+
+const TOPOLOGY_EDGE_KINDS: readonly TopologyEdgeKind[] = ['parent', 'spouse', 'partner', 'sibling']
+const TOPOLOGY_EDGE_SUBTYPES: readonly TopologyEdgeSubtype[] = [
+  'biological',
+  'adoptive',
+  'step',
+  'guardian',
+]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -208,6 +219,73 @@ function decodeEdge(value: unknown): PersonalFamilyViewEdge | null {
   }
 }
 
+/**
+ * confirmed 结构边单条解码：正整数端点、两端不同、kind/subtype 组合合法
+ * （parent 必须携带子类型，对称关系必须无子类型）。坏条目丢弃。
+ */
+function decodeTopologyEdge(value: unknown): PersonalFamilyViewTopologyEdge | null {
+  if (!isRecord(value)) return null
+  if (
+    typeof value.id !== 'string' ||
+    value.id.length === 0 ||
+    typeof value.from_user_id !== 'number' ||
+    typeof value.to_user_id !== 'number' ||
+    !Number.isInteger(value.from_user_id) ||
+    !Number.isInteger(value.to_user_id) ||
+    value.from_user_id <= 0 ||
+    value.to_user_id <= 0 ||
+    value.from_user_id === value.to_user_id ||
+    !isOneOf(TOPOLOGY_EDGE_KINDS)(value.edge_kind)
+  ) {
+    return null
+  }
+  const edgeKind = value.edge_kind
+  if (edgeKind === 'parent') {
+    if (!isOneOf(TOPOLOGY_EDGE_SUBTYPES)(value.subtype)) return null
+    return {
+      id: value.id,
+      from_user_id: value.from_user_id,
+      to_user_id: value.to_user_id,
+      edge_kind: edgeKind,
+      subtype: value.subtype,
+    }
+  }
+  // 对称关系必须没有子类型；携带子类型即视为脏数据丢弃
+  if (value.subtype !== null) return null
+  return {
+    id: value.id,
+    from_user_id: value.from_user_id,
+    to_user_id: value.to_user_id,
+    edge_kind: edgeKind,
+    subtype: null,
+  }
+}
+
+/**
+ * 结构边数组解码。三种形态显式区分：
+ * - 字段缺失（旧后端载荷）→ null，表示结构数据未提供（安全降级提示）；
+ * - 字段存在但不是数组 → 拒绝整个载荷（合同破坏，不能静默吞掉）；
+ * - 合法数组 → 逐条解码、按 id 防御去重、端点不在已解码节点集合内丢弃。
+ */
+function decodeTopologyEdges(
+  value: unknown,
+  visibleIds: ReadonlySet<number>,
+): PersonalFamilyViewTopologyEdge[] | null {
+  if (value === undefined) return null
+  if (!Array.isArray(value)) throw new Error('个人家族视图响应格式无效')
+  const seen = new Set<string>()
+  const edges: PersonalFamilyViewTopologyEdge[] = []
+  for (const raw of value) {
+    const edge = decodeTopologyEdge(raw)
+    if (edge === null) continue
+    if (seen.has(edge.id)) continue
+    if (!visibleIds.has(edge.from_user_id) || !visibleIds.has(edge.to_user_id)) continue
+    seen.add(edge.id)
+    edges.push(edge)
+  }
+  return edges
+}
+
 export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData {
   if (!isRecord(value)) throw new Error('个人家族视图响应格式无效')
   if (
@@ -242,6 +320,8 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
     edges.push(edge)
   }
 
+  const topologyEdges = decodeTopologyEdges(value.topology_edges, visibleIds)
+
   return {
     space_id: value.space_id,
     status: value.status,
@@ -249,6 +329,7 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
     computed_at: typeof value.computed_at === 'string' ? value.computed_at : null,
     nodes,
     edges,
+    topology_edges: topologyEdges,
     truncated: value.truncated,
     next_cursor: value.next_cursor,
     stale_reason: typeof value.stale_reason === 'string' ? value.stale_reason : null,

@@ -2,19 +2,25 @@ import type {
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
+  PersonalFamilyViewTopologyEdge,
 } from '@/types/api'
 
+import { structuralEdgeLabel } from '@/components/canvas/relationshipDisplay'
+
+import { computeFamilyTreeLayout } from './familyTreeLayout'
+
 /**
- * 家族树画布 view-model（09-01 design.md §5.2）：
+ * 家族树画布 view-model（09-01 design.md §5.2 / 09-13 design.md §5.1）：
  *
  * - 纯函数层：把已解码的 PersonalFamilyViewData 构造成 Vue Flow 可用的节点/边规格；
- *   旧 graph 的成员/边/位置数据一律不得混入（红线），布局只使用服务端返回的
- *   path 方向元数据做几何摆位，不推导任何授权/关系结论；
- * - 节点只来自 PFV nodes（`none` 已在 decoder 丢弃，不会出现）；
- * - 树状布局（默认）：以 viewer 为基准行，按 path 步骤方向（up/down/sym）
- *   估计世代带（长辈在上、晚辈在下、同辈同行），同带按 user_id 升序横向排开；
- * - 自由画布：viewer 固定原点，其余节点按确定性环形摆位（旧 node_positions
- *   API 属旧 graph 合同，不复用）。
+ *   旧 graph 的成员/边/位置数据一律不得混入（红线）；
+ * - **个人摘要与结构边严格分离**（09-13 R1）：个人摘要 edges 只提供节点称谓
+ *   （node.term）与个人路径说明，绝不画成星形连线；画布连线只来自 confirmed
+ *   topology_edges（server 端直接亲属事实）；
+ * - topology_edges === null 表示旧后端载荷未提供结构数据：节点可按摘要估计
+ *   几何摆位，但不绘制替代连线，由视图提示刷新重试；
+ * - 自由画布：viewer 固定原点，其余节点按确定性环形摆位（会话内可拖动，
+ *   不持久化；自由画布改变位置，不改变结构边身份和含义）。
  */
 
 /** Vue Flow member 节点的注入数据（MemberNode 纯展示合同） */
@@ -37,49 +43,69 @@ export interface FamilyCanvasNode {
   y: number
 }
 
-export interface FamilyCanvasEdge {
+/** 画布结构边：来自 confirmed topology_edges，不代表 viewer 与目标的称谓路径 */
+export interface FamilyStructuralEdge {
   key: string
-  edge: PersonalFamilyViewEdge
-  /** 边标签：称谓优先；null 时 Vue Flow 不渲染 label */
-  label: string | null
+  edge: PersonalFamilyViewTopologyEdge
+  /** 结构标签（亲子/配偶/伴侣/兄弟姐妹 + 子类型），不用 viewer 视角称谓 */
+  label: string
+  /** parent 边：source=家长、target=子女；对称边：规范化端点（from≤to） */
   sourceUserId: number
   targetUserId: number
+  /** parent=纵向（底部→顶部端口）；对称=横向（左右端口按实际 x 位置选择） */
+  orientation: 'vertical' | 'horizontal'
 }
 
 export interface FamilyCanvasModel {
   nodes: FamilyCanvasNode[]
-  edges: FamilyCanvasEdge[]
+  /** confirmed 结构边：画布连线的唯一来源 */
+  edges: FamilyStructuralEdge[]
+  /** 个人摘要边（viewer→成员称谓路径）：只用于节点名牌称谓与几何估计，绝不画线 */
+  summaryEdges: PersonalFamilyViewEdge[]
+  /** false = 旧载荷缺 topology_edges 字段：结构数据未提供（区别于合法空数组） */
+  topologyAvailable: boolean
 }
 
 /** 世代带行距 / 同带宽列距（谱卷节奏，与旧画布一致量级） */
 export const ROW_SPACING = 240
 export const COL_SPACING = 280
 
-function edgeKey(edge: PersonalFamilyViewEdge, index: number): string {
-  return `e-${edge.from_user_id}-${edge.to_user_id}-${index}`
-}
+/** 对称结构边的端口 id（MemberNode 与画布边共用，单一来源） */
+export const HANDLE_SOURCE_RIGHT = 'fg-handle-src-right'
+export const HANDLE_TARGET_LEFT = 'fg-handle-tgt-left'
 
 /**
- * 从 viewer 出发的世代差：path 步骤 direction up=-1（向长辈）/ down=+1（向晚辈）
- * / sym=0。只做几何摆位，不产生任何关系语义结论。
+ * 构造画布模型：nodes 来自已解码快照；edges 只来自 confirmed 结构边。
+ * 个人摘要 edges 不进入连线——它们是 viewer 视角路径摘要，不是亲属结构。
  */
-function generationDelta(edge: PersonalFamilyViewEdge): number {
-  let delta = 0
-  for (const step of edge.path) {
-    if (step.direction === 'up') delta -= 1
-    else if (step.direction === 'down') delta += 1
-  }
-  return delta
+export function buildFamilyCanvas(
+  data: PersonalFamilyViewData,
+  viewerId: number | null,
+): FamilyCanvasModel {
+  const topologyAvailable = data.topology_edges !== null
+  const edges: FamilyStructuralEdge[] = (data.topology_edges ?? []).map((edge) => ({
+    key: edge.id,
+    edge,
+    label: structuralEdgeLabel(edge),
+    sourceUserId: edge.from_user_id,
+    targetUserId: edge.to_user_id,
+    orientation: edge.edge_kind === 'parent' ? 'vertical' : 'horizontal',
+  }))
+
+  const nodes: FamilyCanvasNode[] = data.nodes.map((node) => ({
+    userId: node.user_id,
+    display: node.display,
+    visibilityLevel: node.visibility_level,
+    isSelf: viewerId !== null && node.user_id === viewerId,
+    term: viewerId === null ? null : termTowardViewer(node.user_id, viewerId, data.edges),
+    x: 0,
+    y: 0,
+  }))
+
+  return { nodes, edges, summaryEdges: data.edges, topologyAvailable }
 }
 
-/** 服务端合同：PFV 边恒为 viewer(actor)→target；此处防御两种端点朝向。 */
-function deltaTowardViewer(edge: PersonalFamilyViewEdge, viewerId: number): number | null {
-  if (edge.from_user_id === viewerId && edge.to_user_id !== viewerId) return generationDelta(edge)
-  if (edge.to_user_id === viewerId && edge.from_user_id !== viewerId) return -generationDelta(edge)
-  return null
-}
-
-/** viewer 视角称谓：取第一条连接 viewer 与该成员的边的 term */
+/** viewer 视角称谓：取第一条连接 viewer 与该成员的摘要边的 term（仅节点名牌用） */
 function termTowardViewer(
   userId: number,
   viewerId: number,
@@ -94,37 +120,51 @@ function termTowardViewer(
   return null
 }
 
-/**
- * 构造画布模型（不含位置）：nodes/edges 均来自已解码快照。
- * key 稳定可复现，供画布事件与关系面板联动。
- */
-export function buildFamilyCanvas(
-  data: PersonalFamilyViewData,
-  viewerId: number | null,
-): FamilyCanvasModel {
-  const edges: FamilyCanvasEdge[] = data.edges.map((edge, index) => ({
-    key: edgeKey(edge, index),
-    edge,
-    label: edge.term,
-    sourceUserId: edge.from_user_id,
-    targetUserId: edge.to_user_id,
-  }))
-
-  const nodes: FamilyCanvasNode[] = data.nodes.map((node) => ({
-    userId: node.user_id,
-    display: node.display,
-    visibilityLevel: node.visibility_level,
-    isSelf: viewerId !== null && node.user_id === viewerId,
-    term: viewerId === null ? null : termTowardViewer(node.user_id, viewerId, data.edges),
-    x: 0,
-    y: 0,
-  }))
-
-  return { nodes, edges }
+export interface TreeLayoutOutcome {
+  nodes: FamilyCanvasNode[]
+  /**
+   * true = confirmed 结构边存在世代约束矛盾，无法一致分代。
+   * nodes 已按自由画布摆位，视图应切换自由画布并提示。
+   */
+  failed: boolean
 }
 
-/** 树状布局（默认）：viewer 所在行为 0 代带，按世代差纵向分带、同带横向排开。 */
+/**
+ * 树状布局（默认）：confirmed 结构边存在时走确定性世代布局（design.md §6）；
+ * 世代约束矛盾 → failed=true 并回退自由画布摆位。结构数据未提供（旧载荷）
+ * 时仅按个人摘要估计几何位置——不绘制任何星形替代连线。
+ */
 export function applyTreeViewLayout(
+  model: FamilyCanvasModel,
+  viewerId: number | null,
+): TreeLayoutOutcome {
+  if (!model.topologyAvailable) {
+    return { nodes: estimatePositionsFromSummary(model, viewerId), failed: false }
+  }
+  const positions = computeFamilyTreeLayout({
+    userIds: model.nodes.map((node) => node.userId),
+    edges: model.edges.map((spec) => spec.edge),
+    viewerId,
+  })
+  if (positions === null) {
+    return { nodes: applyFreeCanvasLayout(model), failed: true }
+  }
+  return {
+    nodes: model.nodes.map((node) => ({
+      ...node,
+      x: positions.get(node.userId)?.x ?? 0,
+      y: positions.get(node.userId)?.y ?? 0,
+    })),
+    failed: false,
+  }
+}
+
+/**
+ * 结构数据未提供时的几何估计（旧 09-01 世代带逻辑）：按摘要路径的
+ * up/down/sym 方向累计世代带，同带按 user_id 排开。只用于摆位，
+ * 不产生任何连线或关系结论。
+ */
+function estimatePositionsFromSummary(
   model: FamilyCanvasModel,
   viewerId: number | null,
 ): FamilyCanvasNode[] {
@@ -132,12 +172,12 @@ export function applyTreeViewLayout(
   for (const node of model.nodes) deltaByUser.set(node.userId, 0)
 
   if (viewerId !== null) {
+    const summaryEdges = model.summaryEdges ?? []
     const seen = new Set<number>()
-    for (const edge of model.edges) {
-      const delta = deltaTowardViewer(edge.edge, viewerId)
+    for (const edge of summaryEdges) {
+      const delta = summaryGenerationDelta(edge, viewerId)
       if (delta === null) continue
-      const other =
-        edge.sourceUserId === viewerId ? edge.targetUserId : edge.sourceUserId
+      const other = edge.from_user_id === viewerId ? edge.to_user_id : edge.from_user_id
       // 同一成员多条边时取首次结果，保证确定性
       if (!seen.has(other)) {
         seen.add(other)
@@ -156,7 +196,6 @@ export function applyTreeViewLayout(
 
   const positioned = new Map<number, { x: number; y: number }>()
   for (const [delta, userIds] of bands) {
-    // 同带按 user_id 升序（确定性），围绕 x=0 居中排开
     const sorted = [...userIds].sort((a, b) => a - b)
     sorted.forEach((userId, index) => {
       positioned.set(userId, {
@@ -171,6 +210,26 @@ export function applyTreeViewLayout(
     x: positioned.get(node.userId)?.x ?? 0,
     y: positioned.get(node.userId)?.y ?? 0,
   }))
+}
+
+/** 摘要边世代差：path 步骤 direction up=-1 / down=+1 / sym=0（仅几何估计用） */
+function summaryGenerationDelta(edge: PersonalFamilyViewEdge, viewerId: number): number | null {
+  if (edge.from_user_id === viewerId && edge.to_user_id !== viewerId) {
+    return accumulateDelta(edge.path, 1)
+  }
+  if (edge.to_user_id === viewerId && edge.from_user_id !== viewerId) {
+    return accumulateDelta(edge.path, -1)
+  }
+  return null
+}
+
+function accumulateDelta(path: PersonalFamilyViewEdge['path'], sign: 1 | -1): number {
+  let delta = 0
+  for (const step of path) {
+    if (step.direction === 'up') delta -= sign
+    else if (step.direction === 'down') delta += sign
+  }
+  return delta
 }
 
 /** 自由画布：viewer 固定原点，其余成员按确定性环形摆位（会话内可拖动，不持久化）。 */
