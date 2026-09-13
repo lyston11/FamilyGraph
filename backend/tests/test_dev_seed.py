@@ -18,8 +18,10 @@ import sqlite3
 
 import pytest
 from conftest import create_user_with_pin
+from sqlalchemy import select
 
 from app import config, dev_seed
+from app.models.personal_family_view import PersonalFamilyView
 from app.models.relation import Relation
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
@@ -299,6 +301,32 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     assert dev_seed.maybe_seed_demo_data(db_session) is False
     assert db_session.query(User).count() == 36
     assert db_session.query(SourceFact).count() == 55
+
+
+def test_full_seed_initializes_personal_family_view_rows(db_session, monkeypatch) -> None:
+    """全量播种后，每个种子成员（有 Account）× 其 active 成员资格空间都有
+    queued 的 PFV 视图行（09-13 缺口修复：种子不发注册事件，行必须在种子内
+    初始化，否则换数据集后家族树永远 never_computed、重算作业空转）。"""
+    monkeypatch.setattr(config, "DEV_SEED_DEMO_DATA", "1")
+    assert dev_seed.maybe_seed_demo_data(db_session) is True
+
+    users = {user.name: user for user in db_session.query(User).all()}
+    memberships = db_session.scalars(
+        select(SpaceMember).where(SpaceMember.status == "active")
+    ).all()
+    expected = set()
+    for member in memberships:
+        user = next(u for u in users.values() if u.id == member.user_id)
+        assert user.account is not None
+        expected.add((user.account.id, member.space_id))
+
+    rows = db_session.scalars(select(PersonalFamilyView)).all()
+    assert {(row.viewer_account_id, row.space_id) for row in rows} == expected
+    assert all(row.status == "queued" for row in rows)
+    # 幂等：收敛后重复调用不再新增视图行
+    before = len(rows)
+    assert dev_seed.maybe_seed_demo_data(db_session) is False
+    assert db_session.query(PersonalFamilyView).count() == before
 
 
 def test_non_empty_db_backfills_manifest_and_preserves_existing_user(

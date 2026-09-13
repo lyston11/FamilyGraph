@@ -61,6 +61,7 @@ from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import BASIC_DISCLOSURE_KEYS, User
 from app.services import disclosure as disclosure_service
+from app.services import personal_family_view
 from app.services import source_facts as sf_service
 from app.utils import security, timeutil
 
@@ -276,6 +277,7 @@ class _SeedOutcome(NamedTuple):
     added_memberships: int
     added_relations: int
     space_ids: tuple[tuple[str, int], ...]
+    initialized_views: int = 0
 
     @property
     def wrote_anything(self) -> bool:
@@ -315,23 +317,25 @@ def maybe_seed_demo_data(session: Session) -> bool:
         # 全量播种（空库快路径）：沿用原摘要形态（计数 / space_id / 公开演示 PIN）；
         # 姓名等 PII 不进应用日志（logging-guidelines），演示集固定可按 space_id 查库核对
         logger.info(
-            "dev seed completed (full): %s members=%d relations=%d source_facts=%d; "
-            "demo PIN=%s (public dev value)",
+            "dev seed completed (full): %s members=%d relations=%d source_facts=%d "
+            "pfv_views=%d; demo PIN=%s (public dev value)",
             " ".join(f"{name}={space_id}" for name, space_id in outcome.space_ids),
             outcome.manifest_users,
             len(_SEED_EDGES),
             len(_SEED_EDGES),
+            outcome.initialized_views,
             _SEED_PIN,
         )
     elif outcome.wrote_anything:
         # 增量补缺：只报计数，姓名等 PII 不进日志（logging-guidelines 既有约定）
         logger.info(
             "dev seed completed (incremental): added users=%d spaces=%d "
-            "memberships=%d relations=%d",
+            "memberships=%d relations=%d pfv_views=%d",
             outcome.added_users,
             outcome.added_spaces,
             outcome.added_memberships,
             outcome.added_relations,
+            outcome.initialized_views,
         )
     else:
         logger.info("dev seed converged: manifest already satisfied; no writes")
@@ -620,12 +624,25 @@ def _seed_demo_family(session: Session) -> _SeedOutcome:
         disclosure_service.set_basic_disclosure(
             session, user, {key: True for key in BASIC_DISCLOSURE_KEYS}
         )
+    # PFV 视图行（09-13 缺口修复）：种子直接插库、不发注册/成员资格事件，
+    # personal_family_views 行若不在此初始化，换数据集后家族树会永远停在
+    # never_computed（重算作业没有行可重建，登记的作业空转成功）。幂等初始化
+    # 为 queued 行，由 steward worker 按既有机制重算收敛，语义与注册流一致。
+    initialized_views = 0
+    for user in users.values():
+        account_id = session.scalar(select(Account.id).where(Account.user_id == user.id))
+        if account_id is None:
+            continue
+        initialized_views += personal_family_view.initialize_account_views(
+            session, account_id=account_id, user_id=user.id
+        )
     return _SeedOutcome(
         manifest_users=len(all_members),
         added_users=added_users,
         added_spaces=added_spaces,
         added_memberships=added_memberships,
         added_relations=added_relations,
+        initialized_views=initialized_views,
         space_ids=tuple(
             (space_name, spaces[space_name].id)
             for household_name, lineage_name, _admin_name in _SEED_SPACE_PAIRS
