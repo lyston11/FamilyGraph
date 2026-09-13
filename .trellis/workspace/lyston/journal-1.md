@@ -898,3 +898,25 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: 治理平台级 Memory 与 RAG 开关
+<!-- trellis-session: v=2 fp=2d83e9b7363443a9 -->
+
+**Date**: 2026-09-13
+**Task**: 治理平台级 Memory 与 RAG 开关
+**Branch**: `main`
+
+### Summary
+
+完成 Memory/RAG 平台级开关治理：新增数据库单例配置与部署 hard-off 语义、家庭状态接口、独立系统管理员读写 API 与审计、家庭端关闭态和系统管理员平台能力页面；补充迁移、权限、四种组合及前端回归测试。backend 980 passed，frontend 通过 type-check/lint/全量测试/build，system-admin-frontend 通过 type-check/lint/全量测试/build。保留其他并行任务的未提交改动。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `048acaa` | fix: govern platform memory and rag switches |
+
+### Status
+
+[OK] **Completed**
