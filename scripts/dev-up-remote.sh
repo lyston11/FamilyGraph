@@ -70,4 +70,15 @@ probe http://localhost:5173                  "家庭前端"           || FAILED=
 probe http://localhost:5174                  "管理员前端"         || FAILED=1
 probe http://127.0.0.1:4225                  "dbx（隧道→服务器）" || FAILED=1
 
+# agent sidecar 不监听本地端口，经 ssh 探测服务器侧 systemd 状态；
+# 缺失时 assistant run 会永远 queued（无告警），必须显式给出修复提示。
+if ssh -o ConnectTimeout=10 lyston 'systemctl --user is-active --quiet familygraph-agent.service' 2>/dev/null; then
+  log "OK   agent sidecar（服务器 systemd）"
+else
+  log "FAIL agent sidecar：familygraph-agent.service 未运行 → assistant 会停在 queued。" \
+      "修复：ssh lyston 后执行 bash projects/FamilyGraph/scripts/install-server-automation.sh（幂等）" \
+      "或 systemctl --user start familygraph-agent；日志 journalctl --user -u familygraph-agent"
+  FAILED=1
+fi
+
 [ "$FAILED" -eq 0 ] && log "全部服务就绪 ✅（后端/数据库在 lyston 服务器）" || fail "有服务未就绪，请查看 $LOG_DIR 下日志"

@@ -263,6 +263,21 @@ docker compose exec agent node -e "fetch('http://127.0.0.1:8080/readyz').then(r=
 
 sidecar crash 或网络断开后，`agent_runs` 表中 `leased`/`running` 状态的 Run 由 `reaper` 按 `lease_expires_at`（默认 300s）自动回队或判 `expired` 终态。无需人工干预。断线 SSE 客户端用 `Last-Event-ID` 重连，事件从 DB 重放保证不漏序。
 
+### Agent sidecar 裸机部署（lyston 服务器，systemd）
+
+裸机服务器不走 docker compose，sidecar 由 systemd 用户服务 `familygraph-agent.service` 常驻（随 `scripts/install-server-automation.sh` 安装，含 `npm ci` + `npm run build` 幂等重建）：
+
+- **角色**：assistant run 执行器。它不在线时 run 入队后永远 `queued` 且无任何告警——"发消息没回复"先查它。
+- **环境**：只读复用 `EnvironmentFile`（`AGENT_SERVICE_SECRET` 仅进程内存，不落日志）；`FG_API_BASE_URL`/`FG_INTERNAL_API_BASE_URL` 固定 127.0.0.1 回环；`AGENT_SIDECAR_ID=lyston-server-1` 固定（审计区分实例）；健康端口 `HEALTH_PORT=18080`（服务器 8080 已被占用）。
+- **健康与日志**：`curl http://127.0.0.1:18080/healthz`（存活）/`/readyz`（含后端可达性）；日志 `journalctl --user -u familygraph-agent`。
+- **排障口径**：
+  1. `systemctl --user is-active familygraph-agent` 非 active → `journalctl --user -u familygraph-agent -n 50`；
+  2. 启动即退、报 18080 占用 → `lsof -iTCP:18080 -sTCP:LISTEN` 定位残留 nohup/旧实例并清理；
+  3. `readyz` 非 200 → 先确认 `familygraph-api` active（internal listener 8001）；
+  4. 重装/升级后生效：`git pull` 后重跑 `bash scripts/install-server-automation.sh`（幂等），再 `systemctl --user restart familygraph-agent`。
+- **node 版本豁免记录**：服务器 node v22.22.2、npm 10.9.7；`agent/package.json` `engines: >=24` 在非 engine-strict 下仅产生 npm 安装警告，实测 v22 构建与运行正常。升级服务器 node 到 24+ 前此豁免持续有效；若 npm 未来启用 engine-strict 或 SDK 依赖 24+ 专属 API，需先升级 node 再重跑安装器。
+- `dev-up-remote.sh` 会经 ssh 探测该服务存活，缺失时输出修复命令而非静默通过。
+
 ### 日志脱敏
 
 应用日志为 JSON 行格式，字段：`ts/level/logger/msg/user_id/request_id`。**脱敏红线**：PIN、JWT、pin_hash、challenge_token、refresh token、Provider API key 永不入日志；姓名/生卒等 PII 只允许出现在 `audit_log` 表（仅 admin 可读），不进应用日志。
