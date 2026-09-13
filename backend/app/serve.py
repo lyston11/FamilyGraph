@@ -23,7 +23,8 @@ import contextlib
 import logging
 import os
 import signal
-from collections.abc import Generator
+import time
+from collections.abc import Callable, Generator, Sequence
 from types import FrameType
 
 import uvicorn
@@ -40,6 +41,14 @@ PUBLIC_HOST = os.environ.get("PUBLIC_API_HOST", "0.0.0.0")
 INTERNAL_HOST = os.environ.get("INTERNAL_AGENT_API_HOST", "127.0.0.1")
 ADMIN_HOST = os.environ.get("ADMIN_API_HOST", "127.0.0.1")
 
+# 优雅停机时限（秒）：到点后 uvicorn 强制断开仍在处理的连接（SSE 长流、慢请求），
+# 避免旧实例拖住端口、放大 restart 竞态窗口。需大于正常请求 P99 且远小于
+# systemd TimeoutStopSec（见 scripts/install-server-automation.sh）。
+SHUTDOWN_GRACE_SECONDS = int(os.environ.get("SHUTDOWN_GRACE_SECONDS", "5"))
+# bind 预检重试节奏：首次探测后按此序列退避（总窗约 4.5s）。旧实例正在退出时
+# 端口在秒级内释放，进程内吸收该窗口，避免 systemd 以 5s 间隔循环重启。
+_BIND_RETRY_DELAYS: tuple[float, ...] = (1.0, 1.5, 2.0)
+
 
 class _NoSignalCaptureServer(uvicorn.Server):
     """禁用 per-server 信号重装：信号由 app.serve main() 统一安装分发。"""
@@ -53,13 +62,31 @@ async def _serve() -> None:
     from app.main import admin_app, app, internal_app
 
     public = _NoSignalCaptureServer(
-        uvicorn.Config(app, host=PUBLIC_HOST, port=PUBLIC_PORT, log_config=None)
+        uvicorn.Config(
+            app,
+            host=PUBLIC_HOST,
+            port=PUBLIC_PORT,
+            log_config=None,
+            timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+        )
     )
     internal = _NoSignalCaptureServer(
-        uvicorn.Config(internal_app, host=INTERNAL_HOST, port=INTERNAL_PORT, log_config=None)
+        uvicorn.Config(
+            internal_app,
+            host=INTERNAL_HOST,
+            port=INTERNAL_PORT,
+            log_config=None,
+            timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+        )
     )
     admin = _NoSignalCaptureServer(
-        uvicorn.Config(admin_app, host=ADMIN_HOST, port=ADMIN_PORT, log_config=None)
+        uvicorn.Config(
+            admin_app,
+            host=ADMIN_HOST,
+            port=ADMIN_PORT,
+            log_config=None,
+            timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
+        )
     )
     servers = (public, internal, admin)
 
@@ -80,16 +107,75 @@ async def _serve() -> None:
             loop.remove_signal_handler(sig)
 
 
+def _probe_bind(host: str, port: int) -> None:
+    """单次 bind 预检；不可用即抛 OSError。
+
+    设置 SO_REUSEADDR 与 asyncio/uvicorn 真实绑定语义一致：TIME_WAIT 残留
+    （重启竞态的典型现场，`ss -tln` 无监听者但 bind 报 EADDRINUSE）不算占用；
+    只要有活跃 LISTEN 就仍会失败。
+    """
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind((host, port))
+    finally:
+        probe.close()
+
+
+def _ensure_ports_bindable(
+    plan: Sequence[tuple[str, str, int]],
+    *,
+    delays: Sequence[float] = _BIND_RETRY_DELAYS,
+    sleep: Callable[[float], None] = time.sleep,
+    prober: Callable[[str, int], None] = _probe_bind,
+) -> None:
+    """逐 listener 预检绑定，EADDRINUSE 时有限退避重试，超窗才报错（fail-closed）。
+
+    重启竞态主因：旧实例尚未完成端口释放，新实例预检即失败退出，systemd 以
+    5s 间隔循环重启，约 1 分钟后才有一个实例成功（09-13 任务实测）。进程内
+    重试吸收秒级释放窗口；重试期间逐次告警，最终失败给出与「端口被他人占用」
+    可区分的排障口径。
+    """
+    for name, host, port in plan:
+        probe_host = host if host not in ("", "0.0.0.0", "::") else "127.0.0.1"
+        last_exc: OSError | None = None
+        for attempt in range(len(delays) + 1):
+            if attempt:
+                logger.warning(
+                    "%s listener 端口 %s:%s 尚未释放（疑似旧实例退出中），%.1fs 后重试（%d/%d）",
+                    name,
+                    host,
+                    port,
+                    delays[attempt - 1],
+                    attempt,
+                    len(delays),
+                )
+                sleep(delays[attempt - 1])
+            try:
+                prober(probe_host, port)
+            except OSError as exc:
+                last_exc = exc
+                continue
+            last_exc = None
+            break
+        if last_exc is not None:
+            raise RuntimeError(
+                f"{name} listener 无法绑定 {host}:{port}（重试 {len(delays)} 次后仍被占用："
+                f"或为上一实例尚未完全退出，或被其他进程持有，"
+                f"可用 lsof -iTCP:{port} -sTCP:LISTEN 定位）：{last_exc}"
+            ) from None
+
+
 def _validate_bind_plan() -> None:
     """启动前校验 listener 绑定计划（fail-closed）。
 
     生产 posture（未显式 DEV_ALLOW_WEAK_SECRETS）下 internal/admin listener
     不得绑定通配地址——compose 部署必须显式绑定内部网络接口 IP。另做端口
     可用性预检：uvicorn 绑定失败会在任务内 sys.exit 导致脏退出，这里提前
-    给出明确错误并以非零码退出。
+    给出明确错误并以非零码退出；对旧实例尚未释放的端口做有限退避重试。
     """
-    import socket
-
     from app import config
 
     ports = {
@@ -109,20 +195,13 @@ def _validate_bind_plan() -> None:
             "生产环境 ADMIN_API_HOST 不得为通配地址："
             "请绑定 admin 内部网络接口（compose）或 127.0.0.1（本机）"
         )
-    for host, port, name in (
-        (PUBLIC_HOST, PUBLIC_PORT, "public"),
-        (INTERNAL_HOST, INTERNAL_PORT, "internal"),
-        (ADMIN_HOST, ADMIN_PORT, "admin"),
-    ):
-        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            probe.bind((host if host not in ("", "0.0.0.0", "::") else "127.0.0.1", port))
-        except OSError as exc:
-            raise RuntimeError(
-                f"{name} listener 无法绑定 {host}:{port}（端口被占用或地址不可用）：{exc}"
-            ) from None
-        finally:
-            probe.close()
+    _ensure_ports_bindable(
+        (
+            ("public", PUBLIC_HOST, PUBLIC_PORT),
+            ("internal", INTERNAL_HOST, INTERNAL_PORT),
+            ("admin", ADMIN_HOST, ADMIN_PORT),
+        )
+    )
 
 
 def main() -> None:

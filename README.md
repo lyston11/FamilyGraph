@@ -52,6 +52,12 @@ curl -f http://localhost:8080/api/health   # 经 nginx 反代，同样返回 ok
 
 脚本会跳过已运行进程、写入 `.dev-logs/` 并检查健康端点。dbx 仅在服务器部署，远程模式通过 `http://127.0.0.1:4225` 访问。后端代码在服务器更新后执行 `git pull`、必要时 `alembic upgrade head`，再 `systemctl --user restart familygraph-api`。
 
+#### 重启行为与排障口径（09-13-api-restart-bind-race）
+
+- `systemctl --user restart familygraph-api` 正常应在数秒内完成：uvicorn 优雅停机受 `SHUTDOWN_GRACE_SECONDS`（默认 5s）约束，到点强断 SSE 长流与慢请求，端口秒级释放；systemd `TimeoutStopSec=15` 兜底 SIGKILL。
+- 新实例启动时 bind 预检带 SO_REUSEADDR（TIME_WAIT 残留不算占用），对仍被占用的端口按 1s/1.5s/2s 退避重试（总窗约 4.5s），重试期间 journal 会输出"疑似旧实例退出中"告警。
+- 若最终报 `重试 N 次后仍被占用`：先看 `journalctl --user -u familygraph-api` 里旧实例是否仍在退出；用 `lsof -iTCP:<port> -sTCP:LISTEN` 定位持有者，确认是否被无关进程占用。不要为绕过预检改小退避窗口。
+
 只有在故障排查、调试单个进程或运行隔离测试时才手动逐个启动；此时仍需自行配置环境变量并验证对应端口：
 
 ```bash

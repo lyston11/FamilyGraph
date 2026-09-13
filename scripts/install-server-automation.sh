@@ -53,6 +53,9 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$REPO_ROOT/backend/.venv/bin/python -m app.serve
 Restart=on-failure
 RestartSec=5
+# 与 serve.py SHUTDOWN_GRACE_SECONDS（默认 5s，uvicorn 强断 SSE/慢请求）对齐：
+# 预留 lifespan 收尾余量；超时 SIGKILL 兜底，保证端口秒级释放、restart 不再竞态。
+TimeoutStopSec=15
 
 [Install]
 WantedBy=default.target
