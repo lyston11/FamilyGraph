@@ -302,6 +302,11 @@ class SpaceAgentSettingOut(BaseModel):
     assist_candidate: bool = False
     assist_ranking: bool = False
     assist_explanation: bool = False
+    # 09-13 治理：辅助开关生效值（平台配置 ∧ 空间级；平台未开启时家庭端
+    # 据此显示可解释提示，不暴露 env 细节）
+    assist_candidate_effective: bool = False
+    assist_ranking_effective: bool = False
+    assist_explanation_effective: bool = False
     # 09-13 推测层：空间级开关 + 有效开关（平台 AND 空间；平台未开启时前端
     # 据此显示可解释提示，不暴露 env 细节）
     inferred_tree: bool = False

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端门禁与测试口径"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "核验开关真值表与 fail-closed 语义未回退"}

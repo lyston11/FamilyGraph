@@ -93,6 +93,7 @@ def test_admin_can_update_both_switches_and_response_contains_metadata_only(
         "rag_enabled",
         "memory_source",
         "rag_source",
+        "steward_assist",
         "updated_at",
     }
 
@@ -112,6 +113,7 @@ def test_admin_can_update_both_switches_and_response_contains_metadata_only(
         "rag_enabled",
         "memory_source",
         "rag_source",
+        "steward_assist",
         "updated_at",
     }
 

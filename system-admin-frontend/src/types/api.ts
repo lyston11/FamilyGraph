@@ -392,17 +392,30 @@ export interface AgentPlatformDefaultsOut {
   updated_at: string | null
 }
 
+export interface AdminStewardAssistSwitches {
+  candidate: boolean
+  ranking: boolean
+  explanation: boolean
+  candidate_source: 'environment' | 'platform' | 'deployment'
+  ranking_source: 'environment' | 'platform' | 'deployment'
+  explanation_source: 'environment' | 'platform' | 'deployment'
+}
+
 export interface AdminPlatformFeatureState {
   memory_enabled: boolean
   rag_enabled: boolean
   memory_source: 'environment' | 'platform' | 'deployment'
   rag_source: 'environment' | 'platform' | 'deployment'
+  steward_assist: AdminStewardAssistSwitches
   updated_at: string | null
 }
 
 export interface AdminPlatformFeaturePayload {
   memory_enabled: boolean
   rag_enabled: boolean
+  steward_assist_candidate?: boolean
+  steward_assist_ranking?: boolean
+  steward_assist_explanation?: boolean
 }
 
 /** 空间单维度行级设置（enabled=false 且 provider/model 空 = 显式停用）。 */

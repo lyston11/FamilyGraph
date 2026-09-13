@@ -53,7 +53,7 @@ from app.schemas.admin_steward import (
     StewardStatusOut,
     StewardSwitchStateOut,
 )
-from app.services import admin_audit, steward
+from app.services import admin_audit, platform_features, steward
 from app.utils import timeutil
 
 router = APIRouter(prefix="/admin-api/v1", tags=["admin-steward"])
@@ -131,10 +131,12 @@ def steward_status(
     """
     core = config.STEWARD_ENABLED
     worker = config.STEWARD_WORKER_ENABLED
+    # 09-13 治理：平台级辅助生效值来自平台配置（DB ∧ env），不再是纯 env
+    pf_state = platform_features.get_platform_feature_state(db)
     assist_any = (
-        config.STEWARD_ASSIST_CANDIDATE
-        or config.STEWARD_ASSIST_RANKING
-        or config.STEWARD_ASSIST_EXPLANATION
+        pf_state.steward_assist_candidate
+        or pf_state.steward_assist_ranking
+        or pf_state.steward_assist_explanation
     )
     switches = [
         _switch(

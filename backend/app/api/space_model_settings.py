@@ -41,7 +41,7 @@ from app.schemas.agent import (
     SpaceModelSettingsKindsOut,
     SpaceModelSettingsOut,
 )
-from app.services import agent_provider, audit, space_fsm, steward_inferred
+from app.services import agent_provider, audit, space_fsm, steward_assist, steward_inferred
 
 router = APIRouter(tags=["space-model-settings"])
 
@@ -74,10 +74,14 @@ def _setting_row(
 
 
 def _setting_out(
-    row: AgentSpaceProviderSetting | None, *, inferred_effective: bool = False
+    row: AgentSpaceProviderSetting | None,
+    *,
+    inferred_effective: bool = False,
+    assist_effective: dict[str, bool] | None = None,
 ) -> SpaceAgentSettingOut | None:
     if row is None:
         return None
+    effective = assist_effective or {}
     return SpaceAgentSettingOut(
         agent_kind=row.agent_kind,
         provider_id=row.provider_id,
@@ -88,6 +92,10 @@ def _setting_out(
         assist_candidate=bool(row.assist_candidate),
         assist_ranking=bool(row.assist_ranking),
         assist_explanation=bool(row.assist_explanation),
+        # 生效 = 平台配置 ∧ 空间级；空间开而平台关 → 前端据 False 显示可解释提示
+        assist_candidate_effective=bool(effective.get("candidate", False)),
+        assist_ranking_effective=bool(effective.get("ranking", False)),
+        assist_explanation_effective=bool(effective.get("explanation", False)),
         inferred_tree=bool(row.inferred_tree),
         # 生效 = 平台 AND 空间；空间开而平台关 → 前端据 False 显示可解释提示
         inferred_effective=inferred_effective,
@@ -164,6 +172,10 @@ def get_space_model_settings(
             steward=_setting_out(
                 _setting_row(session, space_id, "steward"),
                 inferred_effective=steward_inferred.effective_enabled(session, space_id),
+                assist_effective={
+                    kind: steward_assist.assist_enabled(session, space_id, kind)
+                    for kind in ("candidate", "ranking", "explanation")
+                },
             ),
         ),
         catalog=_catalog_out(session),

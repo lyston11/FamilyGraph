@@ -337,6 +337,17 @@ const inferredPlatformBlocked = computed<boolean>(() => {
   const row = rowFor('steward')
   return row !== null && row.inferred_tree && !row.inferred_effective
 })
+
+/** 09-13 治理：辅助开关空间级开而平台级未开 → 明确提示替代静默不生效 */
+const assistPlatformBlocked = computed<boolean>(() => {
+  const row = rowFor('steward')
+  if (row === null) return false
+  return (
+    (row.assist_candidate && !row.assist_candidate_effective) ||
+    (row.assist_ranking && !row.assist_ranking_effective) ||
+    (row.assist_explanation && !row.assist_explanation_effective)
+  )
+})
 </script>
 
 <template>
@@ -469,6 +480,13 @@ const inferredPlatformBlocked = computed<boolean>(() => {
               data-test="inferred-platform-hint"
             >
               推测层需要平台管理员开启平台级开关后才会生效
+            </span>
+            <span
+              v-if="kind === 'steward' && assistPlatformBlocked"
+              class="assist-hint"
+              data-test="assist-platform-hint"
+            >
+              辅助开关已打开，但平台管理员尚未开启平台级模型辅助——实际调用不会发生
             </span>
           </div>
 

@@ -50,6 +50,9 @@ function enabledRow(
     assist_candidate: false,
     assist_ranking: false,
     assist_explanation: false,
+    assist_candidate_effective: false,
+    assist_ranking_effective: false,
+    assist_explanation_effective: false,
     inferred_tree: false,
     inferred_effective: false,
     ...overrides,
@@ -73,6 +76,9 @@ function settingsFixture(
         assist_candidate: true,
         assist_ranking: false,
         assist_explanation: false,
+        assist_candidate_effective: true,
+        assist_ranking_effective: false,
+        assist_explanation_effective: false,
         inferred_tree: false,
         inferred_effective: false,
         ...stewardOverrides,
@@ -336,5 +342,32 @@ describe('SpaceModelSettingsPanel（推测层开关，09-13）', () => {
       expect(wrapper.find('[data-test="model-settings-steward"]').exists()).toBe(true)
     })
     expect(wrapper.find('[data-test="inferred-platform-hint"]').exists()).toBe(false)
+  })
+})
+
+describe('SpaceModelSettingsPanel（辅助开关平台治理提示，09-13）', () => {
+  beforeEach(() => {
+    pinia = createPinia()
+    vi.clearAllMocks()
+    mockedFetch.mockResolvedValue(settingsFixture())
+  })
+
+  it('空间级辅助开而平台未开 → 显示可解释的平台提示', async () => {
+    mockedFetch.mockResolvedValue(
+      settingsFixture({ assist_candidate_effective: false, assist_ranking_effective: false, assist_explanation_effective: false }),
+    )
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="assist-flags-steward"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="assist-platform-hint"]').exists()).toBe(true)
+  })
+
+  it('平台已开（生效）→ 不显示平台提示', async () => {
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="assist-flags-steward"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="assist-platform-hint"]').exists()).toBe(false)
   })
 })

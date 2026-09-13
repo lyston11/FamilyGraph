@@ -9,7 +9,7 @@ const state = ref<'loading' | 'ready' | 'error'>('loading')
 const features = ref<AdminPlatformFeatureState | null>(null)
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
-const saving = ref<'memory' | 'rag' | null>(null)
+const saving = ref<'memory' | 'rag' | 'steward' | null>(null)
 
 async function load(): Promise<void> {
   state.value = 'loading'
@@ -35,6 +35,36 @@ async function toggle(key: 'memory' | 'rag'): Promise<void> {
       rag_enabled: key === 'rag' ? next : features.value.rag_enabled,
     })
     notice.value = `${key === 'memory' ? 'Memory' : 'RAG'} 已${next ? '启用' : '停用'}，已以服务端状态同步。`
+  } catch (reason) {
+    error.value = reason instanceof AdminApiError ? reason.message : '保存失败，开关已保持服务端状态'
+    await load()
+  } finally {
+    saving.value = null
+  }
+}
+
+type AssistKind = 'candidate' | 'ranking' | 'explanation'
+
+function currentAssist(kind: AssistKind): boolean {
+  return features.value?.steward_assist[kind] ?? false
+}
+
+/** 09-13：平台级 Steward 辅助三开关治理；全量 PUT（memory/rag 原样透传） */
+async function toggleAssist(kind: AssistKind): Promise<void> {
+  if (!features.value || saving.value) return
+  const next = !currentAssist(kind)
+  saving.value = 'steward'
+  error.value = null
+  notice.value = null
+  try {
+    features.value = await updatePlatformFeatures({
+      memory_enabled: features.value.memory_enabled,
+      rag_enabled: features.value.rag_enabled,
+      steward_assist_candidate: kind === 'candidate' ? next : currentAssist('candidate'),
+      steward_assist_ranking: kind === 'ranking' ? next : currentAssist('ranking'),
+      steward_assist_explanation: kind === 'explanation' ? next : currentAssist('explanation'),
+    })
+    notice.value = `管家辅助（${kind}）已${next ? '启用' : '停用'}，已与服务端状态同步。`
   } catch (reason) {
     error.value = reason instanceof AdminApiError ? reason.message : '保存失败，开关已保持服务端状态'
     await load()
@@ -107,6 +137,37 @@ onMounted(() => void load())
             <span>{{ saving === 'rag' ? '保存中…' : features.rag_source === 'deployment' ? '部署关闭' : features.rag_enabled ? '已启用' : '已停用' }}</span>
           </button>
         </section>
+        <section class="ag-card ag-feature-card" data-testid="platform-feature-steward-assist">
+          <div>
+            <p class="ag-feature-kicker">能力 03</p>
+            <h2>管家模型辅助</h2>
+            <p>
+              Steward 推荐卡的候选补全 / 排序 / 解释三类模型辅助的平台级开关；
+              仍需空间 owner 打开对应空间级开关才会实际调用模型。
+            </p>
+          </div>
+          <div class="ag-assist-switches">
+            <button
+              v-for="assist in ([
+                { kind: 'candidate', label: '候选补全' },
+                { kind: 'ranking', label: '推荐排序' },
+                { kind: 'explanation', label: '卡片解释' },
+              ] as const)"
+              :key="assist.kind"
+              type="button"
+              class="ag-feature-switch"
+              role="switch"
+              :aria-checked="currentAssist(assist.kind)"
+              :aria-label="`管家辅助 ${assist.label}：${currentAssist(assist.kind) ? '已启用' : '已停用'}`"
+              :disabled="saving !== null"
+              :data-testid="`platform-feature-steward-assist-${assist.kind}`"
+              @click="toggleAssist(assist.kind)"
+            >
+              <span class="ag-feature-switch-track"><span class="ag-feature-switch-thumb"></span></span>
+              <span>{{ assist.label }}：{{ currentAssist(assist.kind) ? '已启用' : '已停用' }}</span>
+            </button>
+          </div>
+        </section>
       </div>
       <p v-if="error" class="form-error" role="alert" data-testid="platform-feature-error">{{ error }}</p>
     </template>
@@ -151,6 +212,13 @@ onMounted(() => void load())
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.ag-assist-switches {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ag-space-2);
 }
 
 .ag-feature-switch {
