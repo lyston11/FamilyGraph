@@ -76,10 +76,12 @@ def binding_for(
 @contextmanager
 def write_transaction(bind: Engine | Connection) -> Iterator[Session]:
     from app.services.steward import _immediate_tx
+    from app.services.steward_write_budget import writer_turn
 
-    with Session(bind=bind, autoflush=False, expire_on_commit=False) as session:
-        with _immediate_tx(session):
-            yield session
+    with writer_turn(bind):
+        with Session(bind=bind, autoflush=False, expire_on_commit=False) as session:
+            with _immediate_tx(session):
+                yield session
 
 
 def require_binding(
@@ -152,8 +154,8 @@ def begin_job(db: Session, binding: Binding, *, now: datetime | None = None) -> 
 
 
 def heartbeat(db: Session, binding: Binding, *, ttl: int, now: datetime | None = None) -> datetime:
-    moment = now or utcnow()
     with write_transaction(db.get_bind()) as session:
+        moment = now or utcnow()
         job = require_binding(session, binding, now=moment)
         generation = session.scalar(
             select(StewardGeneration)

@@ -203,6 +203,7 @@ steward_runtime.shutdown_runtime(*, timeout_seconds=10.0) -> bool
 10. 发布后每个本地交付效果与 intent done 同事务；用户已作出的动作/revision 优先。普通交付执行前持久预留 effect 预算和 owner/attempt/deadline 租约；成功只退还本次预留，迟到结果不能退款或改写新状态。同输入的新代、扫描、重启和 GC 不重置失败次数。管理员单项重试以 policy/attempt CAS 合并重复请求，冷却后仅授予一次机会并同事务审计，不创建 core job。仅真实回执去重 finding；通知按最多 8 名收件人一批独立补发，不因已有 finding 回执漏发。旧 assist orphan 恢复不处理 staged job。模型 reserved/in_flight/unknown 继续使用既有持久预算，unknown 不自动重发，剩余租约不足最小发送窗口不再发 HTTP。
 11. 可选推测使用独立 intent lease/跨代预算；输出前重验开关、版本、每一步 viewer_path 证据；失败不回滚 confirmed 核心。
 12. GC 在读快照中发现候选，短写事务只按最多 64 个候选 ID 重验全部根后分批删除旧 target/intent/view；保留 current publication、最新预览、共享 result_view_id 来源与未交付 published 效果。同 effect 后继只有 published 才能接替旧交付责任；输入已失效时无需等待后继发布即可终止旧意图。候选 SQL 必须覆盖当前 source revision、snapshot/config 和有效期，不能仅在最终重验判断失效，否则 failed 意图会永远漏选。引用查询使用显式索引，不能在写事务内全历史聚合或依赖临时反向索引。shutdown 返回 false 时，临时库/数据目录必须保留，不能在协调器仍会写入时删除。
+13. 短写事务还须限制连续写入：同一进程/Engine 的 `write_transaction` 共用 FIFO 预算，累计 writer 步骤 50ms 后，在下一次 BEGIN 前统一让出 100ms；其他协调器不能填掉空档。writer 步骤包含取锁、commit/rollback 和 Session 清理，预算不宣称单笔事务可被抢占或限时。自然读/计算空档可抵扣等待；排队时不创建 Session，异常清理票据，同线程嵌套立即拒绝。心跳等时间栅栏在实际入事务后重取时间，不得用排队前时刻续活过期租约。SQLite busy_timeout 仍为 5000ms；当前 `app.serve` 的多 listener 共用进程和 Engine，这不是跨进程写入调度器。
 
 ### 9.4 Validation & Error Matrix
 
@@ -232,6 +233,7 @@ steward_runtime.shutdown_runtime(*, timeout_seconds=10.0) -> bool
 - `test_steward_staged_pipeline.py`：骨架先出、同水位 demand、真实 receipt、assist 门控、预算耗尽、可选多跳解释、共享结果GC、停止/200/304时间头；found/no_path 保存从实际 BEGIN 到 commit 不编解码大 JSON，重复保存只推进/退款一次，读回为对象/null；相关旧Steward/assist/API回归继续通过。
 - `test_steward_publication_consumers.py`：普通消费者同源读取、未发布/失效安全空态、无同步重算和 GET 零写；相关 legacy 读取兼容测试继续通过。
 - `test_steward_demand_coalescing.py`：另一连接真实持写锁时已覆盖 demand 仍可只读完成；新 revision/更高事件水位、focus/retry、失效输入或租约保留 writer 与唤醒，撤权先于缓存；展示读取不解码内部搜索缓存且继续拒绝被篡改的路径证据。
+- `test_steward_write_budget.py`：两个协调器排队期间无 Session/事务占用，真实独立 WAL 连接可先提交；FIFO、回滚释放、嵌套拒绝、不同 Engine 隔离、自然空档抵扣，以及排队跨过 lease/generation 有效期时拒绝心跳。
 - `test_steward_runtime_recovery.py`：真实单 spawn CPU 切片让出后其他空间完成；已保存目标与半算目标中断后经 reaper/新 owner 接管，复用完整结果、重做半目标、持续计账、拒绝旧回执并只发布一次。
 - `test_steward_delivery_recovery.py`：普通交付跨代/崩溃持续计账、租约隔离、单项 CAS 重试与审计、旧责任在新代正式发布后收敛、未发布后继时源输入失效仍能清理。
 - `test_steward_benchmark_measurement.py`：真实独立连接在首次 COMMIT 后立即写入；SQLite authorizer 内的 COMMIT 延迟必须计入，统计回调的可控延迟不得计入显式持锁或隐式写窗口。结束时间必须在 DB-API 返回后、任何指标锁/分配/日志前固定，提交失败但仍持有事务时计到实际 rollback；SQL 异常自动回滚立即结束计时，后续清理不得二次记录。诊断 verb 使用固定白名单，注释和绑定参数均不得泄漏。
