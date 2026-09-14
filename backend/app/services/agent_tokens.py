@@ -76,6 +76,8 @@ def issue_run_token(
     ttl_seconds: int | None = None,
 ) -> str:
     """run token：绑定执行实体与 scope；exp 上限 600s（design.md 合同）。"""
+    if type(attempt) is not int or attempt < 1:
+        raise AgentTokenError("invalid attempt")
     if agent_kind not in RUNTIME_AGENT_KINDS:
         raise AgentTokenError("invalid agent_kind")
     ttl = min(
@@ -125,7 +127,7 @@ def decode_run_token(raw_token: str) -> dict[str, Any]:
     if not isinstance(allowlist, list) or any(not isinstance(item, str) for item in allowlist):
         raise AgentTokenError("invalid tool_allowlist")
     for key in ("run_id", "job_id", "attempt", "account_id", "space_id"):
-        if not isinstance(payload[key], int):
+        if type(payload[key]) is not int or payload[key] < 1:
             raise AgentTokenError("invalid scope claim type")
     if payload["agent_kind"] not in RUNTIME_AGENT_KINDS:
         raise AgentTokenError("invalid agent_kind")

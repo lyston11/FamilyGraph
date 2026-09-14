@@ -75,7 +75,14 @@ from app.schemas.agent import (
     CitationOut,
     RunEventCitationsOut,
 )
-from app.services import agent_events, agent_provider, agent_queue, audit, policy_guard
+from app.services import (
+    agent_citations,
+    agent_events,
+    agent_provider,
+    agent_queue,
+    audit,
+    policy_guard,
+)
 from app.services.agent_events import TERMINAL_STREAM_EVENT_TYPES
 from app.services.agent_provider import POLICY_ALLOWED, POLICY_DENIED_NO_LOCAL
 from app.services.agent_tools import default_allowlist
@@ -123,65 +130,12 @@ def _own_run_or_404(db: Session, account_id: int, run_id: int) -> tuple[AgentRun
 def _message_citations(
     db: Session, message: AgentMessage, account: Account
 ) -> tuple[list[dict[str, Any]], int]:
-    """Project stored citations through the *current* reader's authorization.
-
-    The stored content is the server-authenticated record; this read-side
-    projection never widens it: revoked/invalidated sources leave the array
-    and are only counted, and their identifiers are not echoed back.
-    """
-    from app.models.rag import RAGDocument
-    from app.services import memory_sources
-
-    stored = message.content_json.get("citations")
-    if message.role != "assistant" or not isinstance(stored, list):
-        return [], 0
-    actor = account.user
-    session_row = db.get(AgentSession, message.session_id)
-    if session_row is None:
-        return [], len(stored)
-    readable: list[dict[str, Any]] = []
-    unavailable = 0
-    for entry in stored:
-        if not isinstance(entry, dict):
-            continue
-        document = db.scalar(
-            select(RAGDocument).where(
-                RAGDocument.source_type == str(entry.get("source_type", "")),
-                RAGDocument.source_id == str(entry.get("source_id", "")),
-                RAGDocument.status == "active",
-            )
-        )
-        ok = (
-            document is not None
-            and document.revision == entry.get("revision")
-            and memory_sources.document_readable(
-                db,
-                document,
-                actor=actor,
-                account=account,
-                space_id=session_row.space_id,
-                agent_kind=session_row.agent_kind,
-            )
-        )
-        if ok and document is not None:
-            readable.append(
-                {
-                    "source_type": str(entry["source_type"]),
-                    "source_id": str(entry["source_id"]),
-                    "scope": str(entry.get("scope", document.scope)),
-                    "sensitivity": str(entry.get("sensitivity", document.sensitivity)),
-                    "revision": int(entry["revision"]),
-                    "citation_handle": str(entry["citation_handle"]),
-                }
-            )
-        else:
-            unavailable += 1
-    return readable, unavailable
+    return agent_citations.project_message_citations(db, message, account)
 
 
 def _message_out(db: Session, message: AgentMessage, account: Account) -> AgentMessageOut:
-    content_json = message.content_json
-    raw_citations = content_json.get("citations")
+    content_json = agent_citations.public_base(message.content_json)
+    raw_citations = message.content_json.get("citations")
     projected, unavailable = _message_citations(db, message, account)
     if isinstance(raw_citations, list):
         # Raw stored citations (incl. identifiers of unreadable sources) are
@@ -556,9 +510,7 @@ def get_run_event_citations(
     )
     if event is None:
         raise_api_error(404, AGENT_RUN_NOT_FOUND, "事件不存在")
-    message = db.scalar(
-        select(AgentMessage).where(AgentMessage.idempotency_key == f"run:{run.id}:event:{seq}")
-    )
+    message = agent_citations.event_message(db, run, seq)
     if message is None:
         return RunEventCitationsOut(
             run_id=run.id, seq=seq, citations=[], unavailable_citation_count=0
@@ -602,25 +554,47 @@ async def stream_agent_run_events(
     cursors = [c for c in (_parse_cursor(last_event_id), after_event_id) if c is not None]
     cursor = max(cursors) if cursors else -1
     return StreamingResponse(
-        _event_stream(run_id, cursor),
+        _event_stream(run_id, cursor, account.id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-def _fetch_new_events(run_id: int, after_seq: int) -> list[AgentRunEvent]:
-    """短生命周期会话查询：长连接不占用请求级会话（中间件生命周期之外）。"""
-    session = SessionLocal()
-    try:
-        return list(
-            session.scalars(
-                select(AgentRunEvent)
-                .where(AgentRunEvent.run_id == run_id, AgentRunEvent.seq > after_seq)
-                .order_by(AgentRunEvent.seq.asc())
-            )
-        )
-    finally:
-        session.close()
+def _fetch_new_events(run_id: int, after_seq: int, account_id: int) -> list[dict[str, Any]] | None:
+    """Authorize and project in one short session; only immutable DTOs escape."""
+    with SessionLocal() as session:
+        account = session.get(Account, account_id)
+        run = session.get(AgentRun, run_id)
+        agent_session = session.get(AgentSession, run.session_id) if run is not None else None
+        if (
+            account is None
+            or run is None
+            or agent_session is None
+            or agent_session.account_id != account_id
+        ):
+            return None
+        rows = session.scalars(
+            select(AgentRunEvent)
+            .where(AgentRunEvent.run_id == run_id, AgentRunEvent.seq > after_seq)
+            .order_by(AgentRunEvent.seq.asc())
+        ).all()
+        return [
+            {
+                "run_id": row.run_id,
+                "seq": row.seq,
+                "type": row.type,
+                "payload": agent_citations.project_event_payload(
+                    session,
+                    run,
+                    seq=row.seq,
+                    event_type=row.type,
+                    payload=row.public_payload,
+                    account=account,
+                ),
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
 
 
 def _run_is_terminal(run_id: int) -> bool:
@@ -632,32 +606,25 @@ def _run_is_terminal(run_id: int) -> bool:
         session.close()
 
 
-def _wire_event(row: AgentRunEvent) -> bytes:
-    data = json.dumps(
-        {
-            "run_id": row.run_id,
-            "seq": row.seq,
-            "type": row.type,
-            "payload": row.public_payload,
-            "created_at": row.created_at.isoformat(),
-        },
-        ensure_ascii=False,
-    )
-    return f"id: {row.seq}\nevent: {row.type}\ndata: {data}\n\n".encode()
+def _wire_event(row: dict[str, Any]) -> bytes:
+    data = json.dumps(row, ensure_ascii=False)
+    return f"id: {row['seq']}\nevent: {row['type']}\ndata: {data}\n\n".encode()
 
 
-async def _event_stream(run_id: int, cursor: int) -> AsyncIterator[bytes]:
+async def _event_stream(run_id: int, cursor: int, account_id: int) -> AsyncIterator[bytes]:
     subscription = agent_events.notifier.subscribe(run_id)
     last_sent = time.monotonic()
     try:
         while True:
             # DB 查询放线程池，避免 SQLite 往返阻塞事件循环
-            rows = await anyio.to_thread.run_sync(_fetch_new_events, run_id, cursor)
+            rows = await anyio.to_thread.run_sync(_fetch_new_events, run_id, cursor, account_id)
+            if rows is None:
+                return
             for row in rows:
                 yield _wire_event(row)
-                cursor = row.seq
+                cursor = row["seq"]
                 last_sent = time.monotonic()
-                if row.type in TERMINAL_STREAM_EVENT_TYPES:
+                if row["type"] in TERMINAL_STREAM_EVENT_TYPES:
                     return
             if await anyio.to_thread.run_sync(_run_is_terminal, run_id):
                 # 终态但终态事件缺失（如 reaper 直接收敛）：按状态收口关闭

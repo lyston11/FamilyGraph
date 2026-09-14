@@ -37,6 +37,9 @@ class ContextBuild(Base):
     # Authorized block payload persisted once so a replayed GET returns the
     # identical context instead of re-running a competing retrieval.
     blocks_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    policy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

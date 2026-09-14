@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 QUERY_PLAN_VERSION = "lex-v1"
 
 MAX_QUERY_CHARS = 500
 MAX_TERMS = 8
+MAX_HISTORY_MESSAGES = 4
+MAX_HISTORY_MESSAGE_CHARS = 500
 # Terms shorter than this cannot trigram-match; they take the bounded
 # short-word fallback path instead of the FTS path.
 FTS_MIN_CHARS = 3
@@ -60,6 +63,41 @@ _QUESTION_STOPWORDS = frozenset(
 
 _PUNCT_RE = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
 
+# A closed lexical grammar, not general NER or inferred family relationships.
+# Explicitly labelled names/locations are also accepted; opaque conversation
+# text outside these forms never becomes a guessed anchor.
+_KINSHIP_ANCHORS = re.compile(
+    "曾祖父|曾祖母|外祖父|外祖母|祖父|祖母|外公|外婆|爷爷|奶奶|"
+    "爸爸|妈妈|父亲|母亲|舅舅|舅妈|叔叔|婶婶|伯父|伯母|姑姑|姑父|"
+    "阿姨|姨父|哥哥|姐姐|弟弟|妹妹|儿子|女儿|孙子|孙女"
+)
+_NAMED_PERSON = re.compile(r"(?:人物|姓名|家人)[:：]\s*([\w\u4e00-\u9fff]{2,16})")
+_NAMED_PLACE = re.compile(r"(?:地点|城市|位置)[:：]\s*([\w\u4e00-\u9fff]{2,30})")
+
+
+def _anchor(query: str, history: Sequence[str]) -> tuple[tuple[str, ...], str | None]:
+    if re.match(r"^(?:请问)?(?:他们|她们)", query):
+        return (), "plural_reference_unsupported"
+    person = re.match(r"^(?:请问)?(?:他|她|那个人|这位)", query)
+    place = re.match(r"^(?:请问)?(?:那里|那儿|那个地方|该地点)", query)
+    if not person and not place:
+        return (), None
+    if person and _KINSHIP_ANCHORS.search(query):
+        return (), "explicit_entity_in_query"
+    if any(len(message) > MAX_HISTORY_MESSAGE_CHARS for message in history[-MAX_HISTORY_MESSAGES:]):
+        return (), "anchor_history_truncated"
+    candidates: set[str] = set()
+    for message in history[-MAX_HISTORY_MESSAGES:]:
+        bounded = unicodedata.normalize("NFKC", message[:MAX_HISTORY_MESSAGE_CHARS])
+        if person:
+            candidates.update(_KINSHIP_ANCHORS.findall(bounded))
+            candidates.update(_NAMED_PERSON.findall(bounded))
+        else:
+            candidates.update(_NAMED_PLACE.findall(bounded))
+    if len(candidates) == 1:
+        return (next(iter(candidates)),), None
+    return (), "anchor_missing" if not candidates else "anchor_ambiguous"
+
 
 @dataclass(frozen=True)
 class QueryPlan:
@@ -72,6 +110,7 @@ class QueryPlan:
     fallback_terms: tuple[str, ...]
     degradation: tuple[str, ...] = field(default=())
     term_count: int = 0
+    anchors: tuple[str, ...] = ()
 
     def log_summary(self) -> dict[str, object]:
         """Version/count/duration shape only; raw question text stays out."""
@@ -81,6 +120,7 @@ class QueryPlan:
             "fts_terms": len(self.fts_terms),
             "fallback_terms": len(self.fallback_terms),
             "degradation": list(self.degradation),
+            "anchor_count": len(self.anchors),
         }
 
 
@@ -115,7 +155,7 @@ def _segment_terms(normalized: str) -> list[str]:
     return terms
 
 
-def plan_query(raw: str) -> QueryPlan:
+def plan_query(raw: str, *, recent_messages: Sequence[str] = ()) -> QueryPlan:
     """Build the bounded query plan; never raises on odd input."""
     degradation: list[str] = []
     normalized = normalize_query(raw or "")
@@ -135,9 +175,12 @@ def plan_query(raw: str) -> QueryPlan:
     # Exact phrase keeps whole-question regression for FTS trigram matching.
     phrase = truncated if " " not in truncated and len(truncated) >= FTS_MIN_CHARS else None
 
+    anchors, anchor_degradation = _anchor(truncated, recent_messages)
+    if anchor_degradation is not None:
+        degradation.append(anchor_degradation)
     candidates: list[str] = []
     seen: set[str] = set()
-    for term in _segment_terms(truncated):
+    for term in [*anchors, *_segment_terms(truncated)]:
         if term in seen:
             continue
         seen.add(term)
@@ -148,12 +191,11 @@ def plan_query(raw: str) -> QueryPlan:
                 seen.add(alias)
                 candidates.append(alias)
 
-    fts_terms = [t for t in candidates if len(t) >= FTS_MIN_CHARS]
-    fallback_terms = [t for t in candidates if FTS_MIN_CHARS > len(t) >= 2]
     if len(candidates) > MAX_TERMS:
         degradation.append("term_cap_applied")
-    fts_terms = fts_terms[:MAX_TERMS]
-    fallback_terms = fallback_terms[:MAX_TERMS]
+    candidates = candidates[:MAX_TERMS]
+    fts_terms = [t for t in candidates if len(t) >= FTS_MIN_CHARS]
+    fallback_terms = [t for t in candidates if FTS_MIN_CHARS > len(t) >= 2]
     if not fts_terms and not fallback_terms:
         degradation.append("no_usable_terms")
     return QueryPlan(
@@ -164,6 +206,7 @@ def plan_query(raw: str) -> QueryPlan:
         fallback_terms=tuple(fallback_terms),
         degradation=tuple(degradation),
         term_count=len(fts_terms) + len(fallback_terms),
+        anchors=anchors,
     )
 
 

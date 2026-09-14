@@ -29,7 +29,8 @@ from app.errors import (
     raise_api_error,
 )
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent, AgentSession
-from app.models.rag import RAGDocument
+from app.services import agent_citations
+from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
 from app.utils import timeutil
 
 # notes.md 事件类型注册表（首版）
@@ -70,6 +71,25 @@ class EventEntry:
     seq: int
     type: str
     public_payload: dict[str, Any]
+    context_reference: dict[str, Any] | None = None
+
+    def fingerprint(self, run_id: int, attempt: int) -> str:
+        canonical = json.dumps(
+            {
+                "v": 2,
+                "run_id": run_id,
+                "attempt": attempt,
+                "seq": self.seq,
+                "type": self.type,
+                "public_payload": self.public_payload,
+                "context_reference": self.context_reference,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @property
     def request_fingerprint(self) -> str:
@@ -128,17 +148,34 @@ def _validate_entry(entry: EventEntry) -> None:
     if not isinstance(entry.public_payload, dict):
         raise_api_error(422, AGENT_EVENT_INVALID, "payload 必须为 JSON object")
     try:
-        size = len(json.dumps(entry.public_payload, ensure_ascii=False).encode("utf-8"))
+        size = len(
+            json.dumps(entry.public_payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        )
     except (TypeError, ValueError):
         raise_api_error(422, AGENT_EVENT_INVALID, "payload 不可序列化")
     if size > MAX_PAYLOAD_BYTES:
         raise_api_error(422, AGENT_EVENT_INVALID, "payload 超限")
+    if entry.context_reference is not None:
+        from pydantic import ValidationError
+
+        from app.schemas.agent import ContextReferenceIn
+
+        try:
+            ref = ContextReferenceIn.model_validate(entry.context_reference)
+        except ValidationError:
+            raise_api_error(422, AGENT_EVENT_INVALID, "context_reference 格式无效")
+        if entry.type != "message.assistant_added" or len(set(ref.used_handles)) != len(
+            ref.used_handles
+        ):
+            raise_api_error(422, AGENT_EVENT_INVALID, "context_reference 使用无效")
 
 
 def append_events(
     db: Session,
     run: AgentRun,
     entries: list[EventEntry],
+    *,
+    execution: ExecutionIdentity | None = None,
 ) -> tuple[list[AgentRunEvent], list[int]]:
     """幂等批量追加。
 
@@ -147,11 +184,17 @@ def append_events(
     新事件必须严格接在当前流末尾（seq == max+1，含本批次先前条目），
     保证 SSE 重放无漏序、乱序。
     """
+    if execution is not None:
+        run, _session, _job = fence_execution(db, execution)
+    else:
+        acquire_run_writer(db, run.id)
+    expected_attempt = execution.expected_attempt if execution is not None else run.attempt
     accepted: list[AgentRunEvent] = []
     duplicates: list[int] = []
     expected_next = next_seq(db, run.id)
     for entry in entries:
         _validate_entry(entry)
+        fingerprint = entry.fingerprint(run.id, expected_attempt)
         prior: AgentRunEvent | None = db.scalar(
             select(AgentRunEvent).where(
                 AgentRunEvent.run_id == run.id, AgentRunEvent.seq == entry.seq
@@ -162,10 +205,20 @@ def append_events(
             # 全等）视为重复；指纹不比较服务端认证后的结果，异指纹同 seq 属
             # 协议违规。
             prior_fingerprint = prior.request_fingerprint
-            if prior_fingerprint is not None:
-                same = prior_fingerprint == entry.request_fingerprint
+            if (prior.context_reference_json or {}).get("protocol_version") == 2:
+                same = prior.type == entry.type and prior_fingerprint == fingerprint
+            elif prior_fingerprint is not None:
+                same = (
+                    entry.context_reference is None
+                    and prior.type == entry.type
+                    and prior_fingerprint == entry.request_fingerprint
+                )
             else:
-                same = prior.type == entry.type and prior.public_payload == entry.public_payload
+                same = (
+                    entry.context_reference is None
+                    and prior.type == entry.type
+                    and prior.public_payload == entry.public_payload
+                )
             if same:
                 duplicates.append(entry.seq)
                 continue
@@ -192,170 +245,169 @@ def append_events(
             )
         # Citation authentication happens for not-yet-committed events only;
         # replayed duplicates above never re-generate persistent payloads.
-        context_reference: dict[str, Any] | None = None
-        authenticated_citations: list[dict[str, Any]] | None = None
-        if entry.type == "message.assistant_added" and isinstance(
-            entry.public_payload.get("text"), str
-        ):
-            context_reference, authenticated_citations = _authenticate_citations(db, run, entry)
+        context_record: dict[str, Any] = {
+            "protocol_version": 2,
+            "attempt": expected_attempt,
+            "submitted": entry.context_reference,
+        }
+        authenticated: list[dict[str, Any]] = []
+        unavailable = 0
+        payload = agent_citations.public_base(entry.public_payload)
+        if entry.type == "message.assistant_added" and isinstance(payload.get("text"), str):
+            authenticated, unavailable = _authenticate_citations(db, run, entry, expected_attempt)
+            from app.models.account import Account
+            from app.models.agent import AgentMessage
+
+            content_json: dict[str, Any] = {"text": payload["text"]}
+            if authenticated:
+                content_json["citations"] = authenticated
+            if unavailable:
+                content_json["unavailable_citation_count"] = unavailable
+            if isinstance(payload.get("web_citations"), list):
+                content_json["web_citations"] = payload["web_citations"]
+            message = AgentMessage(
+                session_id=run.session_id,
+                role="assistant",
+                content_json=content_json,
+                idempotency_key=f"run:{run.id}:event:{entry.seq}",
+                created_at=timeutil.utcnow(),
+            )
+            db.add(message)
+            db.flush()
+            session = db.get(AgentSession, run.session_id)
+            account = db.get(Account, session.account_id) if session else None
+            if account is not None:
+                projected, unavailable = agent_citations.project_message_citations(
+                    db, message, account
+                )
+                payload = agent_citations.fit_public_citations(payload, projected, unavailable)
         accepted.append(
             insert_event(
                 db,
                 run,
                 seq=entry.seq,
                 event_type=entry.type,
-                public_payload=entry.public_payload,
-                request_fingerprint=entry.request_fingerprint,
-                context_reference=context_reference,
+                public_payload=payload,
+                request_fingerprint=fingerprint,
+                context_reference=context_record,
             )
         )
-        if entry.type == "message.assistant_added":
-            # Promote the public assistant projection into session history so
-            # subsequent Pi turns can restore the full conversation.  Only the
-            # bounded text/citation projection is persisted; provider-private
-            # payloads never cross this boundary.  Memory citations are
-            # authenticated server-side from the attempt's context build —
-            # the model text alone never turns into a verified citation.
-            payload = entry.public_payload
-            text = payload.get("text")
-            if isinstance(text, str):
-                session = db.get(AgentRun, run.id)
-                if session is not None:
-                    from app.models.agent import AgentMessage
-
-                    content_json: dict[str, Any] = {"text": text}
-                    if authenticated_citations:
-                        content_json["citations"] = authenticated_citations
-                    if isinstance(payload.get("web_citations"), list):
-                        content_json["web_citations"] = payload["web_citations"]
-                    db.add(
-                        AgentMessage(
-                            session_id=session.session_id,
-                            role="assistant",
-                            content_json=content_json,
-                            idempotency_key=f"run:{run.id}:event:{entry.seq}",
-                            created_at=timeutil.utcnow(),
-                        )
-                    )
-                    db.flush()
         expected_next += 1
         if entry.type == "run.started":
             _promote_to_running(db, run)
     return accepted, duplicates
 
 
-# Citation handles look like ``rag:<source_id>:r<rev>:c<chunk>``.
-_CITATION_HANDLE_RE = re.compile(r"rag:[^\s:]+:r\d+:c\d+")
-_MAX_USED_HANDLES = 32
-
-
-def _revision_from_handle(citation_handle: str) -> int | None:
-    segment = citation_handle.split(":r", 1)[1] if ":r" in citation_handle else ""
-    segment = segment.split(":", 1)[0]
-    try:
-        return int(segment)
-    except ValueError:
-        return None
-
-
 def _authenticate_citations(
-    db: Session, run: AgentRun, entry: EventEntry
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
-    """Authenticate the citation handles the answer actually used.
-
-    A handle becomes a verified citation only when it belongs to an included
-    item of this run/attempt's context build and the source is still readable
-    for the acting account.  Fabricated, other-build, revoked or
-    wrong-revision handles stay unauthenticated: the text remains unverified
-    text, never a confirmed fact.  Returns (context_reference, citations).
-    """
+    db: Session,
+    run: AgentRun,
+    entry: EventEntry,
+    expected_attempt: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Wire references locate server evidence; text alone never authenticates."""
     from app.models.account import Account
     from app.models.context import ContextBuild, ContextBuildItem
-    from app.services import memory_sources
+    from app.models.platform_features import PlatformFeatureConfig
+    from app.services import agent_provider, memory_sources, platform_features
+    from app.services.context_builder import invalidate_build
 
-    text_value = entry.public_payload.get("text")
-    if not isinstance(text_value, str):
-        return None, None
-    current_run = db.get(AgentRun, run.id)
-    if current_run is None:
-        return None, None
-    run = current_run
-    build = db.scalar(
-        select(ContextBuild)
-        .where(ContextBuild.run_id == run.id, ContextBuild.attempt == run.attempt)
-        .order_by(ContextBuild.id.desc())
-        .limit(1)
-    )
-    if build is None:
-        return None, None
-    handles: list[str] = []
-    seen: set[str] = set()
-    for match in _CITATION_HANDLE_RE.findall(text_value):
-        if match not in seen:
-            seen.add(match)
-            handles.append(match)
-        if len(handles) >= _MAX_USED_HANDLES:
-            break
-    if not handles:
-        return {"context_build_id": build.id, "attempt": run.attempt, "used_handles": []}, None
-    agent_session = db.get(AgentSession, run.session_id)
-    account = db.get(Account, agent_session.account_id) if agent_session is not None else None
-    actor = account.user if account is not None else None
-    if actor is None or account is None or agent_session is None:
-        return {"context_build_id": build.id, "attempt": run.attempt, "used_handles": []}, None
-    items = {
-        item.citation_handle: item
-        for item in db.scalars(
-            select(ContextBuildItem).where(
-                ContextBuildItem.build_id == build.id,
-                ContextBuildItem.included.is_(True),
-            )
-        ).all()
-    }
-    citations: list[dict[str, Any]] = []
-    used_handles: list[str] = []
-    for handle in handles:
-        item = items.get(handle)
-        if item is None:
-            continue
-        document = db.scalar(
-            select(RAGDocument).where(
-                RAGDocument.source_type == item.source_type,
-                RAGDocument.source_id == item.source_id,
-                RAGDocument.status == "active",
-            )
+    ref = entry.context_reference
+    if ref is None:
+        return [], 0  # Legacy sidecars retain text/web, not guessed citations.
+    build = db.get(ContextBuild, ref["build_id"], populate_existing=True)
+    session = db.get(AgentSession, run.session_id)
+    if (
+        build is None
+        or session is None
+        or ref["attempt"] != expected_attempt
+        or build.run_id != run.id
+        or build.attempt != expected_attempt
+        or build.account_id != session.account_id
+        or build.space_id != session.space_id
+        or build.agent_kind != run.kind
+    ):
+        raise_api_error(409, AGENT_EVENT_INVALID, "context_reference 不属于当前执行")
+    items = list(
+        db.scalars(
+            select(ContextBuildItem)
+            .where(ContextBuildItem.build_id == build.id, ContextBuildItem.included.is_(True))
+            .order_by(ContextBuildItem.rank, ContextBuildItem.id)
         )
-        handle_revision = _revision_from_handle(handle)
-        if (
-            document is None
-            or (handle_revision is not None and document.revision != handle_revision)
-            or not memory_sources.document_readable(
-                db,
-                document,
-                actor=actor,
-                account=account,
-                space_id=agent_session.space_id,
-                agent_kind=run.kind,
-            )
-        ):
+    )
+    handles = ref["used_handles"]
+    mentioned = set(
+        re.findall(r"\[(rag:[^\s\]]{1,250})\]", str(entry.public_payload.get("text", "")))
+    )
+    if any(
+        sum(item.citation_handle == h for item in items) != 1 or h not in mentioned for h in handles
+    ):
+        raise_api_error(409, AGENT_EVENT_INVALID, "句柄未纳入此构建或未出现在回答中")
+    account = db.get(Account, session.account_id)
+    if account is None:
+        return [], len(handles)
+    db.get(PlatformFeatureConfig, 1, populate_existing=True)
+    resolution = agent_provider.resolve_for_run(db, run, session.space_id)
+    decision = {
+        "provider_id": resolution.provider_id,
+        "model": resolution.model,
+        "policy_result": resolution.policy_result,
+    }
+    stored_policy = build.policy_json or {}
+    from app import config
+
+    if (
+        build.invalidated_at is not None
+        or (stored_policy.get("rag_enabled") and not platform_features.is_rag_enabled(db))
+        or stored_policy.get("provider_kind") != resolution.kind
+        or stored_policy.get("provider_decision") != decision
+        or stored_policy.get("deployment_policy_version") != config.POLICY_VERSION
+    ):
+        invalidate_build(db, build, "policy_changed")
+        return [], len(handles)
+    citations: list[dict[str, Any]] = []
+    unavailable = 0
+    for item in items:
+        if item.citation_handle not in handles:
             continue
-        used_handles.append(handle)
+        source_ref = memory_sources.ExactChunkRef.parse(item.metadata_json.get("source_ref"))
+        resolved = (
+            memory_sources.read_exact_chunk(
+                db,
+                source_ref,
+                actor=account.user,
+                account=account,
+                space_id=session.space_id,
+                agent_kind=run.kind,
+                for_model=True,
+                provider_kind=(build.policy_json or {}).get("provider_kind"),
+            )
+            if source_ref
+            else None
+        )
+        if (
+            source_ref is None
+            or resolved is None
+            or source_ref.source_type != item.source_type
+            or source_ref.source_id != item.source_id
+            or item.metadata_json.get("revision") != source_ref.source_revision
+            or item.citation_handle
+            != f"rag:{source_ref.source_id}:r{source_ref.source_revision}:c{source_ref.chunk_id}"
+        ):
+            unavailable += 1
+            invalidate_build(db, build, "source_changed")
+            continue
         citations.append(
             {
-                "source_type": item.source_type,
-                "source_id": item.source_id,
-                "scope": str(item.metadata_json.get("scope", document.scope)),
-                "sensitivity": str(item.metadata_json.get("sensitivity", document.sensitivity)),
-                "revision": int(document.revision),
-                "citation_handle": handle,
+                "source_type": source_ref.source_type,
+                "source_id": source_ref.source_id,
+                "revision": source_ref.source_revision,
+                "scope": resolved.document.scope,
+                "sensitivity": resolved.document.sensitivity,
+                "citation_handle": item.citation_handle,
+                "_source_ref": source_ref.as_json(),
             }
         )
-    context_reference = {
-        "context_build_id": build.id,
-        "attempt": run.attempt,
-        "used_handles": used_handles,
-    }
-    return context_reference, citations
+    return citations, unavailable
 
 
 def _promote_to_running(db: Session, run: AgentRun) -> None:

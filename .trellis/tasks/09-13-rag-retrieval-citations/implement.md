@@ -6,10 +6,10 @@
 
 ## 本轮修复验收
 
-- [ ] B-I01/I05/I10：不可变 signed attempt 进入 writer/admission；context 并发唯一与持久失效；内部 context_reference 及原请求指纹端到端。
-- [ ] B-I02/I03/I04/I09：精确片段认证，统一所有读取投影，保留字段服务端独占；固定补取精确定位。
-- [ ] B-I06/I07/I08：真实包装预算、有界授权补足、有限同会话唯一锚点与歧义降级。
-- [ ] 独立核验；冻结核心/英文不退化；C、原请求幂等和精确 16 KiB 正对照保留。
+- [x] B-I01/I05/I10：不可变 signed attempt 进入 writer/admission；context 并发唯一与持久失效；内部 context_reference 及原请求指纹端到端。
+- [x] B-I02/I03/I04/I09：精确片段认证，统一所有读取投影，保留字段服务端独占；固定补取精确定位。
+- [x] B-I06/I07/I08：真实包装预算、有界授权补足、有限同会话唯一锚点与歧义降级。
+- [x] 主线程代码核验；冻结核心/英文不退化；C、原请求幂等和精确 16 KiB 正对照保留。check 子代理限流不计为通过，具体核验和末轮三项补修见 [acceptance-check.md](research/acceptance-check.md)。
 
 ## 初版执行记录（以下历史勾选不能代替本轮复验）
 
@@ -29,7 +29,7 @@
 backend：`.venv/bin/ruff check .`、`.venv/bin/ruff format --check .`、`.venv/bin/mypy app`；选择 memory_rag/context/policy、internal_agent_api、agent_events、schema_contract 和新中文数据集用例，依最终改动扩展 pytest。
 agent：`npm run lint`、`npm run type-check`、`npm test`、`npm run build`，含 C 的压缩回归和真实合同假 Provider 联调。
 frontend：`npm run lint`、`npm run type-check`、agent store/CitationList/MessageList 的相关测试、`npm run build`。
-集成时运行项目 frontend-api-smoke；环境阻塞不视为验收通过。此处为计划命令，本轮没有重新执行业务测试。
+集成时运行项目 frontend-api-smoke；环境阻塞不视为验收通过。本轮 B 后端最终 1201 passed / 3 skipped，agent 118、frontend 625；真实 listener/Pi smoke 末轮 95/95。详见 [核验记录](research/acceptance-check.md)，D 完成后的最终累计 smoke 仍待执行。
 
 ## 完成与回滚
 

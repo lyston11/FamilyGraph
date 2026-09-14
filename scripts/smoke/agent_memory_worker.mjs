@@ -21,14 +21,27 @@ const facts = {
   context_build_present: false,
   context_reused: false,
   context_source_in_prompt: false,
+  unused_source_in_prompt: false,
   current_user_once: false,
   history_in_manager: false,
+  lease_context_attempt_match: false,
+  context_reference_on_wire: false,
+  context_reference_binding: false,
+  context_reference_completed_text_only: false,
+  context_reference_private: false,
+  original_reference_retry_identical: false,
   lost_response_injected: false,
   retry_duplicate_verified: false,
 };
 const loseResponse = process.env.FG_SMOKE_LOSE_RESPONSE === "1";
 let lostSeq;
 let liveSession;
+let leaseBinding;
+let contextBinding;
+let usedSource;
+let unusedSource;
+let completedText;
+const assistantRequests = new Map();
 const agentDir = await mkdtemp(resolve(tmpdir(), "fg-memory-smoke-pi-"));
 const textOf = (message) => typeof message.content === "string"
   ? message.content
@@ -44,8 +57,53 @@ globalThis.fetch = async (input, init) => {
 };
 const transport = async (input, init) => {
   const response = await globalThis.fetch(input, init);
-  if (String(input).endsWith("/events/append") && response.ok) {
+  const path = new URL(String(input)).pathname;
+  if (path.endsWith("/jobs/lease") && response.status === 200) {
+    const leased = await response.clone().json();
+    leaseBinding = { run_id: leased.run_id, attempt: leased.attempt };
+  }
+  if (path.endsWith("/context") && response.ok) {
+    const context = await response.clone().json();
+    contextBinding = { run_id: context.run_id, build_id: context.context_build_id, attempt: context.attempt };
+    assert.ok(Number.isInteger(leaseBinding?.attempt) && leaseBinding.attempt > 0);
+    assert.equal(contextBinding.run_id, leaseBinding.run_id);
+    assert.equal(contextBinding.attempt, leaseBinding.attempt);
+    facts.lease_context_attempt_match = true;
+  }
+  if (path.endsWith("/events/append") && response.ok) {
+    assert.equal(path, `/internal/agent/runs/${leaseBinding?.run_id}/events/append`);
     const body = JSON.parse(String(init?.body ?? "{}"));
+    for (const entry of body.events ?? []) {
+      if (entry.type !== "message.assistant_added") {
+        assert.equal(entry.context_reference, undefined);
+        continue;
+      }
+      // Observe the actual HTTP request, not only EventBuffer's local value.
+      const reference = entry.context_reference;
+      assert.ok(reference);
+      assert.deepEqual(Object.keys(reference).sort(), ["attempt", "build_id", "used_handles"]);
+      facts.context_reference_on_wire = true;
+      assert.equal(reference.build_id, contextBinding?.build_id);
+      assert.equal(reference.attempt, leaseBinding?.attempt);
+      assert.equal(reference.attempt, contextBinding?.attempt);
+      facts.context_reference_binding = true;
+      assert.ok(usedSource && unusedSource && completedText);
+      assert.equal(entry.public_payload.text, completedText);
+      assert.deepEqual(reference.used_handles, [usedSource.citation]);
+      assert.ok(!reference.used_handles.includes(unusedSource.citation));
+      facts.context_reference_completed_text_only = true;
+      for (const key of ["context_reference", "context_build_id", "_source_ref", "used_handles", "citations", "unavailable_citation_count"]) {
+        assert.equal(Object.hasOwn(entry.public_payload, key), false);
+      }
+      facts.context_reference_private = true;
+      const original = JSON.stringify(entry);
+      if (assistantRequests.has(entry.seq)) {
+        assert.equal(original, assistantRequests.get(entry.seq));
+        facts.original_reference_retry_identical = true;
+      } else {
+        assistantRequests.set(entry.seq, original);
+      }
+    }
     const message = body.events?.find((entry) => entry.type === "message.assistant_added");
     if (message && loseResponse && !facts.lost_response_injected) {
       // FastAPI has durably committed this exact request. Revoke its source
@@ -79,14 +137,19 @@ const worker = new SidecarWorker({
     facts.context_reused = repeated.context_build_id === projection.context_build_id
       && JSON.stringify(repeated.context_blocks) === JSON.stringify(projection.context_blocks);
     const current = [...projection.messages].reverse().find((message) => message.role === "user");
-    const source = projection.context_blocks?.[0];
+    const source = projection.context_blocks?.find((block) => block.source_id === process.env.FG_SMOKE_MEMORY_ID);
+    const unused = projection.context_blocks?.find((block) => block.source_id === process.env.FG_SMOKE_UNUSED_MEMORY_ID);
     assert.ok(source && source.content.includes("清淡"));
+    assert.ok(unused && unused.citation !== source.citation);
+    usedSource = source;
+    unusedSource = unused;
     const bundle = await buildRunSession(cfg, cl, projection, runToken, {
       ...deps, agentDir,
       streamOverride: (model, context, options) => {
         facts.provider_calls += 1;
         const texts = context.messages.map(textOf);
         facts.context_source_in_prompt = texts.some((text) => text.includes(source.content) && text.includes(source.citation));
+        facts.unused_source_in_prompt = texts.some((text) => text.includes(unused.content) && text.includes(unused.citation));
         facts.current_user_once = texts.filter((text) => text.startsWith(current.content_json.text)).length === 1;
         const stream = createAssistantMessageEventStream();
         void (async () => {
@@ -101,7 +164,13 @@ const worker = new SidecarWorker({
           };
           try {
             await options?.onPayload?.({ model: model.id, messages: context.messages }, model);
-            stream.push({ type: "start", partial: response });
+            // A transient partial mentions the other retrieved source. Only
+            // the completed assistant text may contribute used_handles.
+            const draft = `未完成的草稿。[${unused.citation}]`;
+            const partial = { ...response, content: [{ type: "text", text: draft }] };
+            stream.push({ type: "start", partial });
+            stream.push({ type: "text_delta", contentIndex: 0, delta: draft, partial });
+            completedText = response.content[0].text;
             stream.push({ type: "done", reason: "stop", message: response });
             stream.end(response);
           } catch {
@@ -124,11 +193,13 @@ const worker = new SidecarWorker({
 try {
   assert.equal(await worker.tryLeaseAndRun(), true);
   assert.equal(facts.provider_calls, 1);
-  for (const key of ["context_build_present", "context_reused", "context_source_in_prompt", "current_user_once", "history_in_manager"]) assert.equal(facts[key], true, key);
+  for (const key of ["context_build_present", "context_reused", "context_source_in_prompt", "unused_source_in_prompt", "current_user_once", "history_in_manager", "lease_context_attempt_match", "context_reference_on_wire", "context_reference_binding", "context_reference_completed_text_only", "context_reference_private"]) assert.equal(facts[key], true, key);
+  assert.equal(assistantRequests.size, 1);
   assert.equal(facts.unauthorized_network_attempts, 0);
   if (loseResponse) {
     assert.equal(facts.lost_response_injected, true);
     assert.equal(facts.retry_duplicate_verified, true);
+    assert.equal(facts.original_reference_retry_identical, true);
   }
   process.stdout.write(JSON.stringify({ verdict: "pass", checks: facts }) + "\n");
 } catch (error) {

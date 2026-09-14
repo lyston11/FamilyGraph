@@ -52,12 +52,13 @@ interface MockJob {
   provider?: Record<string, unknown>;
   messages?: RunContextMessage[];
   contextBlocks?: RunContextBlock[];
+  contextBuildId?: number;
 }
 
 interface MockState {
   jobs: MockJob[];
   /** Keyed by String(run_id). */
-  eventsByRun: Map<string, Array<{ seq: number; type: string; public_payload: unknown }>>;
+  eventsByRun: Map<string, FgWireEvent[]>;
   toolCalls: Array<{ run_id: string; tool: string; body: Record<string, unknown> }>;
   settles: Array<{
     run_id: string;
@@ -343,7 +344,8 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
   });
 }
 
-type FgWireEvent = { seq: number; type: string; public_payload: unknown };
+type FgWireEvent = { seq: number; type: string; public_payload: unknown;
+  context_reference?: { build_id: number; attempt: number; used_handles: string[] } };
 
 function resetState(): void {
   state.jobs.length = 0;
@@ -361,6 +363,7 @@ function enqueueJob(options: {
   agentKind?: "assistant" | "unexpected";
   messages?: RunContextMessage[];
   contextBlocks?: RunContextBlock[];
+  contextBuildId?: number;
 }): string {
   idCounter += 1;
   const jobId = 4000 + idCounter;
@@ -377,6 +380,7 @@ function enqueueJob(options: {
     ...(options.provider !== undefined ? { provider: options.provider } : {}),
     ...(options.messages !== undefined ? { messages: options.messages } : {}),
     ...(options.contextBlocks !== undefined ? { contextBlocks: options.contextBlocks } : {}),
+    contextBuildId: options.contextBuildId,
   });
   // Backend enqueue owns message.user_added at seq 0 (interactive assistant run).
   state.eventsByRun.set(String(runId), [
@@ -409,6 +413,7 @@ function contextProjection(job: MockJob): Record<string, unknown> {
       },
     ],
     ...(job.contextBlocks !== undefined ? { context_blocks: job.contextBlocks } : {}),
+    context_build_id: job.contextBuildId ?? null,
     provider:
       job.provider ??
       ({
@@ -807,6 +812,28 @@ describe("worker full cycle against mock FastAPI", () => {
         .filter((event) => event.type === "message.assistant_added")
         .map((event) => event.public_payload),
     ).toEqual([{ role: "assistant", text: "done" }]);
+    expect(state.settles[0]).toMatchObject({ run_id: runKey, status: "succeeded" });
+  });
+
+  it("sends the server build and actual completed citation over the InternalClient wire", async () => {
+    resetState();
+    const handle = "rag:42:r1:c9";
+    const unused = "rag:43:r1:c10";
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"], contextBuildId: 471, contextBlocks: [
+      { source_id: "42", source_type: "memory", scope: "private", sensitivity: "normal",
+        revision: 1, citation: handle, content: "synthetic relevant material" },
+      { source_id: "43", source_type: "memory", scope: "private", sensitivity: "normal",
+        revision: 1, citation: unused, content: "synthetic unused material" },
+    ] });
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(undefined, await buildSessionFactory([
+      textTurn(`The answer [${handle}]`),
+    ], { modelContexts }));
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(JSON.stringify(modelContexts)).toContain(unused);
+    const answer = state.eventsByRun.get(runKey)?.find((e) => e.type === "message.assistant_added");
+    expect(answer?.context_reference).toEqual({ build_id: 471, attempt: 1, used_handles: [handle] });
+    expect(answer?.public_payload).toEqual({ role: "assistant", text: `The answer [${handle}]` });
     expect(state.settles[0]).toMatchObject({ run_id: runKey, status: "succeeded" });
   });
 

@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app import config
 from app.models.agent import RuntimeAgentKind as AgentKind
@@ -112,10 +112,23 @@ class ContextOut(BaseModel):
 # ---- events ----
 
 
+class ContextReferenceIn(_Strict):
+    build_id: int = Field(strict=True, ge=1)
+    attempt: int = Field(strict=True, ge=1)
+    used_handles: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(max_length=20)
+
+
 class EventIn(_Strict):
     seq: int = Field(ge=0)
     type: str = Field(min_length=1, max_length=64)
     public_payload: dict[str, Any]
+    context_reference: ContextReferenceIn | None = None
+
+    @model_validator(mode="after")
+    def check_reference_type(self) -> EventIn:
+        if self.context_reference is not None and self.type != "message.assistant_added":
+            raise ValueError("context_reference 仅用于完成的 assistant 消息")
+        return self
 
 
 class EventAppendRequest(_Strict):
@@ -198,6 +211,9 @@ class CitationOut(BaseModel):
     sensitivity: str
     revision: int
     citation_handle: str
+    document_id: int | None = None
+    chunk_id: int | None = None
+    index_version: str | None = None
 
 
 class AgentMessageOut(BaseModel):

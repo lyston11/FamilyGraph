@@ -20,6 +20,7 @@ import logging
 from typing import Any, cast
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from app import config
 from app.errors import AGENT_PROVIDER_PROXY_UNAVAILABLE, AGENT_PROVIDER_REQUEST_INVALID
 from app.models.agent import AgentRun
 from app.services import agent_provider, audit, policy_guard
+from app.services.agent_execution import ExecutionIdentity, fence_execution
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,9 @@ def _refresh_run_gate(db: Session, run: AgentRun | int) -> AgentRun:
     return fresh
 
 
-def _admit_upstream_request(db: Session, run_id: int) -> AgentRun:
+def _admit_upstream_request(
+    db: Session, run_id: int, *, execution: ExecutionIdentity | None = None
+) -> AgentRun:
     """Atomically admit one upstream request before opening the socket.
 
     ``SELECT`` followed by ``send`` leaves a cancellation TOCTOU window.  A
@@ -120,6 +124,21 @@ def _admit_upstream_request(db: Session, run_id: int) -> AgentRun:
     committed (the request is then considered already in flight).
     """
     db.rollback()
+    if execution is not None:
+        try:
+            run, _session, _job = fence_execution(db, execution)
+        except HTTPException as exc:
+            db.rollback()
+            from app.errors import extract_api_error
+
+            error = extract_api_error(exc.detail) or {}
+            raise ProviderProxyError(
+                exc.status_code,
+                str(error.get("code", "AGENT_TOKEN_SCOPE_MISMATCH")),
+                "执行身份已失效",
+            ) from None
+        db.commit()
+        return run
     result = cast(
         CursorResult[Any],
         db.execute(
@@ -182,6 +201,7 @@ async def stream_provider_response(
     accept: str | None = None,
     user_agent: str | None = None,
     expected_api: str | None = None,
+    execution: ExecutionIdentity | None = None,
 ) -> tuple[Any, Any, int]:
     """向已注册 Provider 转发一次 chat/completions 请求，返回 (client, 上游流, provider_id)。
 
@@ -270,7 +290,7 @@ async def stream_provider_response(
         # Atomically admit the request immediately before constructing the
         # upstream POST.  A later cancellation may stop the stream, but cannot
         # retroactively revoke an already-admitted request.
-        _admit_upstream_request(db, run.id)
+        _admit_upstream_request(db, run.id, execution=execution)
         upstream = await client.send(
             client.build_request("POST", target, content=body, headers=headers),
             stream=True,

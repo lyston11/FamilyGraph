@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -42,7 +42,8 @@ from app.services import memory_sources, platform_features
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.services.policy_consumer import is_policy_consumer_kind
-from app.services.rag_query import plan_query
+from app.services.rag_budget import estimate_tokens
+from app.services.rag_query import QueryPlan, plan_query
 from app.utils.timeutil import utcnow
 
 # v2: deterministic sentence/paragraph chunking with bounded overlap.  The
@@ -92,6 +93,9 @@ class RAGHit:
     index_version: str = RAG_INDEX_VERSION
     space_id: int | None = None
     allowed_scopes: tuple[str, ...] = ()
+    chunk_index: int | None = None
+    source_revision: int | None = None
+    content_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -600,15 +604,12 @@ def dismiss_candidate(db: Session, *, candidate_id: int, account_id: int) -> Mem
 
 
 def _estimate_tokens(text_value: str) -> int:
-    """Conservative UTF-8 based estimate.
+    """Declared UTF-8 estimate; actual ContextBuilder includes the full envelope.
 
-    CJK text is roughly one token per character (three UTF-8 bytes); latin
-    text is roughly two bytes per token.  ``utf8_bytes // 2`` overestimates
-    both, which is the safe direction for a budget: it can exclude a block
-    early but never silently overstuff the model window.  The old
-    ``len(text) // 4`` estimate undercounted Chinese by ~8x.
+    This heuristic is deliberately conservative for ordinary Chinese/English,
+    but is not a guarantee about every tokenizer or the full model request.
     """
-    return max(1, len(text_value.encode("utf-8")) // 2)
+    return max(1, estimate_tokens(text_value))
 
 
 def _split_sentences(paragraph: str) -> list[str]:
@@ -849,6 +850,7 @@ _ELIGIBILITY_SQL = """
   c.status = 'active'
   AND d.status = 'active'
   AND c.index_version = d.index_version
+  AND c.source_revision = d.revision AND d.source_revision = d.revision
   AND d.index_version = :index_version
   AND d.confirmation_status IN ('confirmed', 'authorized')
   AND (d.source_type != 'memory' OR EXISTS (
@@ -872,18 +874,20 @@ _ELIGIBILITY_SQL = """
 
 _HIT_SQL = """
     SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
-           c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version
+           c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version,
+           c.chunk_index, c.source_revision
     FROM rag_chunks AS c
     JOIN rag_documents AS d ON d.id = c.document_id
     WHERE {condition}
       AND {eligibility}
     ORDER BY {ordering}
-    LIMIT :limit
+    LIMIT :limit OFFSET :offset
 """
 
-# Bounded scan budget for the parameterized short-word fallback: it reads only
-# eligibility-filtered rows, and never degrades into an unbounded table scan.
+# Candidate budget shared by FTS and the parameterized short-word fallback.
+# SQLite's internal work is separate from the number of returned candidates.
 _FALLBACK_SCAN_LIMIT = 200
+_SCAN_PAGE_SIZE = 32
 
 
 def _rows_to_hits(
@@ -930,6 +934,9 @@ def _rows_to_hits(
                 index_version=str(row["index_version"]),
                 space_id=document.space_id,
                 allowed_scopes=memory_sources.document_allowed_scopes(db, document, actor),
+                chunk_index=int(row["chunk_index"]),
+                source_revision=int(row["source_revision"]),
+                content_hash=memory_sources.quote_hash(str(row["text"])),
             )
         )
     return hits, denied
@@ -947,6 +954,9 @@ def search_rag(
     provider_kind: str | None = None,
     raise_on_restricted: bool = False,
     for_model: bool = True,
+    recent_messages: Sequence[str] = (),
+    query_plan: QueryPlan | None = None,
+    trace: dict[str, Any] | None = None,
 ) -> list[RAGHit]:
     """Search with SQL scope/confirmation/status predicates before results escape.
 
@@ -962,34 +972,28 @@ def search_rag(
     # intentionally use is_assistant for private/public branches, so it can
     # never read private memory or unrestricted public material.
     is_assistant = int(agent_kind == "assistant")
-    plan = plan_query(query)
+    plan = query_plan or plan_query(query, recent_messages=recent_messages)
+    if trace is not None:
+        trace.update(
+            {
+                **plan.log_summary(),
+                "scanned": 0,
+                "denied": 0,
+                "returned": 0,
+                "scan_limit": _FALLBACK_SCAN_LIMIT,
+                "stop_reason": "empty_query",
+            }
+        )
     if not plan.normalized_query:
         return []
     if not _active_space_member(db, user_id=actor.id, space_id=space_id):
         return []
     expire_due_memories(db, account_id=account.id, space_id=space_id)
     limit = max(1, min(limit, 100))
-    if for_model and raise_on_restricted and provider_kind != "local":
-        restricted_hits = search_rag(
-            db,
-            actor=actor,
-            account=account,
-            space_id=space_id,
-            query=plan.normalized_query,
-            agent_kind=agent_kind,
-            limit=limit,
-            provider_kind="local",
-        )
-        if any(hit.sensitivity in ("high", "local_required") for hit in restricted_hits):
-            raise_api_error(
-                409,
-                PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
-                "敏感 Context 需要可用的本地 Provider",
-            )
     # Restricted material is eligible only when the selected provider is local.
     sensitivity_predicate = (
         "AND d.sensitivity IN ('normal','sensitive')"
-        if for_model and provider_kind != "local"
+        if for_model and provider_kind != "local" and not raise_on_restricted
         else ""
     )
     params: dict[str, Any] = {
@@ -1001,71 +1005,106 @@ def search_rag(
     }
     eligibility = _ELIGIBILITY_SQL.format(sensitivity=sensitivity_predicate)
 
-    # Branch 1: FTS trigram over phrase and terms (>= 3 chars), OR'ed inside
-    # the single MATCH expression (FTS5 does not allow SQL-level MATCH ORs).
+    hits: list[RAGHit] = []
+    seen_chunk_ids: set[int] = set()
+    scanned = 0
+    denied = 0
+
+    def collect(sql: Any, branch_params: dict[str, Any], *, rank_by_order: bool) -> None:
+        nonlocal scanned, denied
+        offset = 0
+        while len(hits) < limit and scanned < _FALLBACK_SCAN_LIMIT:
+            page_size = min(_SCAN_PAGE_SIZE, _FALLBACK_SCAN_LIMIT - scanned)
+            rows = (
+                db.execute(sql, {**branch_params, "limit": page_size, "offset": offset})
+                .mappings()
+                .all()
+            )
+            scanned += len(rows)
+            offset += len(rows)
+            page, rejected = _rows_to_hits(
+                db,
+                rows,
+                actor=actor,
+                account=account,
+                space_id=space_id,
+                agent_kind=agent_kind,
+                rank_by_order=rank_by_order,
+            )
+            denied += rejected
+            for hit in page:
+                if hit.chunk_id in seen_chunk_ids:
+                    continue
+                if (
+                    for_model
+                    and provider_kind != "local"
+                    and hit.sensitivity in ("high", "local_required")
+                ):
+                    if raise_on_restricted:
+                        raise_api_error(
+                            409,
+                            PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
+                            "敏感 Context 需要可用的本地 Provider",
+                        )
+                    denied += 1
+                    continue
+                seen_chunk_ids.add(hit.chunk_id)
+                hits.append(hit)
+                if len(hits) == limit:
+                    break
+            if len(rows) < page_size:
+                break
+
+    # Each branch has stable SQL ordering; both share one candidate budget.
+    # Policy rejection refills from the next page instead of exhausting the
+    # caller's result limit. The bound counts returned SQL candidates, not the
+    # database engine's internal index/table operations.
     match_values = ([_fts_match(plan.phrase)] if plan.phrase else []) + [
         _fts_match(term) for term in plan.fts_terms
     ]
     if match_values:
-        params["match"] = " OR ".join(match_values)
-        sql = text(
-            f"""
+        sql = text(f"""
             SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
                    c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version,
-                   bm25(rag_chunks_fts) AS rank
+                   c.chunk_index, c.source_revision, bm25(rag_chunks_fts) AS rank
             FROM rag_chunks_fts
             JOIN rag_chunks AS c ON c.id = rag_chunks_fts.rowid
             JOIN rag_documents AS d ON d.id = c.document_id
-            WHERE rag_chunks_fts MATCH :match
-              AND {eligibility}
-            ORDER BY rank ASC, c.id ASC
-            LIMIT :limit
-            """
+            WHERE rag_chunks_fts MATCH :match AND {eligibility}
+            ORDER BY rank ASC, c.id ASC LIMIT :limit OFFSET :offset
+        """)
+        collect(sql, {**params, "match": " OR ".join(match_values)}, rank_by_order=False)
+    if len(hits) < limit and plan.fallback_terms and scanned < _FALLBACK_SCAN_LIMIT:
+        clauses = " OR ".join(
+            f"c.text LIKE :like{idx} ESCAPE '!'" for idx in range(len(plan.fallback_terms))
         )
-        rows = db.execute(sql, {**params, "limit": limit}).mappings().all()
-    else:
-        rows = []
-    hits, _denied = _rows_to_hits(
-        db,
-        rows,
-        actor=actor,
-        account=account,
-        space_id=space_id,
-        agent_kind=agent_kind,
-        rank_by_order=False,
-    )
-    seen_chunk_ids = {hit.chunk_id for hit in hits}
-
-    # Branch 2: bounded short-word fallback for two-character terms.
-    if len(hits) < limit and plan.fallback_terms:
-        fallback_terms = plan.fallback_terms[: 8 - len(plan.fts_terms)] or plan.fallback_terms[:1]
-        like_clauses = " OR ".join(f"c.text LIKE :like{idx}" for idx in range(len(fallback_terms)))
-        for idx, term in enumerate(fallback_terms):
-            params[f"like{idx}"] = f"%{term}%"
+        # Parameters prevent SQL injection; LIKE's pattern characters still
+        # need escaping so a literal underscore cannot match unrelated text.
+        escaped_terms = [
+            term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            for term in plan.fallback_terms
+        ]
+        fallback_params = {
+            **params,
+            **{f"like{idx}": f"%{term}%" for idx, term in enumerate(escaped_terms)},
+        }
         sql = text(
-            _HIT_SQL.format(
-                condition=f"({like_clauses})",
-                eligibility=eligibility,
-                ordering="c.id ASC",
-            )
+            _HIT_SQL.format(condition=f"({clauses})", eligibility=eligibility, ordering="c.id ASC")
         )
-        rows = db.execute(sql, {**params, "limit": _FALLBACK_SCAN_LIMIT}).mappings().all()
-        fallback_hits, _denied = _rows_to_hits(
-            db,
-            rows,
-            actor=actor,
-            account=account,
-            space_id=space_id,
-            agent_kind=agent_kind,
-            rank_by_order=True,
+        collect(sql, fallback_params, rank_by_order=True)
+    if trace is not None:
+        trace.update(
+            {
+                "scanned": scanned,
+                "denied": denied,
+                "returned": len(hits),
+                "stop_reason": "limit"
+                if len(hits) >= limit
+                else "scan_limit"
+                if scanned >= _FALLBACK_SCAN_LIMIT
+                else "exhausted",
+            }
         )
-        for hit in fallback_hits:
-            if hit.chunk_id in seen_chunk_ids:
-                continue
-            seen_chunk_ids.add(hit.chunk_id)
-            hits.append(hit)
-            if len(hits) >= limit:
-                break
     return hits
 
 

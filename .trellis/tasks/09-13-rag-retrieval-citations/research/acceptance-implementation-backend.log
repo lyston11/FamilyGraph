@@ -1,0 +1,38 @@
+COMMAND: .venv/bin/ruff check .
+All checks passed!
+EXIT: 0
+COMMAND: .venv/bin/ruff format --check .
+351 files already formatted
+EXIT: 0
+COMMAND: .venv/bin/mypy app
+Success: no issues found in 193 source files
+EXIT: 0
+COMMAND: .venv/bin/python -m pytest -q --tb=short
+........................................................................ [  6%]
+........................................................................ [ 12%]
+........................................................................ [ 18%]
+........................................................................ [ 24%]
+........................................................................ [ 30%]
+........................................................................ [ 36%]
+........................................................................ [ 42%]
+sss..................................................................... [ 48%]
+........................................................................ [ 54%]
+........................................................................ [ 60%]
+........................................................................ [ 66%]
+........................................................................ [ 72%]
+........................................................................ [ 78%]
+........................................................................ [ 84%]
+........................................................................ [ 90%]
+........................................................................ [ 96%]
+.............................................                            [100%]
+=============================== warnings summary ===============================
+tests/test_admin_agent_latency.py::test_latency_metrics_shape_and_percentiles
+tests/test_admin_agent_latency.py::test_latency_metrics_shape_and_percentiles
+tests/test_admin_agent_latency.py::test_latency_metrics_shape_and_percentiles
+tests/test_admin_agent_latency.py::test_latency_metrics_shape_and_percentiles
+  /Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:941: DeprecationWarning: The default datetime adapter is deprecated as of Python 3.12; see the sqlite3 documentation for suggested replacement recipes
+    cursor.execute(statement, parameters)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1194 passed, 3 skipped, 4 warnings in 70.70s (0:01:10)
+EXIT: 0
