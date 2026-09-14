@@ -3,7 +3,7 @@
   "name": "memory-rag-acceptance-audit",
   "title": "双 Agent RAG/记忆实施验收复查与修复规划",
   "description": "核对实施完成声明，记录来源、引用、租约、索引生命周期和真实联调反例，形成修复 PRD、设计与验收计划。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": "agent-memory-rag",
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-14",
-  "completedAt": null,
+  "completedAt": "2026-09-14",
   "branch": "feat/09-14-memory-rag-acceptance-audit",
   "base_branch": "main",
   "worktree_path": "/Users/lyston/PycharmProjects/fg-09-14-memory-rag-acceptance-audit",
@@ -41,9 +41,13 @@
     "canonical_evidence": ".trellis/tasks/09-14-memory-rag-acceptance-audit/research/evidence.json",
     "repair_owners": "B and D existing tasks; this task owns final acceptance evidence",
     "execution_authorization": "2026-09-14 user: 直接开始审查代码并验收，没问题就提交合并归档",
-    "implementation_status": "acceptance_verified_pending_integration",
+    "implementation_status": "accepted_and_integrated",
     "final_evidence": ".trellis/tasks/09-14-memory-rag-acceptance-audit/research/final/artifacts.json",
     "verified_code_commit": "aebee83c3feda56c2df47e61a13919bf037829f9",
-    "cumulative_commit": "dd8157c"
+    "cumulative_commit": "dd8157c",
+    "final_branch_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "integration_target": "main",
+    "integration_status": "merged_smoke_passed"
   }
 }
