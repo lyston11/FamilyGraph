@@ -100,7 +100,7 @@ git merge-base --is-ancestor <commit> main
 | --- | --- | --- |
 | 称谓质量修复 | backend 1119 passed / 3 skipped，frontend 618 passed；lint、类型检查与构建通过，合并后相关 backend 59 passed；[记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md) | 3 项为既有延期的 break-glass 测试；真实 terminology 模型质量、生产 smoke 未测；关系最终确认的成环/证据留存仍按原 PRD 延期 |
 | Memory/RAG 累计分支 | 中文核心 16/16、英文 2/2、扩展 7/10；隔离 API smoke 56/56、真实 listener+Pi 假模型正常链 50/50；[矩阵](tasks/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md) | 属于特定审计基线；B/D 安全与并发反例尚未全部通过，不能据此批准整个父任务 |
-| 渐进重算续作 | 迁移、部分纯计算/输入版本/发布栅栏及 30/50 人性能和浏览器中间记录；[检查点](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) | 200 人、两次真实 300 秒扫描、5 次首屏 p95、最终后端和全范围复审尚待完成；一次前端计时器异常使退出码为 1，不能仅因断言全绿标门禁通过 |
+| 渐进重算续作 | 最新分支前端 656 tests、lint/type-check/build 均 exit 0，先前计时器异常已修复；已有迁移、发布栅栏、30/50/200 人和浏览器的中间诊断；[最新检查点](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) | 交付失败预算与独立重试仍待审查；最终冻结源码后的后端、0045 迁移、30/50/200 人、两次真实 300 秒扫描、Chrome 五次与 API smoke 尚未完成，中间诊断不等于最终性能验收 |
 
 本次仅更新交接文档，不重跑业务测试、不改变开关、不部署。上述数字是对应记录的已有证据；未来代码变化须按受影响范围重新验证，smoke 退出码 2 仍代表环境阻塞。
 
