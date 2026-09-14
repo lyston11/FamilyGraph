@@ -15,7 +15,7 @@
   "branch": "feat/09-13-agent-memory-capability-plan",
   "base_branch": "main",
   "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan",
-  "commit": "bc6b500",
+  "commit": "67e93161460741f4fb4d8f08dddba52ba9a73173",
   "pr_url": null,
   "subtasks": [],
   "children": [
@@ -23,7 +23,7 @@
   ],
   "parent": "09-13-agent-memory-rag-remediation",
   "relatedFiles": [],
-  "notes": "研究交付已完成，12项能力均记录明确采用/延期条件。MR-23/MR-26已复现但未修生产代码；18项预算断言仅证明合成方案。研究已本地提交 bc6b500，主分支集成不在本轮范围。",
+  "notes": "研究交付完成；12项议题有设计与采用/延期条件。MR-23/MR-26已复现但生产修复仍归独立P2规划；18项预算断言仅证明合成方案。67e9316已push，按2026-09-14新授权纳入累计候选，最终验收后归档研究任务。",
   "meta": {
     "planning_only": "false",
     "workstream": "E",
@@ -32,8 +32,9 @@
     "implementation_approved": "2026-09-13: user execute; read-only capability evaluation and isolated synthetic reproductions",
     "implementation_status": "research_complete",
     "verification": "MR-23/MR-26 synthetic production-path probes; 18 synthetic budget-plan cases; main source/hash/module-path review passed",
-    "integration_status": "not_merged; main merge excluded from approved execution scope",
+    "integration_status": "merged_to_candidate; final main acceptance pending",
     "followup_owner": "09-13-steward-memory-evidence-projections",
-    "local_commit": "bc6b500"
+    "local_commit": "bc6b500",
+    "push_status": "E research branch 67e9316 already pushed; incorporated into cumulative candidate after latest integration authorization."
   }
 }
