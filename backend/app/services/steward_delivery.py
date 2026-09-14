@@ -26,6 +26,7 @@ from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
 from app.models.steward import (
     ActionCard,
+    StewardCandidateEvidenceVersion,
     StewardDeliveryIntent,
     StewardFindingDelivery,
     StewardGeneration,
@@ -37,7 +38,13 @@ from app.models.steward import (
     StewardRetryBudget,
 )
 from app.models.steward_inferred import StewardInferredEdge
-from app.services import action_cards, steward_assist, steward_inferred, steward_suggestions
+from app.services import (
+    action_cards,
+    steward_assist,
+    steward_candidate_evidence,
+    steward_inferred,
+    steward_suggestions,
+)
 from app.services.recommendation_matrix import evaluate_recommendation
 from app.utils.timeutil import utcnow
 
@@ -322,16 +329,37 @@ def prepare_intents(
             }
         )
     candidates = session.scalars(
-        select(StewardLlmCandidate.id)
+        select(StewardLlmCandidate)
         .where(StewardLlmCandidate.space_id == space.id, StewardLlmCandidate.status == "proposed")
         .order_by(StewardLlmCandidate.id)
     )
-    for candidate_id in candidates:
+    for candidate in candidates:
+        if steward_candidate_evidence.is_internal_candidate(session, candidate):
+            continue
         intents.append(
             {
-                "key": f"candidate:{candidate_id}",
+                "key": f"candidate:{candidate.id}",
                 "kind": "candidate",
-                "payload": {"candidate_id": candidate_id},
+                "payload": {"candidate_id": candidate.id},
+            }
+        )
+    # Capture IDs in the read-side plan, including dismissed candidates. A
+    # version created after planning waits for a later generation; one intent
+    # can never sweep up every currently pending version of the candidate.
+    versions = session.execute(
+        select(StewardCandidateEvidenceVersion.id, StewardCandidateEvidenceVersion.candidate_id)
+        .where(
+            StewardCandidateEvidenceVersion.space_id == space.id,
+            StewardCandidateEvidenceVersion.status == "pending",
+        )
+        .order_by(StewardCandidateEvidenceVersion.id)
+    )
+    for version_id, candidate_id in versions:
+        intents.append(
+            {
+                "key": f"candidate:evidence:{version_id}",
+                "kind": "candidate",
+                "payload": {"candidate_id": candidate_id, "evidence_version_id": version_id},
             }
         )
     intents.extend(_terminology_intents(session, generation_id=generation_id, prior=prior))
@@ -411,6 +439,21 @@ def _apply(
 
     payload = intent.payload_json
     now = utcnow()
+    if intent.kind == "candidate" and "evidence_version_id" in payload:
+        # Internal evidence never loads the whole-space public projection
+        # context and never calls suggestion/inferred upserts (even notify=False
+        # would create recipients). The saved support owns its bounded recheck.
+        return {
+            "candidate_evidence_checked": int(
+                steward_candidate_evidence.project_version(
+                    session,
+                    candidate_id=int(payload["candidate_id"]),
+                    version_id=int(payload["evidence_version_id"]),
+                    job=job,
+                    now=now,
+                )
+            )
+        }
     if intent.kind == "finding":
         signature = str(payload["finding"]["signature"])
         occurrence = int(payload["occurrence_generation_id"])

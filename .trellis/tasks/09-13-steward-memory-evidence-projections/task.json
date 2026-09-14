@@ -27,7 +27,7 @@
     "workstream": "E-followup",
     "audit_issue_scope": "MR-23,MR-26",
     "implementation_dependencies": "progressive-recompute merged into main; consume integrated Steward delivery and migration 0048",
-    "implementation_status": "mr26_verified_mr23_pending",
+    "implementation_status": "verified",
     "creation_basis": "E synthetic production-path evidence; user-approved recording and remediation planning",
     "execution_authorization": "2026-09-14 user: 执行",
     "notification_policy": "internal evidence only; no new suggestions, recipients, notifications or inferred edges for versioned candidates",
@@ -35,6 +35,11 @@
     "serial_dependency_status": "resolved: user-requested wait completed; progressive-recompute dee91a14e85ca69d4c39044c1da359ea46700612 is integrated into main",
     "implementation_baseline": "dee91a14e85ca69d4c39044c1da359ea46700612",
     "migration_parent": "0048_steward_terminology_publication",
-    "mr26_validation": "12 targeted tests passed; Ruff lint/format and mypy 204 source files passed; independent trellis-check found no issues"
+    "mr26_validation": "12 targeted tests passed; Ruff lint/format and mypy 204 source files passed; independent trellis-check found no issues",
+    "mr26_commit": "cff6f8e",
+    "mr23_integration_research": "research/mr23-integration-summary.md",
+    "mr23_validation": "188 focused tests passed; complete backend 1594 passed / 3 existing skipped; import cleanup 43 passed; full Ruff/format and mypy 205 passed; independent final trellis-check passed",
+    "migration_head": "0049_steward_candidate_evidence",
+    "acceptance_status": "SP-AC1 through SP-AC6 passed; pending authorized commit/integration/archive"
   }
 }

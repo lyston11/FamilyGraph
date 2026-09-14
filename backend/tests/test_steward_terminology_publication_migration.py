@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,7 @@ from app.utils.timeutil import utcnow
 from conftest import create_agent_fixture, create_user_with_pin
 
 BACKEND = Path(__file__).parents[1]
-HEAD = "0048_steward_terminology_publication"
+HEAD = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini"))).get_current_head()
 PARENTS = ("0047_rag_lifecycle_integrity", "0045_steward_staged_publication")
 RUNNER = """
 import sys

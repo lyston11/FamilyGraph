@@ -171,7 +171,7 @@ def downgrade() -> None:
     op.drop_index("ix_sdi_status_id", table_name="steward_delivery_intents")
 
 
-def _preflight_parent_downgrade() -> None:
+def _preflight_parent_downgrade(planned: set[str] | None = None) -> None:
     """Honor parent refusal contracts before changing this merge's schema.
 
     SQLite migration DDL is not assumed transactional. A command descending
@@ -179,15 +179,16 @@ def _preflight_parent_downgrade() -> None:
     drops any input triggers. Unmerging to the two parents remains lossless.
     """
     context = op.get_context()
-    destination = context.opts.get("destination_rev")
-    if context.script is None or destination is None:
-        return
-    planned = {
-        item.revision
-        for item in context.script.iterate_revisions(
-            revision, destination, select_for_downgrade=True
-        )
-    }
+    if planned is None:
+        destination = context.opts.get("destination_rev")
+        if context.script is None or destination is None:
+            return
+        planned = {
+            item.revision
+            for item in context.script.iterate_revisions(
+                revision, destination, select_for_downgrade=True
+            )
+        }
     connection = op.get_bind()
     # Establish the writer before examining evidence, just as the parent RAG
     # guard does. No source row changes and no trigger fires for this statement.

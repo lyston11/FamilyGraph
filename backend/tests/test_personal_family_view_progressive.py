@@ -11,6 +11,12 @@
 from __future__ import annotations
 
 import pytest
+
+from app import config
+from app.models.personal_family_view import PersonalFamilyView
+from app.services import personal_family_view, steward_runtime
+from app.services import source_facts as sf
+from app.utils.timeutil import utcnow
 from conftest import (
     auth_header,
     create_agent_fixture,
@@ -18,12 +24,6 @@ from conftest import (
     create_user_with_pin,
     login,
 )
-
-from app import config
-from app.models.personal_family_view import PersonalFamilyView
-from app.services import personal_family_view, steward_runtime
-from app.services import source_facts as sf
-from app.utils.timeutil import utcnow
 
 
 def _confirm(session, fact_type: str, subject_id: int, object_id: int, space_id: int):

@@ -11,13 +11,6 @@
 from __future__ import annotations
 
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_space_member,
-    create_user_with_pin,
-    login,
-)
 from sqlalchemy import select
 
 from app import config
@@ -26,6 +19,13 @@ from app.models.steward import StewardGeneration, StewardGenerationView, Steward
 from app.services import personal_family_view as pfv
 from app.services import steward, steward_generations
 from app.services.source_facts import create_source_fact, transition_source_fact
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_space_member,
+    create_user_with_pin,
+    login,
+)
 
 
 @pytest.fixture()

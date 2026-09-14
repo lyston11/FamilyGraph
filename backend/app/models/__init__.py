@@ -53,6 +53,7 @@ from app.models.space import (
 from app.models.steward import (
     ActionCard,
     BehaviorProjection,
+    StewardCandidateEvidenceVersion,
     StewardJob,
     StewardLlmCandidate,
     StewardModelCall,
@@ -132,6 +133,7 @@ __all__ = [
     "SpaceManagerApplication",
     "SpaceMember",
     "SpaceProfileRef",
+    "StewardCandidateEvidenceVersion",
     "StewardJob",
     "StewardLlmCandidate",
     "StewardModelCall",

@@ -7,7 +7,6 @@ import time
 from datetime import timedelta
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -26,6 +25,7 @@ from app.services import steward, steward_pipeline, steward_runtime
 from app.services.relationship_resolver import advance_search
 from app.services.source_facts import create_source_fact, transition_source_fact
 from app.utils.timeutil import utcnow
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 @pytest.fixture(autouse=True)

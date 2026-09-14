@@ -26,6 +26,7 @@
 - [relationship-intelligence.md](relationship-intelligence.md)
 - [steward-action-card.md](steward-action-card.md)
 - [steward-behavior-rebuild.md](steward-behavior-rebuild.md)
+- [steward-candidate-evidence.md](steward-candidate-evidence.md)
 - [controlled-web.md](controlled-web.md)
 - [assistant-history-restoration.md](assistant-history-restoration.md)
 

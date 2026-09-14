@@ -14,7 +14,6 @@ import threading
 import time
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from sqlalchemy import select
 
 from app import config
@@ -29,6 +28,7 @@ from app.models.steward import (
 from app.services import steward, steward_runtime
 from app.services.source_facts import create_source_fact, transition_source_fact
 from app.utils.timeutil import utcnow
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 @pytest.fixture()

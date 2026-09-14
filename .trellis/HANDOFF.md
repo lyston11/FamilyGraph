@@ -1,13 +1,14 @@
 # FamilyGraph · Trellis 当前交接
 
-> 更新：2026-09-14。Memory/RAG代码核验基线：累计`aebee83`（包含`main@461d691`），验收制品`dd8157c`；其他任务设计沿用主检出最新材料。本文是交接快照，main合并与归档证据见各任务执行记录，代码通过不等于已部署。
+> 更新：2026-09-15。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 已提交 `cff6f8e`，MR-23 已通过最终验收，待串行集成归档。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
 > 当前设计与验收要求看对应任务的 `prd.md`、`design.md`、`implement.md` 及最新研究记录；已实现行为看代码、迁移、测试和 Git 集成证据。工作流以 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 为准。本页末尾保留 v1 历史，已标为历史的 `.trellis/spec/` 条款不覆盖现行任务。
 > 架构入口：[系统架构与设计](../docs/ARCHITECTURE.md)；运行与验证入口：[README](../README.md)；数据播种：[DEV-DATA-SEEDING.md](../docs/DEV-DATA-SEEDING.md)。
 
 ## 当前最需要知道的事
 
 - 管家已经自动计算个人称谓，通知、建议详情、推测面板与档案称谓区已接通同一呈现链；称谓优化不需要逐条批准。闭环及质量修复已合入，详见 [最新审核记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md)。
-- Memory/RAG的A/C/B/D修复与E研究已经完成累计验收，原B/D20组缺口和D追加恢复回归均闭合，见 [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。管家渐进重算仍有独立验收与续作，未随本次收尾归档。
+- Memory/RAG 的 A/C/B/D 修复与 E 研究已经完成累计验收，原 B/D 20 组缺口和 D 追加恢复回归均闭合，见 [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。管家渐进重算也已完成本地 AC1–AC9、串行集成和归档，见 [集成验收](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md)。
+- MR-26 已限定行为重建的三个所属键族，推荐忽略冷却及未知键保留；MR-23 的共同父母证书仅内部记录与核验，不因换版新增关系通知、待办或推测边，不解除既有驳回。
 - Provider 配置 UX、平台辅助开关已有归档成果，两项的活动旧副本与相关会话指针均已清理。平台能力页已补修部署关闭时误报启用的问题，并展示四类辅助的来源与阻断原因。称谓能力也不再受早期“Agent 能力整体延期”描述约束。
 - 本页没有核查线上开关或真实模型质量。新称谓模型链使用 fake transport 验证，`STEWARD_ASSIST_TERMINOLOGY` 默认关闭。
 
@@ -58,8 +59,8 @@
 | D：索引生命周期 | `aebee83`/`dd8157c`闭合D-I01～10及合法superseded恢复回归；唯一性、正文证据、不可变片段、租约/事务、换版和无损迁移通过 | [任务](tasks/archive/2026-09/09-13-rag-index-lifecycle/prd.md)、[复查台账](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/findings.md) |
 | Memory/RAG 验收复查 | F-01～12通过；原红测、最终制品hash、代码绑定和局限分别保留，E延期能力未记作生产实现 | [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)、[验收矩阵](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md)、[实施计划](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/implement.md) |
 | E：能力扩展准入 | 研究交付已归档，生产扩展未因此上线；主动检索、聊天保存/候选、导入、混合检索、全请求预算、持久摘要等按采用门槛保持延期 | [任务](tasks/archive/2026-09/09-13-agent-memory-capability-plan/prd.md)、[12 项决定](tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/capability-decision-register.md) |
-| 管家快照与渐进重算 P1 | `in_progress`，分支 `0baf299` 后还有续作；完整发布、性能与安全验收未完成，不能归档 | [PRD](tasks/09-13-steward-snapshot-progressive-recompute/prd.md)、[设计](tasks/09-13-steward-snapshot-progressive-recompute/design.md)、[实施计划 §9/§10](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) |
-| MR-23/MR-26 证据与行为投影 P2 | 仅规划；候选证据版本和行为投影键族是独立所有权，不把称谓闭环已修复当成这两项已完成 | [任务](tasks/09-13-steward-memory-evidence-projections/prd.md)、[实施顺序](tasks/09-13-steward-memory-evidence-projections/implement.md) |
+| 管家快照与渐进重算 P1 | 本地 AC1–AC9 通过；`dee91a1` 已合入 main、`27fe936` 归档，worktree/本地分支已清理 | [PRD](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/prd.md)、[集成验收](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md)、[代码与清理证据](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-final-evidence.json) |
+| MR-23/MR-26 证据与行为投影 P2 | SP-AC1～6 通过；保留独立冷却、内部证据换版、双向隔离及写锁后的租约检查已实现，待串行集成归档 | [任务](tasks/09-13-steward-memory-evidence-projections/prd.md)、[实施顺序](tasks/09-13-steward-memory-evidence-projections/implement.md)、[最终验收](tasks/09-13-steward-memory-evidence-projections/research/final-validation-summary.md) |
 | Steward 能力后续 P3 | shared RAG、额外个人路径解释、新地区包及有观测依据的性能研究仍延期；已交付称谓和独立 P1 重算不受此状态覆盖 | [任务](tasks/09-11-steward-capability-followups/prd.md)、[设计](tasks/09-11-steward-capability-followups/design.md) |
 | 跨空间发现 | 继续延期；个人叫法可复用不授予其他空间路径读取权 | [任务](tasks/09-11-steward-cross-space-discovery/prd.md) |
 
@@ -68,18 +69,18 @@
 ## 继续实施时的关键顺序与边界
 
 1. **Memory/RAG**：本期F-01～12已闭合；后续修改保留A来源、C恢复/压缩、B精确引用和D事务/索引合同。旧bd899b9红测只用于追溯，新的代码变化按实际影响复验，不恢复旧lease、弱引用或破坏性降级行为。
-2. **渐进重算**：落实显式一致读快照→事务外计算→短事务保存目标结果→CAS 原子发布结果指针、水位与交付待办。先展示获权的已确认骨架，再逐目标补称谓；preview 不提前消费事件或发通知，本人 ready 与空间 published 分开。
+2. **渐进重算**：保留已实现的显式一致读快照→事务外计算→短事务保存目标结果→CAS 原子发布结果指针、水位与交付待办。先展示获权的已确认骨架，再逐目标补称谓；preview 不提前消费事件或发通知，本人 ready 与空间 published 分开。同进程/Engine 的共享写预算在 Session 创建前让出写入机会，不改变输入、授权与租约栅栏。
 3. **渐进客户端**：`progressive=true` 显式启用；普通请求保留完整视图/安全空态。读取和 304 均先重验授权与有效期；按账号、空间、请求序号、generation/revision 拒收旧结果；采用 `X-PFV-Validated-At` / `X-PFV-Display-Until`，同拓扑补标签时保持坐标、视口和选中。
-4. **MR-26→MR-23**：先限制 rebuild 只处理自己拥有的键族，保留冷却/未知键；再收敛相关支撑事实的证据归因和版本。不能使用全空间 hash 代替相关依据，不能因新证据自动解除驳回或新增通知。实施前在最新主线复核旧探针，保留称谓、授权与反馈合同。
+4. **MR-26→MR-23**：重建只处理自己拥有的键族，保留冷却/未知键。证据版本使用相关 confirmed 事实的 ID/revision，不用全空间 hash 代替相关依据；后续 core 捕获版本 ID，再由发布后的 candidate 交付核验。内部 `projected` 是所记录时点的核验历史，不是持续有效的亲属事实；换版不新增公开投影或解除驳回。
 5. **shared RAG 与能力扩展**：以已验收的A/B/D来源/索引/引用合同为基线，仍需各自采用门槛。Steward使用自己的job/space/consumer身份，仅消费当前空间获权的confirmed shared资料，不读取私人聊天/private memory，不伪造Assistant Run。通用反馈排序仍需收益评估。
 
 这几条线不是同一个发布批次。它们共享 `maintenance`、`platform_features`、Steward/PFV、部分前端与迁移；按 [AGENTS.md](../AGENTS.md) 串行处理相交文件和主线集成，保留其他会话 WIP。
 
 ## 迁移与集成检查点
 
-- 本次累计验收迁移单头为`0047_rag_lifecycle_integrity`；代码包含0045对RAG引用/称谓分支的合并、0046执行合同和0047生命周期约束。数据库实际应用状态须另行核查，不将代码集成当作生产迁移。
+- MR-23 验收的迁移单头为 `0049_steward_candidate_evidence`，待本任务串行集成；其父 `0048_steward_terminology_publication` 连接 `0047_rag_lifecycle_integrity` 与 `0045_steward_staged_publication`。0049 原地扩展候选表并保存不可变证据版本，有证据或已采用归因时拒绝丢弃。数据库实际应用状态须另行核查，不将代码集成当作生产迁移。
 - 0047已在隔离FK OFF/ON真实连接验证；重复来源/镜像冲突首项DDL前拒绝，0045/0047危险downgrade保留历史块与正文证据，不以删数据使往返通过。
-- 渐进分支的 `0044_steward_generations` 与主线称谓迁移同接 0043，续作另有 `0045_steward_staged_publication`。该分支在核验时仅包含称谓 A，尚不包含 B 和 `c8805bf`、`d26bb83`。吸收主线、复核共享实现与迁移 DAG 是集成前置，不能直接按编号判断兼容。
+- 0048 已完成称谓 A/B、质量修复和渐进发布的主线接合；两种升级次序均保留业务数据并恢复 60 条输入触发器。深降级须在首个 DDL 前预检计划路径中的 RAG/Memory/Steward 历史及待办，拒绝后 schema 和 head 均原样保留。
 - 在隔离数据库验证合并后的 upgrade、旧数据兼容及所要求的回退限制；维护租约、引用依赖和进行中的发布不能被破坏性降级抹掉。运行期 SQLite 备份使用 `python -m app.backup`。
 - 任务状态通过 Trellis 命令维护；只清理已经合入且没有未提交代码的 worktree/分支。活动目录的旧副本、未合并分支和其他会话资料不能随本页更新删除或归档。
 
@@ -100,9 +101,10 @@ git merge-base --is-ancestor <commit> main
 | --- | --- | --- |
 | 称谓质量修复 | backend 1119 passed / 3 skipped，frontend 618 passed；lint、类型检查与构建通过，合并后相关 backend 59 passed；[记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md) | 3 项为既有延期的 break-glass 测试；真实 terminology 模型质量、生产 smoke 未测；关系最终确认的成环/证据留存仍按原 PRD 延期 |
 | Memory/RAG累计验收 | 后端1352/3既有skipped、前端660、agent118检查点及代码一致证明；中文16/16、英文2/2、扩展7/10；真实listener/Pi/维护95/95、API56/56、迁移8/8；[矩阵](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md) | B/D原20组及追加恢复回归闭合；未测真实Provider/生产规模，扩展集3项仍未命中，E可选能力与MR-23/26 P2保持边界 |
-| 渐进重算续作 | 最新分支前端 656 tests、lint/type-check/build 均 exit 0，先前计时器异常已修复；已有迁移、发布栅栏、30/50/200 人和浏览器的中间诊断；[最新检查点](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) | 交付失败预算与独立重试仍待审查；最终冻结源码后的后端、0045 迁移、30/50/200 人、两次真实 300 秒扫描、Chrome 五次与 API smoke 尚未完成，中间诊断不等于最终性能验收 |
+| 渐进重算最终本地验收 | 后端 1535 passed / 3 既有 skipped，前端 740、管理员前端 111；静态检查与构建通过。30/50/200 人、两次真实 300 秒扫描、Chrome 桌面五次及移动端两主题、API smoke 56/56 均通过；[冻结源码与完整结果](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md) | 200 人全空间冷算约 416 秒，本人 ready 约 54 秒，确认骨架先出；写预算仅覆盖同进程/Engine。性能数值为本机样本，目标服务器迁移、部署与运行观测未执行 |
+| MR-23/MR-26 修复验收 | 定向 188 passed；完整后端 1594 passed / 3 既有 skipped；六个既有测试导入整理后 43 passed；Ruff/format（394 文件）、mypy（205 源文件）和独立审查通过；[验证记录](tasks/09-13-steward-memory-evidence-projections/research/validation.md) | fake transport 与合成迁移库；仅 direct_sibling 的共同父母证书，projected 为历史核验。未运行真实模型或生产迁移，未重复前端/浏览器/容量实测 |
 
-Memory/RAG本次执行了上述累计检查；其他领域沿用各任务既有记录，没有改变线上开关或部署。未来代码变化按受影响范围重新验证，smoke退出码2仍代表环境阻塞。
+各行均绑定其链接任务的冻结代码与验证环境。没有改变线上开关或部署。未来代码变化按受影响范围重新验证，smoke 退出码 2 仍代表环境阻塞。
 
 ## v1 决策的历史与取代关系
 

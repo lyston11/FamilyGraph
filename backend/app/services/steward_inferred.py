@@ -42,7 +42,7 @@ from app.models.steward_inferred import (
     INFERRED_RELATION_KINDS,
     StewardInferredEdge,
 )
-from app.services import steward_events
+from app.services import steward_candidate_evidence, steward_events
 from app.services.domain_events import emit as emit_domain_event
 from app.utils.timeutil import utcnow
 
@@ -193,6 +193,8 @@ def _edge_from_candidate(
     moment: datetime,
 ) -> StewardInferredEdge | None:
     """候选 → 推测边；结构不合法/不可见/重复/冷却/超限返回 None（逐条跳过）。"""
+    if steward_candidate_evidence.is_internal_candidate(db, candidate):
+        return None
     payload = candidate.payload_json if isinstance(candidate.payload_json, dict) else {}
     raw_kind = payload.get("kind")
     raw_subject = payload.get("subject_user_id")

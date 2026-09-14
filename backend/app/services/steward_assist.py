@@ -63,6 +63,7 @@ from app.services import (
     action_cards,
     agent_provider,
     platform_features,
+    steward_candidate_evidence,
     steward_guard,
 )
 from app.services.steward_guard import ProjectionContext
@@ -1564,6 +1565,10 @@ def _apply_batch(
             return batch.status if batch is not None else "missing"
         if (batch.lease_owner, batch.attempt) != (lease_owner, lease_attempt):
             return batch.status
+        # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time.
+        # Retain simulated future clocks while refusing a lease that expired
+        # during the actual writer wait.
+        now = max(now, timeutil.utcnow())
         # Expired executors leave persisted products for the recovery owner.
         if batch.lease_until is None or batch.lease_until <= now:
             return batch.status
@@ -1617,16 +1622,14 @@ def _apply_batch(
                     subject_id = int(item.get("subject_user_id") or 0)
                     object_id = int(item.get("object_user_id") or 0)
                     digest = steward_guard.candidate_digest(kind, subject_id, object_id)
-                    exists = db.scalar(
-                        select(StewardLlmCandidate.id).where(
+                    candidate = db.scalar(
+                        select(StewardLlmCandidate).where(
                             StewardLlmCandidate.space_id == batch.space_id,
                             StewardLlmCandidate.candidate_digest == digest,
                         )
                     )
-                    if exists is not None:
-                        continue
-                    db.add(
-                        StewardLlmCandidate(
+                    if candidate is None:
+                        candidate = StewardLlmCandidate(
                             space_id=batch.space_id,
                             job_id=batch.job_id,
                             candidate_kind=kind,
@@ -1636,9 +1639,14 @@ def _apply_batch(
                                 if key in item
                             },
                             candidate_digest=digest,
+                            attribution_status="unsupported",
                             status="proposed",
                             created_at=now,
                         )
+                        db.add(candidate)
+                        db.flush()
+                    steward_candidate_evidence.record_for_candidate(
+                        db, candidate, batch=batch, model_call=attempt, now=now
                     )
             elif attempt.assist_kind == "ranking":
                 for rank_value, card_id in enumerate(product.get("order", []), 1):

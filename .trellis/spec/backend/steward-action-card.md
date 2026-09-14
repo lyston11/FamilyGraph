@@ -129,7 +129,7 @@ request_lineage_membership(
 - **预算**：发送前预留调用次数 + 输入/输出 token 上界 + 墙钟；failed/degraded/invalid-output 同样消耗预算；输出 cap=min(辅助上限, 剩余预算)。
 - **写回栅栏**：发送前与应用前各一次短事务重验——空间设置、provider id/模型、policy_version、源事实 digest/revision、卡片状态/revision、候选受众、租约。任何变化 skip/supersede（安全原因码入审计）；禁用辅助后旧在途响应不得落文案。
 - **上限**：`STEWARD_ASSIST_MAX_PROMPT_BYTES` / `MAX_RESPONSE_BYTES`（流式读，超界即断）、单批候选/卡片数、批次并发、`BATCH_LEASE_SECONDS` 租约、单次 HTTP timeout=min(配置, 剩余租约)。
-- **红线（改代码前必读）**：候选只落 `steward_llm_candidates` 内部池 + `StewardSuggestion` 审核投影，绝不直接进卡片/任何正式写入；排序必须通过"严格排列"校验且按 recipient 分组；解释只输出结构化 `{reason_code, supporting_fact_ids, template_slots}` 由确定性模板渲染。prompt 输入只允许白名单结构化字段，绝不含 masked 值、高敏感类别或私人 Session/Memory。
+- **红线（改代码前必读）**：候选先落 `steward_llm_candidates`；legacy/unsupported 沿原审核投影，versioned 及其 sibling 反向候选只作内部证据核验，不新增建议、收件人、通知或推测边，详见 [候选相关证据版本](steward-candidate-evidence.md)。候选绝不直接进卡片/任何正式写入；排序必须通过"严格排列"校验且按 recipient 分组；解释只输出结构化 `{reason_code, supporting_fact_ids, template_slots}` 由确定性模板渲染。prompt 输入只允许白名单结构化字段，绝不含 masked 值、高敏感类别或私人 Session/Memory。
 
 ## 生产调度与租约栅栏（09-11 production-ops；迁移 0036）
 

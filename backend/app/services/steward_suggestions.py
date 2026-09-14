@@ -51,7 +51,7 @@ from app.models.steward_suggestion import (
     StewardSuggestionRecipient,
 )
 from app.models.user import User
-from app.services import visibility
+from app.services import steward_candidate_evidence, visibility
 from app.services.action_cards import compute_evidence_hash
 from app.services.family_projection import authorized_space_or_404
 from app.utils.timeutil import utcnow
@@ -359,6 +359,8 @@ def project_for_job(
         )
     )
     for candidate in candidates:
+        if steward_candidate_evidence.is_internal_candidate(session, candidate):
+            continue
         payload = candidate.payload_json if isinstance(candidate.payload_json, dict) else {}
         raw_kind = payload.get("kind")
         raw_subject = payload.get("subject_user_id")

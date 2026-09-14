@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
@@ -43,6 +42,7 @@ from app.services import (
 from app.services.relationship_resolver import advance_search
 from app.services.source_facts import create_source_fact, transition_source_fact
 from app.utils.timeutil import utcnow
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 @dataclass(frozen=True)

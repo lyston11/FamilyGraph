@@ -1,0 +1,46 @@
+{
+  "verified_at": "2026-09-14T17:04:08.618483+00:00",
+  "branch": "feat/09-13-steward-memory-evidence-projections",
+  "baseline_main": "6fed610e8860e7648ab16a8a9268f141616e5c87",
+  "migration_head": "0049_steward_candidate_evidence",
+  "focused_pytest": {
+    "passed": 188,
+    "seconds": 84.19
+  },
+  "full_backend_pytest": {
+    "passed": 1594,
+    "skipped": 3,
+    "warnings": 4,
+    "seconds": 156.36,
+    "exit_code": 0
+  },
+  "post_import_sort_pytest": {
+    "passed": 43,
+    "seconds": 7.42,
+    "exit_code": 0
+  },
+  "ruff": {
+    "lint": "passed",
+    "format": "passed",
+    "formatted_files": 394
+  },
+  "mypy": {
+    "status": "passed",
+    "source_files": 205
+  },
+  "independent_trellis_check": "passed; no remaining actionable findings; code review plus mypy, no duplicate full pytest",
+  "full_suite_recorded_files_unchanged": true,
+  "scope_limits": [
+    "fake model transport only",
+    "no production data, configuration, migration or deployment changes",
+    "no frontend/build/browser/large-scale performance rerun for this backend-only task",
+    "projected means historical attestation, not ongoing confirmed relationship",
+    "existing candidate-to-original-job CASCADE remains"
+  ],
+  "artifact_sha256": {
+    "backend-final.log": "d8024546ba0902ffde66620bc58ea159e74a0c7ab692d807ce06f4ea7fa73114",
+    "backend-final.xml": "de319a51f3ff6d11ab64236b831656cf8c5964eee0acd64a7279bc58c8a1fb31",
+    "import-regressions.log": "9e74dd670d9732a581bc74a65db72157b1a0463dade35144f5c68d11a769690c",
+    "backend-source-manifest.json": "2a3f8e81ab6a8c894756df7b586766882cdb09093ffdc62c46b0c69e671d9121"
+  }
+}

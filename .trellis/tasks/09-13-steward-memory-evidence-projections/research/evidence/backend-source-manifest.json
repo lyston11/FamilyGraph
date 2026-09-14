@@ -1,0 +1,50 @@
+{
+  "full_suite": {
+    "branch_head": "78d328cf063cdffa7f7ef031f248162ebce6a7d2",
+    "integration_base": "6fed610e8860e7648ab16a8a9268f141616e5c87",
+    "files": {
+      "backend/app/models/__init__.py": "d5c43c9824372a8932c5c02ab7c3fb801fba8ca9186adb80705e70fdf30a9236",
+      "backend/app/models/steward.py": "686f5da9408f8b0a2637792755cce3c737771d8c8626aaa73165ebb211c35340",
+      "backend/app/services/steward.py": "8cda6b2f113d4fdd95fa4b8e1ea07c288756d3fae8ebf2d81de948c198437e4b",
+      "backend/app/services/steward_assist.py": "007414dd00378a63b275d3bac539290737a84e86c51a710ac1b75aa249b22f36",
+      "backend/app/services/steward_candidate_evidence.py": "35dedb109caa7a3113d29d496bac31d88bd0b2f87e91ea81d5d0eaf5b3397f35",
+      "backend/app/services/steward_delivery.py": "ada234813cc6a6fc2032ca98dd16801da08929a0a8c6f10f83e3027ee37aaa06",
+      "backend/app/services/steward_inferred.py": "0564b828088a6bcfc0d1ed6fc48347f35178dc5f9ba3299186c635e5ab1a61d2",
+      "backend/app/services/steward_suggestions.py": "90f494f4e071ccb44933fa7996e0634b919962909614302a0d8c922371ab760e",
+      "backend/migrations/versions/0048_steward_terminology_publication.py": "b3066ce28119eee5cd06e145a0c35967e1a4d26651e63e44e6987f0313dfe840",
+      "backend/migrations/versions/0049_steward_candidate_evidence.py": "18c75a6674d4dbf3e09067c48e1b238d1fddae3a8dcaef7356ae81f0ce2662f2",
+      "backend/tests/conftest.py": "8cb39a28c84eba3161dd85c0f5a7b05e074dd578900ee6b42b0695cf6a01ff5d",
+      "backend/tests/test_steward_behavior_rebuild.py": "96622f87785d04f3ab731f06b0745f1cd8a4bd8b149e5ffc78ea8b27e8013b00",
+      "backend/tests/test_steward_candidate_evidence.py": "cc8c7c14f2018433d3b9692ab080b4a9e74cb31c3d9767b474d43efa36245b71",
+      "backend/tests/test_steward_candidate_evidence_integration.py": "778a6b12236c0d5272a71fe3ddd0462ef035d77f0a02bb236bba47300a5c97e2",
+      "backend/tests/test_steward_candidate_evidence_migration.py": "cd02bdee6e04d85b304dddd68ba5153a2fac03db44c8b1e158ada7c70d59fafd",
+      "backend/tests/test_steward_terminology_publication_migration.py": "e64cf510d8b1afd52c1498e9a21b75ec792c56e4e7aa0e316bc5ac4c65e045a5"
+    }
+  },
+  "final_files": {
+    "backend/app/models/__init__.py": "d5c43c9824372a8932c5c02ab7c3fb801fba8ca9186adb80705e70fdf30a9236",
+    "backend/app/models/steward.py": "686f5da9408f8b0a2637792755cce3c737771d8c8626aaa73165ebb211c35340",
+    "backend/app/services/steward.py": "8cda6b2f113d4fdd95fa4b8e1ea07c288756d3fae8ebf2d81de948c198437e4b",
+    "backend/app/services/steward_assist.py": "007414dd00378a63b275d3bac539290737a84e86c51a710ac1b75aa249b22f36",
+    "backend/app/services/steward_candidate_evidence.py": "35dedb109caa7a3113d29d496bac31d88bd0b2f87e91ea81d5d0eaf5b3397f35",
+    "backend/app/services/steward_delivery.py": "ada234813cc6a6fc2032ca98dd16801da08929a0a8c6f10f83e3027ee37aaa06",
+    "backend/app/services/steward_inferred.py": "0564b828088a6bcfc0d1ed6fc48347f35178dc5f9ba3299186c635e5ab1a61d2",
+    "backend/app/services/steward_suggestions.py": "90f494f4e071ccb44933fa7996e0634b919962909614302a0d8c922371ab760e",
+    "backend/migrations/versions/0048_steward_terminology_publication.py": "b3066ce28119eee5cd06e145a0c35967e1a4d26651e63e44e6987f0313dfe840",
+    "backend/migrations/versions/0049_steward_candidate_evidence.py": "18c75a6674d4dbf3e09067c48e1b238d1fddae3a8dcaef7356ae81f0ce2662f2",
+    "backend/tests/conftest.py": "8cb39a28c84eba3161dd85c0f5a7b05e074dd578900ee6b42b0695cf6a01ff5d",
+    "backend/tests/test_personal_family_view_progressive.py": "1e5ae8da53a21372b7da8582af404f67d946bdaa28ff5979eac39a0b8b333b14",
+    "backend/tests/test_steward_behavior_rebuild.py": "96622f87785d04f3ab731f06b0745f1cd8a4bd8b149e5ffc78ea8b27e8013b00",
+    "backend/tests/test_steward_candidate_evidence.py": "cc8c7c14f2018433d3b9692ab080b4a9e74cb31c3d9767b474d43efa36245b71",
+    "backend/tests/test_steward_candidate_evidence_integration.py": "778a6b12236c0d5272a71fe3ddd0462ef035d77f0a02bb236bba47300a5c97e2",
+    "backend/tests/test_steward_candidate_evidence_migration.py": "cd02bdee6e04d85b304dddd68ba5153a2fac03db44c8b1e158ada7c70d59fafd",
+    "backend/tests/test_steward_generations.py": "d82406e11026bd45a8f6093b7b5feb51a44eac326ddde283adf12b9ff46e0d87",
+    "backend/tests/test_steward_input_versions.py": "a98e6d25bc591370b69ccf54b7f79dd85a51af8688bbbf3533b43e77e2237592",
+    "backend/tests/test_steward_runtime_recovery.py": "19931c7abbcf8f0a58ec27fab9808a708f4bacb405e25a60d0c9a4b235024d6e",
+    "backend/tests/test_steward_short_tx.py": "9eb34a3b7abfaed3e4025dc56ed5d48a621661491a537851252004262b60a5e7",
+    "backend/tests/test_steward_snapshot_fences.py": "479ac9148627308efa2bd9195014feacfb4c0c213a88b416314806346ba7263b",
+    "backend/tests/test_steward_terminology_publication_migration.py": "e64cf510d8b1afd52c1498e9a21b75ec792c56e4e7aa0e316bc5ac4c65e045a5"
+  },
+  "full_suite_recorded_files_unchanged": true,
+  "post_suite_changes": "Import order only in six existing Steward test files; 43 targeted tests passed afterward."
+}

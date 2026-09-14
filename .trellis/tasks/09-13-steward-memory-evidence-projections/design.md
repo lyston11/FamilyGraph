@@ -40,7 +40,12 @@
 
 渐进重算已在 `dee91a1` 集成；已核实当前单一 Alembic head 为 `0048_steward_terminology_publication`。本任务的新迁移使用 0049，以该 head 为父节点；提交前再次检查迁移序号无冲突。重复或无法安全归并的行只报告稳定 ID/状态，阻断破坏性处理。
 
+
+0049 的降级预检还须覆盖本次计划中的祖先拒绝条件，SQLite DDL 不假定可事务回滚：先建立 writer，再校验祖先与本表证据，任何拒绝均发生在首个 DDL 前。复用 0048 `_preflight_parent_downgrade` 的 SQL，通过新增可选 `planned` 参数传入从 0049 计算的实际计划；默认参数保留 0048 原行为。这样 `downgrade -1` 只移除空的 0049 结构，不会从 0048 错解相对目标。当前 merge 图的 `-2` 本身歧义，由 Alembic 在 DDL 前拒绝；绝对深降级沿现有 RAG/Memory/Steward 拒绝合同。无需引入计划缓存或重复祖先 SQL。
+
 数据库唯一性裁决同证据版本竞争；既有 BEGIN IMMEDIATE、batch lease/attempt 和世界快照栅栏保持。候选生成/复用、版本插入、归因标记与 batch 应用同事务；后续 core 的核验和投影状态同事务。来源撤销/revision 变化后旧 worker 不能以过时证据写出新版本。重复已应用批次不重发模型；相同支持集跨 job 仍为同一版本。
+
+实际写锁等待可能跨过租约截止；`_apply_batch` 在获得 writer 后使用 `max(caller_now, live_now)` 重采样检查。调用方未来时间可收紧恢复测试，但旧时间不得延长真实租约。过期执行者保留已有模型结果供原恢复机制处理，不采用证据。
 
 ## 5. 验证与回退
 
@@ -52,7 +57,7 @@
 
 - `services/steward.py`：MR-26 所属前缀及删除范围；沿用其空间可消费事实规则。
 - `services/steward_delivery.py`（渐进重算先集成）：MR-23 后续 core 的版本意图准备及发布后内部核验，复用现有候选交付种类和 fence，不改核心发布原子边界。
-- `models/steward.py`、模型导出与一个新迁移：归因标记及版本持久化/约束，保留现有身份和引用。
+- `models/steward.py`、模型导出与一个新迁移：归因标记及版本持久化/约束，保留现有身份和引用。 0048 仅扩展可复用降级预检 helper 的可选参数，保留其历史 SQL 与默认行为；对应 publication 迁移测试以动态单头继续验收原合同。
 - 新 `services/steward_candidate_evidence.py`：共同父母证书、规范化摘要、幂等版本写入及一次内部核验；不承接公共呈现。
 - `services/steward_assist.py`：结构去重改为稳定候选复用后记录相关证据；保留网络/预算/批次栅栏。
 - `services/steward_suggestions.py`、`services/steward_inferred.py`：排除已版本化候选，阻止两个入口绕过内部策略；不改现有个人化展示。

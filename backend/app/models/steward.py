@@ -418,13 +418,17 @@ class StewardModelCall(Base):
 class StewardLlmCandidate(Base):
     """LLM 关系候选池（内部；R3 红线：不经过确定性矩阵绝不进卡片/任何正式写入）。
 
-    候选只含空间可见 user id + 关系种类 + 理由文本；呈现与产品化另立任务。
-    candidate_digest = payload sha256，(space_id, digest) 唯一：跨 job 重复候选静默跳过。
+    稳定身份只含关系种类与有向端点，原 payload/job/驳回历史不随证据换版。
+    attribution_status=versioned 是粘性的内部处理模式，不表示关系当前已确认。
     """
 
     __tablename__ = "steward_llm_candidates"
     __table_args__ = (
         CheckConstraint("status IN ('proposed','dismissed')", name="ck_slc_status"),
+        CheckConstraint(
+            "attribution_status IN ('legacy','unsupported','versioned')",
+            name="ck_slc_attribution_status",
+        ),
         sa.UniqueConstraint("space_id", "candidate_digest", name="uq_slc_space_digest"),
     )
 
@@ -438,6 +442,9 @@ class StewardLlmCandidate(Base):
     candidate_kind: Mapped[str] = mapped_column(String(48), nullable=False)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     candidate_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    attribution_status: Mapped[str] = mapped_column(
+        String(16), default="legacy", server_default="legacy", nullable=False
+    )
     status: Mapped[str] = mapped_column(String(16), default="proposed", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
@@ -446,6 +453,59 @@ class StewardLlmCandidate(Base):
             f"<StewardLlmCandidate space={self.space_id} job={self.job_id}"
             f" {self.candidate_kind}/{self.status}>"
         )
+
+
+class StewardCandidateEvidenceVersion(Base):
+    """Immutable, space-internal support certificate; never a confirmed relation.
+
+    The first later delivery checks the saved source IDs/revisions and records
+    pending -> projected/invalidated once. A projected row attests only to that
+    historical check. Provenance deletion may clear its nullable references;
+    candidate/space deletion retains the existing domain cascade semantics.
+    """
+
+    __tablename__ = "steward_candidate_evidence_versions"
+    __table_args__ = (
+        sa.UniqueConstraint("candidate_id", "evidence_digest", name="uq_scev_candidate_digest"),
+        CheckConstraint("status IN ('pending','projected','invalidated')", name="ck_scev_status"),
+        CheckConstraint(
+            "(status = 'pending' AND projection_job_id IS NULL "
+            "AND projection_checked_at IS NULL AND invalidation_reason IS NULL) OR "
+            "(status = 'projected' AND projection_checked_at IS NOT NULL "
+            "AND invalidation_reason IS NULL) OR "
+            "(status = 'invalidated' AND projection_checked_at IS NOT NULL "
+            "AND invalidation_reason IS NOT NULL)",
+            name="ck_scev_projection_result",
+        ),
+        Index("ix_scev_space_pending", "space_id", "status", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_llm_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    validation_contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    support_facts_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    source_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    source_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_assist_batches.id", ondelete="SET NULL"), nullable=True
+    )
+    source_model_call_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_model_calls.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    projection_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    projection_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 # ---- Staged publication, input fences and durable recovery (0044/0045) ----
