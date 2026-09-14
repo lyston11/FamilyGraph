@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import config
@@ -93,11 +93,20 @@ _ACTION_TO_KIND: dict[str, str] = {
     ACTION_REQUEST_LINEAGE: "lineage_request",
 }
 
+_CARD_COOLDOWN_PREFIX = "card_cooldown:"
+_CORRECTION_PREFERENCE_PREFIX = "correction_preference:"
+_TERM_USAGE_PREFIX = "term_usage:"
+
+# 重放器只拥有这三个键族；其他生产者的投影不在重建删除范围内。
+_REBUILD_PROJECTION_KEY_PREFIXES = (
+    _CARD_COOLDOWN_PREFIX,
+    _CORRECTION_PREFERENCE_PREFIX,
+    _TERM_USAGE_PREFIX,
+)
+
 # 行为投影键白名单前缀（红线：泛行为监控字段一律拒绝）
 PROJECTION_KEY_PREFIXES = (
-    "card_cooldown:",
-    "correction_preference:",
-    "term_usage:",
+    *_REBUILD_PROJECTION_KEY_PREFIXES,
     "kinship_recommendation_dismissed:",
 )
 
@@ -271,11 +280,12 @@ def rebuild_behavior_projections(
     account_id: int | None = None,
     now: datetime | None = None,
 ) -> int:
-    """Rebuild the allow-listed behavior projection from domain events.
+    """Rebuild only owned card/term projections from domain events.
 
     Projection rows are a cache, not an authority.  Replaying only explicit
     card/term events makes the result deterministic and avoids persisting
-    keyboard, click, hover, or dwell-time telemetry.
+    keyboard, click, hover, or dwell-time telemetry. Other producers' rows
+    remain unchanged; the caller owns the delete-and-replay transaction.
     """
     if not config.BEHAVIOR_PROJECTION_ENABLED:
         return 0
@@ -292,17 +302,29 @@ def rebuild_behavior_projections(
         )
         if value is not None
     }
+    # SQLite LIKE folds case and treats underscores as wildcards.
+    owned_projection = or_(
+        *(
+            func.substr(BehaviorProjection.projection_key, 1, len(prefix)) == prefix
+            for prefix in _REBUILD_PROJECTION_KEY_PREFIXES
+        )
+    )
     if account_id is not None:
         account_ids = {account_id}
         session.execute(
             delete(BehaviorProjection).where(
                 BehaviorProjection.space_id == space_id,
                 BehaviorProjection.account_id == account_id,
+                owned_projection,
             )
         )
     else:
         account_ids = event_accounts
-        session.execute(delete(BehaviorProjection).where(BehaviorProjection.space_id == space_id))
+        session.execute(
+            delete(BehaviorProjection).where(
+                BehaviorProjection.space_id == space_id, owned_projection
+            )
+        )
     if not account_ids:
         return 0
 
@@ -334,7 +356,7 @@ def rebuild_behavior_projections(
                     session,
                     space_id=space_id,
                     account_id=actor,
-                    projection_key=f"card_cooldown:{kind}",
+                    projection_key=f"{_CARD_COOLDOWN_PREFIX}{kind}",
                     value={"until": until.isoformat()},
                     now=now or event.created_at,
                 )
@@ -347,7 +369,7 @@ def rebuild_behavior_projections(
                     session,
                     space_id=space_id,
                     account_id=actor,
-                    projection_key=f"correction_preference:{concept}",
+                    projection_key=f"{_CORRECTION_PREFERENCE_PREFIX}{concept}",
                     value={"entry_id": entry_id, "updated_at": event.created_at.isoformat()},
                     now=now or event.created_at,
                 )
@@ -361,7 +383,7 @@ def rebuild_behavior_projections(
                     session,
                     space_id=space_id,
                     account_id=actor,
-                    projection_key=f"term_usage:{concept}",
+                    projection_key=f"{_TERM_USAGE_PREFIX}{concept}",
                     value={"count": usage_counts[key], "updated_at": event.created_at.isoformat()},
                     now=now or event.created_at,
                 )

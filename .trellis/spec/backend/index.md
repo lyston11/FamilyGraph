@@ -25,6 +25,7 @@
 - [rag-index-lifecycle-contract.md](rag-index-lifecycle-contract.md)
 - [relationship-intelligence.md](relationship-intelligence.md)
 - [steward-action-card.md](steward-action-card.md)
+- [steward-behavior-rebuild.md](steward-behavior-rebuild.md)
 - [controlled-web.md](controlled-web.md)
 - [assistant-history-restoration.md](assistant-history-restoration.md)
 
