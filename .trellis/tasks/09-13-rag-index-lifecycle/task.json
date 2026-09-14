@@ -27,8 +27,11 @@
     "workstream": "D",
     "implementation_dependencies": "09-13-memory-contract-repair,09-13-rag-retrieval-citations",
     "audit_issue_scope": "MR-13,MR-25; MR-15 effective state; MR-17 lifecycle; MR-24",
-    "implementation_status": "repair_in_progress",
+    "implementation_status": "verified_pending_integration",
     "acceptance_review_task": "09-14-memory-rag-acceptance-audit",
-    "reviewed_cumulative_commit": "bd899b98871c02ad97b7791a051f126d671bfefb"
+    "reviewed_cumulative_commit": "bd899b98871c02ad97b7791a051f126d671bfefb",
+    "acceptance_review": "D-I01..10 closed; independent 15 passed / 1 historical exploration deselected; index_superseded regression fixed",
+    "validation": "backend 1352 passed / 3 existing skipped; ruff/format/mypy pass; FK OFF/ON migration oracle 8/8; real listener/Pi smoke 95/95",
+    "acceptance_commit": "aebee83c3feda56c2df47e61a13919bf037829f9"
   }
 }

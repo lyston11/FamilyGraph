@@ -6,11 +6,13 @@
 
 ## 本轮修复顺序
 
-- [ ] D-I01/I02：规范来源唯一键、镜像预检、并发稳定重放；完整物化时固定摘要/等价证据，同 revision 改文与缺块组合不改写旧定位。
-- [ ] D-I03/I04/I05/I09：不可变 lease/owner/round/policy/target 条件更新、固定轮次水位、最终有效开关/来源重验；真实 tick 的整个 RAG 批次失败可回滚。
-- [ ] D-I06/I07/I10：真实算法目标、有界完整换版、活动版本检索、普通维护不降级；缺块/FTS 恢复与全局来源合法性一致。
-- [ ] D-I08：旧 0045 降级入口在第一项破坏动作前无损拒绝不兼容数据；新迁移保全真实保存依赖和 FK ON/OFF 下全部子块。
-- [ ] 独立 D 核验、F-07～11 与原 D-AC1～8 回填；保留 B 精确引用、A 来源、C Pi 恢复及 RAG-only 晚开启正对照。
+- [x] D-I01/I02：规范来源唯一键、镜像预检、并发稳定重放；完整物化时固定摘要/等价证据，同 revision 改文与缺块组合不改写旧定位。
+- [x] D-I03/I04/I05/I09：不可变 lease/owner/round/policy/target 条件更新、固定轮次水位、最终有效开关/来源重验；真实 tick 的整个 RAG 批次失败可回滚。
+- [x] D-I06/I07/I10：真实算法目标、有界完整换版、活动版本检索、普通维护不降级；缺块/FTS 恢复与全局来源合法性一致。
+- [x] D-I08：旧 0045 降级入口在第一项破坏动作前无损拒绝不兼容数据；新迁移保全真实保存依赖和 FK ON/OFF 下全部子块。
+- [x] 独立 D 核验、F-07～11 与原 D-AC1～8 回填；保留 B 精确引用、A 来源、C Pi 恢复及 RAG-only 晚开启正对照。
+
+最新结果与限制见 [最终验收](research/acceptance-final.md)。实现记录、独立红绿证据和生命周期合同均已保存；提交后由父任务唯一串行通道集成与清理。
 
 依据：[独立问题报告](../09-14-memory-rag-acceptance-audit/research/d-integration-check.md)、[执行前核对](../09-14-memory-rag-acceptance-audit/research/d-execution-preflight.md)、[累计验收设计](../09-14-memory-rag-acceptance-audit/design.md)。旧探针/日志/哈希不改写，新的持久回归与结果另行记录。
 

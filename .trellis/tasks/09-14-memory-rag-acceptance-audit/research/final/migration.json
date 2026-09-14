@@ -1,0 +1,420 @@
+{
+  "oracle_version": 2,
+  "oracle_sha256": "2d2b873cb1640fdf4faa802b39b8389ad2869461b084a89a867c727bf26744c0",
+  "candidate_commit": "c253cb6028704778c1fed78db3000919333039b1",
+  "candidate_migrations": {
+    "0045_rag_index_lifecycle.py": "532b70ca1274a4f6a98fec78ac08b8335f55f213843c1f64968f3e8a524c441a",
+    "0046_context_execution_contract.py": "f54d0c413bccce61c2c52de1531d5b749fb9095cdea5d1dbc9e1058d48913a75",
+    "0047_rag_lifecycle_integrity.py": "f7f399ec1da7a4fcb064c5ba49b23490c72900d7734aafd354de2a291ee68b81"
+  },
+  "seed_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329",
+  "synthetic_only": true,
+  "cases": [
+    {
+      "case": "fk0-populated",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "saved_dependency_readable": true,
+        "input_digest_column_added": true,
+        "canonical_unique_enforced": true,
+        "revision_mirror_enforced": true,
+        "new_revision_reached": true
+      },
+      "original_rows_sha256": "dc58e6862ffadf27b38c96413a369ce5459a8dfbe5f220d5e237dd689e5336ae",
+      "migration": {
+        "foreign_keys": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "final_foreign_keys": [
+          0
+        ],
+        "writes": [
+          "ALTER",
+          "DROP",
+          "CREATE",
+          "CREATE",
+          "CREATE",
+          "ALTER",
+          "ALTER",
+          "ALTER",
+          "ALTER",
+          "ALTER",
+          "UPDATE",
+          "UPDATE"
+        ],
+        "empty_writer_locks": [
+          0
+        ],
+        "preflight": {
+          "duplicate_groups": 0,
+          "revision_conflicts": 0,
+          "saved_rag_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk0-duplicate",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_mutation": true,
+        "expected_preflight_refusal": true
+      },
+      "original_rows_sha256": "31747540442d557ccf67ba750de2dd3d71baa5e3c0f0c3121a2e39a02ee4da20",
+      "migration": {
+        "foreign_keys": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "final_foreign_keys": [
+          0
+        ],
+        "writes": [],
+        "empty_writer_locks": [
+          0
+        ],
+        "error_type": "RuntimeError",
+        "refusal": "canonical_identity_conflict",
+        "preflight": {
+          "duplicate_groups": 1,
+          "revision_conflicts": 0,
+          "saved_rag_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk0-mirror",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_mutation": true,
+        "expected_preflight_refusal": true
+      },
+      "original_rows_sha256": "3107377d21b136067c01b583f3e5eb8b6fc9024fe01773f869815a753064deca",
+      "migration": {
+        "foreign_keys": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "final_foreign_keys": [
+          0
+        ],
+        "writes": [],
+        "empty_writer_locks": [
+          0
+        ],
+        "error_type": "RuntimeError",
+        "refusal": "canonical_identity_conflict",
+        "preflight": {
+          "duplicate_groups": 0,
+          "revision_conflicts": 1,
+          "saved_rag_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk0-old_downgrade",
+      "passed": true,
+      "checks": {
+        "preparation_succeeded": true,
+        "preparation_preserved_rows": true,
+        "preparation_dependency_readable": true,
+        "preparation_reached_0045": true,
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_mutation": true,
+        "expected_preflight_refusal": true,
+        "saved_dependency_readable": true
+      },
+      "original_rows_sha256": "dc58e6862ffadf27b38c96413a369ce5459a8dfbe5f220d5e237dd689e5336ae",
+      "migration": {
+        "foreign_keys": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "final_foreign_keys": [
+          0
+        ],
+        "writes": [],
+        "empty_writer_locks": [
+          0
+        ],
+        "error_type": "RuntimeError",
+        "refusal": "lifecycle_downgrade_incompatible",
+        "refusal_counts": {
+          "historical_chunks": 4,
+          "key_collisions": 4,
+          "distinct_reasons": 1,
+          "saved_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk1-populated",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "saved_dependency_readable": true,
+        "input_digest_column_added": true,
+        "canonical_unique_enforced": true,
+        "revision_mirror_enforced": true,
+        "new_revision_reached": true
+      },
+      "original_rows_sha256": "dc58e6862ffadf27b38c96413a369ce5459a8dfbe5f220d5e237dd689e5336ae",
+      "migration": {
+        "foreign_keys": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "final_foreign_keys": [
+          1
+        ],
+        "writes": [
+          "ALTER",
+          "DROP",
+          "CREATE",
+          "CREATE",
+          "CREATE",
+          "ALTER",
+          "ALTER",
+          "ALTER",
+          "ALTER",
+          "ALTER",
+          "UPDATE",
+          "UPDATE"
+        ],
+        "empty_writer_locks": [
+          0
+        ],
+        "preflight": {
+          "duplicate_groups": 0,
+          "revision_conflicts": 0,
+          "saved_rag_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk1-duplicate",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_mutation": true,
+        "expected_preflight_refusal": true
+      },
+      "original_rows_sha256": "31747540442d557ccf67ba750de2dd3d71baa5e3c0f0c3121a2e39a02ee4da20",
+      "migration": {
+        "foreign_keys": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "final_foreign_keys": [
+          1
+        ],
+        "writes": [],
+        "empty_writer_locks": [
+          0
+        ],
+        "error_type": "RuntimeError",
+        "refusal": "canonical_identity_conflict",
+        "preflight": {
+          "duplicate_groups": 1,
+          "revision_conflicts": 0,
+          "saved_rag_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk1-mirror",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_mutation": true,
+        "expected_preflight_refusal": true
+      },
+      "original_rows_sha256": "3107377d21b136067c01b583f3e5eb8b6fc9024fe01773f869815a753064deca",
+      "migration": {
+        "foreign_keys": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "final_foreign_keys": [
+          1
+        ],
+        "writes": [],
+        "empty_writer_locks": [
+          0
+        ],
+        "error_type": "RuntimeError",
+        "refusal": "canonical_identity_conflict",
+        "preflight": {
+          "duplicate_groups": 0,
+          "revision_conflicts": 1,
+          "saved_rag_dependencies": 1
+        }
+      }
+    },
+    {
+      "case": "fk1-old_downgrade",
+      "passed": true,
+      "checks": {
+        "preparation_succeeded": true,
+        "preparation_preserved_rows": true,
+        "preparation_dependency_readable": true,
+        "preparation_reached_0045": true,
+        "actual_connection_fk": true,
+        "final_connection_fk": true,
+        "allowed_writer_locks_change_no_rows": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_mutation": true,
+        "expected_preflight_refusal": true,
+        "saved_dependency_readable": true
+      },
+      "original_rows_sha256": "dc58e6862ffadf27b38c96413a369ce5459a8dfbe5f220d5e237dd689e5336ae",
+      "migration": {
+        "foreign_keys": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "final_foreign_keys": [
+          1
+        ],
+        "writes": [],
+        "empty_writer_locks": [
+          0
+        ],
+        "error_type": "RuntimeError",
+        "refusal": "lifecycle_downgrade_incompatible",
+        "refusal_counts": {
+          "historical_chunks": 4,
+          "key_collisions": 4,
+          "distinct_reasons": 1,
+          "saved_dependencies": 1
+        }
+      }
+    }
+  ],
+  "passed": 8,
+  "total": 8
+}

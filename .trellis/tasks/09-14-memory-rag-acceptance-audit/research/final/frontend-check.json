@@ -1,0 +1,24 @@
+{
+  "candidate_head": "c253cb6028704778c1fed78db3000919333039b1",
+  "results": {
+    "lint": 0,
+    "type_check": 0,
+    "test": 0,
+    "build": 0
+  },
+  "test_files": 69,
+  "tests_passed": 660,
+  "stderr": "one jsdom ResizeObserver cleanup TypeError; no test failure or nonzero exit",
+  "focused_followup": {
+    "files": 8,
+    "tests_passed": 80,
+    "stderr_reproduced": false
+  },
+  "main_baseline": {
+    "commit": "461d691c76890cef3cdaabcae7d5d93a8181033f",
+    "files": 68,
+    "tests_passed": 618,
+    "stderr_reproduced": false
+  },
+  "product_code_changed_for_stderr": false
+}

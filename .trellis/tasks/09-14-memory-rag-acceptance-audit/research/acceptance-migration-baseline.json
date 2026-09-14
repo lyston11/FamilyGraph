@@ -1,0 +1,164 @@
+{
+  "seed_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329",
+  "synthetic_only": true,
+  "cases": [
+    {
+      "case": "fk0-populated",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "saved_dependency_readable": true
+      },
+      "original_rows_sha256": "12cb226aec86c2c6d9ed5f2427e43ddd99cab89b9b652a61d3f468c798ed8024",
+      "migration": {
+        "foreign_keys": [
+          0
+        ],
+        "destructive_statements": 0
+      }
+    },
+    {
+      "case": "fk0-duplicate",
+      "passed": false,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": false,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_destructive_statement": true
+      },
+      "original_rows_sha256": "9c4698f7b6a99132e4f6ae6ec0b63fc8d59d5b81a25acaed603a6f8035742f97",
+      "migration": {
+        "foreign_keys": [
+          0
+        ],
+        "destructive_statements": 0
+      }
+    },
+    {
+      "case": "fk0-mirror",
+      "passed": false,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": false,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_destructive_statement": true
+      },
+      "original_rows_sha256": "c76cca146001d90cc9fcb21e97fa1aab1f6893009f5ac449c6b62ca03f40a9a4",
+      "migration": {
+        "foreign_keys": [
+          0
+        ],
+        "destructive_statements": 0
+      }
+    },
+    {
+      "case": "fk0-old_downgrade",
+      "passed": false,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": false,
+        "foreign_key_check_empty": true,
+        "expected_exit": false,
+        "schema_unchanged": false,
+        "revision_unchanged": false,
+        "refused_before_destructive_statement": false
+      },
+      "original_rows_sha256": "12cb226aec86c2c6d9ed5f2427e43ddd99cab89b9b652a61d3f468c798ed8024",
+      "migration": {
+        "foreign_keys": [
+          0
+        ],
+        "destructive_statements": 6
+      }
+    },
+    {
+      "case": "fk1-populated",
+      "passed": true,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": true,
+        "saved_dependency_readable": true
+      },
+      "original_rows_sha256": "12cb226aec86c2c6d9ed5f2427e43ddd99cab89b9b652a61d3f468c798ed8024",
+      "migration": {
+        "foreign_keys": [
+          1
+        ],
+        "destructive_statements": 0
+      }
+    },
+    {
+      "case": "fk1-duplicate",
+      "passed": false,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": false,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_destructive_statement": true
+      },
+      "original_rows_sha256": "9c4698f7b6a99132e4f6ae6ec0b63fc8d59d5b81a25acaed603a6f8035742f97",
+      "migration": {
+        "foreign_keys": [
+          1
+        ],
+        "destructive_statements": 0
+      }
+    },
+    {
+      "case": "fk1-mirror",
+      "passed": false,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": true,
+        "foreign_key_check_empty": true,
+        "expected_exit": false,
+        "schema_unchanged": true,
+        "revision_unchanged": true,
+        "refused_before_destructive_statement": true
+      },
+      "original_rows_sha256": "c76cca146001d90cc9fcb21e97fa1aab1f6893009f5ac449c6b62ca03f40a9a4",
+      "migration": {
+        "foreign_keys": [
+          1
+        ],
+        "destructive_statements": 0
+      }
+    },
+    {
+      "case": "fk1-old_downgrade",
+      "passed": false,
+      "checks": {
+        "actual_connection_fk": true,
+        "all_original_rows_preserved": false,
+        "foreign_key_check_empty": true,
+        "expected_exit": false,
+        "schema_unchanged": false,
+        "revision_unchanged": false,
+        "refused_before_destructive_statement": false
+      },
+      "original_rows_sha256": "12cb226aec86c2c6d9ed5f2427e43ddd99cab89b9b652a61d3f468c798ed8024",
+      "migration": {
+        "foreign_keys": [
+          1
+        ],
+        "destructive_statements": 6
+      }
+    }
+  ],
+  "passed": 2,
+  "total": 8
+}

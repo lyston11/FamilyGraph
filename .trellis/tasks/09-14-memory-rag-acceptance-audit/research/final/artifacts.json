@@ -1,0 +1,161 @@
+{
+  "scope": "D final pre-commit checkpoint; product source hashes are in backend-check/migration/retrieval reports; committed mapping recorded in final acceptance",
+  "artifacts": [
+    {
+      "file": "backend-check.json",
+      "sha256": "6a11ec752302035317e9c4131fef4db993ac8ccc102009b360d7ec6e969e72c3",
+      "original": "/private/tmp/familygraph-d-backend-final-check.json",
+      "original_sha256": "6a11ec752302035317e9c4131fef4db993ac8ccc102009b360d7ec6e969e72c3"
+    },
+    {
+      "file": "logs/backend-check.log.gz",
+      "sha256": "2aa6163beb5ad2128fec4b29fba4bed4b178581e0181edd6037be390793174b0",
+      "original": "/private/tmp/familygraph-d-backend-final-check.log",
+      "original_sha256": "0819b22d525651fd632314838d78c700783e762970e42046e0ed0af4ec237c14",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "logs/backend-junit.xml.gz",
+      "sha256": "79966f72781b82c0c18c46c5990009688bdd5459bce7b1bea6a4e195095c772b",
+      "original": "/private/tmp/familygraph-d-backend-final.xml",
+      "original_sha256": "0d74d1d0db4a124bf2a27658b5c0ecf0439d12075d56017e3610a6c7c5c575a5",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "migration.json",
+      "sha256": "56e4e1640d541f04554be38067c6783c8c2c3a63fb4d7efa2a8fd230d727a62c",
+      "original": "/private/tmp/familygraph-d-migration-final.json",
+      "original_sha256": "56e4e1640d541f04554be38067c6783c8c2c3a63fb4d7efa2a8fd230d727a62c"
+    },
+    {
+      "file": "agent-memory-smoke.json",
+      "sha256": "f3420b7bc17c8adf4275b146a9b5cc63244a5c23b9f10ce9091132a4df7f4171",
+      "original": "/private/tmp/familygraph-d-agent-memory-smoke-final.json",
+      "original_sha256": "f3420b7bc17c8adf4275b146a9b5cc63244a5c23b9f10ce9091132a4df7f4171"
+    },
+    {
+      "file": "api-smoke.json",
+      "sha256": "cee6e12e3bc7c47a1a58e9f11e5913273713d102700bdbc26e527ba55a9bed39",
+      "original": "/private/tmp/familygraph-d-cumulative-api-smoke.json",
+      "original_sha256": "cee6e12e3bc7c47a1a58e9f11e5913273713d102700bdbc26e527ba55a9bed39"
+    },
+    {
+      "file": "retrieval.json",
+      "sha256": "b01cf493f1cc443e736203595c18ff887896093af3b759526d7c4802bdf38369",
+      "original": "/private/tmp/familygraph-d-retrieval-final.json",
+      "original_sha256": "b01cf493f1cc443e736203595c18ff887896093af3b759526d7c4802bdf38369"
+    },
+    {
+      "file": "logs/frontend-check.log.gz",
+      "sha256": "5ac72415c92450b35bd36a9e72c4f42bfe3eba9e69d5c11fbf0278ee69eafbbd",
+      "original": "/private/tmp/familygraph-d-frontend-check.log",
+      "original_sha256": "044f21cf85e17c0ed92072d290913fe3c2e6a61cdcf9a23468c1d591280c4388",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "logs/frontend-rag-focused.log.gz",
+      "sha256": "76f14529eadb66811318dfc211bc93d73485c83ab5f18c988cc7586fc873a949",
+      "original": "/private/tmp/familygraph-d-frontend-rag-focused.log",
+      "original_sha256": "bccd5fbe0355a5d880a718a476b2c5307b9d92ccf0053ead7d1d17fa8164b607",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "logs/frontend-main-baseline.log.gz",
+      "sha256": "5eeb8fc33f8af024205918f32d83a64a1c3ecb49753c6aaf4c3574a7d9667b0d",
+      "original": "/private/tmp/familygraph-main-frontend-baseline.log",
+      "original_sha256": "d9abc7da7392ab8f8acfb84fdb0c47440773eccdfe930076c616e7939ad37963",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/test_d_independent.py",
+      "sha256": "3a6e7431f017c17b05b5b71128c26800981d6eec8dc1460a319e030909a1f6ad",
+      "original": "/private/tmp/fg-d-review-eNCyDK/test_d_independent.py",
+      "original_sha256": "3a6e7431f017c17b05b5b71128c26800981d6eec8dc1460a319e030909a1f6ad"
+    },
+    {
+      "file": "independent/test_d_composed.py",
+      "sha256": "d8383eae4eacc4bddeee1d641029db9d34db618cf8b7a5e20f2e87411f71cadd",
+      "original": "/private/tmp/fg-d-review-eNCyDK/test_d_composed.py",
+      "original_sha256": "d8383eae4eacc4bddeee1d641029db9d34db618cf8b7a5e20f2e87411f71cadd"
+    },
+    {
+      "file": "independent/test_d_recovery_boundary.py",
+      "sha256": "2e61da51c2c71f4c5d56c275ed8c98cda2d44d93c9a9f8d87070e345270052b1",
+      "original": "/private/tmp/fg-d-review-eNCyDK/test_d_recovery_boundary.py",
+      "original_sha256": "2e61da51c2c71f4c5d56c275ed8c98cda2d44d93c9a9f8d87070e345270052b1"
+    },
+    {
+      "file": "independent/first-pass.log.gz",
+      "sha256": "e7809b6a5052a34bcfe273826a3ada310a37887eda625272e5f75c6d8bf8aa16",
+      "original": "/private/tmp/fg-d-review-eNCyDK/first-pass.log",
+      "original_sha256": "c2248a6855771ffa834236f26f858c7d90872f6e16383b824279a3c4b9bb8673",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/first-pass.xml.gz",
+      "sha256": "478f4cb5846177a3f8fd863830bca7cfda6cefb28b972fef84c7f0c3d6db3baf",
+      "original": "/private/tmp/fg-d-review-eNCyDK/first-pass.xml",
+      "original_sha256": "1daf18fa6dcb11ba4e0e93ad58da5def8c4d294d0f9065d93fce0a56466edbde",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/composed.log.gz",
+      "sha256": "7979a190b597b2fbc6f17bc1feecc3a9d4c58f84910e7503a26942d8cc8b6423",
+      "original": "/private/tmp/fg-d-review-eNCyDK/composed.log",
+      "original_sha256": "96f2fa21b0862205d087e4feb53f3f817042c1b87630d6f9d7a97eb19f2316cb",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/composed.xml.gz",
+      "sha256": "81bc2c1aa26cb9385de30277f2390e92030c16f606d3268d72d8e65a3aca194b",
+      "original": "/private/tmp/fg-d-review-eNCyDK/composed.xml",
+      "original_sha256": "ca9f06746ec7b9ef923da30c351bfc244110a757dd1eb118ac0b30af091ffa6a",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/contract-review.log.gz",
+      "sha256": "e1b2f628bc0a493e79c4d6b09566c8e3f8d35b519e6c6c1fb8033accd42c57bc",
+      "original": "/private/tmp/fg-d-review-eNCyDK/contract-review.log",
+      "original_sha256": "1002636da9ec4d057bbe56174c4982d105153bb4a460d4df57715f3d3d87069d",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/contract-review.xml.gz",
+      "sha256": "23437446d66ecced76f7752ca907f97076abc2660adf30ee4b80116032e9da5b",
+      "original": "/private/tmp/fg-d-review-eNCyDK/contract-review.xml",
+      "original_sha256": "3ea7de8680a90dd8c8d9515a0869c0f0e06305adc77d8b87a7f5fadc7157eefe",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/final-review.log.gz",
+      "sha256": "8569611def025f2c8c06e2d7e33f40d7f2ce600a838d9523d52069d6b7ec7237",
+      "original": "/private/tmp/fg-d-review-eNCyDK/final-review.log",
+      "original_sha256": "fbffc814dbde202e8ec183804f7836ee85575b5167ba385100ba48acb3ab7443",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/final-review.xml.gz",
+      "sha256": "ff364a78e47190864f6e1377207509c2718eb221dd927fa9889531a5f4eff3a0",
+      "original": "/private/tmp/fg-d-review-eNCyDK/final-review.xml",
+      "original_sha256": "bef8207d0df8b21c53f0f586c6fbb7b163634e780608ae042ff9dad8046bbf6c",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "independent/original-manifest.sha256",
+      "sha256": "d12c71415d7be2b447e4dcd1e11ad4b5937a1b2f0d5ffe976801b0d6b61205df",
+      "original": "/private/tmp/fg-d-review-eNCyDK/review-artifacts.sha256",
+      "original_sha256": "d12c71415d7be2b447e4dcd1e11ad4b5937a1b2f0d5ffe976801b0d6b61205df"
+    },
+    {
+      "file": "frontend-check.json",
+      "sha256": "aeafb810d4a544ffe44c2eb7e5f2b57f2309d76fe629931a9c3bd6221629b848",
+      "copy": "summary from captured command exit codes and raw logs"
+    },
+    {
+      "file": "code-checkpoint.json",
+      "sha256": "80b13bcaaa664835e77925583172e10d35a13b7bf2212cf8860cf5d72fed2f7e",
+      "copy": "committed source verification and cumulative package trees"
+    }
+  ],
+  "code_commit": "aebee83c3feda56c2df47e61a13919bf037829f9"
+}

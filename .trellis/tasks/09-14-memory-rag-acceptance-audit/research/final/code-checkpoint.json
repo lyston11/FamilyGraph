@@ -1,0 +1,14 @@
+{
+  "code_commit": "aebee83c3feda56c2df47e61a13919bf037829f9",
+  "base_head_during_tests": "c253cb6028704778c1fed78db3000919333039b1",
+  "backend_source_hashes_match_commit": true,
+  "agent_shared_diff_from_b": "empty",
+  "b_checkpoint": "bc76e95c7091fcb9977dc6595d5e65e4181f1329",
+  "package_trees": {
+    "backend": "3a5c4f70dc6537f3f5d1b3439d0a3d44011fcdab",
+    "agent": "e13401a5fb3264751e23b6a3c2993cc881184dcb",
+    "frontend": "1252cc132a00f34c11c4a2551f61b5ad36e988ac",
+    "shared": "06bb7460258941206e467fc2a2057949e656c542",
+    "scripts": "98e703d6969b081bc2a77794c1e0480e0c74507b"
+  }
+}
