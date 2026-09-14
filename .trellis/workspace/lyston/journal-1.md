@@ -1048,3 +1048,36 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 
 - MR-23/MR-26的P2保持独立planning；E的主动检索、导入、混合检索、全请求预算和跨Run持久摘要按既有采用门槛另行推进。
 - 扩展检索仍7/10、MRR 0.65；前端一次jsdom清理stderr未复现，保留记录。真实Provider质量、生产性能、线上开关及部署尚未验证。
+
+
+## Session 29: 修复 Provider 配置任务的重复活动副本与归档状态
+<!-- trellis-session: v=2 fp=27d4c9eb702fc26d -->
+
+**Date**: 2026-09-14
+**Task**: 修复 Provider 配置任务的重复活动副本与归档状态
+**Branch**: `main`
+
+### Summary
+
+保留09-12-agent-provider-config-ux在2026-09-13的正式completed归档，清理造成in_progress误报的活动旧副本、一个过期会话指针和两条旧上下文路径。
+
+### Main Changes
+
+- 逐字比较证明旧副本无新增工作，整体移至仓库外私有备份；沿用正式归档，不生成第二份归档或更改原完成日期。
+- 通过Trellis归档辅助函数清理1个过期会话；修复归档implement/check清单，补记提交与修复证据，更新HANDOFF。
+- [归档修复记录](../../tasks/archive/2026-09/09-12-agent-provider-config-ux/research/duplicate-cleanup.md)及JSON回执已保存；其他任务未提交工作保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3fb2877` | fix(trellis): reconcile provider task archive state |
+
+### Testing
+
+- [OK] Trellis归档清单validate通过（3+3条）；in_progress列表不再包含该任务；旧会话引用为0。原PRD和研究材料哈希一致，修改范围与git diff --check通过。
+- [OK] 当前Provider页面与相关测试对原交付9017a6d无差异；本轮无业务代码改动，未重复应用测试。
+
+### Status
+
+[OK] **Completed**
