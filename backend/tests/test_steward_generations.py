@@ -137,46 +137,33 @@ def test_fingerprint_short_circuit_skips_rebuild(db_session, _steward_enabled) -
 def test_retry_budget_exhaustion_fails_generation(
     db_session, monkeypatch, _steward_enabled
 ) -> None:
-    viewer, space, _fact = _seed_family(db_session, "gen-budget")
-    pfv.initialize_account_views(
-        db_session, account_id=_account_id(db_session, viewer.id), user_id=viewer.id
-    )
-    db_session.commit()
+    from app.services import steward_pipeline, steward_runtime
+
+    _viewer, space, _fact = _seed_family(db_session, "gen-budget")
     monkeypatch.setattr(config, "STEWARD_STAGE_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(config, "STEWARD_RETRY_BACKOFF_FIRST_SECONDS", 0)
+    calls = []
 
-    import app.services.personal_family_view as pfv_mod
-
-    calls = {"n": 0}
-
-    def flaky(session, *, account, space_id):
-        calls["n"] += 1
+    def flaky(state):
+        calls.append(1)
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(pfv_mod, "rebuild_view", flaky)
-    # 第一次失败：预算记账（attempts=1 < max=2），作业照常结算（视图 failed）
-    _job1, _summary1 = _run_job(db_session, space.id)
-    db_session.rollback()
-    # 第二次失败：attempts=2 达到上限 → 整代失败（raise）
-    with pytest.raises(pfv_mod.StewardStageBudgetExhausted):
-        _run_job(db_session, space.id)
-    db_session.rollback()
-    # 预算已耗尽：同指纹再次执行仍整代失败，不重复执行重计算
-    calls["n"] = 0
-    with pytest.raises(pfv_mod.StewardStageBudgetExhausted):
-        _run_job(db_session, space.id)
+    monkeypatch.setattr(steward_runtime, "run_slice", flaky)
+    for _ in range(3):
+        with pytest.raises(steward_pipeline.RequiredTargetFailed):
+            _run_job(db_session, space.id)
+        db_session.rollback()
+    assert len(calls) == 2
     job = db_session.scalar(
         select(StewardJob).where(StewardJob.space_id == space.id).order_by(StewardJob.id.desc())
     )
-    assert job is not None
-    # 水位从未推进（必需目标耗尽 → 不发布）
-    assert job.last_event_cursor is None
-
-    budget = db_session.execute(
+    assert job is not None and job.status == "failed" and job.last_event_cursor is None
+    budget = db_session.scalar(
         select(steward_generations.StewardRetryBudget).where(
             steward_generations.StewardRetryBudget.space_id == space.id
         )
-    ).scalar()
-    assert budget is not None and budget.exhausted
+    )
+    assert budget is not None and budget.exhausted and budget.attempts == 2
     gen = db_session.scalar(
         select(StewardGeneration)
         .where(StewardGeneration.space_id == space.id)
@@ -207,14 +194,14 @@ def test_demand_endpoint_authorization_and_idempotency(
     # 先结算种子事件自动登记的作业，保证 demand 从干净队列开始
     _run_job(db_session, space.id)
     db_session.commit()
-    # 合法成员：queued；focus 必须在授权骨架内
+    # 完整且输入未变的发布已满足需求；focus 必须在授权骨架内。
     assert (
         client.post(
             "/api/personal-family-view/demand",
             json={"space_id": space.id, "focus_user_id": viewer.id},
             headers=headers,
         ).json()["status"]
-        == "queued"
+        == "already_active"
     )
     # 活跃作业存在 → already_active（重复登记合并）
     assert (

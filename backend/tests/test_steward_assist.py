@@ -643,27 +643,38 @@ def test_slow_http_does_not_block_other_space_writes(db_session, monkeypatch) ->
 
 
 def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
-    """辅助执行线程被杀死（HTTP 永不返回）→ core 结果不受影响；批次随后由
-    恢复器按 unknown 收敛（保守计费，不自动重发）。"""
+    """Sent-but-unfinished HTTP is recovered as unknown without leaking a test worker."""
     space, _a, _b, event = _spouse_space(db_session, "assist-kill")
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
     gate = threading.Event()
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _slow_transport(calls, gate))
 
+    class SimulatedWorkerLoss(BaseException):
+        pass
+
+    def unfinished_transport(url, headers, payload, timeout):
+        calls.append({"url": url})
+        assert gate.wait(timeout=10), "test did not stop its worker"
+        # Leave in_flight untouched, exactly as a process disappearing after
+        # send. Exception would instead be handled as an ordinary HTTP result.
+        raise SimulatedWorkerLoss
+
+    monkeypatch.setattr(steward_assist, "_post_json", unfinished_transport)
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
     assert steward_assist.schedule_due_batch(db_session) is not None
-
+    batch_id = batch.id
     errors: list[Exception] = []
 
     def _run_batch() -> None:
         worker = SessionLocal()
         try:
-            steward_assist.execute_batch(worker, batch.id)
-        except Exception as exc:  # pragma: no cover - 调试输出
+            steward_assist.execute_batch(worker, batch_id)
+        except SimulatedWorkerLoss:
+            pass
+        except Exception as exc:  # pragma: no cover - exposed by assertion
             errors.append(exc)
         finally:
             worker.close()
@@ -675,27 +686,29 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
         while not calls and not errors and time.monotonic() < deadline:
             time.sleep(0.01)
         assert calls, f"transport never entered; errors={errors}"
+        db_session.rollback()
+        db_session.expire_all()
+        batch = _batch(db_session, job.id)
+        batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
+        db_session.commit()
+        assert steward_assist.recover_stuck_batches(db_session) == 1
+
+        assert db_session.get(StewardJob, job.id).status == "succeeded"
+        assert len(_cards(db_session, space.id)) == 2
+        db_session.expire_all()
+        rows = _calls(db_session, job.id)
+        assert rows and rows[0].status == "unknown"
+        assert (
+            rows[0].billed_tokens == rows[0].reserved_input_tokens + rows[0].reserved_output_tokens
+        )
+        batch = _batch(db_session, job.id)
+        assert batch.status == "failed"
+        assert batch.error_code == steward_assist.REASON_NETWORK_UNKNOWN
     finally:
-        # 模拟杀死：不 set gate，线程随测试进程回收；lease 置为过期模拟崩溃后时间流逝
-        pass
-    db_session.rollback()  # 放弃本会话对 applying 状态的缓存视图
-    db_session.expire_all()
-    batch = _batch(db_session, job.id)
-    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
-    db_session.commit()
-
-    assert steward_assist.recover_stuck_batches(db_session) == 1
-
-    # core 结果完好（未被辅助崩溃回滚）
-    assert db_session.get(StewardJob, job.id).status == "succeeded"
-    assert len(_cards(db_session, space.id)) == 2
-    db_session.expire_all()
-    rows = _calls(db_session, job.id)
-    assert rows and rows[0].status == "unknown"
-    assert rows[0].billed_tokens == rows[0].reserved_input_tokens + rows[0].reserved_output_tokens
-    batch = _batch(db_session, job.id)
-    assert batch.status == "failed"
-    assert batch.error_code == steward_assist.REASON_NETWORK_UNKNOWN
+        gate.set()
+        executor.join(timeout=15)
+        assert not executor.is_alive()
+    assert errors == []
 
 
 # ---- AC-2：四个崩溃点恢复 ----

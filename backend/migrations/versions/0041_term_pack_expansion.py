@@ -36,16 +36,62 @@ _SEED_TIME = datetime(2026, 9, 13)
 # (level, locale, code) 在库内查重后插入缺失行。
 _PREEXISTING_ZH_CN_CODES = frozenset(
     {
-        "Um", "Uf", "Um-Um", "Um-Uf", "Uf-Um", "Uf-Uf", "Um-Uf-Bm", "Uf-Bm", "Uf-Bf",
-        "Um-Bm", "Um-Bf", "Uam", "Uaf", "Usm", "Usf", "Ug", "Ugm", "Ugf",
-        "Dm", "Df", "D", "Bm", "Bf", "B", "Sm", "Sf", "S", "Pm", "Pf", "P",
-        "Sm-Um", "Sm-Uf", "Sf-Um", "Sf-Uf", "Dm-Sf", "Df-Sm",
+        "Um",
+        "Uf",
+        "Um-Um",
+        "Um-Uf",
+        "Uf-Um",
+        "Uf-Uf",
+        "Um-Uf-Bm",
+        "Uf-Bm",
+        "Uf-Bf",
+        "Um-Bm",
+        "Um-Bf",
+        "Uam",
+        "Uaf",
+        "Usm",
+        "Usf",
+        "Ug",
+        "Ugm",
+        "Ugf",
+        "Dm",
+        "Df",
+        "D",
+        "Bm",
+        "Bf",
+        "B",
+        "Sm",
+        "Sf",
+        "S",
+        "Pm",
+        "Pf",
+        "P",
+        "Sm-Um",
+        "Sm-Uf",
+        "Sf-Um",
+        "Sf-Uf",
+        "Dm-Sf",
+        "Df-Sm",
     }
 )
 _PREEXISTING_SYSTEM_CODES = frozenset(
     {
-        "SELF", "U", "Um", "Uf", "D", "Dm", "Df", "B", "Bm", "Bf",
-        "S", "Sm", "Sf", "P", "Pm", "Pf",
+        "SELF",
+        "U",
+        "Um",
+        "Uf",
+        "D",
+        "Dm",
+        "Df",
+        "B",
+        "Bm",
+        "Bf",
+        "S",
+        "Sm",
+        "Sf",
+        "P",
+        "Pm",
+        "Pf",
     }
 )
 
@@ -117,9 +163,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # 仅删除本迁移引入的 (level, locale, concept_code) 组合；手工写入的
     # 同码异词行（若有）同样在列——种子层不存在用户数据。
-    new_keys = {
-        (row["level"], row["locale"], row["concept_code"]) for row in _new_seed_rows()
-    }
+    new_keys = {(row["level"], row["locale"], row["concept_code"]) for row in _new_seed_rows()}
     if not new_keys:
         return
     conn = op.get_bind()

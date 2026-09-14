@@ -59,8 +59,9 @@ def test_household_card_happy_path_fields(client, db_session) -> None:
     assert payload["space_id"] == space.id
     assert payload["space_kind"] == "household"
     assert payload["space_name"] == space.name
-    assert isinstance(payload["view_version"], int) and payload["view_version"] >= 1
-    assert payload["computed_at"] is not None
+    # 成员卡无需等待亲缘计算，首次 GET 不创建旧 PFV 或同步重算。
+    assert payload["view_version"] == 0
+    assert payload["computed_at"] is None
 
     # viewer = 管理员本人；成员列表不含 viewer，且投影与 PersonalFamilyView 同口径
     assert payload["viewer"]["id"] == admin.id

@@ -3,7 +3,7 @@
 覆盖：
 - 慢计算（路径解析被 monkeypatch 为阻塞）期间，独立连接的写事务能在
   busy_timeout 内完成提交——旧整族立即事务形态下该写入必然超时失败；
-- 计算完成并发布后，作业结果、派生缓存与视图照常落库（功能等价回归）；
+- 计算完成后原子发布版本化视图，按人物对读者仍可获得完整结果；
 - 发布阶段的租约栅栏：执行中途租约过期时发布被拒（409），作业由
   reaper 收敛，不冒充成功。
 """
@@ -19,9 +19,14 @@ from sqlalchemy import select
 
 from app import config
 from app.db import SessionLocal
-from app.models.derived_fact import DerivedFact
-from app.models.personal_family_view import PersonalFamilyView
-from app.services import steward
+from app.models.account import Account
+from app.models.steward import (
+    StewardGenerationView,
+    StewardJob,
+    StewardPublication,
+    StewardViewTarget,
+)
+from app.services import steward, steward_runtime
 from app.services.source_facts import create_source_fact, transition_source_fact
 from app.utils.timeutil import utcnow
 
@@ -59,68 +64,61 @@ def test_slow_compute_does_not_block_concurrent_writer(
     db_session, monkeypatch: pytest.MonkeyPatch, _steward_enabled
 ) -> None:
     """路径解析阻塞期间，独立连接写入在 busy_timeout=5000ms 内完成。"""
-    (viewer, account), space = _seed_family(db_session, "shorttx")
+    (_viewer, account), space = _seed_family(db_session, "shorttx")
     job, _created = steward.enqueue_steward_job(
         db_session, space_id=space.id, cause="integrity_scan", trigger_cursor=1
     )
     grant = steward.lease_next_steward_job(db_session, leased_by="w1")
     assert grant is not None
 
-    release = threading.Event()
+    job_id, attempt, account_id = job.id, grant.attempt, account.id
+    entered, release = threading.Event(), threading.Event()
+    original = steward_runtime.run_slice
 
-    import app.services.relationship_resolver as resolver
+    def slow_slice(state, **kwargs):
+        entered.set()
+        assert release.wait(timeout=10), "test did not release the CPU slice"
+        return original(state, **kwargs)
 
-    original = resolver.resolve_relationship
-
-    def slow_resolve(session, *, viewer_user_id, target_user_id, space_id, **kwargs):
-        result = original(
-            session,
-            viewer_user_id=viewer_user_id,
-            target_user_id=target_user_id,
-            space_id=space_id,
-            **kwargs,
-        )
-        # 只在第一批解析完成后阻塞一次，模拟长 CPU 计算（读锁外）
-        release.wait(timeout=10)
-        return result
-
-    monkeypatch.setattr(resolver, "resolve_relationship", slow_resolve)
-    # steward 模块内通过绝对导入使用 resolver；确保补丁覆盖
-    import app.services.steward as steward_mod
-
-    monkeypatch.setattr(steward_mod, "resolve_relationship", slow_resolve, raising=False)
-
+    monkeypatch.setattr(steward_runtime, "run_slice", slow_slice)
     errors: list[Exception] = []
+    error_lock = threading.Lock()
 
     def run_job() -> None:
         try:
-            steward.run_steward_job(db_session, job, worker_id="w1", expected_attempt=grant.attempt)
+            with SessionLocal() as worker_session:
+                current = worker_session.get(StewardJob, job_id)
+                assert current is not None
+                steward.run_steward_job(
+                    worker_session, current, worker_id="w1", expected_attempt=attempt
+                )
         except Exception as exc:  # pragma: no cover - 失败路径由断言披露
-            errors.append(exc)
+            with error_lock:
+                errors.append(exc)
 
     worker = threading.Thread(target=run_job)
     worker.start()
     try:
-        # 等待计算进入阻塞（worker 持有读连接，无写锁）
-        time.sleep(0.4)
+        assert entered.wait(timeout=10), "worker never entered the actual search path"
         # 独立连接写事务：模拟并发登录/lease 写入
         started = time.monotonic()
         with SessionLocal() as other:
-            from app.models.user import User
-
-            probe = create_user_with_pin(other, "shorttx-probe", "654321", gender="f")
+            probe = other.get(Account, account_id)
+            assert probe is not None
+            probe.failed_attempts += 1
             other.commit()
-            assert other.get(User, probe.id) is not None
+            assert other.get(Account, account_id).failed_attempts == 1
         elapsed_ms = (time.monotonic() - started) * 1000
         assert elapsed_ms < 5000, f"并发写入被写锁阻塞 {elapsed_ms:.0f}ms"
     finally:
         release.set()
         worker.join(timeout=30)
+    assert not worker.is_alive()
     assert errors == []
 
 
 def test_short_tx_publishes_results(db_session, _steward_enabled) -> None:
-    """短事务流水线发布后：作业 succeeded、派生缓存与视图已落库。"""
+    """发布指针只指向完整版本化结果，普通读取获得两位亲人的称谓。"""
     (viewer, account), space = _seed_family(db_session, "shorttx-publish")
     from app.services import personal_family_view as pfv
 
@@ -138,19 +136,22 @@ def test_short_tx_publishes_results(db_session, _steward_enabled) -> None:
     assert (settled.last_event_cursor or 0) >= 1
     rows = list(
         db_session.scalars(
-            select(DerivedFact).where(
-                DerivedFact.space_id == space.id, DerivedFact.viewer_user_id == viewer.id
+            select(StewardViewTarget)
+            .join(StewardGenerationView)
+            .join(
+                StewardPublication,
+                StewardPublication.generation_id == StewardGenerationView.generation_id,
+            )
+            .where(
+                StewardPublication.space_id == space.id,
+                StewardGenerationView.root_user_id == viewer.id,
             )
         )
     )
-    assert len(rows) == 2
-    view = db_session.scalar(
-        select(PersonalFamilyView).where(
-            PersonalFamilyView.space_id == space.id,
-            PersonalFamilyView.viewer_account_id == account.id,
-        )
-    )
-    assert view is not None and view.status == "current"
+    assert len(rows) == 2 and all(row.status == "ready" for row in rows)
+    payload = pfv.current_view_payload(db_session, account=account, space_id=space.id)
+    assert payload is not None and payload["status"] == "current"
+    assert len(payload["edges"]) == 2
 
 
 def test_publish_rejected_when_lease_expired(db_session, _steward_enabled) -> None:

@@ -67,7 +67,9 @@ ADMIN_V1_ROUTES = {
     # 09-11 Steward 运维（仅 admin listener；读不受引擎门禁，rerun 受 STEWARD_ENABLED 门禁）
     "/admin-api/v1/steward/status",
     "/admin-api/v1/steward/jobs",
+    "/admin-api/v1/steward/deliveries",
     "/admin-api/v1/steward/spaces/{space_id}/rerun",
+    "/admin-api/v1/steward/spaces/{space_id}/deliveries/{intent_id}/retry",
     "/admin-api/v1/platform-features",
     # 09-13 观测：agent 延迟指标（只读，admin listener）
     "/admin-api/v1/agent/latency",
@@ -131,8 +133,7 @@ def test_family_app_registers_no_admin_routes(client: TestClient) -> None:
 def test_admin_app_registers_only_admin_api_routes() -> None:
     """8002 业务路由 == 认证面七条 + /admin-api/v1 模型路由，无其他任何路由。
 
-    写端点仅限 access-sessions、manager-applications approve/reject 与 09-06
-    迁入的 agent 治理（providers 注册/更新、platform-defaults 覆盖）；
+    写端点包括会话签发、审批、agent 治理、Steward 重跑/单项交付重试与平台开关；
     家庭 /api 路由与旧 admin.py 不得出现在 admin listener。
     """
     registered = {getattr(route, "path", "") for route in admin_app.routes}
@@ -145,7 +146,7 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
     ), sorted(business)
     # 家庭面路由不得反向出现在 admin listener
     assert not any(path.startswith("/api/") for path in registered)
-    # 审批与 agent 治理之外无任何写能力：v1 路由面写端点全集如下
+    # v1 路由面写端点精确白名单，新增能力必须显式纳入隔离合同。
     writes = {
         route.path
         for route in admin_app.routes
@@ -160,8 +161,9 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
         "/admin-api/v1/agent/providers",
         "/admin-api/v1/agent/providers/{provider_id}",
         "/admin-api/v1/agent/platform-defaults",
-        # 09-11：admin steward 唯一写端点（单空间重跑，STEWARD_ENABLED 门禁 + 幂等键）
+        # Steward 恢复仅限 core 重跑和单项交付有限重试。
         "/admin-api/v1/steward/spaces/{space_id}/rerun",
+        "/admin-api/v1/steward/spaces/{space_id}/deliveries/{intent_id}/retry",
         "/admin-api/v1/platform-features",
     }
 
@@ -182,6 +184,8 @@ def test_admin_api_prefix_on_family_listener_is_ordinary_404(client: TestClient)
         "/admin-api/auth/login",
         "/admin-api/auth/me",
         "/admin-api/health",
+        "/admin-api/v1/steward/deliveries",
+        "/admin-api/v1/steward/spaces/1/deliveries/1/retry",
         "/admin-api/anything/else",
     )
     for probe in probes:
@@ -191,6 +195,9 @@ def test_admin_api_prefix_on_family_listener_is_ordinary_404(client: TestClient)
         assert response.json() == random_unknown.json(), probe
     # POST 同样普通 404
     assert client.post("/admin-api/auth/login", json={}).status_code == 404
+    retry = client.post("/admin-api/v1/steward/spaces/1/deliveries/1/retry", json={})
+    assert retry.status_code == 404
+    assert retry.json() == client.post("/definitely-not-here", json={}).json()
     assert client.post("/definitely-not-here", json={}).status_code == 404
 
 
@@ -208,7 +215,12 @@ def test_family_token_rejected_on_admin_listener(
     family_login = client.post("/api/auth/login", json={"name": "家庭用户", "pin": "123456"})
     assert family_login.status_code == 200
     family_headers = {"Authorization": f"Bearer {family_login.json()['access_token']}"}
-    for method, route in (("get", "/admin-api/auth/me"), ("put", "/admin-api/auth/username")):
+    for method, route in (
+        ("get", "/admin-api/auth/me"),
+        ("put", "/admin-api/auth/username"),
+        ("get", "/admin-api/v1/steward/deliveries"),
+        ("post", "/admin-api/v1/steward/spaces/1/deliveries/1/retry"),
+    ):
         response = getattr(admin_client, method)(route, headers=family_headers)
         assert response.status_code == 401, route
         assert response.json()["error"]["code"] == "ADMIN_UNAUTHORIZED"

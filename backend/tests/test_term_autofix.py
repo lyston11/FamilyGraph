@@ -468,8 +468,8 @@ def test_pfv_golden_terms_from_screenshot(db_session) -> None:
 
 
 def test_pfv_computation_version_bumped(db_session) -> None:
-    """词典/解析升级触发全量重算：computation_version 升至 pfv-v3。"""
-    assert personal_family_view.COMPUTATION_VERSION == "pfv-v3"
+    """版本化发布升级计算合同，旧称谓缓存不能直接充当当前完整结果。"""
+    assert personal_family_view.COMPUTATION_VERSION == "pfv-v4"
 
 
 def test_compose_resolution_view_sibling_terms(db_session) -> None:

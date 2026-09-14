@@ -2,8 +2,8 @@
 
 缓存正确性合同：
 - evidence_hash = sha256(snapshot_hash + algorithm_version)；snapshot_hash 是
-  参与计算 confirmed facts 的 (id, revision, type) 有序集指纹。读取时重算当前
-  指纹并与缓存行比较，不一致即重算+upsert——过期缓存绝不返回（AC-KI8）。
+  完整授权确认图的版本化指纹（含节点性别/事实内容/桥接，不含称谓）。先
+  读取图指纹和缓存行，只有失配才搜索——有效缓存既不搜索也不写入（AC-KI8）。
 - KINSHIP_ALGO_VERSION 升版使旧缓存整体自然失效（evidence_hash 不再匹配）。
 - 失效入口 invalidate_for_event 消费 E1 的 source_fact.* 领域事件 payload
   （fact 双方 user ids + space），按最小充分规则删除 subject/object 作为任一端
@@ -23,12 +23,13 @@ from sqlalchemy.orm import Session
 from app.models.derived_fact import DerivedFact
 from app.models.user import User
 from app.models.v2_foundation import DomainEvent
+from app.services.relationship_graph import RelationshipGraph, load_graph
 from app.services.relationship_resolver import (
     PathStep,
     RelationshipResolution,
     describe_path,
     path_class_for_path,
-    resolve_relationship,
+    resolve_graph,
     steps_to_json,
 )
 from app.utils.timeutil import utcnow
@@ -81,18 +82,47 @@ def _path_class_from_json(
     )
 
 
-_EMPTY_RESOLUTION = RelationshipResolution(
-    viewer_user_id=0,
-    target_user_id=0,
-    space_id=0,
-    found=False,
-    path_class="none",
-    concept_code=None,
-)
+def resolution_from_cached_row(
+    row: DerivedFact, *, graph: RelationshipGraph
+) -> RelationshipResolution | None:
+    """Validate before reconstructing a complete detached structural result.
+
+    Reconstruction uses the already-loaded graph's genders, never a second path
+    search or another DB read. Terms-only updates therefore reuse the same paths.
+    """
+    if (
+        row.viewer_user_id != graph.viewer_user_id
+        or row.space_id != graph.space_id
+        or row.evidence_hash != evidence_hash_for(graph.snapshot_hash)
+        or row.algorithm_version != KINSHIP_ALGO_VERSION
+    ):
+        return None
+    main_path = steps_from_json(list(row.main_path_json))
+    alt_paths = tuple(steps_from_json(list(path)) for path in row.alt_paths_json)
+    return RelationshipResolution(
+        viewer_user_id=row.viewer_user_id,
+        target_user_id=row.target_user_id,
+        space_id=row.space_id,
+        found=True,
+        path_class=path_class_for_path(
+            viewer_user_id=row.viewer_user_id, target_user_id=row.target_user_id, path=main_path
+        ),
+        concept_code=row.concept_code,
+        main_path=main_path,
+        alt_paths=alt_paths,
+        alt_descriptions=tuple(describe_path(path, graph.node_genders) for path in alt_paths),
+        explanation_structural=(
+            "这是你自己。"
+            if row.viewer_user_id == row.target_user_id
+            else describe_path(main_path, graph.node_genders)
+        ),
+        snapshot_hash=graph.snapshot_hash,
+        node_genders=graph.node_genders,
+    )
 
 
-def _result_from_row(row: DerivedFact) -> DerivedFactResult:
-    """从缓存行构造结果（cache_hit=True 路径；不回填结构解析以省查询）。"""
+def _result_from_row(row: DerivedFact, resolution: RelationshipResolution) -> DerivedFactResult:
+    """A cache hit has the same complete structural DTO as a cold computation."""
     return DerivedFactResult(
         cache_hit=True,
         found=True,
@@ -107,13 +137,13 @@ def _result_from_row(row: DerivedFact) -> DerivedFactResult:
         ),
         main_path_json=list(row.main_path_json),
         alt_paths_json=list(row.alt_paths_json),
-        alt_descriptions=(),
-        explanation_structural=None,
+        alt_descriptions=resolution.alt_descriptions,
+        explanation_structural=resolution.explanation_structural,
         evidence_fact_ids=[int(fid) for fid in row.evidence_fact_ids_json],
         evidence_hash=row.evidence_hash,
         algorithm_version=row.algorithm_version,
         term_version=row.term_version,
-        resolution=_EMPTY_RESOLUTION,
+        resolution=resolution,
     )
 
 
@@ -123,16 +153,21 @@ def compute_pair(
     viewer_user_id: int,
     target_user_id: int,
     space_id: int,
+    graph: RelationshipGraph | None = None,
+    force_rebuild: bool = False,
 ) -> tuple[RelationshipResolution, DerivedFact | None, str | None]:
-    """纯读取阶段：解析路径 + 读取既有缓存行，不做任何写入（不 flush）。
+    """Read graph/cache first, then compute only a missing structural result.
 
-    返回 (resolution, 既有缓存行或 None, 当前 evidence_hash 或 None)。
-    供短事务执行器把「CPU 计算（无写锁）」与「缓存行 upsert（短写事务）」
-    分离：计算可以长时间进行而不占有 SQLite 写锁。
+    Callers may reuse graph only within the same explicit input snapshot. There
+    is no Session-global memoization that can survive a commit/input change.
+    No flush or writes occur here; the caller controls the on-demand transaction.
     """
-    resolution = resolve_relationship(
-        session, viewer_user_id=viewer_user_id, target_user_id=target_user_id, space_id=space_id
-    )
+    if graph is None:
+        graph = load_graph(session, viewer_user_id=viewer_user_id, space_id=space_id)
+    elif graph.viewer_user_id != viewer_user_id or graph.space_id != space_id:
+        raise ValueError("graph scope does not match the requested pair")
+    if any(edge.fact_id < 0 for edges in graph.adjacency.values() for edge in edges):
+        raise ValueError("DerivedFact cache requires a confirmed graph")
     row = session.scalar(
         select(DerivedFact).where(
             DerivedFact.viewer_user_id == viewer_user_id,
@@ -140,6 +175,36 @@ def compute_pair(
             DerivedFact.space_id == space_id,
         )
     )
+    if not force_rebuild and row is not None:
+        cached = resolution_from_cached_row(row, graph=graph)
+        if cached is not None:
+            return cached, row, row.evidence_hash
+    if not force_rebuild:
+        # A published PFV target already contains the same structural result.
+        # The helper follows the publication pointer; draft staging is never a
+        # cache source for ordinary Agent/kinship consumers.
+        from app.services.steward_pipeline import published_pair_resolution
+
+        published = published_pair_resolution(
+            session,
+            viewer_user_id=viewer_user_id,
+            target_user_id=target_user_id,
+            space_id=space_id,
+            graph_hash=graph.snapshot_hash,
+        )
+        if (
+            published is not None
+            and published.viewer_user_id == viewer_user_id
+            and published.target_user_id == target_user_id
+            and published.space_id == space_id
+            and published.snapshot_hash == graph.snapshot_hash
+        ):
+            return (
+                published,
+                row,
+                evidence_hash_for(graph.snapshot_hash) if published.found else None,
+            )
+    resolution = resolve_graph(graph, target_user_id=target_user_id)
     current_hash = evidence_hash_for(resolution.snapshot_hash) if resolution.found else None
     return resolution, row, current_hash
 
@@ -149,6 +214,8 @@ def apply_pair_result(
     resolution: RelationshipResolution,
     row: DerivedFact | None,
     current_hash: str | None,
+    *,
+    force_rebuild: bool = False,
 ) -> DerivedFactResult:
     """写入阶段：把 compute_pair 的结果 upsert/删除进缓存（调用方决定事务边界）。
 
@@ -182,6 +249,13 @@ def apply_pair_result(
         )
 
     assert current_hash is not None
+    if (
+        not force_rebuild
+        and row is not None
+        and row.evidence_hash == current_hash
+        and row.algorithm_version == KINSHIP_ALGO_VERSION
+    ):
+        return _result_from_row(row, resolution)
     main_json = steps_to_json(resolution.main_path)
     alts_json = [steps_to_json(path) for path in resolution.alt_paths]
     now = utcnow()
@@ -244,88 +318,13 @@ def get_or_compute(
     force_rebuild 供 rebuild_space/运维强制全量重算。
     """
     resolution, row, current_hash = compute_pair(
-        session, viewer_user_id=viewer_user_id, target_user_id=target_user_id, space_id=space_id
-    )
-
-    if not resolution.found:
-        if row is not None:
-            session.delete(row)
-            session.flush()
-        return DerivedFactResult(
-            cache_hit=False,
-            found=False,
-            viewer_user_id=viewer_user_id,
-            target_user_id=target_user_id,
-            space_id=space_id,
-            concept_code=None,
-            path_class=resolution.path_class,
-            main_path_json=[],
-            alt_paths_json=[],
-            alt_descriptions=(),
-            explanation_structural=None,
-            evidence_fact_ids=[],
-            evidence_hash=None,
-            algorithm_version=KINSHIP_ALGO_VERSION,
-            term_version=None,
-            resolution=resolution,
-        )
-
-    current_evidence_hash = current_hash
-    assert current_evidence_hash is not None  # found=True 保证有指纹
-    if (
-        not force_rebuild
-        and row is not None
-        and row.evidence_hash == current_evidence_hash
-        and row.algorithm_version == KINSHIP_ALGO_VERSION
-    ):
-        return _result_from_row(row)
-
-    main_json = steps_to_json(resolution.main_path)
-    alts_json = [steps_to_json(path) for path in resolution.alt_paths]
-    now = utcnow()
-    if row is None:
-        row = DerivedFact(
-            viewer_user_id=viewer_user_id,
-            target_user_id=target_user_id,
-            space_id=space_id,
-            concept_code=resolution.concept_code or "",
-            main_path_json=main_json,
-            alt_paths_json=alts_json,
-            evidence_fact_ids_json=_fact_ids(resolution),
-            evidence_hash=current_evidence_hash,
-            algorithm_version=KINSHIP_ALGO_VERSION,
-            term_version=None,  # E3 TermRegistry 接入后填充
-            computed_at=now,
-        )
-        session.add(row)
-    else:
-        row.concept_code = resolution.concept_code or ""
-        row.main_path_json = main_json
-        row.alt_paths_json = alts_json
-        row.evidence_fact_ids_json = _fact_ids(resolution)
-        row.evidence_hash = current_evidence_hash
-        row.algorithm_version = KINSHIP_ALGO_VERSION
-        row.computed_at = now
-    session.flush()
-
-    return DerivedFactResult(
-        cache_hit=False,
-        found=True,
+        session,
         viewer_user_id=viewer_user_id,
         target_user_id=target_user_id,
         space_id=space_id,
-        concept_code=resolution.concept_code,
-        path_class=resolution.path_class,
-        main_path_json=main_json,
-        alt_paths_json=alts_json,
-        alt_descriptions=resolution.alt_descriptions,
-        explanation_structural=resolution.explanation_structural,
-        evidence_fact_ids=_fact_ids(resolution),
-        evidence_hash=current_evidence_hash,
-        algorithm_version=KINSHIP_ALGO_VERSION,
-        term_version=row.term_version,
-        resolution=resolution,
+        force_rebuild=force_rebuild,
     )
+    return apply_pair_result(session, resolution, row, current_hash, force_rebuild=force_rebuild)
 
 
 def steps_from_json(steps_json: list[dict[str, Any]]) -> tuple[PathStep, ...]:

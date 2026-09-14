@@ -46,28 +46,17 @@ def _cooldown_active(
 
 
 def recommendations_payload(session: Session, *, account: Account, space_id: int) -> dict[str, Any]:
-    view = personal_family_view.get_current_view(session, account=account, space_id=space_id)
-    if view is None:
-        return {
-            "space_id": space_id,
-            "view_status": "never_computed",
-            "view_version": 0,
-            "generated_from_view_version": 0,
-            "items": [],
-            "truncated": False,
-        }
-    base = {
+    payload = personal_family_view.current_view_payload(session, account=account, space_id=space_id)
+    version = payload["view_version"] if payload is not None else 0
+    base: dict[str, Any] = {
         "space_id": space_id,
-        "view_status": view.status,
-        "view_version": view.view_version,
-        "generated_from_view_version": view.view_version,
+        "view_status": payload["status"] if payload is not None else "never_computed",
+        "view_version": version,
+        "generated_from_view_version": version,
         "items": [],
         "truncated": False,
     }
-    if view.status != "current":
-        return base
-    payload = personal_family_view.current_view_payload(session, account=account, space_id=space_id)
-    if payload is None:
+    if payload is None or payload["status"] != "current":
         return base
     nodes = {int(node["user_id"]): node for node in payload["nodes"]}
     actor = session.get(User, account.user_id)

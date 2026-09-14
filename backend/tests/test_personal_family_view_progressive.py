@@ -21,7 +21,7 @@ from conftest import (
 
 from app import config
 from app.models.personal_family_view import PersonalFamilyView
-from app.services import personal_family_view
+from app.services import personal_family_view, steward_runtime
 from app.services import source_facts as sf
 from app.utils.timeutil import utcnow
 
@@ -48,6 +48,10 @@ def _materialize(session, account, space_id):
 @pytest.fixture()
 def _pfv_enabled(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "PERSONAL_FAMILY_VIEW_ENABLED", True)
+    monkeypatch.setattr(config, "STEWARD_WORKER_ENABLED", True)
+    # These legacy phase tests drive projection state explicitly; the scheduler
+    # is enabled but does not claim during the assertions.
+    monkeypatch.setattr(steward_runtime, "launch_due", lambda **_kwargs: 0)
 
 
 def _get(client, headers, space_id, *, progressive=False):
@@ -139,10 +143,9 @@ def test_progressive_total_excludes_revoked_target(db_session, client, _pfv_enab
     sf.transition_source_fact(db_session, fact, "revoke")
     db_session.commit()
     after = _get(client, headers, space.id, progressive=True).json()["progress"]
-    # 目标仍是空间成员（授权分母不变），但其 confirmed 路径已失效：
-    # 完成数归零，绝不把已失效路径冒充完成（R4）。
+    # 仍是空间成员但已不在授权可达骨架；未验证内容和分母同时撤回。
     assert after["completed_count"] == 0
-    assert after["total_count"] == 1
+    assert after["total_count"] == 0
 
 
 def test_progress_phase_mapping_helpers(db_session) -> None:

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import wait
 from datetime import timedelta
 
 import pytest
@@ -16,8 +17,25 @@ from sqlalchemy import select
 from app import config
 from app.models.space import FamilySpace
 from app.models.steward import StewardJob, StewardSpaceSchedule
-from app.services import maintenance, steward
+from app.services import maintenance, steward, steward_runtime
 from app.utils import timeutil
+
+
+def _tick():
+    """Observe dispatch and then await its finite workers for state assertions.
+
+    Production ticks return immediately; tests explicitly synchronize before
+    checking a completed job or starting the next simulated scan interval.
+    """
+    counters = maintenance.run_maintenance_tick()
+    with steward_runtime._lock:
+        futures = [future for future in steward_runtime._active.values() if not future.done()]
+    if futures:
+        _done, pending = wait(futures, timeout=5)
+        assert not pending
+        for future in futures:
+            future.result()
+    return counters
 
 
 def _space(session, name: str) -> FamilySpace:
@@ -46,7 +64,7 @@ def test_tick_executes_queued_steward_job_end_to_end(db_session, _worker_enabled
     assert created and job.status == "queued"
     db_session.commit()
 
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
 
     assert counters["steward_executed"] == 1
     db_session.expire_all()
@@ -68,7 +86,7 @@ def test_tick_requeues_expired_lease_then_executes(db_session, _worker_enabled):
     granted.lease_expires_at = timeutil.utcnow() - timedelta(seconds=1)
     db_session.commit()
 
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
 
     assert counters["steward_reaped"] == 1
     assert counters["steward_executed"] == 1
@@ -89,7 +107,7 @@ def test_tick_noop_when_worker_disabled(db_session, monkeypatch):
     )
     db_session.commit()
 
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
 
     assert counters == {
         "agent_reaped": 0,
@@ -116,7 +134,7 @@ def test_tick_agent_reaper_invoked_when_runtime_enabled(db_session, monkeypatch)
         agent_queue, "reaper_pass", lambda db, **kw: (calls.append(1), original(db, **kw))[1]
     )
 
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
     assert calls == [1]
     assert counters["agent_reaped"] == 0
 
@@ -133,20 +151,21 @@ def test_failed_job_settles_failed_not_crash_loop(db_session, _worker_enabled, m
         raise RuntimeError("simulated executor crash")
 
     monkeypatch.setattr(steward, "run_steward_job", _boom)
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
     db_session.expire_all()
     settled = db_session.get(StewardJob, job.id)
     assert settled.status == "failed"
     # F16：错误对象只落安全分类码，异常原文不进入 error_json
     assert settled.error_json["code"] == "STEWARD_EXECUTION_FAILED"
     assert "simulated" not in str(settled.error_json)
-    assert counters["steward_executed"] == 0
+    assert counters["steward_executed"] == 1  # Dispatched; failure settles independently.
 
 
 # ---- 09-11 生产调度：周期扫描 / 有限恢复 / 租约栅栏（AC-2/3/4）----
 
 
 def _jobs_for(session, space_id: int, *, cause: str | None = None) -> list[StewardJob]:
+    session.expire_all()
     stmt = select(StewardJob).where(StewardJob.space_id == space_id)
     if cause is not None:
         stmt = stmt.where(StewardJob.cause == cause)
@@ -156,7 +175,7 @@ def _jobs_for(session, space_id: int, *, cause: str | None = None) -> list[Stewa
 def test_scan_backfill_enqueues_due_space_job_on_first_enable(db_session, _worker_enabled):
     """首次启用（无调度行）：扫描立即到期并经 canonical enqueue 登记追补作业。"""
     space = _space(db_session, "scan-first")
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
     assert counters["steward_scanned"] == 1
     assert counters["steward_executed"] == 1
     jobs = _jobs_for(db_session, space.id, cause="integrity_scan")
@@ -170,8 +189,8 @@ def test_scan_backfill_enqueues_due_space_job_on_first_enable(db_session, _worke
 def test_scan_same_cursor_still_registers_due_check_job(db_session, _worker_enabled):
     """空闲空间相同事件水位：到期检查不被历史 succeeded 幂等短路（AC-2）。"""
     space = _space(db_session, "scan-idle")
-    maintenance.run_maintenance_tick()
-    counters = maintenance.run_maintenance_tick()
+    _tick()
+    counters = _tick()
     assert counters["steward_scanned"] == 1
     jobs = _jobs_for(db_session, space.id, cause="integrity_scan")
     assert len(jobs) == 2  # 每个周期各登记一个作业，第二个 tick 仍然执行
@@ -197,7 +216,7 @@ def test_events_during_downtime_backfilled_by_scan(db_session, monkeypatch):
 
     monkeypatch.setattr(config, "STEWARD_ENABLED", True)
     monkeypatch.setattr(config, "STEWARD_WORKER_ENABLED", True)
-    maintenance.run_maintenance_tick()
+    _tick()
     jobs = _jobs_for(db_session, space.id)
     assert len(jobs) == 1
     assert jobs[0].trigger_cursor >= event.id
@@ -207,12 +226,12 @@ def test_events_during_downtime_backfilled_by_scan(db_session, monkeypatch):
 def test_policy_version_change_triggers_backfill(db_session, _worker_enabled, monkeypatch):
     """policy_version 变化：调度行置为立即到期，追补作业按新版本登记。"""
     space = _space(db_session, "scan-policy")
-    maintenance.run_maintenance_tick()
+    _tick()
     old = db_session.get(StewardSpaceSchedule, space.id)
     old_policy = old.policy_version
 
     monkeypatch.setattr(steward, "POLICY_VERSION", "v-next-policy")
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
     assert counters["steward_scanned"] == 1
     db_session.expire_all()
     schedule = db_session.get(StewardSpaceSchedule, space.id)
@@ -242,7 +261,7 @@ def test_lock_conflict_retries_with_backoff_then_succeeds(db_session, _worker_en
         return real(db, job_obj, now=now, upper=upper)
 
     monkeypatch.setattr(steward, "_execute_locked", flaky)
-    maintenance.run_maintenance_tick()
+    _tick()
     db_session.expire_all()
     first = db_session.get(StewardJob, job.id)
     assert first.status == "queued"
@@ -251,12 +270,12 @@ def test_lock_conflict_retries_with_backoff_then_succeeds(db_session, _worker_en
     assert first.available_at is not None and first.available_at > timeutil.utcnow()
 
     # 退避未到：不自动重试
-    counters = maintenance.run_maintenance_tick()
+    counters = _tick()
     assert counters["steward_executed"] == 0
 
     first.available_at = timeutil.utcnow() - timedelta(seconds=1)
     db_session.commit()
-    maintenance.run_maintenance_tick()
+    _tick()
     db_session.expire_all()
     settled = db_session.get(StewardJob, job.id)
     assert settled.status == "succeeded"
@@ -277,13 +296,13 @@ def test_retry_exhausted_no_more_auto_retry(db_session, _worker_enabled, monkeyp
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(steward, "_execute_locked", always_locked)
-    maintenance.run_maintenance_tick()
+    _tick()
     db_session.expire_all()
     failed = db_session.get(StewardJob, job.id)
     assert failed.status == "failed"
     assert failed.error_code == "STEWARD_TRANSIENT_DB_LOCK"
 
-    maintenance.run_maintenance_tick()
+    _tick()
     db_session.expire_all()
     still = db_session.get(StewardJob, job.id)
     assert still.status == "failed"
@@ -320,7 +339,7 @@ def test_deterministic_failure_isolated_per_space(db_session, _worker_enabled, m
         return real(db, job_obj, now=now, upper=upper)
 
     monkeypatch.setattr(steward, "_execute_locked", selective)
-    maintenance.run_maintenance_tick()
+    _tick()
     db_session.expire_all()
     failed = db_session.get(StewardJob, job_a.id)
     assert failed.status == "failed"

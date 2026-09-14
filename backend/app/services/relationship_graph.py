@@ -14,8 +14,8 @@
 - 桥接口径：仅承认 status=active 且 expires_at 为空或严格晚于当前 UTC 时间的
   bridge（到期边界等于当前时刻即失效；读取时过滤，不等后台写 expired 状态），
   节点可见性、路径、拓扑授权与快照指纹使用同一有效桥接集合。
-- 快照指纹 snapshot_hash：参与计算的 (fact_id, revision, fact_type) 按 fact_id
-  升序逐行 "id:revision:type" 拼接后 SHA256 —— DerivedFact 缓存正确性依据。
+- 快照指纹 snapshot_hash：viewer/space、授权节点与性别、实际事实内容、
+  有效桥接/成员和确认邻接表的版本化 SHA256；展示字段和推测边独立失效。
 
 纯函数纪律：相同 facts 快照 + algorithm_version 必须产出相同结果（AC-KI7）；
 本模块不含任何 LLM 参与。
@@ -24,9 +24,12 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+import json
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from types import MappingProxyType
+from typing import Any, TypeVar
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -65,6 +68,41 @@ _SYMMETRIC_KIND_BY_FACT_TYPE = {
 
 # 遍历与主路径排序的确定性依据：邻接表按键排序，同键按 (to_id, edge_type, fact_id)
 _EDGE_ORDER = {EDGE_PARENT: 0, EDGE_SIBLING: 1, EDGE_SPOUSE: 2, EDGE_PARTNER: 3, EDGE_BRIDGE: 4}
+
+GRAPH_SNAPSHOT_VERSION = "authorized-graph-v2"
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+class FrozenMapping(Mapping[_K, _V]):
+    """A detached, read-only mapping with an explicit pickle representation.
+
+    MappingProxyType alone cannot cross a spawn boundary. Copy before wrapping,
+    so neither the caller's original dict nor the receiver can mutate a snapshot.
+    Values must themselves be immutable (graph edges/terms use frozen DTOs).
+    """
+
+    __slots__ = ("_data",)
+    _data: Mapping[_K, _V]
+
+    def __init__(self, values: Mapping[_K, _V]) -> None:
+        object.__setattr__(self, "_data", MappingProxyType(dict(values)))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TypeError("snapshot mappings are immutable")
+
+    def __getitem__(self, key: _K) -> _V:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[_K]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        return type(self), (dict(self._data),)
 
 
 @dataclass(frozen=True)
@@ -112,15 +150,62 @@ _INFERENCE_PARENT_SUBTYPES = {
 
 
 @dataclass(frozen=True)
+class GraphFact:
+    """Confirmed evidence copied from SourceFact, without ORM state."""
+
+    id: int
+    revision: int
+    fact_type: str
+    state: str
+    space_id: int | None
+    subject_user_id: int
+    object_user_id: int
+
+
+@dataclass(frozen=True)
+class GraphBridge:
+    """Effective bridge scope and membership at the graph's read snapshot."""
+
+    id: int
+    revision: int
+    lineage_space_a_id: int
+    lineage_space_b_id: int
+    anchor_a_user_id: int
+    anchor_b_user_id: int
+    expires_at: datetime | None
+    member_user_ids: tuple[int, ...]
+    scope_json: str
+    consent_a_account_id: int | None
+    consent_b_account_id: int | None
+
+
+@dataclass(frozen=True)
 class RelationshipGraph:
-    """(viewer, space) 口径的图快照：节点性别 + 邻接表 + 指纹。"""
+    """Detached (viewer, space) snapshot, safe to send to a spawn worker.
+
+    Confirmed evidence/scope remains available for authorization checks and
+    topology preparation. Extra inferred edges affect only adjacency, never the
+    confirmed snapshot hash or confirmed evidence collection.
+    """
 
     viewer_user_id: int
     space_id: int
-    node_genders: dict[int, str]
-    adjacency: dict[int, list[GraphEdge]]
+    node_genders: Mapping[int, str]
+    adjacency: Mapping[int, Sequence[GraphEdge]]
     snapshot_hash: str
     bridge_user_ids: frozenset[int] = frozenset()
+    confirmed_facts: tuple[GraphFact, ...] = ()
+    bridges: tuple[GraphBridge, ...] = ()
+    authorized_space_ids: frozenset[int] = frozenset()
+    valid_until: datetime | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "node_genders", FrozenMapping(self.node_genders))
+        object.__setattr__(
+            self,
+            "adjacency",
+            FrozenMapping({uid: tuple(edges) for uid, edges in self.adjacency.items()}),
+        )
 
 
 def birth_from_user(user: User) -> tuple[str, int] | None:
@@ -285,7 +370,8 @@ def load_graph(
     # 有效桥接 = active 且未到期（expires_at 为空或严格晚于当前 UTC 时刻）；
     # 仅时钟跨过 expires_at 也立即失去授权，节点/路径/拓扑/指纹同一集合。
     active_bridges = session.scalars(
-        select(PersonalFamilyBridge).where(
+        select(PersonalFamilyBridge)
+        .where(
             PersonalFamilyBridge.status == "active",
             or_(
                 PersonalFamilyBridge.expires_at.is_(None),
@@ -298,7 +384,9 @@ def load_graph(
                 & (PersonalFamilyBridge.anchor_b_user_id == viewer_user_id),
             ),
         )
+        .order_by(PersonalFamilyBridge.id)
     ).all()
+    bridge_snapshots: list[GraphBridge] = []
     for bridge in active_bridges:
         if bridge.lineage_space_a_id == space_id:
             other_space_id = bridge.lineage_space_b_id
@@ -314,6 +402,21 @@ def load_graph(
             )
         ).all()
         bridge_user_ids.update(bridge_member_ids)
+        bridge_snapshots.append(
+            GraphBridge(
+                id=bridge.id,
+                revision=bridge.revision,
+                lineage_space_a_id=bridge.lineage_space_a_id,
+                lineage_space_b_id=bridge.lineage_space_b_id,
+                anchor_a_user_id=bridge.anchor_a_user_id,
+                anchor_b_user_id=bridge.anchor_b_user_id,
+                expires_at=bridge.expires_at,
+                member_user_ids=tuple(sorted(bridge_member_ids)),
+                scope_json=json.dumps(bridge.scope_json, sort_keys=True, separators=(",", ":")),
+                consent_a_account_id=bridge.consent_a_account_id,
+                consent_b_account_id=bridge.consent_b_account_id,
+            )
+        )
     visible.update(bridge_user_ids)
 
     authorized_space_ids = {space_id, *bridge_space_ids}
@@ -364,6 +467,73 @@ def load_graph(
         adjacency.setdefault(viewer_user_id, []).append(
             GraphEdge(other_anchor_id, EDGE_BRIDGE, None, "sym", 0)
         )
+
+    # Hash the actual authorized confirmed input before adding optional inferred
+    # edges. Revisions alone do not cover gender corrections, changed endpoints,
+    # visibility changes or bridges expiring without an event.
+    confirmed_facts = tuple(
+        GraphFact(
+            id=fact.id,
+            revision=fact.revision,
+            fact_type=fact.fact_type,
+            state=fact.state,
+            space_id=fact.space_id,
+            subject_user_id=fact.subject_user_id,
+            object_user_id=fact.object_user_id,
+        )
+        for fact in participating
+    )
+    hash_payload = {
+        "version": GRAPH_SNAPSHOT_VERSION,
+        "viewer": viewer_user_id,
+        "space": space_id,
+        "authorized_spaces": sorted(authorized_space_ids),
+        "nodes": sorted(genders.items()),
+        "facts": [
+            (
+                f.id,
+                f.revision,
+                f.fact_type,
+                f.state,
+                f.space_id,
+                f.subject_user_id,
+                f.object_user_id,
+            )
+            for f in confirmed_facts
+        ],
+        "bridges": [
+            (
+                b.id,
+                b.revision,
+                b.lineage_space_a_id,
+                b.lineage_space_b_id,
+                b.anchor_a_user_id,
+                b.anchor_b_user_id,
+                b.expires_at.isoformat() if b.expires_at else None,
+                b.member_user_ids,
+                b.scope_json,
+                b.consent_a_account_id,
+                b.consent_b_account_id,
+            )
+            for b in bridge_snapshots
+        ],
+        "adjacency": [
+            (
+                uid,
+                [
+                    (edge.to_id, edge.edge_type, edge.subtype, edge.direction, edge.fact_id)
+                    for edge in sorted(
+                        edges,
+                        key=lambda edge: (edge.to_id, _EDGE_ORDER[edge.edge_type], edge.fact_id),
+                    )
+                ],
+            )
+            for uid, edges in sorted(adjacency.items())
+        ],
+    }
+    snapshot_hash = hashlib.sha256(
+        json.dumps(hash_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
     if extra_edges:
         confirmed_keys: set[tuple[int, int, str]] = set()
@@ -430,18 +600,18 @@ def load_graph(
     for edges in adjacency.values():
         edges.sort(key=lambda edge: (edge.to_id, _EDGE_ORDER[edge.edge_type], edge.fact_id))
 
-    digest = hashlib.sha256()
-    for fact in participating:
-        digest.update(f"{fact.id}:{fact.revision}:{fact.fact_type}\n".encode())
-    for bridge in active_bridges:
-        digest.update(
-            f"bridge:{bridge.id}:{bridge.revision}:{bridge.lineage_space_a_id}:{bridge.lineage_space_b_id}\n".encode()
-        )
     return RelationshipGraph(
         viewer_user_id=viewer_user_id,
         space_id=space_id,
         node_genders=genders,
         adjacency=adjacency,
-        snapshot_hash=digest.hexdigest(),
+        snapshot_hash=snapshot_hash,
         bridge_user_ids=frozenset(bridge_user_ids),
+        confirmed_facts=confirmed_facts,
+        bridges=tuple(bridge_snapshots),
+        authorized_space_ids=frozenset(authorized_space_ids),
+        valid_until=min(
+            (bridge.expires_at for bridge in bridge_snapshots if bridge.expires_at is not None),
+            default=None,
+        ),
     )

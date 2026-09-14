@@ -188,6 +188,7 @@ def upsert_suggestion(
     )
     if existing is not None and existing.evidence_hash == evidence_hash:
         _ensure_recipients(session, existing, recipient_account_ids or [], now)
+        _record_suggestion_notifications(session, existing, account_ids=recipient_account_ids or [])
         return existing, False
     suggestion = StewardSuggestion(
         space_id=space_id,
@@ -213,7 +214,7 @@ def upsert_suggestion(
     if existing is not None:
         _supersede(session, existing, suggestion.id, now)
     _ensure_recipients(session, suggestion, recipient_account_ids or [], now)
-    _record_suggestion_notifications(session, suggestion)
+    _record_suggestion_notifications(session, suggestion, account_ids=recipient_account_ids or [])
     return suggestion, True
 
 
@@ -243,13 +244,21 @@ def _ensure_recipients(
     session.flush()
 
 
-def _record_suggestion_notifications(session: Session, suggestion: StewardSuggestion) -> None:
+def _record_suggestion_notifications(
+    session: Session,
+    suggestion: StewardSuggestion,
+    *,
+    account_ids: list[int],
+) -> None:
     """建议产生 → 收件人通知（UNIQUE (recipient, space, suggestion) 去重）。"""
     from app.services import notifications as notifications_service
 
+    if not account_ids:
+        return
     recipients = session.scalars(
         select(StewardSuggestionRecipient.account_id).where(
-            StewardSuggestionRecipient.suggestion_id == suggestion.id
+            StewardSuggestionRecipient.suggestion_id == suggestion.id,
+            StewardSuggestionRecipient.account_id.in_(account_ids),
         )
     ).all()
     for account_id in recipients:
@@ -274,6 +283,8 @@ def project_for_job(
     findings: list[dict[str, Any]],
     facts: list[Any],
     now: datetime | None = None,
+    candidate_ids: list[int] | None = None,
+    recipient_account_ids: list[int] | None = None,
 ) -> int:
     """core 事务内的建议投影入口（确定性 findings + 本 job 的模型候选）。
 
@@ -298,15 +309,20 @@ def project_for_job(
     # 本 job 的投影已随结算提交——若只看当前 job 的候选，模型候选永远投影
     # 不成建议。改为取本空间全部"尚未被任何建议引用"的 proposed 候选
     # （source_candidate_id 反连接保证幂等：已被投影的候选不再重复投影）。
-    projected_ids = select(StewardSuggestion.source_candidate_id).where(
-        StewardSuggestion.source_candidate_id.is_not(None)
+    projected = (
+        select(StewardSuggestion.id)
+        .where(
+            StewardSuggestion.source_candidate_id == StewardLlmCandidate.id,
+        )
+        .exists()
     )
     candidates = list(
         session.scalars(
             select(StewardLlmCandidate).where(
                 StewardLlmCandidate.space_id == job.space_id,
                 StewardLlmCandidate.status == "proposed",
-                StewardLlmCandidate.id.not_in(projected_ids),
+                ~projected,
+                *([StewardLlmCandidate.id.in_(candidate_ids)] if candidate_ids is not None else []),
             )
         )
     )
@@ -389,7 +405,26 @@ def project_for_job(
                 )
             ]
         }
-        member_users = _space_active_member_user_ids(session, job.space_id)
+        if recipient_account_ids is None:
+            recipients = _account_ids_of_users(
+                session,
+                _space_active_member_user_ids(session, job.space_id),
+            )
+        else:
+            recipients = list(
+                session.scalars(
+                    select(Account.id)
+                    .join(
+                        SpaceMember,
+                        SpaceMember.user_id == Account.user_id,
+                    )
+                    .where(
+                        Account.id.in_(recipient_account_ids),
+                        SpaceMember.space_id == job.space_id,
+                        SpaceMember.status == "active",
+                    )
+                )
+            )
         _, was_created = upsert_suggestion(
             session,
             space_id=job.space_id,
@@ -401,7 +436,7 @@ def project_for_job(
             evidence_json=evidence,
             policy_version=job.policy_version,
             source_job_id=job.id,
-            recipient_account_ids=_account_ids_of_users(session, member_users),
+            recipient_account_ids=recipients,
             now=now,
         )
         created += int(was_created)

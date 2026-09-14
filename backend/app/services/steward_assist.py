@@ -49,6 +49,7 @@ from app.models.space import FamilySpace
 from app.models.steward import (
     ActionCard,
     StewardAssistBatch,
+    StewardGeneration,
     StewardJob,
     StewardLlmCandidate,
     StewardModelCall,
@@ -973,10 +974,10 @@ def execute_batch(
             if batch.lease_until is not None
             else 0.0
         )
-        if remaining <= 0:
+        if remaining < 0.1:
             # 墙钟耗尽：未发送的保留 in_flight，由恢复器按 unknown 收敛
             continue
-        timeout = max(0.1, min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining))
+        timeout = min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining)
         user_content = _user_content_for(db, attempt)
         payload = _fill_model(
             _build_payload(
@@ -1241,16 +1242,29 @@ def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
     handled = 0
     resume_apply: list[int] = []
     with _immediate_tx(db):
-        # ①：core 已 succeeded 但批次缺失（core 崩溃在登记前不可能——同事务；
-        # 此分支兜底历史/异常路径）
+        # Legacy core committed registration atomically. Staged generations
+        # activate their own fenced delivery intent; orphan repair must never
+        # bypass that gate or revive an invalidated generation's assistance.
         orphan_jobs = list(
             db.scalars(
-                select(StewardJob).where(
+                select(StewardJob)
+                .where(
                     StewardJob.status == "succeeded",
+                    # The job survives result GC; its publication checkpoint
+                    # remains authoritative evidence that delivery is staged.
+                    StewardJob.checkpoint_json["generation_id"].as_integer().is_(None),
                     ~select(StewardAssistBatch.id)
                     .where(StewardAssistBatch.job_id == StewardJob.id)
                     .exists(),
+                    ~select(StewardGeneration.id)
+                    .where(
+                        StewardGeneration.job_id == StewardJob.id,
+                        StewardGeneration.manifest_sealed.is_(True),
+                    )
+                    .exists(),
                 )
+                .order_by(StewardJob.id)
+                .limit(16)
             )
         )
         for job in orphan_jobs:
@@ -1273,11 +1287,14 @@ def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
         # ③④：lease 过期的中间态批次（含已终态但仍残留 in_flight attempt 的批次）
         stale = list(
             db.scalars(
-                select(StewardAssistBatch).where(
+                select(StewardAssistBatch)
+                .where(
                     StewardAssistBatch.lease_until.is_not(None),
                     StewardAssistBatch.lease_until <= now,
                     StewardAssistBatch.status.in_(("leased", "applying", "failed", "superseded")),
                 )
+                .order_by(StewardAssistBatch.id)
+                .limit(32)
             )
         )
         for batch in stale:

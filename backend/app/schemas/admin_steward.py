@@ -45,6 +45,36 @@ class StewardRerunAccepted(BaseModel):
     coalesced: bool
 
 
+class StewardDeliveryOut(BaseModel):
+    """Only delivery metadata; never expose its payload, key or evidence."""
+
+    intent_id: int
+    generation_id: int
+    space_id: int
+    kind: str
+    status: str
+    attempt: int
+    available_at: datetime | None = None
+    error_code: str | None = None
+
+
+class StewardDeliveriesPageOut(BaseModel):
+    items: list[StewardDeliveryOut]
+    page: int
+    page_size: int
+
+
+class StewardDeliveryRetryRequest(StewardRerunRequest):
+    expected_attempt: int = Field(ge=0)
+
+
+class StewardDeliveryRetryAccepted(BaseModel):
+    intent_id: int
+    status: Literal["pending", "done"]
+    attempt: int
+    coalesced: bool
+
+
 class StewardSwitchStateOut(BaseModel):
     """单个开关的有效状态与可解释说明（AC-1：任意组合均可解释）。"""
 

@@ -18,7 +18,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.account import Account
-from app.models.personal_family_view import PersonalFamilyViewEdge, PersonalFamilyViewNode
 from app.models.space import SpaceMember
 from app.models.steward import ActionCard
 from app.models.user import User
@@ -50,42 +49,20 @@ def _dir_class_for_path(path: list[dict[str, Any]]) -> str:
 def space_stats_payload(session: Session, *, account: Account, space_id: int) -> dict[str, Any]:
     """构造空间统计聚合；调用方（API 层）负责 ETag/304。"""
     space, actor = authorized_space_or_404(session, account=account, space_id=space_id)
-    view = personal_family_view.get_view(session, account=account, space_id=space_id)
-    # 首读物化（09-11 R5：仅显式提交的首次物化；已存在的 stale/queued 行不再
-    # 隐式重算，失效由 domain_events 驱动、steward 重建）。
-    if view.status == "never_computed":
-        personal_family_view.rebuild_view(session, account=account, space_id=space_id)
-    # 首读重建落库（可重建投影；失效由 domain_events 驱动、steward 重建），
-    # 使 view_version/computed_at/stale 聚合稳定，条件请求（304）可复用。
-    session.commit()
-    bridge_ids = _bridge_authorized_ids(session, actor, space_id)
-
-    # 逐节点重新执行当前字段级 VisibilityPolicy：撤权/收紧后旧快照行立即出局
-    nodes = session.scalars(
-        select(PersonalFamilyViewNode).where(PersonalFamilyViewNode.view_id == view.id)
-    ).all()
-    visible_ids: set[int] = set()
-    for node in nodes:
-        target = session.get(User, node.user_id)
-        if target is None:
-            continue
-        decision = visibility.evaluate(
-            session, actor, target, space_context=space_id, purpose=visibility.PURPOSE_GRAPH
-        )
-        if not decision.visible and node.user_id not in bridge_ids:
-            continue
-        visible_ids.add(node.user_id)
-
-    edges = session.scalars(
-        select(PersonalFamilyViewEdge).where(PersonalFamilyViewEdge.view_id == view.id)
-    ).all()
+    # Canonical reads validate the publication and its input/permission fence.
+    # An unpublished or stale projection contributes no relationship counts;
+    # a GET must never compute or materialize a replacement under a writer.
+    payload = personal_family_view.current_view_payload(session, account=account, space_id=space_id)
+    status = payload["status"] if payload is not None else "never_computed"
+    visible_ids = {int(node["user_id"]) for node in payload["nodes"]} if payload else set()
+    edges = payload["edges"] if payload else []
     distribution: dict[str, int] = {}
     edge_count = 0
     for edge in edges:
-        if edge.from_user_id not in visible_ids or edge.to_user_id not in visible_ids:
+        if edge["from_user_id"] not in visible_ids or edge["to_user_id"] not in visible_ids:
             continue
         edge_count += 1
-        dir_class = _dir_class_for_path(edge.path_json or [])
+        dir_class = _dir_class_for_path(edge.get("path") or [])
         distribution[dir_class] = distribution.get(dir_class, 0) + 1
 
     # 成员投影计数：当前空间 active 成员中对 viewer 可见者（viewer 自身恒计入）
@@ -124,8 +101,8 @@ def space_stats_payload(session: Session, *, account: Account, space_id: int) ->
     return {
         "space_id": space_id,
         "space_kind": space.kind,
-        "status": view.status,
-        "view_version": view.view_version,
+        "status": status,
+        "view_version": payload["view_version"] if payload is not None else 0,
         "node_count": len(visible_ids),
         "edge_count": edge_count,
         "member_count": member_count,
@@ -135,19 +112,14 @@ def space_stats_payload(session: Session, *, account: Account, space_id: int) ->
         ],
         "pending_action_cards": pending_cards,
         "pending_memberships": pending_memberships,
-        "computed_at": view.computed_at,
+        "computed_at": payload["computed_at"] if payload is not None else None,
         # 非 current 必须显式标因：优先 FSM 失败原因，否则给出稳定的占位原因
         "stale_reason": (
-            (view.failed_reason or _NO_STALE_REASON) if view.status != "current" else None
+            ((payload.get("stale_reason") if payload else None) or _NO_STALE_REASON)
+            if status != "current"
+            else None
         ),
     }
-
-
-def _bridge_authorized_ids(session: Session, actor: User, space_id: int) -> set[int]:
-    """当前 anchor 可达的 active bridge 对端（与 load_graph 同一授权基础）。"""
-    from app.services.relationship_graph import load_graph
-
-    return set(load_graph(session, viewer_user_id=actor.id, space_id=space_id).bridge_user_ids)
 
 
 __all__ = ["space_stats_payload"]

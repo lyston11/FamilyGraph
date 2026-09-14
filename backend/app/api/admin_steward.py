@@ -39,6 +39,7 @@ from app.models.space import FamilySpace
 from app.models.steward import (
     STEWARD_JOB_STATUSES,
     ActionCard,
+    StewardDeliveryIntent,
     StewardGeneration,
     StewardJob,
     StewardModelCall,
@@ -46,6 +47,10 @@ from app.models.steward import (
 )
 from app.schemas.admin_steward import (
     StewardAlertOut,
+    StewardDeliveriesPageOut,
+    StewardDeliveryOut,
+    StewardDeliveryRetryAccepted,
+    StewardDeliveryRetryRequest,
     StewardJobOut,
     StewardJobsPageOut,
     StewardMetricsOut,
@@ -54,7 +59,7 @@ from app.schemas.admin_steward import (
     StewardStatusOut,
     StewardSwitchStateOut,
 )
-from app.services import admin_audit, platform_features, steward
+from app.services import admin_audit, platform_features, steward, steward_delivery
 from app.utils import timeutil
 
 router = APIRouter(prefix="/admin-api/v1", tags=["admin-steward"])
@@ -263,23 +268,13 @@ def steward_status(
         core_queue_depth=queue_counts["queued"],
         oldest_queued_age_seconds=oldest_queued_seconds,
     )
-    # 09-13 R6/R8：核心发布完成 ≠ 交付完成。delivery_backlog 统计登记后尚未
-    # 落地的辅助批次（reserved/in_flight/待重试 failed），latest_generation
-    # 展示最近一次代次的发布状态与 per-viewer 进度聚合。
+    # Published core work activates independently retryable delivery intents.
     delivery_backlog: int | None = None
     latest_generation: dict[str, Any] | None = None
     if core:
-        from app.models.steward import StewardAssistBatch
-        from app.services import steward_generations
+        from app.services import steward_delivery, steward_generations
 
-        delivery_backlog = int(
-            db.scalar(
-                select(sa.func.count()).where(
-                    StewardAssistBatch.status.in_(("reserved", "in_flight", "failed"))
-                )
-            )
-            or 0
-        )
+        delivery_backlog = sum(steward_delivery.backlog(db).values())
         generation_row = db.scalar(
             select(StewardGeneration).order_by(StewardGeneration.id.desc()).limit(1)
         )
@@ -448,6 +443,92 @@ def _find_idempotent_rerun(db: Session, space_id: int, idempotency_key: str) -> 
         .order_by(StewardJob.id.desc())
         .limit(1)
     )
+
+
+@router.get("/steward/deliveries", response_model=StewardDeliveriesPageOut)
+def steward_deliveries(
+    request: Request,
+    space_id: int | None = Query(default=None, gt=0),
+    status: str = Query(default="failed"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=_PAGE_SIZE_DEFAULT, ge=1, le=_PAGE_SIZE_MAX),
+    db: Session = Depends(get_db),
+    identity: AdminPrincipal = Depends(require_admin_ready),
+) -> StewardDeliveriesPageOut:
+    if status not in ("pending", "failed", "done", "superseded"):
+        raise_api_error(422, VALIDATION_ERROR, "未知交付状态")
+    query = (
+        select(StewardDeliveryIntent)
+        .join(StewardGeneration)
+        .where(StewardGeneration.status == "published", StewardDeliveryIntent.status == status)
+        .order_by(StewardDeliveryIntent.id.desc())
+    )
+    if space_id is not None:
+        query = query.where(StewardDeliveryIntent.space_id == space_id)
+    rows = db.scalars(query.limit(page_size).offset((page - 1) * page_size)).all()
+    items = [
+        StewardDeliveryOut(
+            intent_id=row.id,
+            generation_id=row.generation_id,
+            space_id=row.space_id,
+            kind=row.kind,
+            status=row.status,
+            attempt=row.attempt,
+            available_at=row.available_at,
+            error_code=row.error_code,
+        )
+        for row in rows
+    ]
+    _audit(
+        db,
+        identity,
+        request,
+        action="steward.deliveries",
+        target_id=space_id,
+        filters={"status": status, "page": page, "page_size": page_size},
+        result_count=len(items),
+    )
+    db.commit()
+    return StewardDeliveriesPageOut(items=items, page=page, page_size=page_size)
+
+
+@router.post(
+    "/steward/spaces/{space_id}/deliveries/{intent_id}/retry",
+    response_model=StewardDeliveryRetryAccepted,
+    status_code=202,
+)
+def steward_delivery_retry(
+    space_id: int,
+    intent_id: int,
+    body: StewardDeliveryRetryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    identity: AdminPrincipal = Depends(require_admin_ready),
+) -> StewardDeliveryRetryAccepted:
+    _require_rerun_enabled()
+    with steward._immediate_tx(db):
+        result = steward_delivery.retry_intent(
+            db,
+            space_id=space_id,
+            intent_id=intent_id,
+            expected_attempt=body.expected_attempt,
+            expected_policy_version=body.expected_policy_version,
+        )
+        _audit(
+            db,
+            identity,
+            request,
+            action="steward.delivery.retry",
+            target_id=space_id,
+            filters={
+                "intent_id": intent_id,
+                "attempt": result["attempt"],
+                "coalesced": result["coalesced"],
+                "reason_class": _classify_reason(body.reason),
+            },
+            result_count=1,
+        )
+    return StewardDeliveryRetryAccepted.model_validate(result)
 
 
 @router.post(

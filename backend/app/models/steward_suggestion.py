@@ -75,6 +75,7 @@ class StewardSuggestion(Base):
         Index("ix_steward_suggestions_space_status", "space_id", "status"),
         Index("ix_steward_suggestions_subject", "subject_user_id"),
         Index("ix_steward_suggestions_object", "object_user_id"),
+        Index("ix_steward_suggestions_candidate", "source_candidate_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -441,7 +441,7 @@ class StewardLlmCandidate(Base):
         )
 
 
-# ---- 09-13 短事务重算：generation 进度/审计与跨代重试预算（迁移 0044）----
+# ---- Staged publication, input fences and durable recovery (0044/0045) ----
 
 STEWARD_GENERATION_STATUSES = ("running", "published", "failed", "superseded")
 STEWARD_GENERATION_VIEW_STATUSES = ("pending", "ready", "failed")
@@ -453,13 +453,12 @@ _GENERATION_VIEW_STATUS_SQL = (
 
 
 class StewardGeneration(Base):
-    """一次空间重算的发布代次（09-13 design §3 StewardGeneration MVP 合同）。
+    """One sealed, fenced generation of a space's required viewer results.
 
-    - 作业开始（短事务）时创建 running 行：记录执行游标与空间输入指纹；
-    - 发布事务置 published；输入漂移/必需目标耗尽置 failed/superseded；
-    - progress/审计来源：per-viewer 状态在 StewardGenerationView。
-    本表不承载 staging 大载荷（视图行仍由 PFV live 表原子重建承载），
-    只承担发布边界、指纹与进度聚合——普通读者不读本表。
+    Viewer skeletons and complete targets are staged below this row. Ordinary
+    reads follow StewardPublication; progressive reads can use the latest valid
+    preview. Publication, consumed cursor, completion event and delivery
+    activation commit atomically without copying large results.
     """
 
     __tablename__ = "steward_generations"
@@ -467,6 +466,7 @@ class StewardGeneration(Base):
         CheckConstraint(_GENERATION_STATUS_SQL, name="ck_sg_status"),
         Index("ix_sg_space_created", "space_id", "created_at"),
         Index("ix_sg_job", "job_id"),
+        Index("ix_sg_space_id", "space_id", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -484,6 +484,16 @@ class StewardGeneration(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # v4 publication fence. Empty input versions identify pre-staging legacy rows.
+    input_versions_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lease_attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manifest_sealed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    required_views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ready_views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    intents_prepared: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -493,11 +503,12 @@ class StewardGeneration(Base):
 
 
 class StewardGenerationView(Base):
-    """代次内单查看者的真实进度行（09-13 R4：完成数来自已保存验证结果）。
+    """Authorized skeleton and target-derived progress for exactly one viewer.
 
-    - 视图重建完成（逐视图短事务）时 upsert ready + 完成计数；
-    - 单视图失败 upsert failed + 安全原因码；进度读取经 generation 状态门控，
-      未 published 的 ready 仅表示「本人视图已重建」，不代表全作业成功。
+    Only ready/unavailable complete targets increment completed_count. A ready
+    preview is local completion; the full space becomes authoritative only when
+    the generation is published. Identical views can reference immutable prior
+    targets through result_view_id, which the collector treats as a live root.
     """
 
     __tablename__ = "steward_generation_views"
@@ -505,6 +516,8 @@ class StewardGenerationView(Base):
         CheckConstraint(_GENERATION_VIEW_STATUS_SQL, name="ck_sgv_status"),
         sa.UniqueConstraint("generation_id", "viewer_account_id", name="uq_sgv_gen_viewer"),
         Index("ix_sgv_viewer", "viewer_account_id", "space_id"),
+        Index("ix_sgv_generation_status", "generation_id", "status"),
+        Index("ix_sgv_result_source", "result_view_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -525,17 +538,24 @@ class StewardGenerationView(Base):
     total_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     failed_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    structural_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    presentation_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    topology_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skeleton_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    demand_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Reuse immutable, verified results without copying a whole view at publication.
+    result_view_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class StewardRetryBudget(Base):
-    """按输入指纹跨代持久的重试预算（09-13 design §5.2：换 job/重启不清零）。
+    """Pre-reserved attempts persist across jobs, scans, crashes and restarts.
 
-    - (space_id, fingerprint, scope) 唯一；scope 如 'pfv'（个人视图重建阶段）；
-    - 失败自增 attempts；达到上限 exhausted=1：扫描遇到耗尽输入只做轻量维护
-      并报告失败，不重复执行同一重计算；相关输入变化（新指纹）即新预算；
-    - 人工重跑（admin_rerun）授予一次有界额外机会：调用方按 cause 放宽一次。
+    Search scope identifies viewer/target and structural+algorithm fingerprint;
+    presentation changes do not reset an exhausted path search. Optional overlay
+    budgets have their own scope. Auditable, cooldown-limited manual grants add
+    a finite opportunity without resetting past attempts.
     """
 
     __tablename__ = "steward_retry_budgets"
@@ -553,4 +573,158 @@ class StewardRetryBudget(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     exhausted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manual_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manual_grants: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class StewardInputRevision(Base):
+    """Durable source revisions. Scope 0 is global; tombstones are never reset."""
+
+    __tablename__ = "steward_input_revisions"
+
+    scope_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    structural: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    presentation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    inferred: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class StewardViewTarget(Base):
+    """One complete, immutable target result; absence/pending is never no_path."""
+
+    __tablename__ = "steward_view_targets"
+    __table_args__ = (
+        sa.UniqueConstraint("view_id", "target_user_id", name="uq_svt_view_target"),
+        CheckConstraint(
+            "status IN ('pending','ready','unavailable','failed')", name="ck_svt_status"
+        ),
+        Index("ix_svt_view_status", "view_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    view_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_generation_views.id", ondelete="CASCADE"), nullable=False
+    )
+    target_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    distance: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    resolution_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    edge_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class StewardPublication(Base):
+    """The only authoritative full-result pointer. Publish never copies target rows."""
+
+    __tablename__ = "steward_publications"
+    __table_args__ = (Index("ix_sp_generation", "generation_id"),)
+
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    generation_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_generations.id", ondelete="CASCADE"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class StewardViewDemand(Base):
+    """Coalesced viewer demand, independent of the event cursor and source inputs."""
+
+    __tablename__ = "steward_view_demands"
+    __table_args__ = (
+        sa.UniqueConstraint("space_id", "viewer_account_id", name="uq_svd_space_viewer"),
+        Index("ix_svd_unfulfilled", "space_id", "fulfilled_revision", "revision"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    viewer_account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    fulfilled_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    focus_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    retry_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class StewardDeliveryIntent(Base):
+    """Prepared per-object delivery, activated by the publication transaction.
+
+    Status stays pending while the generation is running. A published generation
+    is the activation bit, so publishing is independent of the number of intents.
+    DB effects and done are committed together; external calls use assist batches.
+    """
+
+    __tablename__ = "steward_delivery_intents"
+    __table_args__ = (
+        sa.UniqueConstraint("generation_id", "intent_key", name="uq_sdi_generation_key"),
+        CheckConstraint("status IN ('pending','done','failed','superseded')", name="ck_sdi_status"),
+        Index("ix_sdi_due", "status", "available_at", "id"),
+        Index("ix_sdi_generation", "generation_id", "status"),
+        Index("ix_sdi_effect", "space_id", "effect_fingerprint", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    generation_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_generations.id", ondelete="CASCADE"), nullable=False
+    )
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    intent_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    effect_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class StewardFindingDelivery(Base):
+    """Receipt for one contiguous finding occurrence, retained across GC.
+
+    Planning a finding is not delivery. Every successor that still observes the
+    same finding shares its occurrence ID until one published generation omits
+    it. Only the transaction emitting the event creates this receipt.
+    """
+
+    __tablename__ = "steward_finding_deliveries"
+
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    signature: Mapped[str] = mapped_column(String(200), primary_key=True)
+    occurrence_generation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivered_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class StewardInferredOverlay(Base):
+    """Optional viewer projection, fenced independently of confirmed progress."""
+
+    __tablename__ = "steward_inferred_overlays"
+
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    viewer_account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    input_versions_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    valid_until: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

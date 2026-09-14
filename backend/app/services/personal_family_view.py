@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
@@ -34,7 +33,6 @@ from app.models.personal_family_view import (
 )
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
-from app.models.steward import StewardGeneration
 from app.models.steward_inferred import StewardInferredEdge
 from app.models.term_registry import TermEntry
 from app.models.user import User
@@ -62,7 +60,7 @@ from app.services.source_facts import FACT_CONFIRMED
 from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
 from app.utils.timeutil import utcnow
 
-COMPUTATION_VERSION = "pfv-v3"
+COMPUTATION_VERSION = "pfv-v4"
 POLICY_VERSION = config.POLICY_VERSION
 
 logger = logging.getLogger(__name__)
@@ -145,10 +143,20 @@ def _input_hash(graph_hash: str, *, policy_version: str, term_hash: str) -> str:
 def _current_input_hash(
     session: Session, *, account: Account, space_id: int, graph_hash: str
 ) -> str:
-    return _input_hash(
-        graph_hash,
-        policy_version=POLICY_VERSION,
-        term_hash=_term_registry_hash(session, account_id=account.id, space_id=space_id),
+    from app.services import steward_snapshot
+
+    return steward_snapshot.canonical_hash(
+        {
+            "base": _input_hash(
+                graph_hash,
+                policy_version=POLICY_VERSION,
+                term_hash=_term_registry_hash(session, account_id=account.id, space_id=space_id),
+            ),
+            "versions": steward_snapshot.core_versions(
+                steward_snapshot.input_versions(session, space_id)
+            ),
+            "date": utcnow().date().isoformat(),
+        }
     )
 
 
@@ -427,9 +435,9 @@ def _emit_inferred_projection(
                 if len(inferred_steps) == 1 and inferred_steps[0]["fact_id"] == -int(edge.id):
                     viewer_path = main_path
                     persons = {actor.id, new_user_id}
-                    for step_json in main_path:
-                        persons.add(int(step_json["from"]))
-                        persons.add(int(step_json["to"]))
+                    for path_step_json in main_path:
+                        persons.add(int(path_step_json["from"]))
+                        persons.add(int(path_step_json["to"]))
                     births = load_birth_years(
                         session,
                         viewer_user_id=actor.id,
@@ -572,78 +580,49 @@ def progress_for(
     space_id: int,
     view: PersonalFamilyView | None,
 ) -> dict[str, Any]:
-    """构造渐进轮询 progress 块（design §7.1 的 MVP 合同）。
+    from app.services import steward_snapshot, steward_views
 
-    - phase：view.status 的安全映射（retrying=stale 可重试，failed=终态）；
-    - total_count：当前授权图内除本人外的可见目标上界（只统计授权目标）；
-    - completed_count：已完整保存的 confirmed 路径摘要边数（含称谓）；
-      无路径目标不计入完成，也不伪装成失败——它们只是不在分母的已达成集合；
-    - generation/revision：viewer 内单调（view_version + updated_at）。
-    """
-    # 真实进度来源（09-13 R4）：最近非 superseded 代次的 per-viewer 进度行——
-    # 完成数来自已保存并验证的视图重建结果；无代次行（旧数据/开关前作业）时
-    # 回退到 PFV 行计数口径。running 代次超过 2×lease TTL 无更新按 retrying
-    # 处理（作业已被 reaper 回收或即将被后继代次取代，不无限 building）。
-    gen_view = steward_generations.view_progress_for_viewer(
-        session, space_id=space_id, viewer_account_id=account.id
+    staged, _valid_until = steward_views.payload_for(
+        session, account=account, space_id=space_id, progressive=True
     )
-    if gen_view is not None:
-        generation_row = session.get(StewardGeneration, gen_view.generation_id)
-        stale_running = (
-            generation_row is not None
-            and generation_row.status == "running"
-            and generation_row.updated_at is not None
-            and (utcnow() - generation_row.updated_at).total_seconds()
-            > 2 * config.STEWARD_LEASE_TTL_SECONDS
-        )
-        if generation_row is not None and generation_row.status == "failed":
-            phase = "failed"
-        elif gen_view.status == "ready":
-            phase = "ready"
-        elif stale_running:
-            phase = "retrying"
-        else:
-            phase = "building"
-        gen_updated_at: datetime | None = gen_view.updated_at
-        return {
-            "contract_version": PROGRESS_CONTRACT_VERSION,
-            "phase": phase,
-            "generation": gen_view.generation_id,
-            "revision": int(gen_updated_at.timestamp()) if gen_updated_at is not None else 0,
-            "completed_count": gen_view.completed_count,
-            "total_count": gen_view.total_count,
-            "next_poll_ms": _PROGRESS_NEXT_POLL_MS.get(phase, 0),
+    if staged is not None:
+        return dict(staged["progress"])
+    payload = (
+        _view_payload_for_view(session, account=account, space_id=space_id, view=view)
+        if view is not None
+        else empty_view_payload(space_id=space_id)
+    )
+    complete_ids = {edge["to_user_id"] for edge in payload["edges"]}
+    targets = [
+        {
+            "user_id": node["user_id"],
+            "status": "ready" if node["user_id"] in complete_ids else "unavailable",
+            "reason_code": None if node["user_id"] in complete_ids else "no_path",
         }
-
-    status = view.status if view is not None else "never_computed"
-    phase = _phase_for_status(status)
-    completed = 0
-    total = 0
-    if view is not None:
-        # 完成数只来自当前有效代次的已保存结果：stale/running 期间的旧行
-        # 未经验证，不计入完成（绝不把失效路径冒充完成）。
-        if status == "current":
-            completed = (
-                session.scalar(
-                    select(func.count(PersonalFamilyViewEdge.id)).where(
-                        PersonalFamilyViewEdge.view_id == view.id,
-                        PersonalFamilyViewEdge.inclusion_reason_code == "confirmed_path",
-                    )
-                )
-                or 0
-            )
-        actor = session.get(User, account.user_id)
-        if actor is not None:
-            graph = load_graph(session, viewer_user_id=actor.id, space_id=space_id)
-            total = max(len(graph.node_genders) - 1, 0)
-    updated_at = view.updated_at if view is not None else None
+        for node in payload["nodes"]
+        if node["user_id"] != account.user_id and node["inclusion_reason_code"] != "inferred_path"
+    ]
+    phase = _phase_for_status(payload["status"])
+    reason = payload.get("stale_reason")
+    if phase != "ready" and steward_views.worker_stopped(session, space_id=space_id):
+        phase, reason = "failed", "worker_stopped"
     return {
         "contract_version": PROGRESS_CONTRACT_VERSION,
         "phase": phase,
-        "generation": view.view_version if view is not None else 0,
-        "revision": int(updated_at.timestamp()) if updated_at is not None else 0,
-        "completed_count": int(completed),
-        "total_count": int(total),
+        "generation": 0,
+        "revision": (view.view_version + int(payload["status"] != "current"))
+        if view is not None
+        else 0,
+        "topology_revision": steward_snapshot.canonical_hash(
+            {
+                "nodes": [node["user_id"] for node in payload["nodes"]],
+                "edges": payload["topology_edges"],
+            }
+        ),
+        "completed_count": len(targets),
+        "total_count": len(targets),
+        "targets": targets,
+        "reason_code": reason,
         "next_poll_ms": _PROGRESS_NEXT_POLL_MS.get(phase, 0),
     }
 
@@ -656,10 +635,17 @@ def attach_progress(
     payload: dict[str, Any],
     view: PersonalFamilyView | None,
 ) -> dict[str, Any]:
-    """给响应载荷附加 progress 块（progressive=true 显式启用；旧合同不变）。"""
-    payload = dict(payload)
-    payload["progress"] = progress_for(session, account=account, space_id=space_id, view=view)
-    return payload
+    from app.services.steward_views import payload_for
+
+    staged, _valid_until = payload_for(
+        session, account=account, space_id=space_id, progressive=True
+    )
+    if staged is not None:
+        return staged
+    return {
+        **payload,
+        "progress": progress_for(session, account=account, space_id=space_id, view=view),
+    }
 
 
 def view_is_current(
@@ -686,6 +672,13 @@ def view_is_current(
 
 
 def view_payload(session: Session, *, account: Account, space_id: int) -> dict[str, Any]:
+    from app.services.steward_views import payload_for
+
+    staged, _valid_until = payload_for(
+        session, account=account, space_id=space_id, progressive=False
+    )
+    if staged is not None:
+        return staged
     view = get_view(session, account=account, space_id=space_id)
     return _view_payload_for_view(session, account=account, space_id=space_id, view=view)
 
@@ -693,7 +686,34 @@ def view_payload(session: Session, *, account: Account, space_id: int) -> dict[s
 def current_view_payload(
     session: Session, *, account: Account, space_id: int
 ) -> dict[str, Any] | None:
-    """Read and authorize an existing projection without creating one."""
+    """Read an existing projection in one snapshot, without ending caller work.
+
+    SQLite's SQLAlchemy autobegin alone does not start a DBAPI read transaction.
+    Reuse an actual caller transaction (including uncommitted seed/command work),
+    otherwise use a separate explicit read snapshot and leave the caller alone.
+    """
+    from app.services.steward_snapshot import read_transaction
+
+    connection = session.connection()
+    if connection.dialect.name == "sqlite" and not getattr(
+        connection.connection.driver_connection, "in_transaction", False
+    ):
+        with read_transaction(connection.engine) as read:
+            return _current_view_payload_in_snapshot(read, account=account, space_id=space_id)
+    with session.no_autoflush:
+        return _current_view_payload_in_snapshot(session, account=account, space_id=space_id)
+
+
+def _current_view_payload_in_snapshot(
+    session: Session, *, account: Account, space_id: int
+) -> dict[str, Any] | None:
+    from app.services.steward_views import payload_for
+
+    staged, _valid_until = payload_for(
+        session, account=account, space_id=space_id, progressive=False
+    )
+    if staged is not None:
+        return staged
     view = get_current_view(session, account=account, space_id=space_id)
     if view is None:
         return None
@@ -701,7 +721,12 @@ def current_view_payload(
 
 
 def _path_evidence_valid(
-    session: Session, *, path: Any, space_id: int, visible_ids: set[int]
+    session: Session,
+    *,
+    path: Any,
+    space_id: int,
+    visible_ids: set[int],
+    inferred_edge: StewardInferredEdge | None = None,
 ) -> bool:
     """逐步重验一条路径：每一步事实存在、confirmed、空间适用、端点/方向一致，
     且路径上所有节点（含中间人）当前对 actor 可见。任一步失败整条无效。"""
@@ -717,7 +742,32 @@ def _path_evidence_valid(
         if from_user not in visible_ids or to_user not in visible_ids:
             return False
         edge_type = step.get("edge_type")
-        if not isinstance(fact_id, int) or fact_id <= 0:
+        if not isinstance(fact_id, int):
+            return False
+        if fact_id < 0:
+            # Only the explicitly authorized optional edge may appear as a
+            # negative fact id. Confirmed paths never receive this allowance.
+            if (
+                inferred_edge is None
+                or fact_id != -inferred_edge.id
+                or inferred_edge.space_id != space_id
+                or inferred_edge.status != "proposed"
+                or {inferred_edge.subject_user_id, inferred_edge.object_user_id}
+                != {from_user, to_user}
+            ):
+                return False
+            hop, _ = _inferred_hop_step(inferred_edge, {})
+            expected_direction = (
+                "up" if hop.edge_type == "parent" and from_user != hop.from_id else hop.direction
+            )
+            if (
+                edge_type != hop.edge_type
+                or step.get("subtype") != hop.subtype
+                or step.get("direction") != expected_direction
+            ):
+                return False
+            continue
+        if fact_id == 0:
             # 桥接步（fact_id=0）没有 SourceFact；仅承认 bridge 边型。
             if edge_type != "bridge":
                 return False
@@ -830,16 +880,35 @@ def _view_payload_for_view(
             row = (
                 session.get(StewardInferredEdge, int(edge_id)) if isinstance(edge_id, int) else None
             )
-            if row is None or row.status != "proposed":
+            if (
+                row is None
+                or row.status != "proposed"
+                or row.space_id != space_id
+                or row.subject_user_id != edge.from_user_id
+                or row.object_user_id != edge.to_user_id
+                or row.relation_kind != edge.edge_kind
+            ):
                 continue
             if edge.from_user_id not in visible_ids or edge.to_user_id not in visible_ids:
+                continue
+            if not _path_evidence_valid(
+                session,
+                path=edge.path_json,
+                space_id=space_id,
+                visible_ids=visible_ids,
+                inferred_edge=row,
+            ):
                 continue
             # viewer 视角路径同样逐步重验（中间节点可见性 + 证据事实 confirmed）：
             # 失效的 viewer_path/viewer_term 剥离为空，不回传未验证的保存内容。
             viewer_path = basis.get("viewer_path") or []
             viewer_term = basis.get("viewer_term")
             if viewer_path and not _path_evidence_valid(
-                session, path=viewer_path, space_id=space_id, visible_ids=visible_ids
+                session,
+                path=viewer_path,
+                space_id=space_id,
+                visible_ids=visible_ids,
+                inferred_edge=row,
             ):
                 viewer_path = []
                 viewer_term = None
@@ -911,6 +980,7 @@ def _view_payload_for_view(
                 "path_class": edge.path_class,
                 "concept_code": edge.concept_code,
                 "term": edge.term,
+                "term_source_level": (edge.authorization_basis_json or {}).get("term_source_level"),
                 "inclusion_reason_code": edge.inclusion_reason_code,
             }
             for edge, verified_alts in served_edges
@@ -1021,7 +1091,7 @@ def initialize_account_views(session: Session, *, account_id: int, user_id: int)
     return created
 
 
-def request_view_recompute(*, space_id: int) -> None:
+def request_view_recompute(*, space_id: int, account: Account | None = None) -> None:
     """显式短事务登记重算作业（独立 Session/事务；GET 事务绝不承担入队写）。
 
     通过 canonical enqueue 合同入队；队列已活跃或水位已被 succeeded 覆盖时
@@ -1033,6 +1103,11 @@ def request_view_recompute(*, space_id: int) -> None:
     from app.services.steward import current_event_watermark, enqueue_steward_job
 
     try:
+        if account is not None:
+            from app.services.steward_demand import register
+
+            register(account=account, space_id=space_id)
+            return
         with SessionLocal() as session:
             enqueue_steward_job(
                 session,
@@ -1051,47 +1126,11 @@ def request_view_recompute(*, space_id: int) -> None:
 
 
 def request_demand(
-    *,
-    space_id: int,
-    focus_user_id: int | None = None,
+    *, account: Account, space_id: int, focus_user_id: int | None = None, retry: bool = False
 ) -> str:
-    """认证按需重算登记（独立短 Session/事务；GET/POST 请求事务不承担入队写）。
+    from app.services.steward_demand import register
 
-    幂等：同空间已有活跃作业 → already_active（同 scope 需求合并，不推进
-    输入版本）；无活跃作业 → 经 canonical enqueue 登记新作业（扫描语义：
-    不被 succeeded 水位短路，保证显式 demand 总会触发一次新鲜校验）。
-    focus_user_id 的授权校验在 API 层完成（当前授权骨架内可见），此处仅
-    记日志供审计；任何失败只记日志，绝不影响调用方的安全响应。
-    """
-    if not config.STEWARD_ENABLED:
-        return "queued"
-    from app.db import SessionLocal
-    from app.services.steward import current_event_watermark, enqueue_steward_job
-
-    try:
-        with SessionLocal() as session:
-            _job, created = enqueue_steward_job(
-                session,
-                space_id=space_id,
-                cause="integrity_scan",
-                trigger_cursor=current_event_watermark(session),
-            )
-            session.commit()
-            if focus_user_id is not None:
-                logger.info(
-                    "pfv demand registered space=%s focus=%s created=%s",
-                    space_id,
-                    focus_user_id,
-                    created,
-                )
-            return "queued" if created else "already_active"
-    except Exception as exc:
-        logger.warning(
-            "pfv demand enqueue failed for space %s (error=%s)",
-            space_id,
-            type(exc).__name__,
-        )
-        return "already_active"
+    return register(account=account, space_id=space_id, focus_user_id=focus_user_id, retry=retry)
 
 
 def rebuild_space_views(

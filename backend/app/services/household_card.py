@@ -32,14 +32,9 @@ EMPTY_STATE_HINT = "这个家庭还没有其他确认成员，邀请家人加入
 def household_card_payload(session: Session, *, account: Account, space_id: int) -> dict[str, Any]:
     """构造 household card 最小投影；调用方（API 层）负责 ETag/304。"""
     space, actor = authorized_household_space_or_404(session, account=account, space_id=space_id)
-    view = personal_family_view.get_view(session, account=account, space_id=space_id)
-    # 首读物化（09-11 R5：仅显式提交的首次物化；已存在的 stale/queued 行不再
-    # 隐式重算，失效由 domain_events 驱动、steward 重建）。
-    if view.status == "never_computed":
-        personal_family_view.rebuild_view(session, account=account, space_id=space_id)
-    # 首读重建落库（可重建投影；失效由 domain_events 驱动、steward 重建），
-    # 使 view_version/computed_at 稳定，条件请求（304）可复用同一安全快照。
-    session.commit()
+    # Member display is a current authorized source projection and does not
+    # wait for kinship computation. Metadata follows the published view only.
+    payload = personal_family_view.current_view_payload(session, account=account, space_id=space_id)
 
     # viewer 本人恒可见（evaluate self → self_private）
     viewer_decision = visibility.evaluate(
@@ -77,8 +72,8 @@ def household_card_payload(session: Session, *, account: Account, space_id: int)
         "space_id": space_id,
         "space_kind": "household",
         "space_name": space.name,
-        "view_version": view.view_version,
-        "computed_at": view.computed_at,
+        "view_version": payload["view_version"] if payload is not None else 0,
+        "computed_at": payload["computed_at"] if payload is not None else None,
         "viewer": jsonable_encoder(visibility.payload_from_decision(viewer_decision, actor)),
         "members": members,
         "allowed_actions": {

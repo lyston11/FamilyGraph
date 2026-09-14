@@ -29,7 +29,7 @@ tests/test_relationship_resolver.py）：
 血缘线优先）；③ 同分时 spouse/partner 步少者胜（姻亲次之；sibling 属血缘）；
 ④ 仍同分按路径节点 id 序列字典序。替代路径按同一键排序取次序 ≤3 条。
 
-partner 未披露语义（AC-KI1）：partner 边只能作为单跳完整路径参与解析，
+partner 未披露语义（AC-KI1）：partner 可以作为非 partner 前缀之后的末跳，
 不得经 partner 继续延伸姻亲链（姻亲链仅允许经 spouse）。
 
 ## path_class 判定（按主路径，优先序自高到低）
@@ -41,19 +41,26 @@ collateral（含 sibling 步）→ direct_line（纯 parent 链）。
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+import pickle
+from collections import deque
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.relationship_graph import RelationshipGraph, load_graph
+from app.services.relationship_graph import FrozenMapping, RelationshipGraph, load_graph
 
 # 深度上限（合同值）：超过 12 步的简单路径不再枚举（found=false）
 MAX_PATH_DEPTH = 12
 # 单对 (viewer, target) 枚举的简单路径总量上限（防病态图爆炸；确定性截断）
 MAX_SIMPLE_PATHS = 128
 ALT_PATH_LIMIT = 3
+# Unlike the path count cap, these bound work and memory even when no path has
+# been found. Exhaustion is an explicit failure, never a cached no-path answer.
+MAX_SEARCH_EXPANSIONS = 2_000_000
+MAX_SEARCH_STATE_BYTES = 8 * 1024 * 1024
+SEARCH_SLICE_EXPANSIONS = 2048
 
 PATH_CLASS_SELF = "self"
 PATH_CLASS_NONE = "none"
@@ -107,72 +114,255 @@ class RelationshipResolution:
     alt_descriptions: tuple[str, ...] = ()
     explanation_structural: str | None = None
     snapshot_hash: str = ""
-    node_genders: dict[int, str] = field(default_factory=dict)
+    node_genders: Mapping[int, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "node_genders", FrozenMapping(self.node_genders))
 
 
-# ---- 简单路径枚举（迭代加深 + 确定性邻接序，天然防环） ----
+# ---- 可让出的简单路径枚举（原迭代加深/邻接序，无 Session） ----
 
 
-def _dfs_collect(
+class SearchBudgetExceeded(RuntimeError):
+    """A retryable/terminal budget outcome, distinct from a proved no-path.
+
+    Positional exception args deliberately preserve fields across spawn/pickle.
+    The coordinator owns retry policy; the resolver never silently raises limits.
+    """
+
+    def __init__(self, reason: str, expansions: int, limit: int) -> None:
+        self.reason = reason
+        self.expansions = expansions
+        self.limit = limit
+        super().__init__(reason, expansions, limit)
+
+    def __str__(self) -> str:
+        return f"relationship search exceeded {self.reason} budget ({self.limit})"
+
+
+@dataclass
+class _SearchFrame:
+    node: int
+    remaining_depth: int
+    visited: frozenset[int]
+    steps: tuple[PathStep, ...]
+    edge_index: int = 0
+
+
+@dataclass
+class SearchState:
+    """One detached continuation. Only its owning worker advances it.
+
+    No generators, closures, ORM instances or process-local handles are retained.
+    Saving/reloading a continuation preserves adjacency and iterative-depth order.
+    Dropping it cancels a half-computed target without producing a result.
+    """
+
+    graph: RelationshipGraph
+    target_user_id: int
+    reverse_distances: dict[int, int]
+    max_total_expansions: int
+    max_state_bytes: int
+    max_depth: int
+    max_paths: int
+    depth_limit: int = 1
+    expansions: int = 0
+    stack: list[_SearchFrame] = field(default_factory=list)
+    paths: list[tuple[PathStep, ...]] = field(default_factory=list)
+    complete: bool = False
+
+
+@dataclass(frozen=True)
+class SearchSlice:
+    state: SearchState
+    resolution: RelationshipResolution | None
+
+
+def reachable_targets(graph: RelationshipGraph) -> dict[int, int]:
+    """Authorized reachable node distances without enumerating alternative paths.
+
+    A partner hop records a target but does not extend it. Keep non-partner
+    distances separately: a node reached cheaply via partner can still have a
+    longer valid non-partner prefix through which other targets are reachable.
+    """
+    start = graph.viewer_user_id
+    distances = {start: 0}
+    expandable = {start: 0}
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        distance = expandable[node] + 1
+        if distance > MAX_PATH_DEPTH:
+            continue
+        for edge in graph.adjacency.get(node, ()):
+            if distance < distances.get(edge.to_id, MAX_PATH_DEPTH + 1):
+                distances[edge.to_id] = distance
+            if edge.edge_type != "partner" and edge.to_id not in expandable:
+                expandable[edge.to_id] = distance
+                queue.append(edge.to_id)
+    return distances
+
+
+def _reverse_distances(graph: RelationshipGraph, target: int) -> dict[int, int]:
+    """A safe lower bound; only partner edges *into the goal* can be used.
+
+    Ignoring the DFS visited set can underestimate distance, never overestimate
+    it, so pruning cannot remove a path or change the first 128 path prefix.
+    """
+    incoming: dict[int, list[int]] = {}
+    for node, edges in graph.adjacency.items():
+        for edge in edges:
+            if edge.edge_type != "partner" or edge.to_id == target:
+                incoming.setdefault(edge.to_id, []).append(node)
+    distances = {target: 0}
+    queue = deque([target])
+    while queue:
+        node = queue.popleft()
+        distance = distances[node] + 1
+        if distance > MAX_PATH_DEPTH:
+            continue
+        for predecessor in incoming.get(node, ()):
+            if predecessor not in distances:
+                distances[predecessor] = distance
+                queue.append(predecessor)
+    return distances
+
+
+def _check_state_budget(state: SearchState) -> None:
+    if len(pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)) > state.max_state_bytes:
+        raise SearchBudgetExceeded("state_bytes", state.expansions, state.max_state_bytes)
+
+
+def _root_frame(state: SearchState) -> _SearchFrame:
+    start = state.graph.viewer_user_id
+    return _SearchFrame(start, state.depth_limit, frozenset({start}), ())
+
+
+def start_search(
     graph: RelationshipGraph,
-    node: int,
-    goal: int,
     *,
-    remaining_depth: int,
-    visited: frozenset[int],
-    steps: tuple[PathStep, ...],
-    out: list[tuple[PathStep, ...]],
-) -> None:
-    """恰好 remaining_depth 步内到达 goal 的路径收集（每条路径只在其自身长度
-    的迭代层入集一次）；邻接序已确定性排序。"""
-    if len(out) >= MAX_SIMPLE_PATHS:
-        return
-    for edge in graph.adjacency.get(node, ()):
-        if edge.to_id in visited:
+    target_user_id: int,
+    max_total_expansions: int = MAX_SEARCH_EXPANSIONS,
+    max_state_bytes: int = MAX_SEARCH_STATE_BYTES,
+) -> SearchState:
+    """Prepare a bounded pure search. Call advance_search until resolution exists."""
+    if max_total_expansions < 1 or max_state_bytes < 1:
+        raise ValueError("search budgets must be positive")
+    if len(pickle.dumps(graph, protocol=pickle.HIGHEST_PROTOCOL)) > max_state_bytes:
+        raise SearchBudgetExceeded("state_bytes", 0, max_state_bytes)
+    distances = _reverse_distances(graph, target_user_id)
+    depth_limit = distances.get(graph.viewer_user_id, MAX_PATH_DEPTH + 1)
+    state = SearchState(
+        graph=graph,
+        target_user_id=target_user_id,
+        reverse_distances=distances,
+        max_total_expansions=max_total_expansions,
+        max_state_bytes=max_state_bytes,
+        max_depth=MAX_PATH_DEPTH,
+        max_paths=MAX_SIMPLE_PATHS,
+        depth_limit=max(1, depth_limit),
+        complete=target_user_id == graph.viewer_user_id or depth_limit > MAX_PATH_DEPTH,
+    )
+    if not state.complete:
+        state.stack.append(_root_frame(state))
+    _check_state_budget(state)
+    return state
+
+
+def advance_search(
+    state: SearchState, *, max_expansions: int = SEARCH_SLICE_EXPANSIONS
+) -> SearchSlice:
+    """Advance at most max_expansions adjacency entries, then yield explicitly.
+
+    Frame pops/depth increments are bounded by MAX_PATH_DEPTH per expansion.
+    Only completed searches expose a resolution; partially found paths do not
+    qualify as a complete target. Total work and serialized state are bounded.
+    """
+    if max_expansions < 1:
+        raise ValueError("slice expansion budget must be positive")
+    slice_end = state.expansions + max_expansions
+    while not state.complete:
+        if not state.stack:
+            if state.depth_limit >= state.max_depth or len(state.paths) >= state.max_paths:
+                state.complete = True
+                break
+            state.depth_limit += 1
+            state.stack.append(_root_frame(state))
+        frame = state.stack[-1]
+        edges = state.graph.adjacency.get(frame.node, ())
+        if frame.edge_index >= len(edges):
+            state.stack.pop()
             continue
-        extended = (
-            *steps,
-            PathStep(node, edge.to_id, edge.edge_type, edge.subtype, edge.direction, edge.fact_id),
+        if state.expansions >= slice_end:
+            break
+        if state.expansions >= state.max_total_expansions:
+            raise SearchBudgetExceeded("expansions", state.expansions, state.max_total_expansions)
+        edge = edges[frame.edge_index]
+        frame.edge_index += 1
+        state.expansions += 1
+        if edge.to_id in frame.visited:
+            continue
+        if edge.to_id == state.target_user_id:
+            if frame.remaining_depth == 1:
+                state.paths.append(
+                    (
+                        *frame.steps,
+                        PathStep(
+                            frame.node,
+                            edge.to_id,
+                            edge.edge_type,
+                            edge.subtype,
+                            edge.direction,
+                            edge.fact_id,
+                        ),
+                    )
+                )
+                if len(state.paths) >= state.max_paths:
+                    state.complete = True
+            continue
+        if frame.remaining_depth == 1 or edge.edge_type == "partner":
+            continue
+        lower_bound = state.reverse_distances.get(edge.to_id)
+        if lower_bound is None or lower_bound > frame.remaining_depth - 1:
+            continue
+        steps = (
+            *frame.steps,
+            PathStep(
+                frame.node,
+                edge.to_id,
+                edge.edge_type,
+                edge.subtype,
+                edge.direction,
+                edge.fact_id,
+            ),
         )
-        if edge.to_id == goal:
-            if remaining_depth == 1:
-                out.append(extended)
-            continue
-        if remaining_depth == 1:
-            continue
-        if edge.edge_type == "partner":
-            # 未披露语义：partner 边不得延伸——姻亲链仅允许经 spouse（AC-KI1）
-            continue
-        _dfs_collect(
-            graph,
-            edge.to_id,
-            goal,
-            remaining_depth=remaining_depth - 1,
-            visited=visited | {edge.to_id},
-            steps=extended,
-            out=out,
+        state.stack.append(
+            _SearchFrame(
+                edge.to_id,
+                frame.remaining_depth - 1,
+                frame.visited | {edge.to_id},
+                steps,
+            )
         )
+    _check_state_budget(state)
+    resolution = (
+        _resolution_for_paths(state.graph, state.target_user_id, state.paths)
+        if state.complete
+        else None
+    )
+    return SearchSlice(state=state, resolution=resolution)
 
 
 def _enumerate_simple_paths(
     graph: RelationshipGraph, start: int, goal: int
 ) -> list[tuple[PathStep, ...]]:
-    """start→goal 全部简单路径；迭代加深保证短路径先于长路径入集，
-    达到总量上限时截断的必是更长路径（确定性截断）。"""
-    out: list[tuple[PathStep, ...]] = []
-    for depth_limit in range(1, MAX_PATH_DEPTH + 1):
-        _dfs_collect(
-            graph,
-            start,
-            goal,
-            remaining_depth=depth_limit,
-            visited=frozenset({start}),
-            steps=(),
-            out=out,
-        )
-        if len(out) >= MAX_SIMPLE_PATHS:
-            break
-    return out[:MAX_SIMPLE_PATHS]
+    """Compatibility adapter over the same resumable engine used by Steward."""
+    if start != graph.viewer_user_id:
+        graph = replace(graph, viewer_user_id=start)
+    state = start_search(graph, target_user_id=goal)
+    while not state.complete:
+        advance_search(state)
+    return state.paths
 
 
 def _path_sort_key(path: tuple[PathStep, ...]) -> tuple[Any, ...]:
@@ -190,7 +380,7 @@ _GENDER_LETTER = {"m": "m", "f": "f"}
 _SYM_LETTER = {"sibling": "B", "spouse": "S", "partner": "P", "bridge": "X"}
 
 
-def _step_token(step: PathStep, genders: dict[int, str]) -> str:
+def _step_token(step: PathStep, genders: Mapping[int, str]) -> str:
     """单步编码：边字母 + [亚型字母（仅 parent 类）] + [性别字母]。"""
     if step.edge_type == "parent":
         token = "U" if step.direction == "up" else "D"
@@ -201,7 +391,7 @@ def _step_token(step: PathStep, genders: dict[int, str]) -> str:
     return token + _GENDER_LETTER.get(genders.get(step.to_id, ""), "")
 
 
-def concept_code_for_path(path: tuple[PathStep, ...], genders: dict[int, str]) -> str | None:
+def concept_code_for_path(path: tuple[PathStep, ...], genders: Mapping[int, str]) -> str | None:
     """主路径 → concept_code（编码合同见模块 docstring）。"""
     if not path:
         return None
@@ -257,7 +447,7 @@ _PARENT_DOWN_ROLE = {
 }
 
 
-def _step_role(step: PathStep, genders: dict[int, str]) -> str:
+def _step_role(step: PathStep, genders: Mapping[int, str]) -> str:
     """单步的确定性中文角色词（不依赖姓名，保证输出稳定）。"""
     suffix = _GENDER_LETTER.get(genders.get(step.to_id, ""), "")
     if step.edge_type == "parent" and step.direction == "up":
@@ -283,7 +473,7 @@ def _step_role(step: PathStep, genders: dict[int, str]) -> str:
     }.get((step.edge_type, suffix), "亲属")
 
 
-def describe_path(path: tuple[PathStep, ...], genders: dict[int, str]) -> str:
+def describe_path(path: tuple[PathStep, ...], genders: Mapping[int, str]) -> str:
     """路径 → 确定性中文层级描述（「你的父亲的母亲的兄弟」式）。"""
     roles = "的".join(_step_role(step, genders) for step in path)
     return f"你的{roles}"
@@ -303,18 +493,12 @@ def bulk_concept_codes(
     主路径选择与编码完全复用 resolve_relationship 的同一批私有原语，
     保证与单点解析逐字节一致（单一真相，AC-KI7）。无路径目标得 None。
     """
-    out: dict[int, str | None] = {}
-    for target_user_id in sorted(set(target_ids)):
-        if target_user_id == viewer_user_id:
-            out[target_user_id] = "SELF"
-            continue
-        paths = _enumerate_simple_paths(graph, viewer_user_id, target_user_id)
-        out[target_user_id] = (
-            concept_code_for_path(sorted(paths, key=_path_sort_key)[0], graph.node_genders)
-            if paths
-            else None
-        )
-    return out
+    if graph.viewer_user_id != viewer_user_id:
+        graph = replace(graph, viewer_user_id=viewer_user_id)
+    return {
+        target_user_id: resolve_graph(graph, target_user_id=target_user_id).concept_code
+        for target_user_id in sorted(set(target_ids))
+    }
 
 
 def resolve_relationship(
@@ -336,6 +520,20 @@ def resolve_relationship(
         space_id=space_id,
         extra_edges=extra_edges,
     )
+    return resolve_graph(graph, target_user_id=target_user_id)
+
+
+def resolve_graph(graph: RelationshipGraph, *, target_user_id: int) -> RelationshipResolution:
+    """Resolve a target using only an already-authorized, detached graph."""
+    paths = _enumerate_simple_paths(graph, graph.viewer_user_id, target_user_id)
+    return _resolution_for_paths(graph, target_user_id, paths)
+
+
+def _resolution_for_paths(
+    graph: RelationshipGraph, target_user_id: int, paths: list[tuple[PathStep, ...]]
+) -> RelationshipResolution:
+    viewer_user_id = graph.viewer_user_id
+    space_id = graph.space_id
 
     if viewer_user_id == target_user_id:
         return RelationshipResolution(
@@ -353,7 +551,6 @@ def resolve_relationship(
             node_genders=graph.node_genders,
         )
 
-    paths = _enumerate_simple_paths(graph, viewer_user_id, target_user_id)
     if not paths:
         # 不泄露存在性：不可见/不存在/超深一律同一结果形状
         return RelationshipResolution(

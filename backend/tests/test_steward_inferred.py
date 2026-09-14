@@ -246,6 +246,12 @@ def test_pfv_payload_contains_inferred_edges(db_session, monkeypatch) -> None:
     assert inferred[0]["subject_user_id"] == a.id
     assert inferred[0]["object_user_id"] == b.id
     assert inferred[0]["term"] is not None  # 确定性单跳称谓（丈夫/妻子）
+    assert inferred[0]["path"][0]["from"] == a.id
+    assert inferred[0]["path"][0]["to"] == b.id
+    assert inferred[0]["viewer_term"] is not None
+    assert len(inferred[0]["viewer_path"]) == 2
+    assert inferred[0]["viewer_path"][0]["from"] == viewer.id
+    assert inferred[0]["viewer_path"][-1]["fact_id"] == -inferred[0]["id"]
     node_ids = {node["user_id"] for node in payload["nodes"]}
     assert b.id in node_ids
     b_node = next(node for node in payload["nodes"] if node["user_id"] == b.id)

@@ -18,7 +18,6 @@ from conftest import (
 )
 
 from app import config
-from app.models.personal_family_view import PersonalFamilyViewNode
 from app.models.steward import ActionCard
 from app.services import personal_family_view
 from app.services import source_facts as sf
@@ -59,6 +58,8 @@ def test_space_stats_aggregates_authorized_projection_only(client, db_session) -
     parent = create_user_with_pin(db_session, "ss-parent", "123456", gender="m")
     create_space_member(db_session, space.id, parent.id)
     _confirm_parent(db_session, parent.id, viewer.id, space.id)
+    personal_family_view.rebuild_view(db_session, account=viewer.account, space_id=space.id)
+    db_session.commit()
 
     resp = _stats(client, _login_header(client, "ss-viewer"), space.id)
     assert resp.status_code == 200, resp.text
@@ -131,7 +132,7 @@ def test_space_stats_pending_counts(client, db_session) -> None:
     assert data["pending_action_cards"] == 1
     assert data["pending_memberships"] == 1
 
-    # 卡片被接受（仍非 pending 终态）→ pending 计数归零，快照状态仍 current
+    # 卡片被查看（非 pending）→ 即使家谱尚未发布，pending 计数仍即时归零
     card.state = "viewed"
     db_session.commit()
     data = _stats(client, _login_header(client, "ss-pending"), space.id).json()
@@ -143,6 +144,8 @@ def test_space_stats_stale_status_and_revocation_immediate_hide(client, db_sessi
     parent = create_user_with_pin(db_session, "ss-stale-parent", "123456")
     create_space_member(db_session, space.id, parent.id)
     _confirm_parent(db_session, parent.id, viewer.id, space.id)
+    personal_family_view.rebuild_view(db_session, account=viewer.account, space_id=space.id)
+    db_session.commit()
     headers = _login_header(client, "ss-stale")
     assert _stats(client, headers, space.id).json()["status"] == "current"
 
@@ -163,8 +166,8 @@ def test_space_stats_stale_status_and_revocation_immediate_hide(client, db_sessi
     data = _stats(client, headers, space.id).json()
     assert data["status"] == "stale"
     assert data["stale_reason"] is not None
-    # none 节点与其边不得计入，也不能从计数反推其存在
-    assert data["node_count"] == 1
+    # 非 current 只返回安全空图统计；成员计数仍按当前授权计算。
+    assert data["node_count"] == 0
     assert data["edge_count"] == 0
     assert data["member_count"] == 1
     assert data["relation_distribution"] == []
@@ -172,23 +175,22 @@ def test_space_stats_stale_status_and_revocation_immediate_hide(client, db_sessi
 
 def test_space_stats_queued_and_failed_status_paths(client, db_session) -> None:
     viewer, space = create_agent_fixture(db_session, name="ss-status")
+    personal_family_view.rebuild_view(db_session, account=viewer.account, space_id=space.id)
+    db_session.commit()
     headers = _login_header(client, "ss-status")
     assert _stats(client, headers, space.id).json()["status"] == "current"
 
     view = personal_family_view.get_view(db_session, account=viewer.account, space_id=space.id)
 
-    # queued：仍返回上一份授权快照聚合 + 显式状态与占位原因
+    # queued/failed：不把上一份投影行聚合成当前统计，保留明确状态。
     view.status = "queued"
     db_session.commit()
     data = _stats(client, headers, space.id).json()
     assert data["status"] == "queued"
     assert data["stale_reason"] == "projection_not_current"
-    assert data["node_count"] >= 1
+    assert data["node_count"] == 0
 
-    # failed 且无安全快照行 → 零聚合，不回退旧全局统计
-    db_session.query(PersonalFamilyViewNode).filter(
-        PersonalFamilyViewNode.view_id == view.id
-    ).delete()
+    # 即使旧节点仍在，也不能在失败状态下暴露旧计数。
     view.status = "failed"
     view.failed_reason = "boom"
     db_session.commit()
@@ -215,7 +217,9 @@ def test_space_stats_lineage_space_supported(client, db_session) -> None:
 
     data = _stats(client, _login_header(client, "ss-lineage"), lineage.id).json()
     assert data["space_kind"] == "lineage"
-    assert data["node_count"] == 1
+    assert data["status"] == "never_computed"
+    assert data["node_count"] == 0
+    assert data["member_count"] == 1
 
 
 def test_space_stats_etag_304_and_authorization_before_304(client, db_session) -> None:

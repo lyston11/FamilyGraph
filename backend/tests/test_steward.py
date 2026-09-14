@@ -274,66 +274,69 @@ def test_execute_same_cursor_zero_side_effects(db_session) -> None:
     assert len(_cards(db_session, space.id)) == cards_after_first
 
 
-def test_worker_crash_after_card_insert_rerun_no_duplicate(db_session) -> None:
-    """模拟 worker 在插入卡片后、提交 job checkpoint 前崩溃：
-    run_steward_job 的整体立即事务回滚卡片插入；重跑不重复出卡（AC-ST2）。"""
+def test_worker_crash_after_card_insert_rerun_no_duplicate(db_session, monkeypatch) -> None:
+    """A failed delivery rolls back its cards; retry never duplicates them."""
+    from app.models.steward import StewardDeliveryIntent, StewardRetryBudget
+    from app.services import steward_delivery
+
     space = _space(db_session, "crash", kind="lineage")
     a = _person(db_session, space.id, "A", member=True)
     b = _person(db_session, space.id, "B", gender="f", member=False, ref=True)
     fact = _confirm(db_session, "spouse", a.id, b.id, space_id=space.id)
     ev = _emit_fact_event(db_session, fact)
     db_session.commit()
-
-    # 入队 + lease
     job, _ = steward.enqueue_steward_job(
-        db_session, space_id=space.id, cause="source_fact", trigger_cursor=ev.id
+        db_session,
+        space_id=space.id,
+        cause="source_fact",
+        trigger_cursor=ev.id,
     )
     grant = steward.lease_next_steward_job(db_session, leased_by="test-worker")
-    assert grant is not None and grant.id == job.id
+    assert grant is not None
+    result = steward.run_steward_job(db_session, grant, drain_delivery=False)
+    original = steward._materialize_action
 
-    # 模拟执行中途异常（事务整体回滚）：直接 raise，run_steward_job 的
-    # _immediate_tx 会回滚，job 状态回到 leased（未结算）。
-    with pytest.raises(RuntimeError):
-        # 通过在执行体内抛错模拟崩溃；用 monkeypatch 替换 _recommend_cards
-        import app.services.steward as st_mod
+    def boom(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("simulated crash after card insert")
 
-        original = st_mod._recommend_cards
-
-        def boom(s, sp, vis, *, now):
-            raise RuntimeError("simulated crash after card insert")
-
-        st_mod._recommend_cards = boom  # type: ignore[assignment]
-        try:
-            steward.run_steward_job(db_session, grant)
-        finally:
-            st_mod._recommend_cards = original  # type: ignore[assignment]
-
-    # 崩溃回滚后：无卡片、job 仍非 succeeded
+    monkeypatch.setattr(steward, "_materialize_action", boom)
+    delivery = steward_delivery.drain(
+        bind=db_session.get_bind(), generation_id=result["generation_id"], limit=64
+    )
+    assert delivery["delivery_failed"] == 1
     assert _cards(db_session, space.id) == []
     db_session.refresh(job)
-    assert job.status != "succeeded"
-
-    # 把 lease 失效后 reaper 回队，重跑正常路径
-    job.lease_expires_at = timeutil.utcnow()
+    assert job.status == "succeeded" and job.last_event_cursor == ev.id
+    monkeypatch.setattr(steward, "_materialize_action", original)
+    retry = db_session.scalar(
+        select(StewardDeliveryIntent).where(
+            StewardDeliveryIntent.kind == "recommend",
+            StewardDeliveryIntent.status == "pending",
+        )
+    )
+    assert retry is not None
+    retry.available_at = timeutil.utcnow() - timedelta(seconds=1)
+    budget = db_session.scalar(
+        select(StewardRetryBudget).where(
+            StewardRetryBudget.space_id == space.id,
+            StewardRetryBudget.fingerprint == retry.effect_fingerprint,
+            StewardRetryBudget.scope == "delivery",
+        )
+    )
+    assert budget is not None and budget.attempts == 1
+    budget.retry_after = retry.available_at
     db_session.commit()
-    steward.reaper_pass(db_session)
-    db_session.refresh(job)
-    assert job.status == "queued"  # attempt 未耗尽 → 回队
-
-    grant2 = steward.lease_next_steward_job(db_session, leased_by="test-worker")
-    assert grant2 is not None and grant2.id == job.id
-    summary = steward.run_steward_job(db_session, grant2)
-    assert summary["stats"]["cards_created"] == 2
+    delivery = steward_delivery.drain(
+        bind=db_session.get_bind(), generation_id=result["generation_id"], limit=64
+    )
+    assert delivery["cards_created"] == 2
     cards = _cards(db_session, space.id)
     assert len(cards) == 2
-    # 同空间同证据只有这两张；dedupe key 各一
-    assert {c.dedupe_key for c in cards} == {
+    assert {card.dedupe_key for card in cards} == {
         action_cards.dedupe_key_for("household_link", a.id, b.id),
         action_cards.dedupe_key_for("lineage_request", a.id, b.id),
     }
-
-
-# ---- 2. 跨空间对抗（AC-ST1 底）----
 
 
 def test_cross_space_fact_not_consumed_by_other_space_job(db_session) -> None:
@@ -1416,21 +1419,19 @@ def test_settle_rejected_when_lease_expires_during_execution(
     attempt = job.attempt
     db_session.commit()
 
-    # 执行本身瞬时完成，但模拟墙钟在执行期间越过租约 deadline
-    monkeypatch.setattr(
-        steward,
-        "_execute_locked",
-        lambda db, job, *, now, upper: {
-            "finding_signatures": [],
-            "stats": {},
-        },
-    )
-    real_utcnow = timeutil.utcnow
-    monkeypatch.setattr(
-        steward,
-        "utcnow",
-        lambda: real_utcnow() + timedelta(seconds=3600),
-    )
+    # Run the real staging path, then expire its lease before publication.
+    from app.services import steward_pipeline
+
+    original = steward._execute_locked
+
+    def expire_after_staging(db, job, *, now, upper):
+        summary = original(db, job, now=now, upper=upper)
+        with steward_pipeline.write_transaction(db.get_bind()) as independent:
+            current = independent.get(StewardJob, job.id)
+            current.lease_expires_at = timeutil.utcnow() - timedelta(seconds=1)
+        return summary
+
+    monkeypatch.setattr(steward, "_execute_locked", expire_after_staging)
 
     with pytest.raises(fastapi.HTTPException) as excinfo:
         steward.run_steward_job(db_session, job, worker_id="test-worker", expected_attempt=attempt)

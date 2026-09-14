@@ -34,6 +34,9 @@ class PersonalFamilyViewEdgeOut(BaseModel):
     path_class: str
     concept_code: str | None
     term: str | None
+    # Canonical internal readers use provenance; the public PFV wire contract
+    # stays unchanged and does not expose this implementation detail.
+    term_source_level: str | None = Field(default=None, exclude=True)
     inclusion_reason_code: str
 
 
@@ -75,8 +78,17 @@ class InferredEdgeOut(BaseModel):
     viewer_path: list[dict[str, Any]]
     new_user_id: int | None
     evidence_fact_ids: list[int]
+    presentation: dict[str, Any] | None = None
     revision: int
     created_at: datetime
+
+
+class PFVTargetProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: int
+    status: Literal["pending", "ready", "unavailable", "failed"]
+    reason_code: str | None = None
 
 
 class PFVProgress(BaseModel):
@@ -99,6 +111,9 @@ class PFVProgress(BaseModel):
     completed_count: int
     total_count: int
     next_poll_ms: int
+    topology_revision: str = ""
+    targets: list[PFVTargetProgress] = Field(default_factory=list)
+    reason_code: str | None = None
 
 
 class PersonalFamilyViewOut(BaseModel):
@@ -130,6 +145,7 @@ class PFVDemandIn(BaseModel):
 
     space_id: int = Field(gt=0)
     focus_user_id: int | None = Field(default=None, gt=0)
+    retry: bool = False
 
 
 class PFVDemandOut(BaseModel):

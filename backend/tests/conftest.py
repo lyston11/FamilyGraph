@@ -178,7 +178,13 @@ _TABLES = (
 
 @pytest.fixture(autouse=True)
 def _clean_tables(db_session):
+    from app.services import steward_runtime
+
+    steward_runtime.start_runtime()
     yield db_session
+    # Coordinators now run outside maintenance ticks. Do not clear a database
+    # while an earlier test can still publish into it.
+    assert steward_runtime.shutdown_runtime(timeout_seconds=10.0)
     # 先丢弃测试残留的脏状态，再按子表→父表顺序清空（满足 FK，无需关外键）
     db_session.rollback()
     # family_spaces.lineage_space_id 是自引用 RESTRICT（0035）：单语句 DELETE

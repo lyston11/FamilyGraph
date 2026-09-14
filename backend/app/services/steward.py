@@ -70,11 +70,7 @@ from app.services import (
     action_cards,
     person_identity,
     recommendation_matrix,
-    steward_assist,
     steward_events,
-    steward_generations,
-    steward_inferred,
-    steward_suggestions,
 )
 from app.services.action_cards import ACTION_SUPERSEDE
 from app.services.disclosure import disclosed_categories
@@ -127,6 +123,10 @@ def classify_execution_error(exc: Exception) -> tuple[str, bool]:
     业务错误（带 API 错误码，fail-closed 进入 failed 终态）与其余未知异常
     （未知异常一律按确定性处理：不无限重试掩盖真实缺陷）。
     """
+    from app.services.steward_runtime import RuntimeStopping
+
+    if isinstance(exc, RuntimeStopping):
+        return "worker_stopped", True
     if isinstance(exc, sqlite3.OperationalError):
         message = str(exc).lower()
         if any(marker in message for marker in _RETRYABLE_LOCK_MARKERS):
@@ -541,6 +541,32 @@ def _enqueue_core_job_locked(
     )
     db.add(job)
     db.flush()
+    if cause == "admin_rerun":
+        # Reserve one auditable opportunity; scans/restarts cannot reset past
+        # attempts. The admin endpoint also enforces its space-level cooldown.
+        from app.models.steward import StewardRetryBudget
+
+        budgets = db.scalars(
+            select(StewardRetryBudget)
+            .where(
+                StewardRetryBudget.space_id == space_id,
+                StewardRetryBudget.scope != "delivery",
+                (StewardRetryBudget.exhausted.is_(True))
+                | (StewardRetryBudget.retry_after.is_not(None)),
+                (StewardRetryBudget.manual_retry_at.is_(None))
+                | (
+                    StewardRetryBudget.manual_retry_at
+                    <= now - timedelta(seconds=config.STEWARD_RERUN_COOLDOWN_SECONDS)
+                ),
+            )
+            .order_by(StewardRetryBudget.updated_at.desc())
+            .limit(16)
+        ).all()
+        for budget in budgets:
+            budget.max_attempts = max(budget.max_attempts, budget.attempts + 1)
+            budget.exhausted, budget.retry_after = False, None
+            budget.manual_grants += 1
+            budget.manual_retry_at, budget.updated_at = now, now
     return job, True
 
 
@@ -567,11 +593,27 @@ def lease_next_steward_job(
     """
     _require_enabled()
     ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_LEASE_TTL_SECONDS
+    from app.services.steward_overlay import active_leases
+
     with _immediate_tx(db):
+        db.expire_all()
         stmt = select(StewardJob).where(StewardJob.status == "queued")
         if space_id is not None:
             stmt = stmt.where(StewardJob.space_id == space_id)
         moment = now or utcnow()
+        active_count = (
+            db.scalar(
+                select(func.count())
+                .select_from(StewardJob)
+                .where(
+                    StewardJob.status.in_(("leased", "running")),
+                    StewardJob.lease_expires_at > moment,
+                )
+            )
+            or 0
+        )
+        if active_count + active_leases(db) >= config.STEWARD_MAX_CONCURRENT_JOBS:
+            return None
         # 退避未到期的作业暂不可租
         stmt = stmt.where((StewardJob.available_at.is_(None)) | (StewardJob.available_at <= moment))
         stmt = stmt.order_by(StewardJob.created_at.asc(), StewardJob.id.asc()).limit(1)
@@ -598,21 +640,19 @@ def heartbeat_steward_job(
     worker_id: str | None = None,
     ttl_seconds: int | None = None,
     now: datetime | None = None,
+    expected_attempt: int | None = None,
 ) -> datetime:
-    """续租；租约栅栏验证 owner + deadline（F17：过期执行者不得续新租约）。"""
-    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_LEASE_TTL_SECONDS
-    with _immediate_tx(db):
-        if job.status not in ("leased", "running"):
-            raise_api_error(409, STEWARD_JOB_NOT_ACTIVE, "作业不在活跃状态，无法续租")
-        moment = now or utcnow()
-        if _lease_stale(job, worker_id=worker_id, now=moment):
-            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，续租被拒绝")
-        expires = moment + timedelta(seconds=ttl)
-        job.lease_expires_at = expires
-        job.heartbeat_at = moment
-        job.updated_at = moment
-        db.flush()
-        return expires
+    from app.services import steward_pipeline
+
+    binding = steward_pipeline.binding_for(
+        job, worker_id=worker_id, expected_attempt=expected_attempt
+    )
+    return steward_pipeline.heartbeat(
+        db,
+        binding,
+        ttl=ttl_seconds if ttl_seconds is not None else config.STEWARD_LEASE_TTL_SECONDS,
+        now=now,
+    )
 
 
 def settle_steward_job(
@@ -634,8 +674,11 @@ def settle_steward_job(
     """
     if status not in ("succeeded", "failed", "expired"):
         raise_api_error(422, STEWARD_JOB_NOT_ACTIVE, "非法的终态", detail={"status": status})
+    observed_attempt = job.attempt if expected_attempt is None else expected_attempt
+    observed_owner = job.leased_by if worker_id is None else worker_id
     moment = now or utcnow()
     with _immediate_tx(db):
+        db.refresh(job)
         if job.status in ("succeeded", "failed", "expired"):
             raise_api_error(
                 409, STEWARD_JOB_NOT_ACTIVE, "作业已是终态", detail={"status": job.status}
@@ -647,15 +690,44 @@ def settle_steward_job(
                 "仅 leased/running 可进入终态",
                 detail={"status": job.status},
             )
-        if expected_attempt is not None and job.attempt != expected_attempt:
+        if job.attempt != observed_attempt:
             raise_api_error(
                 409,
                 STEWARD_LEASE_STALE,
                 "attempt 与当前租约不一致，结算被拒绝",
                 detail={"expected_attempt": expected_attempt, "attempt": job.attempt},
             )
-        if _lease_stale(job, worker_id=worker_id, now=moment):
+        if _lease_stale(job, worker_id=observed_owner, now=moment):
             raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，结算被拒绝")
+        from app.models.steward import StewardGeneration
+        from app.services import steward_pipeline
+
+        generation = db.scalar(
+            select(StewardGeneration)
+            .where(
+                StewardGeneration.job_id == job.id,
+                StewardGeneration.manifest_sealed.is_(True),
+                StewardGeneration.status == "running",
+            )
+            .order_by(StewardGeneration.id.desc())
+            .limit(1)
+        )
+        if generation is not None:
+            steward_pipeline.require_generation(
+                db,
+                steward_pipeline.Binding(
+                    job.id,
+                    job.space_id,
+                    observed_owner,
+                    observed_attempt,
+                ),
+                generation.id,
+                now=moment,
+            )
+            if status == "succeeded":
+                raise_api_error(409, STEWARD_JOB_NOT_ACTIVE, "分代作业必须通过完整发布栅栏结算")
+            generation.status = "failed" if status == "failed" else "superseded"
+            generation.error_code, generation.updated_at = error_code or status, moment
         job.status = status
         job.settled_at = moment
         job.updated_at = moment
@@ -690,20 +762,38 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
     """回收过期 lease：attempt 未耗尽回队，耗尽判 expired 终态。返回处理数。"""
     moment = now or utcnow()
     with _immediate_tx(db):
+        db.expire_all()
         stale = list(
             db.scalars(
-                select(StewardJob).where(
+                select(StewardJob)
+                .where(
                     StewardJob.status.in_(("leased", "running")),
                     StewardJob.lease_expires_at.is_not(None),
-                    StewardJob.lease_expires_at < moment,
+                    StewardJob.lease_expires_at <= moment,
                 )
+                .order_by(StewardJob.id)
+                .limit(32)
             )
         )
         for job in stale:
+            from app.models.steward import StewardGeneration
+
+            for generation in db.scalars(
+                select(StewardGeneration).where(
+                    StewardGeneration.job_id == job.id,
+                    StewardGeneration.status == "running",
+                    StewardGeneration.lease_attempt == job.attempt,
+                    StewardGeneration.lease_owner == job.leased_by,
+                )
+            ).all():
+                generation.status = "superseded"
+                generation.error_code = "lease_expired"
+                generation.updated_at = moment
             exhausted = job.attempt >= job.max_attempts
             outcome = "expired" if exhausted else "queued"
             job.status = outcome
             job.lease_expires_at = None
+            job.leased_by = None
             job.heartbeat_at = None
             job.updated_at = moment
             if exhausted:
@@ -821,129 +911,118 @@ def run_steward_job(
     now: datetime | None = None,
     worker_id: str | None = None,
     expected_attempt: int | None = None,
+    drain_delivery: bool = True,
 ) -> dict[str, Any]:
-    """执行一次 steward 作业（09-13 短事务流水线）。
+    """Run detached computation, stage complete targets, then atomically publish."""
+    from app.services import steward_delivery, steward_pipeline
+    from app.services.steward_snapshot import SnapshotChanged
 
-    事务模型（09-13 R1：重算不得持续占有 SQLite 写锁）：
-
-    1. 开始（短立即事务）：租约栅栏验证（job id + attempt + owner + deadline），
-       置 running 并提交；
-    2. 计算：消费窗口/派生缓存/视图重建/检测出卡全部在写锁外进行，
-       只用有界短写事务分批落库（每批一次 BEGIN IMMEDIATE），期间由独立心跳
-       线程按租约 TTL 的 1/3 周期短事务续租——计算不再受 lease TTL 上限约束；
-    3. 发布（短立即事务）：fresh-read 后复查完整租约栅栏，置 succeeded、提交
-       消费水位、写完成事件并登记后继需求。发布与批次保存不再同事务——
-       已保存批次按输入指纹幂等复用，崩溃重试不会重复结算。
-
-    租约栅栏（F17）：旧执行者/过期租约在开始与发布两处都被拒绝；执行中途
-    失去租约时发布失败，作业由 reaper/新执行者接管，已提交批次不回滚但
-    也绝不冒充新租约的结果。
-    """
     _require_enabled()
-    moment = now or utcnow()
-    with _immediate_tx(db):
-        if job.status not in ("leased", "running"):
-            raise_api_error(
-                409,
-                STEWARD_JOB_NOT_ACTIVE,
-                "作业不在可执行状态",
-                detail={"status": job.status},
-            )
-        if expected_attempt is not None and job.attempt != expected_attempt:
-            raise_api_error(
-                409,
-                STEWARD_LEASE_STALE,
-                "attempt 与当前租约不一致，执行被拒绝",
-                detail={"expected_attempt": expected_attempt, "attempt": job.attempt},
-            )
-        if _lease_stale(job, worker_id=worker_id, now=moment):
-            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，执行被拒绝")
-        job.status = "running"
-        job.heartbeat_at = moment
-        job.updated_at = moment
-        raw_upper = (job.checkpoint_json or {}).get("execution_cursor")
-        exec_upper = (
-            job.trigger_cursor
-            if not isinstance(raw_upper, int)
-            else min(raw_upper, job.trigger_cursor)
-        )
-        db.flush()
-    heartbeat = _LeaseHeartbeat(job_id=int(job.id), worker_id=worker_id)
+    binding = steward_pipeline.binding_for(
+        job, worker_id=worker_id, expected_attempt=expected_attempt
+    )
+    raw = db.connection().connection.dbapi_connection
+    if isinstance(raw, sqlite3.Connection) and raw.in_transaction:
+        raise RuntimeError("steward requires a clean session without pending writes")
+    db.rollback()
+    current = steward_pipeline.begin_job(db, binding, now=now)
+    raw_upper = (current.checkpoint_json or {}).get("execution_cursor")
+    upper = (
+        current.trigger_cursor
+        if not isinstance(raw_upper, int)
+        else min(raw_upper, current.trigger_cursor)
+    )
+    heartbeat = _LeaseHeartbeat(binding=binding, bind=db.get_bind())
     try:
         heartbeat.start()
-        summary = _execute_locked(db, job, now=utcnow(), upper=exec_upper)
-    except Exception:
-        # 执行主体失败：收敛本代为 failed（前提：无发布发生）。
-        # 已提交的批次保留待指纹复用；作业结算交由调用方/reaper。
+        summary = _execute_locked(db, current, now=now or utcnow(), upper=upper)
+        _publish_success(
+            db,
+            current,
+            exec_upper=upper,
+            summary=summary,
+            worker_id=binding.owner,
+            expected_attempt=binding.attempt,
+        )
+    except Exception as exc:
+        code, retryable = classify_execution_error(exc)
+        if isinstance(exc, SnapshotChanged):
+            code, retryable = "input_changed", False
         try:
-            with _immediate_tx(db):
-                steward_generations.mark_failed(
-                    db, space_id=job.space_id, error_code=ERROR_EXECUTION_FAILED
-                )
-        except Exception:  # noqa: BLE001 — 收敛失败不影响原异常传播
-            pass
+            steward_pipeline.record_failure(db, binding, error_code=code, retryable=retryable)
+        except Exception as failure:
+            logger.warning(
+                "steward failure settlement deferred job=%s error=%s",
+                binding.job_id,
+                type(failure).__name__,
+            )
         raise
     finally:
         heartbeat.stop()
-    _publish_success(db, job, exec_upper=exec_upper, summary=summary, worker_id=worker_id)
+    if drain_delivery:
+        try:
+            delivered = steward_delivery.drain(
+                bind=db.get_bind(), generation_id=int(summary["generation_id"]), limit=64
+            )
+        except Exception as exc:
+            # Publication already committed. Delivery recovery is independent;
+            # a lock or poison object cannot turn core success into a failure.
+            logger.warning(
+                "steward delivery deferred generation=%s error=%s",
+                summary["generation_id"],
+                type(exc).__name__,
+            )
+            delivered = {"delivery_failed": 1}
+        for key, count in delivered.items():
+            if key in summary["stats"]:
+                summary["stats"][key] += count
+        summary["delivery"] = delivered
+    db.expire_all()
     return summary
 
 
 class _LeaseHeartbeat:
-    """计算期间的独立租约心跳线程（短事务续租，不与计算共享 Session）。
+    """Independent, expected-attempt heartbeat; no shared Session or ORM object."""
 
-    周期 = 租约 TTL 的 1/3（下限 5s）；续租走 heartbeat_steward_job 的
-    完整租约栅栏——失去租约（过期/易主/终态）时置 lost 标志，发布阶段
-    因 fresh-read 栅栏失败同样被拒，双保险。线程绝不抛出：异常只记日志。
-    """
-
-    def __init__(self, *, job_id: int, worker_id: str | None) -> None:
-        self._job_id = job_id
-        self._worker_id = worker_id
+    def __init__(self, *, binding: Any, bind: Any) -> None:
+        self._binding = binding
+        self._bind = bind
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.lost = False
 
     def start(self) -> None:
-        interval = max(config.STEWARD_LEASE_TTL_SECONDS / 3.0, 5.0)
         self._thread = threading.Thread(
-            target=self._run,
-            args=(interval,),
-            name=f"steward-heartbeat-{self._job_id}",
-            daemon=True,
+            target=self._run, name=f"steward-heartbeat-{self._binding.job_id}", daemon=True
         )
         self._thread.start()
 
-    def _run(self, interval: float) -> None:
-        from app.db import SessionLocal
+    def _run(self) -> None:
+        from app.services import steward_pipeline
 
+        interval = max(config.STEWARD_LEASE_TTL_SECONDS / 3.0, 0.25)
         while not self._stop.wait(interval):
             try:
-                with SessionLocal() as session:
-                    row = session.get(StewardJob, self._job_id)
-                    if row is None:
-                        self.lost = True
-                        return
-                    heartbeat_steward_job(
-                        session, row, worker_id=self._worker_id, ttl_seconds=None, now=None
+                with Session(bind=self._bind, expire_on_commit=False) as session:
+                    steward_pipeline.heartbeat(
+                        session, self._binding, ttl=config.STEWARD_LEASE_TTL_SECONDS
                     )
-                    session.commit()
-            except Exception as exc:  # noqa: BLE001 — 心跳失败不中断计算
+            except Exception as exc:
+                self.lost = True
                 logger.warning(
-                    "steward lease heartbeat failed for job %s (error=%s)",
-                    self._job_id,
+                    "steward lease heartbeat stopped job=%s error=%s",
+                    self._binding.job_id,
                     type(exc).__name__,
                 )
-                api_error = extract_api_error(getattr(exc, "detail", None))
-                if api_error is not None and str(api_error.get("code")) == STEWARD_LEASE_STALE:
-                    self.lost = True
-                    return
+                return
 
     def stop(self) -> None:
         self._stop.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=10.0)
+        if self._thread is not None:
+            # Coordinator completion must include its last heartbeat write.
+            # Runtime shutdown supplies the outer bounded wait and returns
+            # False if a database operation has not stopped by its deadline.
+            self._thread.join()
 
 
 def _publish_success(
@@ -953,82 +1032,14 @@ def _publish_success(
     exec_upper: int,
     summary: dict[str, Any],
     worker_id: str | None,
+    expected_attempt: int | None = None,
 ) -> None:
-    """发布阶段（短立即事务）：fresh-read 复查租约栅栏后置 succeeded。
+    from app.services import steward_pipeline
 
-    发布与计算分离后，此处核验的是数据库当前租约而非计算开始时的旧实例；
-    heartbeat.lost / 新 attempt / 过期 deadline 任一成立都拒绝发布（409），
-    已提交批次保留待指纹复用，作业交由 reaper 或新执行者收敛。
-    """
-    summary_generation_id = summary.get("generation_id")
-    settled_moment = utcnow()
-    with _immediate_tx(db):
-        current = db.get(StewardJob, job.id)
-        assert current is not None
-        if current.status not in ("leased", "running"):
-            raise_api_error(
-                409,
-                STEWARD_JOB_NOT_ACTIVE,
-                "作业不在可发布状态",
-                detail={"status": current.status},
-            )
-        if _lease_stale(current, worker_id=worker_id, now=settled_moment):
-            raise_api_error(409, STEWARD_LEASE_STALE, "租约已过期或易主，发布被拒绝")
-        current.status = "succeeded"
-        current.last_event_cursor = exec_upper
-        current.error_code = None
-        current.available_at = None
-        current.checkpoint_json = {
-            "last_event_cursor": exec_upper,
-            "policy_version": current.policy_version,
-            "finding_signatures": summary["finding_signatures"],
-            "stats": summary["stats"],
-        }
-        current.settled_at = settled_moment
-        current.updated_at = settled_moment
-        db.flush()
-        # 代次与作业结算同事务发布（09-13：发布边界原子；进度行已在前置阶段落库）
-        if isinstance(summary_generation_id, int):
-            steward_generations.mark_published(
-                db, generation_id=summary_generation_id, stats=summary["stats"]
-            )
-        emit_domain_event(
-            db,
-            event_type=steward_events.EVENT_STEWARD_JOB_COMPLETED,
-            aggregate_type=steward_events.AGGREGATE_STEWARD_JOB,
-            aggregate_id=current.id,
-            payload={
-                "job_id": current.id,
-                "space_id": current.space_id,
-                "cause": current.cause,
-                "status": "succeeded",
-                "trigger_cursor": exec_upper,
-                "stats": summary["stats"],
-            },
-            space_id=current.space_id,
-            actor_account_id=None,
-        )
-        # 运行期间到来的更高水位：只请求后继工作（新 queued 行），不由本次
-        # 结算宣告完成；本作业已终态，插入不违反每空间单活跃约束。
-        if current.trigger_cursor > exec_upper:
-            follow_up_cause = (
-                current.cause if current.cause in STEWARD_JOB_CAUSES else "domain_event"
-            )
-            db.add(
-                StewardJob(
-                    space_id=current.space_id,
-                    cause=follow_up_cause,
-                    trigger_cursor=current.trigger_cursor,
-                    status="queued",
-                    attempt=0,
-                    max_attempts=current.max_attempts,
-                    policy_version=current.policy_version,
-                    checkpoint_json={},
-                    created_at=settled_moment,
-                    updated_at=settled_moment,
-                )
-            )
-            db.flush()
+    binding = steward_pipeline.binding_for(
+        job, worker_id=worker_id, expected_attempt=expected_attempt
+    )
+    steward_pipeline.publish(db, binding, summary=summary, upper=exec_upper)
 
 
 def execute_steward_job(
@@ -1038,63 +1049,27 @@ def execute_steward_job(
     now: datetime | None = None,
     worker_id: str | None = None,
     expected_attempt: int | None = None,
+    drain_delivery: bool = True,
 ) -> dict[str, Any]:
-    """带失败恢复的执行包装（09-11 R3）：
+    """Recover only the exact observed binding, including failures before snapshot."""
+    from app.services import steward_pipeline
 
-    - 租约栅栏拒绝（STEWARD_LEASE_STALE / NOT_ACTIVE）→ 原样抛出，绝不结算
-      （旧执行者不得覆盖新租约）；
-    - 可重试错误（DB 锁/暂时超时）且重试预算未耗尽 → 回 queued 并按
-      attempt 设置有限退避 available_at（错误只落安全分类码）；
-    - 确定性错误或预算耗尽 → failed 终态（终态不复活，人工重跑另建新行），
-      并抛出原异常。
-    """
+    binding = steward_pipeline.binding_for(
+        job, worker_id=worker_id, expected_attempt=expected_attempt
+    )
     try:
         return run_steward_job(
-            db, job, now=now, worker_id=worker_id, expected_attempt=expected_attempt
+            db,
+            job,
+            now=now,
+            worker_id=worker_id,
+            expected_attempt=expected_attempt,
+            drain_delivery=drain_delivery,
         )
     except Exception as exc:
-        api_error = extract_api_error(getattr(exc, "detail", None))
-        if api_error is not None and str(api_error.get("code")) in (
-            STEWARD_LEASE_STALE,
-            STEWARD_JOB_NOT_ACTIVE,
-        ):
-            raise
         code, retryable = classify_execution_error(exc)
-        current = require_steward_job(db, job.id)
-        moment = now or utcnow()
-        # 失败收敛（09-13）：本空间残留 running 代次置 failed——整代不发布、
-        # 消费水位不推进；已提交批次保留待指纹复用。
-        try:
-            steward_generations.mark_failed(db, space_id=job.space_id, error_code=code)
-            db.commit()
-        except Exception:  # noqa: BLE001 — 收敛失败不影响作业结算路径
-            db.rollback()
-        if retryable and current.attempt < current.max_attempts:
-            backoff_seconds = (
-                config.STEWARD_RETRY_BACKOFF_FIRST_SECONDS
-                if current.attempt <= 1
-                else config.STEWARD_RETRY_BACKOFF_SECOND_SECONDS
-            )
-            current.status = "queued"
-            current.available_at = moment + timedelta(seconds=backoff_seconds)
-            current.leased_by = None
-            current.lease_expires_at = None
-            current.heartbeat_at = None
-            current.updated_at = moment
-            current.error_code = code
-            current.error_json = {"code": code, "retryable": True}
-            db.commit()
-        else:
-            settle_steward_job(
-                db,
-                current,
-                status="failed",
-                error={"code": code},
-                error_code=code,
-                now=moment,
-                worker_id=worker_id,
-                expected_attempt=expected_attempt,
-            )
+        if code not in (STEWARD_LEASE_STALE, STEWARD_JOB_NOT_ACTIVE):
+            steward_pipeline.record_failure(db, binding, error_code=code, retryable=retryable)
         raise
 
 
@@ -1117,147 +1092,12 @@ def _completed_cursor_floor(db: Session, job: StewardJob) -> int:
 def _execute_locked(
     db: Session, job: StewardJob, *, now: datetime, upper: int | None = None
 ) -> dict[str, Any]:
-    """执行主体（09-13 短事务版；名称沿用旧执行器供故障注入补丁）。
+    """Compatibility entry for execution fault injection; owns no write lock."""
+    from app.services import steward_pipeline
 
-    CPU 计算在写锁外，落库只用有界短写事务。
-
-    阶段切分（每阶段之间 db.commit() 释放写锁）：
-    1. 事件窗口消费（纯读取）；
-    2. 派生缓存重算——路径解析（纯 CPU 读取）与缓存行 upsert 分离，
-       按 STEWARD_DERIVED_COMMIT_CHUNK 对分批短事务提交；
-    3. 个人家族视图逐视图短事务重建（单视图失败不污染空间）；
-    4. finding/建议/推测/卡片/辅助登记合并为一个短写事务（其内部 SAVEPOINT
-       隔离可选层失败）。
-
-    一致性边界：分块提交意味着计算期间读到的是「截止当前已提交」的输入；
-    缓存行 evidence_hash 指纹守护保证后续扫描对漂移输入自然重算，发布阶段
-    仍以完整租约栅栏核验——不会把半程结果冒充成功作业。
-    """
-    space = db.get(FamilySpace, job.space_id)
-    assert space is not None  # FK 保证存在
-    stats: dict[str, int] = {
-        "events_consumed": 0,
-        "derived_recomputed": 0,
-        "cards_created": 0,
-        "cards_superseded": 0,
-        "findings_emitted": 0,
-        "cards_expired": 0,
-        "personal_family_views_rebuilt": 0,
-        "inferred_projected": 0,
-        "inferred_superseded": 0,
-    }
-    visible = _space_visible_user_ids(db, space)
-    floor = _completed_cursor_floor(db, job)
-    exec_upper = job.trigger_cursor if upper is None else min(upper, job.trigger_cursor)
-
-    # 0.5 发布代次登记（短立即事务；同空间残留 running 代次原子置 superseded）
-    fingerprint = steward_generations.space_input_fingerprint(db, space_id=space.id)
-    with _immediate_tx(db):
-        generation = steward_generations.create_running_generation(
-            db,
-            space_id=space.id,
-            job_id=job.id,
-            execution_cursor=exec_upper,
-            fingerprint=fingerprint,
-            now=now,
-        )
-    generation_id = int(generation.id)
-
-    # 1. 事件窗口消费（纯读取；窗口 = (floor, lease 时固定的上界]）
-    touched = _consume_window(db, space, floor=floor, upper=exec_upper)
-    stats["events_consumed"] = len(touched.events)
-    db.commit()
-
-    # 2/3. 派生缓存 + 个人视图重建（指纹命中的无变化图短路；到期检查/出卡/
-    #      辅助登记在阶段 4 照常执行——扫描不能以「没有新事件」跳过全部维护）
-    unchanged = steward_generations.unchanged_since_published(
-        db, space_id=space.id, fingerprint=fingerprint
+    return steward_pipeline.execute(
+        db, job, now=now, upper=job.trigger_cursor if upper is None else upper
     )
-    if unchanged:
-        stats["derived_recomputed"] = 0
-        stats["personal_family_views_rebuilt"] = 0
-        stats["fingerprint_short_circuit"] = 1
-    else:
-        stats["derived_recomputed"] = _rebuild_space_derived(db, space, visible)
-
-        from app.services.personal_family_view import rebuild_space_views
-
-        stats["personal_family_views_rebuilt"] = rebuild_space_views(
-            db,
-            space_id=space.id,
-            per_view_commit=True,
-            generation_id=generation_id,
-            fingerprint=fingerprint,
-        )
-    db.commit()
-
-    # 4. 冲突/缺失检测（读取）+ 全部报告/投影/出卡/辅助（单个短写事务）
-    findings = _detect_findings(db, space, visible)
-    prior_signatures = _prior_finding_signatures(db, job.space_id)
-    with _immediate_tx(db):
-        stats["findings_emitted"] = _emit_new_findings(db, job, findings, prior_signatures, now=now)
-
-        # 5.5 建议审核投影（09-11 candidate-review）：投影失败不回滚 core。
-        try:
-            with db.begin_nested():
-                stats["suggestions_projected"] = steward_suggestions.project_for_job(
-                    db,
-                    job,
-                    findings=findings,
-                    facts=_applicable_confirmed_facts(db, space, visible),
-                    now=now,
-                )
-        except Exception as exc:  # noqa: BLE001 — 辅助投影绝不拖垮确定性 core
-            logger.warning(
-                "steward suggestion projection failed for job %s (error=%s)",
-                job.id,
-                type(exc).__name__,
-            )
-            stats["suggestions_projected"] = 0
-
-        # 5.6 推测层投影（09-13）：失败仅记日志，不拖垮确定性 core。
-        try:
-            with db.begin_nested():
-                stats["inferred_superseded"] = steward_inferred.supersede_evidence_changed(
-                    db, job.space_id, now=now
-                )
-                stats["inferred_projected"] = steward_inferred.project_for_job(
-                    db,
-                    job,
-                    facts=_applicable_confirmed_facts(db, space, visible),
-                    visible=visible,
-                    now=now,
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "steward inferred projection failed for job %s (error=%s)",
-                job.id,
-                type(exc).__name__,
-            )
-            stats["inferred_superseded"] = 0
-            stats["inferred_projected"] = 0
-
-        # 3. 推荐矩阵 → 出卡（先重验证旧卡再出新卡）+ 惰性过期
-        stats["cards_superseded"] += _revalidate_active_cards(db, space, now=now)
-        stats["cards_created"] = _recommend_cards(db, space, visible, now=now)
-        stats["cards_expired"] = action_cards.expire_due_cards(db, space_id=space.id, now=now)
-
-        # 5. 模型辅助层：仅登记辅助批次行；HTTP 绝不在本写事务内。
-        cards = action_cards.active_cards_in_space(db, space.id)
-        steward_assist.register_batch_for_job(
-            db,
-            job=job,
-            facts_brief=_confirmed_facts_brief(db, space, visible),
-            visible=visible,
-            cards=cards,
-        )
-    return {
-        "floor_cursor": floor,
-        "trigger_cursor": exec_upper,
-        "generation_id": generation_id,
-        "finding_signatures": sorted(f["signature"] for f in findings),
-        "stats": stats,
-    }
 
 
 # ---- 空间可见集合与事实范围（跨空间红线的单点实现）----

@@ -28,7 +28,14 @@ from sqlalchemy import select
 from app import config
 from app.db import SessionLocal
 from app.models.steward import StewardJob
-from app.services import agent_queue, steward, steward_assist
+from app.services import (
+    agent_queue,
+    steward,
+    steward_assist,
+    steward_delivery,
+    steward_gc,
+    steward_runtime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,25 +71,12 @@ def run_maintenance_tick() -> dict[str, int]:
         if config.STEWARD_ENABLED and config.STEWARD_WORKER_ENABLED:
             counters["steward_reaped"] = steward.reaper_pass(db)
             counters["steward_scanned"] = steward.scan_due_spaces(db)
-            for _ in range(_MAX_JOBS_PER_TICK):
-                job = steward.lease_next_steward_job(db, leased_by="inproc-steward-worker")
-                if job is None:
-                    break
-                attempt = job.attempt
-                try:
-                    # execute_steward_job：成功→succeeded；可重试错误→退避回队；
-                    # 确定性错误/预算耗尽→failed 终态（独立事务已提交）后原样
-                    # 抛出。单个毒药作业不得卡死整轮泵。
-                    steward.execute_steward_job(
-                        db,
-                        job,
-                        worker_id="inproc-steward-worker",
-                        expected_attempt=attempt,
-                    )
-                    counters["steward_executed"] += 1
-                except Exception:
-                    counters["steward_failed"] += 1
-                    logger.warning("steward job %s not settled this tick", job.id)
+            # Dispatch bounded coordinators. A tick never waits for a family.
+            counters["steward_executed"] = steward_runtime.launch_due(limit=_MAX_JOBS_PER_TICK)
+            delivery = steward_delivery.drain(bind=db.get_bind())
+            counters["steward_delivery_done"] = delivery["delivery_done"]
+            counters["steward_delivery_failed"] = delivery["delivery_failed"]
+            counters["steward_gc_rows"] = steward_gc.collect(db.get_bind())
             # ---- 09-11 辅助批次（R1：core 先泵，辅助后行；HTTP 不在本会话/事务）----
             # 恢复四个崩溃点的中间态批次，再调度至多一个到期批次，并把 HTTP
             # 执行提交到有界线程池（自有 Session）——模型慢调用不阻塞 core tick，
@@ -152,6 +146,7 @@ def start_maintenance_loop() -> asyncio.Task[None] | None:
     if _task is not None and not _task.done():
         return _task
     interval = max(config.MAINTENANCE_INTERVAL_SECONDS, 0.5)
+    steward_runtime.start_runtime()
     _task = asyncio.get_running_loop().create_task(
         maintenance_loop(interval), name="familygraph-maintenance"
     )
@@ -176,3 +171,4 @@ async def stop_maintenance_loop() -> None:
         pass
     # 优雅停机：不无限等待在途 httpx（单次调用受 timeout 上界，线程有限收敛）
     steward_assist.shutdown_assist_executor()
+    await asyncio.to_thread(steward_runtime.shutdown_runtime)

@@ -23,7 +23,8 @@ E2 resolver 的确定性描述函数完成，本服务返回 source_level=None �
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func, select
@@ -50,7 +51,7 @@ from app.services.derived_facts import (
     steps_from_json,
 )
 from app.services.domain_events import emit as emit_domain_event
-from app.services.relationship_graph import load_birth_years
+from app.services.relationship_graph import FrozenMapping, load_birth_years
 from app.services.relationship_resolver import concept_code_for_path, describe_path
 from app.services.space_fsm import is_active_member
 from app.utils.timeutil import utcnow
@@ -86,6 +87,58 @@ class TermResolution:
     term: str | None
     source_level: str | None
     entry_id: int | None
+
+
+@dataclass(frozen=True)
+class TermSnapshotEntry:
+    """Only the registry fields needed for deterministic display and versioning."""
+
+    id: int
+    concept_code: str
+    level: str
+    term: str
+    revision: int
+    space_id: int | None
+    owner_account_id: int | None
+    locale: str | None
+
+
+_LEVEL_ORDER = {
+    TERM_LEVEL_PERSONAL: 0,
+    TERM_LEVEL_SPACE: 1,
+    TERM_LEVEL_LOCALE: 2,
+    TERM_LEVEL_SYSTEM: 3,
+}
+
+
+@dataclass(frozen=True)
+class TermSnapshot:
+    """Frozen, picklable account/space registry input; no Session or ORM rows.
+
+    Births are separate viewer-authorized presentation input. Supply the complete
+    birth map in VariantContext before resolving any target, never accumulate it
+    in target order. The same registry snapshot serves all targets/alternatives.
+    """
+
+    account_id: int
+    space_id: int
+    locale: str
+    entries: tuple[TermSnapshotEntry, ...]
+    resolved: Mapping[str, TermResolution] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        resolved: dict[str, TermResolution] = {}
+        # Preserve the existing registry's first-row choice within a tier, made
+        # explicit so bulk loading does not reorder equally eligible synonyms.
+        ordered = sorted(
+            self.entries,
+            key=lambda entry: (_LEVEL_ORDER[entry.level], entry.id),
+        )
+        for entry in ordered:
+            resolved.setdefault(
+                entry.concept_code, TermResolution(entry.term, entry.level, entry.id)
+            )
+        object.__setattr__(self, "resolved", FrozenMapping(resolved))
 
 
 # ---- 输入校验 ----
@@ -162,6 +215,53 @@ def seed_builtin_packs(session: Session) -> int:
 # ---- 解析 ----
 
 
+def _load_term_snapshot(
+    session: Session, *, account_id: int, space_id: int, concept_codes: set[str] | None
+) -> TermSnapshot:
+    locale = space_locale(session, space_id)
+    stmt = select(TermEntry).where(
+        TermEntry.status == "active",
+        (
+            ((TermEntry.level == TERM_LEVEL_PERSONAL) & (TermEntry.owner_account_id == account_id))
+            | ((TermEntry.level == TERM_LEVEL_SPACE) & (TermEntry.space_id == space_id))
+            | ((TermEntry.level == TERM_LEVEL_LOCALE) & (TermEntry.locale == locale))
+            | (TermEntry.level == TERM_LEVEL_SYSTEM)
+        ),
+    )
+    if concept_codes is not None:
+        stmt = stmt.where(TermEntry.concept_code.in_(concept_codes))
+    entries = tuple(
+        TermSnapshotEntry(
+            id=row.id,
+            concept_code=row.concept_code,
+            level=row.level,
+            term=row.term,
+            revision=row.revision,
+            space_id=row.space_id,
+            owner_account_id=row.owner_account_id,
+            locale=row.locale,
+        )
+        for row in session.scalars(stmt.order_by(TermEntry.id))
+    )
+    return TermSnapshot(account_id=account_id, space_id=space_id, locale=locale, entries=entries)
+
+
+def load_term_snapshot(session: Session, *, account_id: int, space_id: int) -> TermSnapshot:
+    """Load once inside the caller's explicit read transaction, then detach.
+
+    Only active terms eligible for this account/space/locale are copied. The
+    caller closes its read transaction before any graph or term computation.
+    """
+    return _load_term_snapshot(
+        session, account_id=account_id, space_id=space_id, concept_codes=None
+    )
+
+
+def _registry_term_from_snapshot(snapshot: TermSnapshot, concept_code: str) -> TermResolution:
+    code = validate_concept_code(concept_code)
+    return snapshot.resolved.get(code, TermResolution(None, None, None))
+
+
 def resolve_term(
     session: Session,
     *,
@@ -175,51 +275,10 @@ def resolve_term(
     绝不静默使用其他概念的词条。
     """
     code = validate_concept_code(concept_code)
-
-    personal = session.scalar(
-        select(TermEntry).where(
-            TermEntry.level == TERM_LEVEL_PERSONAL,
-            TermEntry.owner_account_id == account_id,
-            TermEntry.concept_code == code,
-            TermEntry.status == "active",
-        )
+    snapshot = _load_term_snapshot(
+        session, account_id=account_id, space_id=space_id, concept_codes={code}
     )
-    if personal is not None:
-        return TermResolution(personal.term, TERM_LEVEL_PERSONAL, personal.id)
-
-    space_entry = session.scalar(
-        select(TermEntry).where(
-            TermEntry.level == TERM_LEVEL_SPACE,
-            TermEntry.space_id == space_id,
-            TermEntry.concept_code == code,
-            TermEntry.status == "active",
-        )
-    )
-    if space_entry is not None:
-        return TermResolution(space_entry.term, TERM_LEVEL_SPACE, space_entry.id)
-
-    locale_entry = session.scalar(
-        select(TermEntry).where(
-            TermEntry.level == TERM_LEVEL_LOCALE,
-            TermEntry.locale == space_locale(session, space_id),
-            TermEntry.concept_code == code,
-            TermEntry.status == "active",
-        )
-    )
-    if locale_entry is not None:
-        return TermResolution(locale_entry.term, TERM_LEVEL_LOCALE, locale_entry.id)
-
-    system_entry = session.scalar(
-        select(TermEntry).where(
-            TermEntry.level == TERM_LEVEL_SYSTEM,
-            TermEntry.concept_code == code,
-            TermEntry.status == "active",
-        )
-    )
-    if system_entry is not None:
-        return TermResolution(system_entry.term, TERM_LEVEL_SYSTEM, system_entry.id)
-
-    return TermResolution(None, None, None)
+    return _registry_term_from_snapshot(snapshot, code)
 
 
 def resolve_term_alias(
@@ -907,9 +966,7 @@ def _sibling_variant_term(code: str, context: VariantContext) -> str | None:
     return table[order]
 
 
-def _generalized_term(
-    session: Session, *, account_id: int, space_id: int, concept_code: str
-) -> str | None:
+def _generalized_term(snapshot: TermSnapshot, *, concept_code: str) -> str | None:
     """第 5 级泛化：最长已命名前缀 + 残链小词（「妹夫的父亲」）。
 
     - 前缀沿用四级解析优先级（用户 personal/space 词条若命中前缀，同样尊重）；
@@ -921,9 +978,7 @@ def _generalized_term(
         prefix = "-".join(code_tokens[:cut])
         if prefix == "SELF":  # pragma: no cover - SELF 只可能是全码
             continue
-        resolved = resolve_term(
-            session, account_id=account_id, space_id=space_id, concept_code=prefix
-        )
+        resolved = _registry_term_from_snapshot(snapshot, prefix)
         if resolved.term is None:
             continue
         residual_words: list[str] = []
@@ -948,6 +1003,37 @@ def resolve_term_or_structural(
     structural_description: str,
     variant_context: VariantContext | None = None,
 ) -> dict[str, Any]:
+    """Compatible DB entry point over the same pure display computation.
+
+    The on-demand path loads only the code and possible named prefixes. Steward
+    loads all eligible terms once and calls resolve_term_from_snapshot directly.
+    """
+    if concept_code is None:
+        snapshot = TermSnapshot(account_id, space_id, DEFAULT_SPACE_LOCALE, ())
+    else:
+        code = validate_concept_code(concept_code)
+        tokens = code.split("-")
+        snapshot = _load_term_snapshot(
+            session,
+            account_id=account_id,
+            space_id=space_id,
+            concept_codes={"-".join(tokens[:cut]) for cut in range(1, len(tokens) + 1)},
+        )
+    return resolve_term_from_snapshot(
+        snapshot,
+        concept_code=concept_code,
+        structural_description=structural_description,
+        variant_context=variant_context,
+    )
+
+
+def resolve_term_from_snapshot(
+    snapshot: TermSnapshot,
+    *,
+    concept_code: str | None,
+    structural_description: str,
+    variant_context: VariantContext | None = None,
+) -> dict[str, Any]:
     """词条解析 + 长幼消歧 + 长链泛化 + 结构回退。
 
     解析顺序（09-13-steward-term-autofix）：
@@ -964,9 +1050,7 @@ def resolve_term_or_structural(
             "source_level": SOURCE_LEVEL_STRUCTURAL,
             "entry_id": None,
         }
-    resolved = resolve_term(
-        session, account_id=account_id, space_id=space_id, concept_code=concept_code
-    )
+    resolved = _registry_term_from_snapshot(snapshot, concept_code)
     if resolved.source_level is not None and resolved.term is not None:
         variant = (
             _sibling_variant_term(concept_code, variant_context)
@@ -984,9 +1068,7 @@ def resolve_term_or_structural(
             "source_level": resolved.source_level,
             "entry_id": resolved.entry_id,
         }
-    generalized = _generalized_term(
-        session, account_id=account_id, space_id=space_id, concept_code=concept_code
-    )
+    generalized = _generalized_term(snapshot, concept_code=concept_code)
     if generalized is not None:
         return {
             "term": generalized,
@@ -1064,10 +1146,9 @@ def compose_resolution_view(
         session, viewer_user_id=viewer_user_id, space_id=space_id, user_ids=person_ids
     )
 
-    main_view = resolve_term_or_structural(
-        session,
-        account_id=account_id,
-        space_id=space_id,
+    term_snapshot = load_term_snapshot(session, account_id=account_id, space_id=space_id)
+    main_view = resolve_term_from_snapshot(
+        term_snapshot,
         concept_code=result.concept_code,
         structural_description=main_description,
         variant_context=VariantContext(
@@ -1085,10 +1166,8 @@ def compose_resolution_view(
             if index < len(alt_descriptions)
             else describe_path(steps, genders)
         )
-        alt_term_view = resolve_term_or_structural(
-            session,
-            account_id=account_id,
-            space_id=space_id,
+        alt_term_view = resolve_term_from_snapshot(
+            term_snapshot,
             concept_code=alt_code,
             structural_description=alt_description,
             variant_context=VariantContext(

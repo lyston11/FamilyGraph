@@ -95,6 +95,7 @@ def project_for_job(
     facts: list[Any],
     visible: set[int],
     now: datetime | None = None,
+    candidate_ids: list[int] | None = None,
 ) -> int:
     """把未投影的 proposed LLM 候选投影为推测边；返回新建行数。
 
@@ -108,15 +109,20 @@ def project_for_job(
     evidence = _evidence_snapshot(db, job.space_id)
     confirmed_keys = _confirmed_triples(db, facts)
 
-    projected_ids = select(StewardInferredEdge.source_candidate_id).where(
-        StewardInferredEdge.source_candidate_id.is_not(None)
+    projected = (
+        select(StewardInferredEdge.id)
+        .where(
+            StewardInferredEdge.source_candidate_id == StewardLlmCandidate.id,
+        )
+        .exists()
     )
     candidates = list(
         db.scalars(
             select(StewardLlmCandidate).where(
                 StewardLlmCandidate.space_id == job.space_id,
                 StewardLlmCandidate.status == "proposed",
-                StewardLlmCandidate.id.not_in(projected_ids),
+                ~projected,
+                *([StewardLlmCandidate.id.in_(candidate_ids)] if candidate_ids is not None else []),
             )
         )
     )
@@ -264,7 +270,9 @@ def active_edges(
     )
 
 
-def supersede_evidence_changed(db: Session, space_id: int, *, now: datetime | None = None) -> int:
+def supersede_evidence_changed(
+    db: Session, space_id: int, *, now: datetime | None = None, edge_ids: list[int] | None = None
+) -> int:
     """证据变化失效：活跃行的 evidence_hash 与当前 facts 摘要不符 → superseded。
 
     由管家 core 作业在投影前调用（重算时证据口径已刷新）。返回失效行数。
@@ -280,6 +288,7 @@ def supersede_evidence_changed(db: Session, space_id: int, *, now: datetime | No
                 StewardInferredEdge.space_id == space_id,
                 StewardInferredEdge.status == INFERRED_ACTIVE_STATE,
                 StewardInferredEdge.evidence_hash != evidence_hash,
+                *([StewardInferredEdge.id.in_(edge_ids)] if edge_ids is not None else []),
             )
         )
     )

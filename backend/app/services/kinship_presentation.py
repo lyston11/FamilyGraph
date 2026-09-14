@@ -15,13 +15,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.account import Account
-from app.models.personal_family_view import PersonalFamilyView, PersonalFamilyViewEdge
 from app.models.user import User
-from app.services import visibility
+from app.services import personal_family_view, visibility
 
 PRESENTATION_VERSION = 1
 
@@ -65,23 +63,19 @@ def _display_name(payload: dict[str, Any] | None, user_id: int) -> str:
 
 def _current_pfv_edge(
     session: Session, *, account: Account, space_id: int, target_user_id: int
-) -> PersonalFamilyViewEdge | None:
-    view = session.scalar(
-        select(PersonalFamilyView).where(
-            PersonalFamilyView.viewer_account_id == account.id,
-            PersonalFamilyView.root_user_id == account.user_id,
-            PersonalFamilyView.space_id == space_id,
-        )
-    )
-    if view is None:
+) -> dict[str, Any] | None:
+    payload = personal_family_view.current_view_payload(session, account=account, space_id=space_id)
+    if payload is None or payload["status"] != "current":
         return None
-    return session.scalar(
-        select(PersonalFamilyViewEdge).where(
-            PersonalFamilyViewEdge.view_id == view.id,
-            PersonalFamilyViewEdge.from_user_id == account.user_id,
-            PersonalFamilyViewEdge.to_user_id == target_user_id,
-            PersonalFamilyViewEdge.inclusion_reason_code != "inferred_path",
-        )
+    return next(
+        (
+            edge
+            for edge in payload["edges"]
+            if edge["from_user_id"] == account.user_id
+            and edge["to_user_id"] == target_user_id
+            and edge.get("inclusion_reason_code") != "inferred_path"
+        ),
+        None,
     )
 
 
@@ -127,9 +121,9 @@ def build_relation_presentation(
             space_id=space_id,
             target_user_id=(object_user_id if subject_user_id == viewer.id else subject_user_id),
         )
-        if pfv_edge is not None and pfv_edge.term:
-            term = pfv_edge.term
-            raw_level = pfv_edge.authorization_basis_json.get("term_source_level")
+        if pfv_edge is not None and pfv_edge.get("term"):
+            term = pfv_edge["term"]
+            raw_level = pfv_edge.get("term_source_level")
             if term_source_level is None and isinstance(raw_level, str):
                 term_source_level = raw_level
 
