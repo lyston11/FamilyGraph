@@ -4,6 +4,7 @@ import type {
   PersonalFamilyViewEdge,
   PersonalFamilyViewInferredEdge,
   PersonalFamilyViewTopologyEdge,
+  PersonalFamilyViewTargetStatus,
 } from '@/types/api'
 
 import { structuralEdgeLabel } from '@/components/canvas/relationshipDisplay'
@@ -31,6 +32,7 @@ export interface FamilyCanvasNodeData {
   isSelf: boolean
   /** 服务端解析的 viewer→该成员称谓；null = 暂无 */
   term: string | null
+  termStatus?: PersonalFamilyViewTargetStatus | null
   /** 推测层：该成员仅经推测边上树（inclusion_reason_code=inferred_path） */
   inferred: boolean
   /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
@@ -44,6 +46,7 @@ export interface FamilyCanvasNode {
   isSelf: boolean
   /** 服务端解析的 viewer→该成员称谓；null = 暂无 */
   term: string | null
+  termStatus?: PersonalFamilyViewTargetStatus | null
   /** 推测层成员：节点卡片渲染「推测」角标 */
   inferred: boolean
   /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
@@ -157,6 +160,7 @@ export function buildFamilyCanvas(
     visibilityLevel: node.visibility_level,
     isSelf: viewerId !== null && node.user_id === viewerId,
     term: viewerId === null ? null : termTowardViewer(node.user_id, viewerId, data.edges),
+    termStatus: data.progress?.targets.find((target) => target.user_id === node.user_id)?.status ?? null,
     inferred: node.inclusion_reason_code === 'inferred_path',
     inferredTerm: inferredTermByUser.get(node.user_id) ?? null,
     x: 0,

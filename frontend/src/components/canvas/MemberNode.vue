@@ -94,7 +94,9 @@ function select(): void {
         推测·{{ data.inferredTerm }}
       </span>
       <span v-else-if="data.term" class="term-chip" data-test="view-label">{{ data.term }}</span>
-      <span v-else-if="!data.inferred && !data.isSelf" class="term-chip term-chip--pending" data-test="term-pending-chip">整理中</span>
+      <span v-else-if="data.termStatus === 'pending'" class="term-chip term-chip--pending" data-test="term-pending-chip">整理中</span>
+      <span v-else-if="data.termStatus === 'failed'" class="term-chip term-chip--pending" data-test="term-failed-chip">整理未完成</span>
+      <span v-else-if="data.termStatus === 'unavailable'" class="term-chip term-chip--pending" data-test="term-unavailable-chip">暂无可显示的称谓</span>
       <span v-if="display.birth !== null && !('__masked__' in display.birth)" class="birth" data-test="node-birth">
         {{ display.birth.date ?? '不详' }}
       </span>

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NSpin } from 'naive-ui'
+import { NAlert, NButton, NSpin } from 'naive-ui'
 
 import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 import { pathClassLabel } from '@/components/canvas/relationshipDisplay'
 import MaskedField from '@/components/common/MaskedField.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
+import { usePersonalFamilyViewPolling } from '@/composables/usePersonalFamilyViewPolling'
 import { ApiError } from '@/api/errors'
 import { useActionCardsStore } from '@/stores/actionCards'
 import { useAuthStore } from '@/stores/auth'
@@ -57,7 +58,9 @@ const spaceContext = useSpaceContext()
 type PagePhase = 'loading' | 'ready' | 'error' | 'unavailable'
 
 const phase = ref<PagePhase>('loading')
-const selectedEdge = ref<PersonalFamilyViewEdge | null>(null)
+const selectedEdgeKey = ref<string | null>(null)
+let profileRequest = 0
+let mounted = false
 
 /** 路由参数 userId：非法（非正整数）一律视为不可见目标，不回显原始参数 */
 const targetUserId = computed<number | null>(() => {
@@ -80,6 +83,14 @@ watch(
 )
 
 const spaceId = computed(() => spaces.currentSpaceId)
+const pollEnabled = ref(false)
+const live = usePersonalFamilyViewPolling(spaceId, pollEnabled, { autoLoad: false })
+const preparing = computed(() => {
+  const data = live.data.value
+  return data !== null && data.nodes.length === 0 && (
+    data.progress ? ['queued', 'preparing', 'building', 'retrying'].includes(data.progress.phase)
+      : ['never_computed', 'queued', 'running'].includes(data.status))
+})
 
 /** 目标节点：只从当前授权快照内查询，快照更新（撤权/刷新）时响应式回收 */
 const profileNode = computed<PersonalFamilyViewNode | null>(() => {
@@ -91,7 +102,7 @@ const profileNode = computed<PersonalFamilyViewNode | null>(() => {
 
 /** 统一安全不可见状态：显式不可见，或快照刷新后目标已不在授权快照中 */
 const unavailableVisible = computed(
-  () => phase.value === 'unavailable' || (phase.value === 'ready' && profileNode.value === null),
+  () => phase.value === 'unavailable' || (phase.value === 'ready' && profileNode.value === null && !preparing.value),
 )
 
 /**
@@ -102,7 +113,10 @@ const unavailableVisible = computed(
 async function ensureProfile(): Promise<void> {
   // 目标非法（null）或命中自己：不建立任何数据上下文（自己走重定向处理）
   if (targetUserId.value === null || isSelf.value) return
-  selectedEdge.value = null
+  const request = ++profileRequest
+  const current = () => mounted && request === profileRequest
+  pollEnabled.value = false
+  selectedEdgeKey.value = null
   phase.value = 'loading'
   try {
     // 空间列表缺失（硬刷新直达）时先补拉；失败进入安全失败状态
@@ -110,9 +124,10 @@ async function ensureProfile(): Promise<void> {
       await spaces.load()
     }
   } catch {
-    phase.value = 'error'
+    if (current()) phase.value = 'error'
     return
   }
+  if (!current()) return
   // 空间上下文：会话内到达（家族树/家庭卡）沿用当前空间，绝不重跑默认选择——
   // ensureDefaultSpace 会把上下文改回最近 household，导致从 lineage 树进入时
   // 目标意外「不可见」（走查实测）。仅硬刷新直达（无上下文）时兜底选择一次。
@@ -121,6 +136,7 @@ async function ensureProfile(): Promise<void> {
   // 对方资料；其余未知 kind 仍安全不可见。
   if (spaces.currentSpaceId === null) {
     const kind = await spaceContext.ensureDefaultSpace().catch(() => 'none' as const)
+    if (!current()) return
     if (kind === 'none' || spaceId.value === null) {
       phase.value = 'unavailable'
       return
@@ -134,31 +150,41 @@ async function ensureProfile(): Promise<void> {
     phase.value = 'unavailable'
     return
   }
-  try {
-    await pfv.load(lineageSpaceId)
-  } catch (cause) {
-    // 投影端点 403/404 与目标不在快照中同形状合并，避免存在性探测
-    if (cause instanceof ApiError && (cause.status === 403 || cause.status === 404)) {
-      phase.value = 'unavailable'
-    } else {
-      phase.value = 'error'
-    }
-    return
-  }
-  phase.value = 'ready'
+  pollEnabled.value = true
+  await live.refresh()
+  if (!current()) return
+  syncProfilePhase()
   // 相关待办（ActionCard）经 store 静默加载；入口降级（403/503）自然无按钮
   const sid = spaceId.value
   if (sid !== null) void actionCards.ensureLoaded(sid).catch(() => undefined)
 }
 
 onMounted(() => {
+  mounted = true
   if (!isSelf.value) void ensureProfile()
 })
 
-watch(targetUserId, () => {
+onBeforeUnmount(() => { mounted = false; profileRequest += 1 })
+
+watch([targetUserId, spaceId], () => {
   // null = 非法参数或离开本页的瞬态（如自己重定向）：不发起任何加载
   if (targetUserId.value === null || isSelf.value) return
   void ensureProfile()
+})
+
+function syncProfilePhase(): void {
+  if (!pollEnabled.value || spaceId.value === null) return
+  const cause = pfv.errorFor(spaceId.value)
+  if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) phase.value = 'unavailable'
+  else if (live.data.value !== null) phase.value = 'ready'
+  else if (cause !== null) phase.value = 'error'
+}
+
+watch([live.data, () => spaceId.value === null ? null : pfv.errorFor(spaceId.value)], syncProfilePhase)
+watch([profileNode, () => live.data.value?.progress?.generation], () => {
+  if (pollEnabled.value && spaceId.value !== null && targetUserId.value !== null && profileNode.value) {
+    void pfv.focusTarget(spaceId.value, targetUserId.value).catch(() => undefined)
+  }
 })
 
 // ---- 只读展示：身份头部 / 公示字段 / 关系上下文 ----
@@ -226,6 +252,25 @@ const adjacentEdges = computed<PersonalFamilyViewEdge[]>(() => {
   return data.edges.filter((edge) => edge.from_user_id === target || edge.to_user_id === target)
 })
 
+const targetProgress = computed(() => spaceId.value === null || targetUserId.value === null
+  ? null : pfv.targetFor(spaceId.value, targetUserId.value))
+const targetProgressMessage = computed(() => {
+  switch (targetProgress.value?.status) {
+    case 'pending': return '正在优先整理与这位家人的关系，称谓和完整说明准备好后会自动显示。'
+    case 'unavailable': return '已完成整理，目前没有可显示的称谓。已授权的公示资料仍可查看。'
+    case 'failed': return '这位家人的称谓暂未整理成功，已授权的公示资料仍可查看。可以重新尝试。'
+    default: return ''
+  }
+})
+
+function relationKey(edge: PersonalFamilyViewEdge): string {
+  return `${edge.from_user_id}:${edge.to_user_id}:${edge.edge_kind}`
+}
+const selectedEdge = computed(() => adjacentEdges.value.find((edge) => relationKey(edge) === selectedEdgeKey.value) ?? null)
+watch(adjacentEdges, (edges) => {
+  if (!edges.some((edge) => relationKey(edge) === selectedEdgeKey.value)) selectedEdgeKey.value = null
+})
+
 /** 快照内 user_id → display.name；解析不到返回 null（面板安全占位） */
 function resolveName(userId: number): string | null {
   const sid = spaceId.value
@@ -239,13 +284,13 @@ const snapshotMeta = computed(() => {
 })
 
 function openRelationDetail(edge: PersonalFamilyViewEdge): void {
-  selectedEdge.value = edge
+  selectedEdgeKey.value = relationKey(edge)
   // 面板为页面顶部覆盖层（与家族树一致）：打开时回到页首保证可见
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 
 function closeRelationDetail(): void {
-  selectedEdge.value = null
+  selectedEdgeKey.value = null
 }
 
 // ---- 相关 ActionCard：只提供「查看待办」跳转，无任何写操作 ----
@@ -290,8 +335,10 @@ function goBack(): void {
   void router.push({ name: currentBackTarget() })
 }
 
-function retry(): void {
-  void ensureProfile()
+async function retry(): Promise<void> {
+  if (!pollEnabled.value) { await ensureProfile(); return }
+  await live.retry()
+  if (mounted) syncProfilePhase()
 }
 </script>
 
@@ -319,6 +366,13 @@ function retry(): void {
       <NButton size="small" data-test="profile-retry" @click="retry">重新加载</NButton>
     </section>
 
+    <section v-else-if="preparing" class="status-panel" data-test="profile-preparing">
+      <h2 class="status-title">正在准备家谱</h2>
+      <p class="status-text" role="status">{{ live.progressMessage.value || '授权家谱准备好后，资料会自动显示。' }}</p>
+      <p v-if="live.notice.value" class="status-text" role="status" data-test="profile-preparing-notice">{{ live.notice.value }}</p>
+      <NButton size="small" @click="retry">重新加载</NButton>
+    </section>
+
     <!-- 目标不在授权快照中 / 投影 403/404：统一安全状态，无任何目标细节 -->
     <section v-else-if="unavailableVisible" class="status-panel" data-test="profile-unavailable">
       <h2 class="status-title">对方不可见或不存在</h2>
@@ -326,6 +380,13 @@ function retry(): void {
     </section>
 
     <template v-else-if="profileNode">
+      <NAlert v-if="live.notice.value" type="warning" :show-icon="true" data-test="profile-update-notice">
+        {{ live.notice.value }}
+        <NButton size="small" @click="retry">重新加载</NButton>
+      </NAlert>
+      <p v-if="live.data.value?.progress" class="status-text" role="status" data-test="profile-progress">
+        {{ live.progressMessage.value }}
+      </p>
       <!-- 身份头部：头像（姓字纸牌，与既有页面一致）、姓名、可见性说明（icon+文字） -->
       <section class="identity-card" data-test="profile-identity">
         <span class="avatar" aria-hidden="true">{{ profileNode.display.name.slice(0, 1) }}</span>
@@ -373,10 +434,14 @@ function retry(): void {
       <!-- 当前用户可见的关系上下文：只读，点击打开关系说明面板 -->
       <section class="relations-card" data-test="profile-relations">
         <h2 class="section-title">关系上下文</h2>
-        <p v-if="adjacentEdges.length === 0" class="status-text" data-test="profile-relations-empty">
+        <p v-if="targetProgressMessage" class="status-text" role="status" :data-test="`profile-target-${targetProgress?.status}`">
+          {{ targetProgressMessage }}
+        </p>
+        <NButton v-if="targetProgress?.status === 'failed'" size="small" data-test="profile-target-retry" @click="retry">重新尝试</NButton>
+        <p v-if="adjacentEdges.length === 0 && !targetProgressMessage" class="status-text" data-test="profile-relations-empty">
           当前授权快照中没有与该成员可见的关系路径。
         </p>
-        <template v-else>
+        <template v-if="adjacentEdges.length > 0">
           <button
             v-for="(edge, edgeIndex) in adjacentEdges"
             :key="`${edge.from_user_id}-${edge.to_user_id}-${edgeIndex}`"

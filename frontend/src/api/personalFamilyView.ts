@@ -10,7 +10,10 @@ import type {
   PersonalFamilyViewNode,
   PersonalFamilyViewPathStep,
   PersonalFamilyViewProgress,
-  PersonalFamilyViewSnapshot,
+  PersonalFamilyViewResponse,
+  PersonalFamilyViewResponseMetadata,
+  PersonalFamilyViewDemandResult,
+  PersonalFamilyViewTarget,
   PersonalFamilyViewStatus,
   PersonalFamilyViewTopologyEdge,
   PrivacyMode,
@@ -22,6 +25,7 @@ import type {
 import { isMasked } from '@/types/api'
 
 import { apiClient } from './client'
+import { ApiError } from './errors'
 
 /**
  * PersonalFamilyView 解码层（design.md §4.1）：`unknown` → 共享类型的唯一入口。
@@ -360,11 +364,19 @@ function decodeInferredPresentation(value: unknown): KinshipPresentation | null 
  * 渐进进度块解码（09-13 progressive=true）：载荷缺失（旧后端/未启用）→ null；
  * 字段不完整视为脏数据整体丢弃（安全降级，不产生半块进度）。
  */
-function decodeProgress(value: unknown): PersonalFamilyViewProgress | null {
+function invalidProgress(): never {
+  throw new ApiError(0, 'PFV_PROTOCOL_INVALID', '家谱数据暂时无法验证，请重新加载')
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function decodeProgress(value: unknown, visibleIds: ReadonlySet<number>): PersonalFamilyViewProgress | null {
   if (value === undefined || value === null) return null
-  if (!isRecord(value)) return null
+  if (!isRecord(value)) return invalidProgress()
   if (
-    typeof value.contract_version !== 'string' ||
+    value.contract_version !== 'pfv-progress-v1' ||
     !isOneOf([
       'queued',
       'preparing',
@@ -373,19 +385,38 @@ function decodeProgress(value: unknown): PersonalFamilyViewProgress | null {
       'retrying',
       'failed',
     ] as const)(value.phase) ||
-    typeof value.generation !== 'number' ||
-    typeof value.revision !== 'number' ||
-    typeof value.completed_count !== 'number' ||
-    typeof value.total_count !== 'number' ||
-    typeof value.next_poll_ms !== 'number'
+    !isCount(value.generation) ||
+    !isCount(value.revision) ||
+    !isCount(value.completed_count) ||
+    !isCount(value.total_count) ||
+    !isCount(value.next_poll_ms) ||
+    typeof value.topology_revision !== 'string' ||
+    !isNullableString(value.reason_code) ||
+    !Array.isArray(value.targets)
   ) {
-    return null
+    return invalidProgress()
   }
+  const targets: PersonalFamilyViewTarget[] = []
+  const seen = new Set<number>()
+  for (const target of value.targets) {
+    if (!isRecord(target) || !isCount(target.user_id) || target.user_id === 0 ||
+        !visibleIds.has(target.user_id) || seen.has(target.user_id) ||
+        !isOneOf(['pending', 'ready', 'unavailable', 'failed'] as const)(target.status) ||
+        !isNullableString(target.reason_code ?? null)) return invalidProgress()
+    seen.add(target.user_id)
+    targets.push({ user_id: target.user_id, status: target.status, reason_code: typeof target.reason_code === 'string' ? target.reason_code : null })
+  }
+  const completed = targets.filter((target) => target.status === 'ready' || target.status === 'unavailable').length
+  if (targets.length !== value.total_count || completed !== value.completed_count ||
+      (value.phase === 'ready' && completed !== value.total_count)) return invalidProgress()
   return {
     contract_version: value.contract_version,
     phase: value.phase,
     generation: value.generation,
     revision: value.revision,
+    topology_revision: value.topology_revision,
+    targets,
+    reason_code: value.reason_code,
     completed_count: value.completed_count,
     total_count: value.total_count,
     next_poll_ms: value.next_poll_ms,
@@ -436,6 +467,8 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
     }
   }
   const topologyEdges = decodeTopologyEdges(value.topology_edges, visibleIds)
+  const progress = decodeProgress(value.progress, visibleIds)
+  if (progress && topologyEdges === null) return invalidProgress()
 
   return {
     space_id: value.space_id,
@@ -449,19 +482,33 @@ export function decodePersonalFamilyView(value: unknown): PersonalFamilyViewData
     truncated: value.truncated,
     next_cursor: value.next_cursor,
     stale_reason: typeof value.stale_reason === 'string' ? value.stale_reason : null,
-    progress: decodeProgress(value.progress),
+    progress,
   }
+}
+
+function epochSecondsHeader(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
+  const seconds = Number(value)
+  return seconds > 0 && Number.isSafeInteger(seconds) && Number.isSafeInteger(seconds * 1000) ? seconds : null
+}
+
+function singleHttpDateHeader(value: unknown): number | null {
+  if (typeof value !== 'string') return null
+  const milliseconds = Date.parse(value)
+  // The legacy server emits IMF-fixdate. Reject combined duplicate headers and loose date parsing.
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toUTCString() === value ? milliseconds : null
 }
 
 /**
  * 按明确 space_id 读取投影。传入上一份 etag 时走条件请求：
- * 304 返回 `null`，由 store 保留同一安全快照（design.md §4.1）。
+ * 304 保留响应头，由 store 验证请求链与 ETag 后续期，数据对象保持不变。
  */
 export async function fetchPersonalFamilyView(
   spaceId: number,
   etag?: string | null,
-  options: { progressive?: boolean } = {},
-): Promise<PersonalFamilyViewSnapshot | null> {
+  options: { progressive?: boolean; signal?: AbortSignal } = {},
+): Promise<PersonalFamilyViewResponse> {
+  const started = performance.now()
   const response = await apiClient.get<unknown>('/personal-family-view', {
     params: {
       space_id: spaceId,
@@ -469,13 +516,51 @@ export async function fetchPersonalFamilyView(
       ...(options.progressive ? { progressive: 'true' } : {}),
     },
     headers: etag ? { 'If-None-Match': etag } : undefined,
+    signal: options.signal,
     // 304 不是错误：交由调用方复用既有快照
     validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
   })
-  if (response.status === 304) return null
-  const nextEtag = response.headers?.etag ?? response.headers?.ETag ?? null
+  const headers = response.headers ?? {}
+  const nextEtag = headers.etag ?? headers.ETag ?? null
+  const until = epochSecondsHeader(headers['x-pfv-display-until'] ?? headers['X-PFV-Display-Until'])
+  const hasValidatedAt = 'x-pfv-validated-at' in headers || 'X-PFV-Validated-At' in headers
+  const validatedAt = epochSecondsHeader('x-pfv-validated-at' in headers
+    ? headers['x-pfv-validated-at'] : headers['X-PFV-Validated-At'])
+  // This timestamp belongs to the same authorization check as Display-Until. A malformed
+  // dedicated header must never fall back to an unrelated transport/proxy Date header.
+  const serverDate = hasValidatedAt
+    ? validatedAt === null ? null : validatedAt * 1000
+    : singleHttpDateHeader(headers.date ?? headers.Date)
+  // Both timestamp formats have second precision; subtract one second and the full round trip.
+  const lifetime = until !== null && serverDate !== null
+    ? Math.max(0, until * 1000 - serverDate - Math.max(0, performance.now() - started) - 1000)
+    : null
+  const metadata: PersonalFamilyViewResponseMetadata = {
+    etag: typeof nextEtag === 'string' ? nextEtag : null,
+    displayUntil: until,
+    serverDate,
+    displayExpiresAt: lifetime === null ? null : Date.now() + lifetime,
+  }
+  if (response.status === 304) return { notModified: true, ...metadata }
   return {
     data: decodePersonalFamilyView(response.data),
-    etag: typeof nextEtag === 'string' ? nextEtag : null,
+    ...metadata,
   }
+}
+
+export async function demandPersonalFamilyView(
+  spaceId: number,
+  options: { focusUserId?: number; retry?: boolean; signal?: AbortSignal } = {},
+): Promise<PersonalFamilyViewDemandResult> {
+  const response = await apiClient.post<unknown>('/personal-family-view/demand', {
+    space_id: spaceId,
+    ...(options.focusUserId === undefined ? {} : { focus_user_id: options.focusUserId }),
+    ...(options.retry === undefined ? {} : { retry: options.retry }),
+  }, { signal: options.signal })
+  const value = response.data
+  if (!isRecord(value) || !isOneOf(['queued', 'already_active'] as const)(value.status) ||
+      !(value.focus_user_id === null || (isCount(value.focus_user_id) && value.focus_user_id > 0))) {
+    return invalidProgress()
+  }
+  return { status: value.status, focus_user_id: value.focus_user_id }
 }

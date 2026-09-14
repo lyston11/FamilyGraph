@@ -76,7 +76,7 @@ describe('personalFamilyView store（design.md §4.1）', () => {
     const store = usePersonalFamilyViewStore()
 
     const data = await store.load(7)
-    expect(mockedFetch).toHaveBeenCalledWith(7, null, { progressive: true })
+    expect(mockedFetch).toHaveBeenCalledWith(7, null, expect.objectContaining({ progressive: true }))
     expect(data?.space_id).toBe(7)
     expect(store.forSpace(7)?.space_id).toBe(7)
     expect(store.forSpace(8)).toBeNull()
@@ -91,7 +91,7 @@ describe('personalFamilyView store（design.md §4.1）', () => {
 
     mockedFetch.mockResolvedValueOnce(null) // 304 Not Modified
     const second = await store.load(7)
-    expect(mockedFetch).toHaveBeenLastCalledWith(7, 'W/"v1"', { progressive: true })
+    expect(mockedFetch).toHaveBeenLastCalledWith(7, 'W/"v1"', expect.objectContaining({ progressive: true }))
     // 同一对象引用：不允许 304 时重建快照
     expect(second).toBe(cachedSnapshot?.data)
     expect(store.bySpace.get(7)).toBe(cachedSnapshot)
@@ -105,7 +105,7 @@ describe('personalFamilyView store（design.md §4.1）', () => {
 
     mockedFetch.mockResolvedValue(makeSnapshot(7, 'W/"v2"', { view_version: 2 }))
     const refreshed = await store.refresh(7)
-    expect(mockedFetch).toHaveBeenLastCalledWith(7, null, { progressive: true })
+    expect(mockedFetch).toHaveBeenLastCalledWith(7, null, expect.objectContaining({ progressive: true }))
     expect(refreshed?.view_version).toBe(2)
     expect(store.bySpace.get(7)?.etag).toBe('W/"v2"')
     expect(store.bySpace.get(7)).not.toBe(cachedSnapshot)
@@ -130,7 +130,7 @@ describe('personalFamilyView store（design.md §4.1）', () => {
     // Bridge pending → active：通知/待办接线（Phase 5）调用本入口重载授权投影
     mockedFetch.mockResolvedValue(makeSnapshot(7, 'W/"v2"', { view_version: 2 }))
     const reloaded = await store.reloadAfterBridgeChange(7)
-    expect(mockedFetch).toHaveBeenLastCalledWith(7, null, { progressive: true })
+    expect(mockedFetch).toHaveBeenLastCalledWith(7, null, expect.objectContaining({ progressive: true }))
     expect(reloaded?.view_version).toBe(2)
     expect(store.bySpace.get(7)?.etag).toBe('W/"v2"')
     // 只读重载：不产生任何领域写请求（本测试仅 mock 了 GET 投影端点）
@@ -160,7 +160,7 @@ describe('personalFamilyView store（design.md §4.1）', () => {
     store.clear()
     pending.reject(new Error('late failure'))
 
-    await expect(inflight).rejects.toThrow('late failure')
+    await expect(inflight).resolves.toBeNull()
     expect(store.errorFor(7)).toBeNull()
   })
 

@@ -2,7 +2,7 @@
 
 - Pinia setup store 风格；一个领域一个 store：auth(token/user/PIN_CHANGE_REQUIRED)、spaces(空间列表+当前空间)、graph(成员/关系/位置)、ui(布局模式/弹窗)。
 - 服务端数据唯一来源是 store；组件不缓存副本。图数据变更（建档/断连/移动卡片）通过 action 调 API 后更新 store，不做乐观更新（v1 网络环境简单）。
-- 缓存失效边界：空间/图数据在切换空间、收到连接变更通知、重新登录时强制刷新；无后台轮询。
+- 缓存失效边界：空间/图数据在切换空间、收到连接变更通知、重新登录时强制刷新；PFV 的有界轮询例外见下文渐进合同。
 - **敏感缓存清理红线**：logout 与 token 失效(401/token_version)时必须清空全部 store + localStorage + 内存图数据，路由守卫兜底跳登录页。
 - localStorage 只允许存 refresh token 与 UI 偏好（布局模式），其余一律内存态。
 
@@ -63,3 +63,16 @@
 ### Convention: 成员授权投影 stale-while-revalidate
 
 `spaces.loadMembers(spaceId)` 重校验同一空间时先发请求、成功后整体替换 `members`；在途期间保留旧成员关系，避免管理员入口因瞬时空数组闪断。失败必须保留旧投影并设置 `membersError`，调用方可展示失败态；路由守卫仍以本次请求结果 fail-closed。跨空间切换清空旧授权上下文，守卫刷新目标空间时传 `setCurrentSpace: false`，不得改写 `currentSpaceId`。
+
+
+## 渐进 PFV 的版本与展示期限（09-13 / 0045）
+
+完整接口/失败矩阵和测试入口见 [Steward合同 §9](../backend/steward-action-card.md#9-一致快照版本化预览和原子发布0044--0045)。本节只规定浏览器状态所有权。
+
+- `api/personalFamilyView.ts` 严格解码 `pfv-progress-v1`、安全整数 generation/revision、完整 targets/counts。`X-PFV-Validated-At` 优先；存在但非法时拒绝使用，缺少时才兼容单个合法 HTTP Date。有效期换算扣完整 RTT 和1秒精度余量，同时用墙钟/monotonic deadline约束，时钟后调不延长展示。
+- `stores/personalFamilyView.ts` 按登录主体×space隔离；epoch、请求序号、generation/revision共同拒绝迟到或倒退。新代完整替换，不能拼旧行；展示到期清内容但保留版本水位，旧响应不能复活。
+- 304只续期本次请求对应的相同ETag/版本，且必须包含合法校验时间/有效期；200/304缺元数据不得当成功。401/403/404立即清内容；网络失败仅在尚有效时保留旧画布，有限退避后显示可重试终态。
+- `usePersonalFamilyViewPolling` 由树页和资料页共用。preparing/queued短轮询取骨架、building按约1秒推进；本人ready/failed停止高频加载，低频授权保活受期限限制。隐藏/卸载/切空间取消旧请求，回前台先重验。
+- 布局依赖topology_revision和布局模式，标签/进度不触发布局或fitView。节点稳定ID保留坐标、视口和选中项。preparing/input_changed/展示到期空窗立即隐藏图内容，仅保留同主体同空间的坐标和布局锚点；新授权骨架或 ready 真空结果到达后才裁剪移除节点。401/403/404、登出或主体切换即使发生于空态期间，也必须清坐标、锚点与视口。布局偏好仅内存按space保存，敏感图数据不写浏览器持久存储。
+- 骨架尚无个人称谓时显示“整理中”；failed/unavailable各自有明确文案。本人完成分母不包含其他账号或推测层。
+- 断言入口：PFV API/store progress测试、`usePersonalFamilyViewPolling.spec.ts`、树页/资料页测试；真实浏览器脚本验证布局交互，组件stubs不能代替首屏性能证据。

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NAlert, NButton, NPopover, NRadioButton, NRadioGroup, NSpin } from 'naive-ui'
 import { House, List, LocateFixed, Maximize, Network, RefreshCw } from 'lucide-vue-next'
@@ -8,17 +8,20 @@ import { Controls } from '@vue-flow/controls'
 // 仅引入 Vue Flow 结构样式（定位/层叠）；theme-default 的写死配色不引入，
 // 节点/连线/Controls 观感全部由 --fg-* token 自绘（design.md §7）
 import { VueFlow, useVueFlow } from '@vue-flow/core'
-import type { Edge as FlowEdge, EdgeMouseEvent, Node as FlowNode } from '@vue-flow/core'
+import type { Edge as FlowEdge, EdgeMouseEvent, Node as FlowNode, NodeDragEvent, ViewportTransform } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 
+import { ApiError } from '@/api/errors'
 import InferredEdgePanel from '@/components/canvas/InferredEdgePanel.vue'
 import MemberNode from '@/components/canvas/MemberNode.vue'
 import StructuralRelationshipPanel from '@/components/canvas/StructuralRelationshipPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
+import { usePersonalFamilyViewPolling } from '@/composables/usePersonalFamilyViewPolling'
 import {
   applyFreeCanvasLayout,
   applyTreeViewLayout,
   buildFamilyCanvas,
+  COL_SPACING,
   HANDLE_SOURCE_BOTTOM,
   HANDLE_SOURCE_RIGHT,
   HANDLE_TARGET_LEFT,
@@ -59,20 +62,26 @@ const spaceContext = useSpaceContext()
 
 const { fitView, setCenter } = useVueFlow()
 
-const viewMode = ref<'tree' | 'canvas'>('tree')
-const selectedEdge = ref<FamilyStructuralEdge | null>(null)
-const selectedInferred = ref<FamilyCanvasInferredEdgeSpec | null>(null)
+const viewMode = ref<'tree' | 'canvas'>(spaces.currentSpaceId === null ? 'tree' : pfv.viewModes.get(spaces.currentSpaceId) ?? 'tree')
+const selectedEdgeKey = ref<string | null>(null)
+const selectedInferredKey = ref<string | null>(null)
+const selectedEdge = computed<FamilyStructuralEdge | null>(() =>
+  canvasModel.value.edges.find((edge) => edge.key === selectedEdgeKey.value) ?? null)
+const selectedInferred = computed<FamilyCanvasInferredEdgeSpec | null>(() =>
+  canvasModel.value.inferredEdges.find((edge) => edge.key === selectedInferredKey.value) ?? null)
 /** 世代布局冲突回退提示（切换空间/刷新后清除） */
 const layoutFallbackNotice = ref(false)
 
 const spaceId = computed(() => spaces.currentSpaceId)
 const isLineageContext = computed(() => spaces.currentSpace?.kind === 'lineage')
+const live = usePersonalFamilyViewPolling(spaceId, isLineageContext)
 const data = computed<PersonalFamilyViewData | null>(() =>
   spaceId.value === null ? null : pfv.forSpace(spaceId.value),
 )
 const loading = computed(() => spaceId.value !== null && pfv.isLoading(spaceId.value))
 const loadError = computed(() => (spaceId.value === null ? null : pfv.errorFor(spaceId.value)))
 const viewerId = computed(() => auth.user?.id ?? null)
+const accessDenied = computed(() => loadError.value instanceof ApiError && [401, 403, 404].includes(loadError.value.status))
 
 /** 失败/错误状态不显示空间名（design.md §8：不泄露目标细节） */
 const spaceName = computed(() => (loadError.value !== null ? null : spaces.currentSpace?.name ?? null))
@@ -83,20 +92,27 @@ const pendingComputation = computed(() => {
   return (
     d !== null &&
     d.nodes.length === 0 &&
-    (d.status === 'never_computed' || d.status === 'queued' || d.status === 'running')
+    (d.progress ? d.progress.phase !== 'ready' && d.progress.phase !== 'failed'
+      : d.status === 'never_computed' || d.status === 'queued' || d.status === 'running')
   )
 })
 const failedWithoutSnapshot = computed(
-  () => data.value !== null && data.value.status === 'failed' && data.value.nodes.length === 0,
+  () => data.value !== null && data.value.nodes.length === 0 &&
+    (data.value.progress ? data.value.progress.phase === 'failed' : data.value.status === 'failed'),
 )
 const emptyProjection = computed(
-  () => data.value !== null && data.value.status === 'current' && data.value.nodes.length === 0,
+  () => data.value !== null && data.value.nodes.length === 0 &&
+    (data.value.progress ? data.value.progress.phase === 'ready' : data.value.status === 'current'),
 )
 
 /** stale/failed/计算中：用最近安全投影渲染画布，但清晰标注版本/时间/原因 */
 const statusBanner = computed<{ kind: 'stale' | 'failed' | 'running'; text: string } | null>(() => {
   const d = data.value
   if (d === null || d.nodes.length === 0) return null
+  if (d.progress) {
+    if (d.progress.phase === 'ready') return null
+    return { kind: d.progress.phase === 'failed' ? 'failed' : 'running', text: live.progressMessage.value }
+  }
   const meta = `投影版本 v${d.view_version}，更新于 ${d.computed_at ?? '未知时间'}`
   if (d.status === 'stale') {
     return {
@@ -114,24 +130,17 @@ const statusBanner = computed<{ kind: 'stale' | 'failed' | 'running'; text: stri
 })
 
 async function loadView(force = false): Promise<void> {
-  if (spaceId.value === null || !isLineageContext.value) return
-  if (force) await pfv.refresh(spaceId.value).catch(() => undefined)
-  else await pfv.load(spaceId.value).catch(() => undefined)
+  await live.refresh(force)
 }
 
-onMounted(() => {
-  // 家族树不替用户更换空间；当前仍是 household 时保留上下文，等待用户
-  // 在壳层的「当前家族空间」选择器中明确选择目标 lineage。
-  void loadView().then(() => scheduleProgressPoll())
-})
-
-watch([spaceId, isLineageContext], () => {
+watch([spaceId, isLineageContext, viewerId, accessDenied], () => {
   // 切换空间：清面板选择与回退提示，并按新上下文读取投影（旧请求由 store epoch 丢弃）
-  selectedEdge.value = null
-  selectedInferred.value = null
+  selectedEdgeKey.value = null
+  selectedInferredKey.value = null
   layoutFallbackNotice.value = false
-  void loadView()
+  viewMode.value = spaceId.value === null ? 'tree' : pfv.viewModes.get(spaceId.value) ?? 'tree'
 })
+watch(viewMode, (mode) => { if (spaceId.value !== null) pfv.rememberViewMode(spaceId.value, mode) })
 
 // ---- 画布 view-model：nodes/edges 只来自已解码快照 ----
 
@@ -146,10 +155,59 @@ const canvasModel = computed(() =>
         topologyAvailable: false,
       },)
 
-/** 树状模式的确定性世代布局结果（design.md §6）；仅 tree 模式计算 */
-const treeLayout = computed(() =>
-  viewMode.value === 'tree' ? applyTreeViewLayout(canvasModel.value, viewerId.value) : null,
-)
+/** Layout dependencies deliberately exclude terms, target revisions, and progress counters. */
+const layoutIdentity = computed(() => JSON.stringify([
+  spaceId.value, viewerId.value, canvasModel.value.topologyAvailable,
+  data.value?.progress?.topology_revision ?? [
+    canvasModel.value.nodes.filter((node) => !node.inferred).map((node) => node.userId).sort((a, b) => a - b),
+    canvasModel.value.edges.map((edge) => edge.key).sort(),
+  ],
+  canvasModel.value.nodes.filter((node) => node.inferred).map((node) => node.userId).sort((a, b) => a - b),
+  canvasModel.value.inferredEdges.map((edge) => [edge.key, edge.edge.relation_kind, edge.sourceUserId, edge.targetUserId]).sort(),
+]))
+const treeLayout = shallowRef<ReturnType<typeof applyTreeViewLayout> | null>(null)
+const layoutPositions = shallowRef(new Map<number, { x: number; y: number }>())
+let layoutSpace: number | null = null
+let layoutViewer: number | null = null
+watch([layoutIdentity, viewMode, hasRenderableNodes, emptyProjection, accessDenied], () => {
+  const model = canvasModel.value
+  if (layoutSpace !== spaceId.value || layoutViewer !== viewerId.value || accessDenied.value || emptyProjection.value) {
+    layoutPositions.value = new Map()
+  }
+  layoutSpace = spaceId.value
+  layoutViewer = viewerId.value
+  if (model.nodes.length === 0 || accessDenied.value) {
+    // A temporary empty body revokes graph content, not the same viewer's non-sensitive anchors.
+    treeLayout.value = null
+    return
+  }
+  const outcome = viewMode.value === 'tree'
+    ? applyTreeViewLayout(model, viewerId.value)
+    : { nodes: applyFreeCanvasLayout(model), failed: false }
+  const previous = layoutPositions.value
+  const positions = new Map<number, { x: number; y: number }>()
+  const occupied: { x: number; y: number }[] = []
+  const overlaps = (x: number, y: number) => occupied.some((position) =>
+    position.y === y && Math.abs(position.x - x) < COL_SPACING)
+  // Existing members keep their horizontal anchor; changed generation constraints update only y.
+  for (const node of outcome.nodes) {
+    const old = previous.get(node.userId)
+    if (old) {
+      let x = old.x
+      while (overlaps(x, node.y)) x += COL_SPACING
+      positions.set(node.userId, { x, y: node.y }); occupied.push({ x, y: node.y })
+    }
+  }
+  for (const node of outcome.nodes) {
+    if (positions.has(node.userId)) continue
+    let x = node.x
+    while (overlaps(x, node.y)) x += COL_SPACING
+    positions.set(node.userId, { x, y: node.y })
+    occupied.push({ x, y: node.y })
+  }
+  layoutPositions.value = positions
+  treeLayout.value = outcome
+}, { immediate: true })
 
 const generationLayoutFailed = computed(() => treeLayout.value?.failed ?? false)
 
@@ -166,10 +224,10 @@ watch(
 )
 
 const positionedNodes = computed(() => {
-  if (viewMode.value === 'canvas' || generationLayoutFailed.value) {
-    return applyFreeCanvasLayout(canvasModel.value)
-  }
-  return treeLayout.value?.nodes ?? applyFreeCanvasLayout(canvasModel.value)
+  const dragged = spaceId.value === null ? undefined : pfv.positionsBySpace.get(spaceId.value)
+  return canvasModel.value.nodes.map((node) => ({ ...node,
+    ...(viewMode.value === 'canvas' ? dragged?.get(node.userId) : undefined) ?? layoutPositions.value.get(node.userId),
+  }))
 })
 
 const flowNodes = computed<FlowNode[]>(() =>
@@ -182,6 +240,7 @@ const flowNodes = computed<FlowNode[]>(() =>
       visibilityLevel: node.visibilityLevel,
       isSelf: node.isSelf,
       term: node.term,
+      termStatus: node.termStatus,
       inferred: node.inferred,
       inferredTerm: node.inferredTerm,
     },
@@ -268,6 +327,7 @@ function onNodeSelect(userId: number): void {
     void router.push({ name: 'home' })
     return
   }
+  if (spaceId.value !== null) void pfv.focusTarget(spaceId.value, userId).catch(() => undefined)
   // fgBackTo：资料页返回按钮的上下文来源（PRD R1）
   void router.push({
     name: 'person-profile',
@@ -278,38 +338,37 @@ function onNodeSelect(userId: number): void {
 
 function openRelationshipPanel(edgeKey: string): void {
   const spec = canvasModel.value.edges.find((candidate) => candidate.key === edgeKey)
-  if (spec) selectedEdge.value = spec
+  if (spec) selectedEdgeKey.value = spec.key
 }
 
 function onEdgeClick(event: EdgeMouseEvent): void {
   const edgeId = event.edge?.id
   if (typeof edgeId !== 'string') return
   if (edgeId.startsWith('i-')) {
-    selectedEdge.value = null
-    selectedInferred.value =
-      canvasModel.value.inferredEdges.find((candidate) => candidate.key === edgeId) ?? null
+    selectedEdgeKey.value = null
+    selectedInferredKey.value = edgeId
     return
   }
-  selectedInferred.value = null
+  selectedInferredKey.value = null
   openRelationshipPanel(edgeId)
 }
 
 /** 推测边动作完成（确认/驳回）：强制重载授权投影（无乐观更新红线），关面板 */
 async function onInferredAction(): Promise<void> {
-  selectedInferred.value = null
+  selectedInferredKey.value = null
   await loadView(true)
 }
 
 // 结构/推测边随快照刷新/空间切换消失时清空面板，避免残留旧端点信息
 watch(canvasModel, (model) => {
-  if (selectedEdge.value && !model.edges.some((candidate) => candidate.key === selectedEdge.value?.key)) {
-    selectedEdge.value = null
+  if (selectedEdgeKey.value && !model.edges.some((candidate) => candidate.key === selectedEdgeKey.value)) {
+    selectedEdgeKey.value = null
   }
   if (
-    selectedInferred.value &&
-    !model.inferredEdges.some((candidate) => candidate.key === selectedInferred.value?.key)
+    selectedInferredKey.value &&
+    !model.inferredEdges.some((candidate) => candidate.key === selectedInferredKey.value)
   ) {
-    selectedInferred.value = null
+    selectedInferredKey.value = null
   }
 })
 
@@ -339,7 +398,7 @@ function focusSelf(): void {
 }
 
 async function reload(): Promise<void> {
-  await loadView(true)
+  await live.retry()
 }
 
 /** 返回家庭卡（PRD §2.5 底部操作）：切到本家族配对的家庭卡（显式配对优先，
@@ -351,50 +410,41 @@ async function backToHousehold(): Promise<void> {
   await spaceContext.switchSpace(target.id)
 }
 
-// ---- 渐进轮询（09-13 R3/R4）：结果未就绪时按服务端建议间隔重读 ----
-// 授权投影返回 queued/running/never_computed（或无数据）→ 继续轮询；
-// ready/current/stale-with-data 停止高频轮询；切空间/卸载清理定时器。
-let pollTimer: number | null = null
+// Viewport/drag positions are memory-only and cleared by the authenticated space store.
+const initialViewport = shallowRef(spaceId.value === null ? undefined : pfv.viewports.get(spaceId.value))
+const hasAutoFitted = ref(initialViewport.value !== undefined)
+let fitTimer: ReturnType<typeof setTimeout> | null = null
 
-function stopProgressPolling(): void {
-  if (pollTimer !== null) {
-    window.clearTimeout(pollTimer)
-    pollTimer = null
-  }
+function onNodeDrag(event: NodeDragEvent): void {
+  if (spaceId.value === null || viewMode.value !== 'canvas') return
+  pfv.rememberPositions(spaceId.value, event.nodes.map((node) => [Number(node.id.slice(2)), node.position]))
 }
 
-function scheduleProgressPoll(): void {
-  stopProgressPolling()
-  const d = data.value
-  if (d === null || spaceId.value === null) return
-  const notReady =
-    d.status === 'never_computed' || d.status === 'queued' || d.status === 'running'
-  if (!notReady) return
-  const delay =
-    d.progress?.next_poll_ms ?? (d.status === 'running' ? 1000 : 250)
-  pollTimer = window.setTimeout(() => {
-    void loadView(false).then(() => scheduleProgressPoll())
-  }, delay)
+function onViewportChange(viewport: ViewportTransform): void {
+  if (spaceId.value !== null && hasRenderableNodes.value) pfv.rememberViewport(spaceId.value, viewport)
 }
 
-watch(data, () => scheduleProgressPoll())
-
-watch(spaceId, () => {
-  // 切空间：停旧轮询，首屏 fit 机会重置（新空间首个可渲染布局才适应画布）
-  stopProgressPolling()
-  hasAutoFitted.value = false
+watch([spaceId, viewerId, accessDenied], () => {
+  if (fitTimer !== null) { clearTimeout(fitTimer); fitTimer = null }
+  initialViewport.value = spaceId.value === null ? undefined : pfv.viewports.get(spaceId.value)
+  hasAutoFitted.value = initialViewport.value !== undefined
 })
 
-onBeforeUnmount(stopProgressPolling)
+watch(hasRenderableNodes, (visible) => {
+  if (visible) return
+  if (fitTimer !== null) { clearTimeout(fitTimer); fitTimer = null }
+  // Expiry unmounts VueFlow. A later authorized body restores its last non-sensitive viewport.
+  initialViewport.value = spaceId.value === null ? undefined : pfv.viewports.get(spaceId.value)
+  hasAutoFitted.value = initialViewport.value !== undefined
+})
 
-// ---- fitView 只发生在首屏（或显式「适应画布」）：称谓批次补齐不重排视口 ----
-const hasAutoFitted = ref(false)
+onBeforeUnmount(() => { if (fitTimer !== null) clearTimeout(fitTimer) })
 
 watch([positionedNodes, viewMode], () => {
   if (!hasRenderableNodes.value) return
   if (hasAutoFitted.value) return
   hasAutoFitted.value = true
-  setTimeout(fitToMembers, 30)
+  fitTimer = setTimeout(() => { fitTimer = null; fitToMembers() }, 30)
 })
 
 const lineageSpaces = computed(() => spaces.spaces.filter((space) => space.kind === 'lineage'))
@@ -418,6 +468,9 @@ function resolveName(userId: number): string | null {
       <div v-if="data && loadError === null && isLineageContext" class="view-count">
         <strong>{{ data.nodes.length }}</strong><span>位家人</span>
       </div>
+      <span v-if="data?.progress && isLineageContext" class="status-text" data-test="family-tree-progress" role="status">
+        {{ live.progressMessage.value }}
+      </span>
     </header>
 
     <!-- 当前空间不是 lineage：安全上下文提示，不渲染任何投影内容 -->
@@ -428,10 +481,14 @@ function resolveName(userId: number): string | null {
     </section>
 
     <template v-else>
+      <NAlert v-if="live.notice.value" type="warning" :show-icon="true" data-test="update-notice">
+        {{ live.notice.value }}
+        <NButton size="small" @click="reload">重新加载</NButton>
+      </NAlert>
       <NSpin v-if="loading && data === null" class="loading-spin" :show="true" />
 
       <!-- 403/404/网络错误：安全失败状态（不显示空间名/ID 细节） -->
-      <section v-else-if="loadError !== null" class="status-panel" data-test="family-tree-error">
+      <section v-else-if="loadError !== null && data === null" class="status-panel" data-test="family-tree-error">
         <h2 class="status-title">家族树暂时无法读取</h2>
         <p class="status-text">
           当前家族空间的授权投影请求失败。已按安全策略隐藏空间信息，稍后可重试。
@@ -443,11 +500,11 @@ function resolveName(userId: number): string | null {
       <section v-else-if="pendingComputation" class="status-panel" data-test="family-tree-pending">
         <h2 class="status-title">家族树尚未就绪</h2>
         <p class="status-text" data-test="pending-status-text">
-          {{
+          {{ live.progressMessage.value || (
             data?.status === 'never_computed'
               ? '当前家族空间的授权投影尚未计算，稍后回来查看。'
               : '当前家族空间的授权投影正在计算，以下页面稍后自动可用。'
-          }}
+          ) }}
         </p>
         <NButton size="small" data-test="pending-reload" @click="reload">重新加载</NButton>
       </section>
@@ -582,9 +639,10 @@ function resolveName(userId: number): string | null {
         <section class="canvas-section" data-test="canvas-section">
           <div class="canvas-wrap">
             <VueFlow
+              :key="spaceId ?? 'none'"
               :nodes="flowNodes"
               :edges="[...flowEdges, ...inferredFlowEdges]"
-              fit-view-on-init
+              :default-viewport="initialViewport"
               :fit-view-params="{ padding: 0.22 }"
               :min-zoom="0.2"
               :max-zoom="1.8"
@@ -593,6 +651,9 @@ function resolveName(userId: number): string | null {
               :zoom-on-scroll="true"
               data-test="flow-canvas"
               @edge-click="onEdgeClick"
+              @node-drag="onNodeDrag"
+              @node-drag-stop="onNodeDrag"
+              @viewport-change-end="onViewportChange"
             >
               <Controls />
               <template #node-member="nodeProps">
@@ -610,7 +671,7 @@ function resolveName(userId: number): string | null {
               :space-id="spaceId ?? 0"
               :edge="selectedInferred.edge"
               :resolve-name="resolveName"
-              @close="selectedInferred = null"
+              @close="selectedInferredKey = null"
               @confirmed="onInferredAction"
               @dismissed="onInferredAction"
             />
@@ -622,7 +683,7 @@ function resolveName(userId: number): string | null {
               :view-version="data.view_version"
               :computed-at="data.computed_at"
               :resolve-name="resolveName"
-              @close="selectedEdge = null"
+              @close="selectedEdgeKey = null"
               @request-correction="goNotifications"
               @view-todos="goNotifications"
             />

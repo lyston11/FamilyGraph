@@ -1,8 +1,12 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { createPinia, setActivePinia } from 'pinia'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { createPinia, disposePinia, getActivePinia, setActivePinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { familyData, familyNode, familyProgress, familySnapshot } from '@/__tests__/personalFamilyViewFixtures'
+import { ApiError } from '@/api/errors'
+import InferredEdgePanel from '@/components/canvas/InferredEdgePanel.vue'
 
 import * as graphApi from '@/api/graph'
 import * as personalFamilyViewApi from '@/api/personalFamilyView'
@@ -11,18 +15,24 @@ import { VueFlow } from '@vue-flow/core'
 import FamilyTreeView from '@/views/FamilyTreeView.vue'
 import familyTreeSource from '@/views/FamilyTreeView.vue?raw'
 import { useAuthStore } from '@/stores/auth'
+import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpacesStore } from '@/stores/spaces'
 import type {
   FamilySpace,
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
+  PersonalFamilyViewInferredEdge,
   PersonalFamilyViewNode,
   PersonalFamilyViewPathStep,
   PersonalFamilyViewSnapshot,
   PersonalFamilyViewTopologyEdge,
   SpaceMemberInfo,
 } from '@/types/api'
+
+enableAutoUnmount(afterEach)
+afterEach(() => { const pinia = getActivePinia(); if (pinia) disposePinia(pinia) })
+const { fitViewMock } = vi.hoisted(() => ({ fitViewMock: vi.fn() }))
 
 /**
  * FamilyTreeView（09-01 design.md §5.2 / 09-13 design.md §5-6）：
@@ -45,6 +55,7 @@ vi.mock('@/composables/useSpaceContext', () => ({
 
 vi.mock('@/api/personalFamilyView', () => ({
   fetchPersonalFamilyView: vi.fn(),
+  demandPersonalFamilyView: vi.fn().mockResolvedValue({ status: 'queued', focus_user_id: null }),
 }))
 
 vi.mock('@/api/spaces', () => ({
@@ -88,6 +99,7 @@ vi.mock('@vue-flow/core', () => ({
       zoomOnPinch: { type: Boolean, default: undefined },
       panOnDrag: { type: Boolean, default: undefined },
       zoomOnScroll: { type: Boolean, default: undefined },
+      defaultViewport: { type: Object, default: undefined },
     },
     setup(props, { slots }) {
       return () =>
@@ -103,7 +115,7 @@ vi.mock('@vue-flow/core', () => ({
   // MemberNode 依赖连接点组件与位置枚举：测试只关心名牌自身的渲染/交互合同
   Handle: defineComponent({ template: '<div class="mock-handle" />' }),
   Position: { Top: 'top', Bottom: 'bottom', Left: 'left', Right: 'right' },
-  useVueFlow: () => ({ fitView: vi.fn(), setCenter: vi.fn() }),
+  useVueFlow: () => ({ fitView: fitViewMock, setCenter: vi.fn() }),
 }))
 
 vi.mock('@vue-flow/controls', () => ({
@@ -190,7 +202,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
 }
 
 function makeSnapshot(data: PersonalFamilyViewData): PersonalFamilyViewSnapshot {
-  return { data, etag: 'W/"v3"' }
+  return data.progress ? familySnapshot(data) : { data, etag: 'W/"v3"' }
 }
 
 function makeLineageSpace(): FamilySpace {
@@ -278,7 +290,7 @@ describe('FamilyTreeView 数据边界', () => {
       }),
     })
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, expect.objectContaining({ progressive: true }))
     // 红线：家族树页面禁止请求或读取旧 graph store 的 /api/graph/me
     expect(mockedFetchMyGraph).not.toHaveBeenCalled()
   })
@@ -575,5 +587,222 @@ describe('FamilyTreeView 移动端画布（Phase 7 375px 契约）', () => {
     const templateSection = familyTreeSource.slice(templateStart, familyTreeSource.indexOf('<style'))
     expect(templateSection).not.toContain('列表')
     wrapper.unmount()
+  })
+})
+
+describe('FamilyTreeView 渐进展示与稳定交互', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllMocks()
+    vi.mocked(personalFamilyViewApi.demandPersonalFamilyView).mockResolvedValue({ status: 'already_active', focus_user_id: null })
+    document.body.innerHTML = ''
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it.each(['ready', 'failed'] as const)('空的 %s 预览结束等待，不依赖整作业 current 状态', async (phase) => {
+    const { wrapper } = await mountTree({ data: familyData({ nodes: [], topology_edges: [],
+      progress: familyProgress({ phase, next_poll_ms: 0, targets: [] }) }) })
+    expect(wrapper.find('[data-test="family-tree-pending"]').exists()).toBe(false)
+    expect(wrapper.find(`[data-test="family-tree-${phase === 'ready' ? 'empty' : 'failed'}"]`).exists()).toBe(true)
+  })
+
+  it('先显示确认骨架，自动补齐称谓和真实完成计数，ready 预览停止高频加载', async () => {
+    const skeleton = familyData({ nodes: [familyNode(1), familyNode(2), familyNode(3)],
+      topology_edges: [makeTopologyEdge('parent', 2, 1), makeTopologyEdge('spouse', 2, 3)],
+      progress: familyProgress({ targets: [{ user_id: 2, status: 'pending', reason_code: null }, { user_id: 3, status: 'pending', reason_code: null }] }) })
+    const { wrapper } = await mountTree({ data: skeleton })
+    expect(wrapper.findAll('[data-test="canvas-member-card"]')).toHaveLength(3)
+    expect(wrapper.findAll('[data-test="term-pending-chip"]')).toHaveLength(2)
+    expect(wrapper.findComponent(VueFlow).props('edges')).toHaveLength(2)
+    expect(wrapper.find('[data-test="family-tree-progress"]').text()).toContain('0/2')
+    await vi.advanceTimersByTimeAsync(50)
+    expect(fitViewMock).toHaveBeenCalledTimes(1)
+
+    mockedFetchView.mockResolvedValue(familySnapshot({ ...skeleton,
+      edges: [{ ...makeEdge(1, 2, [makeStep(1, 2, 'up')]), term: '父亲' }],
+      progress: familyProgress({ phase: 'ready', revision: 2, next_poll_ms: 0,
+        targets: [{ user_id: 2, status: 'ready', reason_code: null }, { user_id: 3, status: 'unavailable', reason_code: null }] }) }))
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.find('[data-test="view-label"]').text()).toBe('父亲')
+    expect(wrapper.find('[data-test="term-unavailable-chip"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="term-pending-chip"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="family-tree-progress"]').text()).toContain('已整理完成（2/2）')
+    expect(wrapper.find('[data-test="status-banner"]').exists()).toBe(false)
+    expect(fitViewMock).toHaveBeenCalledTimes(1)
+    const calls = mockedFetchView.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(mockedFetchView).toHaveBeenCalledTimes(calls)
+  })
+
+  it('称谓更新保留拖动位置和视口，离开后返回仍保留自由画布', async () => {
+    const { wrapper, pinia, router } = await mountTree({ data: familyData() })
+    await vi.advanceTimersByTimeAsync(50)
+    const radio = wrapper.find('[data-test="layout-switch"]').findAll('input[type="radio"]')[1]!
+    await radio.setValue()
+    const flow = wrapper.findComponent(VueFlow)
+    const position = { x: 721, y: 385 }
+    const viewport = { x: -42, y: 72, zoom: 1.4 }
+    flow.vm.$emit('nodeDragStop', { node: { id: 'n-2', position }, nodes: [{ id: 'n-2', position }] })
+    flow.vm.$emit('viewportChangeEnd', viewport)
+    await flushPromises()
+    const instance = flow.vm
+    const pfv = usePersonalFamilyViewStore(pinia)
+    mockedFetchView.mockResolvedValue(familySnapshot({
+      edges: [{ ...makeEdge(1, 2, [makeStep(1, 2, 'up')]), term: '父亲' }],
+      progress: familyProgress({ revision: 2, phase: 'ready', next_poll_ms: 0, targets: [{ user_id: 2, status: 'ready', reason_code: null }] }),
+    }))
+    await pfv.refresh(9)
+    await flushPromises()
+    expect(wrapper.findComponent(VueFlow).vm).toBe(instance)
+    expect(flow.props('nodes')).toContainEqual(expect.objectContaining({ id: 'n-2', position }))
+    expect(pfv.viewports.get(9)).toEqual(viewport)
+    expect(fitViewMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+
+    const returned = mount(FamilyTreeView, { global: { plugins: [pinia, router] }, attachTo: document.body })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(50)
+    const restored = returned.findComponent(VueFlow)
+    expect(restored.props('defaultViewport')).toEqual(viewport)
+    expect(restored.props('nodes')).toContainEqual(expect.objectContaining({ id: 'n-2', position, draggable: true }))
+    expect(fitViewMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { status: 'queued', phase: 'preparing', reason_code: null },
+    { status: 'stale', phase: 'retrying', reason_code: 'input_changed' },
+  ] as const)('$phase 空窗隐藏图内容，新授权骨架恢复拖动位置和视口', async ({ status, phase, reason_code }) => {
+    const { wrapper, pinia } = await mountTree({ data: familyData() })
+    await vi.advanceTimersByTimeAsync(50)
+    await wrapper.find('[data-test="layout-switch"]').findAll('input[type="radio"]')[1]!.setValue()
+    const flow = wrapper.findComponent(VueFlow)
+    const position = { x: 721, y: 385 }
+    const viewport = { x: -42, y: 72, zoom: 1.4 }
+    flow.vm.$emit('nodeDragStop', { node: { id: 'n-2', position }, nodes: [{ id: 'n-2', position }] })
+    flow.vm.$emit('viewportChangeEnd', viewport)
+    await flushPromises()
+    const pfv = usePersonalFamilyViewStore(pinia)
+    mockedFetchView.mockResolvedValue(familySnapshot({ status, nodes: [], topology_edges: [], edges: [], inferred_edges: [],
+      progress: familyProgress({ revision: 2, phase, reason_code, targets: [] }) }))
+    await pfv.refresh(9)
+    await flushPromises()
+    expect(wrapper.findComponent(VueFlow).exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('家人2')
+    mockedFetchView.mockResolvedValue(familySnapshot({ progress: familyProgress({ generation: 8 }) }))
+    await pfv.refresh(9)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(50)
+    const restored = wrapper.findComponent(VueFlow)
+    expect(restored.props('nodes')).toContainEqual(expect.objectContaining({ id: 'n-2', position }))
+    expect(restored.props('defaultViewport')).toEqual(viewport)
+    expect(fitViewMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['recompute', 'denied', 'subject'] as const)('树布局跨空窗按授权上下文处理锚点：%s', async (transition) => {
+    const { wrapper, pinia } = await mountTree({ data: familyData({ nodes: [familyNode(1), familyNode(3)],
+      topology_edges: [makeTopologyEdge('parent', 3, 1)],
+      progress: familyProgress({ topology_revision: 'one-parent', targets: [{ user_id: 3, status: 'pending', reason_code: null }] }) }) })
+    const pfv = usePersonalFamilyViewStore(pinia)
+    const initialNodes = wrapper.findComponent(VueFlow).props('nodes') as { id: string; position: { x: number; y: number } }[]
+    const viewport = { x: -42, y: 72, zoom: 1.4 }
+    wrapper.findComponent(VueFlow).vm.$emit('viewportChangeEnd', viewport)
+    const skeleton = familyData({ nodes: [familyNode(1), familyNode(2), familyNode(3)],
+      topology_edges: [makeTopologyEdge('parent', 3, 1), makeTopologyEdge('spouse', 2, 3)],
+      progress: familyProgress({ generation: 8, topology_revision: 'parents-and-spouse',
+        targets: [{ user_id: 2, status: 'pending', reason_code: null }, { user_id: 3, status: 'pending', reason_code: null }] }) })
+    mockedFetchView.mockResolvedValue(familySnapshot(skeleton))
+    await pfv.refresh(9)
+    await flushPromises()
+    const expandedNodes = wrapper.findComponent(VueFlow).props('nodes') as typeof initialNodes
+    expect(expandedNodes.find((node) => node.id === 'n-3')?.position.x).toBe(initialNodes.find((node) => node.id === 'n-3')?.position.x)
+    const positions = expandedNodes.map(({ id, position }) => ({ id, position }))
+    mockedFetchView.mockResolvedValue(familySnapshot({ status: 'stale', nodes: [], topology_edges: [],
+      progress: familyProgress({ generation: 8, revision: 2, phase: 'retrying', topology_revision: '', reason_code: 'input_changed', targets: [] }) }))
+    await pfv.refresh(9)
+    await flushPromises()
+    expect(wrapper.findComponent(VueFlow).exists()).toBe(false)
+    if (transition === 'denied') {
+      mockedFetchView.mockRejectedValueOnce(new ApiError(403, 'FORBIDDEN', '无法读取'))
+      await expect(pfv.refresh(9)).rejects.toMatchObject({ status: 403 })
+      await flushPromises()
+    } else if (transition === 'subject') {
+      useAuthStore(pinia).user = { ...useAuthStore(pinia).user!, id: 2 }
+      await flushPromises()
+    }
+    mockedFetchView.mockResolvedValue(familySnapshot({ ...skeleton, progress: { ...skeleton.progress!, generation: 9 } }))
+    await pfv.refresh(9)
+    await flushPromises()
+    const flow = wrapper.findComponent(VueFlow)
+    const restored = flow.props('nodes') as typeof initialNodes
+    if (transition === 'recompute') {
+      expect(restored.map(({ id, position }) => ({ id, position }))).toEqual(positions)
+      expect(flow.props('defaultViewport')).toEqual(viewport)
+    } else {
+      expect(restored.find((node) => node.id === 'n-3')?.position.x).toBeGreaterThan(restored.find((node) => node.id === 'n-2')!.position.x)
+      expect(flow.props('defaultViewport')).toBeUndefined()
+    }
+  })
+
+  it('选中面板按稳定 ID 使用最新对象，撤销可见性时及时关闭', async () => {
+    const inferred: PersonalFamilyViewInferredEdge = { id: 15, subject_user_id: 1, object_user_id: 2,
+      relation_kind: 'sibling', term: '兄弟', path: [], viewer_term: null, viewer_path: [], new_user_id: null,
+      evidence_fact_ids: [], revision: 1, created_at: '2026-09-14T00:00:00Z' }
+    const { wrapper, pinia } = await mountTree({ data: familyData({ inferred_edges: [inferred] }) })
+    const flow = wrapper.findComponent(VueFlow)
+    const edge = (flow.props('edges') as { id: string }[]).find((row) => row.id.startsWith('i-'))!
+    flow.vm.$emit('edgeClick', { edge })
+    await flushPromises()
+    expect(wrapper.findComponent(InferredEdgePanel).props('edge').revision).toBe(1)
+    mockedFetchView.mockResolvedValue(familySnapshot({ inferred_edges: [{ ...inferred, revision: 2, term: '姐妹' }],
+      progress: familyProgress({ revision: 2 }) }))
+    const pfv = usePersonalFamilyViewStore(pinia)
+    await pfv.refresh(9)
+    await flushPromises()
+    expect(wrapper.findComponent(InferredEdgePanel).props('edge')).toMatchObject({ revision: 2, term: '姐妹' })
+    mockedFetchView.mockResolvedValue(familySnapshot({ nodes: [familyNode(1)], topology_edges: [], inferred_edges: [],
+      progress: familyProgress({ generation: 8, revision: 0, topology_revision: 'self', targets: [] }) }))
+    await pfv.refresh(9)
+    await flushPromises()
+    expect(wrapper.findComponent(InferredEdgePanel).exists()).toBe(false)
+    expect(wrapper.findAll('[data-test="canvas-member-card"]')).toHaveLength(1)
+  })
+
+  it('点击待计算家人发送一次 focus，并照常打开授权资料', async () => {
+    const { wrapper, router } = await mountTree({ data: familyData() })
+    const target = wrapper.findAll('[data-test="canvas-member-card"]')[1]!
+    await target.trigger('click')
+    await flushPromises()
+    expect(personalFamilyViewApi.demandPersonalFamilyView).toHaveBeenCalledWith(9, expect.objectContaining({ focusUserId: 2 }))
+    expect(router.currentRoute.value.params.userId).toBe('2')
+    await target.trigger('click')
+    await flushPromises()
+    expect(personalFamilyViewApi.demandPersonalFamilyView).toHaveBeenCalledTimes(1)
+  })
+
+  it('暂时断线保留同一画布，到展示期限隐藏内容，重新授权后恢复视口', async () => {
+    const { wrapper, pinia } = await mountTree({ data: familyData() })
+    const flow = wrapper.findComponent(VueFlow)
+    const viewport = { x: -170, y: 88, zoom: 1.2 }
+    flow.vm.$emit('viewportChangeEnd', viewport)
+    flow.vm.$emit('edgeClick', { edge: (flow.props('edges') as { id: string }[])[0] })
+    await flushPromises()
+    const instance = flow.vm
+    mockedFetchView.mockRejectedValue(new ApiError(0, 'NETWORK_ERROR', '连接中断'))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.findComponent(VueFlow).vm).toBe(instance)
+    expect(wrapper.find('[data-test="update-notice"]').text()).toContain('重试')
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushPromises()
+    expect(usePersonalFamilyViewStore(pinia).forSpace(9)).toBeNull()
+    expect(wrapper.findComponent(VueFlow).exists()).toBe(false)
+    expect(wrapper.find('[data-test="structural-panel"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('家人2')
+    expect(wrapper.find('[data-test="family-tree-error"]').exists()).toBe(true)
+    mockedFetchView.mockResolvedValue(familySnapshot({ progress: familyProgress({ generation: 8 }) }))
+    await wrapper.find('[data-test="family-tree-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(VueFlow).props('defaultViewport')).toEqual(viewport)
+    expect(wrapper.findAll('[data-test="canvas-member-card"]')).toHaveLength(2)
   })
 })

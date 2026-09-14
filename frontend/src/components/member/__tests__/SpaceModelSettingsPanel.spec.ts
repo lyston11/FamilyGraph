@@ -1,6 +1,6 @@
-import { mount, flushPromises } from '@vue/test-utils'
-import { createPinia, type Pinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { createPinia, disposePinia, type Pinia } from 'pinia'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider, NSelect } from 'naive-ui'
 import { defineComponent, h } from 'vue'
 
@@ -112,6 +112,7 @@ function prefilledFixture(kind: AgentConfigKind): SpaceModelSettings {
 }
 
 let pinia: Pinia
+const mountedPanels: Array<{ wrapper: VueWrapper; container: HTMLElement }> = []
 
 function mountPanel() {
   const Harness = defineComponent({
@@ -119,13 +120,29 @@ function mountPanel() {
       return h('div', [h(NMessageProvider, () => h(SpaceModelSettingsPanel, { spaceId: 7 }))])
     },
   })
-  return mount(Harness, { global: { plugins: [pinia] }, attachTo: document.body })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const wrapper = mount(Harness, { global: { plugins: [pinia] }, attachTo: container })
+  mountedPanels.push({ wrapper, container })
+  return wrapper
 }
 
 beforeEach(() => {
   pinia = createPinia()
   vi.clearAllMocks()
   mockedFetch.mockResolvedValue(settingsFixture())
+})
+
+afterEach(async () => {
+  // 保存后还会异步重载并创建消息，先完成这些 promise，再清理消息计时器。
+  await flushPromises()
+  for (const { wrapper, container } of mountedPanels.splice(0)) {
+    // Naive UI 的消息计时器需显式销毁；卸载组件同时释放 ResizeObserver。
+    wrapper.getComponent(NMessageProvider).vm.destroyAll()
+    wrapper.unmount()
+    container.remove()
+  }
+  disposePinia(pinia)
 })
 
 describe('SpaceModelSettingsPanel（管家模型辅助开关）', () => {

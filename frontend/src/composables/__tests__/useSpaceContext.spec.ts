@@ -257,7 +257,7 @@ describe('useSpaceContext（空间切换事务）', () => {
     }
 
     // 按空间类型加载新投影：lineage → PersonalFamilyView；household 投影不加载
-    expect(fetchPersonalFamilyViewMock).toHaveBeenCalledWith(12, null, { progressive: true })
+    expect(fetchPersonalFamilyViewMock).toHaveBeenCalledWith(12, null, expect.objectContaining({ progressive: true, signal: expect.any(AbortSignal) }))
     expect(fetchHouseholdCardMock).not.toHaveBeenCalled()
 
     // 管理员入口与默认页面目标按新空间类型重算，并导航到家族树
@@ -317,7 +317,7 @@ describe('useSpaceContext（空间切换事务）', () => {
     expect(household.forSpace(7)).toBeNull()
 
     // 新上下文按 lineage 类型加载
-    expect(fetchPersonalFamilyViewMock).toHaveBeenCalledWith(12, null, { progressive: true })
+    expect(fetchPersonalFamilyViewMock).toHaveBeenCalledWith(12, null, expect.objectContaining({ progressive: true, signal: expect.any(AbortSignal) }))
   })
 
   it('新空间投影加载失败：保留新上下文的安全失败态，不回滚显示旧空间数据', async () => {

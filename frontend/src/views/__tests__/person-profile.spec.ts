@@ -1,13 +1,17 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { createPinia, setActivePinia } from 'pinia'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { createPinia, disposePinia, getActivePinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { familyData, familyProgress, familySnapshot } from '@/__tests__/personalFamilyViewFixtures'
+import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 
 import * as actionCardsApi from '@/api/actionCards'
 import * as personalFamilyViewApi from '@/api/personalFamilyView'
 import { ApiError } from '@/api/errors'
 import PersonProfileView from '@/views/PersonProfileView.vue'
 import { useAuthStore } from '@/stores/auth'
+import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpacesStore } from '@/stores/spaces'
 import type {
   ActionCard,
@@ -23,6 +27,9 @@ import type {
   StructuredDate,
 } from '@/types/api'
 
+enableAutoUnmount(afterEach)
+afterEach(() => { const pinia = getActivePinia(); if (pinia) disposePinia(pinia) })
+
 /**
  * PersonProfileView（design.md §5.3 / PRD §2.4，Phase 4）：
  * - 直达/刷新先建立 lineage 空间上下文并加载 PersonalFamilyView 快照，再在
@@ -36,6 +43,7 @@ import type {
 
 vi.mock('@/api/personalFamilyView', () => ({
   fetchPersonalFamilyView: vi.fn(),
+  demandPersonalFamilyView: vi.fn().mockResolvedValue({ status: 'queued', focus_user_id: null }),
 }))
 
 vi.mock('@/api/actionCards', () => ({
@@ -139,7 +147,7 @@ function makeData(overrides: Partial<PersonalFamilyViewData> = {}): PersonalFami
 }
 
 function makeSnapshot(data: PersonalFamilyViewData): PersonalFamilyViewSnapshot {
-  return { data, etag: 'W/"v3"' }
+  return data.progress ? familySnapshot(data) : { data, etag: 'W/"v3"' }
 }
 
 function makeLineageSpace(): FamilySpace {
@@ -256,7 +264,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
       }),
     })
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, expect.objectContaining({ progressive: true }))
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="profile-name"]').text()).toBe('成员2')
     expect(wrapper.find('[data-test="profile-identity"]').text()).toContain('家庭详情可见')
@@ -284,14 +292,14 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
       { userId: '2', currentSpaceId: 9, spaces: [makeLineageSpace(), household] },
     )
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, expect.objectContaining({ progressive: true }))
     expect(wrapper.find('[data-test="profile-name"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
   })
 
   it('会话内当前空间是 household：走通用授权快照渲染资料（09-05 R1；家庭卡点成员卡可见）', async () => {
     const { wrapper } = await mountProfile(
-      { data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
+      { data: makeData({ space_id: 5, nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
       { userId: '2', currentSpaceId: 5, spaces: [makeLineageSpace(), makeHouseholdSpace()] },
     )
 
@@ -328,7 +336,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
 
   it('当前空间是 household（无 lineage 空间）：同样经授权快照渲染（09-05 R1）', async () => {
     const { wrapper } = await mountProfile(
-      { data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
+      { data: makeData({ space_id: 5, nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
       { userId: '2', currentSpaceId: 5, spaces: [makeHouseholdSpace()] },
     )
 
@@ -345,7 +353,7 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
       { userId: '2', currentSpaceId: null },
     )
 
-    expect(mockedFetchView).toHaveBeenCalledWith(9, null, { progressive: true })
+    expect(mockedFetchView).toHaveBeenCalledWith(9, null, expect.objectContaining({ progressive: true }))
     expect(useSpacesStore(pinia).currentSpaceId).toBe(9)
     expect(wrapper.find('[data-test="profile-name"]').text()).toBe('成员2')
   })
@@ -543,5 +551,83 @@ describe('PersonProfileView 只读与 Bridge 边界', () => {
     for (const test of buttonTests) {
       expect(test).not.toMatch(/approve|reject|consent|revoke/i)
     }
+  })
+})
+
+describe('PersonProfileView 渐进关系说明', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllMocks()
+    vi.stubGlobal('scrollTo', vi.fn())
+    vi.mocked(personalFamilyViewApi.demandPersonalFamilyView).mockResolvedValue({ status: 'already_active', focus_user_id: null })
+    document.body.innerHTML = ''
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('先显示授权资料和单人待计算提示，轮询补齐完整称谓与说明', async () => {
+    const { wrapper } = await mountProfile({ data: familyData() })
+    expect(wrapper.find('[data-test="profile-name"]').text()).toBe('家人2')
+    expect(wrapper.find('[data-test="profile-target-pending"]').text()).toContain('自动显示')
+    expect(wrapper.find('[data-test="profile-relations-empty"]').exists()).toBe(false)
+    expect(personalFamilyViewApi.demandPersonalFamilyView).toHaveBeenCalledWith(9, expect.objectContaining({ focusUserId: 2 }))
+    mockedFetchView.mockResolvedValue(familySnapshot({ edges: [makeEdge(1, 2, '父亲')],
+      progress: familyProgress({ revision: 2, phase: 'ready', next_poll_ms: 0, targets: [{ user_id: 2, status: 'ready', reason_code: null }] }) }))
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.find('[data-test="profile-target-pending"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="profile-relation-0"]').text()).toContain('父亲')
+    expect(wrapper.find('[data-test="profile-progress"]').text()).toContain('已整理完成（1/1）')
+    expect(personalFamilyViewApi.demandPersonalFamilyView).toHaveBeenCalledTimes(1)
+    const calls = mockedFetchView.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(mockedFetchView).toHaveBeenCalledTimes(calls)
+  })
+
+  it('无可显示称谓和计算失败分别提示，失败可明确重试', async () => {
+    const { wrapper, pinia } = await mountProfile({ data: familyData({
+      progress: familyProgress({ phase: 'ready', next_poll_ms: 0, targets: [{ user_id: 2, status: 'unavailable', reason_code: null }] }),
+    }) })
+    expect(wrapper.find('[data-test="profile-target-unavailable"]').text()).toContain('已完成整理')
+    expect(wrapper.find('[data-test="profile-target-pending"]').exists()).toBe(false)
+    mockedFetchView.mockResolvedValue(familySnapshot({ progress: familyProgress({ generation: 8, phase: 'failed', next_poll_ms: 0,
+      targets: [{ user_id: 2, status: 'failed', reason_code: null }] }) }))
+    await usePersonalFamilyViewStore(pinia).refresh(9)
+    await flushPromises()
+    expect(wrapper.find('[data-test="profile-target-failed"]').text()).toContain('暂未整理成功')
+    expect(wrapper.find('[data-test="profile-progress"]').text()).toContain('0/1')
+    expect(wrapper.find('[data-test="profile-identity"]').exists()).toBe(true)
+    await wrapper.find('[data-test="profile-target-retry"]').trigger('click')
+    await flushPromises()
+    expect(personalFamilyViewApi.demandPersonalFamilyView).toHaveBeenCalledWith(9, expect.objectContaining({ retry: true }))
+  })
+
+  it('骨架尚未就绪时继续等待并暴露等待过长提示，避免误报成员不存在', async () => {
+    const { wrapper } = await mountProfile({ data: familyData({ nodes: [], topology_edges: [],
+      progress: familyProgress({ phase: 'preparing', targets: [] }) }) })
+    expect(wrapper.find('[data-test="profile-preparing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(31_000)
+    await flushPromises()
+    expect(wrapper.find('[data-test="profile-preparing-notice"]').text()).toContain('等待时间较长')
+  })
+
+  it('同一关系的说明随批次更新，成员失权后资料与面板同时回收', async () => {
+    const { wrapper, pinia } = await mountProfile({ data: familyData({ edges: [makeEdge(1, 2, '父亲')],
+      progress: familyProgress({ phase: 'ready', next_poll_ms: 0, targets: [{ user_id: 2, status: 'ready', reason_code: null }] }) }) })
+    await wrapper.find('[data-test="profile-relation-0"]').trigger('click')
+    expect(wrapper.findComponent(RelationshipDetailPanel).props('edge').term).toBe('父亲')
+    const pfv = usePersonalFamilyViewStore(pinia)
+    mockedFetchView.mockResolvedValue(familySnapshot({ edges: [makeEdge(1, 2, '爸爸')],
+      progress: familyProgress({ generation: 8, phase: 'ready', next_poll_ms: 0, targets: [{ user_id: 2, status: 'ready', reason_code: null }] }) }))
+    await pfv.refresh(9)
+    await flushPromises()
+    expect(wrapper.findComponent(RelationshipDetailPanel).props('edge').term).toBe('爸爸')
+    mockedFetchView.mockRejectedValue(new ApiError(403, 'FORBIDDEN', '无法读取'))
+    await expect(pfv.refresh(9)).rejects.toMatchObject({ status: 403 })
+    await flushPromises()
+    expect(wrapper.findComponent(RelationshipDetailPanel).exists()).toBe(false)
+    expect(wrapper.find('[data-test="profile-identity"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('家人2')
   })
 })

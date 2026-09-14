@@ -431,11 +431,14 @@ export type PersonalFamilyViewProgressPhase =
   | 'failed'
 
 export interface PersonalFamilyViewProgress {
-  contract_version: string
+  contract_version: 'pfv-progress-v1'
   phase: PersonalFamilyViewProgressPhase
   /** viewer 内单调代次；客户端据此拒绝倒退响应 */
   generation: number
   revision: number
+  topology_revision: string
+  targets: PersonalFamilyViewTarget[]
+  reason_code: string | null
   /** 只统计当前查看者已授权目标；完成数来自已保存验证结果，不是耗时百分比 */
   completed_count: number
   total_count: number
@@ -443,10 +446,36 @@ export interface PersonalFamilyViewProgress {
   next_poll_ms: number
 }
 
-/** 带 ETag 的安全快照：304 时复用上一份 data，不重建对象 */
-export interface PersonalFamilyViewSnapshot {
-  data: PersonalFamilyViewData
+export type PersonalFamilyViewTargetStatus = 'pending' | 'ready' | 'unavailable' | 'failed'
+
+export interface PersonalFamilyViewTarget {
+  user_id: number
+  status: PersonalFamilyViewTargetStatus
+  reason_code: string | null
+}
+
+/** 响应头独立于数据 ETag；304 可续期，不能自行推算新的授权期限。 */
+export interface PersonalFamilyViewResponseMetadata {
   etag: string | null
+  displayUntil?: number | null
+  serverDate?: number | null
+  displayExpiresAt?: number | null
+}
+
+/** 带 ETag 的安全快照：304 时复用上一份 data，不重建对象 */
+export interface PersonalFamilyViewSnapshot extends PersonalFamilyViewResponseMetadata {
+  data: PersonalFamilyViewData
+}
+
+export interface PersonalFamilyViewNotModified extends PersonalFamilyViewResponseMetadata {
+  notModified: true
+}
+
+export type PersonalFamilyViewResponse = PersonalFamilyViewSnapshot | PersonalFamilyViewNotModified | null
+
+export interface PersonalFamilyViewDemandResult {
+  status: 'queued' | 'already_active'
+  focus_user_id: number | null
 }
 
 export interface PersonalFamilyBridge {
