@@ -1,23 +1,33 @@
-# 后端开发规范
+# 后端规范路由
 
-> **历史资料（不可执行）**：Trellis 规范已弃用。本目录仅供追溯；开发规则以仓库根目录 [AGENTS.md](../../AGENTS.md) 及现行项目文档为准。请勿将本文作为新任务的门禁或实现入口。
+## 范围
 
-> 技术栈：FastAPI + SQLAlchemy + SQLite(WAL) + lunar-python + JWT。全局架构契约见 [../architecture.md](../architecture.md)（身份模型/状态机/授权矩阵/删除级联的权威定义）。
+适用于 `backend/` 中的 FastAPI、SQLAlchemy、SQLite/WAL、JWT、后台 API 与 Agent/Steward 运行时改动。
 
-| Guide | Description | Status |
-|-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | 分层结构与单向依赖规则 | Initial draft |
-| [Database Guidelines](./database-guidelines.md) | PRAGMA/迁移/事务/约束/备份 | Initial draft |
-| [Error Handling](./error-handling.md) | 统一错误结构/错误码/防枚举 | Initial draft |
-| [Quality Guidelines](./quality-guidelines.md) | 质量门禁命令/禁止模式/测试门槛 | Initial draft |
-| [Logging Guidelines](./logging-guidelines.md) | 结构化日志/PII 脱敏红线/audit_log | Initial draft |
-| [Agent Runtime](./agent-runtime.md) | Pi sidecar 六端点合同/token/事件/Provider 治理 | V2.1 |
-| [Assistant Memory/RAG Contract Record](./memory-rag-execution-contract.md) | 签名 attempt、精确引用、持续失效、实际材料包与回归入口 | 2026-09-14 实现记录 |
-| [RAG Index Lifecycle Contract Record](./rag-index-lifecycle-contract.md) | 规范来源与正文证据、有界租约事务、合法恢复、换版与无损迁移拒绝 | 2026-09-14 实现记录 |
-| [Relationship Intelligence](./relationship-intelligence.md) | SourceFact/DerivedFact/概念码/TermRegistry 四级/Extractor/API 隐私红线 | V2.3 |
-| [Steward and ActionCard](./steward-action-card.md) | space-scoped Steward jobs、DomainEvent/BehaviorProjection、ActionCard FSM、推荐资格矩阵与执行重校验 | V2.4 |
-| [Controlled Web](./controlled-web.md) | 双层开关/工具披露、Egress/SSRF、approved token、query PII 最小化、配额审计与引用 | V2.6 |
-| [Memory Contract](./memory-contract.md) | 2026-09-13 A 实现合同记录：来源、幂等、响应授权与缓存回归 | Implementation record |
-| [Assistant History Restoration](./assistant-history-restoration.md) | 2026-09-13 C 实现记录：同一 Pi manager 的历史预填与自动/手动压缩 | Implementation record |
+## 适用性
 
-> 状态说明：Initial draft = 基于锁定技术栈与架构决策制定的初始规范。M0 完成后必须用真实代码实例校正并补充示例。
+- 目录或分层变化：读取 [directory-structure.md](directory-structure.md)。
+- 数据库、迁移、事务、备份或约束：读取 [database-guidelines.md](database-guidelines.md)。
+- 错误、日志、质量门禁：按需读取对应叶文件。
+- Agent、Memory/RAG、Steward、Controlled Web 或关系智能：只读取对应领域叶文件。
+- 涉及全局身份、授权、空间状态或数据权利：从 [全局架构规范路由](../architecture/index.md) 选择具体叶文件。
+
+## 合同叶文件
+
+- [directory-structure.md](directory-structure.md)
+- [database-guidelines.md](database-guidelines.md)
+- [error-handling.md](error-handling.md)
+- [quality-guidelines.md](quality-guidelines.md)
+- [logging-guidelines.md](logging-guidelines.md)
+- [agent-runtime.md](agent-runtime.md)
+- [memory-contract.md](memory-contract.md)
+- [memory-rag-execution-contract.md](memory-rag-execution-contract.md)
+- [rag-index-lifecycle-contract.md](rag-index-lifecycle-contract.md)
+- [relationship-intelligence.md](relationship-intelligence.md)
+- [steward-action-card.md](steward-action-card.md)
+- [controlled-web.md](controlled-web.md)
+- [assistant-history-restoration.md](assistant-history-restoration.md)
+
+## 验证入口
+
+按所选叶文件的 Required validation 执行；不要因为读取本路由而默认读取全部后端规范。
