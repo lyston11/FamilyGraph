@@ -1103,3 +1103,32 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 31: Steward 短事务与渐进家谱：集成验收及归档清理
+<!-- trellis-session: v=2 fp=0d033bb7d83fb78a -->
+
+**Date**: 2026-09-14
+**Task**: Steward 短事务与渐进家谱：集成验收及归档清理
+**Branch**: `main`
+
+### Summary
+
+完成一致快照、事务外计算、版本化 staging 与原子发布、独立交付、先骨架后称谓，并与主线称谓和 Memory/RAG 串行接合。连续短写竞争经共享写入预算整改；后端 1535 passed，家庭前端 740、管理端 111 tests，lint/type-check/build 及 API smoke 56/56 通过。30/50/200 人并发零请求失败，两次真实扫描间隔 300.613/302.030 秒；桌面骨架可交互 p95 389.3ms。已合入本地 main、归档并删除已合并干净 worktree/分支，其他改动和共享依赖保留。最终报告：.trellis/tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md。200 人冷算仍约 416 秒，共享预算仅覆盖同进程/Engine；未 push 或部署。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f7fbd387` | fix(steward): atomically publish fenced snapshot recomputations |
+| `6162cede` | feat(pfv): progressively fill kinship labels on a stable family skeleton |
+| `dddc6b77` | test(steward): verify concurrent writes and progressive browser loading |
+| `ce085fb` | merge(steward): integrate staged publication with terminology and memory lifecycle |
+| `3cb4550` | merge(steward): preserve latest admin switch integration |
+| `84660c8` | perf(steward): coalesce covered demand and bound cache write work |
+| `c021921` | fix(steward): yield shared writer capacity between bounded bursts |
+| `dee91a14` | merge(steward): preserve current Trellis context governance |
+
+### Status
+
+[OK] **Completed**
