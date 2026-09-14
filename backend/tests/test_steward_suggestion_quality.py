@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,6 +33,7 @@ from app.services import (
     terms,
 )
 from app.utils.timeutil import utcnow
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 @pytest.fixture(autouse=True)

@@ -56,8 +56,9 @@ class RAGDocument(Base):
             "(scope IN ('household','lineage') AND space_id IS NOT NULL)",
             name="ck_rag_documents_scope_space",
         ),
+        CheckConstraint("revision = source_revision", name="ck_rag_documents_revision_mirror"),
         Index("ix_rag_documents_scope", "space_id", "scope"),
-        Index("ix_rag_documents_source", "source_type", "source_id", "revision"),
+        Index("ix_rag_documents_source", "source_type", "source_id", "revision", unique=True),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -84,10 +85,13 @@ class RAGDocument(Base):
         String(128), nullable=False, default="visibility-v1"
     )
     index_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Hash of the complete indexing input (Memory.content, not raw_quote).
+    # NULL means legacy/unproven; a partial legacy projection cannot sign it.
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Distinguishes a source-level tombstone (never resurrectable) from an
-    # index-version supersede (reactivatable only by the upgrade flow).
+    # index supersede (recoverable only after source/content revalidation).
     invalidation_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -142,8 +146,15 @@ class RAGIndexMaintenanceState(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     cursor_memory_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    upper_memory_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     round: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cursor_document_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    upper_document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stage_round: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_index_version: Mapped[str] = mapped_column(
+        String(32), default="fts5-trigram-v2", nullable=False
+    )
     attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

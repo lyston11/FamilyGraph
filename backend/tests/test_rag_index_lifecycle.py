@@ -133,7 +133,7 @@ def test_repeated_rebuild_keeps_single_document_and_stable_chunks(rag_on, db_ses
     assert second_ids == chunk_ids
 
 
-def test_uniqueness_adjudicates_concurrent_materialization(rag_on, db_session, owner):
+def test_repeated_ensure_reuses_materialization(rag_on, db_session, owner):
     memory = _confirm_memory(db_session, owner, summary="端午节在苏州住两晚。", scope="private")
     db_session.flush()
     doc_a = memory_rag.ensure_memory_index(db_session, memory)
@@ -413,11 +413,12 @@ def test_search_reads_only_active_chunk_version(db_session, owner, rag_on):
     assert all(hit.index_version == memory_rag.RAG_INDEX_VERSION for hit in hits)
 
 
-def test_stage_index_version_flips_only_legal_documents(db_session, owner, rag_on):
+def test_stage_index_version_flips_only_legal_documents(db_session, owner, rag_on, monkeypatch):
     memory = _confirm_memory(db_session, owner, summary="换版样本春节。", scope="private")
     revoked = _confirm_memory(db_session, owner, summary="换版撤销样本春节。", scope="private")
     db_session.flush()
     memory_rag.revoke_memory(db_session, memory_id=revoked.id, account_id=owner.account.id)
+    monkeypatch.setitem(memory_rag.INDEX_CHUNKERS, "fts5-trigram-v2-test", memory_rag._chunk_text)
     result = rag_maintenance.stage_index_version(
         db_session, target_version="fts5-trigram-v2-test", worker_id="switcher"
     )
@@ -450,6 +451,11 @@ def test_maintenance_status_has_no_content(rag_on, db_session, owner):
             "policy_version",
             "round",
             "cursor_memory_id",
+            "upper_memory_id",
+            "cursor_document_id",
+            "upper_document_id",
+            "stage_round",
+            "target_index_version",
             "last_success_at",
             "has_failures",
             "active_index_version",

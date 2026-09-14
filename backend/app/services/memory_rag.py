@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select, text, update
+from sqlalchemy import and_, bindparam, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -663,118 +663,315 @@ def _chunk_text(value: str, max_chars: int = _CHUNK_MAX_CHARS) -> list[str]:
     return [chunk.strip() for chunk in chunks if chunk.strip()]
 
 
-def index_memory(db: Session, memory: Memory) -> RAGDocument:
-    """Create/update the sole RAG representation for a confirmed memory."""
+def _chunk_text_v1(value: str) -> list[str]:
+    """The historical fixed-width algorithm; never relabel v2 chunks as v1."""
+    clean = value.strip()
+    return [clean[index : index + 1200] for index in range(0, len(clean), 1200)]
+
+
+# Only executable algorithms can be targets. Future algorithms must register
+# their real implementation; tests may inject synthetic versions here.
+INDEX_CHUNKERS: dict[str, Callable[[str], list[str]]] = {
+    "fts5-trigram-v1": _chunk_text_v1,
+    "fts5-trigram-v2": _chunk_text,
+}
+MAX_INDEX_INPUT_CHARS = 120_000
+MAX_INDEX_CHUNKS = 256
+
+
+def _index_conflict(message: str = "同一来源版本的索引内容或元数据冲突") -> None:
+    raise_api_error(409, RAG_SOURCE_NOT_ALLOWED, message)
+
+
+def _pieces_for_version(value: str, version: str) -> list[str]:
+    chunker = INDEX_CHUNKERS.get(version)
+    if chunker is None:
+        _index_conflict("索引算法版本未知，保留原投影")
+    if len(value) > MAX_INDEX_INPUT_CHARS:
+        _index_conflict("来源超过单次索引大小限制")
+    assert chunker is not None
+    pieces = chunker(value)
+    if not pieces or len(pieces) > MAX_INDEX_CHUNKS:
+        _index_conflict("来源块数量超出索引范围")
+    return pieces
+
+
+def _acquire_index_writer(db: Session) -> None:
+    """Acquire the SQLite writer before refreshing mutable sources or flags.
+
+    A no-op UPDATE also starts a real transaction before any SAVEPOINT on
+    SQLite's legacy driver. Callers own the short outer commit/rollback.
+    """
+    db.execute(text("UPDATE rag_documents SET id = id WHERE 0"))
+
+
+def _require_fresh_rag_enabled(db: Session) -> None:
+    db.flush()
+    db.get(PlatformFeatureConfig, 1, populate_existing=True)
     _require_rag_enabled(db)
-    if not memory_sources.memory_materializable(db, memory):
-        raise_api_error(409, RAG_SOURCE_NOT_ALLOWED, "来源未验证或已失效，不能建立索引")
-    now = utcnow()
-    document = db.scalar(
-        select(RAGDocument).where(
-            RAGDocument.source_type == "memory",
-            RAGDocument.source_id == str(memory.id),
-            RAGDocument.revision == memory.revision,
-        )
+
+
+def _fresh_materializable_memory(db: Session, memory_id: int) -> Memory:
+    db.flush()
+    memory = db.get(Memory, memory_id, populate_existing=True)
+    if memory is None or not memory_sources.memory_materializable(db, memory):
+        _index_conflict("来源未验证或已失效，不能建立索引")
+    assert memory is not None
+    return memory
+
+
+def _memory_document_metadata(db: Session, memory: Memory) -> dict[str, Any]:
+    return {
+        "source_type": "memory",
+        "source_id": str(memory.id),
+        "author_account_id": memory.author_account_id,
+        "owner_user_id": db.scalar(
+            select(Account.user_id).where(Account.id == memory.author_account_id)
+        ),
+        "space_id": memory.space_id,
+        "scope": memory.scope,
+        "sensitivity": memory.sensitivity,
+        "confirmation_status": "confirmed",
+        "source_revision": memory.revision,
+        "revision": memory.revision,
+        "visibility_snapshot": {},
+        "visibility_snapshot_key": f"memory:{memory.id}:r{memory.revision}",
+    }
+
+
+def _check_document_metadata(
+    document: RAGDocument, expected: dict[str, Any], *, allow_index_superseded: bool = False
+) -> None:
+    current = document.status == "active" and document.invalidation_reason is None
+    superseded = (
+        allow_index_superseded
+        and document.source_type == "memory"
+        and document.status == "invalidated"
+        and document.invalidation_reason == "index_superseded"
     )
-    if document is None:
-        document = RAGDocument(
-            source_type="memory",
-            source_id=str(memory.id),
-            author_account_id=memory.author_account_id,
-            owner_user_id=db.scalar(
-                select(Account.user_id).where(Account.id == memory.author_account_id)
-            ),
-            space_id=memory.space_id,
-            scope=memory.scope,
-            sensitivity=memory.sensitivity,
-            confirmation_status="confirmed",
-            source_revision=memory.revision,
-            revision=memory.revision,
-            visibility_snapshot_key=f"memory:{memory.id}:r{memory.revision}",
-            index_version=RAG_INDEX_VERSION,
+    if (
+        not (current or superseded)
+        or document.revision != document.source_revision
+        or any(getattr(document, key) != value for key, value in expected.items())
+    ):
+        _index_conflict()
+
+
+def _canonical_document(
+    db: Session,
+    metadata: dict[str, Any],
+    *,
+    target_version: str,
+    allow_index_superseded: bool = False,
+) -> tuple[RAGDocument, bool]:
+    now = utcnow()
+    created_id = db.scalar(
+        sqlite_insert(RAGDocument)
+        .values(
+            **metadata,
+            index_version=target_version,
             status="active",
             created_at=now,
             updated_at=now,
         )
-        db.add(document)
-        db.flush()
-    elif document.status != "active":
-        # MR-25: a tombstoned document is only resurrectable when the
-        # tombstone was an index-version supersede, never a source-level one.
-        if document.invalidation_reason != "index_superseded":
-            raise_api_error(
-                409,
-                RAG_SOURCE_NOT_ALLOWED,
-                "来源已失效或撤销，索引不能复活",
-                {"document_id": document.id, "reason": document.invalidation_reason},
-            )
-        if not memory_sources.memory_materializable(db, memory):
-            raise_api_error(409, RAG_SOURCE_NOT_ALLOWED, "来源未验证或已失效，不能建立索引")
-        document.status = "active"
-        document.invalidation_reason = None
-        document.updated_at = now
-    else:
-        document.index_version = RAG_INDEX_VERSION
-        document.updated_at = now
-    _materialize_chunks(db, document, memory.content, memory.revision)
-    db.flush()
-    return document
+        .on_conflict_do_nothing(index_elements=["source_type", "source_id", "revision"])
+        .returning(RAGDocument.id)
+    )
+    document = db.scalar(
+        select(RAGDocument)
+        .where(
+            RAGDocument.source_type == metadata["source_type"],
+            RAGDocument.source_id == metadata["source_id"],
+            RAGDocument.revision == metadata["revision"],
+        )
+        .execution_options(populate_existing=True)
+    )
+    assert document is not None
+    _check_document_metadata(document, metadata, allow_index_superseded=allow_index_superseded)
+    return document, created_id is not None
 
 
-def _materialize_chunks(db: Session, document: RAGDocument, text_value: str, revision: int) -> None:
-    """Upsert chunks so same-version re-indexing keeps chunk IDs stable.
+def _version_chunks(
+    db: Session, document_id: int, version: str, *, bounded: bool = False
+) -> list[RAGChunk]:
+    statement = (
+        select(RAGChunk)
+        .where(RAGChunk.document_id == document_id, RAGChunk.index_version == version)
+        .order_by(RAGChunk.chunk_index)
+        .execution_options(populate_existing=True)
+    )
+    if bounded:
+        # The extra row proves overflow without loading an unbounded damaged
+        # projection during a maintenance batch. Explicit FTS repair can page
+        # documents containing legacy material beyond the new input limit.
+        statement = statement.limit(MAX_INDEX_CHUNKS + 1)
+    return list(db.scalars(statement))
 
-    Citation handles embed ``chunk_id``; deleting and re-inserting rows on
-    every re-index would silently re-point old handles at different text.
-    Within one index_version: unchanged chunks keep their row, changed chunks
-    are updated in place, extra chunks are tombstoned, and a different
-    algorithm version (RAG_INDEX_VERSION bump) is a new document lifecycle
-    owned by the maintenance task (D).
+
+def _chunks_match(rows: Sequence[RAGChunk], pieces: list[str], revision: int) -> bool:
+    return all(
+        0 <= row.chunk_index < len(pieces)
+        and row.text == pieces[row.chunk_index]
+        and row.source_revision == revision
+        and row.status == "active"
+        for row in rows
+    )
+
+
+def _fts_rows(db: Session, rows: Sequence[RAGChunk]) -> dict[int, tuple[Any, str]]:
+    if not rows:
+        return {}
+    records = db.execute(
+        text("SELECT rowid, chunk_id, text FROM rag_chunks_fts WHERE rowid IN :ids").bindparams(
+            bindparam("ids", expanding=True)
+        ),
+        {"ids": [row.id for row in rows]},
+    )
+    return {record[0]: (record[1], record[2]) for record in records}
+
+
+def _repair_chunk_fts(db: Session, rows: Sequence[RAGChunk]) -> None:
+    indexed = _fts_rows(db, rows)
+    for row in rows:
+        if indexed.get(row.id) == (row.id, row.text):
+            continue
+        db.execute(text("DELETE FROM rag_chunks_fts WHERE rowid = :id"), {"id": row.id})
+        db.execute(
+            text("INSERT INTO rag_chunks_fts(rowid, chunk_id, text) VALUES (:id, :id, :value)"),
+            {"id": row.id, "value": row.text},
+        )
+
+
+def _materialize_chunks(
+    db: Session,
+    document: RAGDocument,
+    text_value: str,
+    revision: int,
+    *,
+    creating: bool = False,
+    target_version: str | None = None,
+) -> None:
+    """Validate the complete identity before filling gaps; never rewrite a chunk.
+
+    The input digest survives missing chunks, unlike comparing only surviving
+    positions. Legacy NULL digests require a complete matching active set;
+    neither raw_quote's hash nor a partial set proves the indexing input.
     """
-    pieces = _chunk_text(text_value)
-    # Version-scoped: rows of another index_version belong to a staged or
-    # superseded chunk set and are managed by the version-switch flow (D).
-    existing = {
-        int(chunk.chunk_index): chunk
-        for chunk in db.scalars(
-            select(RAGChunk).where(
-                RAGChunk.document_id == document.id,
-                RAGChunk.index_version == document.index_version,
-            )
-        ).all()
-    }
-    kept_indexes: set[int] = set()
-    for index, chunk_text_value in enumerate(pieces):
-        kept_indexes.add(index)
-        row = existing.get(index)
-        if row is None:
+    version = target_version or document.index_version
+    pieces = _pieces_for_version(text_value, version)
+    digest = hashlib.sha256(text_value.encode("utf-8")).hexdigest()
+    if document.revision != revision or document.source_revision != revision:
+        _index_conflict()
+    if document.content_sha256 is not None and document.content_sha256 != digest:
+        _index_conflict()
+    existing = _version_chunks(db, document.id, version, bounded=True)
+    if not _chunks_match(existing, pieces, revision):
+        _index_conflict()
+    if document.content_sha256 is None and not creating:
+        active = _version_chunks(db, document.id, document.index_version, bounded=True)
+        active_pieces = _pieces_for_version(text_value, document.index_version)
+        if len(active) != len(active_pieces) or not _chunks_match(active, active_pieces, revision):
+            _index_conflict("旧投影缺少完整正文证据，不能补签或补块")
+    by_index = {row.chunk_index: row for row in existing}
+    for index, value in enumerate(pieces):
+        if index not in by_index:
             db.add(
                 RAGChunk(
                     document_id=document.id,
                     chunk_index=index,
                     source_revision=revision,
-                    text=chunk_text_value,
-                    token_estimate=_estimate_tokens(chunk_text_value),
-                    index_version=RAG_INDEX_VERSION,
+                    text=value,
+                    token_estimate=_estimate_tokens(value),
+                    index_version=version,
                     status="active",
                     created_at=utcnow(),
                 )
             )
-        elif row.text == chunk_text_value and row.status == "active":
-            row.token_estimate = _estimate_tokens(chunk_text_value)
-            row.updated_at = utcnow()
-        else:
-            row.text = chunk_text_value
-            row.token_estimate = _estimate_tokens(chunk_text_value)
-            row.index_version = RAG_INDEX_VERSION
-            row.status = "active"
-            row.source_revision = revision
-            row.updated_at = utcnow()
-    now = utcnow()
-    for index, row in existing.items():
-        if index not in kept_indexes and row.status == "active":
-            row.status = "deleted"
-            row.updated_at = now
+    db.flush()
+    complete = _version_chunks(db, document.id, version, bounded=True)
+    if len(complete) != len(pieces) or not _chunks_match(complete, pieces, revision):
+        _index_conflict()
+    if document.content_sha256 is None:
+        document.content_sha256 = digest
+    _repair_chunk_fts(db, complete)
+
+
+def _memory_projection_complete(db: Session, memory: Memory) -> bool:
+    document = db.scalar(
+        select(RAGDocument)
+        .where(
+            RAGDocument.source_type == "memory",
+            RAGDocument.source_id == str(memory.id),
+            RAGDocument.revision == memory.revision,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if document is None or document.status != "active":
+        return False
+    pieces = _pieces_for_version(memory.content, document.index_version)
+    rows = _version_chunks(db, document.id, document.index_version, bounded=True)
+    return (
+        document.content_sha256 == hashlib.sha256(memory.content.encode("utf-8")).hexdigest()
+        and len(rows) == len(pieces)
+        and _chunks_match(rows, pieces, memory.revision)
+        and _fts_rows(db, rows) == {row.id: (row.id, row.text) for row in rows}
+    )
+
+
+def index_memory(db: Session, memory: Memory, *, target_version: str | None = None) -> RAGDocument:
+    """Ensure the canonical projection; existing activity pointers never move here."""
+    _acquire_index_writer(db)
+    db.flush()
+    with db.begin_nested():
+        _require_fresh_rag_enabled(db)
+        current = _fresh_materializable_memory(db, memory.id)
+        version = target_version or RAG_INDEX_VERSION
+        _pieces_for_version(current.content, version)
+        metadata = _memory_document_metadata(db, current)
+        # Only this Memory entry has just revalidated the global source. The
+        # authorized-document entry cannot opt in to historical state recovery.
+        document, created = _canonical_document(
+            db, metadata, target_version=version, allow_index_superseded=True
+        )
+        recovering = document.status == "invalidated"
+        active_version = document.index_version
+        _materialize_chunks(db, document, current.content, current.revision, creating=created)
+        current = _fresh_materializable_memory(db, current.id)
+        db.refresh(document)
+        _check_document_metadata(
+            document, _memory_document_metadata(db, current), allow_index_superseded=recovering
+        )
+        if document.content_sha256 != hashlib.sha256(current.content.encode("utf-8")).hexdigest():
+            _index_conflict()
+        if recovering:
+            # Validate/fill the complete immutable set before activation. A
+            # later gate rejection still rolls back this update and FTS/chunks
+            # together in the enclosing index savepoint.
+            changed = db.execute(
+                update(RAGDocument)
+                .where(
+                    RAGDocument.id == document.id,
+                    RAGDocument.source_type == "memory",
+                    RAGDocument.status == "invalidated",
+                    RAGDocument.invalidation_reason == "index_superseded",
+                    RAGDocument.revision == current.revision,
+                    RAGDocument.source_revision == current.revision,
+                    RAGDocument.index_version == active_version,
+                    RAGDocument.content_sha256 == document.content_sha256,
+                )
+                .values(
+                    status="active",
+                    invalidation_reason=None,
+                    invalidated_at=None,
+                    updated_at=utcnow(),
+                )
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            if changed != 1:
+                _index_conflict()
+            db.refresh(document)
+        _require_fresh_rag_enabled(db)
+    return document
 
 
 def ingest_authorized_document(
@@ -791,7 +988,6 @@ def ingest_authorized_document(
     visibility_snapshot_key: str = "authorized-v1",
 ) -> RAGDocument:
     """Ingest only an explicitly authorized non-chat source."""
-    _require_rag_enabled(db)
     if source_type not in RAG_SOURCE_TYPES or source_type == "memory":
         raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "该来源类型不能通过文档入口索引")
     if not text_value.strip():
@@ -800,41 +996,44 @@ def ingest_authorized_document(
     _validate_sensitivity(sensitivity)
     if scope == "public" and sensitivity in ("high", "local_required"):
         raise_api_error(422, MEMORY_SENSITIVE_SCOPE_FORBIDDEN, "高敏感文档不能公开到全局")
-    now = utcnow()
-    document = RAGDocument(
-        source_type=source_type,
-        source_id=source_id,
-        author_account_id=author_account_id,
-        owner_user_id=(
-            db.scalar(select(Account.user_id).where(Account.id == author_account_id))
+    if type(revision) is not int or revision < 1:
+        raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "来源版本必须为正整数")
+    _acquire_index_writer(db)
+    db.flush()
+    with db.begin_nested():
+        _require_fresh_rag_enabled(db)
+        metadata: dict[str, Any] = {
+            "source_type": source_type,
+            "source_id": source_id,
+            "author_account_id": author_account_id,
+            "owner_user_id": db.scalar(
+                select(Account.user_id).where(Account.id == author_account_id)
+            )
             if author_account_id is not None
-            else None
-        ),
-        space_id=space_id,
-        scope=scope,
-        sensitivity=sensitivity,
-        confirmation_status="authorized",
-        source_revision=revision,
-        revision=revision,
-        visibility_snapshot_key=visibility_snapshot_key,
-        index_version=RAG_INDEX_VERSION,
-        status="active",
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(document)
-    db.flush()
-    _materialize_chunks(db, document, text_value, revision)
-    db.flush()
-    emit_domain_event(
-        db,
-        event_type="rag.document.ingested",
-        aggregate_type="rag_document",
-        aggregate_id=document.id,
-        payload={"source_type": source_type, "scope": scope, "revision": revision},
-        space_id=space_id,
-        actor_account_id=author_account_id,
-    )
+            else None,
+            "space_id": space_id,
+            "scope": scope,
+            "sensitivity": sensitivity,
+            "confirmation_status": "authorized",
+            "source_revision": revision,
+            "revision": revision,
+            "visibility_snapshot": {},
+            "visibility_snapshot_key": visibility_snapshot_key,
+        }
+        document, created = _canonical_document(db, metadata, target_version=RAG_INDEX_VERSION)
+        _materialize_chunks(db, document, text_value, revision, creating=created)
+        _require_fresh_rag_enabled(db)
+        if created:
+            emit_domain_event(
+                db,
+                event_type="rag.document.ingested",
+                aggregate_type="rag_document",
+                aggregate_id=document.id,
+                payload={"source_type": source_type, "scope": scope, "revision": revision},
+                space_id=space_id,
+                actor_account_id=author_account_id,
+            )
+        db.flush()
     return document
 
 
@@ -851,7 +1050,7 @@ _ELIGIBILITY_SQL = """
   AND d.status = 'active'
   AND c.index_version = d.index_version
   AND c.source_revision = d.revision AND d.source_revision = d.revision
-  AND d.index_version = :index_version
+  AND d.invalidation_reason IS NULL
   AND d.confirmation_status IN ('confirmed', 'authorized')
   AND (d.source_type != 'memory' OR EXISTS (
     SELECT 1 FROM memories m WHERE CAST(m.id AS TEXT) = d.source_id
@@ -1001,7 +1200,6 @@ def search_rag(
         "user_id": actor.id,
         "space_id": space_id,
         "is_assistant": is_assistant,
-        "index_version": RAG_INDEX_VERSION,
     }
     eligibility = _ELIGIBILITY_SQL.format(sensitivity=sensitivity_predicate)
 
@@ -1442,65 +1640,56 @@ def query_hash(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
 
+def _document_materializable(db: Session, document: RAGDocument) -> bool:
+    """Global source lifecycle, with no reader or membership impersonation."""
+    return (
+        document.status == "active"
+        and document.invalidation_reason is None
+        and document.revision == document.source_revision
+        and memory_sources._document_chain(db, document) is not None
+    )
+
+
 def repair_fts(db: Session) -> int:
     """FTS physical repair only: rebuild the search projection from the
     currently legal chunk rows.  Never touches Memory/document business state,
     confirmation records or tombstones (D-R5 / D-AC6)."""
-    _require_rag_enabled(db)
-    db.execute(text("DELETE FROM rag_chunks_fts"))
-    db.execute(
-        text(
-            "INSERT INTO rag_chunks_fts(rowid, chunk_id, text) "
-            "SELECT c.id, c.id, c.text FROM rag_chunks AS c "
-            "JOIN rag_documents AS d ON d.id = c.document_id "
-            "WHERE c.status = 'active' AND d.status = 'active' "
-            "AND c.index_version = d.index_version"
-        )
-    )
-    return int(
-        db.scalar(
-            text(
-                "SELECT count(*) FROM rag_chunks AS c "
-                "JOIN rag_documents AS d ON d.id = c.document_id "
-                "WHERE c.status = 'active' AND d.status = 'active' "
-                "AND c.index_version = d.index_version"
-            )
-        )
-        or 0
-    )
+    _acquire_index_writer(db)
+    db.flush()
+    rebuilt = cursor = 0
+    with db.begin_nested():
+        _require_fresh_rag_enabled(db)
+        db.execute(text("DELETE FROM rag_chunks_fts"))
+        while True:
+            documents = db.scalars(
+                select(RAGDocument)
+                .where(RAGDocument.id > cursor, RAGDocument.status == "active")
+                .order_by(RAGDocument.id)
+                .limit(100)
+                .execution_options(populate_existing=True)
+            ).all()
+            if not documents:
+                break
+            for document in documents:
+                cursor = document.id
+                if not _document_materializable(db, document):
+                    continue
+                rows = [
+                    row
+                    for row in _version_chunks(db, document.id, document.index_version)
+                    if row.status == "active" and row.source_revision == document.revision
+                ]
+                _repair_chunk_fts(db, rows)
+                rebuilt += len(rows)
+        _require_fresh_rag_enabled(db)
+    return rebuilt
 
 
-def ensure_memory_index(db: Session, memory: Memory) -> RAGDocument:
-    """Idempotent materialization of one legal memory (maintenance entry).
-
-    Unlike ``index_memory`` this is a no-op when the current projection is
-    already complete, which is what the bounded maintenance loop calls; the
-    FTS triggers keep the search projection in sync.
-    """
-    _require_rag_enabled(db)
-    if not memory_sources.memory_materializable(db, memory):
-        raise_api_error(409, RAG_SOURCE_NOT_ALLOWED, "来源未验证或已失效，不能建立索引")
-    document = db.scalar(
-        select(RAGDocument).where(
-            RAGDocument.source_type == "memory",
-            RAGDocument.source_id == str(memory.id),
-            RAGDocument.revision == memory.revision,
-            RAGDocument.status == "active",
-        )
-    )
-    if document is not None and document.index_version == RAG_INDEX_VERSION:
-        complete = db.scalar(
-            select(RAGChunk.id)
-            .where(
-                RAGChunk.document_id == document.id,
-                RAGChunk.index_version == document.index_version,
-                RAGChunk.status == "active",
-            )
-            .limit(1)
-        )
-        if complete is not None:
-            return document
-    return index_memory(db, memory)
+def ensure_memory_index(
+    db: Session, memory: Memory, *, target_version: str | None = None
+) -> RAGDocument:
+    """Ensure every expected block and FTS row without changing activity/identity."""
+    return index_memory(db, memory, target_version=target_version)
 
 
 def rebuild_index(db: Session) -> int:

@@ -6,7 +6,7 @@ Revises: 0044_rag_citation_contract, 0044_steward_terminology
 Create Date: 2026-09-14
 
 - rag_documents.invalidation_reason distinguishes source_invalidated (never
-  resurrectable) from index_superseded (reactivatable by the upgrade flow).
+  resurrectable) from index_superseded (recoverable after source/content validation).
   Existing invalidated rows are stamped source_invalidated: the historical
   tombstone path never recorded an index supersede.
 - rag_chunks unique key becomes (document_id, index_version, chunk_index) so
@@ -80,15 +80,38 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    connection = op.get_bind()
+    connection.execute(sa.text("UPDATE rag_documents SET id = id WHERE 0"))
+    incompatible = connection.scalar(
+        sa.text(
+            "SELECT COUNT(*) FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id "
+            "WHERE c.index_version != d.index_version"
+        )
+    )
+    collisions = connection.scalar(
+        sa.text(
+            "SELECT COUNT(*) FROM (SELECT document_id, chunk_index FROM rag_chunks "
+            "GROUP BY document_id, chunk_index HAVING COUNT(*) > 1)"
+        )
+    )
+    reasons = connection.scalar(
+        sa.text(
+            "SELECT COUNT(*) FROM rag_documents WHERE invalidation_reason IS NOT NULL "
+            "AND invalidation_reason != 'source_invalidated'"
+        )
+    )
+    if incompatible or collisions or reasons:
+        dependencies = connection.scalar(
+            sa.text("SELECT COUNT(*) FROM memories WHERE source_kind = 'rag_chunk'")
+        )
+        raise RuntimeError(
+            "Cannot losslessly downgrade RAG lifecycle: "
+            f"historical_chunks={incompatible}, key_collisions={collisions}, "
+            f"distinct_reasons={reasons}, saved_dependencies={dependencies}; "
+            "retain chunks and roll forward"
+        )
     op.drop_table("rag_index_maintenance_failures")
     op.drop_table("rag_index_maintenance_state")
-    # Downgrade collapses versioned chunk identity back to (document,
-    # chunk_index); versions other than the document's current pointer are
-    # removed first so the old unique key holds.
-    op.execute(
-        "DELETE FROM rag_chunks WHERE index_version != "
-        "(SELECT index_version FROM rag_documents WHERE rag_documents.id = rag_chunks.document_id)"
-    )
     op.drop_index("ix_rag_chunks_document_version", table_name="rag_chunks")
     op.create_index(
         "ix_rag_chunks_document",
