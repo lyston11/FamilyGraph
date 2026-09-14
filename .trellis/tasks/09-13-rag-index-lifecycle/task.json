@@ -27,7 +27,7 @@
     "workstream": "D",
     "implementation_dependencies": "09-13-memory-contract-repair,09-13-rag-retrieval-citations",
     "audit_issue_scope": "MR-13,MR-25; MR-15 effective state; MR-17 lifecycle; MR-24",
-    "implementation_status": "review_failed_repair_planned",
+    "implementation_status": "repair_in_progress",
     "acceptance_review_task": "09-14-memory-rag-acceptance-audit",
     "reviewed_cumulative_commit": "bd899b98871c02ad97b7791a051f126d671bfefb"
   }

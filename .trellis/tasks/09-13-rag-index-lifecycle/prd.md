@@ -4,7 +4,9 @@
 
 让合法历史记忆在 RAG 有效开启后自动补齐索引，同时确保重试、重建和换版不会复活撤销内容或改变既有引用含义。
 
-父任务：[治理总任务](../09-13-agent-memory-rag-remediation/prd.md)。D 负责 MR-13、MR-25、MR-15 的生效状态，以及 MR-17 的检索失效边界。任务默认 P2，但 MR-13/MR-25 按 P1 验收；实施顺序等待 A/B 合同稳定，不表示可忽略生命周期缺陷。本轮仅规划。
+父任务：[治理总任务](../09-13-agent-memory-rag-remediation/prd.md)。D 负责 MR-13、MR-25、MR-15 的生效状态，以及 MR-17 的检索失效边界。任务默认 P2，但 MR-13/MR-25 按 P1 验收；实施顺序等待 A/B 合同稳定，不表示可忽略生命周期缺陷。
+
+2026-09-14 用户已授权审查、修复验收及通过后的提交、串行合并、归档与清理。初版 bd899b9 的全套绿色记录保留为历史；[独立复查](../09-14-memory-rag-acceptance-audit/research/d-integration-check.md) 的 D-I01～10 尚需修复，原 D-AC1～8 按 [F-07～11](../09-14-memory-rag-acceptance-audit/prd.md) 重新验收。B 本轮执行身份与精确引用合同稳定后，D 接续实施；[执行前核对](../09-14-memory-rag-acceptance-audit/research/d-execution-preflight.md) 是本轮补充约束。
 
 ## Background
 

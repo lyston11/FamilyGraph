@@ -1,5 +1,7 @@
 # Design：来源生命周期先于索引补建
 
+2026-09-14 修复验收沿用本设计，并纳入 [执行前核对](../09-14-memory-rag-acceptance-audit/research/d-execution-preflight.md)：缺块加同 revision 改文必须被规范内容摘要或等价完整证据阻断；FK PRAGMA 在实际迁移连接验证；失租异常回滚整个批次；不可重建原文的旧合法投影保持可检索；0045 旧降级入口独立保护真实保存引用。相关接口和迁移最终签名以新增实施/检查记录为准，不把待测行为记为已交付。
+
 ## 1. 状态与身份
 
 复用 A 的基础来源规则，但区分 source_is_materializable（与某个阅读者无关的来源合法性）和 can_read(actor, space)（请求侧动态授权），后台不能假扮某个成员决定全局索引状态。规范 document 唯一键为 source_type/source_id/revision；复用现有 document.index_version 作为活动指针，文中 active_index_version 是其逻辑名称，不新增第二个可独立写的真源。chunk 唯一键改为 document_id/index_version/chunk_index，内容摘要用于一致性检验，不能用修改同一 ID 文本的方式覆盖旧引用。

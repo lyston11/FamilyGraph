@@ -2,9 +2,19 @@
 
 ## 前提
 
-保持 planning；A/B 合同交付后在主检出 start D，并进入记录的独立 worktree。检查现有 maintenance/迁移/平台任务改动及实际 heads；不与其他任务共用 SQLite/端口。
+2026-09-14 已获授权继续修复验收；在 B 本轮修复通过后，于主检出 start D，再把 B 与父任务累计分支合入 D 的既有 worktree。检查真实 Alembic heads，不预占迁移编号；不与 B 并行修改来源、检索和迁移代码。
 
-## 执行顺序
+## 本轮修复顺序
+
+- [ ] D-I01/I02：规范来源唯一键、镜像预检、并发稳定重放；完整物化时固定摘要/等价证据，同 revision 改文与缺块组合不改写旧定位。
+- [ ] D-I03/I04/I05/I09：不可变 lease/owner/round/policy/target 条件更新、固定轮次水位、最终有效开关/来源重验；真实 tick 的整个 RAG 批次失败可回滚。
+- [ ] D-I06/I07/I10：真实算法目标、有界完整换版、活动版本检索、普通维护不降级；缺块/FTS 恢复与全局来源合法性一致。
+- [ ] D-I08：旧 0045 降级入口在第一项破坏动作前无损拒绝不兼容数据；新迁移保全真实保存依赖和 FK ON/OFF 下全部子块。
+- [ ] 独立 D 核验、F-07～11 与原 D-AC1～8 回填；保留 B 精确引用、A 来源、C Pi 恢复及 RAG-only 晚开启正对照。
+
+依据：[独立问题报告](../09-14-memory-rag-acceptance-audit/research/d-integration-check.md)、[执行前核对](../09-14-memory-rag-acceptance-audit/research/d-execution-preflight.md)、[累计验收设计](../09-14-memory-rag-acceptance-audit/design.md)。旧探针/日志/哈希不改写，新的持久回归与结果另行记录。
+
+## 初版执行记录（历史勾选不代表本轮复验通过）
 
 - [x] 先构造 MR-25 的隔离回归：同 revision invalidated document 被旧 rebuild 激活、重复重建换 chunk；这是尚需执行的验证，不把静态分析称为已经发生。
 - [x] 固定 document 唯一身份、source tombstone/index_superseded 区别和 chunk/index_version 契约。
