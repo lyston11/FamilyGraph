@@ -231,6 +231,7 @@ steward_runtime.shutdown_runtime(*, timeout_seconds=10.0) -> bool
 - `test_relationship_snapshot_compute.py`：老 DFS 首128/排序/partner/depth 等价、pickle续算、资源上限、前置缓存与仅展示刷新。
 - `test_steward_staged_pipeline.py`：骨架先出、同水位 demand、真实 receipt、assist 门控、预算耗尽、可选多跳解释、共享结果GC、停止/200/304时间头；found/no_path 保存从实际 BEGIN 到 commit 不编解码大 JSON，重复保存只推进/退款一次，读回为对象/null；相关旧Steward/assist/API回归继续通过。
 - `test_steward_publication_consumers.py`：普通消费者同源读取、未发布/失效安全空态、无同步重算和 GET 零写；相关 legacy 读取兼容测试继续通过。
+- `test_steward_demand_coalescing.py`：另一连接真实持写锁时已覆盖 demand 仍可只读完成；新 revision/更高事件水位、focus/retry、失效输入或租约保留 writer 与唤醒，撤权先于缓存；展示读取不解码内部搜索缓存且继续拒绝被篡改的路径证据。
 - `test_steward_runtime_recovery.py`：真实单 spawn CPU 切片让出后其他空间完成；已保存目标与半算目标中断后经 reaper/新 owner 接管，复用完整结果、重做半目标、持续计账、拒绝旧回执并只发布一次。
 - `test_steward_delivery_recovery.py`：普通交付跨代/崩溃持续计账、租约隔离、单项 CAS 重试与审计、旧责任在新代正式发布后收敛、未发布后继时源输入失效仍能清理。
 - `test_steward_benchmark_measurement.py`：真实独立连接在首次 COMMIT 后立即写入；SQLite authorizer 内的 COMMIT 延迟必须计入，统计回调的可控延迟不得计入显式持锁或隐式写窗口。结束时间必须在 DB-API 返回后、任何指标锁/分配/日志前固定，提交失败但仍持有事务时计到实际 rollback；SQL 异常自动回滚立即结束计时，后续清理不得二次记录。诊断 verb 使用固定白名单，注释和绑定参数均不得泄漏。
@@ -262,6 +263,7 @@ resolution = resolve_graph(snapshot.graph, target_user_id=target_id)
 ### 9.8 与自动称谓及 Memory/RAG 的串行集成
 
 - `0048_steward_terminology_publication` 合并 `0047_rag_lifecycle_integrity` 与 `0045_steward_staged_publication`。既有 revision ID 不改名；分别从两父分支升级，不能只测一次从空库到 head。
+- 同迁移增加 `ix_sdi_status_id(status,id)` 支持全局按 ID 领取 pending intent。既有 `(status,available_at,id)` 不能满足该排序，会先遍历并排序全部 pending 及其依赖；有 generation_id 的领取仍使用 generation 索引。模型和迁移同时维护，unmerge 删除本层新增索引。
 - 先安装 0045 再运行 0044 术语迁移时，SQLite batch 重建 provider setting 表会丢弃其已有三个 inferred 输入触发器。0048 幂等恢复这些父级触发器；安全 unmerge 只删除本层 15 个新增 presentation 触发器。
 - 一次命令降过多个父版本时，0048 在任何 DDL 前预检计划路径上的 RAG digest/context evidence、历史 chunks/失效原因、Memory provenance 和 Steward 未完待办拒绝条件。单纯 unmerge 保留全部表与业务行；深层拒绝不能先拆当前输入栅栏。
 - `ViewerInput.terminology` 复制当前 viewer/space 的明确 usage（含关联词条内容与 revision）、稳定 suppression、非空投影及有效模型开关。`steward_terminology_snapshot.resolve_display_term` 从同一授权图/事实 revision/披露出生数据纯算 baseline 与有效自动词；个人/空间偏好优先，不能在逐目标 writer 中重读图。
@@ -272,4 +274,7 @@ resolution = resolve_graph(snapshot.graph, target_user_id=target_id)
 - 无改善的普通 baseline 不建立空自动投影；明确 usage、已有自动词/抑制及 derived 的“保留叫法”仍处理。相同有效输入完整交付后仅复用完成回执；assist 分组也在写事务外准备，注册在确定性术语交付结束后进行，保留主线逐 HTTP fence 和 unknown 恢复。
 - 前端称谓输入失效清 payload、ETag、期限和在途请求，保留同身份的坐标/视口；账号变化仍完整清理。称谓面板按 generation/legacy view_version 清旧证据与建议，同代 progress revision 不触发重复 resolve。
 - 确认关系缺省称谓只消费 `current_view_payload` 的正式发布结果，缺失时显示中性线索，不能在普通呈现读取里回退到整图搜索。候选关系依旧按其自身 `fact_type` 的有向单步解析，保留第三方视角和亚型语义。
+- 热视图复用读取元数据并以单行 `INSERT ... SELECT` 复制已授权骨架，不在 writer 中解码/重编码整族 JSON；结果仍通过 `result_view_id` 引用原始目标集合，计数与版本栅栏不变。
+- PFV 累积载荷只读取目标 ID、状态、失败原因和展示边，不加载仅计算复用需要的 `resolution_json`。授权节点和逐步路径证据校验继续执行。
+- 无 focus、无 retry 的重复 demand 可在同一显式授权读快照中合并：有效 publication 已包含本人 ready 视图，或有效 running generation 已覆盖当前 demand revision 且 job 的 owner/attempt/deadline 和最高事件水位均满足。已发布视图不因自身完成事件或无关全局事件失去 satisfied 语义；运行中遇到更高水位、新需求、失效输入或租约仍回到原短写事务并唤醒执行器。
 - 集成回归入口：`test_steward_terminology_input_versions.py`、`test_steward_terminology_publication_migration.py`、`test_rag_lifecycle_migrations.py`、`test_steward_terminology_delivery_integration.py` 及主线 terminology/suggestion quality/runtime 测试；前端 `personalFamilyViewProgress.spec.ts`、`KinshipTermPanel.spec.ts` 和 `person-profile.spec.ts`。

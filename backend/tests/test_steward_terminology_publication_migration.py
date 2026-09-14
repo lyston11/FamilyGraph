@@ -132,12 +132,16 @@ def test_merge_preserves_both_parents_and_pending_delivery(tmp_path, first_paren
             revision = connection.scalar(
                 text("SELECT presentation FROM steward_input_revisions WHERE scope_id=0")
             )
+            assert [
+                row[2] for row in connection.exec_driver_sql("PRAGMA index_info(ix_sdi_status_id)")
+            ] == ["status", "id"]
         _migrate(tmp_path, "downgrade", PARENTS[0], foreign_keys=foreign_keys)
         assert _snapshot(engine, retained_tables) == before
         with engine.connect() as connection:
             assert set(
                 connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
             ) == set(PARENTS)
+            assert not connection.exec_driver_sql("PRAGMA index_info(ix_sdi_status_id)").all()
         _migrate(tmp_path, "upgrade", "head", foreign_keys=foreign_keys)
         assert _snapshot(engine, retained_tables) == before
         with engine.connect() as connection:
@@ -159,6 +163,9 @@ def test_merge_preserves_both_parents_and_pending_delivery(tmp_path, first_paren
                 )
                 == 60
             )
+            assert [
+                row[2] for row in connection.exec_driver_sql("PRAGMA index_info(ix_sdi_status_id)")
+            ] == ["status", "id"]
         with Session(engine) as db:
             before_inferred = (
                 db.scalar(

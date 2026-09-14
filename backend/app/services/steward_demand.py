@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session, load_only
 
 from app import config
 from app.db import SessionLocal
@@ -27,6 +28,73 @@ from app.services.steward_views import authorize
 from app.utils.timeutil import utcnow
 
 
+def _already_covered(session: Session, *, account: Account, space_id: int) -> bool:
+    """Coalesce only work covered in the caller's authorized read snapshot."""
+    from app.services.steward import current_event_watermark
+
+    now = utcnow()
+    query = (
+        select(StewardGeneration)
+        .options(
+            load_only(
+                StewardGeneration.space_id,
+                StewardGeneration.manifest_sealed,
+                StewardGeneration.valid_until,
+                StewardGeneration.input_versions_json,
+                raiseload=True,
+            )
+        )
+        .join(
+            StewardGenerationView,
+            StewardGenerationView.generation_id == StewardGeneration.id,
+        )
+        .where(
+            StewardGeneration.space_id == space_id,
+            StewardGeneration.manifest_sealed.is_(True),
+            StewardGeneration.valid_until > now,
+            StewardGenerationView.space_id == space_id,
+            StewardGenerationView.viewer_account_id == account.id,
+            StewardGenerationView.root_user_id == account.user_id,
+        )
+    )
+    published = session.scalar(
+        query.join(
+            StewardPublication, StewardPublication.generation_id == StewardGeneration.id
+        ).where(
+            StewardPublication.space_id == space_id,
+            StewardGeneration.status == "published",
+            StewardGenerationView.status == "ready",
+        )
+    )
+    # Preserve the existing satisfied-view contract: unrelated global events,
+    # including publication's completion event, do not create a new demand.
+    if published is not None and valid_generation(session, published, now=now):
+        return True
+    running = session.scalar(
+        query.join(StewardJob, StewardJob.id == StewardGeneration.job_id)
+        .join(
+            StewardViewDemand,
+            (StewardViewDemand.space_id == StewardGeneration.space_id)
+            & (StewardViewDemand.viewer_account_id == StewardGenerationView.viewer_account_id),
+        )
+        .where(
+            StewardGeneration.status == "running",
+            StewardGenerationView.status.in_(("pending", "ready")),
+            StewardViewDemand.fulfilled_revision < StewardViewDemand.revision,
+            StewardGenerationView.demand_revision >= StewardViewDemand.revision,
+            StewardJob.space_id == space_id,
+            StewardJob.status.in_(("leased", "running")),
+            StewardJob.leased_by == StewardGeneration.lease_owner,
+            StewardJob.attempt == StewardGeneration.lease_attempt,
+            StewardJob.lease_expires_at > now,
+            StewardJob.trigger_cursor >= current_event_watermark(session),
+        )
+        .order_by(StewardGeneration.id.desc())
+        .limit(1)
+    )
+    return running is not None and valid_generation(session, running, now=now)
+
+
 def register(
     *, account: Account, space_id: int, focus_user_id: int | None = None, retry: bool = False
 ) -> str:
@@ -40,6 +108,12 @@ def register(
         with steward_snapshot.read_transaction(bind) as session:
             current = authorize(session, account=account, space_id=space_id)
             versions = steward_snapshot.input_versions(session, space_id)
+            if (
+                focus_user_id is None
+                and not retry
+                and _already_covered(session, account=current, space_id=space_id)
+            ):
+                return "already_active"
             if focus_user_id is not None:
                 reached = reachable_targets(
                     load_graph(session, viewer_user_id=current.user_id, space_id=space_id)

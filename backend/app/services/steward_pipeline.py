@@ -17,9 +17,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Exists, Text, bindparam, exists, func, select, update
+from sqlalchemy import Exists, Text, bindparam, exists, func, insert, literal, select, update
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm import Session, defer, load_only
 
 from app import config
 from app.errors import STEWARD_JOB_NOT_ACTIVE, STEWARD_LEASE_STALE, raise_api_error
@@ -521,10 +521,14 @@ def _prepare_delivery(
 def _latest_view(
     session: Session, *, space_id: int, account_id: int, structural_hash: str | None = None
 ) -> StewardGenerationView | None:
-    stmt = select(StewardGenerationView).where(
-        StewardGenerationView.space_id == space_id,
-        StewardGenerationView.viewer_account_id == account_id,
-        StewardGenerationView.structural_hash.is_not(None),
+    stmt = (
+        select(StewardGenerationView)
+        .where(
+            StewardGenerationView.space_id == space_id,
+            StewardGenerationView.viewer_account_id == account_id,
+            StewardGenerationView.structural_hash.is_not(None),
+        )
+        .options(defer(StewardGenerationView.skeleton_json, raiseload=True))
     )
     if structural_hash is not None:
         stmt = stmt.where(StewardGenerationView.structural_hash == structural_hash)
@@ -667,26 +671,52 @@ def _reuse_view(
         ):
             return False
         now = utcnow()
-        session.add(
-            StewardGenerationView(
-                generation_id=generation_id,
-                space_id=binding.space_id,
-                viewer_account_id=account_id,
-                root_user_id=root_user_id,
-                status="ready",
-                completed_count=prior.completed_count,
-                total_count=prior.total_count,
-                revision=1,
-                structural_hash=prior.structural_hash,
-                presentation_hash=prior.presentation_hash,
-                topology_revision=prior.topology_revision,
-                skeleton_json=prior.skeleton_json,
-                demand_revision=demand_revision,
-                result_view_id=prior.result_view_id or prior.id,
-                created_at=now,
-                updated_at=now,
+        # Copy one already-authorized immutable skeleton within SQLite. Loading
+        # and re-encoding the family JSON here would extend every warm writer.
+        view = StewardGenerationView
+        session.execute(
+            insert(view)
+            .from_select(
+                (
+                    "generation_id",
+                    "space_id",
+                    "viewer_account_id",
+                    "root_user_id",
+                    "status",
+                    "completed_count",
+                    "total_count",
+                    "revision",
+                    "structural_hash",
+                    "presentation_hash",
+                    "topology_revision",
+                    "skeleton_json",
+                    "demand_revision",
+                    "result_view_id",
+                    "created_at",
+                    "updated_at",
+                ),
+                select(
+                    literal(generation_id),
+                    view.space_id,
+                    view.viewer_account_id,
+                    view.root_user_id,
+                    literal("ready"),
+                    view.completed_count,
+                    view.total_count,
+                    literal(1),
+                    view.structural_hash,
+                    view.presentation_hash,
+                    view.topology_revision,
+                    view.skeleton_json,
+                    literal(demand_revision),
+                    func.coalesce(view.result_view_id, view.id),
+                    literal(now),
+                    literal(now),
+                ).where(view.id == prior.id),
+                include_defaults=False,
             )
-        )
+            .returning(view.id)
+        ).scalar_one()
         generation.ready_views += 1
         return True
 

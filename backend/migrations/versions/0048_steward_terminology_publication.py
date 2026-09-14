@@ -125,6 +125,10 @@ def _restore_inferred_setting_triggers() -> None:
 
 
 def upgrade() -> None:
+    # Global maintenance takes the oldest eligible pending intent. The due
+    # index orders by available_at before id and otherwise forces a full
+    # pending-queue sort (including correlated prerequisite checks).
+    op.create_index("ix_sdi_status_id", "steward_delivery_intents", ["status", "id"])
     _restore_inferred_setting_triggers()
     for table, columns, scope_column, predicate in _SOURCES:
         for event, prefixes in (
@@ -157,13 +161,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # This merge only installs input triggers. It does not delete projections,
+    # This merge only installs input triggers and an index. It does not delete projections,
     # generations, delivery responsibilities, facts, or user feedback.
     _preflight_parent_downgrade()
     _invalidate_existing_views()
     for table, _columns, _scope, _predicate in _SOURCES:
         for event in ("insert", "delete", "update"):
             op.execute(sa.text(f"DROP TRIGGER sri_{table}_presentation_{event}"))
+    op.drop_index("ix_sdi_status_id", table_name="steward_delivery_intents")
 
 
 def _preflight_parent_downgrade() -> None:

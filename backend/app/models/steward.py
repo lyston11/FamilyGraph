@@ -677,6 +677,7 @@ class StewardDeliveryIntent(Base):
         sa.UniqueConstraint("generation_id", "intent_key", name="uq_sdi_generation_key"),
         CheckConstraint("status IN ('pending','done','failed','superseded')", name="ck_sdi_status"),
         Index("ix_sdi_due", "status", "available_at", "id"),
+        Index("ix_sdi_status_id", "status", "id"),
         Index("ix_sdi_generation", "generation_id", "status"),
         Index("ix_sdi_effect", "space_id", "effect_fingerprint", "id"),
     )

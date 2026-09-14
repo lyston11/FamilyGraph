@@ -303,6 +303,58 @@ def test_demand_is_detached_and_new_viewer_takes_next_preparation_slot(db_sessio
     assert db_session.scalar(select(StewardJob.id).where(StewardJob.status == "queued")) is None
 
 
+def test_warm_reuse_copies_skeleton_without_json_codecs_in_writer(db_session, monkeypatch):
+    _people, space = _family(db_session, name="warm-copy")
+    first = _run(db_session, space.id)
+    prior = {
+        view.viewer_account_id: (view.id, view.skeleton_json)
+        for view in db_session.scalars(
+            select(StewardGenerationView).where(
+                StewardGenerationView.generation_id == first["generation_id"]
+            )
+        )
+    }
+    original_write = steward_pipeline.write_transaction
+    original_encode, original_decode = json.JSONEncoder.encode, json.JSONDecoder.decode
+    writing = False
+
+    @contextmanager
+    def observe_writer(bind):
+        nonlocal writing
+        try:
+            with original_write(bind) as session:
+                writing = True
+                yield session
+        finally:
+            writing = False
+
+    def encode(encoder, value):
+        if writing and isinstance(value, dict):
+            assert "topology_edges" not in value, "warm reuse encoded the skeleton in its writer"
+        return original_encode(encoder, value)
+
+    def decode(decoder, value, **kwargs):
+        if writing:
+            assert '"topology_edges"' not in value, "warm reuse decoded the skeleton in its writer"
+        return original_decode(decoder, value, **kwargs)
+
+    monkeypatch.setattr(steward_pipeline, "write_transaction", observe_writer)
+    monkeypatch.setattr(json.JSONEncoder, "encode", encode)
+    monkeypatch.setattr(json.JSONDecoder, "decode", decode)
+    for _ in range(2):
+        hot = _run(db_session, space.id)
+        assert hot["stats"]["fingerprint_short_circuit"] == 1
+        assert hot["stats"]["derived_recomputed"] == 0
+        for view in db_session.scalars(
+            select(StewardGenerationView).where(
+                StewardGenerationView.generation_id == hot["generation_id"]
+            )
+        ):
+            source_id, skeleton = prior[view.viewer_account_id]
+            assert view.result_view_id == source_id and view.skeleton_json == skeleton
+            assert view.status == "ready" and view.completed_count == view.total_count == 2
+
+
 def test_late_same_cursor_demand_survives_publication(db_session, monkeypatch):
     people, space = _family(db_session, size=2, name="late-demand")
     original = steward_pipeline._prepare_delivery

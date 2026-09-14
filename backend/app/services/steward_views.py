@@ -231,13 +231,16 @@ def payload_for(
     nodes = list(skeleton.get("nodes", []))
     visible = {int(node["user_id"]) for node in nodes}
     witnesses = {tuple(step) for step in skeleton.get("evidence_steps", [])}
-    rows = list(
-        session.scalars(
-            select(StewardViewTarget)
-            .where(StewardViewTarget.view_id == (view.result_view_id or view.id))
-            .order_by(StewardViewTarget.target_user_id)
+    rows = session.execute(
+        select(
+            StewardViewTarget.target_user_id,
+            StewardViewTarget.status,
+            StewardViewTarget.reason_code,
+            StewardViewTarget.edge_json,
         )
-    )
+        .where(StewardViewTarget.view_id == (view.result_view_id or view.id))
+        .order_by(StewardViewTarget.target_user_id)
+    ).all()
     by_id = {row.target_user_id: row for row in rows}
     targets: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
