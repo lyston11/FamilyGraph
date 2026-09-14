@@ -38,7 +38,7 @@ MR-15 贯穿所有议题：形成“实现存在/生产已接线/有效开关/�
 - E-R3：新工具、自动提取、外部模型外发、持久摘要、物理清理等改变产品行为的方案，在选用前补齐对应设计与范围；本任务不默认开启。
 - E-R4：完整复现 MR-23 的模型候选→数据库→后续 core→Suggestion 路径，以及 MR-26 的混合键族重建风险；直接 upsert 单测不足以闭环。
 - E-R5：把 Suggestion 冷却限制、ActionCard 已有生产读写且行为投影开关开启时生效的冷却、异步下一 core 投影分开；不推断今天线上生效。在未决定重现语义前保留同证据驳回，不主动新增提醒。
-- E-R6：沿用既有任务所有权。shared RAG 归 followups；已完成平台开关作为基线。新授权称谓闭环由 [专属总任务](../archive/2026-09/09-13-steward-kinship-capability-closure/prd.md) 负责生产与第四类开关扩展，E 不重复实现或改写其状态；MR-23/26 修复仍归既定 P2 包。
+- E-R6：沿用既有任务所有权。shared RAG 归 followups；已完成平台开关作为基线。新授权称谓闭环由 [专属总任务](../09-13-steward-kinship-capability-closure/prd.md) 负责生产与第四类开关扩展，E 不重复实现或改写其状态；MR-23/26 修复仍归既定 P2 包。
 - E-R7：研究只用合成/已授权数据；记录脱敏结果、版本与命令，不把家庭正文、密钥或完整模型 prompt 贴入 task。
 
 ## Acceptance Criteria
@@ -62,12 +62,12 @@ MR-15 贯穿所有议题：形成“实现存在/生产已接线/有效开关/�
 
 来源/检索/索引评估以 A/B/D 为前置，摘要/预算以 C 修复为前置。MR-23/MR-26 的纯合成复现可独立推进。待采用的业务补丁需明确实施任务和 worktree，E 的只读研究职责不直接改生产代码。
 
-相关现有任务：[Steward 能力后续](../09-11-steward-capability-followups/prd.md)、[辅助平台开关](../09-13-steward-assist-platform-switch-admin/prd.md)。
+相关现有任务：[Steward 能力后续](../../../09-11-steward-capability-followups/prd.md)、[辅助平台开关](../09-13-steward-assist-platform-switch-admin/prd.md)。
 
 ## 研究执行结果（2026-09-13）
 
 2026-09-14续接：研究交付67e9316已push并纳入累计验收dd8157c；B/D最终冻结检索仍为中文16/16、英文2/2、扩展7/10/MRR0.65。用户后续已授权串行合并、归档和清理，本任务只按研究完成收尾；下面的能力延期和P2责任保持不变。
 
-研究交付已完成，详见 [研究核验](research/research-validation.md)、[12 项决定及 E-AC 处置](research/capability-decision-register.md)。MR-23/MR-26 的完整合成生产链已复现，18 项全请求预算方案断言通过；真实模型质量/成本、可选能力接入与实际 tokenizer 均未验证/采用，保持明确延期。已创建唯一后续 [P2 修复规划包](../09-13-steward-memory-evidence-projections/prd.md)，没有启动业务实现。
+研究交付已完成，详见 [研究核验](research/research-validation.md)、[12 项决定及 E-AC 处置](research/capability-decision-register.md)。MR-23/MR-26 的完整合成生产链已复现，18 项全请求预算方案断言通过；真实模型质量/成本、可选能力接入与实际 tokenizer 均未验证/采用，保持明确延期。已创建唯一后续 [P2 修复规划包](../../../09-13-steward-memory-evidence-projections/prd.md)，没有启动业务实现。
 
 主线程已经抽查关键链路、源码/harness哈希与实际模块来源；B/D最终词法结果已在上述续接记录补充。E研究通过不计入生产修复测试数。原研究阶段未获主分支合并授权而保留worktree；后续授权已覆盖本次集成收尾，按AGENTS清理。

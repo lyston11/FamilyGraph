@@ -1,0 +1,20 @@
+{
+  "main_before": "461d691c76890cef3cdaabcae7d5d93a8181033f",
+  "main_after": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+  "merge": "fast-forward",
+  "candidate_branch": "feat/09-13-agent-memory-rag-remediation",
+  "backup": "/var/folders/8c/t8htn7h14t777qd1hclgyj940000gn/T/familygraph-main-integration-_x5go9rq",
+  "parked_task_mirrors": [
+    "09-13-agent-memory-rag-remediation",
+    "09-13-memory-contract-repair",
+    "09-13-assistant-context-compaction",
+    "09-13-rag-retrieval-citations",
+    "09-13-rag-index-lifecycle",
+    "09-13-agent-memory-capability-plan",
+    "09-14-memory-rag-acceptance-audit",
+    "09-13-steward-memory-evidence-projections"
+  ],
+  "preserved_unrelated_paths": 40,
+  "unrelated_hashes_unchanged": true,
+  "format_mirror_preserved_in_candidate": true
+}

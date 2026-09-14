@@ -13,7 +13,7 @@
 MR-23/MR-26：在 E worktree 的 backend 工作目录执行：
 
 ~~~bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python ../.trellis/tasks/09-13-agent-memory-capability-plan/research/steward_capability_probe.py --source-commit 20d03084df341f6cc5fc8fcc18042757c07d822a
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python ../.trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/steward_capability_probe.py --source-commit 20d03084df341f6cc5fc8fcc18042757c07d822a
 ~~~
 
 最终命令退出 0；真实 Alembic upgrade head 从空临时库迁移到 0041_term_pack_expansion。最终运行专用目录 /private/tmp/fg-steward-capability-eval-jrb1sqcp，总探针耗时 2.676 秒；这不是线上/模型延迟指标。15 次 fake attempt 成功、6 次 applied batch 重放均零额外调用、1 次平台关闭对照；MR-26 的 4 个开关/范围组合共 8 次真实 rebuild。
@@ -23,7 +23,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python ../.trellis/tasks/09-13-agent-memory-
 预算方案：在 E worktree 根执行：
 
 ~~~bash
-PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python .trellis/tasks/09-13-agent-memory-capability-plan/research/context_budget_probe.py
+PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python .trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/context_budget_probe.py
 ~~~
 
 退出 0；18 个断言通过，production_budget_verified=false。[结果](context-budget-probe-results.json)明确写 synthetic units、无实际 tokenizer、无真实摘要质量验证、不导入生产模块、不持久跨 Run 摘要。
@@ -31,10 +31,10 @@ PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python .trellis/tasks/09-13-agent-me
 两个研究脚本分别按以下命令检查（把文件名替换为相应脚本）：
 
 ~~~bash
-backend/.venv/bin/ruff check --config backend/pyproject.toml --no-cache .trellis/tasks/09-13-agent-memory-capability-plan/research/steward_capability_probe.py
-backend/.venv/bin/ruff format --config backend/pyproject.toml --no-cache --check .trellis/tasks/09-13-agent-memory-capability-plan/research/steward_capability_probe.py
-backend/.venv/bin/ruff check --config backend/pyproject.toml --no-cache .trellis/tasks/09-13-agent-memory-capability-plan/research/context_budget_probe.py
-backend/.venv/bin/ruff format --config backend/pyproject.toml --no-cache --check .trellis/tasks/09-13-agent-memory-capability-plan/research/context_budget_probe.py
+backend/.venv/bin/ruff check --config backend/pyproject.toml --no-cache .trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/steward_capability_probe.py
+backend/.venv/bin/ruff format --config backend/pyproject.toml --no-cache --check .trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/steward_capability_probe.py
+backend/.venv/bin/ruff check --config backend/pyproject.toml --no-cache .trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/context_budget_probe.py
+backend/.venv/bin/ruff format --config backend/pyproject.toml --no-cache --check .trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/context_budget_probe.py
 ~~~
 
 最终均通过。仅执行两个脚本的 AST parse，没有写 __pycache__。未跑全后端 pytest/mypy、前端 build 或线上 smoke：本研究没有生产改动，不用这些检查冒充缺口修复。

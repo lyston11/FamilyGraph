@@ -1,0 +1,139 @@
+{
+  "main_at_validation": "95830116abb4f5390080db1e2b834cde9ac143c6",
+  "integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+  "code_integrity_report": "final-code-integrity.json",
+  "working_source_files_passed": {
+    "backend": 366,
+    "agent": 40,
+    "frontend": 208,
+    "shared": 1,
+    "scripts": 16
+  },
+  "artifact_integrity": [
+    {
+      "manifest": "research/artifacts.json",
+      "files_passed": 30,
+      "decompressed_passed": 6
+    },
+    {
+      "manifest": "research/final/artifacts.json",
+      "files_passed": 24,
+      "decompressed_passed": 13
+    }
+  ],
+  "task_status_and_cleanup": [
+    {
+      "task": "09-13-memory-contract-repair",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    },
+    {
+      "task": "09-13-assistant-context-compaction",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    },
+    {
+      "task": "09-13-rag-retrieval-citations",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    },
+    {
+      "task": "09-13-rag-index-lifecycle",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    },
+    {
+      "task": "09-13-agent-memory-capability-plan",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    },
+    {
+      "task": "09-14-memory-rag-acceptance-audit",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    },
+    {
+      "task": "09-13-agent-memory-rag-remediation",
+      "completed": true,
+      "merged": true,
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "remote_branch_preserved": true
+    }
+  ],
+  "trellis_validation": [
+    {
+      "task": "09-13-memory-contract-repair",
+      "exit_code": 0
+    },
+    {
+      "task": "09-13-assistant-context-compaction",
+      "exit_code": 0
+    },
+    {
+      "task": "09-13-rag-retrieval-citations",
+      "exit_code": 0
+    },
+    {
+      "task": "09-13-rag-index-lifecycle",
+      "exit_code": 0
+    },
+    {
+      "task": "09-13-agent-memory-capability-plan",
+      "exit_code": 0
+    },
+    {
+      "task": "09-14-memory-rag-acceptance-audit",
+      "exit_code": 0
+    },
+    {
+      "task": "09-13-agent-memory-rag-remediation",
+      "exit_code": 0
+    },
+    {
+      "task": "09-13-steward-memory-evidence-projections",
+      "exit_code": 0
+    }
+  ],
+  "mutable_markdown_files_checked": 71,
+  "local_links_checked": 336,
+  "missing_local_links": [],
+  "frozen_markdown_unchanged": [
+    ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/research/b-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/research/d-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction/research/check.md",
+    ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction/research/implementation.md",
+    ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/research/protocol-preflight.md",
+    ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/research/retrieval-baseline.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/b-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/c/check.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/c/implementation.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/d-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/protocol-preflight.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/retrieval/retrieval-baseline.md"
+  ],
+  "p2_status": "planning",
+  "p2_parent": null,
+  "p2_kinship_context_lines_preserved": true,
+  "protected_unrelated_paths": 40,
+  "protected_hashes_unchanged": true,
+  "passed": true
+}

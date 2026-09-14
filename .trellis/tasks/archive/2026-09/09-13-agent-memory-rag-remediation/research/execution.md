@@ -6,7 +6,11 @@
 
 A/C/B/D修复与E研究交付已在累计dd8157c验收通过；D业务提交aebee83。B/D原20组问题及D追加的合法index_superseded恢复回归均闭合，父AC-01～10/F-01～12证据见 [最终验收](../../09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。后端1352 passed/3既有skipped、前端660、agent118检查点+源码无差异证明，真实listener/Pi/维护95/95、API56/56、迁移8/8；原红测不改写。
 
-A d1f43a5、C8e91c42、Bbc76e95、Ddd8157c、E67e9316以及父候选均已实际push。本会话作为唯一串行集成通道继续main合并、归档与清理；下列“未授权合并/待修复/未push”是此前检查点，不代表当前状态。P2 steward-memory-evidence-projections保持planning；生产部署、真实Provider与线上库操作不在本轮范围。
+A d1f43a5、C8e91c42、Bbc76e95、Ddd8157c、E67e9316以及父候选均已实际push。最终材料a83b5d1已由本会话在主检出串行fast-forward合入main（原461d691）并push；631个源码文件与受验版本一致，实际main的隔离listener/Pi/维护smoke再跑95/95，exit 0，迁移保持0047单头。
+
+A、C、B、D、E研究、Audit和父任务共7项已通过task.py archive归档。每项归档后均立即确认分支已合入、worktree无未提交业务修改，再正常删除worktree和本地分支；未使用force。归档提交已push至9583011，逐项提交及清理回执见 [集成收尾记录](../../09-14-memory-rag-acceptance-audit/research/integration/closure.md)。主检出其他任务的40个既有dirty/untracked路径在合并时逐字保全；snapshot和Orca的worktree保留。
+
+下列“未授权合并/待修复/未push”是此前检查点，不代表当前状态。P2 steward-memory-evidence-projections保持planning，E归档后解除活动父子关系；生产部署、真实Provider与线上库操作不在本轮范围。
 
 ## 初始实施与集成边界（历史）
 
@@ -31,7 +35,7 @@ A d1f43a5、C8e91c42、Bbc76e95、Ddd8157c、E67e9316以及父候选均已实际
 
 ## 新的后续所有者
 
-E 的完整复现已形成独立 P2 规划包 [Steward 证据版本与行为投影键族修复](../../09-13-steward-memory-evidence-projections/prd.md)。它是 E 的 child，负责 MR-23/MR-26 的后续业务实现；本轮没有启动。PRD/design/implement 与两个非空 context manifests 已创建，task.py validate 通过，不占用 A/B/D 迁移编号。
+E 的完整复现已形成独立 P2 规划包 [Steward 证据版本与行为投影键族修复](../../../../09-13-steward-memory-evidence-projections/prd.md)。它由 E 建立，E 归档后保持独立 planning，负责 MR-23/MR-26 的后续业务实现；本轮没有启动。PRD/design/implement 与两个非空 context manifests 已创建，task.py validate 通过，不占用 A/B/D 迁移编号。
 
 ## 此前集成完成汇报（2026-09-14，已由下方复查更新）
 

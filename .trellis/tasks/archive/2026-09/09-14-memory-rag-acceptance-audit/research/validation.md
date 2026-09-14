@@ -50,7 +50,7 @@ B分批原始日志：[首轮](probes/b-first.log)、[补查](probes/b-additiona
 下面仅针对隔离候选checkout；不要在生产环境执行。路径变量用于指定当前任务材料和待测代码，不切换现有分支。当前失败是记录中的预期红色结果，不应改断言来制造绿灯。
 
 ```bash
-FG_AUDIT_DIR=/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/09-14-memory-rag-acceptance-audit
+FG_AUDIT_DIR=/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit
 FG_AUDIT_CHECKOUT=/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation
 cd "$FG_AUDIT_CHECKOUT/backend"
 PYTHONPATH=. .venv/bin/python -c 'import app; print(app.__file__)'

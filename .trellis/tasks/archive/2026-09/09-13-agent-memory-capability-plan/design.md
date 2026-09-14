@@ -62,7 +62,7 @@ high/local_required 或来源限制不能因 embedding/rerank 外发而绕过现
 
 ## 8. E-O10：Steward 共享知识交接
 
-实际实现所有者是 [既有能力后续任务](../09-11-steward-capability-followups/prd.md)。本任务给出 A/B/D 的 service 合同、来源失效/引用规则及评估案例；不创建另一条实现支线。
+实际实现所有者是 [既有能力后续任务](../../../09-11-steward-capability-followups/prd.md)。本任务给出 A/B/D 的 service 合同、来源失效/引用规则及评估案例；不创建另一条实现支线。
 
 至少比较六类合成场景：已确认共享家事、有冲突的共享摘要、过期/已撤销资料、只有 private 来源、需本地 Provider 的来源、没有资料时保持确定性产出。shared RAG 只能用于有证据的辅助解释/候选，不推翻确定性 DerivedFact、不跨空间发现，不读取私人会话。
 
@@ -74,7 +74,7 @@ Steward 仍用专属 job/consumer 身份，不能伪造 generic AgentRun 来通�
 
 TermRegistry 是现有称谓持久化真源；Assistant record_term_usage 的明确同意约束保留。correction_preference/term_usage 投影只有在找到实际消费者并明确用途后才启用，不复制第二套称谓。
 
-本期称谓消费者由 [称谓闭环 B](../archive/2026-09/09-13-steward-terminology-autonomy/design.md) 负责：直接复用本人词条/合法用词与专用反馈，模型结果存为可撤销个人显示投影，既不替代 TermRegistry 也不伪造 TermUsage。它不依赖尚未修复的全量 BehaviorProjection 重建。一般 card relevance 排序与未选用反馈扩展仍按本节评估。
+本期称谓消费者由 [称谓闭环 B](../09-13-steward-terminology-autonomy/design.md) 负责：直接复用本人词条/合法用词与专用反馈，模型结果存为可撤销个人显示投影，既不替代 TermRegistry 也不伪造 TermUsage。它不依赖尚未修复的全量 BehaviorProjection 重建。一般 card relevance 排序与未选用反馈扩展仍按本节评估。
 
 MR-26 复现协议：同账户/空间同时造 card 冷却、term/correction 投影及 family_recommendations 的独立冷却键；用真实 rebuild helper 回放允许事件，再比较非目标键是否原样保留。当前 helper 无生产调用，此实验是条件性风险验证。最小修复方案只删除/重建自己拥有的键族，同一事件集重复回放结果一致，保留其他键；不顺带新增事件水位，增量回放另列可选优化。若没有消费者，继续不接 maintenance。
 

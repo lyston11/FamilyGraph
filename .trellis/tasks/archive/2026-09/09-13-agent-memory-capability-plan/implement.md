@@ -8,7 +8,7 @@
 
 - [x] 为 E-O1～12 建决定记录，冻结每项数据集、指标、成功门槛和成本/延迟上限，注明哪些需要产品选择。
 - [x] 先推进不依赖新架构的 MR-23 多 job 和 MR-26 混合键族复现；记录反证同样有效，不追求证明预设结论。
-- [x] 保留 Suggestion/ActionCard/TermRegistry 的实际边界；核对 [称谓交接](../archive/2026-09/09-13-steward-kinship-capability-closure/research/task-alignment.md) 和既有任务，称谓生产/模型/专用反馈不再重复排期。
+- [x] 保留 Suggestion/ActionCard/TermRegistry 的实际边界；核对 [称谓交接](../09-13-steward-kinship-capability-closure/research/task-alignment.md) 和既有任务，称谓生产/模型/专用反馈不再重复排期。
 - [x] 比较方案与采用门槛已记录；主动检索、语义/重排的真实质量和成本比较明确延期。B/D 最终冻结词法结果单列，未执行实验不冒充通过。
 - [x] 显式原始 user 保存、自动候选和派生来源设计及反例协议完成，产品采用与运行实验明确延期。
 - [x] 导入格式、生命周期与失败/撤销/换版验证协议已定义；导入产品与运行样本实验未执行，明确延期。
@@ -30,7 +30,7 @@ E-AC1～8 各有结果或明确延期记录，并保持“已经评估”“建�
 
 ## 研究执行结果（2026-09-13）
 
-研究交付已完成，详见 [研究核验](research/research-validation.md)、[12 项决定及 E-AC 处置](research/capability-decision-register.md)。MR-23/MR-26 的完整合成生产链已复现，18 项全请求预算方案断言通过；真实模型质量/成本、可选能力接入与实际 tokenizer 均未验证/采用，保持明确延期。已创建唯一后续 [P2 修复规划包](../09-13-steward-memory-evidence-projections/prd.md)，没有启动业务实现。
+研究交付已完成，详见 [研究核验](research/research-validation.md)、[12 项决定及 E-AC 处置](research/capability-decision-register.md)。MR-23/MR-26 的完整合成生产链已复现，18 项全请求预算方案断言通过；真实模型质量/成本、可选能力接入与实际 tokenizer 均未验证/采用，保持明确延期。已创建唯一后续 [P2 修复规划包](../../../09-13-steward-memory-evidence-projections/prd.md)，没有启动业务实现。
 
 主线程已经抽查关键链路、源码/harness 哈希与实际模块来源。后续将由 B/D 的最终词法结果补充评估基线；不能把 E 的研究通过计入生产修复测试数。主分支合并不在本轮授权范围，研究提交完成后保留分支/worktree，待集成后按 AGENTS 清理。
 

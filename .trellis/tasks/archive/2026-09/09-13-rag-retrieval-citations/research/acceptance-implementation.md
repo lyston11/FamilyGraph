@@ -2,7 +2,7 @@
 
 日期：2026-09-14。Active task：`09-13-rag-retrieval-citations`。执行位置：`/Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations`，分支 `feat/09-13-rag-retrieval-citations`；本记录对应基线 `7f2e88c815fa1f7c19b4a9b879c4812caed852d8` 上尚未提交的累计 B 修复。该 SHA 是检查时的 HEAD，不冒充未提交修复的提交号。
 
-实施依据是 audit 的 `design.md` 第 1～4 节、B PRD/design，以及 `.trellis/tasks/09-14-memory-rag-acceptance-audit/research/b-integration-check.md` 所列 B-I01～B-I10。原诊断、冻结 fixture、旧测量报告保持不变。本实施者没有执行 commit、push、merge、archive 或工作流状态变更，没有嵌套委派。本记录包含首轮冻结结果与独立复核后的 R-04 补修；首轮 1194 项通过不冒充补修后的最新全套。生产代码再次交主线程冻结，独立累计检查与最终集成结论由主线程负责；此记录不能替代 D 的索引验收。
+实施依据是 audit 的 `design.md` 第 1～4 节、B PRD/design，以及 `.trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/b-integration-check.md` 所列 B-I01～B-I10。原诊断、冻结 fixture、旧测量报告保持不变。本实施者没有执行 commit、push、merge、archive 或工作流状态变更，没有嵌套委派。本记录包含首轮冻结结果与独立复核后的 R-04 补修；首轮 1194 项通过不冒充补修后的最新全套。生产代码再次交主线程冻结，独立累计检查与最终集成结论由主线程负责；此记录不能替代 D 的索引验收。
 
 ## 缺口与实际收口
 
@@ -105,7 +105,7 @@ Fixture SHA-256 保持 `92f0bed8c438a0bfde6672d71e6bb47db0f039c4cd1ac07fc490a7b3
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests:. \
   FG_RAG_PROBE_REPORT=/private/tmp/familygraph-b-acceptance-retrieval-20260914.json \
   .venv/bin/python -P -m pytest -p conftest -p no:cacheprovider -q -s --tb=short \
-  /Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations/.trellis/tasks/09-13-rag-retrieval-citations/research/test_retrieval_probe.py
+  /Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations/.trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/research/test_retrieval_probe.py
 ```
 
 扩展集仅作为诊断，没有为其未命中题修改别名表/fixture/期望值。数据均为合成资料；未执行真实 Provider 答案忠实度、语义泛化、线上延迟或全请求 token 窗口测量。

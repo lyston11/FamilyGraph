@@ -1,6 +1,6 @@
 # 规划依据与执行约束
 
-- 当前工作流入口：[AGENTS.md](../../../../AGENTS.md)、[Trellis workflow](../../../workflow.md)。最初登记与分析授权已完成；2026-09-14 用户进一步授权审查、验收及通过后的提交、合并和归档，B/D 按既定所有权执行修复，不重复询问相同授权。
+- 当前工作流入口：[AGENTS.md](../../../../../../AGENTS.md)、[Trellis workflow](../../../../../workflow.md)。最初登记与分析授权已完成；2026-09-14 用户进一步授权审查、验收及通过后的提交、合并和归档，B/D 按既定所有权执行修复，不重复询问相同授权。
 - 业务目标依据：[父PRD](../../09-13-agent-memory-rag-remediation/prd.md)、[B PRD](../../09-13-rag-retrieval-citations/prd.md)/[B设计](../../09-13-rag-retrieval-citations/design.md)、[D PRD](../../09-13-rag-index-lifecycle/prd.md)/[D设计](../../09-13-rag-index-lifecycle/design.md)。主线程已直接阅读决定性合同和将修改的记录。
 - `.trellis/spec/guides/index.md`、backend/index.md、frontend/index.md当前自标“历史资料（不可执行）”。它们可帮助追溯，不能重新作为规范门禁。C补丁的spec记录是该修复的技术知识，不改变上述状态。
 - 主检出用于生命周期和任务材料；业务修复/提交仅在专属分支与linked worktree。相交模块、迁移、SQLite或端口串行，禁止reset/rebase/force push或覆盖他人工作。

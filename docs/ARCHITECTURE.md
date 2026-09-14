@@ -160,6 +160,8 @@ backend/app/
 
 ### 8.1 已验收实现与后续能力
 
+A/C/B/D修复及E研究已于2026-09-14随`a83b5d1`合入main并push；七个完成任务已归档并清理worktree/本地分支。[最终验收](../.trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)保留累计检查、合并后真实smoke及延期边界。
+
 | 范围 | 已验收行为 | 尚在独立任务推进的部分 |
 | --- | --- | --- |
 | Assistant | 同会话文字恢复进Pi的同一个manager；一次FTS5预取支持中文短词、受控别名与唯一明确前文；签名attempt贯穿实际执行，服务端精确引用统一投影 | 主动检索工具、通用语义检索、全请求预算和跨Run持久摘要仍需独立采用；RAG子预算不等于全模型请求预算 |
@@ -171,7 +173,7 @@ backend/app/
 
 后续 shared RAG 设计仅允许 Steward 以自己的 job/space/consumer 身份使用当前获权的 confirmed shared 内容，保留来源撤销、引用版本、本地 Provider 要求及成本边界；不伪造 Assistant Run、不读取 private memory/session、不覆盖确定性事实。
 
-需求与后续边界见 [Memory/RAG总任务](../.trellis/tasks/09-13-agent-memory-rag-remediation/prd.md)、[最终独立验收](../.trellis/tasks/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)及 [能力采用登记](../.trellis/tasks/09-13-agent-memory-capability-plan/research/capability-decision-register.md)。原B/D20组缺口和追加恢复回归均已闭合；检索扩展集仍为7/10，真实模型质量和生产状态未据此推定。
+需求与后续边界见 [Memory/RAG总任务](../.trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/prd.md)、[最终独立验收](../.trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)及 [能力采用登记](../.trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/capability-decision-register.md)。原B/D20组缺口和追加恢复回归均已闭合；检索扩展集仍为7/10，真实模型质量和生产状态未据此推定。
 
 ### 8.2 开关与模型准入
 

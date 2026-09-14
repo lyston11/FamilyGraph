@@ -7,7 +7,7 @@
 ## 当前最需要知道的事
 
 - 管家已经自动计算个人称谓，通知、建议详情、推测面板与档案称谓区已接通同一呈现链；称谓优化不需要逐条批准。闭环及质量修复已合入，详见 [最新审核记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md)。
-- Memory/RAG的A/C/B/D修复与E研究已经完成累计验收，原B/D20组缺口和D追加恢复回归均闭合，见 [最终验收](tasks/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。管家渐进重算仍有独立验收与续作，未随本次收尾归档。
+- Memory/RAG的A/C/B/D修复与E研究已经完成累计验收，原B/D20组缺口和D追加恢复回归均闭合，见 [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。管家渐进重算仍有独立验收与续作，未随本次收尾归档。
 - Provider 配置 UX、平台辅助开关已有归档成果；活动目录中的同名旧副本不代表新增待办。称谓能力也不再受早期“Agent 能力整体延期”描述约束。
 - 本页没有核查线上开关或真实模型质量。新称谓模型链使用 fake transport 验证，`STEWARD_ASSIST_TERMINOLOGY` 默认关闭。
 
@@ -51,13 +51,13 @@
 
 | 任务 | 当前可确认状态 | 接手时应读的最新依据 |
 | --- | --- | --- |
-| 双 Agent Memory/RAG 总任务 | A/C/B/D修复及E研究累计验收完成，AC-01～10通过；main合并和归档清理结果以执行记录为准 | [PRD](tasks/09-13-agent-memory-rag-remediation/prd.md)、[执行计划](tasks/09-13-agent-memory-rag-remediation/implement.md)、[最新执行记录](tasks/09-13-agent-memory-rag-remediation/research/execution.md) |
-| A：记忆来源与确认契约 | `d1f43a5`进入累计候选，手工来源、RAG依赖、候选响应和安全重试经真实API及累计回归验收 | [任务](tasks/09-13-memory-contract-repair/prd.md) |
-| C：会话恢复与压缩 | `8e91c42`已push并累计；同一Pi manager恢复/压缩、overflow恢复成功结算通过；跨Run持久摘要仍未实现 | [任务](tasks/09-13-assistant-context-compaction/prd.md)、[复查 PRD](tasks/09-14-memory-rag-acceptance-audit/prd.md) |
-| B：中文召回与可信引用 | `b6688f8`/`bc76e95`闭合B-I01～10；执行身份、精确引用、所有读取出口、真实子预算、补足及追问通过 | [任务](tasks/09-13-rag-retrieval-citations/prd.md)、[复查台账](tasks/09-14-memory-rag-acceptance-audit/research/findings.md) |
-| D：索引生命周期 | `aebee83`/`dd8157c`闭合D-I01～10及合法superseded恢复回归；唯一性、正文证据、不可变片段、租约/事务、换版和无损迁移通过 | [任务](tasks/09-13-rag-index-lifecycle/prd.md)、[复查台账](tasks/09-14-memory-rag-acceptance-audit/research/findings.md) |
-| Memory/RAG 验收复查 | F-01～12通过；原红测、最终制品hash、代码绑定和局限分别保留，E延期能力未记作生产实现 | [最终验收](tasks/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)、[验收矩阵](tasks/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md)、[实施计划](tasks/09-14-memory-rag-acceptance-audit/implement.md) |
-| E：能力扩展准入 | 研究交付，生产扩展未因此上线；主动检索、聊天保存/候选、导入、混合检索、全请求预算、持久摘要等按采用门槛保持延期 | [任务](tasks/09-13-agent-memory-capability-plan/prd.md)、[12 项决定](tasks/09-13-agent-memory-capability-plan/research/capability-decision-register.md) |
+| 双 Agent Memory/RAG 总任务 | A/C/B/D修复及E研究已验收，AC-01～10通过；`a83b5d1`已合入main并push，七项归档及worktree/本地分支清理完成 | [PRD](tasks/archive/2026-09/09-13-agent-memory-rag-remediation/prd.md)、[执行计划](tasks/archive/2026-09/09-13-agent-memory-rag-remediation/implement.md)、[最新执行记录](tasks/archive/2026-09/09-13-agent-memory-rag-remediation/research/execution.md) |
+| A：记忆来源与确认契约 | `d1f43a5`已合入main，手工来源、RAG依赖、候选响应和安全重试经真实API及累计回归验收 | [任务](tasks/archive/2026-09/09-13-memory-contract-repair/prd.md) |
+| C：会话恢复与压缩 | `8e91c42`已合入main；同一Pi manager恢复/压缩、overflow恢复成功结算通过；跨Run持久摘要仍未实现 | [任务](tasks/archive/2026-09/09-13-assistant-context-compaction/prd.md)、[复查 PRD](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/prd.md) |
+| B：中文召回与可信引用 | `b6688f8`/`bc76e95`闭合B-I01～10；执行身份、精确引用、所有读取出口、真实子预算、补足及追问通过 | [任务](tasks/archive/2026-09/09-13-rag-retrieval-citations/prd.md)、[复查台账](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/findings.md) |
+| D：索引生命周期 | `aebee83`/`dd8157c`闭合D-I01～10及合法superseded恢复回归；唯一性、正文证据、不可变片段、租约/事务、换版和无损迁移通过 | [任务](tasks/archive/2026-09/09-13-rag-index-lifecycle/prd.md)、[复查台账](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/findings.md) |
+| Memory/RAG 验收复查 | F-01～12通过；原红测、最终制品hash、代码绑定和局限分别保留，E延期能力未记作生产实现 | [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)、[验收矩阵](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md)、[实施计划](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/implement.md) |
+| E：能力扩展准入 | 研究交付已归档，生产扩展未因此上线；主动检索、聊天保存/候选、导入、混合检索、全请求预算、持久摘要等按采用门槛保持延期 | [任务](tasks/archive/2026-09/09-13-agent-memory-capability-plan/prd.md)、[12 项决定](tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/capability-decision-register.md) |
 | 管家快照与渐进重算 P1 | `in_progress`，分支 `0baf299` 后还有续作；完整发布、性能与安全验收未完成，不能归档 | [PRD](tasks/09-13-steward-snapshot-progressive-recompute/prd.md)、[设计](tasks/09-13-steward-snapshot-progressive-recompute/design.md)、[实施计划 §9/§10](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) |
 | MR-23/MR-26 证据与行为投影 P2 | 仅规划；候选证据版本和行为投影键族是独立所有权，不把称谓闭环已修复当成这两项已完成 | [任务](tasks/09-13-steward-memory-evidence-projections/prd.md)、[实施顺序](tasks/09-13-steward-memory-evidence-projections/implement.md) |
 | Steward 能力后续 P3 | shared RAG、额外个人路径解释、新地区包及有观测依据的性能研究仍延期；已交付称谓和独立 P1 重算不受此状态覆盖 | [任务](tasks/09-11-steward-capability-followups/prd.md)、[设计](tasks/09-11-steward-capability-followups/design.md) |
@@ -99,7 +99,7 @@ git merge-base --is-ancestor <commit> main
 | 范围 | 已有证据 | 实际限制 |
 | --- | --- | --- |
 | 称谓质量修复 | backend 1119 passed / 3 skipped，frontend 618 passed；lint、类型检查与构建通过，合并后相关 backend 59 passed；[记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md) | 3 项为既有延期的 break-glass 测试；真实 terminology 模型质量、生产 smoke 未测；关系最终确认的成环/证据留存仍按原 PRD 延期 |
-| Memory/RAG累计验收 | 后端1352/3既有skipped、前端660、agent118检查点及代码一致证明；中文16/16、英文2/2、扩展7/10；真实listener/Pi/维护95/95、API56/56、迁移8/8；[矩阵](tasks/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md) | B/D原20组及追加恢复回归闭合；未测真实Provider/生产规模，扩展集3项仍未命中，E可选能力与MR-23/26 P2保持边界 |
+| Memory/RAG累计验收 | 后端1352/3既有skipped、前端660、agent118检查点及代码一致证明；中文16/16、英文2/2、扩展7/10；真实listener/Pi/维护95/95、API56/56、迁移8/8；[矩阵](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md) | B/D原20组及追加恢复回归闭合；未测真实Provider/生产规模，扩展集3项仍未命中，E可选能力与MR-23/26 P2保持边界 |
 | 渐进重算续作 | 最新分支前端 656 tests、lint/type-check/build 均 exit 0，先前计时器异常已修复；已有迁移、发布栅栏、30/50/200 人和浏览器的中间诊断；[最新检查点](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) | 交付失败预算与独立重试仍待审查；最终冻结源码后的后端、0045 迁移、30/50/200 人、两次真实 300 秒扫描、Chrome 五次与 API smoke 尚未完成，中间诊断不等于最终性能验收 |
 
 Memory/RAG本次执行了上述累计检查；其他领域沿用各任务既有记录，没有改变线上开关或部署。未来代码变化按受影响范围重新验证，smoke退出码2仍代表环境阻塞。

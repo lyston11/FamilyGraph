@@ -2,9 +2,9 @@
 
 2026-09-14 续接用户已授权的审查、修复、验收、提交、串行合并、归档和清理。本文是执行检查点，原 bd899b9 审计结果和制品哈希不变。
 
-最新检查点：D业务修复aebee83、验收制品dd8157c已push并合入父候选；Audit已从该候选建立独立worktree并进入in_progress。后端1352、前端660、独立D15项、迁移8/8和真实listener/Pi95/95通过。最新逐项判定见 [最终验收](final-acceptance.md)，下文是执行前检查与原计划，保留用于追溯。
+最终状态：D业务修复aebee83、验收制品dd8157c及最终审查a83b5d1已合入main并push；七项归档和worktree/本地分支清理已完成，P2保持planning。后端1352、前端660、独立D15项、迁移8/8和真实listener/Pi95/95通过，实际main再跑smoke95/95。逐项判定见 [最终验收](final-acceptance.md)，完成回执见 [集成收尾](integration/closure.md)；下文是执行前检查与原计划，保留用于追溯。
 
-## 当前累计版本
+## 集成前累计版本（历史）
 
 - B 已完成并 push：`b6688f8`（执行身份与精确证据）及 `bc76e95`（真实 listener 验收与末轮修复记录）。主线程检查见 [B 验收记录](../../09-13-rag-retrieval-citations/research/acceptance-check.md)。backend 1201 passed / 3 skipped，agent 118、frontend 625；真实 listener/Pi smoke 95/95。它们是 B 检查点，不代替 D 之后的累计验证。
 - 父候选 `b1d4dab` 已包含 A、C `8e91c42`、B 和 E 研究提交。
@@ -48,4 +48,4 @@
 5. 每个已合并且干净的任务立即删除 worktree，再用 `git branch -d` 删除本地分支；不使用 force，不碰 snapshot/Orca 或其他任务。保留远端分支作为已提交证据。
 6. 写会话 journal，核对主检出无新增本任务业务脏文件、远端同步和原无关改动保全。
 
-该执行前检查点不代表当前最终状态；累计验收结果见上方链接，main合并、归档和清理仍按实际执行另行记录。
+该执行前检查点不代表当前最终状态；验收与main合并、归档和清理的实际完成结果见上方链接。

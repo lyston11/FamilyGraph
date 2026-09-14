@@ -21,7 +21,7 @@ MR-23 schema 方案需要先确定可验证的支撑事实归因；不能只改 
 
 ### 既有 Steward 能力任务
 
-实际 shared RAG / 个人路径解释 / 地区称谓实现所有者保持为 [09-11-steward-capability-followups](../../09-11-steward-capability-followups/prd.md)。已只读核对该 PRD：R1 shared-only、R2 viewer 隔离、R3 TermRegistry/locale、R4 有观测才性能重构。E-O10 只交来源合同与评估协议，不创建第二个 RAG 实现分支。
+实际 shared RAG / 个人路径解释 / 地区称谓实现所有者保持为 [09-11-steward-capability-followups](../../../../09-11-steward-capability-followups/prd.md)。已只读核对该 PRD：R1 shared-only、R2 viewer 隔离、R3 TermRegistry/locale、R4 有观测才性能重构。E-O10 只交来源合同与评估协议，不创建第二个 RAG 实现分支。
 
 供原任务采用的 A/B/D 交接合同：
 

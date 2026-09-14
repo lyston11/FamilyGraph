@@ -1,6 +1,6 @@
 # Memory 来源、响应和前端缓存合同
 
-本文件记录 2026-09-13 A 任务的实现合同，用于维护真实接口；不将其他历史 spec 重新提升为开发门禁。授权与任务边界仍以 AGENTS.md 和当前任务为准。验证入口：[A 任务](../../tasks/09-13-memory-contract-repair/prd.md)。
+本文件记录 2026-09-13 A 任务的实现合同，用于维护真实接口；不将其他历史 spec 重新提升为开发门禁。授权与任务边界仍以 AGENTS.md 和当前任务为准。验证入口：[A 任务](../../tasks/archive/2026-09/09-13-memory-contract-repair/prd.md)。
 
 ## 1. Scope / Trigger
 

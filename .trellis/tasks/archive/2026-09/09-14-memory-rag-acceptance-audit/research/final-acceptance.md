@@ -1,8 +1,8 @@
 # 双 Agent 记忆与 RAG 最终验收
 
-2026-09-14：累计候选验收通过。原 B-I01～10、D-I01～10 共 20 组问题已闭合；D 独立复核新发现的一项合法索引恢复回归也已修复。父 AC-01～10、修复 F-01～12 均有下列证据。此结论覆盖本期 A/B/C/D 修复与 E 研究交付，未把 E 的延期能力算作生产实现。
+2026-09-14：验收、main 合并、归档和清理均已完成。原 B-I01～10、D-I01～10 共 20 组问题已闭合；D 独立复核新发现的一项合法索引恢复回归也已修复。父 AC-01～10、修复 F-01～12 均有下列证据。此结论覆盖本期 A/B/C/D 修复与 E 研究交付，未把 E 的延期能力算作生产实现。
 
-业务修复提交为 `aebee83c3feda56c2df47e61a13919bf037829f9`，含验收制品的累计提交为 `dd8157c`。该候选已包含 A `d1f43a5`、C `8e91c42`、B `b6688f8` / `bc76e95`、E `67e9316` 与 main `461d691`。A/C/B/D/E 和父候选均已实际 push；最终 main 合并、归档和清理结果在 [父执行记录](../../09-13-agent-memory-rag-remediation/research/execution.md) 追加，不从测试通过推断已合并。
+业务修复提交为 `aebee83c3feda56c2df47e61a13919bf037829f9`，含验收制品的累计提交为 `dd8157c`。该候选已包含 A `d1f43a5`、C `8e91c42`、B `b6688f8` / `bc76e95`、E `67e9316` 与 main `461d691`。最终审查材料提交 `a83b5d1` 已随父候选 fast-forward 合入 main 并 push；随后七个任务逐项归档并清理 worktree/本地分支，归档提交已 push 至 `9583011`。完整执行与清理回执见 [集成收尾记录](integration/closure.md) 和 [父执行记录](../../09-13-agent-memory-rag-remediation/research/execution.md)。
 
 ## 验收证据
 
@@ -16,6 +16,7 @@
 | 真 listener / SidecarWorker / Pi / 维护 | **95/95，exit 0** | [结果](final/agent-memory-smoke.json)；三 listener、RAG-only 晚开启、真实维护、两轮历史与引用、负例、撤权/丢响应/重连/补取。仅模型 stream 合成，无真实 Provider 推理 |
 | 家庭 / 管理员 API smoke | **56/56，exit 0** | [结果](final/api-smoke.json)；在最后恢复补修前执行，该补修后的全量后端与95项链覆盖受影响入口 |
 | 冻结检索 | 中文 **16/16**，英文 **2/2**；扩展 **7/10、MRR 0.65** | [结果](final/retrieval.json)；fixture SHA 不变，保留扩展集局限，不把词法改进说成通用语义能力 |
+| main 合并后复验 | **95/95，exit 0**；Agent build 通过，迁移单头0047 | [实际main结果](integration/main-agent-memory-smoke.json)、[源码与制品核对](integration/main-code-integrity.json)；631个源码文件与累计受验版本一致，未重复无变化的完整套件 |
 
 受验代码由 [提交与包树绑定](final/code-checkpoint.json) 固定；部分命令报告中的 `candidate_commit=c253cb6` 是测试时的旧 HEAD，工作区修复由报告中的 source hash 标识。主线程已逐项对照 `git show aebee83:<path>`，与最终提交相同。最新 24 份制品见 [哈希清单](final/artifacts.json)。原始 30 份冻结制品及6份解压原日志也已复核，均与 [历史清单](artifacts.json) 一致。[最终独立核验](final-check.md) 已通过，未发现剩余实质阻断项。
 

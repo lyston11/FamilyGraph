@@ -23,7 +23,7 @@
   ],
   "parent": "09-13-agent-memory-rag-remediation",
   "relatedFiles": [],
-  "notes": "研究交付完成；12项议题有设计与采用/延期条件。MR-23/MR-26已复现但生产修复仍归独立P2规划；18项预算断言仅证明合成方案。67e9316已push，按2026-09-14新授权纳入累计候选，最终验收后归档研究任务。",
+  "notes": "研究交付已验收并归档；12项议题有设计与采用/延期条件。MR-23/MR-26已复现但生产修复仍归独立P2规划；18项预算断言仅证明合成方案。67e9316已通过累计a83b5d1合入main并push，研究worktree/本地分支已清理。",
   "meta": {
     "planning_only": "false",
     "workstream": "E",
@@ -32,12 +32,15 @@
     "implementation_approved": "2026-09-13: user execute; read-only capability evaluation and isolated synthetic reproductions",
     "implementation_status": "research_complete",
     "verification": "MR-23/MR-26 synthetic production-path probes; 18 synthetic budget-plan cases; main source/hash/module-path review passed",
-    "integration_status": "merged_smoke_passed",
+    "integration_status": "archived_and_cleaned",
     "followup_owner": "09-13-steward-memory-evidence-projections",
     "local_commit": "bc6b500",
     "push_status": "E research branch 67e9316 already pushed; incorporated into cumulative candidate after latest integration authorization.",
     "final_branch_commit": "67e93161460741f4fb4d8f08dddba52ba9a73173",
     "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
-    "integration_target": "main"
+    "integration_target": "main",
+    "worktree_cleanup": "removed_after_merge_and_archive",
+    "local_branch_cleanup": "deleted_with_git_branch_d",
+    "cleanup_evidence": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/integration/archive-cleanup.json"
   }
 }

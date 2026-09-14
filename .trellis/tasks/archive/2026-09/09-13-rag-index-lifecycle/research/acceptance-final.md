@@ -2,7 +2,7 @@
 
 2026-09-14，主线程验收 D 在累计 A/C/B/E 与 main `461d691` 上的修复。D-I01～10 全部闭合，D-AC1～8 通过。本轮独立审查发现的合法 `index_superseded` 恢复回归也已修复；没有剩余实质阻断项。业务修复已提交 `aebee83`；main 合并及清理结果由父任务的最终集成记录跟踪，本文不将通过检查当作已经合并。
 
-实现见 [实施记录](acceptance-implementation.md)，独立红绿证据见 [复核报告](acceptance-check.md)。源码合同见 [生命周期实现合同](../../../spec/backend/rag-index-lifecycle-contract.md)。原 bd899b9 的失败探针和历史结果保持原字节。
+实现见 [实施记录](acceptance-implementation.md)，独立红绿证据见 [复核报告](acceptance-check.md)。源码合同见 [生命周期实现合同](../../../../../spec/backend/rag-index-lifecycle-contract.md)。原 bd899b9 的失败探针和历史结果保持原字节。
 
 ## 实际检查
 

@@ -61,7 +61,7 @@
 在 E worktree 根执行：
 
 ~~~bash
-PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python .trellis/tasks/09-13-agent-memory-capability-plan/research/context_budget_probe.py
+PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python .trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/context_budget_probe.py
 ~~~
 
 输出 passed_cases=18、production_budget_verified=false，结果与脚本 SHA-256 一同落 JSON。脚本通过项目 ruff check 和 format --check；检查使用 --no-cache。

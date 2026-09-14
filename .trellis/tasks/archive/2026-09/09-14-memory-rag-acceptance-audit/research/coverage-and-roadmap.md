@@ -77,7 +77,7 @@
 | E-O11 反馈/行为投影 | 为明确消费者提供有界偏好和反馈 | 先修MR-26键族隔离，一般排序收益另测；TermRegistry不另造；称谓消费者按独立任务成果 | MR-26归09-13-steward-memory-evidence-projections；一般反馈归E/O11 |
 | E-O12 证据/冷却/可见延迟 | 稳定结构身份+相关证据版本；按产品选择到期恢复/改善可见延迟 | 先修MR-23完整多job链，无关事实不打扰；新增投影不得循环调用模型；延迟需实测 | MR-23归同一证据修复任务；UX/延迟归E/O12 |
 
-当前主检出中`09-13-steward-memory-evidence-projections`仍为planning，其[PRD](../../09-13-steward-memory-evidence-projections/prd.md)与本轮来源/索引修复不冲突。Steward平台开关、Provider入口、称谓和家谱短事务工作按各自任务管理，不修改它们的状态或未提交代码。
+当前主检出中`09-13-steward-memory-evidence-projections`仍为planning，其[PRD](../../../../09-13-steward-memory-evidence-projections/prd.md)与本轮来源/索引修复不冲突。Steward平台开关、Provider入口、称谓和家谱短事务工作按各自任务管理，不修改它们的状态或未提交代码。
 
 ## 排序理由
 

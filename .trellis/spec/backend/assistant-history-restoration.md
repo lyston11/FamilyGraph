@@ -1,6 +1,6 @@
 # Assistant 历史恢复与 Pi 压缩合同
 
-本文件记录 C 任务的实际接线，不将历史 spec 重新设为执行门禁。任务入口：[Assistant 历史恢复](../../tasks/09-13-assistant-context-compaction/prd.md)；实现位于 `agent/src/session.ts`，SDK 锁定 Pi 0.84.3。
+本文件记录 C 任务的实际接线，不将历史 spec 重新设为执行门禁。任务入口：[Assistant 历史恢复](../../tasks/archive/2026-09/09-13-assistant-context-compaction/prd.md)；实现位于 `agent/src/session.ts`，SDK 锁定 Pi 0.84.3。
 
 ## 1. Scope / Trigger
 

@@ -4,12 +4,12 @@
 
 消除行为投影重建误删其他冷却数据的风险，并让同结构推测能够记录可验证的新相关证据，同时保留用户已经表达的驳回意愿。
 
-父任务：[能力评估 E](../09-13-agent-memory-capability-plan/prd.md)。本包是 MR-23 / MR-26 的唯一后续业务所有者。用户授权的本轮 E 研究已产生真实服务链的隔离复现；本包仅记录修复方案，尚未启动实施，也不默认开启新提醒。
+研究来源：[能力评估 E](../archive/2026-09/09-13-agent-memory-capability-plan/prd.md)。2026-09-14 E 研究归档后，本包解除活动父子关系并继续保持 planning，是 MR-23 / MR-26 的唯一后续业务所有者。E 研究已产生真实服务链的隔离复现；本包仅记录修复方案，尚未启动实施，也不默认开启新提醒。
 
 ## Evidence
 
-- [MR-26](../09-13-agent-memory-capability-plan/research/behavior-projection-rebuild-results.md)：行为投影开启后，账户级/空间级重建均删除真实推荐服务创建的非所属冷却键；关闭时保留。
-- [MR-23](../09-13-agent-memory-capability-plan/research/steward-candidate-evidence-results.md)：相关支撑事实已进入假模型调用，但同结构候选和 Suggestion 仍保留旧证据；无关/无新增事实对照保持原状态。
+- [MR-26](../archive/2026-09/09-13-agent-memory-capability-plan/research/behavior-projection-rebuild-results.md)：行为投影开启后，账户级/空间级重建均删除真实推荐服务创建的非所属冷却键；关闭时保留。
+- [MR-23](../archive/2026-09/09-13-agent-memory-capability-plan/research/steward-candidate-evidence-results.md)：相关支撑事实已进入假模型调用，但同结构候选和 Suggestion 仍保留旧证据；无关/无新增事实对照保持原状态。
 - 上述是合成迁移库、实际生产服务和 fake transport 的证据，不证明线上发生频率或真实模型质量。
 
 ## Requirements
