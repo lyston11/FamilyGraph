@@ -22,5 +22,11 @@
   "parent": null,
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "implementation_commit": "9017a6dfc3896d1d10980406e33727c92f223984",
+    "archive_commit": "e0e8d8d8b63cd863ad6a15a0072c37026baaa52e",
+    "duplicate_cleanup_date": "2026-09-14",
+    "duplicate_cleanup_status": "reconciled",
+    "duplicate_cleanup_record": ".trellis/tasks/archive/2026-09/09-12-agent-provider-config-ux/research/duplicate-cleanup.md"
+  }
 }

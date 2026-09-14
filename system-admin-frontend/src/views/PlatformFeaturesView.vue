@@ -11,6 +11,18 @@ const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 const saving = ref<'memory' | 'rag' | 'steward' | null>(null)
 
+type FeatureSource = AdminPlatformFeatureState['memory_source']
+
+const assistLabels = {
+  candidate: '候选补全',
+  ranking: '推荐排序',
+  explanation: '卡片解释',
+  terminology: '称谓优化',
+} as const
+type AssistKind = keyof typeof assistLabels
+
+const deploymentHelp = '部署级开关已关闭，请联系运维调整部署配置后刷新页面。'
+
 async function load(): Promise<void> {
   state.value = 'loading'
   error.value = null
@@ -34,7 +46,11 @@ async function toggle(key: 'memory' | 'rag'): Promise<void> {
       memory_enabled: key === 'memory' ? next : features.value.memory_enabled,
       rag_enabled: key === 'rag' ? next : features.value.rag_enabled,
     })
-    notice.value = `${key === 'memory' ? 'Memory' : 'RAG'} 已${next ? '启用' : '停用'}，已以服务端状态同步。`
+    notice.value = resultNotice(
+      key === 'memory' ? 'Memory' : 'RAG',
+      features.value[`${key}_enabled`],
+      features.value[`${key}_source`],
+    )
   } catch (reason) {
     error.value = reason instanceof AdminApiError ? reason.message : '保存失败，开关已保持服务端状态'
     await load()
@@ -43,15 +59,21 @@ async function toggle(key: 'memory' | 'rag'): Promise<void> {
   }
 }
 
-type AssistKind = 'candidate' | 'ranking' | 'explanation' | 'terminology'
-
 function currentAssist(kind: AssistKind): boolean {
   return features.value?.steward_assist[kind] ?? false
 }
 
-/** 09-13：平台级 Steward 辅助三开关治理；全量 PUT（memory/rag 原样透传） */
+function assistSource(kind: AssistKind): FeatureSource {
+  return features.value?.steward_assist[`${kind}_source`] ?? 'environment'
+}
+
+function assistDeploymentClosed(kind: AssistKind): boolean {
+  return assistSource(kind) === 'deployment' && !currentAssist(kind)
+}
+
+/** 平台级 Steward 辅助四开关治理；全量 PUT（memory/rag 原样透传） */
 async function toggleAssist(kind: AssistKind): Promise<void> {
-  if (!features.value || saving.value) return
+  if (!features.value || saving.value || assistDeploymentClosed(kind)) return
   const next = !currentAssist(kind)
   saving.value = 'steward'
   error.value = null
@@ -65,7 +87,11 @@ async function toggleAssist(kind: AssistKind): Promise<void> {
       steward_assist_explanation: kind === 'explanation' ? next : currentAssist('explanation'),
       steward_assist_terminology: kind === 'terminology' ? next : currentAssist('terminology'),
     })
-    notice.value = `管家辅助（${kind}）已${next ? '启用' : '停用'}，已与服务端状态同步。`
+    notice.value = resultNotice(
+      `管家辅助（${assistLabels[kind]}）`,
+      currentAssist(kind),
+      assistSource(kind),
+    )
   } catch (reason) {
     error.value = reason instanceof AdminApiError ? reason.message : '保存失败，开关已保持服务端状态'
     await load()
@@ -74,7 +100,12 @@ async function toggleAssist(kind: AssistKind): Promise<void> {
   }
 }
 
-function sourceLabel(source: AdminPlatformFeatureState['memory_source']): string {
+function resultNotice(label: string, enabled: boolean, source: FeatureSource): string {
+  if (!enabled && source === 'deployment') return `${label} 当前未启用。${deploymentHelp}`
+  return `${label} 已${enabled ? '启用' : '停用'}，已与服务端状态同步。`
+}
+
+function sourceLabel(source: FeatureSource): string {
   if (source === 'environment') return '环境回退（尚未保存平台配置）'
   if (source === 'deployment') return '部署级关闭（环境安全兜底）'
   return '平台配置'
@@ -148,26 +179,28 @@ onMounted(() => void load())
             </p>
           </div>
           <div class="ag-assist-switches">
-            <button
-              v-for="assist in ([
-                { kind: 'candidate', label: '候选补全' },
-                { kind: 'ranking', label: '推荐排序' },
-                { kind: 'explanation', label: '卡片解释' },
-                { kind: 'terminology', label: '称谓优化' },
-              ] as const)"
-              :key="assist.kind"
-              type="button"
-              class="ag-feature-switch"
-              role="switch"
-              :aria-checked="currentAssist(assist.kind)"
-              :aria-label="`管家辅助 ${assist.label}：${currentAssist(assist.kind) ? '已启用' : '已停用'}`"
-              :disabled="saving !== null"
-              :data-testid="`platform-feature-steward-assist-${assist.kind}`"
-              @click="toggleAssist(assist.kind)"
-            >
-              <span class="ag-feature-switch-track"><span class="ag-feature-switch-thumb"></span></span>
-              <span>{{ assist.label }}：{{ currentAssist(assist.kind) ? '已启用' : '已停用' }}</span>
-            </button>
+            <div v-for="(label, kind) in assistLabels" :key="kind" class="ag-assist-option">
+              <button
+                type="button"
+                class="ag-feature-switch"
+                role="switch"
+                :aria-checked="currentAssist(kind)"
+                :aria-label="`管家辅助 ${label}：${assistDeploymentClosed(kind) ? '部署关闭' : currentAssist(kind) ? '已启用' : '已停用'}`"
+                :aria-describedby="`steward-assist-${kind}-source`"
+                :disabled="saving !== null || assistDeploymentClosed(kind)"
+                :data-testid="`platform-feature-steward-assist-${kind}`"
+                @click="toggleAssist(kind)"
+              >
+                <span class="ag-feature-switch-track"><span class="ag-feature-switch-thumb"></span></span>
+                <span>{{ label }}：{{ saving === 'steward' ? '保存中…' : assistDeploymentClosed(kind) ? '部署关闭' : currentAssist(kind) ? '已启用' : '已停用' }}</span>
+              </button>
+              <p
+                :id="`steward-assist-${kind}-source`"
+                :data-testid="`platform-feature-steward-assist-${kind}-source`"
+              >
+                {{ label }} 来源：{{ sourceLabel(assistSource(kind)) }}<span v-if="assistDeploymentClosed(kind)">。{{ deploymentHelp }}</span>
+              </p>
+            </div>
           </div>
         </section>
       </div>
@@ -223,6 +256,12 @@ onMounted(() => void load())
   gap: var(--ag-space-2);
 }
 
+.ag-assist-option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ag-space-2);
+}
+
 .ag-feature-switch {
   min-height: 48px;
   display: inline-flex;
@@ -244,7 +283,7 @@ onMounted(() => void load())
 }
 
 .ag-feature-switch:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.65;
 }
 

@@ -8,7 +8,7 @@
 
 - 管家已经自动计算个人称谓，通知、建议详情、推测面板与档案称谓区已接通同一呈现链；称谓优化不需要逐条批准。闭环及质量修复已合入，详见 [最新审核记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md)。
 - Memory/RAG的A/C/B/D修复与E研究已经完成累计验收，原B/D20组缺口和D追加恢复回归均闭合，见 [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。管家渐进重算仍有独立验收与续作，未随本次收尾归档。
-- Provider 配置 UX、平台辅助开关已有归档成果；活动目录中的同名旧副本不代表新增待办。称谓能力也不再受早期“Agent 能力整体延期”描述约束。
+- Provider 配置 UX、平台辅助开关已有归档成果，两项的活动旧副本与相关会话指针均已清理。平台能力页已补修部署关闭时误报启用的问题，并展示四类辅助的来源与阻断原因。称谓能力也不再受早期“Agent 能力整体延期”描述约束。
 - 本页没有核查线上开关或真实模型质量。新称谓模型链使用 fake transport 验证，`STEWARD_ASSIST_TERMINOLOGY` 默认关闭。
 
 ## 称谓、事实与授权的当前合同
@@ -42,8 +42,8 @@
 | 个人家族视图、结构拓扑及独立推测层 | [家族树拓扑](tasks/archive/2026-09/09-13-family-tree-relationship-topology/prd.md)、[推测层](tasks/archive/2026-09/09-13-steward-inferred-tree-layer/prd.md)已归档；个人摘要与直接结构端点分开，推测不覆盖已确认事实 |
 | 称谓闭环 A/B | `ad10dd0`、`9baf659`；viewer 呈现、自动建议/投影、terminology 和偏好反馈 |
 | 称谓交付后质量修复 | `c8805bf`、`d26bb83`；方向/可见性、有效状态、Keep/Restore、实时输入/租约/恢复、实际前端入口及迟到响应隔离 |
-| Provider 配置 UX | `9017a6d`，归档 `e0e8d8d`；[归档任务](tasks/archive/2026-09/09-12-agent-provider-config-ux/prd.md)。活动同名目录是旧副本 |
-| 平台辅助开关 | `969a5b0`，归档 `4649e48`；[归档任务](tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin/prd.md)。称谓 B 已扩展第四类 `terminology` |
+| Provider 配置 UX | `9017a6d`，归档 `e0e8d8d`；[归档任务](tasks/archive/2026-09/09-12-agent-provider-config-ux/prd.md)。活动旧副本、过期会话指针和归档上下文旧路径已清理；[核对记录](tasks/archive/2026-09/09-12-agent-provider-config-ux/research/duplicate-cleanup.md) |
+| 平台辅助开关 | `969a5b0`，归档 `4649e48`；称谓 B 扩展第四类 `terminology`。补修 `73b0bbd` 使提示与返回生效值一致并展示部署阻断，管理员前端 111 测试与构建通过；活动旧副本、修复 worktree/本地分支已清理，见[修复与对账记录](tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin/research/remediation-2026-09-14.md) |
 
 “代码已接通”“当前环境开关有效”“真实模型质量已验证”是三项独立状态。旧平台任务的 candidate/explanation 真实调用记录不能用作 terminology 的质量验收。
 

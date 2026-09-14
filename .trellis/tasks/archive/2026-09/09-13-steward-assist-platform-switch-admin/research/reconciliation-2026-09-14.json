@@ -1,0 +1,55 @@
+{
+  "task": "09-13-steward-assist-platform-switch-admin",
+  "reconciled_at": "2026-09-14",
+  "original_completed_at": "2026-09-13",
+  "code_commit": "73b0bbd3e89005aa50dae76924079cd765b86393",
+  "code_merged_into_main": true,
+  "code_pushed_to_origin_main": true,
+  "validated_code_hashes": {
+    "system-admin-frontend/src/views/PlatformFeaturesView.vue": "cf5f51ec74519be9c7fd48bef7a0daf828923a8d04d0b916a1c2066eecb471ce",
+    "system-admin-frontend/tests/platform-features.view.spec.ts": "f8d05bb6c818eb9481d17ad39cd9d3fae59eec4ba70ccdb3abf0a4c5ef5f17a2"
+  },
+  "validation": {
+    "component_tests_passed": 20,
+    "new_tests": 16,
+    "admin_tests_passed": 111,
+    "admin_test_files": 15,
+    "lint": "passed",
+    "type_check": "passed",
+    "build": "passed",
+    "independent_review": "passed_no_changes"
+  },
+  "original_active_hashes": {
+    "prd.md": "e97944cad638c7126d30aeb25c8e4e0f3ca015283ce82330237d28de3fc537d9",
+    "task.json": "6527744ec6730633e5f2e4203f75e322919b6802c3a1336f59d23fd37d356be8",
+    "implement.jsonl": "733c8e7584f13a644d9e250fad4af0a9c229981b8f51d49b904d4f27ebf39504",
+    "check.jsonl": "1fe46d69b4d58cc7dbf428a47ce967f66c002f842db3c8bde905690c36714e3c"
+  },
+  "closing_active_hashes": {
+    "implement.md": "04f6b2624a415d775b31ecdba9130d8c9e2db5ad89b9b8be2b0d056835af3491",
+    "prd.md": "72366e255d56e67ff0412c5d557a6753d7f7ba0e944277e0e1b3a5a3f40f392f",
+    "task.json": "e63695363427f219960e1f8251c1aaa6a1baf0316de75f5140a5cf5f0fa6592e",
+    "implement.jsonl": "03f850efb4e2099bef6d0694fd3ea979d6d81359bc472cd58c103e5db748d32f",
+    "check.jsonl": "03f850efb4e2099bef6d0694fd3ea979d6d81359bc472cd58c103e5db748d32f"
+  },
+  "original_stale_session_count": 0,
+  "closing_session_count": 1,
+  "additional_sessions_cleared": 0,
+  "active_copy_removed": true,
+  "worktree_removed": "/Users/lyston/PycharmProjects/fg-09-13-steward-assist-platform-switch-admin",
+  "local_branch_deleted": "feat/09-13-steward-assist-platform-switch-admin",
+  "local_recovery_pointer": "/private/tmp/familygraph-steward-assist-remediation.json",
+  "canonical_archive": ".trellis/tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin",
+  "archive_method": "reconcile_existing_archive; task.py archive refuses destination collision",
+  "closure_verification": {
+    "task_context_validation": "passed; recorded branch deletion warning expected",
+    "active_task_list": "task_absent",
+    "current_task": "none (CLI exit 1 is expected)",
+    "task_sessions": "none",
+    "worktree": "absent",
+    "local_branch": "absent",
+    "main_code_hashes": "match_validated_code",
+    "main_and_origin_main_contain_fix": true,
+    "all_followup_acceptance_criteria": "passed"
+  }
+}

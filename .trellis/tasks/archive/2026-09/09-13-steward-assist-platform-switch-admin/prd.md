@@ -67,3 +67,24 @@ STEWARD_ASSIST_RANKING / STEWARD_ASSIST_EXPLANATION` 只能通过服务器环境
   assist_*_effective；面板在空间级开而平台未开时显示可解释提示。
 - 门禁：后端 1028 passed/3 skipped + ruff/mypy 全绿；system-admin-frontend
   lint/type-check/95 测试/build 全绿；frontend lint/549 测试/build 全绿。
+
+
+## 2026-09-14 归档后修复：生效状态与管理端提示一致
+
+用户已授权修复并归档；沿用本任务，不另建任务。原实施和 2026-09-13 完成记录保留。
+
+### 修复范围
+
+`PlatformFeaturesView.vue` 的管家辅助保存提示使用点击目标值 `next`，但后端返回的是 DB 配置与部署开关共同决定的生效值。部署关闭时会出现开关仍关、提示却说已启用。四类辅助卡片同时没有展示后端已有的 `*_source`。
+
+在现有平台能力组件中，以服务端返回值生成结果提示；为候选补全、推荐排序、卡片解释、称谓优化分别显示来源与部署阻断原因。部署关闭时避免重复执行不能生效的开启操作，保留空间级开关说明及现有全量 PUT 契约。同页 Memory/RAG 的结果提示若有相同的目标值/返回值偏差，一并按返回值对齐。
+
+本次业务文件仅限 `system-admin-frontend/src/views/PlatformFeaturesView.vue` 与 `system-admin-frontend/tests/platform-features.view.spec.ts`。API、数据库、部署配置及家庭端行为不变；不增加新的配置接口，也不重新设计页面。归档材料由主会话更新。
+
+### 追加验收标准
+
+- [x] MRX-01：请求开启但服务端返回关闭时，不出现已启用的错误提示；正常开/关提示也与返回值一致。
+- [x] MRX-02：四类辅助显示来源；部署关闭可解释、可行动，按钮状态与来源一致，已知部署关闭不提交无效开启请求。
+- [x] MRX-03：回归测试覆盖服务端拒绝生效、正常切换和部署阻断；保持其余开关载荷语义。
+- [x] MRX-04：管理员前端 lint、type-check、全量 Vitest、build 通过；独立复核无未解决发现。
+- [x] MRX-05：修复合入主线并 push；活动旧副本与相关会话指针清理，证据汇入原归档，清理本次 worktree/本地分支。

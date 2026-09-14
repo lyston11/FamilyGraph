@@ -1,2 +1,4 @@
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端门禁与测试口径"}
 {"file": ".trellis/spec/backend/agent-runtime.md", "reason": "核验开关真值表与 fail-closed 语义未回退"}
+{"file": "AGENTS.md", "reason": "当前仓库隔离、提交、质量门禁和管理端 listener 边界；当前任务 PRD/implement.md 随角色上下文读取"}
+{"file": ".trellis/tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin/research/remediation-2026-09-14.md", "reason": "2026-09-14 生效状态提示合同、当前回归证据与归档对账"}
