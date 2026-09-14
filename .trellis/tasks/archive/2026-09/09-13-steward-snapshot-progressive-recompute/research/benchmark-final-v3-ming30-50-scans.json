@@ -1,0 +1,3102 @@
+{
+  "generated_at": "2026-09-14T11:05:08.560798+00:00",
+  "results": [
+    {
+      "case": "ming",
+      "people": 30,
+      "accounts": 30,
+      "facts": 45,
+      "cold": {
+        "seconds": 14.835,
+        "stats": {
+          "events_consumed": 0,
+          "derived_recomputed": 870,
+          "cards_created": 9,
+          "cards_superseded": 0,
+          "findings_emitted": 0,
+          "cards_expired": 0,
+          "personal_family_views_rebuilt": 30,
+          "inferred_projected": 0,
+          "inferred_superseded": 0,
+          "suggestions_projected": 0
+        },
+        "job_id": 1
+      },
+      "hot": {
+        "seconds": 0.2157,
+        "stats": {
+          "events_consumed": 1,
+          "derived_recomputed": 0,
+          "cards_created": 0,
+          "cards_superseded": 0,
+          "findings_emitted": 0,
+          "cards_expired": 0,
+          "personal_family_views_rebuilt": 0,
+          "inferred_projected": 0,
+          "inferred_superseded": 0,
+          "suggestions_projected": 0,
+          "fingerprint_short_circuit": 1
+        },
+        "job_id": 2
+      },
+      "first_skeleton_ms": 180.5484170326963,
+      "first_terms_ms": 538.3414999814704,
+      "progress_samples": [
+        {
+          "elapsed_ms": 66.755,
+          "nodes": 0,
+          "terms": 0,
+          "status": "queued",
+          "phase": "failed",
+          "generation": 0,
+          "revision": 1,
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "elapsed_ms": 180.548,
+          "nodes": 30,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 292.229,
+          "nodes": 30,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 404.417,
+          "nodes": 30,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 538.341,
+          "nodes": 30,
+          "terms": 1,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 2,
+          "completed": 1,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 698.739,
+          "nodes": 30,
+          "terms": 1,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 2,
+          "completed": 1,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 824.234,
+          "nodes": 30,
+          "terms": 2,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 3,
+          "completed": 2,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 969.614,
+          "nodes": 30,
+          "terms": 3,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 4,
+          "completed": 3,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 1119.706,
+          "nodes": 30,
+          "terms": 3,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 4,
+          "completed": 3,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 1288.892,
+          "nodes": 30,
+          "terms": 4,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 5,
+          "completed": 4,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 1488.466,
+          "nodes": 30,
+          "terms": 5,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 6,
+          "completed": 5,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 1709.848,
+          "nodes": 30,
+          "terms": 5,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 6,
+          "completed": 5,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 1894.24,
+          "nodes": 30,
+          "terms": 6,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 7,
+          "completed": 6,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2007.191,
+          "nodes": 30,
+          "terms": 12,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 13,
+          "completed": 12,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2123.673,
+          "nodes": 30,
+          "terms": 19,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 20,
+          "completed": 19,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2245.264,
+          "nodes": 30,
+          "terms": 25,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 26,
+          "completed": 25,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2362.622,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2478.606,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2596.713,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2711.778,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2827.954,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 2944.757,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3066.25,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3182.878,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3301.662,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3419.046,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3535.248,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3652.756,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3769.599,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3882.937,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 3998.125,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4111.258,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4226.45,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4359.54,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4472.651,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4587.337,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4713.204,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4830.883,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 4951.944,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5068.696,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5185.455,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5300.15,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5416.098,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5533.079,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5647.039,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5764.403,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5875.853,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 5996.355,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6115.317,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6229.903,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6346.89,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6463.206,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6579.509,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6695.033,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6835.069,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 6953.949,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7070.201,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7189.526,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7301.92,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7415.343,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7529.558,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7645.264,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7762.756,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7877.399,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 7987.682,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8101.971,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8219.385,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8368.094,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8481.17,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8599.473,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8716.241,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8830.828,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 8945.893,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9062.002,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9179.197,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9300.757,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9415.189,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9529.311,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9647.742,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9774.234,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 9891.145,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10008.077,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10125.074,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10239.948,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10355.988,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10471.324,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10585.896,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10703.223,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10826.037,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 10944.795,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11064.808,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11180.856,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11298.315,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11413.12,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11531.866,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11656.681,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11770.236,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 11917.519,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12031.153,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12146.711,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12267.08,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12379.665,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12493.548,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12613.167,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12731.575,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12875.168,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 12992.149,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13120.7,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13239.664,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13355.393,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13476.535,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13592.006,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13705.584,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13824.267,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 13940.455,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14053.801,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14173.992,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14294.971,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14410.814,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14525.702,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14672.166,
+          "nodes": 30,
+          "terms": 29,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14790.998,
+          "nodes": 30,
+          "terms": 29,
+          "status": "current",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14897.705,
+          "nodes": 30,
+          "terms": 29,
+          "status": "current",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        },
+        {
+          "elapsed_ms": 14906.361,
+          "nodes": 30,
+          "terms": 29,
+          "status": "current",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 30,
+          "completed": 29,
+          "total": 29
+        }
+      ],
+      "measurements_ms": {
+        "cold": {
+          "begin_immediate_wait_ms": {
+            "samples": 2395,
+            "p50": 0.006,
+            "p95": 1.262,
+            "p99": 3.478,
+            "max": 11.888
+          },
+          "commit_ms": {
+            "samples": 2437,
+            "p50": 0.031,
+            "p95": 0.186,
+            "p99": 1.147,
+            "max": 21.231
+          },
+          "post_commit_reporting_ms": {
+            "samples": 2437,
+            "p50": 0.002,
+            "p95": 0.004,
+            "p99": 0.006,
+            "max": 0.023
+          },
+          "write_lock_hold_ms": {
+            "samples": 2395,
+            "p50": 1.088,
+            "p95": 2.12,
+            "p99": 4.432,
+            "max": 33.393
+          },
+          "maintenance_reaper_ms": {
+            "samples": 73,
+            "p50": 0.478,
+            "p95": 8.888,
+            "p99": 121.665,
+            "max": 121.665
+          },
+          "lease_client_ms": {
+            "samples": 90,
+            "p50": 4.487,
+            "p95": 14.2,
+            "p99": 51.927,
+            "max": 51.927
+          },
+          "pfv_server_ms": {
+            "samples": 124,
+            "p50": 10.68,
+            "p95": 35.628,
+            "p99": 44.646,
+            "max": 52.724
+          },
+          "pfv_client_ms": {
+            "samples": 124,
+            "p50": 13.163,
+            "p95": 46.138,
+            "p99": 95.129,
+            "max": 105.025
+          },
+          "implicit_acquisition_and_first_statement_ms": {
+            "samples": 42,
+            "p50": 0.039,
+            "p95": 1.479,
+            "p99": 3.663,
+            "max": 3.663
+          },
+          "implicit_write_upper_bound_ms": {
+            "samples": 42,
+            "p50": 0.155,
+            "p95": 2.827,
+            "p99": 20.722,
+            "max": 20.722
+          },
+          "implicit_write_hold_lower_bound_ms": {
+            "samples": 42,
+            "p50": 0.088,
+            "p95": 0.339,
+            "p99": 20.639,
+            "max": 20.639
+          },
+          "login_server_ms": {
+            "samples": 43,
+            "p50": 193.28,
+            "p95": 223.314,
+            "p99": 266.409,
+            "max": 266.409
+          },
+          "login_client_ms": {
+            "samples": 43,
+            "p50": 195.587,
+            "p95": 225.684,
+            "p99": 270.375,
+            "max": 270.375
+          }
+        },
+        "hot": {
+          "begin_immediate_wait_ms": {
+            "samples": 154,
+            "p50": 0.005,
+            "p95": 0.038,
+            "p99": 121.31,
+            "max": 150.31
+          },
+          "commit_ms": {
+            "samples": 155,
+            "p50": 0.016,
+            "p95": 0.052,
+            "p99": 0.548,
+            "max": 1.883
+          },
+          "post_commit_reporting_ms": {
+            "samples": 155,
+            "p50": 0.002,
+            "p95": 0.003,
+            "p99": 0.007,
+            "max": 0.011
+          },
+          "write_lock_hold_ms": {
+            "samples": 154,
+            "p50": 1.108,
+            "p95": 2.068,
+            "p99": 2.955,
+            "max": 6.922
+          },
+          "pfv_server_ms": {
+            "samples": 1,
+            "p50": 12.893,
+            "p95": 12.893,
+            "p99": 12.893,
+            "max": 12.893
+          },
+          "pfv_client_ms": {
+            "samples": 1,
+            "p50": 18.926,
+            "p95": 18.926,
+            "p99": 18.926,
+            "max": 18.926
+          },
+          "maintenance_reaper_ms": {
+            "samples": 1,
+            "p50": 1.528,
+            "p95": 1.528,
+            "p99": 1.528,
+            "max": 1.528
+          },
+          "implicit_acquisition_and_first_statement_ms": {
+            "samples": 1,
+            "p50": 65.951,
+            "p95": 65.951,
+            "p99": 65.951,
+            "max": 65.951
+          },
+          "implicit_write_upper_bound_ms": {
+            "samples": 1,
+            "p50": 66.088,
+            "p95": 66.088,
+            "p99": 66.088,
+            "max": 66.088
+          },
+          "implicit_write_hold_lower_bound_ms": {
+            "samples": 1,
+            "p50": 0.137,
+            "p95": 0.137,
+            "p99": 0.137,
+            "max": 0.137
+          }
+        },
+        "scans": {
+          "begin_immediate_wait_ms": {
+            "samples": 15570,
+            "p50": 0.006,
+            "p95": 0.067,
+            "p99": 1.267,
+            "max": 66.117
+          },
+          "commit_ms": {
+            "samples": 17311,
+            "p50": 0.029,
+            "p95": 0.089,
+            "p99": 0.872,
+            "max": 3.873
+          },
+          "post_commit_reporting_ms": {
+            "samples": 17311,
+            "p50": 0.003,
+            "p95": 0.005,
+            "p99": 0.007,
+            "max": 0.152
+          },
+          "write_lock_hold_ms": {
+            "samples": 15570,
+            "p50": 0.742,
+            "p95": 2.656,
+            "p99": 4.539,
+            "max": 109.732
+          },
+          "maintenance_tick_ms": {
+            "samples": 122,
+            "p50": 8.627,
+            "p95": 54.693,
+            "p99": 89.198,
+            "max": 97.525
+          },
+          "lease_client_ms": {
+            "samples": 3743,
+            "p50": 4.536,
+            "p95": 10.214,
+            "p99": 15.403,
+            "max": 119.439
+          },
+          "pfv_server_ms": {
+            "samples": 5330,
+            "p50": 7.144,
+            "p95": 12.112,
+            "p99": 21.513,
+            "max": 173.027
+          },
+          "pfv_client_ms": {
+            "samples": 5330,
+            "p50": 9.238,
+            "p95": 15.757,
+            "p99": 27.549,
+            "max": 179.129
+          },
+          "maintenance_reaper_ms": {
+            "samples": 2982,
+            "p50": 0.7,
+            "p95": 1.623,
+            "p99": 3.447,
+            "max": 22.615
+          },
+          "implicit_acquisition_and_first_statement_ms": {
+            "samples": 1741,
+            "p50": 0.051,
+            "p95": 0.158,
+            "p99": 2.618,
+            "max": 42.396
+          },
+          "implicit_write_upper_bound_ms": {
+            "samples": 1741,
+            "p50": 0.156,
+            "p95": 0.569,
+            "p99": 2.876,
+            "max": 43.437
+          },
+          "implicit_write_hold_lower_bound_ms": {
+            "samples": 1741,
+            "p50": 0.104,
+            "p95": 0.153,
+            "p99": 0.485,
+            "max": 2.925
+          },
+          "login_server_ms": {
+            "samples": 1741,
+            "p50": 193.348,
+            "p95": 201.418,
+            "p99": 224.984,
+            "max": 330.385
+          },
+          "login_client_ms": {
+            "samples": 1741,
+            "p50": 195.767,
+            "p95": 204.333,
+            "p99": 226.902,
+            "max": 332.809
+          }
+        }
+      },
+      "errors": [],
+      "slow_write_windows": [
+        {
+          "phase": "scans",
+          "category": "write_lock_hold_ms",
+          "hold_ms": 109.732,
+          "thread_cpu_ms": 1.063,
+          "begin_wait_ms": 1.298,
+          "commit_ms": 0.036,
+          "statement_count": 4,
+          "statement_ms": 108.854,
+          "largest_statement_ms": 108.529,
+          "largest_statement_kind": "SELECT",
+          "callers": [
+            "app/services/agent_queue.py:65:_immediate_tx",
+            "app/services/agent_queue.py:292:lease_next",
+            "app/api/internal_agent.py:287:lease_job"
+          ]
+        }
+      ],
+      "scans": {
+        "elapsed_seconds": 610.006,
+        "ticks": 122,
+        "scheduled_at_seconds": [
+          0.019,
+          301.01,
+          602.024
+        ],
+        "requested_windows": 2,
+        "maintenance_interval_seconds": 5.0,
+        "jobs": [
+          {
+            "id": 3,
+            "status": "succeeded"
+          },
+          {
+            "id": 4,
+            "status": "succeeded"
+          },
+          {
+            "id": 5,
+            "status": "succeeded"
+          }
+        ],
+        "all_jobs_published": true,
+        "observed_intervals_seconds": [
+          300.991,
+          301.014
+        ]
+      },
+      "environment": {
+        "python": "3.12.12",
+        "sqlite": "3.51.1",
+        "platform": "macOS-26.2-arm64-arm-64bit",
+        "cpu_count": 10,
+        "bcrypt_rounds": 12,
+        "transport": "in-process ASGI, real routes and independent DB sessions",
+        "journal_mode": "wal",
+        "busy_timeout": 5000,
+        "synchronous": 1,
+        "wal_autocheckpoint": 1000
+      },
+      "writer_window_basis": "explicit hold plus implicit upper bound including acquisition",
+      "measurement_contract": "dbapi-return-before-reporting-v3",
+      "checks": {
+        "no_request_failures": true,
+        "writer_p99_le_100ms": true,
+        "no_writer_over_500ms": true,
+        "real_scan_windows": true,
+        "skeleton_observed": true
+      }
+    },
+    {
+      "case": "sparse",
+      "people": 50,
+      "accounts": 50,
+      "facts": 49,
+      "cold": {
+        "seconds": 13.4756,
+        "stats": {
+          "events_consumed": 0,
+          "derived_recomputed": 2450,
+          "cards_created": 0,
+          "cards_superseded": 0,
+          "findings_emitted": 0,
+          "cards_expired": 0,
+          "personal_family_views_rebuilt": 50,
+          "inferred_projected": 0,
+          "inferred_superseded": 0,
+          "suggestions_projected": 0
+        },
+        "job_id": 1
+      },
+      "hot": {
+        "seconds": 0.2284,
+        "stats": {
+          "events_consumed": 1,
+          "derived_recomputed": 0,
+          "cards_created": 0,
+          "cards_superseded": 0,
+          "findings_emitted": 0,
+          "cards_expired": 0,
+          "personal_family_views_rebuilt": 0,
+          "inferred_projected": 0,
+          "inferred_superseded": 0,
+          "suggestions_projected": 0,
+          "fingerprint_short_circuit": 1
+        },
+        "job_id": 2
+      },
+      "first_skeleton_ms": 175.45208404771984,
+      "first_terms_ms": 675.1632919767871,
+      "progress_samples": [
+        {
+          "elapsed_ms": 64.264,
+          "nodes": 0,
+          "terms": 0,
+          "status": "queued",
+          "phase": "failed",
+          "generation": 0,
+          "revision": 1,
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "elapsed_ms": 175.452,
+          "nodes": 50,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 286.626,
+          "nodes": 50,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 402.134,
+          "nodes": 50,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 515.062,
+          "nodes": 50,
+          "terms": 0,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 1,
+          "completed": 0,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 675.163,
+          "nodes": 50,
+          "terms": 2,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 3,
+          "completed": 2,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 872.613,
+          "nodes": 50,
+          "terms": 3,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 4,
+          "completed": 3,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 1062.664,
+          "nodes": 50,
+          "terms": 6,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 7,
+          "completed": 6,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 1268.469,
+          "nodes": 50,
+          "terms": 8,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 9,
+          "completed": 8,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 1444.948,
+          "nodes": 50,
+          "terms": 10,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 11,
+          "completed": 10,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 1662.512,
+          "nodes": 50,
+          "terms": 12,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 13,
+          "completed": 12,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 1873.658,
+          "nodes": 50,
+          "terms": 14,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 15,
+          "completed": 14,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 2111.426,
+          "nodes": 50,
+          "terms": 16,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 17,
+          "completed": 16,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 2333.135,
+          "nodes": 50,
+          "terms": 18,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 19,
+          "completed": 18,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 2519.279,
+          "nodes": 50,
+          "terms": 21,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 22,
+          "completed": 21,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 2644.537,
+          "nodes": 50,
+          "terms": 22,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 23,
+          "completed": 22,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 2847.705,
+          "nodes": 50,
+          "terms": 24,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 25,
+          "completed": 24,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 3067.158,
+          "nodes": 50,
+          "terms": 26,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 27,
+          "completed": 26,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 3248.637,
+          "nodes": 50,
+          "terms": 28,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 29,
+          "completed": 28,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 3431.226,
+          "nodes": 50,
+          "terms": 30,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 31,
+          "completed": 30,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 3611.136,
+          "nodes": 50,
+          "terms": 32,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 33,
+          "completed": 32,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 3752.209,
+          "nodes": 50,
+          "terms": 33,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 34,
+          "completed": 33,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 3869.731,
+          "nodes": 50,
+          "terms": 35,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 36,
+          "completed": 35,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4080.781,
+          "nodes": 50,
+          "terms": 36,
+          "status": "running",
+          "phase": "building",
+          "generation": 1,
+          "revision": 37,
+          "completed": 36,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4200.51,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4321.08,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4446.695,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4564.798,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4689.479,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4810.509,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 4942.16,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5064.149,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5215.275,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5338.922,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5461.554,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5581.399,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5704.069,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5822.512,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 5944.196,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6063.439,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6188.137,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6311.196,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6432.5,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6551.53,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6673.835,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6796.404,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 6916.179,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7043.441,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7176.419,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7296.431,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7442.642,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7564.274,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7685.866,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7815.781,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 7938.829,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8061.658,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8191.788,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8312.779,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8429.819,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8549.844,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8671.367,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8791.032,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 8922.196,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9039.032,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9159.592,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9312.875,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9430.81,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9549.365,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9667.679,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9790.13,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 9914.271,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10040.872,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10161.442,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10281.14,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10402.681,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10523.656,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10646.321,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10765.193,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 10887.075,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11007.861,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11129.296,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11248.339,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11371.202,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11494.666,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11617.529,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11740.615,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11864.413,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 11983.883,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12102.721,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12234.609,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12356.328,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12477.528,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12599.815,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12725.576,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12849.897,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 12974.853,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 13091.994,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 13215.117,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 13340.347,
+          "nodes": 50,
+          "terms": 49,
+          "status": "running",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 13468.736,
+          "nodes": 50,
+          "terms": 49,
+          "status": "current",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        },
+        {
+          "elapsed_ms": 13535.331,
+          "nodes": 50,
+          "terms": 49,
+          "status": "current",
+          "phase": "ready",
+          "generation": 1,
+          "revision": 50,
+          "completed": 49,
+          "total": 49
+        }
+      ],
+      "measurements_ms": {
+        "cold": {
+          "begin_immediate_wait_ms": {
+            "samples": 5593,
+            "p50": 0.005,
+            "p95": 1.266,
+            "p99": 7.7,
+            "max": 96.712
+          },
+          "commit_ms": {
+            "samples": 5629,
+            "p50": 0.027,
+            "p95": 0.078,
+            "p99": 1.273,
+            "max": 26.401
+          },
+          "post_commit_reporting_ms": {
+            "samples": 5629,
+            "p50": 0.002,
+            "p95": 0.003,
+            "p99": 0.004,
+            "max": 0.021
+          },
+          "write_lock_hold_ms": {
+            "samples": 5593,
+            "p50": 0.991,
+            "p95": 1.529,
+            "p99": 3.72,
+            "max": 58.428
+          },
+          "maintenance_reaper_ms": {
+            "samples": 64,
+            "p50": 0.775,
+            "p95": 74.224,
+            "p99": 122.627,
+            "max": 122.627
+          },
+          "lease_client_ms": {
+            "samples": 73,
+            "p50": 7.813,
+            "p95": 74.71,
+            "p99": 111.967,
+            "max": 111.967
+          },
+          "pfv_server_ms": {
+            "samples": 101,
+            "p50": 15.49,
+            "p95": 77.166,
+            "p99": 104.117,
+            "max": 111.639
+          },
+          "pfv_client_ms": {
+            "samples": 101,
+            "p50": 18.819,
+            "p95": 99.06,
+            "p99": 116.181,
+            "max": 120.404
+          },
+          "implicit_acquisition_and_first_statement_ms": {
+            "samples": 36,
+            "p50": 1.307,
+            "p95": 37.242,
+            "p99": 41.713,
+            "max": 41.713
+          },
+          "implicit_write_upper_bound_ms": {
+            "samples": 36,
+            "p50": 1.574,
+            "p95": 37.322,
+            "p99": 41.81,
+            "max": 41.81
+          },
+          "implicit_write_hold_lower_bound_ms": {
+            "samples": 36,
+            "p50": 0.137,
+            "p95": 2.552,
+            "p99": 7.739,
+            "max": 7.739
+          },
+          "login_server_ms": {
+            "samples": 37,
+            "p50": 196.154,
+            "p95": 261.825,
+            "p99": 267.405,
+            "max": 267.405
+          },
+          "login_client_ms": {
+            "samples": 37,
+            "p50": 201.166,
+            "p95": 274.503,
+            "p99": 276.095,
+            "max": 276.095
+          }
+        },
+        "hot": {
+          "begin_immediate_wait_ms": {
+            "samples": 168,
+            "p50": 0.004,
+            "p95": 0.109,
+            "p99": 91.198,
+            "max": 122.344
+          },
+          "commit_ms": {
+            "samples": 169,
+            "p50": 0.015,
+            "p95": 0.066,
+            "p99": 2.239,
+            "max": 3.625
+          },
+          "post_commit_reporting_ms": {
+            "samples": 169,
+            "p50": 0.002,
+            "p95": 0.003,
+            "p99": 0.003,
+            "max": 0.003
+          },
+          "write_lock_hold_ms": {
+            "samples": 168,
+            "p50": 1.078,
+            "p95": 1.685,
+            "p99": 4.862,
+            "max": 7.659
+          },
+          "pfv_server_ms": {
+            "samples": 2,
+            "p50": 14.803,
+            "p95": 26.388,
+            "p99": 26.388,
+            "max": 26.388
+          },
+          "pfv_client_ms": {
+            "samples": 2,
+            "p50": 21.221,
+            "p95": 29.391,
+            "p99": 29.391,
+            "max": 29.391
+          },
+          "implicit_acquisition_and_first_statement_ms": {
+            "samples": 1,
+            "p50": 1.3,
+            "p95": 1.3,
+            "p99": 1.3,
+            "max": 1.3
+          },
+          "implicit_write_upper_bound_ms": {
+            "samples": 1,
+            "p50": 1.372,
+            "p95": 1.372,
+            "p99": 1.372,
+            "max": 1.372
+          },
+          "implicit_write_hold_lower_bound_ms": {
+            "samples": 1,
+            "p50": 0.071,
+            "p95": 0.071,
+            "p99": 0.071,
+            "max": 0.071
+          },
+          "maintenance_reaper_ms": {
+            "samples": 1,
+            "p50": 21.872,
+            "p95": 21.872,
+            "p99": 21.872,
+            "max": 21.872
+          },
+          "lease_client_ms": {
+            "samples": 1,
+            "p50": 2.545,
+            "p95": 2.545,
+            "p99": 2.545,
+            "max": 2.545
+          }
+        }
+      },
+      "errors": [],
+      "slow_write_windows": [],
+      "scans": null,
+      "environment": {
+        "python": "3.12.12",
+        "sqlite": "3.51.1",
+        "platform": "macOS-26.2-arm64-arm-64bit",
+        "cpu_count": 10,
+        "bcrypt_rounds": 12,
+        "transport": "in-process ASGI, real routes and independent DB sessions",
+        "journal_mode": "wal",
+        "busy_timeout": 5000,
+        "synchronous": 1,
+        "wal_autocheckpoint": 1000
+      },
+      "writer_window_basis": "explicit hold plus implicit upper bound including acquisition",
+      "measurement_contract": "dbapi-return-before-reporting-v3",
+      "checks": {
+        "no_request_failures": true,
+        "writer_p99_le_100ms": true,
+        "no_writer_over_500ms": true,
+        "real_scan_windows": true,
+        "skeleton_observed": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+Measuring sparse/200, trial 1
+{"milestone": "skeleton", "elapsed_ms": 453.145}
+{"milestone": "viewer_ready", "elapsed_ms": 57421.077}
+{"milestone": "cold_published", "seconds": 337.6317}
+{"slow_writer": {"phase": "cold", "category": "implicit_write_upper_bound_ms", "hold_ms": 678.34, "thread_cpu_ms": 0.334, "begin_wait_ms": null, "commit_ms": 0.03, "statement_count": 1, "statement_ms": 678.213, "largest_statement_ms": 678.213, "largest_statement_kind": "INSERT", "callers": ["app/api/auth.py:188:login"]}}
+{"milestone": "hot_published", "seconds": 4.1052}
+{"slow_writer": {"phase": "hot", "category": "implicit_write_upper_bound_ms", "hold_ms": 882.66, "thread_cpu_ms": 0.369, "begin_wait_ms": null, "commit_ms": 0.023, "statement_count": 1, "statement_ms": 882.535, "largest_statement_ms": 882.535, "largest_statement_kind": "INSERT", "callers": ["app/api/auth.py:188:login"]}}
+{"case": "sparse", "people": 200, "cold_s": 337.6317, "hot_s": 4.1052, "checks": {"no_request_failures": true, "writer_p99_le_100ms": true, "no_writer_over_500ms": false, "real_scan_windows": true, "skeleton_observed": true}}

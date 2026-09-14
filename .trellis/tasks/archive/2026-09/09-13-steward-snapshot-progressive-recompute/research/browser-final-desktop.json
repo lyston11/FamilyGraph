@@ -1,0 +1,315 @@
+{
+  "trials": [
+    {
+      "passed": true,
+      "interactive_from_request_ms": 378.9,
+      "interactive_from_navigation_ms": 469.5,
+      "first_http_ms": 35.2,
+      "nodes": 30,
+      "pending_terms_at_skeleton": 29,
+      "request_count": 2,
+      "responses": [
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:37 GMT",
+          "validatedAt": "1789383997",
+          "displayUntil": "1789384297",
+          "hasEtag": true,
+          "nodes": 0,
+          "phase": "queued",
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:37 GMT",
+          "validatedAt": "1789383997",
+          "displayUntil": "1789384297",
+          "hasEtag": true,
+          "nodes": 30,
+          "phase": "building",
+          "completed": 0,
+          "total": 29
+        }
+      ],
+      "pan_interaction_passed": true,
+      "zoom_interaction_passed": true,
+      "pan_retained_after_term_update": true,
+      "drag_interaction_passed": true,
+      "drag_retained_after_term_update": true,
+      "selection_interaction_passed": true,
+      "selection_retained_after_term_update": true,
+      "no_page_horizontal_overflow": true,
+      "theme": "paper",
+      "browser_version": "Chrome/152.0.7977.83",
+      "server_response_ms": {
+        "samples": 3,
+        "p50": 32.71,
+        "p95": 61.047,
+        "p99": 61.047,
+        "max": 61.047
+      },
+      "first_server_response_ms": 32.71,
+      "environment": {
+        "people": 30,
+        "accounts": 30,
+        "facts": 45,
+        "bcrypt_rounds": 12,
+        "maintenance_interval_seconds": 5.0,
+        "scan_interval_seconds": 300,
+        "frontend": "production build",
+        "browser": "Chrome headless",
+        "viewport": "1365x900"
+      }
+    },
+    {
+      "passed": true,
+      "interactive_from_request_ms": 349.4,
+      "interactive_from_navigation_ms": 417.8,
+      "first_http_ms": 30.2,
+      "nodes": 30,
+      "pending_terms_at_skeleton": 29,
+      "request_count": 2,
+      "responses": [
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:41 GMT",
+          "validatedAt": "1789384002",
+          "displayUntil": "1789384302",
+          "hasEtag": true,
+          "nodes": 0,
+          "phase": "queued",
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:42 GMT",
+          "validatedAt": "1789384002",
+          "displayUntil": "1789384302",
+          "hasEtag": true,
+          "nodes": 30,
+          "phase": "building",
+          "completed": 0,
+          "total": 29
+        }
+      ],
+      "pan_interaction_passed": true,
+      "zoom_interaction_passed": true,
+      "pan_retained_after_term_update": true,
+      "drag_interaction_passed": true,
+      "drag_retained_after_term_update": true,
+      "selection_interaction_passed": true,
+      "selection_retained_after_term_update": true,
+      "no_page_horizontal_overflow": true,
+      "theme": "paper",
+      "browser_version": "Chrome/152.0.7977.83",
+      "server_response_ms": {
+        "samples": 3,
+        "p50": 29.023,
+        "p95": 93.741,
+        "p99": 93.741,
+        "max": 93.741
+      },
+      "first_server_response_ms": 29.023,
+      "environment": {
+        "people": 30,
+        "accounts": 30,
+        "facts": 45,
+        "bcrypt_rounds": 12,
+        "maintenance_interval_seconds": 5.0,
+        "scan_interval_seconds": 300,
+        "frontend": "production build",
+        "browser": "Chrome headless",
+        "viewport": "1365x900"
+      }
+    },
+    {
+      "passed": true,
+      "interactive_from_request_ms": 357.8,
+      "interactive_from_navigation_ms": 437.2,
+      "first_http_ms": 32.3,
+      "nodes": 30,
+      "pending_terms_at_skeleton": 29,
+      "request_count": 2,
+      "responses": [
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:46 GMT",
+          "validatedAt": "1789384007",
+          "displayUntil": "1789384307",
+          "hasEtag": true,
+          "nodes": 0,
+          "phase": "queued",
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:47 GMT",
+          "validatedAt": "1789384007",
+          "displayUntil": "1789384307",
+          "hasEtag": true,
+          "nodes": 30,
+          "phase": "building",
+          "completed": 0,
+          "total": 29
+        }
+      ],
+      "pan_interaction_passed": true,
+      "zoom_interaction_passed": true,
+      "pan_retained_after_term_update": true,
+      "drag_interaction_passed": true,
+      "drag_retained_after_term_update": true,
+      "selection_interaction_passed": true,
+      "selection_retained_after_term_update": true,
+      "no_page_horizontal_overflow": true,
+      "theme": "paper",
+      "browser_version": "Chrome/152.0.7977.83",
+      "server_response_ms": {
+        "samples": 3,
+        "p50": 21.931,
+        "p95": 31.075,
+        "p99": 31.075,
+        "max": 31.075
+      },
+      "first_server_response_ms": 31.075,
+      "environment": {
+        "people": 30,
+        "accounts": 30,
+        "facts": 45,
+        "bcrypt_rounds": 12,
+        "maintenance_interval_seconds": 5.0,
+        "scan_interval_seconds": 300,
+        "frontend": "production build",
+        "browser": "Chrome headless",
+        "viewport": "1365x900"
+      }
+    },
+    {
+      "passed": true,
+      "interactive_from_request_ms": 354.2,
+      "interactive_from_navigation_ms": 434.2,
+      "first_http_ms": 29,
+      "nodes": 30,
+      "pending_terms_at_skeleton": 29,
+      "request_count": 2,
+      "responses": [
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:51 GMT",
+          "validatedAt": "1789384012",
+          "displayUntil": "1789384312",
+          "hasEtag": true,
+          "nodes": 0,
+          "phase": "queued",
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:52 GMT",
+          "validatedAt": "1789384012",
+          "displayUntil": "1789384312",
+          "hasEtag": true,
+          "nodes": 30,
+          "phase": "building",
+          "completed": 0,
+          "total": 29
+        }
+      ],
+      "pan_interaction_passed": true,
+      "zoom_interaction_passed": true,
+      "pan_retained_after_term_update": true,
+      "drag_interaction_passed": true,
+      "drag_retained_after_term_update": true,
+      "selection_interaction_passed": true,
+      "selection_retained_after_term_update": true,
+      "no_page_horizontal_overflow": true,
+      "theme": "paper",
+      "browser_version": "Chrome/152.0.7977.83",
+      "server_response_ms": {
+        "samples": 3,
+        "p50": 27.296,
+        "p95": 39.866,
+        "p99": 39.866,
+        "max": 39.866
+      },
+      "first_server_response_ms": 27.296,
+      "environment": {
+        "people": 30,
+        "accounts": 30,
+        "facts": 45,
+        "bcrypt_rounds": 12,
+        "maintenance_interval_seconds": 5.0,
+        "scan_interval_seconds": 300,
+        "frontend": "production build",
+        "browser": "Chrome headless",
+        "viewport": "1365x900"
+      }
+    },
+    {
+      "passed": true,
+      "interactive_from_request_ms": 349.5,
+      "interactive_from_navigation_ms": 425.9,
+      "first_http_ms": 30.0,
+      "nodes": 30,
+      "pending_terms_at_skeleton": 29,
+      "request_count": 2,
+      "responses": [
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:55 GMT",
+          "validatedAt": "1789384016",
+          "displayUntil": "1789384316",
+          "hasEtag": true,
+          "nodes": 0,
+          "phase": "queued",
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:06:56 GMT",
+          "validatedAt": "1789384017",
+          "displayUntil": "1789384317",
+          "hasEtag": true,
+          "nodes": 30,
+          "phase": "building",
+          "completed": 0,
+          "total": 29
+        }
+      ],
+      "pan_interaction_passed": true,
+      "zoom_interaction_passed": true,
+      "pan_retained_after_term_update": true,
+      "drag_interaction_passed": true,
+      "drag_retained_after_term_update": true,
+      "selection_interaction_passed": true,
+      "selection_retained_after_term_update": true,
+      "no_page_horizontal_overflow": true,
+      "theme": "paper",
+      "browser_version": "Chrome/152.0.7977.83",
+      "server_response_ms": {
+        "samples": 3,
+        "p50": 12.456,
+        "p95": 28.554,
+        "p99": 28.554,
+        "max": 28.554
+      },
+      "first_server_response_ms": 28.554,
+      "environment": {
+        "people": 30,
+        "accounts": 30,
+        "facts": 45,
+        "bcrypt_rounds": 12,
+        "maintenance_interval_seconds": 5.0,
+        "scan_interval_seconds": 300,
+        "frontend": "production build",
+        "browser": "Chrome headless",
+        "viewport": "1365x900"
+      }
+    }
+  ],
+  "interactive_from_request_ms_p95": 378.9
+}

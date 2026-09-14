@@ -1,0 +1,4 @@
+{"file": "AGENTS.md", "reason": "仓库当前开发、隔离、数据安全和最小充分验证约束"}
+{"file": ".trellis/tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/current-state.md", "reason": "已核验的事务、输入指纹、权限、前端及租约恢复约束"}
+{"file": ".trellis/tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/planning-review.md", "reason": "最终规划复核收敛的 CAS、跨代重试预算和外部调用未知结果合同"}
+{"file": ".trellis/tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/implementation-audit-0baf299.md", "reason": "续作原子发布、输入版本、渐进生命周期与基准口径缺口，最终审查必须逐项核验"}

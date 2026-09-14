@@ -1,0 +1,49 @@
+{
+  "verified_at": "2026-09-14T15:34:24.164934+00:00",
+  "code_commit": "dee91a14e85ca69d4c39044c1da359ea46700612",
+  "main_before": "be54c8dfc300754b2cb47605b58816ddfd5f83b8",
+  "main_integration": "fast-forward",
+  "runtime_sha256": "fcfce00197a670412114968376836b50662b567d86aaeeb2a60e0782c373c5fd",
+  "runtime_files": 612,
+  "tracked_runtime_files_matching_main": 511,
+  "build_artifacts": "Verified in task worktree; ignored build output was not committed or substituted into the main checkout.",
+  "unrelated_files_preserved": 13,
+  "artifacts": {
+    "benchmark-integration-200-final.json": "7ff83d3d1c790cb42fd913cf95be620273cacd0b217205e8cef7bd5d206bcb90",
+    "benchmark-integration-scans-final.json": "cab64db7f12448d17b3900d2062d54a5d883f4014feae7c40e1b4b80c988468f",
+    "integration-backend-admission.log": "c88bf1acba917313119a45397047a4f865b405f1505e32727163f9501b086d16",
+    "integration-backend-admission.xml": "42fc31fdc8ead7099311cc06e67f7035b8770701c7789d9b133d161b99161ad4",
+    "integration-frontend-vitest.json": "22faaaddbe85a2f5f8513076ea59f2d88a4395bfae042440122b46e1642b63c2",
+    "integration-admin-vitest.json": "99c9749f4fe011262553c17e4465f5b5b7d70c99f819d8692d5036ce97e544a6",
+    "integration-api-smoke-final.json": "f96cdc0f3c433d862eb799c981be38dafa2baf94c13e21746110d7f76c2228f7",
+    "runtime-integration-admission-manifest.json": "c930685b03b42ebd10db1efb21f6ffa32b731693352a31c46a1f2bf8bf72f55d",
+    "browser-integration-desktop-final.json": "9ae13a88ca0f30b4bfc0f24bc7af29ef3148a5b5eb83fedd2e9762de139593b5",
+    "browser-integration-desktop-final.png": "ccd03b9f5aa9917c13fb917b1bc93c6dfa8a5f9e45ebe5b923e3f73c37c2290c",
+    "browser-integration-desktop-final.log": "677b2acc9dd9fcf54e189573a02f5392905c02284bf7c0e5f0486732ff1903fc",
+    "browser-integration-mobile-modern-final.json": "a387afa2579ef5b8733b5b13a9476ce18128bb757cb0b0569117e89d94ebaeb5",
+    "browser-integration-mobile-modern-final.png": "9a9210a89b20f7dee8f90b0d28889744e6c7610710ee44ceede5d58a2081833e",
+    "browser-integration-mobile-modern-final.log": "3587d6ee927c285b95fb2fa675d1efb57695b3efeae2d489293d4510f57f5847",
+    "browser-integration-mobile-paper-final.json": "c1f000b1db28011d49fffd53ad7b4dddabe8ac7960e041664ea9cf5115e3885a",
+    "browser-integration-mobile-paper-final.png": "f39a731ce94c70f16881eac13e113f916a6b5a8039e59c99632a3401441efa61",
+    "browser-integration-mobile-paper-final.log": "7ff264f5b73e42b2c81dadd9c11bad479e5b19b4478ad8a665464c98a76b25e7"
+  },
+  "cleanup": {
+    "verified_at": "2026-09-14T15:38:36.881132+00:00",
+    "task_worktree_removed": true,
+    "task_branch_deleted": true,
+    "shared_backend_venv_preserved": true,
+    "shared_frontend_node_modules_preserved": true,
+    "force_used": false
+  },
+  "external_operations": {
+    "push": false,
+    "deployment": false,
+    "production_changes": false
+  },
+  "archive_path": ".trellis/tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute",
+  "archive_whitespace_check": {
+    "authored_text": "passed",
+    "preserved_raw_log": "research/integration-backend-first.log",
+    "note": "Original pytest failure output contains trailing spaces; preserved unchanged as historical evidence and excluded only from the archive whitespace check."
+  }
+}

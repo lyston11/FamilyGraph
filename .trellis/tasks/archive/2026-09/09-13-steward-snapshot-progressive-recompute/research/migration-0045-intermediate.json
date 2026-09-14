@@ -1,0 +1,44 @@
+{
+  "migration_sha256": "fdf35cc951c89e49976e21564cf16f211684bfd6969fff1dda836ff74fca900b",
+  "checks": [
+    {
+      "command": "downgrade 0044_steward_generations",
+      "refused_as_expected": false,
+      "passed": true
+    },
+    {
+      "command": "upgrade head",
+      "refused_as_expected": false,
+      "passed": true
+    },
+    {
+      "command": "downgrade 0044_steward_generations",
+      "refused_as_expected": true,
+      "passed": true
+    },
+    {
+      "command": "downgrade 0044_steward_generations",
+      "refused_as_expected": true,
+      "passed": true
+    },
+    {
+      "command": "downgrade 0044_steward_generations",
+      "refused_as_expected": true,
+      "passed": true
+    },
+    {
+      "command": "downgrade 0044_steward_generations",
+      "refused_as_expected": false,
+      "passed": true
+    },
+    {
+      "command": "upgrade head",
+      "refused_as_expected": false,
+      "passed": true
+    }
+  ],
+  "source_rows_preserved": true,
+  "legacy_cache_invalidated": true,
+  "foreign_keys_valid": true,
+  "input_trigger_count": 45
+}

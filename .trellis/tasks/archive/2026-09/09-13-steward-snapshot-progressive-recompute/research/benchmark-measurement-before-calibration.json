@@ -1,0 +1,28 @@
+{
+  "independent_write_ms_before_metrics_delay": 0.23,
+  "metrics": {
+    "calibration": {
+      "begin_immediate_wait_ms": {
+        "samples": 1,
+        "p50": 0.009,
+        "p95": 0.009,
+        "p99": 0.009,
+        "max": 0.009
+      },
+      "commit_ms": {
+        "samples": 1,
+        "p50": 0.131,
+        "p95": 0.131,
+        "p99": 0.131,
+        "max": 0.131
+      },
+      "write_lock_hold_ms": {
+        "samples": 1,
+        "p50": 603.373,
+        "p95": 603.373,
+        "p99": 603.373,
+        "max": 603.373
+      }
+    }
+  }
+}

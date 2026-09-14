@@ -1,0 +1,13 @@
+{
+  "performance_source_sha256": "6180be62d335b8d46f8da9dd5ec247a70a0693a18257dad564f1d3c43fc5d1b2",
+  "final_source_sha256": "98be2abbe218db544e5923485abf39176ff1e05c8ecdd5b0b776573c34789989",
+  "changed_files": [
+    {
+      "path": "scripts/smoke/run_api_smoke.py",
+      "before": "d8124dd7c8990909ef7617d7cfe0b66f93ae633651997a7a96a34b40f8c63c7e",
+      "after": "d91a03b1244b1de40fab2153cc83520923a5ba79b348af79bf52c99a632bcba1"
+    }
+  ],
+  "backend_frontend_and_benchmark_sources_unchanged": true,
+  "reason": "Smoke harness allocated only public/admin ports; allocate an isolated internal listener port and host as well."
+}
