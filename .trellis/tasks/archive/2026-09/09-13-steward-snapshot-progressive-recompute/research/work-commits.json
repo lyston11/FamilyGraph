@@ -1,0 +1,42 @@
+[
+  {
+    "commit": "f7fbd38726c835c06ac50a1b8c8bcd2dd14ab469",
+    "message": "fix(steward): atomically publish fenced snapshot recomputations",
+    "files": 53
+  },
+  {
+    "commit": "6162cedecd329b6b111eea10b0b34cfed3d756e9",
+    "message": "feat(pfv): progressively fill kinship labels on a stable family skeleton",
+    "files": 20
+  },
+  {
+    "commit": "dddc6b77af89188a3f883fd266fa8ccfee4df1f3",
+    "message": "test(steward): verify concurrent writes and progressive browser loading",
+    "files": 4
+  },
+  {
+    "commit": "ce085fbab6dc4a4fa36f4217bf0576a12061aa88",
+    "message": "merge(steward): integrate staged publication with terminology and memory lifecycle",
+    "kind": "integration"
+  },
+  {
+    "commit": "3cb4550",
+    "message": "merge(steward): preserve latest admin switch integration",
+    "kind": "integration"
+  },
+  {
+    "commit": "84660c88b32e24bedef11581efbda674daa21d5a",
+    "message": "perf(steward): coalesce covered demand and bound cache write work",
+    "kind": "performance remediation"
+  },
+  {
+    "commit": "c0219217446609a7e9d71675ee29cce8954732fb",
+    "message": "fix(steward): yield shared writer capacity between bounded bursts",
+    "kind": "write admission"
+  },
+  {
+    "commit": "dee91a14e85ca69d4c39044c1da359ea46700612",
+    "message": "merge(steward): preserve current Trellis context governance",
+    "kind": "documentation-only integration"
+  }
+]

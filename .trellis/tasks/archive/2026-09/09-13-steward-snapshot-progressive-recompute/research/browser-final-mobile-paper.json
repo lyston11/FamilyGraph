@@ -1,0 +1,67 @@
+{
+  "trials": [
+    {
+      "passed": true,
+      "interactive_from_request_ms": 346.7,
+      "interactive_from_navigation_ms": 433.4,
+      "first_http_ms": 30.0,
+      "nodes": 30,
+      "pending_terms_at_skeleton": 29,
+      "request_count": 2,
+      "responses": [
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:08:48 GMT",
+          "validatedAt": "1789384129",
+          "displayUntil": "1789384429",
+          "hasEtag": true,
+          "nodes": 0,
+          "phase": "queued",
+          "completed": 0,
+          "total": 0
+        },
+        {
+          "status": 200,
+          "date": "Mon, 14 Sep 2026 11:08:48 GMT",
+          "validatedAt": "1789384129",
+          "displayUntil": "1789384429",
+          "hasEtag": true,
+          "nodes": 30,
+          "phase": "building",
+          "completed": 0,
+          "total": 29
+        }
+      ],
+      "pan_interaction_passed": true,
+      "zoom_interaction_passed": true,
+      "pan_retained_after_term_update": true,
+      "drag_interaction_passed": true,
+      "drag_retained_after_term_update": true,
+      "selection_interaction_passed": true,
+      "selection_retained_after_term_update": true,
+      "no_page_horizontal_overflow": true,
+      "theme": "paper",
+      "browser_version": "Chrome/152.0.7977.83",
+      "server_response_ms": {
+        "samples": 3,
+        "p50": 28.734,
+        "p95": 72.929,
+        "p99": 72.929,
+        "max": 72.929
+      },
+      "first_server_response_ms": 28.734,
+      "environment": {
+        "people": 30,
+        "accounts": 30,
+        "facts": 45,
+        "bcrypt_rounds": 12,
+        "maintenance_interval_seconds": 5.0,
+        "scan_interval_seconds": 300,
+        "frontend": "production build",
+        "browser": "Chrome headless",
+        "viewport": "375x812"
+      }
+    }
+  ],
+  "interactive_from_request_ms_p95": 346.7
+}

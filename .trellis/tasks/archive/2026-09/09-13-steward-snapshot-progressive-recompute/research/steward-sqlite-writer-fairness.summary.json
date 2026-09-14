@@ -1,0 +1,1801 @@
+{
+  "python": "3.12.12",
+  "sqlite": "3.51.1",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "production_revision_under_investigation": "84660c8",
+  "production_code_imported": false,
+  "synthetic_data_only": true,
+  "seed": 84660,
+  "timing_basis": "perf_counter_ns immediately around DBAPI calls; records appended after transaction end",
+  "success_order_basis": "integer primary keys assigned in the same committed SQLite INSERT transactions",
+  "limitations": [
+    "Controlled 1 ms delay represents short application bookkeeping; zero-delay SQL-only controls are retained.",
+    "Equal burst duration, not equal transaction throughput; outside yielding intentionally reduces writer throughput.",
+    "Python scheduling can widen observed API entry/return bounds; internal SQLite retry instants are not exposed.",
+    "The SQL-only test contains no family graph, auth bcrypt, ASGI, real demand traffic, or production scheduler.",
+    "A reproduction demonstrates this mechanism is possible; it does not identify the production trace's causal transaction."
+  ],
+  "results": [
+    {
+      "trial_index": 0,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "every_commit_10ms",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871433007181083,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 75,
+        "online_commits": 42,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1025.557,
+        "background_begin_wait": {
+          "samples": 75,
+          "p50_ms": 0.061084,
+          "p95_ms": 0.133917,
+          "max_ms": 1.26325
+        },
+        "background_explicit_hold": {
+          "samples": 75,
+          "p50_ms": 1.448542,
+          "p95_ms": 1.645,
+          "max_ms": 2.125375
+        },
+        "background_commit": {
+          "samples": 75,
+          "p50_ms": 0.129666,
+          "p95_ms": 0.27375,
+          "max_ms": 0.759333
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 42,
+          "p50_ms": 0.13273,
+          "p95_ms": 3.937625,
+          "max_ms": 4.099292
+        },
+        "online_thread_cpu": {
+          "samples": 42,
+          "p50_ms": 0.174937,
+          "p95_ms": 0.423291,
+          "max_ms": 0.608959
+        },
+        "online_commit": {
+          "samples": 42,
+          "p50_ms": 0.07977,
+          "p95_ms": 0.167958,
+          "max_ms": 0.765208
+        },
+        "observable_positive_background_gaps": {
+          "samples": 74,
+          "median_us": 12257.438,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 42,
+          "transaction_before_insert": false,
+          "insert_call_ns": 996056125,
+          "insert_return_ns": 1000155417,
+          "transaction_after_insert": true,
+          "commit_call_ns": 1000167958,
+          "commit_return_ns": 1000289042,
+          "success_id": 117,
+          "thread_cpu_ns": 471416,
+          "background_commits_during_insert_call": 1,
+          "background_new_begins_and_commits_during_insert_call": 1,
+          "first_overtaking_success_id": 116,
+          "last_overtaking_success_id": 116
+        }
+      },
+      "trace_validation": {
+        "trial": 0,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 1,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871434038757666,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 461,
+        "online_commits": 28,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1025.999,
+        "background_begin_wait": {
+          "samples": 461,
+          "p50_ms": 0.014542,
+          "p95_ms": 0.062208,
+          "max_ms": 0.1255
+        },
+        "background_explicit_hold": {
+          "samples": 461,
+          "p50_ms": 1.35275,
+          "p95_ms": 1.513625,
+          "max_ms": 1.766041
+        },
+        "background_commit": {
+          "samples": 461,
+          "p50_ms": 0.069958,
+          "p95_ms": 0.186834,
+          "max_ms": 0.300541
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 28,
+          "p50_ms": 10.102417,
+          "p95_ms": 63.04825,
+          "max_ms": 63.573792
+        },
+        "online_thread_cpu": {
+          "samples": 28,
+          "p50_ms": 0.302729,
+          "p95_ms": 0.444125,
+          "max_ms": 0.597459
+        },
+        "online_commit": {
+          "samples": 28,
+          "p50_ms": 0.097583,
+          "p95_ms": 0.219583,
+          "max_ms": 0.283209
+        },
+        "observable_positive_background_gaps": {
+          "samples": 460,
+          "median_us": 7.458,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 62250,
+          "insert_return_ns": 63636042,
+          "transaction_after_insert": true,
+          "commit_call_ns": 63649584,
+          "commit_return_ns": 63795875,
+          "success_id": 33,
+          "thread_cpu_ns": 444125,
+          "background_commits_during_insert_call": 32,
+          "background_new_begins_and_commits_during_insert_call": 31,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 32
+        }
+      },
+      "trace_validation": {
+        "trial": 1,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 2,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "none",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871435072939375,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 717,
+        "online_commits": 1,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1002.443,
+        "background_begin_wait": {
+          "samples": 717,
+          "p50_ms": 0.013042,
+          "p95_ms": 0.029125,
+          "max_ms": 1.761333
+        },
+        "background_explicit_hold": {
+          "samples": 717,
+          "p50_ms": 1.34275,
+          "p95_ms": 1.527583,
+          "max_ms": 4.849959
+        },
+        "background_commit": {
+          "samples": 717,
+          "p50_ms": 0.0625,
+          "p95_ms": 0.180625,
+          "max_ms": 1.811917
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 1,
+          "p50_ms": 978.1655,
+          "p95_ms": 978.1655,
+          "max_ms": 978.1655
+        },
+        "online_thread_cpu": {
+          "samples": 1,
+          "p50_ms": 0.867375,
+          "p95_ms": 0.867375,
+          "max_ms": 0.867375
+        },
+        "online_commit": {
+          "samples": 1,
+          "p50_ms": 0.220042,
+          "p95_ms": 0.220042,
+          "max_ms": 0.220042
+        },
+        "observable_positive_background_gaps": {
+          "samples": 716,
+          "median_us": 5.416,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 50541,
+          "insert_return_ns": 978216041,
+          "transaction_after_insert": true,
+          "commit_call_ns": 978223791,
+          "commit_return_ns": 978443833,
+          "success_id": 709,
+          "thread_cpu_ns": 867375,
+          "background_commits_during_insert_call": 708,
+          "background_new_begins_and_commits_during_insert_call": 707,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 708
+        }
+      },
+      "trace_validation": {
+        "trial": 2,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 3,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "none",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871436094266000,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 664,
+        "online_commits": 1,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1030.727,
+        "background_begin_wait": {
+          "samples": 664,
+          "p50_ms": 0.013,
+          "p95_ms": 0.029041,
+          "max_ms": 3.337083
+        },
+        "background_explicit_hold": {
+          "samples": 664,
+          "p50_ms": 1.339125,
+          "p95_ms": 1.693458,
+          "max_ms": 28.494167
+        },
+        "background_commit": {
+          "samples": 664,
+          "p50_ms": 0.058188,
+          "p95_ms": 0.18425,
+          "max_ms": 26.7365
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 1,
+          "p50_ms": 1004.95,
+          "p95_ms": 1004.95,
+          "max_ms": 1004.95
+        },
+        "online_thread_cpu": {
+          "samples": 1,
+          "p50_ms": 0.95625,
+          "p95_ms": 0.95625,
+          "max_ms": 0.95625
+        },
+        "online_commit": {
+          "samples": 1,
+          "p50_ms": 0.056917,
+          "p95_ms": 0.056917,
+          "max_ms": 0.056917
+        },
+        "observable_positive_background_gaps": {
+          "samples": 663,
+          "median_us": 5.292,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 1147541,
+          "insert_return_ns": 1006097541,
+          "transaction_after_insert": true,
+          "commit_call_ns": 1006105666,
+          "commit_return_ns": 1006162583,
+          "success_id": 665,
+          "thread_cpu_ns": 956250,
+          "background_commits_during_insert_call": 664,
+          "background_new_begins_and_commits_during_insert_call": 663,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 664
+        }
+      },
+      "trace_validation": {
+        "trial": 3,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 4,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 2
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871437135895416,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 469,
+        "online_commits": 18,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1000.605,
+        "background_begin_wait": {
+          "samples": 469,
+          "p50_ms": 0.01475,
+          "p95_ms": 0.053584,
+          "max_ms": 0.116875
+        },
+        "background_explicit_hold": {
+          "samples": 469,
+          "p50_ms": 1.345375,
+          "p95_ms": 1.470875,
+          "max_ms": 2.049042
+        },
+        "background_commit": {
+          "samples": 469,
+          "p50_ms": 0.065166,
+          "p95_ms": 0.156292,
+          "max_ms": 0.644417
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 18,
+          "p50_ms": 10.040896,
+          "p95_ms": 148.040458,
+          "max_ms": 148.040458
+        },
+        "online_thread_cpu": {
+          "samples": 18,
+          "p50_ms": 0.228875,
+          "p95_ms": 0.505375,
+          "max_ms": 0.505375
+        },
+        "online_commit": {
+          "samples": 18,
+          "p50_ms": 0.061146,
+          "p95_ms": 0.156917,
+          "max_ms": 0.156917
+        },
+        "observable_positive_background_gaps": {
+          "samples": 468,
+          "median_us": 6.625,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 11,
+          "transaction_before_insert": false,
+          "insert_call_ns": 492569834,
+          "insert_return_ns": 640610292,
+          "transaction_after_insert": true,
+          "commit_call_ns": 640619209,
+          "commit_return_ns": 640715000,
+          "success_id": 312,
+          "thread_cpu_ns": 475417,
+          "background_commits_during_insert_call": 72,
+          "background_new_begins_and_commits_during_insert_call": 71,
+          "first_overtaking_success_id": 241,
+          "last_overtaking_success_id": 311
+        }
+      },
+      "trace_validation": {
+        "trial": 4,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 5,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "every_commit_10ms",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871438148878000,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 74,
+        "online_commits": 41,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1014.869,
+        "background_begin_wait": {
+          "samples": 74,
+          "p50_ms": 0.062875,
+          "p95_ms": 0.121375,
+          "max_ms": 1.304042
+        },
+        "background_explicit_hold": {
+          "samples": 74,
+          "p50_ms": 1.455396,
+          "p95_ms": 1.603333,
+          "max_ms": 2.492792
+        },
+        "background_commit": {
+          "samples": 74,
+          "p50_ms": 0.131125,
+          "p95_ms": 0.226833,
+          "max_ms": 1.145292
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 41,
+          "p50_ms": 0.118458,
+          "p95_ms": 3.892666,
+          "max_ms": 4.216166
+        },
+        "online_thread_cpu": {
+          "samples": 41,
+          "p50_ms": 0.213417,
+          "p95_ms": 0.32275,
+          "max_ms": 0.363542
+        },
+        "online_commit": {
+          "samples": 41,
+          "p50_ms": 0.089166,
+          "p95_ms": 0.137541,
+          "max_ms": 0.362083
+        },
+        "observable_positive_background_gaps": {
+          "samples": 73,
+          "median_us": 12537.209,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 16,
+          "transaction_before_insert": false,
+          "insert_call_ns": 381381875,
+          "insert_return_ns": 385598041,
+          "transaction_after_insert": true,
+          "commit_call_ns": 385605875,
+          "commit_return_ns": 385689000,
+          "success_id": 45,
+          "thread_cpu_ns": 259875,
+          "background_commits_during_insert_call": 1,
+          "background_new_begins_and_commits_during_insert_call": 0,
+          "first_overtaking_success_id": null,
+          "last_overtaking_success_id": null
+        }
+      },
+      "trace_validation": {
+        "trial": 5,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 6,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 0,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871439169543708,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 57034,
+        "online_commits": 33,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1013.21,
+        "background_begin_wait": {
+          "samples": 57034,
+          "p50_ms": 0.001833,
+          "p95_ms": 0.002875,
+          "max_ms": 1.319292
+        },
+        "background_explicit_hold": {
+          "samples": 57034,
+          "p50_ms": 0.005042,
+          "p95_ms": 0.012292,
+          "max_ms": 5.71425
+        },
+        "background_commit": {
+          "samples": 57034,
+          "p50_ms": 0.003667,
+          "p95_ms": 0.009458,
+          "max_ms": 5.71275
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 33,
+          "p50_ms": 3.788208,
+          "p95_ms": 34.927958,
+          "max_ms": 40.366292
+        },
+        "online_thread_cpu": {
+          "samples": 33,
+          "p50_ms": 0.057625,
+          "p95_ms": 0.183333,
+          "max_ms": 0.218
+        },
+        "online_commit": {
+          "samples": 33,
+          "p50_ms": 0.011167,
+          "p95_ms": 0.077958,
+          "max_ms": 0.1
+        },
+        "observable_positive_background_gaps": {
+          "samples": 57033,
+          "median_us": 0.708,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 32,
+          "transaction_before_insert": false,
+          "insert_call_ns": 925569833,
+          "insert_return_ns": 965936125,
+          "transaction_after_insert": true,
+          "commit_call_ns": 965937917,
+          "commit_return_ns": 965957708,
+          "success_id": 54979,
+          "thread_cpu_ns": 181458,
+          "background_commits_during_insert_call": 2132,
+          "background_new_begins_and_commits_during_insert_call": 2131,
+          "first_overtaking_success_id": 52847,
+          "last_overtaking_success_id": 54977
+        }
+      },
+      "trace_validation": {
+        "trial": 6,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 7,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871440298399125,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 465,
+        "online_commits": 17,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1040.99,
+        "background_begin_wait": {
+          "samples": 465,
+          "p50_ms": 0.013084,
+          "p95_ms": 0.049708,
+          "max_ms": 0.258708
+        },
+        "background_explicit_hold": {
+          "samples": 465,
+          "p50_ms": 1.336875,
+          "p95_ms": 1.4615,
+          "max_ms": 1.865333
+        },
+        "background_commit": {
+          "samples": 465,
+          "p50_ms": 0.058041,
+          "p95_ms": 0.152167,
+          "max_ms": 0.545042
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 17,
+          "p50_ms": 10.171959,
+          "p95_ms": 119.47675,
+          "max_ms": 119.47675
+        },
+        "online_thread_cpu": {
+          "samples": 17,
+          "p50_ms": 0.280334,
+          "p95_ms": 0.59275,
+          "max_ms": 0.59275
+        },
+        "online_commit": {
+          "samples": 17,
+          "p50_ms": 0.07475,
+          "p95_ms": 0.216541,
+          "max_ms": 0.216541
+        },
+        "observable_positive_background_gaps": {
+          "samples": 464,
+          "median_us": 6.375,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 10,
+          "transaction_before_insert": false,
+          "insert_call_ns": 454364208,
+          "insert_return_ns": 573840958,
+          "transaction_after_insert": true,
+          "commit_call_ns": 573848500,
+          "commit_return_ns": 573920625,
+          "success_id": 278,
+          "thread_cpu_ns": 390959,
+          "background_commits_during_insert_call": 56,
+          "background_new_begins_and_commits_during_insert_call": 55,
+          "first_overtaking_success_id": 223,
+          "last_overtaking_success_id": 277
+        }
+      },
+      "trace_validation": {
+        "trial": 7,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 8,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "every_commit_10ms",
+        "repeat": 2
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871441348951291,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 75,
+        "online_commits": 41,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1011.116,
+        "background_begin_wait": {
+          "samples": 75,
+          "p50_ms": 0.062875,
+          "p95_ms": 0.102542,
+          "max_ms": 0.180334
+        },
+        "background_explicit_hold": {
+          "samples": 75,
+          "p50_ms": 1.448167,
+          "p95_ms": 1.574334,
+          "max_ms": 2.800625
+        },
+        "background_commit": {
+          "samples": 75,
+          "p50_ms": 0.12475,
+          "p95_ms": 0.257417,
+          "max_ms": 1.4895
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 41,
+          "p50_ms": 0.122583,
+          "p95_ms": 3.785959,
+          "max_ms": 3.923917
+        },
+        "online_thread_cpu": {
+          "samples": 41,
+          "p50_ms": 0.219958,
+          "p95_ms": 0.283833,
+          "max_ms": 0.355292
+        },
+        "online_commit": {
+          "samples": 41,
+          "p50_ms": 0.093375,
+          "p95_ms": 0.134417,
+          "max_ms": 0.281709
+        },
+        "observable_positive_background_gaps": {
+          "samples": 74,
+          "median_us": 12147.978,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 34,
+          "transaction_before_insert": false,
+          "insert_call_ns": 813117250,
+          "insert_return_ns": 817041167,
+          "transaction_after_insert": true,
+          "commit_call_ns": 817049959,
+          "commit_return_ns": 817143334,
+          "success_id": 96,
+          "thread_cpu_ns": 272292,
+          "background_commits_during_insert_call": 1,
+          "background_new_begins_and_commits_during_insert_call": 1,
+          "first_overtaking_success_id": 95,
+          "last_overtaking_success_id": 95
+        }
+      },
+      "trace_validation": {
+        "trial": 8,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 9,
+      "case": {
+        "background_connections": 2,
+        "controlled_hold_ms": 1,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871442367310958,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 514,
+        "online_commits": 13,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1044.615,
+        "background_begin_wait": {
+          "samples": 514,
+          "p50_ms": 0.017333,
+          "p95_ms": 9.809083,
+          "max_ms": 64.446583
+        },
+        "background_explicit_hold": {
+          "samples": 514,
+          "p50_ms": 1.377271,
+          "p95_ms": 1.612667,
+          "max_ms": 3.254959
+        },
+        "background_commit": {
+          "samples": 514,
+          "p50_ms": 0.084646,
+          "p95_ms": 0.235459,
+          "max_ms": 1.753
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 13,
+          "p50_ms": 39.819375,
+          "p95_ms": 205.648125,
+          "max_ms": 205.648125
+        },
+        "online_thread_cpu": {
+          "samples": 13,
+          "p50_ms": 0.276709,
+          "p95_ms": 0.539875,
+          "max_ms": 0.539875
+        },
+        "online_commit": {
+          "samples": 13,
+          "p50_ms": 0.060041,
+          "p95_ms": 0.162667,
+          "max_ms": 0.162667
+        },
+        "observable_positive_background_gaps": {
+          "samples": 436,
+          "median_us": 7.979,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 13,
+          "transaction_before_insert": false,
+          "insert_call_ns": 818437333,
+          "insert_return_ns": 1024085458,
+          "transaction_after_insert": true,
+          "commit_call_ns": 1024094417,
+          "commit_return_ns": 1024154458,
+          "success_id": 527,
+          "thread_cpu_ns": 453083,
+          "background_commits_during_insert_call": 100,
+          "background_new_begins_and_commits_during_insert_call": 99,
+          "first_overtaking_success_id": 428,
+          "last_overtaking_success_id": 526
+        }
+      },
+      "trace_validation": {
+        "trial": 9,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 10,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 0,
+        "pacing": "none",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871443420540166,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 95073,
+        "online_commits": 12,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1091.309,
+        "background_begin_wait": {
+          "samples": 95073,
+          "p50_ms": 0.001875,
+          "p95_ms": 0.002583,
+          "max_ms": 1.33025
+        },
+        "background_explicit_hold": {
+          "samples": 95073,
+          "p50_ms": 0.005125,
+          "p95_ms": 0.010459,
+          "max_ms": 4.10925
+        },
+        "background_commit": {
+          "samples": 95073,
+          "p50_ms": 0.003708,
+          "p95_ms": 0.008625,
+          "max_ms": 2.679167
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 12,
+          "p50_ms": 3.775479,
+          "p95_ms": 366.68375,
+          "max_ms": 366.68375
+        },
+        "online_thread_cpu": {
+          "samples": 12,
+          "p50_ms": 0.039417,
+          "p95_ms": 0.257292,
+          "max_ms": 0.257292
+        },
+        "online_commit": {
+          "samples": 12,
+          "p50_ms": 0.008625,
+          "p95_ms": 0.288875,
+          "max_ms": 0.288875
+        },
+        "observable_positive_background_gaps": {
+          "samples": 95072,
+          "median_us": 0.625,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 5,
+          "transaction_before_insert": false,
+          "insert_call_ns": 111617584,
+          "insert_return_ns": 478301334,
+          "transaction_after_insert": true,
+          "commit_call_ns": 478304792,
+          "commit_return_ns": 478314292,
+          "success_id": 42774,
+          "thread_cpu_ns": 221291,
+          "background_commits_during_insert_call": 35503,
+          "background_new_begins_and_commits_during_insert_call": 35502,
+          "first_overtaking_success_id": 7271,
+          "last_overtaking_success_id": 42772
+        }
+      },
+      "trace_validation": {
+        "trial": 10,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 11,
+      "case": {
+        "background_connections": 2,
+        "controlled_hold_ms": 1,
+        "pacing": "none",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871444664179625,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 745,
+        "online_commits": 1,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1204.938,
+        "background_begin_wait": {
+          "samples": 745,
+          "p50_ms": 0.010625,
+          "p95_ms": 0.022292,
+          "max_ms": 1078.169
+        },
+        "background_explicit_hold": {
+          "samples": 745,
+          "p50_ms": 1.323125,
+          "p95_ms": 1.421291,
+          "max_ms": 2.553083
+        },
+        "background_commit": {
+          "samples": 745,
+          "p50_ms": 0.051125,
+          "p95_ms": 0.118917,
+          "max_ms": 0.391834
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 1,
+          "p50_ms": 1181.739917,
+          "p95_ms": 1181.739917,
+          "max_ms": 1181.739917
+        },
+        "online_thread_cpu": {
+          "samples": 1,
+          "p50_ms": 0.769083,
+          "p95_ms": 0.769083,
+          "max_ms": 0.769083
+        },
+        "online_commit": {
+          "samples": 1,
+          "p50_ms": 0.094625,
+          "p95_ms": 0.094625,
+          "max_ms": 0.094625
+        },
+        "observable_positive_background_gaps": {
+          "samples": 743,
+          "median_us": 4.791,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 30833,
+          "insert_return_ns": 1181770750,
+          "transaction_after_insert": true,
+          "commit_call_ns": 1181784791,
+          "commit_return_ns": 1181879416,
+          "success_id": 746,
+          "thread_cpu_ns": 769083,
+          "background_commits_during_insert_call": 745,
+          "background_new_begins_and_commits_during_insert_call": 744,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 745
+        }
+      },
+      "trace_validation": {
+        "trial": 11,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 12,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "every_commit_5ms",
+        "repeat": 2
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871445880494708,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 131,
+        "online_commits": 42,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1012.521,
+        "background_begin_wait": {
+          "samples": 131,
+          "p50_ms": 0.045125,
+          "p95_ms": 0.088,
+          "max_ms": 0.145375
+        },
+        "background_explicit_hold": {
+          "samples": 131,
+          "p50_ms": 1.413792,
+          "p95_ms": 1.556792,
+          "max_ms": 4.77875
+        },
+        "background_commit": {
+          "samples": 131,
+          "p50_ms": 0.107292,
+          "p95_ms": 0.192042,
+          "max_ms": 3.455291
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 42,
+          "p50_ms": 0.104708,
+          "p95_ms": 3.926542,
+          "max_ms": 3.977583
+        },
+        "online_thread_cpu": {
+          "samples": 42,
+          "p50_ms": 0.180042,
+          "p95_ms": 0.342583,
+          "max_ms": 0.425042
+        },
+        "online_commit": {
+          "samples": 42,
+          "p50_ms": 0.073729,
+          "p95_ms": 0.149667,
+          "max_ms": 3.569209
+        },
+        "observable_positive_background_gaps": {
+          "samples": 130,
+          "median_us": 6288.188,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 42,
+          "transaction_before_insert": false,
+          "insert_call_ns": 985452917,
+          "insert_return_ns": 989430500,
+          "transaction_after_insert": true,
+          "commit_call_ns": 989436667,
+          "commit_return_ns": 989513000,
+          "success_id": 172,
+          "thread_cpu_ns": 278375,
+          "background_commits_during_insert_call": 1,
+          "background_new_begins_and_commits_during_insert_call": 1,
+          "first_overtaking_success_id": 171,
+          "last_overtaking_success_id": 171
+        }
+      },
+      "trace_validation": {
+        "trial": 12,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 13,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 0,
+        "pacing": "none",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871446899352833,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 96876,
+        "online_commits": 4,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1025.035,
+        "background_begin_wait": {
+          "samples": 96876,
+          "p50_ms": 0.001792,
+          "p95_ms": 0.002333,
+          "max_ms": 4.241542
+        },
+        "background_explicit_hold": {
+          "samples": 96876,
+          "p50_ms": 0.005041,
+          "p95_ms": 0.010291,
+          "max_ms": 5.314166
+        },
+        "background_commit": {
+          "samples": 96876,
+          "p50_ms": 0.003667,
+          "p95_ms": 0.0085,
+          "max_ms": 5.312875
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 4,
+          "p50_ms": 22.385541,
+          "p95_ms": 885.201125,
+          "max_ms": 885.201125
+        },
+        "online_thread_cpu": {
+          "samples": 4,
+          "p50_ms": 0.052959,
+          "p95_ms": 0.3985,
+          "max_ms": 0.3985
+        },
+        "online_commit": {
+          "samples": 4,
+          "p50_ms": 0.007021,
+          "p95_ms": 0.009125,
+          "max_ms": 0.009125
+        },
+        "observable_positive_background_gaps": {
+          "samples": 96875,
+          "median_us": 0.625,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 93917,
+          "insert_return_ns": 885295042,
+          "transaction_after_insert": true,
+          "commit_call_ns": 885296042,
+          "commit_return_ns": 885301167,
+          "success_id": 84768,
+          "thread_cpu_ns": 398500,
+          "background_commits_during_insert_call": 84767,
+          "background_new_begins_and_commits_during_insert_call": 84766,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 84767
+        }
+      },
+      "trace_validation": {
+        "trial": 13,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 14,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "none",
+        "repeat": 2
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871448057592625,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 736,
+        "online_commits": 1,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1101.764,
+        "background_begin_wait": {
+          "samples": 736,
+          "p50_ms": 0.010854,
+          "p95_ms": 0.025584,
+          "max_ms": 0.158583
+        },
+        "background_explicit_hold": {
+          "samples": 736,
+          "p50_ms": 1.325125,
+          "p95_ms": 1.451333,
+          "max_ms": 4.126459
+        },
+        "background_commit": {
+          "samples": 736,
+          "p50_ms": 0.051375,
+          "p95_ms": 0.139125,
+          "max_ms": 2.813167
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 1,
+          "p50_ms": 1080.740084,
+          "p95_ms": 1080.740084,
+          "max_ms": 1080.740084
+        },
+        "online_thread_cpu": {
+          "samples": 1,
+          "p50_ms": 0.774167,
+          "p95_ms": 0.774167,
+          "max_ms": 0.774167
+        },
+        "online_commit": {
+          "samples": 1,
+          "p50_ms": 0.135583,
+          "p95_ms": 0.135583,
+          "max_ms": 0.135583
+        },
+        "observable_positive_background_gaps": {
+          "samples": 735,
+          "median_us": 4.75,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 36791,
+          "insert_return_ns": 1080776875,
+          "transaction_after_insert": true,
+          "commit_call_ns": 1080790375,
+          "commit_return_ns": 1080925958,
+          "success_id": 737,
+          "thread_cpu_ns": 774167,
+          "background_commits_during_insert_call": 736,
+          "background_new_begins_and_commits_during_insert_call": 735,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 736
+        }
+      },
+      "trace_validation": {
+        "trial": 14,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 15,
+      "case": {
+        "background_connections": 2,
+        "controlled_hold_ms": 1,
+        "pacing": "none",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871449168106416,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 727,
+        "online_commits": 1,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1096.647,
+        "background_begin_wait": {
+          "samples": 727,
+          "p50_ms": 0.013167,
+          "p95_ms": 0.027416,
+          "max_ms": 1082.325166
+        },
+        "background_explicit_hold": {
+          "samples": 727,
+          "p50_ms": 1.340542,
+          "p95_ms": 1.47325,
+          "max_ms": 3.47975
+        },
+        "background_commit": {
+          "samples": 727,
+          "p50_ms": 0.062208,
+          "p95_ms": 0.154042,
+          "max_ms": 2.161167
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 1,
+          "p50_ms": 1072.062666,
+          "p95_ms": 1072.062666,
+          "max_ms": 1072.062666
+        },
+        "online_thread_cpu": {
+          "samples": 1,
+          "p50_ms": 0.765417,
+          "p95_ms": 0.765417,
+          "max_ms": 0.765417
+        },
+        "online_commit": {
+          "samples": 1,
+          "p50_ms": 0.064584,
+          "p95_ms": 0.064584,
+          "max_ms": 0.064584
+        },
+        "observable_positive_background_gaps": {
+          "samples": 725,
+          "median_us": 5.625,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 1,
+          "transaction_before_insert": false,
+          "insert_call_ns": 71709,
+          "insert_return_ns": 1072134375,
+          "transaction_after_insert": true,
+          "commit_call_ns": 1072143375,
+          "commit_return_ns": 1072207959,
+          "success_id": 727,
+          "thread_cpu_ns": 765417,
+          "background_commits_during_insert_call": 726,
+          "background_new_begins_and_commits_during_insert_call": 725,
+          "first_overtaking_success_id": 2,
+          "last_overtaking_success_id": 726
+        }
+      },
+      "trace_validation": {
+        "trial": 15,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 16,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 0,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871450273071500,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 57949,
+        "online_commits": 37,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1018.116,
+        "background_begin_wait": {
+          "samples": 57949,
+          "p50_ms": 0.001833,
+          "p95_ms": 0.003167,
+          "max_ms": 5.925625
+        },
+        "background_explicit_hold": {
+          "samples": 57949,
+          "p50_ms": 0.005042,
+          "p95_ms": 0.011042,
+          "max_ms": 2.410875
+        },
+        "background_commit": {
+          "samples": 57949,
+          "p50_ms": 0.003667,
+          "p95_ms": 0.008708,
+          "max_ms": 2.407916
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 37,
+          "p50_ms": 3.791583,
+          "p95_ms": 10.125542,
+          "max_ms": 10.149666
+        },
+        "online_thread_cpu": {
+          "samples": 37,
+          "p50_ms": 0.057834,
+          "p95_ms": 0.13875,
+          "max_ms": 0.214458
+        },
+        "online_commit": {
+          "samples": 37,
+          "p50_ms": 0.009,
+          "p95_ms": 0.057916,
+          "max_ms": 0.11425
+        },
+        "observable_positive_background_gaps": {
+          "samples": 57948,
+          "median_us": 0.708,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 34,
+          "transaction_before_insert": false,
+          "insert_call_ns": 910972375,
+          "insert_return_ns": 921122041,
+          "transaction_after_insert": true,
+          "commit_call_ns": 921123208,
+          "commit_return_ns": 921134958,
+          "success_id": 53177,
+          "thread_cpu_ns": 133125,
+          "background_commits_during_insert_call": 465,
+          "background_new_begins_and_commits_during_insert_call": 464,
+          "first_overtaking_success_id": 52713,
+          "last_overtaking_success_id": 53176
+        }
+      },
+      "trace_validation": {
+        "trial": 16,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 17,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "every_commit_5ms",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871451403938291,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 132,
+        "online_commits": 42,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1004.36,
+        "background_begin_wait": {
+          "samples": 132,
+          "p50_ms": 0.045,
+          "p95_ms": 0.08625,
+          "max_ms": 0.126208
+        },
+        "background_explicit_hold": {
+          "samples": 132,
+          "p50_ms": 1.4125,
+          "p95_ms": 1.528917,
+          "max_ms": 2.180541
+        },
+        "background_commit": {
+          "samples": 132,
+          "p50_ms": 0.106749,
+          "p95_ms": 0.190584,
+          "max_ms": 0.84425
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 42,
+          "p50_ms": 0.097604,
+          "p95_ms": 3.696584,
+          "max_ms": 3.986917
+        },
+        "online_thread_cpu": {
+          "samples": 42,
+          "p50_ms": 0.167187,
+          "p95_ms": 0.288291,
+          "max_ms": 0.374792
+        },
+        "online_commit": {
+          "samples": 42,
+          "p50_ms": 0.064188,
+          "p95_ms": 0.114208,
+          "max_ms": 0.199625
+        },
+        "observable_positive_background_gaps": {
+          "samples": 131,
+          "median_us": 6285.0,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 32,
+          "transaction_before_insert": false,
+          "insert_call_ns": 733880250,
+          "insert_return_ns": 737867167,
+          "transaction_after_insert": true,
+          "commit_call_ns": 737876084,
+          "commit_return_ns": 737975917,
+          "success_id": 130,
+          "thread_cpu_ns": 288291,
+          "background_commits_during_insert_call": 1,
+          "background_new_begins_and_commits_during_insert_call": 1,
+          "first_overtaking_success_id": 129,
+          "last_overtaking_success_id": 129
+        }
+      },
+      "trace_validation": {
+        "trial": 17,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 18,
+      "case": {
+        "background_connections": 2,
+        "controlled_hold_ms": 1,
+        "pacing": "slice_10ms_yield_5ms",
+        "repeat": 1
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871452418151333,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 539,
+        "online_commits": 13,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1007.823,
+        "background_begin_wait": {
+          "samples": 539,
+          "p50_ms": 0.014541,
+          "p95_ms": 4.405916,
+          "max_ms": 63.310125
+        },
+        "background_explicit_hold": {
+          "samples": 539,
+          "p50_ms": 1.34525,
+          "p95_ms": 1.482042,
+          "max_ms": 1.795666
+        },
+        "background_commit": {
+          "samples": 539,
+          "p50_ms": 0.06375,
+          "p95_ms": 0.157375,
+          "max_ms": 0.331917
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 13,
+          "p50_ms": 61.193833,
+          "p95_ms": 120.31925,
+          "max_ms": 120.31925
+        },
+        "online_thread_cpu": {
+          "samples": 13,
+          "p50_ms": 0.243583,
+          "p95_ms": 0.399875,
+          "max_ms": 0.399875
+        },
+        "online_commit": {
+          "samples": 13,
+          "p50_ms": 0.048791,
+          "p95_ms": 0.1255,
+          "max_ms": 0.1255
+        },
+        "observable_positive_background_gaps": {
+          "samples": 450,
+          "median_us": 6.333,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 5,
+          "transaction_before_insert": false,
+          "insert_call_ns": 311740167,
+          "insert_return_ns": 432059417,
+          "transaction_after_insert": true,
+          "commit_call_ns": 432067792,
+          "commit_return_ns": 432116583,
+          "success_id": 236,
+          "thread_cpu_ns": 330042,
+          "background_commits_during_insert_call": 73,
+          "background_new_begins_and_commits_during_insert_call": 71,
+          "first_overtaking_success_id": 164,
+          "last_overtaking_success_id": 235
+        }
+      },
+      "trace_validation": {
+        "trial": 18,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    },
+    {
+      "trial_index": 19,
+      "case": {
+        "background_connections": 1,
+        "controlled_hold_ms": 1,
+        "pacing": "every_commit_5ms",
+        "repeat": 0
+      },
+      "configured_burst_ms": 1000,
+      "perf_counter_origin_ns": 871453435430250,
+      "environment": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "busy_timeout": 5000,
+        "wal_autocheckpoint": 1000
+      },
+      "summary": {
+        "background_commits": 133,
+        "online_commits": 42,
+        "failed_operations": 0,
+        "setup_errors": [],
+        "wall_duration_ms": 1005.512,
+        "background_begin_wait": {
+          "samples": 133,
+          "p50_ms": 0.048958,
+          "p95_ms": 0.098166,
+          "max_ms": 1.300375
+        },
+        "background_explicit_hold": {
+          "samples": 133,
+          "p50_ms": 1.429875,
+          "p95_ms": 1.522625,
+          "max_ms": 2.454
+        },
+        "background_commit": {
+          "samples": 133,
+          "p50_ms": 0.115875,
+          "p95_ms": 0.179125,
+          "max_ms": 0.98925
+        },
+        "online_insert_acquisition_and_statement": {
+          "samples": 42,
+          "p50_ms": 0.088688,
+          "p95_ms": 3.906625,
+          "max_ms": 3.934584
+        },
+        "online_thread_cpu": {
+          "samples": 42,
+          "p50_ms": 0.169479,
+          "p95_ms": 0.283667,
+          "max_ms": 0.302
+        },
+        "online_commit": {
+          "samples": 42,
+          "p50_ms": 0.073375,
+          "p95_ms": 0.139417,
+          "max_ms": 0.145791
+        },
+        "observable_positive_background_gaps": {
+          "samples": 132,
+          "median_us": 6288.042,
+          "note": "DBAPI commit return to next BEGIN call; not an internal lock timing trace."
+        },
+        "longest_online_request": {
+          "actor": "online-insert",
+          "local_sequence": 14,
+          "transaction_before_insert": false,
+          "insert_call_ns": 313351541,
+          "insert_return_ns": 317286125,
+          "transaction_after_insert": true,
+          "commit_call_ns": 317290541,
+          "commit_return_ns": 317407458,
+          "success_id": 56,
+          "thread_cpu_ns": 276334,
+          "background_commits_during_insert_call": 1,
+          "background_new_begins_and_commits_during_insert_call": 0,
+          "first_overtaking_success_id": null,
+          "last_overtaking_success_id": null
+        }
+      },
+      "trace_validation": {
+        "trial": 19,
+        "ledger_and_trace_counts_match": true,
+        "ledger_sequence_matches_trace": true,
+        "online_uses_implicit_transaction": true,
+        "successful_phases_ordered": true,
+        "all_pauses_after_commits": true
+      }
+    }
+  ],
+  "trace_validation_all_passed": true
+}

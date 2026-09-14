@@ -1,0 +1,6 @@
+Measuring sparse/200, trial 1
+{"milestone": "skeleton", "elapsed_ms": 281.999}
+{"milestone": "viewer_ready", "elapsed_ms": 53977.13}
+{"milestone": "cold_published", "seconds": 416.1283}
+{"milestone": "hot_published", "seconds": 7.3182}
+{"case": "sparse", "people": 200, "cold_s": 416.1283, "hot_s": 7.3182, "checks": {"no_request_failures": true, "writer_p99_le_100ms": true, "no_writer_over_500ms": true, "real_scan_windows": true, "skeleton_observed": true}}

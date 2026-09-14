@@ -1,0 +1,439 @@
+{
+  "frozen_revision": "3cb4550",
+  "python": "3.12.12",
+  "sqlite": "3.51.1",
+  "real_family_data": false,
+  "family_recompute": false,
+  "database": "in-memory sqlite3; model intent table and baseline indexes; minimal generation table",
+  "interpretation_limit": "Dense synthetic manifest with all targets meaningful. Isolates SQL cost, not actual benchmark causality or writer wall time.",
+  "sql": {
+    "scoped": "SELECT steward_delivery_intents.id, steward_delivery_intents.generation_id, steward_delivery_intents.space_id, steward_delivery_intents.intent_key, steward_delivery_intents.kind, steward_delivery_intents.payload_json, steward_delivery_intents.effect_fingerprint, steward_delivery_intents.status, steward_delivery_intents.attempt, steward_delivery_intents.lease_owner, steward_delivery_intents.lease_until, steward_delivery_intents.available_at, steward_delivery_intents.error_code, steward_delivery_intents.created_at, steward_delivery_intents.updated_at \nFROM steward_delivery_intents JOIN steward_generations ON steward_generations.id = steward_delivery_intents.generation_id \nWHERE steward_generations.status = 'published' AND steward_delivery_intents.status = 'pending' AND steward_delivery_intents.kind != 'inferred_overlay' AND (steward_delivery_intents.available_at IS NULL OR steward_delivery_intents.available_at <= '2026-09-14 14:00:00.000000') AND (steward_delivery_intents.lease_until IS NULL OR steward_delivery_intents.lease_until <= '2026-09-14 14:00:00.000000') AND (steward_delivery_intents.kind != 'assist' OR NOT (EXISTS (SELECT steward_delivery_intents_1.id \nFROM steward_delivery_intents AS steward_delivery_intents_1 \nWHERE steward_delivery_intents_1.generation_id = steward_delivery_intents.generation_id AND steward_delivery_intents_1.kind = 'terminology' AND (steward_delivery_intents_1.status = 'pending' OR steward_delivery_intents_1.status = 'failed' AND JSON_EXTRACT(steward_delivery_intents_1.payload_json, '$.\"phase\"') IN ('refresh', 'complete'))))) AND (steward_delivery_intents.kind != 'terminology' OR JSON_EXTRACT(steward_delivery_intents.payload_json, '$.\"phase\"') != 'refresh' OR NOT (EXISTS (SELECT steward_delivery_intents_1.id \nFROM steward_delivery_intents AS steward_delivery_intents_1 \nWHERE steward_delivery_intents_1.generation_id = steward_delivery_intents.generation_id AND steward_delivery_intents_1.kind = 'terminology' AND JSON_EXTRACT(steward_delivery_intents_1.payload_json, '$.\"phase\"') = 'target' AND steward_delivery_intents_1.status = 'pending'))) AND (steward_delivery_intents.kind != 'terminology' OR JSON_EXTRACT(steward_delivery_intents.payload_json, '$.\"phase\"') != 'complete' OR NOT (EXISTS (SELECT steward_delivery_intents_1.id \nFROM steward_delivery_intents AS steward_delivery_intents_1 \nWHERE steward_delivery_intents_1.generation_id = steward_delivery_intents.generation_id AND steward_delivery_intents_1.kind = 'terminology' AND steward_delivery_intents_1.intent_key != 'terminology:complete' AND (steward_delivery_intents_1.status = 'pending' OR steward_delivery_intents_1.status = 'failed' AND JSON_EXTRACT(steward_delivery_intents_1.payload_json, '$.\"phase\"') = 'refresh')))) AND steward_delivery_intents.generation_id = 1 ORDER BY steward_delivery_intents.id\n LIMIT 1 OFFSET 0",
+    "global": "SELECT steward_delivery_intents.id, steward_delivery_intents.generation_id, steward_delivery_intents.space_id, steward_delivery_intents.intent_key, steward_delivery_intents.kind, steward_delivery_intents.payload_json, steward_delivery_intents.effect_fingerprint, steward_delivery_intents.status, steward_delivery_intents.attempt, steward_delivery_intents.lease_owner, steward_delivery_intents.lease_until, steward_delivery_intents.available_at, steward_delivery_intents.error_code, steward_delivery_intents.created_at, steward_delivery_intents.updated_at \nFROM steward_delivery_intents JOIN steward_generations ON steward_generations.id = steward_delivery_intents.generation_id \nWHERE steward_generations.status = 'published' AND steward_delivery_intents.status = 'pending' AND steward_delivery_intents.kind != 'inferred_overlay' AND (steward_delivery_intents.available_at IS NULL OR steward_delivery_intents.available_at <= '2026-09-14 14:00:00.000000') AND (steward_delivery_intents.lease_until IS NULL OR steward_delivery_intents.lease_until <= '2026-09-14 14:00:00.000000') AND (steward_delivery_intents.kind != 'assist' OR NOT (EXISTS (SELECT steward_delivery_intents_1.id \nFROM steward_delivery_intents AS steward_delivery_intents_1 \nWHERE steward_delivery_intents_1.generation_id = steward_delivery_intents.generation_id AND steward_delivery_intents_1.kind = 'terminology' AND (steward_delivery_intents_1.status = 'pending' OR steward_delivery_intents_1.status = 'failed' AND JSON_EXTRACT(steward_delivery_intents_1.payload_json, '$.\"phase\"') IN ('refresh', 'complete'))))) AND (steward_delivery_intents.kind != 'terminology' OR JSON_EXTRACT(steward_delivery_intents.payload_json, '$.\"phase\"') != 'refresh' OR NOT (EXISTS (SELECT steward_delivery_intents_1.id \nFROM steward_delivery_intents AS steward_delivery_intents_1 \nWHERE steward_delivery_intents_1.generation_id = steward_delivery_intents.generation_id AND steward_delivery_intents_1.kind = 'terminology' AND JSON_EXTRACT(steward_delivery_intents_1.payload_json, '$.\"phase\"') = 'target' AND steward_delivery_intents_1.status = 'pending'))) AND (steward_delivery_intents.kind != 'terminology' OR JSON_EXTRACT(steward_delivery_intents.payload_json, '$.\"phase\"') != 'complete' OR NOT (EXISTS (SELECT steward_delivery_intents_1.id \nFROM steward_delivery_intents AS steward_delivery_intents_1 \nWHERE steward_delivery_intents_1.generation_id = steward_delivery_intents.generation_id AND steward_delivery_intents_1.kind = 'terminology' AND steward_delivery_intents_1.intent_key != 'terminology:complete' AND (steward_delivery_intents_1.status = 'pending' OR steward_delivery_intents_1.status = 'failed' AND JSON_EXTRACT(steward_delivery_intents_1.payload_json, '$.\"phase\"') = 'refresh')))) ORDER BY steward_delivery_intents.id\n LIMIT 1 OFFSET 0"
+  },
+  "results": [
+    {
+      "people_shape": 50,
+      "intent_count": 451,
+      "cases": {
+        "scoped_baseline": {
+          "median_ms": 0.002416,
+          "max_ms": 0.004708,
+          "samples_ms": [
+            0.004708,
+            0.003125,
+            0.002667,
+            0.0025,
+            0.002375,
+            0.002375,
+            0.002417,
+            0.002416,
+            0.0025,
+            0.002459,
+            0.002417,
+            0.002375,
+            0.002375,
+            0.002333,
+            0.002416,
+            0.002292,
+            0.002458,
+            0.002375,
+            0.002375,
+            0.002333
+          ],
+          "plan": [
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_generation (generation_id=? AND status=?)"
+          ]
+        },
+        "scoped_prerequisites": {
+          "median_ms": 0.002708,
+          "max_ms": 0.004,
+          "samples_ms": [
+            0.004,
+            0.003125,
+            0.003,
+            0.00275,
+            0.002791,
+            0.002708,
+            0.002708,
+            0.002708,
+            0.002709,
+            0.002709,
+            0.00275,
+            0.002666,
+            0.002667,
+            0.002667,
+            0.002625,
+            0.002708,
+            0.002708,
+            0.002625,
+            0.002584,
+            0.002667
+          ],
+          "plan": [
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)"
+          ]
+        },
+        "global_baseline": {
+          "median_ms": 0.046417,
+          "max_ms": 0.049083,
+          "samples_ms": [
+            0.049083,
+            0.047042,
+            0.046541,
+            0.046125,
+            0.047,
+            0.046542,
+            0.046542,
+            0.046708,
+            0.046333,
+            0.046416,
+            0.046167,
+            0.046416,
+            0.046458,
+            0.045958,
+            0.045833,
+            0.045625,
+            0.046417,
+            0.046417,
+            0.046209,
+            0.045792
+          ],
+          "plan": [
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_due (status=?)",
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        "global_prerequisites": {
+          "median_ms": 0.618521,
+          "max_ms": 0.678625,
+          "samples_ms": [
+            0.596792,
+            0.580958,
+            0.634083,
+            0.678625,
+            0.612,
+            0.592083,
+            0.608542,
+            0.611708,
+            0.617041,
+            0.633083,
+            0.629083,
+            0.62275,
+            0.630625,
+            0.620125,
+            0.617333,
+            0.618667,
+            0.618833,
+            0.617667,
+            0.620584,
+            0.618375
+          ],
+          "plan": [
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_due (status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        "scoped_with_status_id": {
+          "median_ms": 0.0025,
+          "max_ms": 0.003708,
+          "samples_ms": [
+            0.003708,
+            0.002709,
+            0.002583,
+            0.002541,
+            0.002541,
+            0.0025,
+            0.002458,
+            0.002458,
+            0.002584,
+            0.0025,
+            0.0025,
+            0.002708,
+            0.002416,
+            0.002417,
+            0.002417,
+            0.002458,
+            0.0025,
+            0.0025,
+            0.002417,
+            0.002375
+          ],
+          "plan": [
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)"
+          ]
+        },
+        "global_with_status_id": {
+          "median_ms": 0.00248,
+          "max_ms": 0.003791,
+          "samples_ms": [
+            0.003791,
+            0.002916,
+            0.002667,
+            0.002584,
+            0.002541,
+            0.002542,
+            0.002459,
+            0.002459,
+            0.002584,
+            0.002792,
+            0.002375,
+            0.002417,
+            0.002541,
+            0.002375,
+            0.002375,
+            0.002375,
+            0.0025,
+            0.002375,
+            0.002458,
+            0.002417
+          ],
+          "plan": [
+            "SEARCH steward_delivery_intents USING INDEX synthetic_sdi_status_id (status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)"
+          ]
+        }
+      }
+    },
+    {
+      "people_shape": 200,
+      "intent_count": 5401,
+      "cases": {
+        "scoped_baseline": {
+          "median_ms": 0.002021,
+          "max_ms": 0.003375,
+          "samples_ms": [
+            0.003375,
+            0.002375,
+            0.002208,
+            0.002083,
+            0.002125,
+            0.002042,
+            0.002042,
+            0.002,
+            0.002083,
+            0.002,
+            0.002,
+            0.002,
+            0.002,
+            0.002,
+            0.002,
+            0.001958,
+            0.002083,
+            0.002,
+            0.002042,
+            0.001959
+          ],
+          "plan": [
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_generation (generation_id=? AND status=?)"
+          ]
+        },
+        "scoped_prerequisites": {
+          "median_ms": 0.003229,
+          "max_ms": 0.003584,
+          "samples_ms": [
+            0.003584,
+            0.003167,
+            0.003542,
+            0.003542,
+            0.003416,
+            0.003458,
+            0.003291,
+            0.003292,
+            0.003291,
+            0.003292,
+            0.003333,
+            0.003041,
+            0.002667,
+            0.002667,
+            0.002625,
+            0.002625,
+            0.002709,
+            0.00275,
+            0.002542,
+            0.002583
+          ],
+          "plan": [
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)"
+          ]
+        },
+        "global_baseline": {
+          "median_ms": 0.530958,
+          "max_ms": 0.588875,
+          "samples_ms": [
+            0.546208,
+            0.546292,
+            0.525708,
+            0.5235,
+            0.523167,
+            0.520709,
+            0.545084,
+            0.556083,
+            0.527542,
+            0.539209,
+            0.534292,
+            0.588875,
+            0.577917,
+            0.530208,
+            0.531708,
+            0.549209,
+            0.523667,
+            0.521834,
+            0.5295,
+            0.526208
+          ],
+          "plan": [
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_due (status=?)",
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        "global_prerequisites": {
+          "median_ms": 8.951001,
+          "max_ms": 9.27575,
+          "samples_ms": [
+            8.787,
+            8.94175,
+            9.096875,
+            9.132584,
+            8.764208,
+            9.024458,
+            8.945417,
+            8.904375,
+            8.857583,
+            8.949334,
+            8.831,
+            8.892666,
+            9.011166,
+            8.954125,
+            9.049375,
+            8.952667,
+            8.979416,
+            9.248958,
+            9.27575,
+            8.807042
+          ],
+          "plan": [
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_due (status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        "scoped_with_status_id": {
+          "median_ms": 0.002229,
+          "max_ms": 0.00325,
+          "samples_ms": [
+            0.00325,
+            0.002541,
+            0.002292,
+            0.00225,
+            0.002292,
+            0.002208,
+            0.002167,
+            0.002208,
+            0.00225,
+            0.002125,
+            0.002125,
+            0.0025,
+            0.002125,
+            0.002167,
+            0.002166,
+            0.002125,
+            0.002125,
+            0.002292,
+            0.002334,
+            0.002334
+          ],
+          "plan": [
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH steward_delivery_intents USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)"
+          ]
+        },
+        "global_with_status_id": {
+          "median_ms": 0.002771,
+          "max_ms": 0.003791,
+          "samples_ms": [
+            0.003791,
+            0.003125,
+            0.002958,
+            0.002833,
+            0.002875,
+            0.002833,
+            0.002792,
+            0.00275,
+            0.002834,
+            0.003042,
+            0.002709,
+            0.002792,
+            0.002708,
+            0.002625,
+            0.00275,
+            0.00275,
+            0.002708,
+            0.002667,
+            0.002708,
+            0.002708
+          ],
+          "plan": [
+            "SEARCH steward_delivery_intents USING INDEX synthetic_sdi_status_id (status=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=? AND status=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH steward_delivery_intents_1 USING INDEX ix_sdi_generation (generation_id=?)",
+            "SEARCH steward_generations USING INTEGER PRIMARY KEY (rowid=?)"
+          ]
+        }
+      }
+    }
+  ]
+}

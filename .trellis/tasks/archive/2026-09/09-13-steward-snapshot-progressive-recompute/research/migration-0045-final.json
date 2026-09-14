@@ -1,0 +1,91 @@
+{
+  "migration_sha256": "d4be1434ac4a18cd2c95e2bb76c42406af492b9c0ada0dffb5ba1d79638e69c0",
+  "checks": [
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": null,
+      "passed": true
+    },
+    {
+      "action": "upgrade",
+      "revision": "head",
+      "guard": null,
+      "passed": true
+    },
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": "running_generation",
+      "passed": true
+    },
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": "failed_preview",
+      "passed": true
+    },
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": "unfulfilled_demand",
+      "passed": true
+    },
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": "pending_delivery",
+      "passed": true
+    },
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": "failed_delivery",
+      "passed": true
+    },
+    {
+      "action": "downgrade",
+      "revision": "0044_steward_generations",
+      "guard": null,
+      "passed": true
+    },
+    {
+      "action": "upgrade",
+      "revision": "head",
+      "guard": null,
+      "passed": true
+    },
+    {
+      "connection_foreign_keys": 0,
+      "roundtrip_preserves_policy": true
+    },
+    {
+      "connection_foreign_keys": 1,
+      "roundtrip_preserves_policy": true
+    }
+  ],
+  "legacy_cache_invalidated": true,
+  "source_rows_preserved": true,
+  "users": 3,
+  "facts": 2,
+  "foreign_keys_valid": true,
+  "input_trigger_count": 45,
+  "receipt_and_overlay_tables": [
+    [
+      "steward_finding_deliveries"
+    ],
+    [
+      "steward_inferred_overlays"
+    ]
+  ],
+  "delivery_lease_columns": [
+    "lease_owner",
+    "lease_until"
+  ],
+  "delivery_effect_fingerprint": true,
+  "delivery_effect_index_columns": [
+    "space_id",
+    "effect_fingerprint",
+    "id"
+  ]
+}

@@ -1,0 +1,15 @@
+Measuring ming/30, trial 1
+{"milestone": "skeleton", "elapsed_ms": 177.126}
+{"milestone": "viewer_ready", "elapsed_ms": 2485.424}
+{"milestone": "cold_published", "seconds": 17.7736}
+{"milestone": "hot_published", "seconds": 1.6526}
+{"milestone": "scheduled_scan", "elapsed_seconds": 0.315}
+{"milestone": "scheduled_scan", "elapsed_seconds": 300.928}
+{"milestone": "scheduled_scan", "elapsed_seconds": 602.958}
+{"case": "ming", "people": 30, "cold_s": 17.7736, "hot_s": 1.6526, "checks": {"no_request_failures": true, "writer_p99_le_100ms": true, "no_writer_over_500ms": true, "real_scan_windows": true, "skeleton_observed": true}}
+Measuring sparse/50, trial 2
+{"milestone": "skeleton", "elapsed_ms": 196.573}
+{"milestone": "viewer_ready", "elapsed_ms": 5701.363}
+{"milestone": "cold_published", "seconds": 27.3105}
+{"milestone": "hot_published", "seconds": 2.4009}
+{"case": "sparse", "people": 50, "cold_s": 27.3105, "hot_s": 2.4009, "checks": {"no_request_failures": true, "writer_p99_le_100ms": true, "no_writer_over_500ms": true, "real_scan_windows": true, "skeleton_observed": true}}
