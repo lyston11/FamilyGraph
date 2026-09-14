@@ -47,3 +47,7 @@
 | AC-11/12/13 | 代码+测试级验证 | attempt.viewer_account_id 绑定（test 断言）、GET 零模型调用（详情只读测试）、last_checked 同输入零重发（test_invalid… 第二 job 无新 call）、撤权/证据变化走既有 fence（_fence_check 扩 terminology 语义摘要） |
 | AC-14 | 完成 | task-alignment.md 修订已在规划期落盘；本期未重开远端归档任务 |
 | AC-15 | 部分 | 隔离迁移/受影响检查/合成场景通过；**真实模型与线上状态单列未测**；归档清理见交付说明 |
+
+## 2026-09-14 交付后质量审核补充
+
+本轮直接审核修复已合入 `main`（`c8805bf`、`d26bb83`）。缺口、修复、最新验证结果和剩余限制见 [质量审核与修复记录](quality-review-2026-09-14.md)；以上首次交付记录保留为历史证据。
