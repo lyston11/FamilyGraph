@@ -1,6 +1,6 @@
 # FamilyGraph 系统架构与设计
 
-> 更新于 2026-09-14，当前实现以 `main@880ad1a` 为核验基线，包含独立管理员平台、Provider/功能治理、个人家族视图和管家称谓闭环及质量修复。最新任务状态、分支与集成限制见 [Trellis 交接](../.trellis/HANDOFF.md)。
+> 更新于2026-09-14，本次Memory/RAG实现与验收基线为累计`aebee83`/`dd8157c`，已包含`main@461d691`的独立管理员平台、Provider/功能治理、个人家族视图和管家称谓闭环。主线集成、任务归档与后续边界见 [Trellis交接](../.trellis/HANDOFF.md)。
 > API 签名、错误矩阵和测试清单以当前代码、迁移及测试为准；后续设计看 `.trellis/tasks/` 中对应任务，工作流见根目录 [AGENTS.md](../AGENTS.md)。已标为历史资料的 `.trellis/spec/` 不覆盖现行合同。本文将主线实现与尚在分支推进的设计分开说明。
 > 数据播种、默认管理员来源与存量部署升级处置见 [DEV-DATA-SEEDING.md](./DEV-DATA-SEEDING.md)。
 
@@ -131,7 +131,7 @@ backend/app/
 └── utils/           # security.py（家庭 PIN/JWT）；admin_security.py（admin JWT 签发域）
 ```
 
-规则：api → services / application commands → models；家庭数据出口必须经 `visibility.py`；admin 读模型禁止复用家庭 visibility 链。当前主线迁移 head 是 `0044_steward_terminology`。Memory/RAG 和渐进重算分支另有迁移及分叉，集成前按 [交接检查点](../.trellis/HANDOFF.md) 核对实际 DAG，不能把分支中的 0045 当成 main 已部署版本。
+规则：api → services / application commands → models；家庭数据出口必须经`visibility.py`；admin读模型禁止复用家庭visibility链。本次累计验证迁移单头为`0047_rag_lifecycle_integrity`，已包含RAG与称谓0044分叉的合并。渐进重算仍有独立迁移；后续集成按 [交接检查点](../.trellis/HANDOFF.md) 核对实际DAG，代码版本不等于生产数据库已执行迁移。
 
 路由实况以 [main.py](../backend/app/main.py) 为准。受控联网的遗留 `/api/admin/web/platform` 仍由原 `platform_operator` 路径处理，并未随 Provider 治理迁移成为系统管理员后台接口；不能据此恢复已删除的 `/api/admin/agent/*`。
 
@@ -158,19 +158,20 @@ backend/app/
 
 ## 8. 双 Agent、Memory/RAG 与开关
 
-### 8.1 已有实现与后继修复
+### 8.1 已验收实现与后续能力
 
-| 范围 | 主线基础行为 | 尚在独立任务推进的部分 |
+| 范围 | 已验收行为 | 尚在独立任务推进的部分 |
 | --- | --- | --- |
-| Assistant | 同会话文字历史持久化并在 Run 恢复；以最新用户文本进行一次 FTS5 RAG 预取，经 internal 协议进入 Pi | A/C/B/D 分支的来源修复、恢复/压缩一致性、中文召回、可信引用和索引生命周期尚待累计验收与集成 |
-| Memory | 候选须明确确认，检索受 scope、来源、状态、敏感度和有效开关约束 | 手工/RAG 来源端到端契约修复不能仅因 service 已存在就视为 main 已可用；自动聊天候选、显式聊天保存与授权导入仍有单独采用门槛 |
+| Assistant | 同会话文字恢复进Pi的同一个manager；一次FTS5预取支持中文短词、受控别名与唯一明确前文；签名attempt贯穿实际执行，服务端精确引用统一投影 | 主动检索工具、通用语义检索、全请求预算和跨Run持久摘要仍需独立采用；RAG子预算不等于全模型请求预算 |
+| Memory | 手工/RAG来源经候选→明确确认→保存；服务端重验来源、revision、scope和敏感度，安全重试不重复，legacy/unverified保持隔离 | 自动聊天候选、显式聊天保存与授权导入仍有单独采用门槛；物理擦除和新revision编辑未默认实施 |
+| RAG索引 | 规范来源唯一键、完整输入摘要、不可变chunk与活动版本；有界lease维护支持晚开启补建，FTS修复与换版分离，历史合法引用精确读取 | 缺乏可信完整输入的旧来源保留并报告；不以重建认证未知来源或恢复source tombstone，生产规模延迟未测 |
 | Steward | 确定性领域计算；候选、排序、解释、称谓四类受约束 assist；持久化批次、去重和有限反馈 | shared RAG、通用反馈学习、MR-23 候选证据版本及 MR-26 行为投影键族仍按各自任务推进，不能写成已接通 |
 
 称谓偏好是已实现的领域记忆。它不意味着 Steward 已能检索私人聊天，也不意味着 Assistant 的会话已自动进入长期 Memory。Pi 压缩一致性修复与全请求预算、跨 Run 持久摘要分别验收。
 
 后续 shared RAG 设计仅允许 Steward 以自己的 job/space/consumer 身份使用当前获权的 confirmed shared 内容，保留来源撤销、引用版本、本地 Provider 要求及成本边界；不伪造 Assistant Run、不读取 private memory/session、不覆盖确定性事实。
 
-最新修复要求见 [Memory/RAG 总任务](../.trellis/tasks/09-13-agent-memory-rag-remediation/prd.md)、[独立验收复查](../.trellis/tasks/09-14-memory-rag-acceptance-audit/prd.md)及 [能力采用登记](../.trellis/tasks/09-13-agent-memory-capability-plan/research/capability-decision-register.md)。旧正常链测试通过不替代 B/D 新反例的验收。
+需求与后续边界见 [Memory/RAG总任务](../.trellis/tasks/09-13-agent-memory-rag-remediation/prd.md)、[最终独立验收](../.trellis/tasks/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)及 [能力采用登记](../.trellis/tasks/09-13-agent-memory-capability-plan/research/capability-decision-register.md)。原B/D20组缺口和追加恢复回归均已闭合；检索扩展集仍为7/10，真实模型质量和生产状态未据此推定。
 
 ### 8.2 开关与模型准入
 

@@ -32,7 +32,7 @@
     "implementation_approved": "2026-09-13: user execute; read-only capability evaluation and isolated synthetic reproductions",
     "implementation_status": "research_complete",
     "verification": "MR-23/MR-26 synthetic production-path probes; 18 synthetic budget-plan cases; main source/hash/module-path review passed",
-    "integration_status": "merged_to_candidate; final main acceptance pending",
+    "integration_status": "research verified in cumulative dd8157c; final main integration pending",
     "followup_owner": "09-13-steward-memory-evidence-projections",
     "local_commit": "bc6b500",
     "push_status": "E research branch 67e9316 already pushed; incorporated into cumulative candidate after latest integration authorization."

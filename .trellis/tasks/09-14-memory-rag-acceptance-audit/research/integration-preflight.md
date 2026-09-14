@@ -2,6 +2,8 @@
 
 2026-09-14 续接用户已授权的审查、修复、验收、提交、串行合并、归档和清理。本文是执行检查点，原 bd899b9 审计结果和制品哈希不变。
 
+最新检查点：D业务修复aebee83、验收制品dd8157c已push并合入父候选；Audit已从该候选建立独立worktree并进入in_progress。后端1352、前端660、独立D15项、迁移8/8和真实listener/Pi95/95通过。最新逐项判定见 [最终验收](final-acceptance.md)，下文是执行前检查与原计划，保留用于追溯。
+
 ## 当前累计版本
 
 - B 已完成并 push：`b6688f8`（执行身份与精确证据）及 `bc76e95`（真实 listener 验收与末轮修复记录）。主线程检查见 [B 验收记录](../../09-13-rag-retrieval-citations/research/acceptance-check.md)。backend 1201 passed / 3 skipped，agent 118、frontend 625；真实 listener/Pi smoke 95/95。它们是 B 检查点，不代替 D 之后的累计验证。
@@ -9,7 +11,7 @@
 - D 从父候选 fast-forward，随后纳入最新 `origin/main` 的文档提交 `461d691`，以 `c253cb6` 固定本轮执行材料并 push。主分支尚未收到本轮业务集成。
 - 本轮核对远端发现 C 仍在 `470b362`、A 尚无对应远端分支；已实际 push A `d1f43a5` 和 C `8e91c42` 并设置 upstream。后续清理以真实 refs/合并检查为准，不沿用“全部已 push”的旧汇报。
 - 实施前实际 Alembic head 为 `0046_context_execution_contract`，单头。D 后续编号由实施者从该链向前推进，新增约束不删除旧数据。
-- D-I01～10 仍在修复，F-07～11 和父 AC-06 不能提前标通过；详细补充断言见 [D 执行前核对](d-execution-preflight.md)。
+- 在执行前c253cb6检查点，D-I01～10仍待修复，F-07～11和父AC-06未标通过；详细补充断言见 [D 执行前核对](d-execution-preflight.md)。该阶段已由上方最终验收闭环。
 
 ## 最终检查对象
 
@@ -46,4 +48,4 @@
 5. 每个已合并且干净的任务立即删除 worktree，再用 `git branch -d` 删除本地分支；不使用 force，不碰 snapshot/Orca 或其他任务。保留远端分支作为已提交证据。
 6. 写会话 journal，核对主检出无新增本任务业务脏文件、远端同步和原无关改动保全。
 
-本检查点不宣称最终验收、main 合并或归档已经完成；完成结果另写累计验收记录。
+该执行前检查点不代表当前最终状态；累计验收结果见上方链接，main合并、归档和清理仍按实际执行另行记录。

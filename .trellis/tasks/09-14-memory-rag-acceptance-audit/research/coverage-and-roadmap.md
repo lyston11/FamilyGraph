@@ -1,10 +1,35 @@
 # 原问题覆盖与优化路线
 
-## 原26项均保留
+## 最终处置（2026-09-14）
 
-来源：[2026-09-13完整审计](../../09-13-agent-memory-rag-remediation/research/audit.md)、[原覆盖矩阵](../../09-13-agent-memory-rag-remediation/research/coverage.md)、[E决定登记](../../09-13-agent-memory-capability-plan/research/capability-decision-register.md)。下表是状态更新，不重编号、不把原发现与本次20组数量相加。
+累计dd8157c已完成本期修复与验收；B/D原20组缺口闭合，见 [最终验收](final-acceptance.md)。下面先给当前处置，随后保留bd899b9原基线表；不重编号，不把原26项与新增20组简单相加。
 
-| 原ID | 内容 | 本次处置 / 唯一责任 |
+| 原ID | 最终处置 / 唯一责任 |
+|---|---|
+| MR-01、MR-02、MR-16 | A来源、响应、确认幂等和四开关写入口已修复；累计真实API/前后端回归通过 |
+| MR-03、MR-04、MR-09 | B中文/英文、唯一追问、有界授权补足、句段分块与D片段不可变性已通过；扩展7/10保留 |
+| MR-10 | B真实包装RAG子预算已修；全请求预算仍为E-O6研究，未生产采用 |
+| MR-11 | C8e91c42已push并进入累计候选，Pi恢复/压缩/成功终态回归通过 |
+| MR-13、MR-25 | D规范身份、正文证据、租约/事务、水位、换版、FTS修复及合法恢复已通过，来源tombstone不复活 |
+| MR-14 | B精确引用/所有出口/重试/字节边界与D旧片段保全已通过，真实95项链闭环 |
+| MR-15 | 现有部署与平台AND语义、最终读写复核和RAG-only晚开启通过；线上状态未测，平台治理归既有任务 |
+| MR-17 | A/D后续读取失效与无损拒绝降级通过；E-O9保留/物理擦除策略继续延期 |
+| MR-24 | 真实独立Session、SQL迁移、HTTP/Pi/维护链补齐；累计后端1352、前端660、agent118检查点及代码一致证明 |
+| MR-05 | E-O1主动检索仍延期评估；一次预取保留 |
+| MR-06 | E-O2/O3显式聊天保存与opt-in候选保持规划，未上线 |
+| MR-07、MR-08 | E-O4授权导入及E-O5语义/混合检索保持研究；service和字段占位不算可用生产入口 |
+| MR-12 | C文字恢复边界明确，E-O7跨Run持久摘要未实施 |
+| MR-18 | E-O8新revision/再次确认编辑方向保留，未实施 |
+| MR-19 | Steward shared RAG仍交接09-11-steward-capability-followups，未增加私有聊天消费者 |
+| MR-20、MR-21 | 一般反馈/偏好收益仍属E-O11研究，称谓生产成果按其独立任务判断，不重复真源或接管状态 |
+| MR-22 | E-O12冷却重现/通知与延迟产品选择未采用，不能称已实现自动恢复 |
+| MR-23、MR-26 | E完整合成生产链证据已交付；唯一后续09-13-steward-memory-evidence-projections仍planning，本轮未修 |
+
+## 原26项的基线处置（历史）
+
+来源：[2026-09-13完整审计](../../09-13-agent-memory-rag-remediation/research/audit.md)、[原覆盖矩阵](../../09-13-agent-memory-rag-remediation/research/coverage.md)、[E决定登记](../../09-13-agent-memory-capability-plan/research/capability-decision-register.md)。下表只记录bd899b9复查当时状态，其中“失败/待修/待累计”均已由上方最终处置更新。
+
+| 原ID | 内容 | 原基线处置 / 唯一责任 |
 |---|---|---|
 | MR-01 | 新增/保存缺来源 | A明确来源合同已实施，真实API链通过；保留A责任 |
 | MR-02 | DTO字段与提交后500 | A已修，原验收和本轮创建链保留；不以此证明所有并发皆正确 |

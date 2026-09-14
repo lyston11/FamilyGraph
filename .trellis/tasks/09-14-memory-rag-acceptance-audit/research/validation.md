@@ -1,6 +1,8 @@
 # 验证结果与复现入口
 
-## 版本、数据与工具边界
+2026-09-14最终更新：本文保留bd899b9原审计的版本、命令、红测与早期smoke结果；其中C“未push/合入”等描述只属于该历史检查点。C8e91c42现已push并累计，B/D20组缺口及追加恢复回归已闭合。最新通过结果、代码绑定与限制见 [最终验收](final-acceptance.md)，原30份冻结制品及原始日志不修改。
+
+## 原基线版本、数据与工具边界
 
 - B/D累计代码：`bd899b98871c02ad97b7791a051f126d671bfefb`，父集成worktree为`/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation`。复查过程中backend/agent/frontend/shared等生产路径对该提交无diff。
 - C补充补丁：`8e91c420ce4d8ef2f4a4d806027bd29d72382f94`，只在C专属分支，本地提交并以backup分支固定；未push/合入累计代码或main。

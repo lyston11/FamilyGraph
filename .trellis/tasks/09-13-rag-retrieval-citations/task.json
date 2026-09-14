@@ -30,6 +30,7 @@
     "implementation_status": "verified_pending_integration",
     "acceptance_review_task": "09-14-memory-rag-acceptance-audit",
     "reviewed_cumulative_commit": "bd899b98871c02ad97b7791a051f126d671bfefb",
-    "execution_authorization": "2026-09-14 user: 直接开始审查代码并验收，没问题就提交合并归档"
+    "execution_authorization": "2026-09-14 user: 直接开始审查代码并验收，没问题就提交合并归档",
+    "acceptance_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329"
   }
 }
