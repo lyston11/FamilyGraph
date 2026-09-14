@@ -3,7 +3,7 @@
   "name": "agent-memory-rag-remediation",
   "title": "双 Agent RAG 与记忆修复及能力优化",
   "description": "保存完整审计证据，规划记忆契约、中文召回、上下文压缩、索引与引用修复，并定义后续知识能力的准入条件。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-13",
-  "completedAt": null,
+  "completedAt": "2026-09-14",
   "branch": "feat/09-13-agent-memory-rag-remediation",
   "base_branch": "feat/09-13-rag-index-lifecycle",
   "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation",
@@ -36,8 +36,12 @@
     "implementation_dependencies": "A -> C -> B -> D; E read-only research may run independently",
     "audit_issue_scope": "MR-01..MR-26",
     "implementation_approved": "2026-09-13: user replied 执行 after final planning delivery",
-    "implementation_status": "verified_pending_integration",
+    "implementation_status": "accepted_and_integrated",
     "integration_note": "C 8e91c42, B bc76e95, D aebee83/dd8157c, E 67e9316 and main 461d691 in cumulative candidate. Parent AC-01..10 passed; authorized main integration/archive/cleanup pending.",
-    "acceptance_review_task": "09-14-memory-rag-acceptance-audit"
+    "acceptance_review_task": "09-14-memory-rag-acceptance-audit",
+    "final_branch_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "integration_target": "main",
+    "integration_status": "merged_smoke_passed"
   }
 }
