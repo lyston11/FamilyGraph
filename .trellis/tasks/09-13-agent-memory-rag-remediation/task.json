@@ -36,8 +36,8 @@
     "implementation_dependencies": "A -> C -> B -> D; E read-only research may run independently",
     "audit_issue_scope": "MR-01..MR-26",
     "implementation_approved": "2026-09-13: user replied 执行 after final planning delivery",
-    "implementation_status": "integration_review_failed_repair_planned",
-    "integration_note": "bd899b9 reviewed with 20 B/D gaps; isolated API 56/56 and actual sidecar/Pi smoke 50/50 passed. C review fix 8e91c42 is local and not in this baseline. Main merge/deployment excluded.",
+    "implementation_status": "acceptance_repairs_in_progress",
+    "integration_note": "Authorized serial review, repairs, acceptance, commit, main merge, archive and cleanup. C 8e91c42 and main d7629df included in B candidate. Deployment excluded.",
     "acceptance_review_task": "09-14-memory-rag-acceptance-audit"
   }
 }

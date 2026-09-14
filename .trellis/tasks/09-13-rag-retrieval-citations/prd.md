@@ -4,7 +4,7 @@
 
 让用户用正常中文问题找到有权限的已确认资料，并能从 Assistant 回答追溯到本轮实际引用的来源。
 
-父任务：[治理总任务](../09-13-agent-memory-rag-remediation/prd.md)。B 负责 MR-03、MR-04、MR-09、MR-14、MR-10 的 RAG 子预算；MR-24 通过真实检索与跨端合同回归解决。本轮仅规划。
+父任务：[治理总任务](../09-13-agent-memory-rag-remediation/prd.md)。B 负责 MR-03、MR-04、MR-09、MR-14、MR-10 的 RAG 子预算；MR-24 通过真实检索与跨端合同回归解决。2026-09-14 已获继续修复、审查验收与通过后集成归档授权；本轮关闭 [B-I01～10](../09-14-memory-rag-acceptance-audit/research/b-integration-check.md)，以原 B-AC1～8 和复查 F-01～06/F-12 重新验收。
 
 ## Background
 

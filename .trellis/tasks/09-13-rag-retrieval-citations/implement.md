@@ -2,9 +2,16 @@
 
 ## 前提
 
-保持 planning。A 的来源授权和 C 的 Pi 回归交付后，在主检出 start B、检查分支/worktree 并进入该 worktree。阅读 [父设计](../09-13-agent-memory-rag-remediation/design.md) 与 [数据集和验证协议](../09-13-agent-memory-rag-remediation/research/validation-plan.md)。后续 D 等待 B 的分块/版本合同。
+任务 in_progress，2026-09-14 继续修复验收。累计候选已包含 A、初版 B/D、C 补丁 8e91c42 与 main d7629df。阅读 [复查设计](../09-14-memory-rag-acceptance-audit/design.md)、[B 反例](../09-14-memory-rag-acceptance-audit/research/b-integration-check.md) 和 [父设计](../09-13-agent-memory-rag-remediation/design.md)。D 等待 B 的执行身份、精确片段与检索合同稳定。
 
-## 执行顺序
+## 本轮修复验收
+
+- [ ] B-I01/I05/I10：不可变 signed attempt 进入 writer/admission；context 并发唯一与持久失效；内部 context_reference 及原请求指纹端到端。
+- [ ] B-I02/I03/I04/I09：精确片段认证，统一所有读取投影，保留字段服务端独占；固定补取精确定位。
+- [ ] B-I06/I07/I08：真实包装预算、有界授权补足、有限同会话唯一锚点与歧义降级。
+- [ ] 独立核验；冻结核心/英文不退化；C、原请求幂等和精确 16 KiB 正对照保留。
+
+## 初版执行记录（以下历史勾选不能代替本轮复验）
 
 - [x] 固定核心中文、英文回归、扩展集和权限反例；记录旧实现 Recall@5/排名与扫描量，禁止读真实家庭正文凑样本。
 - [x] 实现内部 QueryPlan、规范化/有限词项/受控别名和明确追问解析；上下文不足有明确降级。

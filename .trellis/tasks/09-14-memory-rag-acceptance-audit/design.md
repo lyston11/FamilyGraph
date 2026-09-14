@@ -2,7 +2,7 @@
 
 ## 状态与依据
 
-本文件是待实施方案。基线 `bd899b9` 的实际行为以 [独立报告](research/findings.md) 为准；本轮仅完成分析规划。约束来自当前 AGENTS、父任务和 B/D 已审定 PRD/design；历史 `.trellis/spec` 索引已标不可执行，不作为新增门禁。
+本文件是当前授权执行的修复方案。基线 `bd899b9` 的实际行为以 [独立报告](research/findings.md) 为准；2026-09-14 用户授权审查、验收及通过后的提交、合并、归档。约束来自当前 AGENTS、父任务和 B/D 已审定 PRD/design；历史 `.trellis/spec` 索引已标不可执行，不作为新增门禁。
 
 原 A 的来源 resolver、C 的同一 SessionManager、B 的词法改善/原请求指纹/固定补取、D 的 tombstone 原因区分均继续复用。不重写队列状态机，也不新增第二套授权系统。
 

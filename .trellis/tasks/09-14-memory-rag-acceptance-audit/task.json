@@ -28,16 +28,18 @@
     ".trellis/tasks/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md",
     ".trellis/tasks/09-14-memory-rag-acceptance-audit/research/validation.md"
   ],
-  "notes": "用户授权创建任务并记录分析；规划包完成，未启动B/D新业务修复。",
+  "notes": "分析规划已交付；用户授权按现有B/D责任修复验收，通过后提交合并归档清理。",
   "meta": {
-    "scope": "analysis_planning",
+    "scope": "acceptance_repair_and_integration",
     "audited_revision": "bd899b98871c02ad97b7791a051f126d671bfefb",
     "planning_delivery": "complete",
-    "implementation_started": "false",
+    "implementation_started": "true",
     "open_findings": "20",
     "reproduced_groups": "18",
     "static_groups": "2",
     "evidence_summary": "B 16 failed / 2 passed; D 17 failed / 3 passed; API smoke 56/56; actual sidecar smoke 50/50",
-    "canonical_evidence": ".trellis/tasks/09-14-memory-rag-acceptance-audit/research/evidence.json"
+    "canonical_evidence": ".trellis/tasks/09-14-memory-rag-acceptance-audit/research/evidence.json",
+    "repair_owners": "B and D existing tasks; this task owns final acceptance evidence",
+    "execution_authorization": "2026-09-14 user: 直接开始审查代码并验收，没问题就提交合并归档"
   }
 }
