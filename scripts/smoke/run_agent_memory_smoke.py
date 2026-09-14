@@ -52,6 +52,34 @@ with SessionLocal() as db:
         RAGDocument.source_id==os.environ['FG_SMOKE_MEMORY_ID'])))
 """
 
+PRIVATE_CITATION_FIELDS = {
+    "context_reference",
+    "context_build_id",
+    "build_id",
+    "used_handles",
+    "_source_ref",
+    "source_ref",
+    "quote_sha256",
+    "content_hash",
+}
+
+
+def has_private_citation_fields(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(
+            key in PRIVATE_CITATION_FIELDS or has_private_citation_fields(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(has_private_citation_fields(item) for item in value)
+    return False
+
+
+def sse_events(response: httpx.Response) -> list[dict]:
+    return [
+        json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")
+    ]
+
 
 def stop(process: subprocess.Popen | None) -> None:
     if process is None or process.poll() is not None:
@@ -73,11 +101,11 @@ def main() -> int:
     process = None
     blocked = False
     sidecar_checks = []
+    negative_checks = {}
+    negative_codes = {}
 
     def check(case: str, ok: bool, note: str = "") -> None:
-        suite.add(
-            api.Result(case, "isolated", "CHECK", "/", passed=bool(ok), note=note)
-        )
+        suite.add(api.Result(case, "isolated", "CHECK", "/", passed=bool(ok), note=note))
 
     try:
         public_port, internal_port, admin_port = api.free_ports(3)
@@ -165,16 +193,10 @@ def main() -> int:
                 json={"name": "朱元璋", "pin": "123456"},
             ).json()
             family_headers = {"Authorization": f"Bearer {login['access_token']}"}
-            spaces = request(
-                "spaces", "GET", f"{family}/api/spaces", headers=family_headers
-            ).json()
-            space_id = next(
-                space["id"] for space in spaces if space["kind"] == "household"
-            )
+            spaces = request("spaces", "GET", f"{family}/api/spaces", headers=family_headers).json()
+            space_id = next(space["id"] for space in spaces if space["kind"] == "household")
             env["FG_SMOKE_SPACE_ID"] = str(space_id)
-            username, password = api.parse_credentials(
-                data_dir / "bootstrap/admin-credentials"
-            )
+            username, password = api.parse_credentials(data_dir / "bootstrap/admin-credentials")
             admin_login = request(
                 "admin-login",
                 "POST",
@@ -203,31 +225,38 @@ def main() -> int:
                 headers=admin_headers,
                 json={"memory_enabled": True, "rag_enabled": False},
             )
-            source_text = "今年春节在上海聚餐，外婆喜欢清淡饮食。"
-            candidate = request(
-                "candidate-create",
-                "POST",
-                f"{family}/api/memory-candidates",
-                201,
-                headers=family_headers,
-                json={
-                    "source": {"kind": "manual"},
-                    "raw_quote": source_text,
-                    "summary": source_text,
-                    "purpose": "isolated integration",
-                    "suggested_scope": "private",
-                    "sensitivity": "normal",
-                    "idempotency_key": secrets.token_hex(16),
-                },
-            ).json()
-            memory = request(
-                "candidate-confirm",
-                "POST",
-                f"{family}/api/memory-candidates/{candidate['id']}/confirm",
-                headers=family_headers,
-                json={"scope": "private"},
-            ).json()
+
+            def save_memory(source_text: str, prefix: str = "") -> dict:
+                candidate = request(
+                    f"{prefix}candidate-create",
+                    "POST",
+                    f"{family}/api/memory-candidates",
+                    201,
+                    headers=family_headers,
+                    json={
+                        "source": {"kind": "manual"},
+                        "raw_quote": source_text,
+                        "summary": source_text,
+                        "purpose": "isolated integration",
+                        "suggested_scope": "private",
+                        "sensitivity": "normal",
+                        "idempotency_key": secrets.token_hex(16),
+                    },
+                ).json()
+                return request(
+                    f"{prefix}candidate-confirm",
+                    "POST",
+                    f"{family}/api/memory-candidates/{candidate['id']}/confirm",
+                    headers=family_headers,
+                    json={"scope": "private"},
+                ).json()
+
+            memory = save_memory("今年春节在上海聚餐，外婆喜欢清淡饮食。")
+            unused_memory = save_memory(
+                "外婆喜欢午后在公园散步，今年春节先看花，再去图书馆。", "unused-"
+            )
             env["FG_SMOKE_MEMORY_ID"] = str(memory["id"])
+            env["FG_SMOKE_UNUSED_MEMORY_ID"] = str(unused_memory["id"])
             count = subprocess.run(
                 [str(api.VENV_PY), "-c", COUNT_DOCUMENTS],
                 cwd=api.BACKEND,
@@ -248,6 +277,7 @@ def main() -> int:
                 json={"memory_enabled": True, "rag_enabled": True},
             )
             hits = []
+            expected_sources = {str(memory["id"]), str(unused_memory["id"])}
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 response = client.get(
@@ -257,14 +287,18 @@ def main() -> int:
                 )
                 if response.status_code == 200:
                     hits = response.json()
-                    if any(hit["source_id"] == str(memory["id"]) for hit in hits):
+                    if expected_sources.issubset({hit["source_id"] for hit in hits}):
                         break
                 time.sleep(0.2)
             check(
                 "rag-only-late-enable-materialized",
                 any(hit["source_id"] == str(memory["id"]) for hit in hits),
             )
-            if not hits:
+            check(
+                "unused-source-materialized",
+                any(hit["source_id"] == str(unused_memory["id"]) for hit in hits),
+            )
+            if not expected_sources.issubset({hit["source_id"] for hit in hits}):
                 raise AssertionError("maintenance did not materialize source")
 
             # RAG-only backfill is now proven; enable the Assistant runtime in
@@ -319,31 +353,23 @@ def main() -> int:
                     timeout=45,
                 )
                 node_report = (
-                    json.loads(node.stdout.strip().splitlines()[-1])
-                    if node.stdout.strip()
-                    else {}
+                    json.loads(node.stdout.strip().splitlines()[-1]) if node.stdout.strip() else {}
                 )
                 sidecar_checks.append(node_report.get("checks", {}))
                 check(
                     f"real-sidecar-cycle-{number}",
                     node.returncode == 0 and node_report.get("verdict") == "pass",
-                    str(node_report.get("error_type", ""))
-                    or next(
-                        (
-                            line[:180]
-                            for line in node.stderr.splitlines()
-                            if line.startswith(
-                                ("Error", "TypeError", "SyntaxError", "ConfigError")
-                            )
-                        ),
-                        "",
-                    ),
+                    str(node_report.get("error_type", "")),
                 )
                 for key, value in node_report.get("checks", {}).items():
                     if isinstance(value, bool) and (
                         number == 2
                         or key
-                        not in ("lost_response_injected", "retry_duplicate_verified")
+                        not in (
+                            "lost_response_injected",
+                            "retry_duplicate_verified",
+                            "original_reference_retry_identical",
+                        )
                     ):
                         check(f"sidecar-{number}-{key}", value)
                 run = request(
@@ -361,15 +387,9 @@ def main() -> int:
                     f"{family}/api/agent/runs/{run_id}/events",
                     headers=family_headers,
                 )
-                events = [
-                    json.loads(line[6:])
-                    for line in stream.text.splitlines()
-                    if line.startswith("data: ")
-                ]
+                events = sse_events(stream)
                 assistant_events = [
-                    event
-                    for event in events
-                    if event["type"] == "message.assistant_added"
+                    event for event in events if event["type"] == "message.assistant_added"
                 ]
                 check(f"assistant-event-{number}-once", len(assistant_events) == 1)
                 if not assistant_events:
@@ -385,8 +405,14 @@ def main() -> int:
                     f"fallback-{number}-permission",
                     bool(fallback["citations"])
                     if number == 1
-                    else not fallback["citations"]
-                    and fallback["unavailable_citation_count"] > 0,
+                    else not fallback["citations"] and fallback["unavailable_citation_count"] > 0,
+                )
+                check(
+                    f"fallback-{number}-only-used-source",
+                    len(fallback["citations"]) == 1
+                    and fallback["citations"][0]["source_id"] == str(memory["id"])
+                    if number == 1
+                    else not fallback["citations"] and fallback["unavailable_citation_count"] == 1,
                 )
                 # The reviewed contract permits the fixed authorized fallback
                 # to supply omitted citation metadata. Verify the effective
@@ -402,10 +428,26 @@ def main() -> int:
                 check(
                     f"sse-{number}-byte-limit",
                     all(
-                        len(json.dumps(item["payload"], ensure_ascii=False).encode())
-                        <= 16384
+                        len(json.dumps(item["payload"], ensure_ascii=False).encode()) <= 16384
                         for item in events
                     ),
+                )
+                check(
+                    f"public-{number}-no-private-provenance",
+                    not has_private_citation_fields(events)
+                    and not has_private_citation_fields(fallback),
+                )
+                reconnect = request(
+                    f"sse-reconnect-{number}",
+                    "GET",
+                    f"{family}/api/agent/runs/{run_id}/events",
+                    headers={**family_headers, "Last-Event-ID": str(event["seq"] - 1)},
+                )
+                check(
+                    f"sse-reconnect-{number}-same-safe-projection",
+                    sse_events(reconnect)
+                    == [item for item in events if item["seq"] >= event["seq"]]
+                    and not has_private_citation_fields(sse_events(reconnect)),
                 )
 
             history = request(
@@ -414,16 +456,12 @@ def main() -> int:
                 f"{family}/api/agent/sessions/{session['id']}/messages",
                 headers=family_headers,
             ).json()
-            assistant_history = [
-                message for message in history if message["role"] == "assistant"
-            ]
+            assistant_history = [message for message in history if message["role"] == "assistant"]
             check(
                 "history-revocation-projection",
                 len(assistant_history) == 2
                 and all(
-                    not message.get(
-                        "citations", message["content_json"].get("citations", [])
-                    )
+                    not message.get("citations", message["content_json"].get("citations", []))
                     and message.get(
                         "unavailable_citation_count",
                         message["content_json"].get("unavailable_citation_count", 0),
@@ -432,6 +470,10 @@ def main() -> int:
                     for message in assistant_history
                 ),
             )
+            check(
+                "history-no-private-provenance",
+                not has_private_citation_fields(history),
+            )
             search = request(
                 "search-after-revoke",
                 "GET",
@@ -439,7 +481,58 @@ def main() -> int:
                 headers=family_headers,
                 params={"space_id": space_id, "q": "外婆"},
             ).json()
-            check("revoked-source-not-searchable", not search)
+            check(
+                "revoked-source-not-searchable",
+                not any(hit["source_id"] == str(memory["id"]) for hit in search),
+            )
+            check(
+                "unused-source-still-searchable",
+                any(hit["source_id"] == str(unused_memory["id"]) for hit in search),
+            )
+
+            posted = request(
+                "message-3-after-revoke",
+                "POST",
+                f"{family}/api/agent/sessions/{session['id']}/messages",
+                headers={**family_headers, "Idempotency-Key": secrets.token_hex(16)},
+                json={"content": "外婆喜欢什么活动？"},
+            ).json()
+            negative = subprocess.run(
+                [
+                    "node",
+                    str(Path(__file__).with_name("agent_memory_negative_worker.mjs")),
+                ],
+                cwd=api.ROOT,
+                env={
+                    **env,
+                    "FG_SMOKE_RUN_ID": str(posted["run"]["id"]),
+                    "FG_SMOKE_FAMILY_TOKEN": login["access_token"],
+                },
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+            negative_report = (
+                json.loads(negative.stdout.strip().splitlines()[-1])
+                if negative.stdout.strip()
+                else {}
+            )
+            negative_checks = negative_report.get("checks", {})
+            negative_codes = negative_report.get("codes", {})
+            check(
+                "real-negative-internal-driver",
+                negative.returncode == 0 and negative_report.get("verdict") == "pass",
+                str(negative_report.get("error_type", "")),
+            )
+            for key, value in negative_checks.items():
+                if isinstance(value, bool):
+                    check(f"negative-{key}", value)
+            check(
+                "no-external-network-attempts",
+                len(sidecar_checks) == 2
+                and all(facts.get("unauthorized_network_attempts") == 0 for facts in sidecar_checks)
+                and negative_checks.get("unauthorized_network_attempts") == 0,
+            )
     except (ConnectionError, FileNotFoundError, subprocess.TimeoutExpired):
         blocked = True
         check(
@@ -458,6 +551,8 @@ def main() -> int:
         "verdict": "blocked" if blocked else "failed" if suite.failed else "pass",
         "model": "scripted stream; no external inference",
         "sidecar_checks": sidecar_checks,
+        "negative_checks": negative_checks,
+        "negative_http_codes": negative_codes,
         "counts": {"total": len(suite.results), "failed": len(suite.failed)},
         "cases": [vars(result) for result in suite.results],
     }
@@ -466,13 +561,7 @@ def main() -> int:
         args.report.write_text(output + "\n")
     else:
         print(output)
-    return (
-        api.EXIT_BLOCKED
-        if blocked
-        else api.EXIT_FAILED
-        if suite.failed
-        else api.EXIT_PASS
-    )
+    return api.EXIT_BLOCKED if blocked else api.EXIT_FAILED if suite.failed else api.EXIT_PASS
 
 
 if __name__ == "__main__":
