@@ -3,7 +3,7 @@
   "name": "agent-memory-capability-plan",
   "title": "Agent 记忆与知识能力扩展准入",
   "description": "记录自动候选、授权导入、语义检索与 Steward 知识及反馈优化的评估方案和实施门槛。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-13",
-  "completedAt": null,
+  "completedAt": "2026-09-14",
   "branch": "feat/09-13-agent-memory-capability-plan",
   "base_branch": "main",
   "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan",
@@ -32,9 +32,12 @@
     "implementation_approved": "2026-09-13: user execute; read-only capability evaluation and isolated synthetic reproductions",
     "implementation_status": "research_complete",
     "verification": "MR-23/MR-26 synthetic production-path probes; 18 synthetic budget-plan cases; main source/hash/module-path review passed",
-    "integration_status": "research verified in cumulative dd8157c; final main integration pending",
+    "integration_status": "merged_smoke_passed",
     "followup_owner": "09-13-steward-memory-evidence-projections",
     "local_commit": "bc6b500",
-    "push_status": "E research branch 67e9316 already pushed; incorporated into cumulative candidate after latest integration authorization."
+    "push_status": "E research branch 67e9316 already pushed; incorporated into cumulative candidate after latest integration authorization.",
+    "final_branch_commit": "67e93161460741f4fb4d8f08dddba52ba9a73173",
+    "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "integration_target": "main"
   }
 }
