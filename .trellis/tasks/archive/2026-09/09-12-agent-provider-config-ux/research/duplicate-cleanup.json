@@ -1,0 +1,34 @@
+{
+  "task": "09-12-agent-provider-config-ux",
+  "canonical_archive": ".trellis/tasks/archive/2026-09/09-12-agent-provider-config-ux",
+  "canonical_status": "completed",
+  "completed_at_preserved": "2026-09-13",
+  "unique_work_found": false,
+  "matching_document_files": 4,
+  "old_metadata_fields": [
+    "branch",
+    "completedAt",
+    "status"
+  ],
+  "active_duplicate_removed": true,
+  "stale_session_pointers_cleared": 1,
+  "backup": "/var/folders/8c/t8htn7h14t777qd1hclgyj940000gn/T/familygraph-provider-task-reconcile-k0hodprp",
+  "implementation_commit": "9017a6dfc3896d1d10980406e33727c92f223984",
+  "original_archive_commit": "e0e8d8d8b63cd863ad6a15a0072c37026baaa52e",
+  "checks": {
+    "archived_context_validate_exit_code": 0,
+    "active_list_exit_code": 0,
+    "active_list_contains_task": false,
+    "stale_session_pointers_remaining": 0,
+    "original_completion_fields_preserved": true,
+    "prd_and_research_unchanged": true,
+    "only_two_context_paths_relocated": true,
+    "former_feature_branch_exists": false,
+    "corresponding_worktree_exists": false,
+    "provider_view_and_tests_unchanged_since_delivery": true,
+    "business_code_modified": false,
+    "application_tests_rerun": false
+  },
+  "backup_manifest_sha256": "9480212a2676b57a4731eef3bbeca56e1d66e76720cc13ff306a1afd61369320",
+  "validation_head": "0db88c2d7adc14d509bda93a690f04813f9026a1"
+}
