@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 29
+- **Total Sessions**: 30
 - **Last Active**: 2026-09-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1083 | Active |
+| `journal-1.md` | ~1105 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 30 | 2026-09-14 | Steward 平台辅助开关提示修复与归档对账 | `73b0bbd3e89005aa50dae76924079cd765b86393` | `main` |
 | 29 | 2026-09-14 | 修复 Provider 配置任务的重复活动副本与归档状态 | `3fb2877` | `main` |
 | 28 | 2026-09-14 | 双 Agent 记忆与 RAG：修复验收、主线集成和归档清理 | `d1f43a5`, `8e91c42`, `b6688f8`, `bc76e95`, `aebee83`, `dd8157c`, `67e9316`, `a83b5d1`, `d4d14e5` | `main` |
 | 27 | 2026-09-14 | 按最新 Trellis 设计同步交接与架构文档 | `9d7d270` | `main` |

@@ -1081,3 +1081,25 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 30: Steward 平台辅助开关提示修复与归档对账
+<!-- trellis-session: v=2 fp=4466f6e96acaacd6 -->
+
+**Date**: 2026-09-14
+**Task**: Steward 平台辅助开关提示修复与归档对账
+**Branch**: `main`
+
+### Summary
+
+修复平台能力页请求开启但服务端仍关闭时的错误成功提示，四类辅助显示来源及部署阻断；新增16条回归，组件20/管理员前端111条测试、lint、type-check、build通过，独立复核无范围内遗留问题。已合入并推送main，沿用原归档且保留2026-09-13完成日期；重复活动副本、会话指针、worktree和本地分支均清理。证据见归档research/remediation-2026-09-14.md及对账回执。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `73b0bbd3e89005aa50dae76924079cd765b86393` | fix(admin): report effective steward assist switch state |
+
+### Status
+
+[OK] **Completed**
