@@ -147,11 +147,18 @@ def _completions_fake(text: str):
     """openai-responses 形状 fake（Provider 默认 api=openai-responses）。"""
 
     def transport(url, headers, payload, timeout):
+        response_text = text
+        decoded = json.loads(text)
+        if isinstance(decoded, dict) and decoded.get("context_hash") is None:
+            messages = payload.get("input", payload.get("messages", []))
+            request = json.loads(next(m["content"] for m in messages if m["role"] == "user"))
+            decoded["context_hash"] = request["context_hash"]
+            response_text = json.dumps(decoded, ensure_ascii=False)
         return {
             "output": [
                 {
                     "type": "message",
-                    "content": [{"type": "output_text", "text": text}],
+                    "content": [{"type": "output_text", "text": response_text}],
                 }
             ],
             "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},

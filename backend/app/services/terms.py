@@ -799,7 +799,7 @@ _RESIDUAL_WORDS: dict[tuple[str, str | None, str | None], str] = {
     ("D", None, None): "子女",
     ("B", None, "m"): "兄弟",
     ("B", None, "f"): "姐妹",
-    ("B", None, None): "兄弟",
+    ("B", None, None): "兄弟姐妹",
     ("S", None, "m"): "丈夫",
     ("S", None, "f"): "妻子",
     ("S", None, None): "配偶",
@@ -835,6 +835,8 @@ def _sibling_base_hop(
     - 3 跳 U-D-S（经父母链同胞的配偶）：Um-Df-Sm/...
     伯/叔、堂表长幼依赖父辈或旁支长幼链，v1 不消歧（保持泛化词）。
     """
+    if any(_parse_token(token)[1] is not None for token in code_tokens):
+        return None  # Do not erase adoptive/step/guardian distinctions with sibling age terms.
     n = len(code_tokens)
     if n == 1:
         domain, _, _ = _parse_token(code_tokens[0])
@@ -951,33 +953,34 @@ def sibling_base_hop(code_tokens: list[str]) -> tuple[int, bool] | None:
     return _sibling_base_hop(code_tokens)
 
 
-def term_registry_hash(session: Session, *, space_id: int, account_id: int | None = None) -> str:
+def term_registry_hash(
+    session: Session,
+    *,
+    space_id: int,
+    account_id: int | None = None,
+    concept_codes: set[str] | None = None,
+) -> str:
     """适用词典版本指纹：system/locale/space（本空间）+ 可选本人 personal 词条。"""
     import hashlib
 
-    stmt = select(TermEntry.concept_code, TermEntry.term, TermEntry.level).where(
-        TermEntry.status == "active",
-        TermEntry.level.in_(("system", "locale")),
-    )
-    parts = [tuple(row) for row in session.execute(stmt).all()]
-    space_rows = session.execute(
-        select(TermEntry.concept_code, TermEntry.term, TermEntry.level).where(
-            TermEntry.status == "active",
-            TermEntry.level == TERM_LEVEL_SPACE,
-            TermEntry.space_id == space_id,
-        )
-    ).all()
-    parts.extend(tuple(row) for row in space_rows)
+    from sqlalchemy import or_
+
+    scopes = [
+        TermEntry.level == TERM_LEVEL_SYSTEM,
+        (TermEntry.level == TERM_LEVEL_LOCALE)
+        & (TermEntry.locale == space_locale(session, space_id)),
+        (TermEntry.level == TERM_LEVEL_SPACE) & (TermEntry.space_id == space_id),
+    ]
     if account_id is not None:
-        personal_rows = session.execute(
-            select(TermEntry.concept_code, TermEntry.term, TermEntry.level).where(
-                TermEntry.status == "active",
-                TermEntry.level == TERM_LEVEL_PERSONAL,
-                TermEntry.owner_account_id == account_id,
-            )
-        ).all()
-        parts.extend(tuple(row) for row in personal_rows)
-    parts.sort()
+        scopes.append(
+            (TermEntry.level == TERM_LEVEL_PERSONAL) & (TermEntry.owner_account_id == account_id)
+        )
+    stmt = select(TermEntry.id, TermEntry.revision, TermEntry.concept_code, TermEntry.term).where(
+        TermEntry.status == "active", or_(*scopes)
+    )
+    if concept_codes is not None:
+        stmt = stmt.where(TermEntry.concept_code.in_(concept_codes))
+    parts = [tuple(row) for row in session.execute(stmt.order_by(TermEntry.id)).all()]
     canonical = repr(parts).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
@@ -1122,7 +1125,11 @@ def compose_resolution_view(
 
     # 09-13 terminology：有效自动词覆盖（个人/空间显式词条无条件优先，
     # 选择器只对 locale/system/derived/structural baseline 生效）。
-    def _apply_override(view: dict[str, Any], path_json: list[dict[str, Any]]) -> dict[str, Any]:
+    def _apply_override(
+        view: dict[str, Any],
+        path_json: list[dict[str, Any]],
+        code: str | None,
+    ) -> dict[str, Any]:
         from app.services import steward_terminology
 
         override = steward_terminology.effective_override(
@@ -1131,15 +1138,16 @@ def compose_resolution_view(
             root_user_id=viewer_user_id,
             space_id=space_id,
             target_user_id=target_user_id,
-            concept_code=view["concept_code"] if "concept_code" in view else result.concept_code,
+            concept_code=code,
             baseline_term=view["term"],
             baseline_source=view["source_level"],
+            path=path_json,
         )
         if override is not None and override != view["term"]:
             return {**view, "term": override, "source_level": SOURCE_LEVEL_STEWARD}
         return view
 
-    main_view = _apply_override(main_view, result.main_path_json)
+    main_view = _apply_override(main_view, result.main_path_json, result.concept_code)
     alt_views: list[dict[str, Any]] = []
     for index, path_json in enumerate(result.alt_paths_json):
         steps = steps_from_json(path_json)
@@ -1161,7 +1169,7 @@ def compose_resolution_view(
                 births=births,
             ),
         )
-        alt_term_view = _apply_override(alt_term_view, path_json)
+        alt_term_view = _apply_override(alt_term_view, path_json, alt_code)
         alt_views.append(
             {
                 "path": path_json,

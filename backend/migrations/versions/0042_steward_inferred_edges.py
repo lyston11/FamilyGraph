@@ -72,9 +72,7 @@ def upgrade() -> None:
         sa.Column(
             "origin",
             sa.String(16),
-            sa.CheckConstraint(
-                "origin IN ('llm','rule','intake')", name="ck_sie_origin"
-            ),
+            sa.CheckConstraint("origin IN ('llm','rule','intake')", name="ck_sie_origin"),
             server_default="llm",
             nullable=False,
         ),
@@ -100,9 +98,7 @@ def upgrade() -> None:
         unique=True,
         sqlite_where=sa.text("status = 'proposed'"),
     )
-    op.create_index(
-        "ix_sie_space_status", "steward_inferred_edges", ["space_id", "status"]
-    )
+    op.create_index("ix_sie_space_status", "steward_inferred_edges", ["space_id", "status"])
     op.create_index(
         "ix_sie_endpoints", "steward_inferred_edges", ["subject_user_id", "object_user_id"]
     )

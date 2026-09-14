@@ -66,6 +66,8 @@ class SuggestionItemOut(BaseModel):
     presentation: dict[str, Any] | None = None
     source_state: str | None = None
     recipient_state: str | None = None
+    linked_proposal: dict[str, Any] | None = None
+    pending_confirmations: list[dict[str, int]] = Field(default_factory=list)
     value: dict[str, Any]
     evidence_summary: dict[str, Any]
     allowed_actions: list[str]
@@ -138,13 +140,20 @@ def list_suggestions(
     cursor: int | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     kind: str | None = Query(default=None),
+    target_user_id: int | None = Query(default=None, ge=1),
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> SuggestionsPageOut:
     _gate()
     _user, account = identity
     payload = steward_suggestions.list_suggestions_page(
-        session, account=account, space_id=space_id, cursor=cursor, limit=limit, kind=kind
+        session,
+        account=account,
+        space_id=space_id,
+        cursor=cursor,
+        limit=limit,
+        kind=kind,
+        target_user_id=target_user_id,
     )
     return SuggestionsPageOut.model_validate(payload)
 
