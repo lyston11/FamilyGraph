@@ -1000,3 +1000,51 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Next Steps
 
 - 业务续作按各任务最新 PRD/design/implement 与验收矩阵推进；本轮没有部署、调整开关或清理他人 worktree。
+
+
+## Session 28: 双 Agent 记忆与 RAG：修复验收、主线集成和归档清理
+<!-- trellis-session: v=2 fp=614f14a933c895a2 -->
+
+**Date**: 2026-09-14
+**Task**: 双 Agent 记忆与 RAG：修复验收、主线集成和归档清理
+**Branch**: `main`
+
+### Summary
+
+完成双 Agent Memory/RAG 本期交付：B/D 原20组缺口和D合法索引恢复回归闭合，A/C/B/D实现及E研究合入main，七项任务归档并清理worktree/本地分支。MR-23/26的P2仍为planning；未部署或操作生产库。
+
+### Main Changes
+
+- 签名执行身份、精确引用及统一读取投影、真实RAG子预算与检索补足闭合；索引来源唯一性、正文证据、不可变片段、维护租约/事务和安全迁移经过反例验收。
+- 累计候选与最终审查以a83b5d1在主检出fast-forward合入main并push；A/C/B/D/E研究/Audit/父共七项归档，逐项使用正常worktree remove和branch -d清理。
+- [最终验收](../../tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)与[集成清理回执](../../tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/integration/closure.md)已归档；修复任务JSONL及文档链接，原始红测和哈希制品保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d1f43a5` | fix(memory): validate source contracts and repair management flows |
+| `8e91c42` | fix(agent): settle recovered compaction attempts successfully |
+| `b6688f8` | fix(rag): fence execution and preserve exact citation evidence |
+| `bc76e95` | test(rag): verify citation contracts over real listeners |
+| `aebee83` | fix(rag): fence index lifecycle and preserve source evidence |
+| `dd8157c` | test(rag): record lifecycle acceptance and cumulative checks |
+| `67e9316` | chore(task): close capability-plan research checklist and record push status |
+| `a83b5d1` | docs(agent): finalize memory and RAG acceptance evidence |
+| `d4d14e5` | docs(agent): close memory RAG integration and archive references |
+
+### Testing
+
+- [OK] 累计backend 1352 passed / 3既有skipped，Ruff/format/mypy通过；frontend 660 passed且lint/type/build通过。Agent沿用源码包树相同的118 tests检查点，最终再次build及实际Pi联调。
+- [OK] 实际main合并后隔离listener/SidecarWorker/Pi/维护smoke 95/95，exit 0；累计API 56/56、FK OFF/ON迁移oracle 8/8。迁移保持0047单头，没有真实Provider调用。
+- [OK] 归档后8个Trellis清单、336个本地链接、631个源码文件和30+24份冻结制品及19份gzip原文核验通过；10份新增集成制品哈希通过。
+- [OK] 主检出其他任务40个既有dirty/untracked路径在保护核对中逐字一致；后续新增的其他任务资料未纳入提交，snapshot和Orca worktree保留。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- MR-23/MR-26的P2保持独立planning；E的主动检索、导入、混合检索、全请求预算和跨Run持久摘要按既有采用门槛另行推进。
+- 扩展检索仍7/10、MRR 0.65；前端一次jsdom清理stderr未复现，保留记录。真实Provider质量、生产性能、线上开关及部署尚未验证。

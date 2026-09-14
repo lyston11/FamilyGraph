@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 27
+- **Total Sessions**: 28
 - **Last Active**: 2026-09-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1002 | Active |
+| `journal-1.md` | ~1050 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 28 | 2026-09-14 | 双 Agent 记忆与 RAG：修复验收、主线集成和归档清理 | `d1f43a5`, `8e91c42`, `b6688f8`, `bc76e95`, `aebee83`, `dd8157c`, `67e9316`, `a83b5d1`, `d4d14e5` | `main` |
 | 27 | 2026-09-14 | 按最新 Trellis 设计同步交接与架构文档 | `9d7d270` | `main` |
 | 26 | 2026-09-14 | 管家称谓闭环质量审核修复与归档 | `c8805bf`, `d26bb83`, `8ad859c` | `main` |
 | 25 | 2026-09-13 | 治理平台级 Memory 与 RAG 开关 | `048acaa` | `main` |
