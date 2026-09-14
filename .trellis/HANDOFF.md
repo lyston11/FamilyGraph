@@ -1,4 +1,127 @@
-# FamilyGraph · Trellis 交接摘要 v1.1
+# FamilyGraph · Trellis 当前交接
+
+> 更新：2026-09-14。代码核验基线：`main@880ad1a`；任务设计同时核对主检出中的最新未提交材料。本文是交接快照，不能把任务文档存在、分支提交或历史测试通过等同于已集成、已上线。
+> 当前设计与验收要求看对应任务的 `prd.md`、`design.md`、`implement.md` 及最新研究记录；已实现行为看代码、迁移、测试和 Git 集成证据。工作流以 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 为准。本页末尾保留 v1 历史，已标为历史的 `.trellis/spec/` 条款不覆盖现行任务。
+> 架构入口：[系统架构与设计](../docs/ARCHITECTURE.md)；运行与验证入口：[README](../README.md)；数据播种：[DEV-DATA-SEEDING.md](../docs/DEV-DATA-SEEDING.md)。
+
+## 当前最需要知道的事
+
+- 管家已经自动计算个人称谓，通知、建议详情、推测面板与档案称谓区已接通同一呈现链；称谓优化不需要逐条批准。闭环及质量修复已合入，详见 [最新审核记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md)。
+- Memory/RAG 修复和管家渐进重算仍在独立分支推进，有尚未闭合的验收。不能用“子任务曾通过全套测试”宣称当前总体验收完成。
+- Provider 配置 UX、平台辅助开关已有归档成果；活动目录中的同名旧副本不代表新增待办。称谓能力也不再受早期“Agent 能力整体延期”描述约束。
+- 本页没有核查线上开关或真实模型质量。新称谓模型链使用 fake transport 验证，`STEWARD_ASSIST_TERMINOLOGY` 默认关闭。
+
+## 称谓、事实与授权的当前合同
+
+基础链路保持 `SourceFact → relationship_resolver → Terms → PersonalFamilyView`。管家复用这套关系与称谓引擎，自动投影只改变显示，不成为新的亲属关系事实。
+
+| 行为 | 当前处理方式 |
+| --- | --- |
+| 自动计算、刷新个人称谓 | 后台作业自动完成；本人词条、空间词条优先于自动投影 |
+| 通知、建议、推测详情的关系表达 | 服务端从认证查看者派生 `presentation`，表达方向、参照人和证据状态；前端不把 `fact_type` 翻译成“生物学亲子”等产品文案 |
+| 确定性或模型称谓改善 | 合法投影自动生效；`term_preference` 在档案称谓区提供可选反馈，新建议 `notify=false`，旧称谓通知也无需处理 |
+| “保留为我的叫法” / “恢复默认叫法” | 复用本人词条；操作时校验当前语义与版本，恢复立即回退并抑制同语义重复应用；不伪造 `TermUsage` 或自动晋升空间词条 |
+| 模型关系候选 | `candidate` 只提供未核实的原子线索；`terminology` 才输出受约束称谓，不能凭模型自报概念码通过语义校验 |
+| 真实关系确认、入空间、授权变更 | 继续走各自授权与状态机；自动称谓不代替当事人的关系确认或授权，也不要求所有建议双方逐条确认 |
+| 通用长期记忆 | Memory 候选仍须明确确认；称谓的自动显示改善不等于聊天自动写长期记忆 |
+
+补充边界：
+
+- viewer 必须来自认证身份。第三人之间的结构边以真实端点表达，不能把当前用户的个人称谓套到该边上。
+- 只显示当前获权的姓名与路径；模型线索标记待核实，整空间事实数不能充当某候选的证明数量。
+- 未读、需要处理、可选偏好、本人忽略、过期及关联提案终态分别建模；列表、详情、通知、推测树和动作须一致。
+- 普通 GET 不调用模型、不创建关系事实。账号、空间或目标切换后拒收旧请求响应；撤权、事实、年龄或偏好变化后重验投影。
+- 称谓辅助复用四类 assist 的 batch/attempt、预算、Provider、租约和恢复；失败或关闭时回退确定性称谓，已经显式保留的本人词条继续有效。
+
+设计依据：[称谓闭环 PRD](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/prd.md)、[设计](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/design.md)、[职责对齐](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/task-alignment.md)。
+
+## 已合入主线的相关成果
+
+| 能力 | 集成证据与入口 |
+| --- | --- |
+| 个人家族视图、结构拓扑及独立推测层 | [家族树拓扑](tasks/archive/2026-09/09-13-family-tree-relationship-topology/prd.md)、[推测层](tasks/archive/2026-09/09-13-steward-inferred-tree-layer/prd.md)已归档；个人摘要与直接结构端点分开，推测不覆盖已确认事实 |
+| 称谓闭环 A/B | `ad10dd0`、`9baf659`；viewer 呈现、自动建议/投影、terminology 和偏好反馈 |
+| 称谓交付后质量修复 | `c8805bf`、`d26bb83`；方向/可见性、有效状态、Keep/Restore、实时输入/租约/恢复、实际前端入口及迟到响应隔离 |
+| Provider 配置 UX | `9017a6d`，归档 `e0e8d8d`；[归档任务](tasks/archive/2026-09/09-12-agent-provider-config-ux/prd.md)。活动同名目录是旧副本 |
+| 平台辅助开关 | `969a5b0`，归档 `4649e48`；[归档任务](tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin/prd.md)。称谓 B 已扩展第四类 `terminology` |
+
+“代码已接通”“当前环境开关有效”“真实模型质量已验证”是三项独立状态。旧平台任务的 candidate/explanation 真实调用记录不能用作 terminology 的质量验收。
+
+## 正在推进与规划中的任务
+
+| 任务 | 当前可确认状态 | 接手时应读的最新依据 |
+| --- | --- | --- |
+| 双 Agent Memory/RAG 总任务 | `in_progress`；A→C→B→D 的分支实施与 E 研究已有成果，整体验收未闭合，未合入本页主线基线 | [PRD](tasks/09-13-agent-memory-rag-remediation/prd.md)、[执行计划](tasks/09-13-agent-memory-rag-remediation/implement.md)、[最新执行记录](tasks/09-13-agent-memory-rag-remediation/research/execution.md) |
+| A：记忆来源与确认契约 | 分支 `d1f43a5` 验收记录保留，尚未合入 main；手工来源、RAG 来源依赖、候选响应和安全重试的修复不能写成主线现状 | [任务](tasks/09-13-memory-contract-repair/prd.md) |
+| C：会话恢复与压缩 | 补充修复 `8e91c42` 分支验证通过，最新累计修复候选已纳入；尚未合入 main，不等于跨 Run 持久摘要已实现 | [任务](tasks/09-13-assistant-context-compaction/prd.md)、[复查 PRD](tasks/09-14-memory-rag-acceptance-audit/prd.md) |
+| B：中文召回与可信引用 | 初版提交存在，独立复查仍有 B-I01～10，按执行身份、精确引用、读取面、预算及追问合同续修 | [任务](tasks/09-13-rag-retrieval-citations/prd.md)、[复查台账](tasks/09-14-memory-rag-acceptance-audit/research/findings.md) |
+| D：索引生命周期 | 初版提交存在，独立复查仍有 D-I01～10，按唯一性、不可变片段、租约/事务、换版/完整性与无损降级续修 | [任务](tasks/09-13-rag-index-lifecycle/prd.md)、[复查台账](tasks/09-14-memory-rag-acceptance-audit/research/findings.md) |
+| Memory/RAG 验收复查 | 元数据仍为 `planning`，最新 PRD 已记录继续修复、验收及通过后集成的授权；以 F-01～12 的新证据判定，不能只看状态字段 | [PRD](tasks/09-14-memory-rag-acceptance-audit/prd.md)、[验收矩阵](tasks/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md)、[实施计划](tasks/09-14-memory-rag-acceptance-audit/implement.md) |
+| E：能力扩展准入 | 研究交付，生产扩展未因此上线；主动检索、聊天保存/候选、导入、混合检索、全请求预算、持久摘要等按采用门槛保持延期 | [任务](tasks/09-13-agent-memory-capability-plan/prd.md)、[12 项决定](tasks/09-13-agent-memory-capability-plan/research/capability-decision-register.md) |
+| 管家快照与渐进重算 P1 | `in_progress`，分支 `0baf299` 后还有续作；完整发布、性能与安全验收未完成，不能归档 | [PRD](tasks/09-13-steward-snapshot-progressive-recompute/prd.md)、[设计](tasks/09-13-steward-snapshot-progressive-recompute/design.md)、[实施计划 §9/§10](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) |
+| MR-23/MR-26 证据与行为投影 P2 | 仅规划；候选证据版本和行为投影键族是独立所有权，不把称谓闭环已修复当成这两项已完成 | [任务](tasks/09-13-steward-memory-evidence-projections/prd.md)、[实施顺序](tasks/09-13-steward-memory-evidence-projections/implement.md) |
+| Steward 能力后续 P3 | shared RAG、额外个人路径解释、新地区包及有观测依据的性能研究仍延期；已交付称谓和独立 P1 重算不受此状态覆盖 | [任务](tasks/09-11-steward-capability-followups/prd.md)、[设计](tasks/09-11-steward-capability-followups/design.md) |
+| 跨空间发现 | 继续延期；个人叫法可复用不授予其他空间路径读取权 | [任务](tasks/09-11-steward-cross-space-discovery/prd.md) |
+
+部分活动任务文件尚未提交，远端检出可能没有这些路径；不要据此新建重复任务。先核对主检出、已登记 worktree、同名归档及提交祖先关系。研究文档中的“尚未实现称谓”“平台开关待建”等旧时点描述，以本页所链接的后继归档和当前代码为准，历史实验结果仍保留。
+
+## 继续实施时的关键顺序与边界
+
+1. **Memory/RAG**：沿现有 B→D→累计复验继续，保留 C 的恢复/压缩补丁。bd899b9 的 20 组缺口中，18 组有合成复现、2 组是静态缺口；最终按 F-01～12 回填。正常 smoke 或中文核心集通过不能抵消安全、并发和来源反例。
+2. **渐进重算**：落实显式一致读快照→事务外计算→短事务保存目标结果→CAS 原子发布结果指针、水位与交付待办。先展示获权的已确认骨架，再逐目标补称谓；preview 不提前消费事件或发通知，本人 ready 与空间 published 分开。
+3. **渐进客户端**：`progressive=true` 显式启用；普通请求保留完整视图/安全空态。读取和 304 均先重验授权与有效期；按账号、空间、请求序号、generation/revision 拒收旧结果；采用 `X-PFV-Validated-At` / `X-PFV-Display-Until`，同拓扑补标签时保持坐标、视口和选中。
+4. **MR-26→MR-23**：先限制 rebuild 只处理自己拥有的键族，保留冷却/未知键；再收敛相关支撑事实的证据归因和版本。不能使用全空间 hash 代替相关依据，不能因新证据自动解除驳回或新增通知。实施前在最新主线复核旧探针，保留称谓、授权与反馈合同。
+5. **shared RAG 与能力扩展**：先等待 A/B/D 的最终来源/索引/引用合同。Steward 使用自己的 job/space/consumer 身份，仅消费当前空间获权的 confirmed shared 资料，不读取私人聊天或 private memory，不伪造 Assistant Run。通用反馈排序仍需收益评估。
+
+这几条线不是同一个发布批次。它们共享 `maintenance`、`platform_features`、Steward/PFV、部分前端与迁移；按 [AGENTS.md](../AGENTS.md) 串行处理相交文件和主线集成，保留其他会话 WIP。
+
+## 迁移与集成检查点
+
+- 本页主线迁移 head 为 `0044_steward_terminology`，不是旧架构文档曾列的 0038。
+- RAG D 分支已有 `0044_rag_citation_contract` 的多父合并，`0045_rag_index_lifecycle` 又合并 RAG 引用和称谓两条分支；这不意味着该迁移已进入 main。
+- 渐进分支的 `0044_steward_generations` 与主线称谓迁移同接 0043，续作另有 `0045_steward_staged_publication`。该分支在核验时仅包含称谓 A，尚不包含 B 和 `c8805bf`、`d26bb83`。吸收主线、复核共享实现与迁移 DAG 是集成前置，不能直接按编号判断兼容。
+- 在隔离数据库验证合并后的 upgrade、旧数据兼容及所要求的回退限制；维护租约、引用依赖和进行中的发布不能被破坏性降级抹掉。运行期 SQLite 备份使用 `python -m app.backup`。
+- 任务状态通过 Trellis 命令维护；只清理已经合入且没有未提交代码的 worktree/分支。活动目录的旧副本、未合并分支和其他会话资料不能随本页更新删除或归档。
+
+接手时先做只读核对：
+
+```bash
+git status --short --branch
+git worktree list
+python3 ./.trellis/scripts/task.py current --source
+python3 ./.trellis/scripts/task.py list
+# 逐笔核对需依赖的提交；存在于仓库不等于已合入 main
+git merge-base --is-ancestor <commit> main
+```
+
+## 验证证据及仍未完成的事项
+
+| 范围 | 已有证据 | 实际限制 |
+| --- | --- | --- |
+| 称谓质量修复 | backend 1119 passed / 3 skipped，frontend 618 passed；lint、类型检查与构建通过，合并后相关 backend 59 passed；[记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md) | 3 项为既有延期的 break-glass 测试；真实 terminology 模型质量、生产 smoke 未测；关系最终确认的成环/证据留存仍按原 PRD 延期 |
+| Memory/RAG 累计分支 | 中文核心 16/16、英文 2/2、扩展 7/10；隔离 API smoke 56/56、真实 listener+Pi 假模型正常链 50/50；[矩阵](tasks/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md) | 属于特定审计基线；B/D 安全与并发反例尚未全部通过，不能据此批准整个父任务 |
+| 渐进重算续作 | 最新分支前端 656 tests、lint/type-check/build 均 exit 0，先前计时器异常已修复；已有迁移、发布栅栏、30/50/200 人和浏览器的中间诊断；[最新检查点](tasks/09-13-steward-snapshot-progressive-recompute/implement.md) | 交付失败预算与独立重试仍待审查；最终冻结源码后的后端、0045 迁移、30/50/200 人、两次真实 300 秒扫描、Chrome 五次与 API smoke 尚未完成，中间诊断不等于最终性能验收 |
+
+本次仅更新交接文档，不重跑业务测试、不改变开关、不部署。上述数字是对应记录的已有证据；未来代码变化须按受影响范围重新验证，smoke 退出码 2 仍代表环境阻塞。
+
+## v1 决策的历史与取代关系
+
+v1 的第一人称体验、全局图/空间视图分离、SQLite WAL、在线备份和附件授权等基础原则继续保留。以下旧语义已经有后继实现：
+
+| 历史条目 | 当前交接口径 |
+| --- | --- |
+| D2/D3、v1 非目标中的 Agent/互反称谓 | 原子事实、关系解析、TermRegistry 与 viewer 呈现已落地；自动称谓与关系事实分开 |
+| U5/QU1=B 的“直系结构边自动完整互见” | 以当前 `visibility.evaluate` 的四级可见性、字段披露与 purpose 收紧为准 |
+| A4 与早期平台角色 | 独立系统管理员主体、密码认证、admin listener/JWT 域；家庭权限继续按空间授权 |
+| T1 中的 Element Plus | 当前双前端使用 Naive UI；以依赖与源码为准 |
+| v1 的固定任务数、未补设计清单与“可发布”结论 | 仅描述 2026-08-25 的历史交付，不能替代上文当前任务及验收状态 |
+
+<details>
+<summary>展开 2026-08-25 的 v1 交接与修订历史（历史资料）</summary>
+
+以下保留旧版本内容用于追溯。其“权威来源”“锁定”“待定”“非目标”及发布状态均指当时版本；与上文后继设计冲突的条款不再指导当前实施。
+
+### FamilyGraph · Trellis 交接摘要 v1.1（历史）
 
 > 项目名：**familygraph**（原名 jiapu-web）｜状态：**v1 已实现完成并可发布**（2026-08-25，见修订历史 v1.3）
 > 本文档是所有任务与 PRD 的权威来源。配套文档：[spec/architecture.md](spec/architecture.md)（全局架构设计，含全部 `[AD-n]` 审计默认假设）。
@@ -158,3 +281,5 @@
 - v1.2 (2026-08-25)：第二轮审计复审整改（有条件通过 → 整改中）：auth_challenges 落库防重放、refresh_sessions 持久化+轮换+重用检测、PIN 白名单三文档统一、新建 managed 档案直连例外澄清、Claim→ClaimState 更名、perpetual 失权措辞修正、AD-7/AD-8 标签补齐、任务口径更正（5父+16子）、QU1 待裁定项登记。
 - v1.2.2 (2026-08-25)：**QU1 用户裁定 = 修订版 B + 披露开关补充**：同空间完整互见；直系结构边对端完整互见；其余家族可达者见必要字段+归属者逐类公开选择（AD-9，users.clan_disclosure_json 默认全不公开）。U5 锁定条目已按此更新，m2a/m2b 验收同步。
 - v1.3 (2026-08-25)：**v1 实现完成**。M0-M4 十六个子任务全部交付并归档（后端 118 测试/mypy strict、前端四门禁、docker e2e 全绿）；全项目复审修复前端分层/async 阻塞等 5 项；M2/M3 专项重验 ALL PASS；Q8 登记在案。状态：**v1 可发布**。
+
+</details>

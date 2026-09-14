@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
+- **Total Sessions**: 27
 - **Last Active**: 2026-09-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~963 | Active |
+| `journal-1.md` | ~1002 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-09-14 | 按最新 Trellis 设计同步交接与架构文档 | `9d7d270` | `main` |
 | 26 | 2026-09-14 | 管家称谓闭环质量审核修复与归档 | `c8805bf`, `d26bb83`, `8ad859c` | `main` |
 | 25 | 2026-09-13 | 治理平台级 Memory 与 RAG 开关 | `048acaa` | `main` |
 | 24 | 2026-09-12 | 修复管理员后台壳层主轴错位 | `323f36c` | `main` |
