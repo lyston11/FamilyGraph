@@ -3,7 +3,7 @@
   "name": "rag-retrieval-citations",
   "title": "中文 RAG 召回与引用闭环",
   "description": "改善中文短词和自然问句召回，建立可预算的检索与可验证的回答引用。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-13",
-  "completedAt": null,
+  "completedAt": "2026-09-14",
   "branch": "feat/09-13-rag-retrieval-citations",
   "base_branch": "main",
   "worktree_path": "/Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations",
@@ -31,6 +31,10 @@
     "acceptance_review_task": "09-14-memory-rag-acceptance-audit",
     "reviewed_cumulative_commit": "bd899b98871c02ad97b7791a051f126d671bfefb",
     "execution_authorization": "2026-09-14 user: 直接开始审查代码并验收，没问题就提交合并归档",
-    "acceptance_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329"
+    "acceptance_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329",
+    "final_branch_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329",
+    "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "integration_target": "main",
+    "integration_status": "merged_smoke_passed"
   }
 }
