@@ -307,7 +307,12 @@ def supersede_evidence_changed(db: Session, space_id: int, *, now: datetime | No
 # ---- 操作（确认/驳回/撤销驳回；api/steward_inferred.py 消费）----
 
 
-def _edge_or_404(session: Session, *, space_id: int, edge_id: int) -> StewardInferredEdge:
+def _edge_or_404(
+    session: Session, *, space_id: int, edge_id: int, viewer_user_id: int
+) -> StewardInferredEdge:
+    from app.models.user import User
+    from app.services import visibility
+
     edge = session.get(StewardInferredEdge, edge_id)
     if (
         edge is None
@@ -316,6 +321,21 @@ def _edge_or_404(session: Session, *, space_id: int, edge_id: int) -> StewardInf
     ):
         # 不存在 / 不可见 / superseded 终态：统一 404 防枚举
         raise_api_error(404, INFERRED_EDGE_NOT_FOUND, "推测关系不存在")
+    viewer = session.get(User, viewer_user_id)
+    for user_id in (edge.subject_user_id, edge.object_user_id):
+        endpoint = session.get(User, user_id)
+        if (
+            viewer is None
+            or endpoint is None
+            or not visibility.evaluate(
+                session,
+                viewer,
+                endpoint,
+                space_context=space_id,
+                purpose=visibility.PURPOSE_PROFILE,
+            ).visible
+        ):
+            raise_api_error(404, INFERRED_EDGE_NOT_FOUND, "推测关系不存在")
     return edge
 
 
@@ -383,16 +403,34 @@ def confirm_edge(
     revision CAS；同推测边重复确认返回既有结果（状态幂等）。
     """
     from app.commands import relationship_proposals
+    from app.services import steward_suggestions
 
     moment = now or utcnow()
     with command_transaction(session, immediate=True):
         _require_member(session, space_id=space_id, user_id=account.user_id)
-        edge = _edge_or_404(session, space_id=space_id, edge_id=edge_id)
+        edge = _edge_or_404(
+            session, space_id=space_id, edge_id=edge_id, viewer_user_id=account.user_id
+        )
+        current_confirmed = steward_suggestions.find_confirmed_relation(
+            session,
+            space_id=space_id,
+            subject_user_id=edge.subject_user_id,
+            object_user_id=edge.object_user_id,
+            fact_type=edge.relation_kind,
+        )
         if edge.status == "confirmed":
             # 状态幂等：已确认（重复确认）返回既有结果形状
             payload: dict[str, Any] = {
                 "edge": {"id": edge.id, "status": edge.status, "revision": edge.revision},
-                "linked_proposal": None,
+                "linked_proposal": {
+                    "source_fact_id": current_confirmed.id,
+                    "revision": current_confirmed.revision,
+                    "state": current_confirmed.state,
+                    "fact_type": current_confirmed.fact_type,
+                }
+                if current_confirmed is not None
+                else None,
+                "pending_confirmations": [],
             }
             return 200, payload
         if edge.status != "proposed":
@@ -400,8 +438,37 @@ def confirm_edge(
         if edge.revision != expected_revision:
             raise_api_error(409, INFERRED_EDGE_REVISION_CONFLICT, "推测关系已被其他操作更新")
 
+        if current_confirmed is not None:
+            # Another authorized flow already confirmed the exact relation.
+            # Acknowledge that fact; do not create or confirm another proposal.
+            _bump(edge, status="confirmed", now=moment)
+            steward_suggestions.resolve_for_linked_fact(
+                session,
+                fact_id=current_confirmed.id,
+                space_id=space_id,
+                now=moment,
+            )
+            _emit_edge_event(
+                session,
+                event_type=steward_events.EVENT_STEWARD_INFERRED_CONFIRMED,
+                edge=edge,
+                actor_account_id=ctx.account_id,
+                extra_payload={"source_fact_id": current_confirmed.id},
+            )
+            return 200, {
+                "edge": {"id": edge.id, "status": edge.status, "revision": edge.revision},
+                "linked_proposal": {
+                    "source_fact_id": current_confirmed.id,
+                    "revision": current_confirmed.revision,
+                    "state": current_confirmed.state,
+                    "fact_type": current_confirmed.fact_type,
+                },
+                "pending_confirmations": [],
+            }
+
         existing_proposal = _find_active_proposal(
             session,
+            space_id=space_id,
             subject_user_id=edge.subject_user_id,
             object_user_id=edge.object_user_id,
             fact_type=edge.relation_kind,
@@ -426,10 +493,24 @@ def confirm_edge(
             )
 
         if entitled and proposal is not None:
+            steward_suggestions.link_source_proposal(
+                session,
+                space_id=space_id,
+                source_candidate_id=edge.source_candidate_id,
+                proposal=proposal,
+                now=moment,
+            )
             confirmed_fact = relationship_proposals.confirm_relationship_proposal(
                 session, ctx, proposal.id, expected_revision=proposal.revision, commit=False
             )
             _bump(edge, status="confirmed", now=moment)
+            steward_suggestions.link_source_proposal(
+                session,
+                space_id=space_id,
+                source_candidate_id=edge.source_candidate_id,
+                proposal=confirmed_fact,
+                now=moment,
+            )
             _emit_edge_event(
                 session,
                 event_type=steward_events.EVENT_STEWARD_INFERRED_CONFIRMED,
@@ -461,7 +542,16 @@ def confirm_edge(
                 evidence_json=dict(edge.evidence_json),
                 commit=False,
             )
-        pending: list[dict[str, int]] = [{"account_id": a} for a in confirmer_ids]
+        steward_suggestions.link_source_proposal(
+            session,
+            space_id=space_id,
+            source_candidate_id=edge.source_candidate_id,
+            proposal=proposal,
+            now=moment,
+        )
+        pending: list[dict[str, int]] = (
+            [{"account_id": a} for a in confirmer_ids] if proposal.state == "proposed" else []
+        )
         payload = {
             "edge": {"id": edge.id, "status": edge.status, "revision": edge.revision},
             "linked_proposal": {
@@ -476,19 +566,16 @@ def confirm_edge(
 
 
 def _find_active_proposal(
-    session: Session, *, subject_user_id: int, object_user_id: int, fact_type: str
+    session: Session, *, space_id: int, subject_user_id: int, object_user_id: int, fact_type: str
 ) -> Any | None:
-    from app.models.relationship_facts import SourceFact
-    from app.services.source_facts import FACT_PROPOSED
+    from app.services.steward_suggestions import find_related_proposal
 
-    return session.scalar(
-        select(SourceFact).where(
-            SourceFact.subject_user_id == subject_user_id,
-            SourceFact.object_user_id == object_user_id,
-            SourceFact.fact_type == fact_type,
-            SourceFact.provenance == "agent_proposal",
-            SourceFact.state == FACT_PROPOSED,
-        )
+    return find_related_proposal(
+        session,
+        space_id=space_id,
+        subject_user_id=subject_user_id,
+        object_user_id=object_user_id,
+        fact_type=fact_type,
     )
 
 
@@ -505,7 +592,9 @@ def dismiss_edge(
     moment = now or utcnow()
     with command_transaction(session, immediate=True):
         _require_member(session, space_id=space_id, user_id=account.user_id)
-        edge = _edge_or_404(session, space_id=space_id, edge_id=edge_id)
+        edge = _edge_or_404(
+            session, space_id=space_id, edge_id=edge_id, viewer_user_id=account.user_id
+        )
         if edge.status == "rejected":
             return {"id": edge.id, "status": edge.status, "revision": edge.revision}
         if edge.status != "proposed":
@@ -535,7 +624,9 @@ def reinstate_edge(
     moment = now or utcnow()
     with command_transaction(session, immediate=True):
         _require_member(session, space_id=space_id, user_id=account.user_id)
-        edge = _edge_or_404(session, space_id=space_id, edge_id=edge_id)
+        edge = _edge_or_404(
+            session, space_id=space_id, edge_id=edge_id, viewer_user_id=account.user_id
+        )
         if edge.status == "proposed":
             return {"id": edge.id, "status": edge.status, "revision": edge.revision}
         if edge.status != "rejected":

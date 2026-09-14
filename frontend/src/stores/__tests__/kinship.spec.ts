@@ -60,6 +60,12 @@ function flagDisabledError(): ApiError {
   return new ApiError(503, 'KINSHIP_FLAG_DISABLED', '关系智能能力未启用')
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
 describe('kinship store（V2.3 Block E4c）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -130,12 +136,13 @@ describe('kinship store（V2.3 Block E4c）', () => {
     expect(store.available).toBe(true)
   })
 
-  it('correctTerm 更新本地词条、失效该空间全部 resolve 缓存', async () => {
+  it('correctTerm 失效本人所有空间的 resolve 缓存', async () => {
     const store = useKinshipStore()
     mockedResolve
       .mockResolvedValueOnce(makeResolve())
-      .mockResolvedValueOnce(makeResolve({ term_source_level: 'personal' }))
+      .mockResolvedValue(makeResolve({ term_source_level: 'personal' }))
     await store.resolvePair(10, 1, 2)
+    await store.resolvePair(11, 1, 2)
     expect(store.cachedResolve(10, 1, 2)).not.toBeNull()
 
     mockedUpdateMyTerm.mockResolvedValue({
@@ -151,8 +158,9 @@ describe('kinship store（V2.3 Block E4c）', () => {
     expect(saved?.term).toBe('老妈')
     // 该空间缓存已失效，下次读取会重新请求
     expect(store.cachedResolve(10, 1, 2)).toBeNull()
+    expect(store.cachedResolve(11, 1, 2)).toBeNull()
     await store.resolvePair(10, 1, 2)
-    expect(mockedResolve).toHaveBeenCalledTimes(2)
+    expect(mockedResolve).toHaveBeenCalledTimes(3)
   })
 
   it('loadMyTerms 带 space_id 拉取并记录空间；submitUsage 固定 manual_select', async () => {
@@ -239,5 +247,76 @@ describe('kinship store（V2.3 Block E4c）', () => {
     expect(store.myTerms).toEqual([])
     expect(store.parseResult).toBeNull()
     expect(store.parseError).toBeNull()
+  })
+
+  it.each(['clear', 'resetForSpace'] as const)('%s 后迟到解析不回写称谓或能力状态', async (action) => {
+    const pending = deferred<KinshipResolve>()
+    mockedResolve.mockReturnValueOnce(pending.promise)
+    const store = useKinshipStore()
+    const request = store.resolvePair(10, 1, 2)
+    if (action === 'clear') store.clear()
+    else store.resetForSpace(10)
+    pending.resolve(makeResolve())
+    expect(await request).toBeNull()
+    expect(store.cachedResolve(10, 1, 2)).toBeNull()
+    expect(store.available).toBeNull()
+  })
+
+  it('个人修改使在途旧解析失效，旧称谓不能覆盖修改后的结果', async () => {
+    const pending = deferred<KinshipResolve>()
+    mockedResolve.mockReturnValueOnce(pending.promise).mockResolvedValue(makeResolve({ term: '老妈' }))
+    mockedUpdateMyTerm.mockResolvedValue({ entry_id: 1, concept_code: 'F_PARENT', term: '老妈', revision: 2, updated_at: '' })
+    const store = useKinshipStore()
+    const oldResolve = store.resolvePair(11, 1, 2)
+    await store.correctTerm(10, 'F_PARENT', '老妈')
+    await store.resolvePair(11, 1, 2)
+    pending.resolve(makeResolve({ term: '妈妈' }))
+    expect(await oldResolve).toBeNull()
+    expect(store.cachedResolve(11, 1, 2)?.term).toBe('老妈')
+  })
+
+  it('同目标较早 force 请求不能覆盖较新的解析', async () => {
+    const pending = deferred<KinshipResolve>()
+    mockedResolve.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(makeResolve({ term: '老妈' }))
+    const store = useKinshipStore()
+    const older = store.resolvePair(10, 1, 2, { force: true })
+    await store.resolvePair(10, 1, 2, { force: true })
+    pending.resolve(makeResolve())
+    expect(await older).toBeNull()
+    expect(store.cachedResolve(10, 1, 2)?.term).toBe('老妈')
+  })
+
+  it('登出后迟到个人词条不回写', async () => {
+    const pending = deferred<MyTerm[]>()
+    mockedFetchMyTerms.mockReturnValueOnce(pending.promise)
+    const store = useKinshipStore()
+    const request = store.loadMyTerms(10)
+    store.clear()
+    pending.resolve([{ entry_id: 1, concept_code: 'F_PARENT', term: '旧账号叫法', revision: 1, updated_at: '' }])
+    expect(await request).toBeNull()
+    expect(store.myTerms).toEqual([])
+    expect(store.myTermsLoading).toBe(false)
+  })
+
+  it('切空间立即清理在途词条与解析的 loading，迟到响应仍被丢弃', async () => {
+    const terms = deferred<MyTerm[]>()
+    const parsed = deferred<ParseResult>()
+    mockedFetchMyTerms.mockReturnValueOnce(terms.promise)
+    mockedParse.mockReturnValueOnce(parsed.promise)
+    const store = useKinshipStore()
+    const loadingTerms = store.loadMyTerms(10)
+    const parsing = store.parseText(10, '妈妈')
+    store.resetForSpace(10)
+    expect(store.myTermsLoading).toBe(false)
+    expect(store.parseLoading).toBe(false)
+    terms.resolve([])
+    parsed.resolve({
+      raw_text_id: 1, normalized_text: '妈妈', resolution_class: 'ambiguous', candidate: null,
+      graph_proof: { found: false, explanation_structural: null }, proposals: [], conflicts: [],
+      clarifying_question: null, evidence_morphemes: [],
+    })
+    expect(await loadingTerms).toBeNull()
+    expect(await parsing).toBeNull()
+    expect(store.parseResult).toBeNull()
   })
 })

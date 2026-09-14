@@ -10,6 +10,7 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpaceStatsStore } from '@/stores/spaceStats'
 import { useSpacesStore } from '@/stores/spaces'
+import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import { useUiStore } from '@/stores/ui'
 import type { FamilySpace } from '@/types/api'
 
@@ -134,6 +135,7 @@ export function useSpaceContext() {
     useHouseholdCardStore().clearSpace(spaceId)
     useSpaceStatsStore().clearSpace(spaceId)
     useNotificationsStore().clearSpace(spaceId)
+    useStewardSuggestionsStore().clearSpace(spaceId)
     // memory/RAG 的空间分区（共享记忆与检索引用）；private 记忆是账号级，不清
     useMemoryStore().resetForSpace(spaceId)
     // ActionCard 分区与 kinship 关系详情缓存

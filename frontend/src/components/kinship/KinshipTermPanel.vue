@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { InputHTMLAttributes as VueInputHTMLAttributes } from 'vue'
 import { NButton, NInput, NModal, useMessage } from 'naive-ui'
 
@@ -7,7 +7,9 @@ import { ApiError } from '@/api/errors'
 import { fetchSuggestions, restoreSuggestionTerm, submitSuggestion } from '@/api/stewardSuggestions'
 import { useAuthStore } from '@/stores/auth'
 import { useKinshipStore } from '@/stores/kinship'
+import { useNotificationsStore } from '@/stores/notifications'
 import { useSpacesStore } from '@/stores/spaces'
+import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import type { SuggestionItem } from '@/types/api'
 import type { KinshipResolve, TermSourceLevel } from '@/types/kinship'
 
@@ -27,7 +29,37 @@ const props = defineProps<{ memberId: number }>()
 const auth = useAuthStore()
 const spaces = useSpacesStore()
 const kinship = useKinshipStore()
+const notifications = useNotificationsStore()
+const suggestions = useStewardSuggestionsStore()
 const message = useMessage()
+
+interface PanelContext {
+  epoch: number
+  viewerEpoch: number
+  spaceId: number
+  viewerId: number
+  targetId: number
+}
+
+let contextEpoch = 0
+let viewerEpoch = 0
+let mounted = true
+
+function captureContext(): PanelContext | null {
+  const spaceId = spaces.currentSpaceId
+  const viewerId = auth.user?.id
+  if (spaceId === null || viewerId === undefined || !Number.isInteger(props.memberId) || props.memberId <= 0) return null
+  return { epoch: contextEpoch, viewerEpoch, spaceId, viewerId, targetId: props.memberId }
+}
+
+function isSameViewer(context: PanelContext): boolean {
+  return context.viewerEpoch === viewerEpoch && context.viewerId === auth.user?.id
+}
+
+function isCurrent(context: PanelContext): boolean {
+  return mounted && context.epoch === contextEpoch && isSameViewer(context) &&
+    context.spaceId === spaces.currentSpaceId && context.targetId === props.memberId
+}
 
 const resolve = computed(() => {
   const spaceId = spaces.currentSpaceId
@@ -38,28 +70,17 @@ const resolve = computed(() => {
 /** 首次进入尚无缓存时也渲染骨架文案，避免整区闪烁 */
 const loadingResolve = ref(false)
 
-async function refresh(force: boolean): Promise<void> {
-  const spaceId = spaces.currentSpaceId
-  const viewerId = auth.user?.id
-  if (spaceId === null || viewerId === undefined) return
+async function refresh(context: PanelContext, force: boolean): Promise<void> {
+  if (!isCurrent(context)) return
   loadingResolve.value = true
   try {
-    await kinship.resolvePair(spaceId, viewerId, props.memberId, { force })
+    await kinship.resolvePair(context.spaceId, context.viewerId, context.targetId, { force })
   } catch {
     // 非降级错误静默：展示「暂无法确定」而非报错打断抽屉
   } finally {
-    loadingResolve.value = false
+    if (isCurrent(context)) loadingResolve.value = false
   }
 }
-
-watch(
-  () => [spaces.currentSpaceId, props.memberId] as const,
-  () => {
-    void refresh(true)
-    void loadSuggestions()
-  },
-  { immediate: true },
-)
 
 // ---- 四级来源徽章（design.md §3.4：来源必须可见）----
 
@@ -82,7 +103,7 @@ const SOURCE_LEVEL_CLASSES: Partial<Record<TermSourceLevel, string>> = {
 }
 
 function sourceLabel(level: TermSourceLevel | null): string {
-  return level ? (SOURCE_LEVEL_LABELS[level] ?? level) : ''
+  return level ? (SOURCE_LEVEL_LABELS[level] ?? '称谓') : ''
 }
 
 function sourceBadgeClass(level: TermSourceLevel | null): string {
@@ -124,26 +145,33 @@ function openCorrection(prefill = ''): void {
 }
 
 async function saveCorrection(): Promise<void> {
-  const spaceId = spaces.currentSpaceId
+  const context = captureContext()
   const conceptCode = resolve.value?.concept_code
   const term = correctionTerm.value.trim()
-  if (!spaceId || !conceptCode || !term) {
+  if (context === null || !conceptCode || !term) {
     correctionError.value = '请输入新的叫法'
     return
   }
+  if (savingCorrection.value) return
   savingCorrection.value = true
   correctionError.value = ''
   try {
-    await kinship.correctTerm(spaceId, conceptCode, term)
+    const saved = await kinship.correctTerm(context.spaceId, conceptCode, term)
+    if (!isSameViewer(context) || saved === null) return
+    suggestions.clear()
+    if (!isCurrent(context)) return
     // 本地立即刷新解析（KI-5：旧称谓不得继续展示）
-    await refresh(true)
+    await refresh(context, true)
+    if (!isCurrent(context)) return
     message.success('个人称谓已更新')
     correctionVisible.value = false
   } catch (error) {
-    correctionError.value =
-      error instanceof ApiError && error.message ? error.message : '保存失败，请稍后重试'
+    if (isCurrent(context)) {
+      correctionError.value =
+        error instanceof ApiError && error.message ? error.message : '保存失败，请稍后重试'
+    }
   } finally {
-    savingCorrection.value = false
+    if (isCurrent(context)) savingCorrection.value = false
   }
 }
 
@@ -162,50 +190,77 @@ const REASON_LABELS: Record<string, string> = {
   preferred_usage: '你用过的叫法',
 }
 
-async function loadSuggestions(): Promise<void> {
-  const spaceId = spaces.currentSpaceId
-  if (spaceId === null) return
+async function loadSuggestions(context: PanelContext): Promise<void> {
+  if (!isCurrent(context)) return
   try {
-    const page = await fetchSuggestions(spaceId, null, 50, 'term_preference')
-    termSuggestions.value = page.items.filter((item) => item.object_user_id === props.memberId)
+    const page = await fetchSuggestions(context.spaceId, null, 50, 'term_preference', context.targetId)
+    if (!isCurrent(context)) return
+    termSuggestions.value = page.items.filter((item) =>
+      item.space_id === context.spaceId && item.kind === 'term_preference' &&
+      item.object_user_id === context.targetId && item.state === 'proposed')
   } catch {
-    termSuggestions.value = []
+    if (isCurrent(context)) termSuggestions.value = []
   }
 }
 
+function canKeep(item: SuggestionItem): boolean {
+  return item.state === 'proposed' && item.allowed_actions.includes('submit')
+}
+
+function canRestore(item: SuggestionItem): boolean {
+  return item.state === 'proposed' && item.value.can_restore === true
+}
+
+async function refreshAfterSuggestion(context: PanelContext, scope: 'personal' | 'space'): Promise<void> {
+  if (!isSameViewer(context)) return
+  if (scope === 'personal') suggestions.clear()
+  else suggestions.clearSpace(context.spaceId)
+  const refreshedView = kinship.refreshAfterTermChange(context.spaceId, scope)
+  const work: Promise<unknown>[] = [refreshedView]
+  if (isCurrent(context)) {
+    work.push(loadSuggestions(context), refresh(context, true), notifications.refresh(context.spaceId))
+  }
+  await Promise.allSettled(work)
+}
+
 async function keepSuggestion(item: SuggestionItem): Promise<void> {
-  const spaceId = spaces.currentSpaceId
-  if (spaceId === null || suggestionBusy.value) return
+  const context = captureContext()
+  if (context === null || suggestionBusy.value || !canKeep(item) ||
+      item.space_id !== context.spaceId || item.object_user_id !== context.targetId) return
   suggestionBusy.value = true
   try {
-    await submitSuggestion(
-      spaceId,
+    const result = await submitSuggestion(
+      context.spaceId,
       item.id,
       { expected_revision: item.revision, evidence_hash: item.evidence_hash, confirm: true },
       crypto.randomUUID(),
     )
-    message.success(`「${String(item.value.term ?? '')}」已保存为你的叫法（跨空间生效）`)
-    await loadSuggestions()
-    await refresh(true)
+    if (!isSameViewer(context)) return
+    if (isCurrent(context) && 'linked_preference' in result) {
+      message.success(`「${result.linked_preference.term}」已保存为你的叫法（跨空间生效）`)
+    }
+    await refreshAfterSuggestion(context, 'personal')
   } catch {
-    message.error('保存未成功：建议可能已被处理，请稍后重试')
+    if (isCurrent(context)) message.error('保存未成功：建议可能已被处理，请稍后重试')
   } finally {
-    suggestionBusy.value = false
+    if (isCurrent(context)) suggestionBusy.value = false
   }
 }
 
 async function restoreSuggestion(item: SuggestionItem): Promise<void> {
-  const spaceId = spaces.currentSpaceId
-  if (spaceId === null || suggestionBusy.value) return
+  const context = captureContext()
+  if (context === null || suggestionBusy.value || !canRestore(item) ||
+      item.space_id !== context.spaceId || item.object_user_id !== context.targetId) return
   const semanticHash =
-    typeof item.value.semantic_identity === 'string' ? item.value.semantic_identity : ''
+    typeof item.value.semantic_hash === 'string' ? item.value.semantic_hash :
+      typeof item.value.semantic_identity === 'string' ? item.value.semantic_identity : ''
   const projectionRevision =
     typeof item.value.projection_revision === 'number' ? item.value.projection_revision : 0
   if (!semanticHash || projectionRevision <= 0) return
   suggestionBusy.value = true
   try {
     await restoreSuggestionTerm(
-      spaceId,
+      context.spaceId,
       item.id,
       {
         expected_revision: item.revision,
@@ -214,24 +269,28 @@ async function restoreSuggestion(item: SuggestionItem): Promise<void> {
       },
       crypto.randomUUID(),
     )
-    message.success('已恢复默认叫法')
-    await loadSuggestions()
-    await refresh(true)
+    if (!isSameViewer(context)) return
+    if (isCurrent(context)) message.success('已恢复默认叫法')
+    await refreshAfterSuggestion(context, 'space')
   } catch {
-    message.error('恢复未成功：称谓依据可能已变化，请稍后重试')
+    if (isCurrent(context)) message.error('恢复未成功：称谓依据可能已变化，请稍后重试')
   } finally {
-    suggestionBusy.value = false
+    if (isCurrent(context)) suggestionBusy.value = false
   }
 }
 
 async function recordUsage(): Promise<void> {
-  const spaceId = spaces.currentSpaceId
+  const context = captureContext()
   const result = resolve.value
-  if (!spaceId || !result?.found || !result.concept_code || !result.term) return
+  if (context === null || callingUsage.value || !result?.found || !result.concept_code || !result.term) return
   callingUsage.value = true
   try {
-    const usage = await kinship.submitUsage(spaceId, result.concept_code, result.term)
-    if (!usage) return
+    const usage = await kinship.submitUsage(context.spaceId, result.concept_code, result.term)
+    if (!usage || !isCurrent(context)) return
+    if (usage.promotion.promoted || usage.promotion.demoted) {
+      await refresh(context, true)
+      if (!isCurrent(context)) return
+    }
     if (usage.promotion.promoted) {
       message.success(`「${result.term}」已成为本空间的推荐叫法`)
     } else if (!usage.created) {
@@ -240,11 +299,40 @@ async function recordUsage(): Promise<void> {
       message.success('已记录你的叫法；再有另一位成员使用，它将成为空间推荐叫法')
     }
   } catch (error) {
-    message.error(error instanceof ApiError && error.message ? error.message : '记录失败，请稍后重试')
+    if (isCurrent(context)) {
+      message.error(error instanceof ApiError && error.message ? error.message : '记录失败，请稍后重试')
+    }
   } finally {
-    callingUsage.value = false
+    if (isCurrent(context)) callingUsage.value = false
   }
 }
+
+watch(() => auth.user?.id, () => { viewerEpoch += 1 }, { flush: 'sync' })
+
+watch(
+  () => [spaces.currentSpaceId, auth.user?.id, props.memberId] as const,
+  () => {
+    contextEpoch += 1
+    termSuggestions.value = []
+    suggestionBusy.value = false
+    loadingResolve.value = false
+    correctionVisible.value = false
+    correctionTerm.value = ''
+    correctionError.value = ''
+    savingCorrection.value = false
+    callingUsage.value = false
+    const context = captureContext()
+    if (context === null) return
+    void refresh(context, true)
+    void loadSuggestions(context)
+  },
+  { immediate: true, flush: 'sync' },
+)
+
+onBeforeUnmount(() => {
+  mounted = false
+  contextEpoch += 1
+})
 </script>
 
 <template>
@@ -327,6 +415,7 @@ async function recordUsage(): Promise<void> {
           </p>
           <div class="suggestion-actions">
             <NButton
+              v-if="canKeep(item)"
               size="tiny"
               type="primary"
               secondary
@@ -337,6 +426,7 @@ async function recordUsage(): Promise<void> {
               保留为我的叫法
             </NButton>
             <NButton
+              v-if="canRestore(item)"
               size="tiny"
               quaternary
               :loading="suggestionBusy"

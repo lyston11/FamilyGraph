@@ -127,6 +127,11 @@ def resolve_pfv_impact(session: Session, event: DomainEvent) -> dict[int, set[in
         scopes.setdefault(int(space_id), set()).add(account_id)
 
     event_type = event.type
+    if event_type == "term.steward_updated":
+        account_id = payload.get("account_id")
+        if isinstance(event.space_id, int) and isinstance(account_id, int):
+            add(event.space_id, account_id)
+        return scopes
     if event_type.startswith("term.personal"):
         # 个人偏好：影响同账号全部相关空间，绝不波及其他账号的视图。
         account_id = payload.get("account_id")
@@ -273,6 +278,10 @@ def emit(
         created_at=utcnow(),
     )
     session.add(event)
+    if event_type == "source_fact.confirmed" and aggregate_type == "source_fact":
+        from app.services.steward_suggestions import resolve_for_linked_fact
+
+        resolve_for_linked_fact(session, fact_id=aggregate_id)
     _apply_rag_invalidation(event, session)
     _invalidate_personal_family_view(event, session)
     _schedule_steward_job(event, session)

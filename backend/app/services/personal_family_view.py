@@ -138,10 +138,16 @@ def _input_hash(graph_hash: str, *, policy_version: str, term_hash: str) -> str:
 def _current_input_hash(
     session: Session, *, account: Account, space_id: int, graph_hash: str
 ) -> str:
+    from app.services.steward_terminology import projection_state_hash
+
     return _input_hash(
         graph_hash,
         policy_version=POLICY_VERSION,
-        term_hash=_term_registry_hash(session, account_id=account.id, space_id=space_id),
+        term_hash=(
+            _term_registry_hash(session, account_id=account.id, space_id=space_id)
+            + ":"
+            + projection_state_hash(session, account_id=account.id, space_id=space_id)
+        ),
     )
 
 
@@ -273,6 +279,7 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
             concept_code=resolution.concept_code,
             baseline_term=term_view["term"],
             baseline_source=term_view["source_level"],
+            path=main_path,
         )
         if override is not None and override != effective_term:
             effective_term = override
@@ -736,6 +743,7 @@ def _view_payload_for_view(
                 subject_user_id=edge.from_user_id,
                 object_user_id=edge.to_user_id,
                 term=edge.term,
+                fact_type=row.relation_kind,
                 evidence_fact_count=len(evidence_fact_ids),
             )
             inferred_edges.append(
@@ -939,20 +947,14 @@ def rebuild_space_views(session: Session, *, space_id: int) -> int:
     不导致整个空间回滚；失败视图标记 failed 终态原因）。
     """
     rows = session.scalars(
-        select(PersonalFamilyView).where(
-            PersonalFamilyView.space_id == space_id,
-            (
-                PersonalFamilyView.status.in_(("queued", "stale", "failed", "never_computed"))
-                | (PersonalFamilyView.policy_version != POLICY_VERSION)
-                | (PersonalFamilyView.computation_version != COMPUTATION_VERSION)
-                | PersonalFamilyView.input_hash.is_(None)
-            ),
-        )
+        select(PersonalFamilyView).where(PersonalFamilyView.space_id == space_id)
     ).all()
     rebuilt = 0
     for row in rows:
         account = session.get(Account, row.viewer_account_id)
         if account is None:
+            continue
+        if view_is_current(session, view=row, account=account, space_id=space_id):
             continue
         view_id = row.id
         try:

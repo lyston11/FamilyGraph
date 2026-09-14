@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient } from '@/api/client'
 import {
   dismissSuggestion,
+  fetchSuggestionDetail,
   fetchSuggestions,
   submitSuggestion,
 } from '@/api/stewardSuggestions'
@@ -37,7 +38,9 @@ function makeSuggestionFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe('stewardSuggestions decoder', () => {
-  it('decodes a valid page and drops invalid items only', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('decodes a valid page and drops invalid items only', async () => {
     const data = {
       space_id: 7,
       items: [
@@ -47,10 +50,9 @@ describe('stewardSuggestions decoder', () => {
       next_cursor: null,
     }
     vi.mocked(apiClient.get).mockResolvedValue({ data })
-    void fetchSuggestions(7).then((page) => {
-      expect(page.items).toHaveLength(1)
-      expect(page.items[0]!.allowed_actions).toContain('submit')
-    })
+    const page = await fetchSuggestions(7)
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]!.allowed_actions).toContain('submit')
   })
 
   it('throws when the top-level payload is malformed', async () => {
@@ -87,5 +89,34 @@ describe('stewardSuggestions decoder', () => {
     const result = await dismissSuggestion(7, 1, 2)
     expect(result.state).toBe('dismissed')
     expect(result.revision).toBe(3)
+  })
+
+  it('sends target filtering to the server before pagination', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { space_id: 7, items: [], next_cursor: null } })
+    await fetchSuggestions(7, null, 50, 'term_preference', 200)
+    expect(apiClient.get).toHaveBeenCalledWith('/steward-suggestions', {
+      params: { space_id: 7, limit: 50, kind: 'term_preference', target_user_id: 200 },
+    })
+  })
+
+  it('decodes current linked proposal state on a reopened rejected suggestion', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: makeSuggestionFixture({
+      state: 'rejected', allowed_actions: ['open_details'],
+      linked_proposal: { source_fact_id: 90, state: 'rejected', revision: 3, fact_type: 'spouse' },
+      pending_confirmations: [],
+    }) })
+    const item = await fetchSuggestionDetail(7, 1)
+    expect(item.state).toBe('rejected')
+    expect(item.linked_proposal?.state).toBe('rejected')
+    expect(item.pending_confirmations).toEqual([])
+  })
+
+  it('decodes superseded details as a read-only terminal state', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: makeSuggestionFixture({
+      state: 'superseded', allowed_actions: ['open_details'],
+    }) })
+    const item = await fetchSuggestionDetail(7, 1)
+    expect(item.state).toBe('superseded')
+    expect(item.allowed_actions).toEqual(['open_details'])
   })
 })

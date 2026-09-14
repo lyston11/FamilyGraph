@@ -920,3 +920,44 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: 管家称谓闭环质量审核修复与归档
+<!-- trellis-session: v=2 fp=45db441ad06042b9 -->
+
+**Date**: 2026-09-14
+**Task**: 管家称谓闭环质量审核修复与归档
+**Branch**: `main`
+
+### Summary
+
+直接审核并修复称谓呈现、授权、偏好生命周期和模型执行缺口；功能已串行合入 main，审核结果补入原任务归档，本轮未新建任务。
+
+### Main Changes
+
+- 按查看者校正称谓方向与通知可见性，隔离私人建议，统一建议、提案和推测树状态。
+- 保留和恢复操作重验实时语义与 CAS；修复模型输入、重试预算、轮转、租约与恢复。
+- 接通人物档案称谓入口，防止账号、空间和目标切换后的迟到响应污染状态。
+- 归档记录：.trellis/tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md；审核 worktree 与分支已清理，148 个既有脏文件哈希一致。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c8805bf` | fix(steward): close kinship authorization and terminology lifecycle gaps |
+| `d26bb83` | fix(frontend): connect kinship preferences and isolate stale suggestion responses |
+| `8ad859c` | docs(steward): archive kinship quality review and validation |
+
+### Testing
+
+- [OK] Backend 全量 1119 passed、3 skipped；mypy 187 文件通过；主检出 Ruff 与格式检查通过。
+- [OK] Frontend 68 文件、618 tests passed；lint 与 build（含 vue-tsc）通过；合并后 backend 受影响测试 59 passed。
+- [OK] git diff --check 通过；本次只补充归档与会话记录，未重复运行代码测试。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 真实模型质量和生产 smoke 尚未验证；开关与线上配置未动。原 PRD 延期的关系确认成环、证据留存问题保持延期。

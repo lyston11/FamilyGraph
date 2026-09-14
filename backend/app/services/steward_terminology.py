@@ -20,20 +20,32 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import config
+from app.models.account import Account
 from app.models.personal_family_view import PersonalFamilyView, PersonalFamilyViewEdge
-from app.models.steward import StewardJob
+from app.models.relationship_facts import SourceFact
+from app.models.space import SpaceMember
+from app.models.steward import StewardJob, StewardTermProjection, StewardTermSuppression
 from app.models.steward_suggestion import StewardSuggestion
-from app.models.term_registry import TermEntry, TermUsage
-from app.models.user import User
+from app.models.term_registry import BUILTIN_TERM_SEEDS, TermEntry, TermUsage
 from app.services import terms
+from app.services.derived_facts import steps_from_json
+from app.services.relationship_graph import load_birth_years, load_graph
+from app.services.relationship_resolver import (
+    concept_code_for_path,
+    describe_path,
+    resolve_relationship,
+)
 from app.utils.timeutil import utcnow
 
-RULE_VERSION = "terminology-v1"
+RULE_VERSION = "terminology-v2"
+PROMPT_VERSION = "terminology-prompt-v2"
 
 REASON_SYNONYM = "synonym"
 REASON_SHORTER_CHAIN = "shorter_chain"
@@ -64,10 +76,18 @@ def suppression_key_for(
         int(viewer_account_id),
         int(space_id),
         int(target_user_id),
-        str(concept_code),
+        _suppression_concept(concept_code),
         normalized,
     ]
     return _canonical_hash(payload)
+
+
+def _suppression_concept(code: str) -> str:
+    """A biological shared-parent path and a direct sibling have the same displayed role."""
+    tokens = code.split("-")
+    if len(tokens) >= 2 and tokens[0] in ("U", "Um", "Uf") and tokens[1] in ("D", "Dm", "Df"):
+        tokens = ["B" + tokens[1][1:], *tokens[2:]]
+    return "-".join(tokens)
 
 
 def has_suppression(
@@ -111,6 +131,16 @@ def _allowed_terms_for_code(
     )
     if resolved.term:
         allowed.add(resolved.term)
+    if resolved.source_level in (terms.TERM_LEVEL_PERSONAL, terms.TERM_LEVEL_SPACE):
+        return allowed
+    # The same bundled vocabulary used by migration/seed is also the semantic
+    # allowlist. Existing databases need not be reseeded to validate a new alias.
+    locale = terms.space_locale(db, space_id)
+    allowed.update(
+        text
+        for level, entry_locale, code, text in BUILTIN_TERM_SEEDS
+        if code == concept_code and (level == "system" or entry_locale == locale)
+    )
     rows = db.scalars(
         select(TermEntry).where(
             TermEntry.concept_code == concept_code,
@@ -120,6 +150,8 @@ def _allowed_terms_for_code(
     ).all()
     for row in rows:
         if row.level == terms.TERM_LEVEL_SPACE and row.space_id != space_id:
+            continue
+        if row.level == terms.TERM_LEVEL_LOCALE and row.locale != terms.space_locale(db, space_id):
             continue
         allowed.add(row.term)
     if variant_context is not None:
@@ -150,44 +182,14 @@ def term_semantics_valid(
     tokens = concept_code.split("-")
     if "SELF" in tokens:  # pragma: no cover - SELF 不产生称谓建议
         return False
-    allowed_full = _allowed_terms_for_code(
+    allowed_full = _candidate_terms(
         db,
         account_id=account_id,
         space_id=space_id,
         concept_code=concept_code,
         variant_context=variant_context,
     )
-    if cleaned in allowed_full:
-        return True
-    segments = cleaned.split("的")
-    for cut in range(1, len(tokens)):
-        prefix = "-".join(tokens[:cut])
-        residual_tokens = tokens[cut:]
-        if len(segments) != 1 + len(residual_tokens):
-            continue
-        prefix_resolved = terms.resolve_term(
-            db, account_id=account_id, space_id=space_id, concept_code=prefix
-        )
-        if prefix_resolved.term is None or prefix_resolved.term not in (
-            _allowed_terms_for_code(
-                db,
-                account_id=account_id,
-                space_id=space_id,
-                concept_code=prefix,
-            )
-        ):
-            continue
-        residual_words: list[str] = []
-        ok = True
-        for token in residual_tokens:
-            word = terms.residual_word_for(token)
-            if word is None:
-                ok = False
-                break
-            residual_words.append(word)
-        if ok and "的".join([prefix_resolved.term, *residual_words]) == cleaned:
-            return True
-    return False
+    return cleaned in allowed_full
 
 
 # ---- 依据摘要 ----
@@ -201,6 +203,8 @@ def projection_semantic_hash(
     concept_code: str | None,
     path_fact_revisions: list[list[int]],
     term_registry_hash: str,
+    root_user_id: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> str:
     return _canonical_hash(
         [
@@ -211,12 +215,14 @@ def projection_semantic_hash(
             concept_code,
             path_fact_revisions,
             term_registry_hash,
+            root_user_id,
+            context,
         ]
     )
 
 
 def request_hash_for(semantic_hash: str) -> str:
-    return _canonical_hash([RULE_VERSION, semantic_hash])
+    return _canonical_hash([PROMPT_VERSION, semantic_hash])
 
 
 # ---- 生产发现（core 短事务内；零模型）----
@@ -229,44 +235,293 @@ def _pfv_rows(db: Session, *, space_id: int) -> list[tuple[int, int, int]]:
             PersonalFamilyView.viewer_account_id,
             PersonalFamilyView.root_user_id,
             PersonalFamilyView.id,
-        ).where(PersonalFamilyView.space_id == space_id)
+        )
+        .join(Account, Account.id == PersonalFamilyView.viewer_account_id)
+        .join(
+            SpaceMember,
+            (SpaceMember.user_id == Account.user_id)
+            & (SpaceMember.space_id == PersonalFamilyView.space_id),
+        )
+        .where(
+            PersonalFamilyView.space_id == space_id,
+            PersonalFamilyView.root_user_id == Account.user_id,
+            PersonalFamilyView.status == "current",
+            SpaceMember.status == "active",
+        )
+        .order_by(PersonalFamilyView.viewer_account_id)
     ).all()
     return [(int(a), int(r), int(v)) for a, r, v in rows]
 
 
-def _edge_fact_revisions(path: list[dict[str, Any]]) -> list[list[int]]:
-    return [
-        [int(step["fact_id"]), 0]
-        for step in path
-        if isinstance(step.get("fact_id"), int) and step["fact_id"] > 0
-    ]
-
-
 def _explicit_usage_term(
-    db: Session, *, account_id: int, space_id: int, concept_code: str
+    db: Session,
+    *,
+    account_id: int,
+    space_id: int,
+    concept_code: str,
+    variant_context: terms.VariantContext | None = None,
 ) -> tuple[str, int] | None:
     """本人明确用词：该账号在此空间选过、且属于同一概念码的四级词条词。
 
     只读 TermUsage/TermEntry（不调用 BehaviorProjection rebuild，不推断偏好）。
     """
-    usage_rows = db.scalars(
-        select(TermUsage.term_entry_id).where(
-            TermUsage.account_id == account_id, TermUsage.space_id == space_id
+    entries = db.scalars(
+        select(TermEntry)
+        .join(TermUsage, TermUsage.term_entry_id == TermEntry.id)
+        .where(
+            TermUsage.account_id == account_id,
+            TermUsage.space_id == space_id,
+            TermEntry.concept_code == concept_code,
         )
+        .order_by(TermUsage.created_at.desc(), TermUsage.id.desc())
     ).all()
-    if not usage_rows:
-        return None
-    entry_ids = list(usage_rows)
-    for entry_id in entry_ids:
-        entry = db.get(TermEntry, int(entry_id))
-        # 本人明确选择即证据：space 候选可能因晋升规则处于 superseded，
-        # 但不改变“该账号在该空间选过这个词”的事实。
-        if entry is None:
-            continue
-        if entry.concept_code != concept_code:
-            continue
-        return entry.term, int(entry.id)
+    for entry in entries:
+        if term_semantics_valid(
+            db,
+            account_id=account_id,
+            space_id=space_id,
+            concept_code=concept_code,
+            term=entry.term,
+            variant_context=variant_context,
+        ):
+            return entry.term, int(entry.id)
     return None
+
+
+def _age_order_for_path(code: str, context: terms.VariantContext) -> str:
+    base = terms.sibling_base_hop(code.split("-"))
+    if base is None or base[0] >= len(context.path):
+        return "unknown"
+    step = context.path[base[0]]
+    reference = context.viewer_user_id if base[0] else int(step["from"])
+    return terms._age_order(context.births, reference, int(step["to"])) or "unknown"
+
+
+def _candidate_terms(
+    db: Session,
+    *,
+    account_id: int,
+    space_id: int,
+    concept_code: str,
+    variant_context: terms.VariantContext | None = None,
+) -> set[str]:
+    allowed = _allowed_terms_for_code(
+        db,
+        account_id=account_id,
+        space_id=space_id,
+        concept_code=concept_code,
+        variant_context=variant_context,
+    )
+    tokens = concept_code.split("-")
+    for cut in range(1, len(tokens)):
+        words = [terms.residual_word_for(token) for token in tokens[cut:]]
+        if any(word is None for word in words):
+            continue
+        for prefix in _allowed_terms_for_code(
+            db,
+            account_id=account_id,
+            space_id=space_id,
+            concept_code="-".join(tokens[:cut]),
+            variant_context=(
+                terms.VariantContext(
+                    viewer_user_id=variant_context.viewer_user_id,
+                    path=variant_context.path[:cut],
+                    births=variant_context.births,
+                )
+                if variant_context is not None
+                else None
+            ),
+        ):
+            combined = "的".join([prefix, *(word for word in words if word is not None)])
+            if len(combined) <= TERM_MAX_LENGTH:
+                allowed.add(combined)
+    return allowed
+
+
+def current_target_context(
+    db: Session,
+    *,
+    viewer_account_id: int,
+    root_user_id: int,
+    space_id: int,
+    target_user_id: int,
+    path: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Read a current authorized path, without trusting a saved PFV or model echo.
+
+    The fingerprint contains only this target's inputs. Output revisions and unrelated
+    facts never enter it; raw birth values never enter stored or outbound contexts.
+    """
+    account = db.get(Account, viewer_account_id)
+    if account is None or account.user_id != root_user_id or root_user_id == target_user_id:
+        return None
+    if (
+        db.scalar(
+            select(SpaceMember.id).where(
+                SpaceMember.space_id == space_id,
+                SpaceMember.user_id == root_user_id,
+                SpaceMember.status == "active",
+            )
+        )
+        is None
+    ):
+        return None
+    if path is None:
+        result = resolve_relationship(
+            db,
+            viewer_user_id=root_user_id,
+            target_user_id=target_user_id,
+            space_id=space_id,
+        )
+        if not result.found:
+            return None
+        path = [step.to_json() for step in result.main_path]
+    if not path:
+        return None
+    graph = load_graph(db, viewer_user_id=root_user_id, space_id=space_id)
+    node_id = root_user_id
+    fact_revisions: list[list[int]] = []
+    persons = {root_user_id}
+    for step in path:
+        if not isinstance(step, dict) or step.get("from") != node_id:
+            return None
+        fact_id = step.get("fact_id")
+        # Automatic optimization is restricted to confirmed paths in this release.
+        if type(fact_id) is not int or fact_id <= 0:
+            return None
+        match = next(
+            (
+                edge
+                for edge in graph.adjacency.get(node_id, [])
+                if (
+                    edge.to_id == step.get("to")
+                    and edge.fact_id == fact_id
+                    and edge.edge_type == step.get("edge_type")
+                    and edge.subtype == step.get("subtype")
+                    and edge.direction == step.get("direction")
+                )
+            ),
+            None,
+        )
+        if match is None or match.to_id in persons:
+            return None
+        fact = db.get(SourceFact, fact_id)
+        if fact is None:
+            return None
+        fact_revisions.append([fact_id, fact.revision])
+        node_id = match.to_id
+        persons.add(node_id)
+    if node_id != target_user_id:
+        return None
+    steps = steps_from_json(path)
+    concept = concept_code_for_path(steps, graph.node_genders)
+    if concept is None or concept == "SELF":
+        return None
+    variants = terms.VariantContext(
+        viewer_user_id=root_user_id,
+        path=path,
+        births=load_birth_years(
+            db, viewer_user_id=root_user_id, space_id=space_id, user_ids=persons
+        ),
+    )
+    baseline = terms.resolve_term_or_structural(
+        db,
+        account_id=viewer_account_id,
+        space_id=space_id,
+        concept_code=concept,
+        structural_description=describe_path(steps, graph.node_genders),
+        variant_context=variants,
+    )
+    tokens = concept.split("-")
+    term_hash = terms.term_registry_hash(
+        db,
+        space_id=space_id,
+        account_id=viewer_account_id,
+        concept_codes={"-".join(tokens[:cut]) for cut in range(1, len(tokens) + 1)},
+    )
+    usage_rows = db.execute(
+        select(TermUsage.id, TermEntry.id, TermEntry.revision, TermEntry.term)
+        .join(TermEntry, TermEntry.id == TermUsage.term_entry_id)
+        .where(
+            TermUsage.account_id == viewer_account_id,
+            TermUsage.space_id == space_id,
+            TermEntry.concept_code == concept,
+        )
+        .order_by(TermUsage.id)
+    ).all()
+    suppressions = list(
+        db.scalars(
+            select(StewardTermSuppression.suppression_key)
+            .where(
+                StewardTermSuppression.viewer_account_id == viewer_account_id,
+                StewardTermSuppression.space_id == space_id,
+                StewardTermSuppression.target_user_id == target_user_id,
+            )
+            .order_by(StewardTermSuppression.suppression_key)
+        )
+    )
+    age_order = _age_order_for_path(concept, variants)
+    allowed = _candidate_terms(
+        db,
+        account_id=viewer_account_id,
+        space_id=space_id,
+        concept_code=concept,
+        variant_context=variants,
+    )
+    allowed = {
+        term
+        for term in allowed
+        if not has_suppression(
+            db,
+            viewer_account_id=viewer_account_id,
+            space_id=space_id,
+            target_user_id=target_user_id,
+            key=suppression_key_for(
+                viewer_account_id=viewer_account_id,
+                space_id=space_id,
+                target_user_id=target_user_id,
+                concept_code=concept,
+                term=term,
+            ),
+        )
+    }
+    usage = _explicit_usage_term(
+        db,
+        account_id=viewer_account_id,
+        space_id=space_id,
+        concept_code=concept,
+        variant_context=variants,
+    )
+    semantic = projection_semantic_hash(
+        viewer_account_id=viewer_account_id,
+        root_user_id=root_user_id,
+        space_id=space_id,
+        target_user_id=target_user_id,
+        concept_code=concept,
+        path_fact_revisions=fact_revisions,
+        term_registry_hash=term_hash,
+        context={
+            "policy_version": config.POLICY_VERSION,
+            "path": path,
+            "age_order": age_order,
+            "baseline": baseline,
+            "usage": [list(row) for row in usage_rows],
+            "suppressions": suppressions,
+            "allowed_terms": sorted(allowed),
+        },
+    )
+    return {
+        "target_user_id": target_user_id,
+        "concept_code": concept,
+        "path": path,
+        "baseline_term": baseline["term"],
+        "baseline_source": baseline["source_level"],
+        "age_order": age_order,
+        "allowed_terms": sorted(allowed),
+        "preferred_term": usage[0] if usage is not None and usage[0] in allowed else None,
+        "semantic_hash": semantic,
+        "request_hash": request_hash_for(semantic),
+    }
 
 
 def upsert_projection(
@@ -311,33 +566,54 @@ def upsert_projection(
             concept_code=concept_code,
             semantic_hash=semantic_hash,
             rule_version=RULE_VERSION,
+            revision=1,
+            status="unchanged",
             created_at=now,
             updated_at=now,
         )
         db.add(row)
         created = True
+    before = (
+        row.semantic_hash,
+        row.baseline_term,
+        row.baseline_source,
+        row.term,
+        row.origin,
+        row.status,
+        row.rule_version,
+    )
     if row.semantic_hash != semantic_hash:
         # 相关依据改变：旧 term 先失效；稳定拒绝记录另行继续有效
         row.semantic_hash = semantic_hash
         if row.status == "active" and row.term is not None:
             row.status = "stale"
-        row.revision += 1
+    row.rule_version = RULE_VERSION
     row.concept_code = concept_code
     row.baseline_term = baseline_term
     row.baseline_source = baseline_source
-    if row.request_hash is None:
-        row.request_hash = request_hash_for(semantic_hash)
+    row.request_hash = request_hash_for(semantic_hash)
     if term is not None:
         # 相同词幂等：CAS 更新不清反馈/last_checked
-        if row.term != term or row.origin != origin:
+        if row.term != term or row.origin != origin or row.status != "active":
             row.term = term
             row.origin = origin
             row.source_model_call_id = source_model_call_id
             row.status = "active"
-            row.revision += 1
+    after = (
+        row.semantic_hash,
+        row.baseline_term,
+        row.baseline_source,
+        row.term,
+        row.origin,
+        row.status,
+        row.rule_version,
+    )
+    changed = before != after
+    if changed and not created:
+        row.revision += 1
     row.updated_at = now
     db.flush()
-    return row, created or row.revision > 1
+    return row, created or changed
 
 
 def upsert_term_preference_suggestion(
@@ -392,7 +668,7 @@ def upsert_term_preference_suggestion(
     }
     # 同语义同词的历史终态（含 resolved）也去重：恢复过/保留过的建议不重生
     existing_any = db.scalar(
-        select(StewardSuggestion.id)
+        select(StewardSuggestion)
         .where(
             StewardSuggestion.space_id == space_id,
             StewardSuggestion.kind == "term_preference",
@@ -406,7 +682,11 @@ def upsert_term_preference_suggestion(
         .limit(1)
     )
     if existing_any is not None:
-        return None, False
+        if existing_any.status == "proposed" and existing_any.value_json != value_json:
+            existing_any.value_json = value_json
+            existing_any.revision += 1
+            existing_any.updated_at = now
+        return existing_any, False
     suggestion, created = steward_suggestions.upsert_suggestion(
         db,
         space_id=space_id,
@@ -422,88 +702,109 @@ def upsert_term_preference_suggestion(
         notify=False,
         now=now,
     )
+    # Optional controls remain available as long as their projection is current.
+    # Evidence changes and explicit feedback, rather than a timer, retire them.
+    suggestion.expires_at = None
     return suggestion, created
 
 
-def run_deterministic_scan(db: Session, *, job: StewardJob, now: Any = None) -> dict[str, int]:
-    """core 完成PFV 后的有界称谓扫描（确定性来源；零模型调用）。
+def request_projection_refresh(db: Session, *, space_id: int, viewer_account_ids: set[int]) -> None:
+    """Invalidate and enqueue in the writer's transaction; never open another writer."""
+    from app.services.domain_events import emit
 
-    - baseline 已是长链泛化（derived）：自动生效，产出可选保留建议；
-    - 本人明确 TermUsage 提供合法优选词且未显式成词条：deterministic override；
-    - 无改善不造建议；显式个人/空间词条目标跳过。
-    """
+    for account_id in sorted(viewer_account_ids):
+        emit(
+            db,
+            event_type="term.steward_updated",
+            aggregate_type="account",
+            aggregate_id=account_id,
+            space_id=space_id,
+            payload={"account_id": account_id},
+        )
+
+
+def projection_state_hash(db: Session, *, account_id: int, space_id: int) -> str:
+    """PFV freshness includes automatic output and its effective feature switch."""
+    from app.services.steward_assist import assist_enabled
+
+    rows = db.scalars(
+        select(StewardTermProjection)
+        .where(
+            StewardTermProjection.viewer_account_id == account_id,
+            StewardTermProjection.space_id == space_id,
+            StewardTermProjection.term.is_not(None),
+        )
+        .order_by(StewardTermProjection.id)
+    ).all()
+    return _canonical_hash(
+        [
+            RULE_VERSION,
+            assist_enabled(db, space_id, "terminology")
+            if any(r.origin == "model" for r in rows)
+            else None,
+            [[r.id, r.revision, r.semantic_hash, r.status, r.rule_version] for r in rows],
+        ]
+    )
+
+
+def run_deterministic_scan(db: Session, *, job: StewardJob, now: Any = None) -> dict[str, int]:
+    """Produce only from current authorized baselines, never from our own display output."""
     now = now or utcnow()
     stats = {"projections": 0, "suggestions": 0}
-    term_hash = terms.term_registry_hash(db, space_id=job.space_id)
+    changed_viewers: set[int] = set()
     for viewer_account_id, root_user_id, view_id in _pfv_rows(db, space_id=job.space_id):
         edges = db.scalars(
             select(PersonalFamilyViewEdge).where(
                 PersonalFamilyViewEdge.view_id == view_id,
-                PersonalFamilyViewEdge.inclusion_reason_code != "inferred_path",
+                PersonalFamilyViewEdge.inclusion_reason_code == "confirmed_path",
             )
         ).all()
         for edge in edges:
-            if edge.to_user_id == root_user_id:
-                continue
-            raw_level = (edge.authorization_basis_json or {}).get("term_source_level")
-            baseline_source = raw_level if isinstance(raw_level, str) else None
-            concept = edge.concept_code
-            if not concept or concept == "SELF":
-                continue
-            if baseline_source is not None and baseline_source not in _OVERRIDABLE_BASELINE_SOURCES:
-                continue  # personal/space 显式词条：读取已无条件优先，跳过
-            semantic_hash = projection_semantic_hash(
+            target = current_target_context(
+                db,
                 viewer_account_id=viewer_account_id,
+                root_user_id=root_user_id,
                 space_id=job.space_id,
                 target_user_id=int(edge.to_user_id),
-                concept_code=concept,
-                path_fact_revisions=_edge_fact_revisions(edge.path_json or []),
-                term_registry_hash=term_hash,
+                path=edge.path_json,
             )
-            improvement: tuple[str, str] | None = None
-            if baseline_source == "derived" and edge.term:
-                improvement = (edge.term, REASON_SHORTER_CHAIN)
-            else:
-                usage = _explicit_usage_term(
-                    db,
-                    account_id=viewer_account_id,
-                    space_id=job.space_id,
-                    concept_code=concept,
+            if target is None:
+                continue
+            baseline_source = target["baseline_source"]
+            if baseline_source not in _OVERRIDABLE_BASELINE_SOURCES:
+                continue
+            baseline = target["baseline_term"]
+            preferred = target["preferred_term"]
+            override = preferred if preferred and preferred != baseline else None
+            reason = REASON_PREFERRED_USAGE if override else REASON_SHORTER_CHAIN
+            suggestion_term = override or (baseline if baseline_source == "derived" else None)
+            previous = db.scalar(
+                select(StewardTermProjection).where(
+                    StewardTermProjection.space_id == job.space_id,
+                    StewardTermProjection.viewer_account_id == viewer_account_id,
+                    StewardTermProjection.root_user_id == root_user_id,
+                    StewardTermProjection.target_user_id == edge.to_user_id,
                 )
-                if usage is not None and edge.term and usage[0] != edge.term:
-                    if not has_suppression(
-                        db,
-                        viewer_account_id=viewer_account_id,
-                        space_id=job.space_id,
-                        target_user_id=int(edge.to_user_id),
-                        key=suppression_key_for(
-                            viewer_account_id=viewer_account_id,
-                            space_id=job.space_id,
-                            target_user_id=int(edge.to_user_id),
-                            concept_code=concept,
-                            term=usage[0],
-                        ),
-                    ):
-                        improvement = (usage[0], REASON_PREFERRED_USAGE)
-            projection, _changed = upsert_projection(
+            )
+            had_override = previous is not None and previous.term is not None
+            projection, changed = upsert_projection(
                 db,
                 space_id=job.space_id,
                 viewer_account_id=viewer_account_id,
                 root_user_id=root_user_id,
                 target_user_id=int(edge.to_user_id),
-                concept_code=concept,
-                semantic_hash=semantic_hash,
-                baseline_term=edge.term,
+                concept_code=target["concept_code"],
+                semantic_hash=target["semantic_hash"],
+                baseline_term=baseline,
                 baseline_source=baseline_source,
-                term=improvement[0] if improvement else None,
-                origin="deterministic" if improvement else None,
+                term=override,
+                origin="deterministic" if override else None,
                 now=now,
             )
             stats["projections"] += 1
-            if improvement is None:
-                continue
-            viewer = db.get(User, root_user_id)
-            if viewer is None:
+            if changed and (had_override or override is not None):
+                changed_viewers.add(viewer_account_id)
+            if suggestion_term is None:
                 continue
             _suggestion, created = upsert_term_preference_suggestion(
                 db,
@@ -511,21 +812,22 @@ def run_deterministic_scan(db: Session, *, job: StewardJob, now: Any = None) -> 
                 viewer_account_id=viewer_account_id,
                 subject_user_id=root_user_id,
                 object_user_id=int(edge.to_user_id),
-                concept_code=concept,
-                term=improvement[0],
+                concept_code=target["concept_code"],
+                term=suggestion_term,
                 projection_id=projection.id,
                 projection_revision=projection.revision,
-                semantic_hash=semantic_hash,
-                reason_code=improvement[1],
+                semantic_hash=target["semantic_hash"],
+                reason_code=reason,
                 policy_version=job.policy_version,
                 origin="deterministic",
                 now=now,
             )
             stats["suggestions"] += int(created)
+    request_projection_refresh(db, space_id=job.space_id, viewer_account_ids=changed_viewers)
     return stats
 
 
-# ---- 模型工作发现与栅栏 ----
+# ---- Model discovery: bounded output, current authorization, per-target history ----
 
 
 def collect_model_groups(
@@ -535,79 +837,77 @@ def collect_model_groups(
     max_groups: int,
     max_targets: int,
 ) -> list[dict[str, Any]]:
-    """有界模型目标分组（每空间每 job 有限组）。
+    if max_groups <= 0 or max_targets <= 0:
+        return []
+    from app.services.steward_assist import terminology_target_retryable
 
-    只包含可核验改善空间的 confirmed 路径：长链（derived baseline）或存在
-    可核验同义候选而 baseline 未采用。检查过的（last_checked_hash 命中当前
-    语义）跳过——无新输入不重复调用。
-    """
-    groups: dict[int, dict[str, Any]] = {}
-    term_hash = terms.term_registry_hash(db, space_id=space_id)
+    candidates: list[tuple[Any, int, dict[str, Any]]] = []
     for viewer_account_id, root_user_id, view_id in _pfv_rows(db, space_id=space_id):
+        targets: list[tuple[Any, int, dict[str, Any]]] = []
         edges = db.scalars(
             select(PersonalFamilyViewEdge).where(
                 PersonalFamilyViewEdge.view_id == view_id,
-                PersonalFamilyViewEdge.inclusion_reason_code != "inferred_path",
+                PersonalFamilyViewEdge.inclusion_reason_code == "confirmed_path",
             )
         ).all()
         for edge in edges:
-            concept = edge.concept_code
-            if not concept or concept == "SELF" or edge.to_user_id == root_user_id:
-                continue
-            raw_level = (edge.authorization_basis_json or {}).get("term_source_level")
-            baseline_source = raw_level if isinstance(raw_level, str) else None
-            if baseline_source is None or baseline_source not in _OVERRIDABLE_BASELINE_SOURCES:
-                continue
-            semantic_hash = projection_semantic_hash(
+            target = current_target_context(
+                db,
                 viewer_account_id=viewer_account_id,
+                root_user_id=root_user_id,
                 space_id=space_id,
                 target_user_id=int(edge.to_user_id),
-                concept_code=concept,
-                path_fact_revisions=_edge_fact_revisions(edge.path_json or []),
-                term_registry_hash=term_hash,
+                path=edge.path_json,
             )
-            request_hash = request_hash_for(semantic_hash)
-            from app.models.steward import StewardTermProjection
-
+            if target is None or target["baseline_source"] not in _OVERRIDABLE_BASELINE_SOURCES:
+                continue
+            baseline = target["baseline_term"] or ""
+            if target["preferred_term"] and target["preferred_term"] != baseline:
+                continue  # An explicit prior choice is authoritative over model rewording.
+            alternatives = [
+                t for t in target["allowed_terms"] if t != baseline and len(t) <= len(baseline)
+            ]
+            if not alternatives:
+                continue
             row = db.scalar(
                 select(StewardTermProjection).where(
                     StewardTermProjection.space_id == space_id,
                     StewardTermProjection.viewer_account_id == viewer_account_id,
-                    StewardTermProjection.target_user_id == int(edge.to_user_id),
+                    StewardTermProjection.root_user_id == root_user_id,
+                    StewardTermProjection.target_user_id == edge.to_user_id,
                 )
             )
-            if row is not None and row.last_checked_hash == request_hash:
-                continue  # 同输入已检查：不重新入队
-            group = groups.setdefault(
-                viewer_account_id,
-                {
-                    "viewer_account_id": viewer_account_id,
-                    "root_user_id": root_user_id,
-                    "targets": [],
-                },
-            )
-            if len(group["targets"]) >= max_targets:
+            if row is not None and row.last_checked_hash == target["request_hash"]:
                 continue
-            group["targets"].append(
-                {
-                    "projection_id": int(row.id) if row is not None else None,
-                    "target_user_id": int(edge.to_user_id),
-                    "concept_code": concept,
-                    "baseline_term": edge.term,
-                    "path": edge.path_json or [],
-                    "semantic_hash": semantic_hash,
-                    "age_context": bool(terms._sibling_base_hop(concept.split("-")) is not None),
-                }
-            )
-    result = []
-    for account_id in sorted(groups):
-        group = groups[account_id]
-        targets = sorted(group["targets"], key=lambda t: (t["target_user_id"],))
+            if not terminology_target_retryable(
+                db,
+                space_id=space_id,
+                viewer_account_id=viewer_account_id,
+                root_user_id=root_user_id,
+                target_user_id=int(edge.to_user_id),
+                semantic_hash=target["semantic_hash"],
+                request_hash=target["request_hash"],
+            ):
+                continue
+            target["projection_id"] = row.id if row is not None else None
+            attempted_at = row.last_attempt_at.isoformat() if row and row.last_attempt_at else ""
+            targets.append((attempted_at, int(edge.to_user_id), target))
         if targets:
-            result.append({**group, "targets": targets[:max_targets]})
-        if len(result) >= max_groups:
-            break
-    return result
+            targets.sort(key=lambda entry: (entry[0], entry[1]))
+            candidates.append(
+                (
+                    targets[0][0],
+                    viewer_account_id,
+                    {
+                        "viewer_account_id": viewer_account_id,
+                        "root_user_id": root_user_id,
+                        "space_id": space_id,
+                        "targets": [entry[2] for entry in targets[:max_targets]],
+                    },
+                )
+            )
+    candidates.sort(key=lambda entry: (entry[0], entry[1]))
+    return [entry[2] for entry in candidates[:max_groups]]
 
 
 def targets_digest(targets: list[dict[str, Any]]) -> str:
@@ -618,25 +918,30 @@ def targets_digest(targets: list[dict[str, Any]]) -> str:
 
 
 def project_terminology_input(db: Session, group: dict[str, Any]) -> str:
-    """terminology user prompt：代号 + 结构 + baseline + 可核验元数据。
-
-    不含姓名、生日原值、无关事实、其他账号数据；目标代号由服务端分配。
-    """
-    roster: list[dict[str, Any]] = []
-    for index, target in enumerate(group["targets"]):
-        ref = f"t{index + 1:03d}"
-        roster.append(
-            {
-                "target_ref": ref,
-                "concept_code": target["concept_code"],
-                "baseline_term": target["baseline_term"],
-                "age_order_available": bool(target.get("age_context")),
-                "semantic_hash": target["semantic_hash"],
-            }
-        )
-    import json
-
-    return json.dumps({"version": 1, "targets": roster}, ensure_ascii=False)
+    """Bounded, de-identified, untrusted terminology data with an exact request identity."""
+    targets = [
+        {
+            "target_ref": f"t{index + 1:03d}",
+            "concept_code": target["concept_code"],
+            "baseline_term": target["baseline_term"],
+            "age_order": target.get("age_order", "unknown"),
+            "allowed_terms": target.get("allowed_terms", []),
+            "semantic_hash": target["semantic_hash"],
+        }
+        for index, target in enumerate(group["targets"])
+    ]
+    context_hash = _canonical_hash(
+        [
+            PROMPT_VERSION,
+            group["viewer_account_id"],
+            group["root_user_id"],
+            group.get("space_id"),
+            targets,
+        ]
+    )
+    return json.dumps(
+        {"version": 1, "context_hash": context_hash, "targets": targets}, ensure_ascii=False
+    )
 
 
 def validate_model_output(
@@ -646,122 +951,78 @@ def validate_model_output(
     group: dict[str, Any],
     space_id: int,
 ) -> dict[str, Any] | None:
-    """terminology 输出校验（封闭 schema + 服务端语义重验）。
-
-    返回 {"items": [{target_user_id, concept_code, term, reason_code}]}；
-    结构不合法返回 None（degraded）。语义不合法/被抑制/无改善的条目逐条
-    丢弃，不转待批准。
-    """
-    import json
-
     try:
         payload = json.loads(text)
     except (json.JSONDecodeError, ValueError):
         return None
-    if not isinstance(payload, dict) or payload.get("version") != 1:
-        return None
-    if payload.get("context_hash") is not None and not isinstance(payload.get("context_hash"), str):
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"version", "context_hash", "items"}
+        or type(payload.get("version")) is not int
+        or payload["version"] != 1
+        or payload.get("context_hash")
+        != json.loads(project_terminology_input(db, group))["context_hash"]
+    ):
         return None
     items = payload.get("items")
-    if not isinstance(items, list):
+    if not isinstance(items, list) or len(items) > len(group["targets"]):
         return None
-    if len(items) > len(group["targets"]):
-        return None
+    by_ref = {f"t{index + 1:03d}": target for index, target in enumerate(group["targets"])}
     seen_refs: set[str] = set()
     accepted: list[dict[str, Any]] = []
-    term_hash = terms.term_registry_hash(db, space_id=space_id)
     for item in items:
-        if not isinstance(item, dict):
-            return None
-        if set(item.keys()) - {"target_ref", "concept_code", "term", "reason_code"}:
+        if not isinstance(item, dict) or set(item) != {
+            "target_ref",
+            "concept_code",
+            "term",
+            "reason_code",
+        }:
             return None
         ref = item.get("target_ref")
-        if not isinstance(ref, str) or ref in seen_refs:
+        if not isinstance(ref, str) or ref not in by_ref or ref in seen_refs:
             return None
         seen_refs.add(ref)
-        index = _ref_index(ref)
-        if index is None or index >= len(group["targets"]):
-            continue  # 未知目标：丢弃该条
-        target = group["targets"][index]
+        target = by_ref[ref]
+        current = current_target_context(
+            db,
+            viewer_account_id=int(group["viewer_account_id"]),
+            root_user_id=int(group["root_user_id"]),
+            space_id=space_id,
+            target_user_id=int(target["target_user_id"]),
+            path=target["path"],
+        )
+        if current is None or current["semantic_hash"] != target["semantic_hash"]:
+            return None
         term_text = item.get("term")
         reason = item.get("reason_code")
-        if reason not in (REASON_SYNONYM, REASON_SHORTER_CHAIN, REASON_PREFERRED_USAGE):
-            continue
-        if not isinstance(term_text, str):
-            continue
-        term_text = term_text.strip()
-        if not term_text or len(term_text) > TERM_MAX_LENGTH:
-            continue
-        if term_text == target["baseline_term"]:
-            continue  # 无改善
-        if item.get("concept_code") != target["concept_code"]:
-            continue  # 不信任模型自报概念码：必须与服务端真值一致
-        variant_context = None
-        from app.services.relationship_graph import load_birth_years
-
-        if target.get("age_context"):
-            persons = {int(t["target_user_id"]) for t in group["targets"]}
-            for step in target["path"]:
-                persons.add(int(step["from"]))
-                persons.add(int(step["to"]))
-            births = load_birth_years(
-                db,
-                viewer_user_id=int(group["root_user_id"]),
-                space_id=space_id,
-                user_ids=persons,
-            )
-            variant_context = terms.VariantContext(
-                viewer_user_id=int(group["root_user_id"]),
-                path=target["path"],
-                births=births,
-            )
-        if not term_semantics_valid(
-            db,
-            account_id=int(group["viewer_account_id"]),
-            space_id=space_id,
-            concept_code=target["concept_code"],
-            term=term_text,
-            variant_context=variant_context,
+        if (
+            not isinstance(term_text, str)
+            or reason not in (REASON_SYNONYM, REASON_SHORTER_CHAIN, REASON_PREFERRED_USAGE)
+            or item.get("concept_code") != current["concept_code"]
         ):
             continue
-        key = suppression_key_for(
-            viewer_account_id=int(group["viewer_account_id"]),
-            space_id=space_id,
-            target_user_id=int(target["target_user_id"]),
-            concept_code=target["concept_code"],
-            term=term_text,
-        )
-        if has_suppression(
-            db,
-            viewer_account_id=int(group["viewer_account_id"]),
-            space_id=space_id,
-            target_user_id=int(target["target_user_id"]),
-            key=key,
+        term_text = term_text.strip()
+        baseline = current["baseline_term"] or ""
+        if (
+            not term_text
+            or len(term_text) > TERM_MAX_LENGTH
+            or len(term_text) > len(baseline)
+            or term_text == baseline
+            or term_text not in current["allowed_terms"]
+            or (reason == REASON_PREFERRED_USAGE and term_text != current["preferred_term"])
+            or (reason == REASON_SHORTER_CHAIN and len(term_text) >= len(baseline))
         ):
             continue
         accepted.append(
             {
                 "target_user_id": int(target["target_user_id"]),
-                "concept_code": target["concept_code"],
+                "concept_code": current["concept_code"],
                 "term": term_text,
                 "reason_code": reason,
-                "semantic_hash": projection_semantic_hash(
-                    viewer_account_id=int(group["viewer_account_id"]),
-                    space_id=space_id,
-                    target_user_id=int(target["target_user_id"]),
-                    concept_code=target["concept_code"],
-                    path_fact_revisions=_edge_fact_revisions(target["path"]),
-                    term_registry_hash=term_hash,
-                ),
+                "semantic_hash": current["semantic_hash"],
             }
         )
     return {"items": accepted}
-
-
-def _ref_index(ref: str) -> int | None:
-    if not ref.startswith("t") or not ref[1:].isdigit():
-        return None
-    return int(ref[1:]) - 1
 
 
 # ---- 有效词选择器（只读；PFV/resolve/呈现服务统一消费）----
@@ -777,6 +1038,7 @@ def effective_override(
     concept_code: str | None,
     baseline_term: str | None,
     baseline_source: str | None,
+    path: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """结合当前授权依据选择有效自动词；无有效自动项返回 None（用 baseline）。
 
@@ -799,10 +1061,36 @@ def effective_override(
             StewardTermProjection.status == "active",
         )
     )
-    if row is None or row.term is None:
+    if (
+        row is None
+        or row.term is None
+        or row.concept_code != concept_code
+        or row.rule_version != RULE_VERSION
+    ):
         return None
+    if row.origin == "model":
+        from app.services.steward_assist import assist_enabled
+
+        if not assist_enabled(db, space_id, "terminology"):
+            return None
     if row.baseline_term is not None and row.baseline_term != baseline_term:
         # baseline 漂移：旧自动词失效，回退当前 baseline
+        return None
+    current = current_target_context(
+        db,
+        viewer_account_id=account_id,
+        root_user_id=root_user_id,
+        space_id=space_id,
+        target_user_id=target_user_id,
+        path=path,
+    )
+    if (
+        current is None
+        or current["semantic_hash"] != row.semantic_hash
+        or current["concept_code"] != concept_code
+        or current["baseline_source"] not in _OVERRIDABLE_BASELINE_SOURCES
+        or row.term not in current["allowed_terms"]
+    ):
         return None
     return row.term
 

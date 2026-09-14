@@ -24,10 +24,7 @@ from app.models.account import Account
 from app.models.notification import Notification
 from app.models.space import FamilySpace, SpaceMember
 from app.models.steward import ActionCard
-from app.models.steward_suggestion import (
-    StewardSuggestion,
-    StewardSuggestionRecipient,
-)
+from app.models.steward_suggestion import StewardSuggestion
 from app.models.user import User
 from app.services import visibility
 from app.services.action_cards import CARD_KIND_META
@@ -49,7 +46,7 @@ _CARD_DOMAIN_STATUS: dict[str, str] = {
 
 SUGGESTION_KIND_TITLES: dict[str, str] = {
     "relation_proposal": "Steward 有关系线索待核实",
-    "term_preference": "Steward 有称谓偏好待确认",
+    "term_preference": "管家称谓建议",
     "identity_duplicate": "发现疑似重复档案待核实",
     "missing_information": "发现资料缺口待核实",
 }
@@ -175,6 +172,7 @@ def _project_item(
     domain_status: str | None
     suggestion_state: str | None = None
     action_card: dict[str, int] | None = None
+    title, summary = row.title, row.summary
     if row.kind == "action_card":
         card = session.get(ActionCard, row.action_card_id) if row.action_card_id else None
         if (
@@ -195,22 +193,33 @@ def _project_item(
         )
         if suggestion is None or suggestion.space_id != row.space_id:
             return None  # 引用损坏（级联删除/换空间）：fail-closed 丢弃该行
-        domain_status = suggestion_service.SUGGESTION_DOMAIN_STATUS.get(suggestion.status)
-        if domain_status is None:  # pragma: no cover - 状态枚举扩展时的防线
+        if not suggestion_service.suggestion_visible(
+            session,
+            viewer=viewer,
+            account=account,
+            suggestion=suggestion,
+        ):
             return None
-        # A-R6/R-05：本人有效状态（忽略/过期/终态）读时即生效，与列表/详情/动作
-        # 同源；本人忽略是个人 dismissed，不伪装成共享关系被驳回之外的语义。
-        recipient = session.scalar(
-            select(StewardSuggestionRecipient).where(
-                StewardSuggestionRecipient.suggestion_id == suggestion.id,
-                StewardSuggestionRecipient.account_id == row.recipient_account_id,
-            )
+        detail = suggestion_service.get_suggestion_detail(
+            session,
+            account=account,
+            space_id=row.space_id,
+            suggestion_id=suggestion.id,
         )
-        suggestion_state = suggestion_service.effective_state(
-            session, viewer=viewer, account=account, suggestion=suggestion, recipient=recipient
-        )
-        if suggestion_state == "dismissed":
-            domain_status = "rejected"
+        suggestion_state = str(detail["state"])
+        domain_status = suggestion_service.SUGGESTION_DOMAIN_STATUS.get(suggestion_state)
+        if domain_status is None:
+            return None
+        presentation = detail.get("presentation")
+        if isinstance(presentation, dict):
+            summary = presentation.get("summary")
+        if suggestion.kind == "term_preference":
+            title = "管家称谓建议"
+            # Optional preferences never enter the domain-action pending count.
+            if domain_status == "pending":
+                domain_status = "done"
+        elif suggestion.kind == "relation_proposal":
+            title = "关系线索待核实" if suggestion_state == "proposed" else "关系线索处理进展"
     elif row.kind == "space_membership":
         from app.services import space_fsm
 
@@ -227,17 +236,25 @@ def _project_item(
         actor = session.get(User, row.actor_user_id)
         if actor is not None:
             decision = visibility.evaluate(
-                session, viewer, actor, purpose=visibility.PURPOSE_PROFILE
+                session,
+                viewer,
+                actor,
+                space_context=row.space_id,
+                purpose=visibility.PURPOSE_PROFILE,
             )
-            actor_name = actor.name if decision.visible else dict(MASKED_ACTOR)
+            actor_name = (
+                visibility.payload_from_decision(decision, actor).get("name")
+                if decision.visible
+                else dict(MASKED_ACTOR)
+            )
 
     return {
         "id": row.id,
         "space_id": row.space_id,
         "kind": row.kind,
         "payload": {
-            "title": row.title,
-            "summary": row.summary,
+            "title": title,
+            "summary": summary,
             "actor_name": actor_name,
             "space_name": space_name,
         },

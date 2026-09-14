@@ -105,7 +105,7 @@ def _get_detail(client, headers, space_id: int, suggestion_id: int):
 def test_presentation_direction_follows_viewer(client, db_session) -> None:
     owner, space = create_agent_fixture(db_session, name="kp-dir")
     child = _make_member(db_session, space, "kp-dir-child")
-    other = _make_member(db_session, space, "kp-dir-other")
+    _make_member(db_session, space, "kp-dir-other")
     created = _project_relation_candidate(db_session, space, owner, owner, child)
     assert created == 1
     db_session.commit()
@@ -134,7 +134,8 @@ def test_presentation_direction_follows_viewer(client, db_session) -> None:
     resp_other = _get_detail(client, _login_header(client, "kp-dir-other"), space.id, suggestion_id)
     assert resp_other.status_code == 200
     p_other = resp_other.json()["presentation"]
-    assert p_other["reference_user_id"] == other.id
+    assert p_other["reference_user_id"] == child.id
+    assert p_other["target_user_id"] == owner.id
     assert "可能是你的" not in p_other["summary"]
 
 

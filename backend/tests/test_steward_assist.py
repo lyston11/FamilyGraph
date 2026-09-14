@@ -794,6 +794,43 @@ def test_crash_point_4_before_writeback_applies_after_fence(db_session, monkeypa
     assert all(card.reason_text_llm == "解释文本" for card in cards)
 
 
+def test_recovery_does_not_resend_audited_unknown_or_revisit_settled_failures(
+    db_session, monkeypatch
+) -> None:
+    space, _a, _b, event = _spouse_space(db_session, "assist-audited-unknown")
+    provider = _provider(db_session)
+    _steward_setting(db_session, space, provider, candidate=True)
+    _turn_on(monkeypatch, ranking=False, explanation=False)
+    _summary, job = _run_job(db_session, space, event.id)
+    batch = steward_assist.schedule_due_batch(db_session)
+    assert batch is not None
+
+    def unknown(url, headers, payload, timeout):
+        raise httpx.ReadTimeout("synthetic unknown result")
+
+    # Real tx2 persists the unknown outcome; simulate a crash before tx3.
+    apply = steward_assist._apply_batch
+    monkeypatch.setattr(steward_assist, "_apply_batch", lambda *_args, **_kwargs: "applying")
+    assert steward_assist.execute_batch(db_session, batch.id, transport=unknown) == "applying"
+    monkeypatch.setattr(steward_assist, "_apply_batch", apply)
+    assert [call.status for call in _calls(db_session, job.id)] == ["unknown"]
+    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+    assert steward_assist.recover_stuck_batches(db_session) == 1
+    assert batch.status == "failed"
+    assert batch.error_code == steward_assist.REASON_NETWORK_UNKNOWN
+    assert steward_assist.schedule_due_batch(db_session) is None
+    settled_at = batch.updated_at
+    assert (
+        steward_assist.recover_stuck_batches(
+            db_session, now=timeutil.utcnow() + timedelta(seconds=5)
+        )
+        == 0
+    )
+    assert batch.updated_at == settled_at
+    assert len(_calls(db_session, job.id)) == 1
+
+
 # ---- AC-3：预算严格上限 ----
 
 
@@ -1109,11 +1146,12 @@ def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
     assert steward_assist.schedule_due_batch(db_session) is not None
     steward_assist.execute_batch(db_session, batch.id)
 
-    # 第一张卡超时消耗全部墙钟；剩余 attempt 保留 in_flight（未发送）
+    # 第一张卡超时消耗全部墙钟；已发送卡保留 in_flight，未发送卡仍为 reserved。
     db_session.expire_all()
     rows = _calls(db_session, job.id)
     assert len(calls) == 1
     assert any(r.status == "in_flight" for r in rows)
+    assert all(r.status in ("in_flight", "reserved") for r in rows)
     # lease 过期后恢复：in_flight → unknown（保守计费）
     b = _batch(db_session, job.id)
     b.lease_until = timeutil.utcnow() - timedelta(seconds=1)
@@ -1122,7 +1160,6 @@ def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
     assert _batch(db_session, job.id).status == "failed"
     db_session.expire_all()
     rows = _calls(db_session, job.id)
-    print("DLROWS:", [(r.status, r.error_code) for r in rows])
     assert all(r.status in ("failed", "unknown", "skipped") for r in rows)
 
 
