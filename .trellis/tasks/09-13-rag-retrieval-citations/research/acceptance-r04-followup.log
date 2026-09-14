@@ -1,0 +1,29 @@
+COMMAND: .venv/bin/ruff check .
+All checks passed!
+EXIT: 0
+COMMAND: .venv/bin/ruff format --check .
+351 files already formatted
+EXIT: 0
+COMMAND: .venv/bin/mypy app
+Success: no issues found in 193 source files
+EXIT: 0
+COMMAND: .venv/bin/python -m pytest -q --tb=short tests/test_rag_acceptance_bindings.py tests/test_rag_acceptance_contract.py tests/test_rag_retrieval_citations.py tests/test_rag_query_context.py tests/test_agent_events.py tests/test_internal_agent_api.py tests/test_policy_guard.py tests/test_memory_rag_service.py tests/test_context_execution_migration.py
+........................................................................ [ 56%]
+.......................................................                  [100%]
+127 passed in 6.61s
+EXIT: 0
+COMMAND: .venv/bin/python -P -m pytest -p conftest -p no:cacheprovider -q --tb=short /private/tmp/test_b_review_invalidation.py
+..F                                                                      [100%]
+=================================== FAILURES ===================================
+________________ test_short_query_treats_underscore_as_literal _________________
+/private/tmp/test_b_review_invalidation.py:60: in test_short_query_treats_underscore_as_literal
+    assert hits == [], {"unrelated_hits": len(hits)}
+E   AssertionError: {'unrelated_hits': 1}
+E   assert [RAGHit(docum...42175e9fc03')] == []
+E     
+E     Left contains one more item: RAGHit(document_id=1, chunk_id=1, source_id='1', text='上海聚餐在周日下午三点。', token_estimate=18, rank=0.0, citation_handle='ra...',), chunk_index=0, source_revision=1, content_hash='825ada9c0724b29b496ca382524394386bf997c11b97e6de8604042175e9fc03')
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED ../../../../../private/tmp/test_b_review_invalidation.py::test_short_query_treats_underscore_as_literal
+1 failed, 2 passed in 1.60s
+EXIT: 1

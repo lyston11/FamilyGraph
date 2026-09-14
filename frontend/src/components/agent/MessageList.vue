@@ -5,7 +5,7 @@ import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
 import CitationList from '@/components/memory/CitationList.vue'
 import WebCitationList from '@/components/agent/WebCitationList.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
-import type { ActiveRunView, AgentMessageView, ToolSummaryView } from '@/stores/agent'
+import { useAgentStore, type ActiveRunView, type AgentMessageView, type ToolSummaryView } from '@/stores/agent'
 
 /**
  * MessageList（PRD AS-3）：文本气泡、进行中状态、工具使用摘要 chip。
@@ -23,6 +23,7 @@ const props = defineProps<{
 }>()
 
 const actionCards = useActionCardsStore()
+const agent = useAgentStore()
 
 const runActive = computed(() => props.run !== null && !props.run.terminal)
 
@@ -116,6 +117,7 @@ const items = computed(() =>
         : []
     return {
       ...message,
+      original: message,
       cards,
       citations: message.citations ?? [],
       unavailable: message.unavailableCitationCount ?? 0,
@@ -149,11 +151,18 @@ const items = computed(() =>
           <CitationList :citations="item.citations" compact />
         </div>
         <p
-          v-if="item.citations.length === 0 && item.unavailable > 0"
+          v-if="item.unavailable > 0"
           class="message-citations-unavailable"
           data-test="message-citations-unavailable"
         >
           部分来源已不可用（{{ item.unavailable }}）
+        </p>
+        <p v-if="item.citationLoadState === 'loading'" class="message-citations-unavailable" role="status">
+          正在加载来源…
+        </p>
+        <p v-else-if="item.citationLoadState === 'failed'" class="message-citations-unavailable" data-test="citation-load-failed">
+          来源加载失败。
+          <button type="button" @click="agent.retryMessageCitations(item.original)">重新加载来源</button>
         </p>
         <div v-if="item.webCitations.length > 0" class="message-citations" data-test="message-web-citations">
           <WebCitationList :citations="item.webCitations" compact />

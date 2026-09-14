@@ -16,6 +16,7 @@ import ScopeBanner from '@/components/agent/ScopeBanner.vue'
 import SessionList from '@/components/agent/SessionList.vue'
 import WebCitationList from '@/components/agent/WebCitationList.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
+import { useAgentStore, type AgentMessageView } from '@/stores/agent'
 import type { AgentSession } from '@/types/agent'
 
 /** 消息流原语组件：气泡、工具 chip、进行中指示、错误文案映射、scope 徽标、引用来源 */
@@ -43,6 +44,26 @@ describe('MessageList', () => {
     // 不渲染任何内部字段
     expect(wrapper.text()).not.toContain('idempotency')
     expect(wrapper.text()).not.toContain('policy_version')
+  })
+
+  it('keeps available citations and unavailable counts visible with a retryable source failure', async () => {
+    const agent = useAgentStore()
+    const retry = vi.spyOn(agent, 'retryMessageCitations').mockResolvedValue(undefined)
+    const message: AgentMessageView = {
+      id: 2, role: 'assistant', text: '保留回答正文', createdAt: null, status: 'sent',
+      citations: [{ source_type: 'memory', source_id: '7', scope: 'private', sensitivity: 'normal',
+        revision: 1, citation_handle: 'rag:7:r1:c1' }],
+      unavailableCitationCount: 1,
+      citationLoadState: 'failed',
+      citationRequest: { runId: 100, seq: 2 },
+    }
+    const wrapper = mount(MessageList, { props: { messages: [message], toolSummaries: [], run: null } })
+    expect(wrapper.find('[data-test="message-citations"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="message-citations-unavailable"]').text()).toContain('1')
+    expect(wrapper.text()).toContain('保留回答正文')
+    await wrapper.find('[data-test="citation-load-failed"] button').trigger('click')
+    expect(retry).toHaveBeenCalledWith(message)
+    wrapper.unmount()
   })
 
   // ---- 09-13-agent-latency-tuning AC-4：长时间 queued/running 用户可见提示 ----

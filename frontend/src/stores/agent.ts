@@ -52,6 +52,8 @@ export interface AgentMessageView {
   citations?: MemoryCitation[]
   /** 因来源失效/失权而未列入 citations 的引用数量（服务端授权投影）。 */
   unavailableCitationCount?: number
+  citationLoadState?: 'loading' | 'failed' | 'loaded'
+  citationRequest?: { runId: number; seq: number }
   /** Assistant 结构化回复中的受控联网外部引用（trust=external）。 */
   webCitations?: WebCitation[]
   /** 由 SSE 回放合并产生的消息（刷新恢复去重标记） */
@@ -332,7 +334,23 @@ export const useAgentStore = defineStore('agent', () => {
       fromReplay: true,
     }
     partition.messages.push(view)
-    return view
+    return partition.messages[partition.messages.length - 1]!
+  }
+
+  async function retryMessageCitations(view: AgentMessageView): Promise<void> {
+    const request = view.citationRequest
+    const stillDisplayed = (): boolean => [...partitions.value.values()].some((p) => p.messages.includes(view))
+    if (request === undefined || view.citationLoadState === 'loading' || !stillDisplayed()) return
+    view.citationLoadState = 'loading'
+    try {
+      const result = await fetchRunEventCitations(request.runId, request.seq)
+      if (view.citationRequest !== request || !stillDisplayed()) return
+      view.citations = parseCitationArray(result.citations)
+      view.unavailableCitationCount = result.unavailable_citation_count
+      view.citationLoadState = 'loaded'
+    } catch {
+      if (view.citationRequest === request && stillDisplayed()) view.citationLoadState = 'failed'
+    }
   }
 
   function applyStreamEvent(event: { seq?: number; type: string; payload: AgentEventPayload }): void {
@@ -381,19 +399,19 @@ export const useAgentStore = defineStore('agent', () => {
           payloadCitations(event.payload),
           payloadWebCitations(event.payload),
         )
-        // 公开事件不携带记忆引用元数据（16 KiB 合同）；按 (run_id, seq) 补取
-        // 服务端已认证的引用。失败保持正文可读，不把未加载来源当作已核验。
-        if (view !== null && view.citations === undefined && typeof event.seq === 'number') {
-          const runId = Number(streamCtx.runId)
-          const seq = event.seq
-          void fetchRunEventCitations(runId, seq)
-            .then((result) => {
-              view.citations = parseCitationArray(result.citations)
-              view.unavailableCitationCount = result.unavailable_citation_count
-            })
-            .catch(() => {
-              // 补取失败：保留可重试状态（引用列表缺省，正文不受影响）。
-            })
+        const unavailable = event.payload.unavailable_citation_count
+        if (typeof unavailable === 'number' && Number.isInteger(unavailable) && unavailable >= 0) {
+          view.unavailableCitationCount = unavailable
+        }
+        // Only the server's complete marker proves all citations fit in 16 KiB.
+        // Partial or legacy events use the same authorized run/seq fallback.
+        if (event.payload.citations_complete !== true && typeof event.seq === 'number') {
+          view.citationRequest = { runId: Number(streamCtx.runId), seq: event.seq }
+          view.citationLoadState = undefined
+          void retryMessageCitations(view)
+        } else if (event.payload.citations_complete === true) {
+          view.citationRequest = undefined
+          view.citationLoadState = 'loaded'
         }
         break
       }
@@ -751,6 +769,7 @@ export const useAgentStore = defineStore('agent', () => {
     sendMessage,
     cancelRun,
     reattachRun,
+    retryMessageCitations,
     setDraft,
     resetForSpace,
     clear,

@@ -68,6 +68,93 @@ def quote_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class ExactChunkRef:
+    """Server-owned evidence about the exact material included in a build."""
+
+    document_id: int
+    chunk_id: int
+    source_type: str
+    source_id: str
+    source_revision: int
+    index_version: str
+    chunk_index: int
+    content_hash: str
+
+    def as_json(self) -> dict[str, Any]:
+        return {"version": 1, **self.__dict__}
+
+    @classmethod
+    def parse(cls, value: Any) -> ExactChunkRef | None:
+        if not isinstance(value, dict) or value.get("version") != 1:
+            return None
+        for key in ("document_id", "chunk_id", "source_revision", "chunk_index"):
+            number = value.get(key)
+            if type(number) is not int or number < (0 if key == "chunk_index" else 1):
+                return None
+        for key, maximum in (("source_type", 32), ("source_id", 255), ("index_version", 32)):
+            item = value.get(key)
+            if not isinstance(item, str) or not 1 <= len(item) <= maximum:
+                return None
+        digest = value.get("content_hash")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            return None
+        return cls(**{key: value[key] for key in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
+class AuthorizedChunk:
+    document: RAGDocument
+    chunk: RAGChunk
+
+
+def read_exact_chunk(
+    db: Session,
+    ref: ExactChunkRef,
+    *,
+    actor: User,
+    account: Account,
+    space_id: int,
+    agent_kind: str = "assistant",
+    for_model: bool = False,
+    provider_kind: str | None = None,
+    require_active_index: bool = False,
+) -> AuthorizedChunk | None:
+    """Read the original fragment, then recheck the existing source policy.
+
+    An active document pointer controls new searches only. A retained old-version
+    chunk remains a valid historical dependency; missing/drifted data never gets
+    substituted by a current search result.
+    """
+    document = db.get(RAGDocument, ref.document_id, populate_existing=True)
+    chunk = db.get(RAGChunk, ref.chunk_id, populate_existing=True)
+    if (
+        document is None
+        or chunk is None
+        or chunk.document_id != ref.document_id
+        or document.source_type != ref.source_type
+        or document.source_id != ref.source_id
+        or document.revision != ref.source_revision
+        or document.source_revision != ref.source_revision
+        or chunk.source_revision != ref.source_revision
+        or chunk.index_version != ref.index_version
+        or chunk.chunk_index != ref.chunk_index
+        or chunk.status != "active"
+        or quote_hash(chunk.text) != ref.content_hash
+        or (require_active_index and document.index_version != ref.index_version)
+        or (
+            for_model
+            and document.sensitivity in ("high", "local_required")
+            and provider_kind != "local"
+        )
+        or not document_readable(
+            db, document, actor=actor, account=account, space_id=space_id, agent_kind=agent_kind
+        )
+    ):
+        return None
+    return AuthorizedChunk(document=document, chunk=chunk)
+
+
 def active_member(db: Session, user_id: int, space_id: int) -> bool:
     return (
         db.scalar(

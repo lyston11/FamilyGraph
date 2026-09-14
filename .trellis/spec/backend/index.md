@@ -12,6 +12,7 @@
 | [Quality Guidelines](./quality-guidelines.md) | 质量门禁命令/禁止模式/测试门槛 | Initial draft |
 | [Logging Guidelines](./logging-guidelines.md) | 结构化日志/PII 脱敏红线/audit_log | Initial draft |
 | [Agent Runtime](./agent-runtime.md) | Pi sidecar 六端点合同/token/事件/Provider 治理 | V2.1 |
+| [Assistant Memory/RAG Contract Record](./memory-rag-execution-contract.md) | 签名 attempt、精确引用、持续失效、实际材料包与回归入口 | 2026-09-14 实现记录 |
 | [Relationship Intelligence](./relationship-intelligence.md) | SourceFact/DerivedFact/概念码/TermRegistry 四级/Extractor/API 隐私红线 | V2.3 |
 | [Steward and ActionCard](./steward-action-card.md) | space-scoped Steward jobs、DomainEvent/BehaviorProjection、ActionCard FSM、推荐资格矩阵与执行重校验 | V2.4 |
 | [Controlled Web](./controlled-web.md) | 双层开关/工具披露、Egress/SSRF、approved token、query PII 最小化、配额审计与引用 | V2.6 |

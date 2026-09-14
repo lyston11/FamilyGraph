@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,6 @@ from conftest import (
 
 BACKEND = Path(__file__).parents[1]
 OLD_HEAD = "0041_term_pack_expansion"
-NEW_HEAD = "0045_rag_index_lifecycle"
 
 
 def _migrate(data_dir, *args):
@@ -219,7 +219,8 @@ def test_real_alembic_chain_and_nonempty_downgrade_guard(tmp_path):
     result = _migrate(tmp_path, "upgrade", "head")
     assert result.returncode == 0, result.stderr
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == NEW_HEAD
+        head = ScriptDirectory(str(BACKEND / "migrations")).get_current_head()
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == head
         original = connection.execute(
             text(
                 "SELECT id,raw_quote,source_candidate_id,source_verification "
@@ -238,13 +239,11 @@ def test_real_alembic_chain_and_nonempty_downgrade_guard(tmp_path):
             ).all()
             == original
         )
-        # The guarded 0042 downgrade aborted after 0045/0044/0043 were
-        # reverted: provenance columns and rows are intact and the version
-        # stops at the guarded 0042 revision.
-        assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0042_memory_source_contract"
-        )
+        # The guarded source branch stops at 0042 with its data intact. A
+        # sibling branch can still be present when Alembic stops partway
+        # through the merge downgrade; scalar() would select it arbitrarily.
+        versions = set(connection.scalars(text("SELECT version_num FROM alembic_version")))
+        assert "0042_memory_source_contract" in versions
     engine.dispose()
 
 

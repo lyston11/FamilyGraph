@@ -329,10 +329,18 @@ def test_stale_attempt_token_cannot_reuse_context(rag_world, db_session, interna
     owner, _member, space, _ids = rag_world
     user, _space, agent_session, run = _seed_run(db_session, "stale-attempt")
     grant = _lease(db_session, internal_client, run)
+    from app.models.agent import AgentJob, AgentRun
+
+    # Signature is authentic, but its lease identity no longer matches. The
+    # real reaper/lease race is covered by test_rag_acceptance_contract.
+    current = db_session.get(AgentRun, run.id)
+    job = db_session.get(AgentJob, grant["job_id"])
+    current.attempt = job.attempt = 2
+    db_session.commit()
     stale = issue_run_token(
         run_id=run.id,
         job_id=grant["job_id"],
-        attempt=0,
+        attempt=1,
         agent_kind="assistant",
         account_id=user.account.id,
         space_id=agent_session.space_id,
@@ -407,7 +415,7 @@ def test_citations_authenticated_from_build_and_revocation_masks(
         ).status_code
         == 200
     )
-    answer = f"今年春节在上海聚餐 [rag:{ids['M1']}:r1:c9999 伪造] {handle}"
+    answer = f"今年春节在上海聚餐 [rag:{ids['M1']}:r1:c9999 伪造] [{handle}]"
     appended = internal_client.post(
         f"/internal/agent/runs/{run.id}/events/append",
         json={
@@ -416,6 +424,11 @@ def test_citations_authenticated_from_build_and_revocation_masks(
                     "seq": 2,
                     "type": "message.assistant_added",
                     "public_payload": {"role": "assistant", "text": answer},
+                    "context_reference": {
+                        "build_id": context.json()["context_build_id"],
+                        "attempt": grant["attempt"],
+                        "used_handles": [handle],
+                    },
                 }
             ]
         },
@@ -494,7 +507,7 @@ def test_unused_or_fabricated_handles_never_authenticated(rag_world, db_session,
         select(AgentRunEvent).where(AgentRunEvent.run_id == run.id, AgentRunEvent.seq == 2)
     )
     reference = event.context_reference_json or {}
-    assert reference.get("used_handles") == []
+    assert reference.get("submitted") is None
     message = db_session.scalar(
         select(AgentMessage).where(AgentMessage.idempotency_key == f"run:{run.id}:event:2")
     )

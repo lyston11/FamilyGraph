@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app import config
 from app.api.deps import get_db
 from app.errors import (
+    AGENT_CONTEXT_INVALIDATED,
     AGENT_DISABLED,
     AGENT_EVENT_INVALID,
     AGENT_INTERNAL_FORBIDDEN,
@@ -68,6 +69,7 @@ from app.services import (
     policy_guard,
 )
 from app.services.agent_events import EventEntry
+from app.services.agent_execution import ExecutionIdentity, fence_execution
 from app.services.provider_proxy import provider_proxy_base_url as agent_provider_proxy_base_url
 from app.utils import security, timeutil
 
@@ -210,6 +212,7 @@ def _authorize_run(
         or claims["job_id"] != run.job_id
         or sorted(claims["tool_allowlist"]) != sorted(run.tool_allowlist_json or [])
         or job is None
+        or job.attempt != claims["attempt"]
         or job.run_id != run.id
         or job.account_id != agent_session.account_id
         or job.space_id != agent_session.space_id
@@ -339,7 +342,9 @@ def heartbeat_job(
     if job is None or job.run_id != claims["run_id"]:
         raise_api_error(404, AGENT_JOB_NOT_FOUND, "Job 不存在或不属于该 Run")
     ttl = body.lease_ttl_seconds if body is not None else None
-    expires = agent_queue.heartbeat(db, job, ttl_seconds=ttl)
+    expires = agent_queue.heartbeat(
+        db, job, ttl_seconds=ttl, execution=ExecutionIdentity.from_claims(_claims)
+    )
     # additive：cancel_requested 随续租下发（B2 客户端忽略未知字段，兼容）
     active_run = db.get(AgentRun, claims["run_id"])
     return HeartbeatOut(
@@ -397,6 +402,7 @@ async def proxy_provider_chat_completions(
             accept=request.headers.get("accept"),
             user_agent=request.headers.get("user-agent"),
             expected_api=expected_api,
+            execution=ExecutionIdentity.from_claims(_claims),
         )
     except provider_proxy.ProviderProxyError as exc:
         db.commit()  # 审计先提交（拒绝路径惯例）
@@ -427,7 +433,8 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
     仅返回站内代理路径和无密钥 projection，绝不出现在浏览器 API、SSE、领域事件或日志。
     """
     run, agent_session, _claims = _authorize_run(db, request, run_id)
-    _require_active_run(db, request, run)
+    execution = ExecutionIdentity.from_claims(_claims)
+    run, agent_session, _job = fence_execution(db, execution, allow_cancel_requested=True)
     # A Pi session is stateful across turns.  Project the complete durable
     # transcript in stable id order; truncating to a recent-N window silently
     # drops earlier user/assistant turns and can make the model contradict its
@@ -448,35 +455,61 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
     )
     context_build_id: int | None = None
     context_blocks: list[dict[str, object]] = []
-    latest_text = next(
+    current_message = next(
         (
-            message.content_json.get("text")
-            for message in reversed(recent)
-            if message.role == "user" and isinstance(message.content_json.get("text"), str)
+            m
+            for m in reversed(recent)
+            if m.role == "user"
+            and (m.id == run.message_id if run.message_id is not None else True)
+            and isinstance(m.content_json.get("text"), str)
         ),
         None,
     )
+    latest_text = current_message.content_json.get("text") if current_message is not None else None
+    # Planning alone sees the last four permitted messages preceding this
+    # run's user message. Pi still receives the full authorized text history.
+    anchor_history = [
+        m.content_json["text"]
+        for m in recent
+        if current_message is not None
+        and m.id < current_message.id
+        and m.role in ("user", "assistant")
+        and isinstance(m.content_json.get("text"), str)
+    ][-4:]
     if isinstance(latest_text, str) and latest_text.strip():
         actor_account = db.get(Account, agent_session.account_id)
         if actor_account is not None:
-            built = context_builder.ContextBuilder(db).build(
-                actor=actor_account.user,
-                space_id=agent_session.space_id,
-                agent_kind=agent_session.agent_kind,
-                query=latest_text,
-                run_id=run.id,
-                provider_kind=resolution.kind,
-                policy_version=run.policy_version,
-                attempt=run.attempt,
-            )
+            try:
+                built = context_builder.ContextBuilder(db).build(
+                    actor=actor_account.user,
+                    space_id=agent_session.space_id,
+                    agent_kind=agent_session.agent_kind,
+                    query=latest_text,
+                    run_id=run.id,
+                    provider_kind=resolution.kind,
+                    policy_version=run.policy_version,
+                    attempt=execution.expected_attempt,
+                    execution=execution,
+                    recent_messages=anchor_history,
+                    provider_decision={
+                        "provider_id": resolution.provider_id,
+                        "model": resolution.model,
+                        "policy_result": resolution.policy_result,
+                    },
+                )
+            except FastAPIHTTPException as exc:
+                error = extract_api_error(exc.detail) or {}
+                if error.get("code") == AGENT_CONTEXT_INVALIDATED:
+                    db.commit()
+                else:
+                    db.rollback()
+                raise
             context_build_id = built.build_id
             context_blocks = (
                 policy_guard.enforce(policy_guard.context_hook(built.as_data_blocks())) or []
             )
-            # ContextBuild/Items are the auditable server-side record for this
-            # prefetch.  Persist only after all policy checks succeed.
-            db.commit()
-    return ContextOut(
+            # Commit the build and the fully materialized response together below.
+    response = ContextOut(
         run_id=run.id,
         session_id=agent_session.id,
         agent_kind=agent_session.agent_kind,
@@ -488,7 +521,12 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
         tool_allowlist=list(run.tool_allowlist_json),
         messages=[
             ContextMessageOut(
-                id=m.id, role=m.role, content_json=m.content_json, created_at=m.created_at
+                id=m.id,
+                role=m.role,
+                content_json={"text": m.content_json["text"]}
+                if m.role in ("user", "assistant") and isinstance(m.content_json.get("text"), str)
+                else {},
+                created_at=m.created_at,
             )
             for m in recent
         ],
@@ -514,6 +552,8 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
         context_build_id=context_build_id,
         context_blocks=context_blocks,
     )
+    db.commit()
+    return response
 
 
 @router.post("/runs/{run_id}/events/append", response_model=EventAppendOut)
@@ -524,6 +564,7 @@ def append_events_endpoint(
     db: Session = Depends(get_db),
 ) -> EventAppendOut:
     run, _agent_session, _claims = _authorize_run(db, request, run_id)
+    execution = ExecutionIdentity.from_claims(_claims)
     _require_active_run(db, request, run)
     # 类型先于事务校验：未知类型不落公开流，直接审计拒绝
     for entry in body.events:
@@ -539,13 +580,21 @@ def append_events_endpoint(
                 api_detail={"type": entry.type},
             )
     entries = [
-        EventEntry(seq=e.seq, type=e.type, public_payload=e.public_payload) for e in body.events
+        EventEntry(
+            seq=e.seq,
+            type=e.type,
+            public_payload=e.public_payload,
+            context_reference=e.context_reference.model_dump() if e.context_reference else None,
+        )
+        for e in body.events
     ]
     try:
-        accepted, duplicates = agent_events.append_events(db, run, entries)
+        accepted, duplicates = agent_events.append_events(db, run, entries, execution=execution)
     except FastAPIHTTPException as exc:
-        # 部分写入后冲突：回滚半批次，审计后按原错误拒绝（fail-closed）
-        db.rollback()
+        # Event/message/fingerprint writes still roll back as a whole. A
+        # source/policy invalidation already observed by the server is durable
+        # even if a later entry rejects this batch; it cannot revive on retry.
+        context_builder.rollback_preserving_invalidation(db, execution)
         api_error = extract_api_error(exc.detail) or {}
         audit.write_audit(
             db,
@@ -591,6 +640,7 @@ def execute_tool(
         version=body.version,
         input_payload=body.input,
         tool_call_id=body.tool_call_id,
+        execution=ExecutionIdentity.from_claims(claims),
     )
     db.commit()
     result_decision = policy_guard.tool_result_hook(output)
@@ -613,7 +663,12 @@ def settle_run_endpoint(
     )
     try:
         settled = agent_queue.settle_run(
-            db, run, status=body.status, error_code=body.error_code, error=body.error
+            db,
+            run,
+            status=body.status,
+            error_code=body.error_code,
+            error=body.error,
+            execution=ExecutionIdentity.from_claims(_claims),
         )
     except FastAPIHTTPException as exc:
         db.rollback()

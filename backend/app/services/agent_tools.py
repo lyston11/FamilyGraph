@@ -17,7 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, cast
 
-from sqlalchemy import select, text
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy import delete, select, text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -34,6 +35,7 @@ from app.errors import (
 from app.models.account import Account
 from app.models.agent import RUNTIME_AGENT_KINDS, AgentRun, AgentSession, AgentToolCall
 from app.services import agent_query, audit, controlled_web, intake_extractor, terms
+from app.services.agent_execution import ExecutionIdentity, fence_execution
 from app.utils import timeutil
 
 # JSON schema 子集校验支持的标量类型
@@ -404,6 +406,29 @@ def check_scope(run: AgentRun, claims: dict[str, Any], spec: ToolSpec) -> None:
         )
 
 
+@dataclass(frozen=True)
+class ToolRunScope:
+    """The admitted run identity, unaffected by ORM expiration after commit."""
+
+    id: int
+    job_id: int | None
+    kind: str
+    policy_version: str
+    attempt: int
+    tool_allowlist_json: tuple[str, ...]
+
+    @classmethod
+    def capture(cls, run: AgentRun) -> ToolRunScope:
+        return cls(
+            run.id,
+            run.job_id,
+            run.kind,
+            run.policy_version,
+            run.attempt,
+            tuple(run.tool_allowlist_json or []),
+        )
+
+
 def execute(
     db: Session,
     run: AgentRun,
@@ -414,6 +439,7 @@ def execute(
     version: int,
     input_payload: dict[str, Any],
     tool_call_id: str | None = None,
+    execution: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """running 态门禁 → 副作用去重 → 注册表校验 → scope 门禁 → schema 校验 → 执行 → 审计。
 
@@ -422,7 +448,11 @@ def execute(
     （不重执行、不重复审计）；不同工具/版本 → AGENT_TOOL_CALL_CONFLICT。
     """
     claim: AgentToolCall | None = None
+    admitted: ToolRunScope | None = None
+    claim_id: int | None = None
     try:
+        if execution is not None:
+            run, agent_session, _job = fence_execution(db, execution, allowed_statuses=("running",))
         if run.status != "running":
             raise ToolProtocolError(
                 409,
@@ -534,8 +564,6 @@ def execute(
                 "Run 已停止或请求取消，拒绝新的工具调用",
                 {"reason": "cancel_requested"},
             )
-        db.commit()
-        db.expire(run, ("cancel_requested", "status"))
         # 原子占位：唯一索引 (run_id, tool_call_id) 使并发同 id 请求在 flush 处
         # 冲突，先占位者独占执行权，后到者回放/拒绝——副作用不再可能双执行。
         if tool_call_id is not None:
@@ -559,17 +587,38 @@ def execute(
                 if replayed is not None:
                     return replayed
                 raise  # pragma: no cover
+        # Admission and dedupe reservation commit together before any network
+        # tool can run. The immutable scope remains the *admitted* attempt even
+        # if reaper/lease advances the Run after this commit. An already admitted
+        # invocation may finish; a new invocation must pass the current fence.
+        admitted = ToolRunScope.capture(run)
+        claim_id = claim.id if claim is not None else None
+        db.commit()
         # 分发也纳入同一拒绝审计路径：领域工具的范围/形状拒绝同属协议违规
         output = _dispatch(
-            db, spec, run=run, agent_session=agent_session, input_payload=input_payload
+            db, spec, run=admitted, agent_session=agent_session, input_payload=input_payload
         )
+        # Pass the same JSON value through the result policy on first execution
+        # and replay; otherwise datetime fields bypass that policy only once.
+        output = cast(dict[str, Any], jsonable_encoder(output))
         if claim is not None:
+            # Store the same JSON representation the HTTP response emits;
+            # gateway results contain expiry datetimes, which bare SQL JSON
+            # cannot serialize and would strand the admitted reservation.
             claim.result_json = dict(output)
     except ToolProtocolError as exc:
-        if claim is not None:
-            # 拒绝路径不得留下空占位（否则该 tool_call_id 永久 in-flight）；
-            # 一并丢弃本次工具的部分写入，fail-closed 后由审计提交记录拒绝。
+        if admitted is not None:
             db.rollback()
+        if claim_id is not None:
+            # A known refusal can release this invocation's empty reservation;
+            # never delete another invocation or a completed result. Unknown
+            # process death remains in-progress (fail closed against repeats).
+            db.execute(
+                delete(AgentToolCall).where(
+                    AgentToolCall.id == claim_id,
+                    AgentToolCall.result_json == {},
+                )
+            )
         audit.write_audit(
             db,
             action="agent_tool_denied",
@@ -582,7 +631,7 @@ def execute(
     audit_detail: dict[str, object] = {
         "tool": spec.name,
         "version": spec.version,
-        "attempt": run.attempt,
+        "attempt": admitted.attempt if admitted is not None else run.attempt,
     }
     if tool_call_id is not None:
         audit_detail["tool_call_id"] = tool_call_id
@@ -606,7 +655,7 @@ def _dispatch(
     db: Session,
     spec: ToolSpec,
     *,
-    run: AgentRun,
+    run: ToolRunScope,
     agent_session: AgentSession,
     input_payload: dict[str, Any],
 ) -> dict[str, Any]:

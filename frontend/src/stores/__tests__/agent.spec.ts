@@ -393,6 +393,59 @@ describe('agent store（V2.2 Block C3）', () => {
     })
   })
 
+  it('partial inline citations still use fallback and a complete projection preserves unavailable counts', async () => {
+    const fetch = vi.mocked(agentApi.fetchRunEventCitations)
+    const citation = {
+      source_type: 'memory', source_id: '7', scope: 'private', sensitivity: 'normal',
+      revision: 1, citation_handle: 'rag:7:r1:c1',
+    }
+    fetch.mockResolvedValueOnce({ run_id: 100, seq: 1, citations: [citation], unavailable_citation_count: 1 })
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+    streamCallbacks?.onEvent(makeEvent(1, 'message.assistant_added', {
+      role: 'assistant', text: 'partial', citations: [citation], citations_complete: false,
+    }))
+    await vi.waitFor(() => expect(store.partitions.get(1)?.messages.find((m) => m.text === 'partial')?.unavailableCitationCount).toBe(1))
+    expect(fetch).toHaveBeenCalledWith(100, 1)
+    expect(store.partitions.get(1)?.messages.find((m) => m.text === 'partial')?.citations).toEqual([citation])
+    fetch.mockClear()
+    streamCallbacks?.onEvent(makeEvent(2, 'message.assistant_added', {
+      role: 'assistant', text: 'complete', citations: [], citations_complete: true, unavailable_citation_count: 2,
+    }))
+    expect(store.partitions.get(1)?.messages.find((m) => m.text === 'complete')?.unavailableCitationCount).toBe(2)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('citation fallback failures preserve the body and can retry', async () => {
+    const fetch = vi.mocked(agentApi.fetchRunEventCitations)
+    fetch.mockRejectedValueOnce(new Error('temporary unavailable'))
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+    streamCallbacks?.onEvent(makeEvent(1, 'message.assistant_added', { role: 'assistant', text: 'preserved body' }))
+    const view = store.partitions.get(1)?.messages.find((m) => m.text === 'preserved body')
+    await vi.waitFor(() => expect(view?.citationLoadState).toBe('failed'))
+    expect(view?.text).toBe('preserved body')
+    fetch.mockResolvedValueOnce({ run_id: 100, seq: 1, citations: [], unavailable_citation_count: 0 })
+    await store.retryMessageCitations(view!)
+    expect(view?.citationLoadState).toBe('loaded')
+    expect(view?.text).toBe('preserved body')
+  })
+
+  it('a late citation response cannot restore data after the space is reset', async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof agentApi.fetchRunEventCitations>>) => void
+    vi.mocked(agentApi.fetchRunEventCitations).mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+    streamCallbacks?.onEvent(makeEvent(1, 'message.assistant_added', { role: 'assistant', text: 'old scope' }))
+    const oldView = store.partitions.get(1)?.messages.find((m) => m.text === 'old scope')
+    expect(oldView?.citationLoadState).toBe('loading')
+    store.resetForSpace(1)
+    resolve({ run_id: 100, seq: 1, citations: [], unavailable_citation_count: 7 })
+    await Promise.resolve()
+    expect(oldView?.unavailableCitationCount).toBeUndefined()
+    expect(store.partitions.get(1)).toBeUndefined()
+  })
+
   it('auth.clearSession() 联动清空 agent store（AC-AS7）', async () => {
     const { useAuthStore } = await import('@/stores/auth')
     const auth = useAuthStore()
