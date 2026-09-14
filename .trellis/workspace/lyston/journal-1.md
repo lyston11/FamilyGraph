@@ -1132,3 +1132,26 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 32: Steward 证据版本与行为投影修复
+<!-- trellis-session: v=2 fp=0ed84480c21ec913 -->
+
+**Date**: 2026-09-15
+**Task**: Steward 证据版本与行为投影修复
+**Branch**: `main`
+
+### Summary
+
+完成 MR-26 所属键族保全与 MR-23 内部相关证据版本，保留确认和私人/共享驳回；复现并修复等待 SQLite 写锁后的租约过期写回。SP-AC1～6 通过，后端 1594 passed / 3 既有 skipped，导入整理后 43 passed，Ruff/format/mypy 及独立审查通过。已合入 main、归档并正常清理 task worktree、feat 及两个 backup 分支；其他会话 WIP 保留，未操作真实模型、生产数据或开关。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cff6f8e` | fix(steward): preserve independent projections during rebuild |
+| `b43602d` | fix(steward): version candidate evidence without reviving suggestions |
+
+### Status
+
+[OK] **Completed**
