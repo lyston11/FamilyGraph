@@ -843,7 +843,7 @@ export interface KinshipPresentation {
   requires_action: boolean
 }
 
-export type SuggestionState = 'proposed' | 'submitted' | 'resolved' | 'dismissed' | 'expired'
+export type SuggestionState = 'proposed' | 'submitted' | 'resolved' | 'dismissed' | 'expired' | 'rejected' | 'superseded'
 
 export type SuggestionAction = 'open_details' | 'submit' | 'dismiss'
 
@@ -873,6 +873,9 @@ export interface SuggestionItem {
   /** 共享状态与本人状态的分离表达（A-R5） */
   source_state?: string | null
   recipient_state?: string | null
+  /** 当前关联提案及仍待确认的账号；旧响应可缺省。 */
+  linked_proposal?: SuggestionLinkedProposal | null
+  pending_confirmations?: Array<{ account_id: number }>
   /** 结构化建议值（relation 的 fact_type / finding 的 code 等；封闭字段） */
   value: Record<string, unknown>
   evidence_summary: SuggestionEvidenceSummary

@@ -6,6 +6,7 @@ import { NButton, NSpin } from 'naive-ui'
 import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 import { pathClassLabel } from '@/components/canvas/relationshipDisplay'
 import MaskedField from '@/components/common/MaskedField.vue'
+import KinshipTermPanel from '@/components/kinship/KinshipTermPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import { ApiError } from '@/api/errors'
 import { useActionCardsStore } from '@/stores/actionCards'
@@ -369,6 +370,12 @@ function retry(): void {
           </div>
         </dl>
       </section>
+
+      <!-- 先由授权快照确认目标可见，再开放本人的称谓偏好入口。 -->
+      <KinshipTermPanel
+        :key="`${auth.user?.id}:${spaceId}:${profileNode.user_id}`"
+        :member-id="profileNode.user_id"
+      />
 
       <!-- 当前用户可见的关系上下文：只读，点击打开关系说明面板 -->
       <section class="relations-card" data-test="profile-relations">

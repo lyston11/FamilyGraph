@@ -5,12 +5,12 @@
 // - 动作分离：打开弹层只读（open_details），提交（submit）需用户显式点击
 //   且带 confirm=true + 每次生成的 Idempotency-Key；驳回（dismiss）独立按钮；
 // - 终态/无权动作由服务端 allowed_actions 决定，前端不本地推导授权；
-// - relation_proposal 提交成功只显示「提案已发起，等待当事人确认」，
-//   绝不显示为关系已确认（pending_confirmations 列表原样展示）；
+// - relation_proposal 展示服务端关联提案状态及实际待确认人数；
 // - 身份重复/资料缺口：v1 无 submit，仅展示指引（转既有资料/去重流程）。
 import { NButton, NModal, NSpin } from 'naive-ui'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
+import { useAuthStore } from '@/stores/auth'
 import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import type { SuggestionItem } from '@/types/api'
 
@@ -20,6 +20,8 @@ const suggestionModel = defineModel<SuggestionItem | null>('suggestion', { defau
 const suggestion = computed<SuggestionItem | null>(() => suggestionModel.value ?? null)
 
 const store = useStewardSuggestionsStore()
+const auth = useAuthStore()
+let contextEpoch = 0
 
 const submitting = ref(false)
 const dismissing = ref(false)
@@ -31,6 +33,16 @@ const KIND_LABELS: Record<SuggestionItem['kind'], string> = {
   term_preference: '称谓偏好',
   identity_duplicate: '疑似重复档案',
   missing_information: '资料缺口',
+}
+
+const STATE_LABELS: Record<SuggestionItem['state'], string> = {
+  proposed: '待核实',
+  submitted: '已提交提案',
+  resolved: '已完成',
+  dismissed: '已忽略',
+  expired: '已失效',
+  rejected: '已拒绝',
+  superseded: '已替换',
 }
 
 const pairText = computed(() => {
@@ -69,7 +81,7 @@ const evidenceText = computed(() => {
     }
     return '依据：当前不可用。'
   }
-  return `证据：基于 ${s.evidence_summary.fact_count} 条已确认的家庭事实生成。`
+  return '依据：暂无可核验的相关事实，待核实。'
 })
 
 const canSubmit = computed(
@@ -79,13 +91,41 @@ const canDismiss = computed(
   () => suggestion.value !== null && suggestion.value.allowed_actions.includes('dismiss'),
 )
 const isRelation = computed(() => suggestion.value?.kind === 'relation_proposal')
+const isPreference = computed(() => suggestion.value?.kind === 'term_preference')
 
-watch(opened, (value) => {
-  if (value) {
+const proposalNote = computed(() => {
+  const linked = suggestion.value?.linked_proposal
+  if (!linked) return null
+  const labels: Record<string, string> = {
+    proposed: '待确认',
+    confirmed: '已确认',
+    rejected: '已拒绝',
+    disputed: '存疑',
+    revoked: '已撤销',
+  }
+  const state = labels[linked.state] ?? '待核实'
+  const pending = suggestion.value?.pending_confirmations?.length ?? 0
+  const confirmationNote = linked.state === 'proposed'
+    ? pending > 0
+      ? `当前有 ${pending} 位成员可确认该提案。`
+      : '当前没有可用的确认人，关系尚未确认。'
+    : ''
+  return `关联提案状态：${state}。${confirmationNote}`
+})
+
+watch(
+  () => [opened.value, props.spaceId, auth.user?.id, suggestion.value?.id] as const,
+  () => {
+    contextEpoch += 1
+    submitting.value = false
+    dismissing.value = false
     resultNote.value = null
     errorNote.value = null
-  }
-})
+  },
+  { flush: 'sync' },
+)
+
+onBeforeUnmount(() => { contextEpoch += 1 })
 
 function setSuggestion(value: SuggestionItem | null): void {
   suggestionModel.value = value
@@ -95,40 +135,54 @@ defineExpose({ setSuggestion })
 
 async function onSubmit(): Promise<void> {
   const s = suggestion.value
-  if (s === null || submitting.value) return
+  if (s === null || !canSubmit.value || submitting.value || dismissing.value) return
+  const requestEpoch = contextEpoch
+  const spaceId = props.spaceId
   submitting.value = true
   resultNote.value = null
   errorNote.value = null
   try {
-    await store.submit(
-      props.spaceId,
+    const result = await store.submit(
+      spaceId,
       s.id,
       { expected_revision: s.revision, evidence_hash: s.evidence_hash, confirm: true },
       // 每次点击生成新幂等键：重试同一语义由调用方持有同一键
       crypto.randomUUID(),
     )
-    resultNote.value = isRelation.value
-      ? '提案已发起：等待有权当事人完成确认，确认完成前不会进入家庭图。'
-      : '已按你的选择完成更新。'
+    if (requestEpoch !== contextEpoch || result === null) return
+    suggestionModel.value = 'linked_proposal' in result
+      ? {
+        ...result.suggestion,
+        linked_proposal: result.linked_proposal,
+        pending_confirmations: result.pending_confirmations,
+      }
+      : result.suggestion
+    resultNote.value = 'linked_proposal' in result ? '已提交关系提案。' : '已按你的选择完成更新。'
   } catch {
-    errorNote.value = '提交未成功：建议可能已被处理或证据已变化，请稍后刷新。'
+    if (requestEpoch === contextEpoch) {
+      errorNote.value = '提交未成功：建议可能已被处理或证据已变化，请稍后刷新。'
+    }
   } finally {
-    submitting.value = false
+    if (requestEpoch === contextEpoch) submitting.value = false
   }
 }
 
 async function onDismiss(): Promise<void> {
   const s = suggestion.value
-  if (s === null || dismissing.value) return
+  if (s === null || !canDismiss.value || dismissing.value || submitting.value) return
+  const requestEpoch = contextEpoch
+  const spaceId = props.spaceId
   dismissing.value = true
   errorNote.value = null
   try {
-    await store.dismiss(props.spaceId, s.id, s.revision)
-    resultNote.value = '已驳回：同一证据版本在本设备账号上不会再次提醒。'
+    const detail = await store.dismiss(spaceId, s.id, s.revision)
+    if (requestEpoch !== contextEpoch) return
+    suggestionModel.value = detail
+    resultNote.value = '已忽略：同一证据版本不会再次向你提醒。'
   } catch {
-    errorNote.value = '驳回未成功，请稍后重试。'
+    if (requestEpoch === contextEpoch) errorNote.value = '忽略未成功，请稍后重试。'
   } finally {
-    dismissing.value = false
+    if (requestEpoch === contextEpoch) dismissing.value = false
   }
 }
 </script>
@@ -139,26 +193,28 @@ async function onDismiss(): Promise<void> {
     preset="card"
     class="suggestion-dialog"
     :style="{ maxWidth: '520px' }"
-    title="待核实详情"
+    title="建议详情"
     data-test="suggestion-dialog"
   >
-    <NSpin v-if="suggestion === null" :show="false" />
-    <div v-else class="suggestion-body">
+    <NSpin v-if="suggestion === null && resultNote === null" :show="true" />
+    <div v-if="suggestion !== null" class="suggestion-body">
       <p class="sug-kind">{{ KIND_LABELS[suggestion.kind] }}</p>
+      <p class="sug-kind" data-test="suggestion-state">
+        {{ isPreference && suggestion.state === 'proposed' ? '无需处理' : STATE_LABELS[suggestion.state] }}
+      </p>
       <h3 class="sug-pair" data-test="suggestion-pair">{{ pairText }}</h3>
       <p v-if="relationText !== null" class="sug-relation" data-test="suggestion-relation">
         {{ relationText }}
       </p>
       <p class="sug-evidence" data-test="suggestion-evidence">{{ evidenceText }}</p>
-      <p class="sug-privacy">
-        该建议只是线索：接受后会先发起需要当事人确认的申请，不会直接修改家庭关系。
+      <p v-if="isRelation && canSubmit" class="sug-privacy">
+        该建议只是线索：提交后由有权确认者按现有流程处理。
       </p>
-
-      <p v-if="resultNote !== null" class="sug-note sug-note--ok" data-test="suggestion-result">
-        {{ resultNote }}
+      <p v-else-if="isPreference" class="sug-privacy">
+        称谓由管家自动维护，无需逐条处理；保留叫法只更新你的个人偏好，并在各空间生效。
       </p>
-      <p v-else-if="errorNote !== null" class="sug-note sug-note--err" data-test="suggestion-error">
-        {{ errorNote }}
+      <p v-if="proposalNote" class="sug-note" data-test="suggestion-proposal-state">
+        {{ proposalNote }}
       </p>
 
       <div class="sug-actions">
@@ -167,27 +223,35 @@ async function onDismiss(): Promise<void> {
           size="small"
           type="primary"
           :loading="submitting"
+          :disabled="dismissing"
           data-test="suggestion-submit"
           @click="onSubmit"
         >
-          确认并提交
+          {{ isPreference ? '保留为我的叫法' : '提交关系提案' }}
         </NButton>
         <NButton
           v-if="canDismiss"
           size="small"
           secondary
           :loading="dismissing"
+          :disabled="submitting"
           data-test="suggestion-dismiss"
           @click="onDismiss"
         >
-          驳回
+          忽略
         </NButton>
         <NButton size="small" quaternary @click="opened = false">关闭</NButton>
       </div>
       <p v-if="isRelation && canSubmit" class="sug-hint">
-        提交后：由两位当事人按既有授权流程确认，任何第三方（含空间管理员）都不能代替确认。
+        确认资格由现有授权流程决定；空间管理员身份本身不提供代确认权限。
       </p>
     </div>
+    <p v-if="resultNote !== null" class="sug-note sug-note--ok" data-test="suggestion-result">
+      {{ resultNote }}
+    </p>
+    <p v-else-if="errorNote !== null" class="sug-note sug-note--err" data-test="suggestion-error">
+      {{ errorNote }}
+    </p>
   </NModal>
 </template>
 

@@ -30,6 +30,12 @@ vi.mock('@/api/kinship', () => ({
   parseRelationText: vi.fn(),
 }))
 
+vi.mock('@/api/personalFamilyView', () => ({ fetchPersonalFamilyView: vi.fn().mockResolvedValue(null) }))
+vi.mock('@/api/stewardSuggestions', () => ({
+  fetchSuggestions: vi.fn().mockResolvedValue({ space_id: 10, items: [], next_cursor: null }),
+  fetchSuggestionDetail: vi.fn(), submitSuggestion: vi.fn(), dismissSuggestion: vi.fn(), restoreSuggestionTerm: vi.fn(),
+}))
+
 // 抽屉内嵌 AttachmentsSection（挂载即拉取附件列表），mock 掉避免真实 XHR
 vi.mock('@/api/attachments', () => ({
   fetchAttachments: vi.fn().mockResolvedValue([]),

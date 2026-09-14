@@ -14,7 +14,7 @@
 //   无假数据、无错误横幅泄漏后端细节；
 // - 数据全部经 notifications store（服务端真源），页面不发请求。
 import { NButton, NEmpty, NSpin } from 'naive-ui'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
@@ -22,6 +22,7 @@ import NoticeItemRow from '@/components/notifications/NoticeItemRow.vue'
 import SuggestionReviewDialog from '@/components/notifications/SuggestionReviewDialog.vue'
 import { describeLoadError } from '@/api/loadError'
 import { useActionCardsStore } from '@/stores/actionCards'
+import { useAuthStore } from '@/stores/auth'
 import { useNotificationsStore } from '@/stores/notifications'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpacesStore } from '@/stores/spaces'
@@ -31,6 +32,7 @@ import { classifyNotifications } from '@/types/notifications'
 
 const router = useRouter()
 const spaces = useSpacesStore()
+const auth = useAuthStore()
 const notifications = useNotificationsStore()
 const actionCards = useActionCardsStore()
 const suggestions = useStewardSuggestionsStore()
@@ -90,26 +92,31 @@ watch(hasActiveBridge, (active) => {
 })
 
 async function load(): Promise<void> {
-  if (spaceId.value === null) return
-  await notifications.load(spaceId.value).catch(() => undefined)
+  const currentSpaceId = spaceId.value
+  if (currentSpaceId === null || auth.user === null) return
   // 待核实建议（Steward 投影）：与通知并行加载；失败不阻塞通知分区
-  await suggestions.load(spaceId.value).catch(() => undefined)
+  await Promise.allSettled([notifications.load(currentSpaceId), suggestions.load(currentSpaceId)])
 }
 
 onMounted(() => {
   void load()
 })
 
-watch(spaceId, () => {
+watch(() => [spaceId.value, auth.user?.id] as const, () => {
   // 切换空间：收起 ActionCard 面板与建议弹层并按新上下文重读（store 已按空间清理）
   inboxOpened.value = false
   reviewOpened.value = false
   reviewSuggestion.value = null
+  reviewEpoch += 1
   void load()
-})
+}, { flush: 'sync' })
 
 /** 打开通知 = 仅标记已读（服务端已读命令 + 重读列表）；不改任何领域/卡片状态 */
 function openNotification(item: NotificationItem): void {
+  if (item.suggestion !== null) {
+    openSuggestion(item)
+    return
+  }
   if (item.read_at !== null || spaceId.value === null) return
   void notifications.markRead(spaceId.value, item.id).catch(() => undefined)
 }
@@ -117,28 +124,44 @@ function openNotification(item: NotificationItem): void {
 // ---- 待核实建议详情弹层：打开只读；提交/驳回在弹层内显式触发 ----
 const reviewOpened = ref(false)
 const reviewSuggestion = ref<SuggestionItem | null>(null)
+let reviewEpoch = 0
+
+watch(reviewOpened, (opened) => {
+  if (!opened) {
+    reviewEpoch += 1
+    reviewSuggestion.value = null
+  }
+}, { flush: 'sync' })
+
+onBeforeUnmount(() => { reviewEpoch += 1 })
 
 function openSuggestion(item: NotificationItem): void {
-  if (item.read_at === null && spaceId.value !== null) {
-    void notifications.markRead(spaceId.value, item.id).catch(() => undefined)
-  }
+  const currentSpaceId = spaceId.value
+  const viewerId = auth.user?.id
   const id = item.suggestion?.suggestion_id
-  if (id === undefined || spaceId.value === null) return
-  // 按 ID 拉取详情：首页 20 条缓存之外的旧建议同样可打开（A-R5）。
-  const cached =
-    suggestions.forSpace(spaceId.value)?.items.find((s) => s.id === id) ?? null
-  if (cached !== null) {
-    reviewSuggestion.value = cached
-    reviewOpened.value = true
-    return
+  if (id === undefined || currentSpaceId === null || viewerId === undefined || item.space_id !== currentSpaceId) return
+  if (item.read_at === null) {
+    void notifications.markRead(currentSpaceId, item.id).catch(() => undefined)
   }
+  const requestEpoch = ++reviewEpoch
+  reviewSuggestion.value = null
+  reviewOpened.value = true
+  const isCurrent = () => requestEpoch === reviewEpoch && reviewOpened.value &&
+    currentSpaceId === spaceId.value && viewerId === auth.user?.id
+  // 始终按 ID 重验当前有效状态；旧列表缓存不授予仍可执行的动作。
   void suggestions
-    .loadDetail(spaceId.value, id)
+    .loadDetail(currentSpaceId, id)
     .then((detail) => {
+      if (!isCurrent()) return
+      if (detail === null) {
+        reviewOpened.value = false
+        return
+      }
       reviewSuggestion.value = detail
-      reviewOpened.value = true
     })
-    .catch(() => undefined)
+    .catch(() => {
+      if (isCurrent()) reviewOpened.value = false
+    })
 }
 
 function markAllRead(): void {
@@ -236,7 +259,7 @@ function retry(): void {
       <section class="notice-section" data-test="section-verify">
         <h2 class="section-title">待核实</h2>
         <p class="section-hint">
-          Steward 基于已确认事实发现的可疑/缺失线索；查看详情不会提交任何动作。
+          管家发现的关系线索和资料缺口仍需核实，查看详情不会提交任何操作。
         </p>
         <NEmpty
           v-if="sections.verify.length === 0"
@@ -287,7 +310,13 @@ function retry(): void {
             data-test="notice-item"
             @click="openNotification(item)"
           >
-            <NoticeItemRow :item="item" />
+            <NoticeItemRow :item="item">
+              <template v-if="item.suggestion !== null" #actions>
+                <NButton size="small" secondary data-test="open-details" @click.stop="openSuggestion(item)">
+                  查看详情
+                </NButton>
+              </template>
+            </NoticeItemRow>
           </li>
         </ul>
       </section>
@@ -307,8 +336,15 @@ function retry(): void {
             :key="item.id"
             class="notice-item notice-item--history"
             data-test="notice-item"
+            @click="openNotification(item)"
           >
-            <NoticeItemRow :item="item" />
+            <NoticeItemRow :item="item">
+              <template v-if="item.suggestion !== null" #actions>
+                <NButton size="small" secondary data-test="open-details" @click.stop="openSuggestion(item)">
+                  查看详情
+                </NButton>
+              </template>
+            </NoticeItemRow>
           </li>
         </ul>
       </section>

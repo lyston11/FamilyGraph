@@ -7,7 +7,14 @@ import {
   fetchSuggestions,
   submitSuggestion,
 } from '@/api/stewardSuggestions'
-import type { SuggestionItem, SuggestionsPage } from '@/types/api'
+import { useKinshipStore } from '@/stores/kinship'
+import { useNotificationsStore } from '@/stores/notifications'
+import type {
+  SuggestionItem,
+  SuggestionsPage,
+  SuggestionSubmitPreferenceResult,
+  SuggestionSubmitProposalResult,
+} from '@/types/api'
 
 /**
  * Steward 建议审核状态（09-11 candidate-review）：按账号 + 明确 space_id 保存
@@ -29,6 +36,32 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
   const errorBySpace = ref<Map<number, unknown>>(new Map())
   /** 请求代际：clear/clearSpace 递增，late response 校验后丢弃 */
   let epoch = 0
+  const spaceEpochs = new Map<number, number>()
+  const listRequests = new Map<number, number>()
+  const detailRequests = new Map<string, number>()
+  let nextRequestId = 0
+
+  function versionOf(spaceId: number): string {
+    return `${epoch}:${spaceEpochs.get(spaceId) ?? 0}`
+  }
+
+  function detailFor(spaceId: number, suggestionId: number): SuggestionItem | null {
+    return detailBySpaceAndId.value.get(`${spaceId}:${suggestionId}`) ?? null
+  }
+
+  function cacheDetail(spaceId: number, item: SuggestionItem): void {
+    detailBySpaceAndId.value = new Map(detailBySpaceAndId.value).set(
+      `${spaceId}:${item.id}`,
+      item,
+    )
+  }
+
+  function refreshNotifications(spaceId: number): Promise<unknown> {
+    const notifications = useNotificationsStore()
+    // 正在进行的已读/列表请求也必须失效，不能在动作完成后覆盖新领域状态。
+    notifications.clearSpace(spaceId)
+    return notifications.refresh(spaceId)
+  }
 
   function setLoading(spaceId: number, value: boolean): void {
     const next = new Set(loadingSpaceIds.value)
@@ -62,20 +95,24 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
   }
 
   async function load(spaceId: number): Promise<SuggestionsPage | null> {
-    const requestEpoch = epoch
+    const requestVersion = versionOf(spaceId)
+    const requestId = ++nextRequestId
+    listRequests.set(spaceId, requestId)
+    const isCurrent = () =>
+      requestVersion === versionOf(spaceId) && listRequests.get(spaceId) === requestId
     setLoading(spaceId, true)
     setError(spaceId, null)
     try {
       const page = await fetchSuggestions(spaceId)
       // 空间已切走或缓存已清：这条响应属于旧上下文，不得回写
-      if (requestEpoch !== epoch) return null
+      if (!isCurrent()) return null
       bySpace.value = new Map(bySpace.value).set(spaceId, page)
       return page
     } catch (cause) {
-      if (requestEpoch === epoch) setError(spaceId, cause)
+      if (isCurrent()) setError(spaceId, cause)
       throw cause
     } finally {
-      if (requestEpoch === epoch) setLoading(spaceId, false)
+      if (isCurrent()) setLoading(spaceId, false)
     }
   }
 
@@ -84,11 +121,20 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
     spaceId: number,
     suggestionId: number,
     expectedRevision: number,
-  ): Promise<void> {
-    const requestEpoch = epoch
+  ): Promise<SuggestionItem | null> {
+    const requestVersion = versionOf(spaceId)
     await dismissSuggestion(spaceId, suggestionId, expectedRevision)
-    if (requestEpoch !== epoch) return
-    await load(spaceId).catch(() => undefined)
+    if (requestVersion !== versionOf(spaceId)) return null
+    const details = new Map(detailBySpaceAndId.value)
+    details.delete(`${spaceId}:${suggestionId}`)
+    detailBySpaceAndId.value = details
+    const [detail] = await Promise.allSettled([
+      loadDetail(spaceId, suggestionId),
+      load(spaceId),
+      refreshNotifications(spaceId),
+    ])
+    if (requestVersion !== versionOf(spaceId)) return null
+    return detail.status === 'fulfilled' ? detail.value : null
   }
 
   /** 提交（confirm=true + Idempotency-Key）：成功后重读列表 */
@@ -97,33 +143,50 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
     suggestionId: number,
     body: { expected_revision: number; evidence_hash: string; confirm: true },
     idempotencyKey: string,
-  ): Promise<void> {
+  ): Promise<SuggestionSubmitProposalResult | SuggestionSubmitPreferenceResult | null> {
     const requestEpoch = epoch
-    await submitSuggestion(spaceId, suggestionId, body, idempotencyKey)
-    if (requestEpoch !== epoch) return
-    await load(spaceId).catch(() => undefined)
+    const requestVersion = versionOf(spaceId)
+    const result = await submitSuggestion(spaceId, suggestionId, body, idempotencyKey)
+    if (requestEpoch !== epoch) return null
+    // 个人词条跨空间生效；空间切换不取消已成功写入的本人偏好失效通知。
+    const refreshTerms = 'linked_preference' in result
+      ? useKinshipStore().refreshAfterTermChange(spaceId, 'personal')
+      : Promise.resolve()
+    if (requestVersion !== versionOf(spaceId)) {
+      await refreshTerms
+      return null
+    }
+    detailRequests.set(`${spaceId}:${suggestionId}`, ++nextRequestId)
+    cacheDetail(spaceId, result.suggestion)
+    await Promise.allSettled([load(spaceId), refreshNotifications(spaceId), refreshTerms])
+    return requestVersion === versionOf(spaceId) ? result : null
   }
 
   /** 按 ID 读取详情（超过首页缓存的旧建议也能打开）；epoch 隔离旧响应 */
-  async function loadDetail(spaceId: number, suggestionId: number): Promise<SuggestionItem> {
-    const cached = detailBySpaceAndId.value.get(`${spaceId}:${suggestionId}`)
-    if (cached) return cached
+  async function loadDetail(spaceId: number, suggestionId: number): Promise<SuggestionItem | null> {
+    const requestVersion = versionOf(spaceId)
+    const key = `${spaceId}:${suggestionId}`
+    const requestId = ++nextRequestId
+    detailRequests.set(key, requestId)
+    // 每次打开都重验服务端当前状态，缓存仅供当前视图消费，不替代授权读取。
     const item = await fetchSuggestionDetail(spaceId, suggestionId)
-    detailBySpaceAndId.value = new Map(detailBySpaceAndId.value).set(
-      `${spaceId}:${suggestionId}`,
-      item,
-    )
+    if (requestVersion !== versionOf(spaceId) || detailRequests.get(key) !== requestId) return null
+    cacheDetail(spaceId, item)
     return item
   }
 
   function clearSpace(spaceId: number): void {
-    epoch += 1
+    spaceEpochs.set(spaceId, (spaceEpochs.get(spaceId) ?? 0) + 1)
+    listRequests.delete(spaceId)
     const nextSpaces = new Map(bySpace.value)
     nextSpaces.delete(spaceId)
     bySpace.value = nextSpaces
     const nextDetails = new Map(detailBySpaceAndId.value)
     for (const key of Array.from(nextDetails.keys())) {
       if (key.startsWith(`${spaceId}:`)) nextDetails.delete(key)
+    }
+    for (const key of detailRequests.keys()) {
+      if (key.startsWith(`${spaceId}:`)) detailRequests.delete(key)
     }
     detailBySpaceAndId.value = nextDetails
     setLoading(spaceId, false)
@@ -132,6 +195,9 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
 
   function clear(): void {
     epoch += 1
+    spaceEpochs.clear()
+    listRequests.clear()
+    detailRequests.clear()
     bySpace.value = new Map()
     detailBySpaceAndId.value = new Map()
     loadingSpaceIds.value = new Set()
@@ -148,6 +214,7 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
     activeForSpace,
     load,
     loadDetail,
+    detailFor,
     dismiss,
     submit,
     clearSpace,

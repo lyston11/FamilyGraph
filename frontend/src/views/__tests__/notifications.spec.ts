@@ -1,4 +1,4 @@
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, type Pinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NMessageProvider } from 'naive-ui'
@@ -9,10 +9,13 @@ import * as actionCardsApi from '@/api/actionCards'
 import { ApiError } from '@/api/errors'
 import * as notificationsApi from '@/api/notifications'
 import * as pfvApi from '@/api/personalFamilyView'
+import * as suggestionsApi from '@/api/stewardSuggestions'
+import SuggestionReviewDialog from '@/components/notifications/SuggestionReviewDialog.vue'
 import NotificationsView from '@/views/NotificationsView.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
+import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
-import type { NotificationsSnapshot } from '@/types/api'
+import type { NotificationsSnapshot, SuggestionItem } from '@/types/api'
 import type { ActionCard } from '@/types/actionCard'
 
 vi.mock('@/api/notifications', () => ({
@@ -23,6 +26,13 @@ vi.mock('@/api/notifications', () => ({
 
 vi.mock('@/api/personalFamilyView', () => ({
   fetchPersonalFamilyView: vi.fn(),
+}))
+
+vi.mock('@/api/stewardSuggestions', () => ({
+  fetchSuggestions: vi.fn(),
+  fetchSuggestionDetail: vi.fn(),
+  submitSuggestion: vi.fn(),
+  dismissSuggestion: vi.fn(),
 }))
 
 vi.mock('@/api/actionCards', () => ({
@@ -86,6 +96,37 @@ function makeSnapshot(items: ReturnType<typeof makeItem>[], unreadCount: number)
   return { data: { space_id: 7, items, unread_count: unreadCount }, etag: 'W/"n1"' }
 }
 
+function makeSuggestion(id = 70, overrides: Partial<SuggestionItem> = {}): SuggestionItem {
+  return {
+    id, space_id: 7, kind: 'relation_proposal', origin: 'model', state: 'proposed',
+    revision: 1, evidence_hash: 'evidence', subject_user_id: 1, object_user_id: id,
+    subject_name: '我', object_name: `家人${id}`, value: {}, presentation: null,
+    evidence_summary: { fact_count: 99, facts: [] },
+    allowed_actions: ['open_details', 'submit', 'dismiss'], expires_at: null, created_at: '',
+    ...overrides,
+  }
+}
+
+function suggestionNotice(id = 70, overrides: Record<string, unknown> = {}) {
+  return makeItem({
+    id, kind: 'steward_suggestion', action_card: null, suggestion: { suggestion_id: id },
+    read_at: '2026-09-14T00:00:00', ...overrides,
+  })
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+async function clickDialog(selector: string): Promise<void> {
+  const button = document.querySelector(selector)
+  expect(button).not.toBeNull()
+  button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await flushPromises()
+}
+
 function makeCard(overrides: Partial<ActionCard> = {}): ActionCard {
   return {
     id: 55,
@@ -130,6 +171,11 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     vi.clearAllMocks()
     document.body.innerHTML = ''
     pinia = createPinia()
+    useAuthStore(pinia).user = {
+      id: 1, name: '我', pin_must_change: false,
+      claim_status: 'claimed', profile_status: 'identity_confirmed',
+    }
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({ space_id: 7, items: [], next_cursor: null })
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [
       { id: 7, name: '我家', owner_id: 1, kind: 'household', created_at: '', pending_count: 0, member_count: 2 },
@@ -340,6 +386,111 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     for (const forbidden of ['批准', '否决', '同意连接', '撤销连接']) {
       expect(bridgeText).not.toContain(forbidden)
     }
+    wrapper.unmount()
+  })
+
+  it('历史建议始终按 ID 重验状态，不复用首页 proposed 缓存', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice(70, { domain_status: 'done' })], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({ space_id: 7, items: [makeSuggestion()], next_cursor: null })
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValue(makeSuggestion(70, {
+      state: 'expired', allowed_actions: ['open_details'],
+    }))
+    const wrapper = await mountNotifications()
+    await wrapper.find('[data-test="section-history"] [data-test="open-details"]').trigger('click')
+    await flushPromises()
+    expect(suggestionsApi.fetchSuggestionDetail).toHaveBeenCalledWith(7, 70)
+    expect(wrapper.findComponent(SuggestionReviewDialog).props('suggestion')?.state).toBe('expired')
+    expect(document.querySelector('[data-test="suggestion-submit"]')).toBeNull()
+    expect(document.querySelector('[data-test="suggestion-evidence"]')?.textContent).not.toContain('99')
+    expect(suggestionsApi.submitSuggestion).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('连续打开两条建议时，较早响应不覆盖最后点击的详情', async () => {
+    const first = deferred<SuggestionItem>()
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice(70), suggestionNotice(71)], 0))
+    vi.mocked(suggestionsApi.fetchSuggestionDetail)
+      .mockReturnValueOnce(first.promise).mockResolvedValueOnce(makeSuggestion(71))
+    const wrapper = await mountNotifications()
+    const buttons = wrapper.findAll('[data-test="open-details"]')
+    await buttons[0]!.trigger('click')
+    await buttons[1]!.trigger('click')
+    await flushPromises()
+    first.resolve(makeSuggestion(70))
+    await flushPromises()
+    expect(wrapper.findComponent(SuggestionReviewDialog).props('suggestion')?.id).toBe(71)
+    wrapper.unmount()
+  })
+
+  it.each(['space', 'account', 'close'] as const)('%s 变化后迟到详情不能重新打开弹层', async (change) => {
+    const pending = deferred<SuggestionItem>()
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice()], 0))
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockReturnValueOnce(pending.promise)
+    const wrapper = await mountNotifications()
+    await wrapper.find('[data-test="open-details"]').trigger('click')
+    const dialog = wrapper.findComponent(SuggestionReviewDialog)
+    if (change === 'space') useSpacesStore(pinia).currentSpaceId = 8
+    else if (change === 'account') useAuthStore(pinia).clearSession()
+    else dialog.vm.$emit('update:opened', false)
+    await flushPromises()
+    pending.resolve(makeSuggestion())
+    await flushPromises()
+    const remaining = wrapper.findComponent(SuggestionReviewDialog)
+    if (remaining.exists()) {
+      expect(remaining.props('opened')).toBe(false)
+      expect(remaining.props('suggestion')).toBeNull()
+    }
+    wrapper.unmount()
+  })
+
+  it.each([
+    { state: 'proposed', pending: [{ account_id: 4 }], expected: '当前有 1 位成员可确认该提案' },
+    { state: 'proposed', pending: [], expected: '当前没有可用的确认人' },
+    { state: 'confirmed', pending: [], expected: '关联提案状态：已确认' },
+  ])('提交后展示真实提案状态 $state 与实际待确认人数', async ({ state, pending, expected }) => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice()], 0))
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValue(makeSuggestion())
+    const submitted = makeSuggestion(70, { state: 'submitted', revision: 2, allowed_actions: ['open_details'] })
+    vi.mocked(suggestionsApi.submitSuggestion).mockResolvedValue({
+      suggestion: submitted,
+      linked_proposal: { source_fact_id: 80, state, revision: 1, fact_type: 'spouse' },
+      pending_confirmations: pending,
+    })
+    const wrapper = await mountNotifications()
+    await wrapper.find('[data-test="open-details"]').trigger('click')
+    await flushPromises()
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice(70, { domain_status: 'accepted' })], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({ space_id: 7, items: [submitted], next_cursor: null })
+    await clickDialog('[data-test="suggestion-submit"]')
+    expect(document.querySelector('[data-test="suggestion-proposal-state"]')?.textContent).toContain(expected)
+    expect(document.querySelector('[data-test="suggestion-submit"]')).toBeNull()
+    expect(document.querySelector('[data-test="suggestion-dismiss"]')).toBeNull()
+    expect(mockedFetchNotifications).toHaveBeenLastCalledWith(7, null)
+    expect(document.body.textContent).not.toContain('由两位当事人')
+    if (state === 'confirmed') {
+      expect(document.querySelector('[data-test="suggestion-proposal-state"]')?.textContent).not.toContain('待确认')
+    }
+    wrapper.unmount()
+  })
+
+  it('忽略后刷新当前详情及通知分类，移除失效操作按钮', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice()], 0))
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValueOnce(makeSuggestion())
+    vi.mocked(suggestionsApi.dismissSuggestion).mockResolvedValue({
+      id: 70, state: 'dismissed', revision: 2, dismissed_at: '', cooldown_until: null,
+    })
+    const wrapper = await mountNotifications()
+    await wrapper.find('[data-test="open-details"]').trigger('click')
+    await flushPromises()
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValueOnce(makeSuggestion(70, {
+      state: 'dismissed', revision: 2, allowed_actions: ['open_details'],
+    }))
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice(70, { domain_status: 'done' })], 0))
+    await clickDialog('[data-test="suggestion-dismiss"]')
+    expect(wrapper.findComponent(SuggestionReviewDialog).props('suggestion')?.state).toBe('dismissed')
+    expect(document.querySelector('[data-test="suggestion-submit"]')).toBeNull()
+    expect(document.querySelector('[data-test="suggestion-dismiss"]')).toBeNull()
+    expect(wrapper.find('[data-test="section-history"] [data-test="open-details"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

@@ -2,8 +2,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineComponent, h } from 'vue'
+import { NMessageProvider } from 'naive-ui'
 
 import * as actionCardsApi from '@/api/actionCards'
+import * as kinshipApi from '@/api/kinship'
+import * as suggestionsApi from '@/api/stewardSuggestions'
 import * as personalFamilyViewApi from '@/api/personalFamilyView'
 import { ApiError } from '@/api/errors'
 import PersonProfileView from '@/views/PersonProfileView.vue'
@@ -21,7 +25,10 @@ import type {
   PersonalFamilyViewPathStep,
   PersonalFamilyViewSnapshot,
   StructuredDate,
+  SuggestionItem,
+  SuggestionsPage,
 } from '@/types/api'
+import type { KinshipResolve } from '@/types/kinship'
 
 /**
  * PersonProfileView（design.md §5.3 / PRD §2.4，Phase 4）：
@@ -40,6 +47,23 @@ vi.mock('@/api/personalFamilyView', () => ({
 
 vi.mock('@/api/actionCards', () => ({
   fetchActionCards: vi.fn(),
+}))
+
+vi.mock('@/api/kinship', () => ({
+  KINSHIP_FLAG_DISABLED: 'KINSHIP_FLAG_DISABLED',
+  resolveKinship: vi.fn().mockResolvedValue({ found: false }),
+  fetchMyTerms: vi.fn(),
+  updateMyTerm: vi.fn(),
+  recordTermUsage: vi.fn(),
+  parseRelationText: vi.fn(),
+}))
+
+vi.mock('@/api/stewardSuggestions', () => ({
+  fetchSuggestions: vi.fn().mockResolvedValue({ space_id: 9, items: [], next_cursor: null }),
+  fetchSuggestionDetail: vi.fn(),
+  submitSuggestion: vi.fn(),
+  dismissSuggestion: vi.fn(),
+  restoreSuggestionTerm: vi.fn(),
 }))
 
 vi.mock('@/api/notifications', () => ({
@@ -142,6 +166,27 @@ function makeSnapshot(data: PersonalFamilyViewData): PersonalFamilyViewSnapshot 
   return { data, etag: 'W/"v3"' }
 }
 
+function makeKinship(targetId: number): KinshipResolve {
+  return {
+    found: true, space_id: 9, viewer_user_id: 1, target_user_id: targetId,
+    term: '外婆', term_source_level: 'steward', term_entry_id: null, concept_code: 'M_MOTHER',
+    path_class: 'direct_line', explanation_structural: null, main_path: [], alt_paths: [],
+    fact_state: { confirmed: 2, proposed: 0, disputed: 0, revoked: 0, evidence_fact_ids: [] },
+    cache_hit: false, algorithm_version: 'v1',
+  }
+}
+
+function makePreference(targetId: number, term: string): SuggestionItem {
+  return {
+    id: targetId, space_id: 9, kind: 'term_preference', origin: 'model', state: 'proposed',
+    revision: 1, evidence_hash: 'evidence', subject_user_id: 1, object_user_id: targetId,
+    subject_name: '我', object_name: '家人', presentation: null,
+    value: { term, can_restore: true, semantic_hash: 'hash', projection_revision: 1 },
+    evidence_summary: { fact_count: 2, facts: [] }, allowed_actions: ['open_details', 'submit'],
+    expires_at: null, created_at: '',
+  }
+}
+
 function makeLineageSpace(): FamilySpace {
   return {
     id: 9,
@@ -232,7 +277,8 @@ async function mountProfile(
   }
   mockedFetchCards.mockResolvedValue(seed?.cards ?? [])
 
-  const wrapper = mount(PersonProfileView, {
+  const Harness = defineComponent({ render: () => h(NMessageProvider, () => h(PersonProfileView)) })
+  const wrapper = mount(Harness, {
     global: { plugins: [pinia, router] },
     attachTo: document.body,
   })
@@ -260,6 +306,9 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="profile-name"]').text()).toBe('成员2')
     expect(wrapper.find('[data-test="profile-identity"]').text()).toContain('家庭详情可见')
+    expect(wrapper.find('[data-test="kinship-section"]').exists()).toBe(true)
+    expect(kinshipApi.resolveKinship).toHaveBeenCalledWith(9, 1, 2)
+    expect(suggestionsApi.fetchSuggestions).toHaveBeenCalledWith(9, null, 50, 'term_preference', 2)
   })
 
   it('目标不在快照中：统一「对方不可见或不存在」，不显示目标 ID/空间名/数量', async () => {
@@ -272,6 +321,44 @@ describe('PersonProfileView 直达/刷新与安全状态', () => {
     expect(wrapper.find('[data-test="profile-identity"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('4242')
     expect(wrapper.text()).not.toContain('李家族谱')
+    expect(wrapper.find('[data-test="kinship-section"]').exists()).toBe(false)
+    expect(kinshipApi.resolveKinship).not.toHaveBeenCalled()
+    expect(suggestionsApi.fetchSuggestions).not.toHaveBeenCalled()
+  })
+
+  it('实际个人档案页展示可选的保留与恢复称谓入口', async () => {
+    vi.mocked(kinshipApi.resolveKinship).mockResolvedValueOnce(makeKinship(2))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValueOnce({
+      space_id: 9, items: [makePreference(2, '姥姥')], next_cursor: null,
+    })
+    const { wrapper } = await mountProfile({
+      data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)] }),
+    })
+    expect(wrapper.find('[data-test="kinship-suggestion"]').text()).toContain('姥姥')
+    expect(wrapper.find('[data-test="kinship-keep-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="kinship-restore-btn"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('路由切换人物后旧档案的迟到建议不会出现在新档案', async () => {
+    let resolveOld!: (page: SuggestionsPage) => void
+    const oldPage = new Promise<SuggestionsPage>((resolve) => { resolveOld = resolve })
+    vi.mocked(kinshipApi.resolveKinship).mockResolvedValueOnce(makeKinship(2)).mockResolvedValueOnce(makeKinship(3))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockReturnValueOnce(oldPage).mockResolvedValueOnce({
+      space_id: 9, items: [makePreference(3, '新人物叫法')], next_cursor: null,
+    })
+    const { wrapper, router } = await mountProfile({
+      data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2), makeNode(3)] }),
+    })
+    await router.push('/people/3')
+    await flushPromises()
+    resolveOld({ space_id: 9, items: [makePreference(2, '旧人物叫法')], next_cursor: null })
+    await flushPromises()
+    expect(wrapper.find('[data-test="profile-name"]').text()).toBe('成员3')
+    expect(wrapper.find('[data-test="kinship-suggestion"]').text()).toContain('新人物叫法')
+    expect(wrapper.text()).not.toContain('旧人物叫法')
+    expect(suggestionsApi.fetchSuggestions).toHaveBeenLastCalledWith(9, null, 50, 'term_preference', 3)
+    wrapper.unmount()
   })
 
   it('会话内到达（当前 lineage）：不重跑默认空间选择——列表中存在 own household 也不改写上下文', async () => {
