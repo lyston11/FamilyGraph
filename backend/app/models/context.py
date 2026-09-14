@@ -13,7 +13,10 @@ from app.models.base import Base
 
 class ContextBuild(Base):
     __tablename__ = "context_builds"
-    __table_args__ = (Index("ix_context_builds_run", "run_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_context_builds_run", "run_id", "created_at"),
+        Index("ix_context_builds_run_attempt", "run_id", "attempt", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(
@@ -29,6 +32,14 @@ class ContextBuild(Base):
     query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
     token_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Execution binding: one build per (run, attempt); replay re-authorizes.
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Authorized block payload persisted once so a replayed GET returns the
+    # identical context instead of re-running a competing retrieval.
+    blocks_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    policy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

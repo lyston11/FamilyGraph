@@ -7,7 +7,6 @@ SourceFact（全局 scope），peer 不映射；revoke 同步失效；映射幂�
 from __future__ import annotations
 
 import pytest
-from conftest import create_user_with_pin
 from sqlalchemy import select
 
 from app.models.relationship_facts import SourceFact
@@ -19,6 +18,7 @@ from app.services.source_facts import (
     map_structural_edge_to_fact,
     revoke_structural_edge_fact,
 )
+from conftest import create_user_with_pin
 
 
 @pytest.fixture()

@@ -9,17 +9,17 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-from conftest import (
-    admin_session_headers,
-    create_agent_fixture,
-    create_system_admin,
-)
 from sqlalchemy import select
 
 from app import config
 from app.models.agent_provider import AgentSpaceProviderSetting
 from app.models.platform_features import PlatformFeatureConfig
 from app.services import platform_features, steward_assist
+from conftest import (
+    admin_session_headers,
+    create_agent_fixture,
+    create_system_admin,
+)
 
 
 def _row(session, **overrides) -> PlatformFeatureConfig:

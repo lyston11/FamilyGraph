@@ -1,0 +1,77 @@
+{
+  "cwd": "/Users/lyston/PycharmProjects/fg-09-13-rag-index-lifecycle/backend",
+  "source_hashes_before": {
+    "app/models/rag.py": "4ff9d2fac7a802c545aa9f1b64c11579e944340c40e4cb83fb65cb4587b34dc7",
+    "app/services/memory_rag.py": "62691b270b0c065c5df6ae283178dc825d2eee97f4c010835c507c1147c6a8e4",
+    "app/services/rag_maintenance.py": "21ea2fa15d8eace3f390854f5ec0b0f983aa53e765fa01d688dda797bc80ac3a",
+    "app/services/maintenance.py": "aa2c70780ec32ea14729a0145a10e37a0edc883f0483c494214b6a608b537029",
+    "migrations/versions/0045_rag_index_lifecycle.py": "532b70ca1274a4f6a98fec78ac08b8335f55f213843c1f64968f3e8a524c441a",
+    "migrations/versions/0047_rag_lifecycle_integrity.py": "f7f399ec1da7a4fcb064c5ba49b23490c72900d7734aafd354de2a291ee68b81",
+    "tests/test_rag_lifecycle_acceptance.py": "c16e953973d2a250155c3a75e2dd030d8c8aaed338aaac2ba8c532411072ecfb",
+    "tests/test_rag_lifecycle_migrations.py": "888cebbd9ee31eb32e19078ed0e37a3d489361de04a712d5259e532ffca587d1"
+  },
+  "commands": [
+    {
+      "argv": [
+        ".venv/bin/python",
+        "-c",
+        "import app; print(app.__file__)"
+      ],
+      "exit_code": 0,
+      "seconds": 0.02
+    },
+    {
+      "argv": [
+        ".venv/bin/ruff",
+        "check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.05
+    },
+    {
+      "argv": [
+        ".venv/bin/ruff",
+        "format",
+        "--check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.01
+    },
+    {
+      "argv": [
+        ".venv/bin/mypy",
+        "--cache-dir",
+        "/private/tmp/familygraph-d-final-mypy",
+        "app"
+      ],
+      "exit_code": 0,
+      "seconds": 11.64
+    },
+    {
+      "argv": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "--junitxml=/private/tmp/familygraph-d-backend-final.xml"
+      ],
+      "exit_code": 0,
+      "seconds": 72.49
+    }
+  ],
+  "source_hashes_after": {
+    "app/models/rag.py": "4ff9d2fac7a802c545aa9f1b64c11579e944340c40e4cb83fb65cb4587b34dc7",
+    "app/services/memory_rag.py": "62691b270b0c065c5df6ae283178dc825d2eee97f4c010835c507c1147c6a8e4",
+    "app/services/rag_maintenance.py": "21ea2fa15d8eace3f390854f5ec0b0f983aa53e765fa01d688dda797bc80ac3a",
+    "app/services/maintenance.py": "aa2c70780ec32ea14729a0145a10e37a0edc883f0483c494214b6a608b537029",
+    "migrations/versions/0045_rag_index_lifecycle.py": "532b70ca1274a4f6a98fec78ac08b8335f55f213843c1f64968f3e8a524c441a",
+    "migrations/versions/0047_rag_lifecycle_integrity.py": "f7f399ec1da7a4fcb064c5ba49b23490c72900d7734aafd354de2a291ee68b81",
+    "tests/test_rag_lifecycle_acceptance.py": "c16e953973d2a250155c3a75e2dd030d8c8aaed338aaac2ba8c532411072ecfb",
+    "tests/test_rag_lifecycle_migrations.py": "888cebbd9ee31eb32e19078ed0e37a3d489361de04a712d5259e532ffca587d1"
+  },
+  "sources_unchanged": true,
+  "passed": true
+}

@@ -50,9 +50,11 @@ function enabledRow(
     assist_candidate: false,
     assist_ranking: false,
     assist_explanation: false,
+  assist_terminology: false,
     assist_candidate_effective: false,
     assist_ranking_effective: false,
     assist_explanation_effective: false,
+  assist_terminology_effective: false,
     inferred_tree: false,
     inferred_effective: false,
     ...overrides,
@@ -76,9 +78,11 @@ function settingsFixture(
         assist_candidate: true,
         assist_ranking: false,
         assist_explanation: false,
+  assist_terminology: false,
         assist_candidate_effective: true,
         assist_ranking_effective: false,
         assist_explanation_effective: false,
+  assist_terminology_effective: false,
         inferred_tree: false,
         inferred_effective: false,
         ...stewardOverrides,
@@ -155,10 +159,11 @@ describe('SpaceModelSettingsPanel（管家模型辅助开关）', () => {
     const stewardFlags = wrapper.find('[data-test="assist-flags-steward"]')
     expect(stewardFlags.exists()).toBe(true)
     const switches = stewardFlags.findAll('.n-switch')
-    expect(switches.length).toBe(4)
-    // 候选开、排序关、解释关、推测层关（初值来自行级设置；naive-ui 用 n-switch--active 表达开态）
+    // 候选/排序/解释/称谓优化/推测层 共 5 个开关
+    expect(switches.length).toBe(5)
+    // 候选开、排序关、解释关、称谓优化关、推测层关（naive-ui 用 n-switch--active 表达开态）
     const states = switches.map((node) => node.classes().includes('n-switch--active'))
-    expect(states).toEqual([true, false, false, false])
+    expect(states).toEqual([true, false, false, false, false])
 
     const assistantBlock = wrapper.find('[data-test="model-settings-assistant"]')
     expect(assistantBlock.find('[data-test="assist-flags-assistant"]').exists()).toBe(false)
@@ -276,6 +281,7 @@ describe('SpaceModelSettingsPanel（开关即保存与未保存徽标，09-06 UX
       assist_candidate: true,
       assist_ranking: true,
       assist_explanation: false,
+  assist_terminology: false,
       inferred_tree: false,
     })
   })

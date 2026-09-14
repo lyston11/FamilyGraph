@@ -1,12 +1,12 @@
 """Agent 工具协议测试：四类拒绝码 + 合法执行 + running 态门禁（RT-3）。"""
 
 import pytest
-from conftest import create_agent_fixture, create_agent_session
 from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.audit_log import AuditLog
 from app.services import agent_queue, agent_tools
+from conftest import create_agent_fixture, create_agent_session
 
 
 def _enqueue(db, session, *, allowlist=None):

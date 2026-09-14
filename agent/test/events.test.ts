@@ -215,3 +215,31 @@ describe("RunEventBuffer", () => {
     expect(JSON.stringify(drained)).not.toContain("https://x");
   });
 });
+
+
+describe("private context references", () => {
+  it("binds only completed assistant text and only handles actually used", () => {
+    const used = "rag:7:r1:c9";
+    const unused = "rag:8:r1:c10";
+    const buffer = new RunEventBuffer(4, { build_id: 31, attempt: 2, allowed_handles: [used, unused] });
+    const message = (text: string, stopReason: string) => ({
+      role: "assistant", stopReason, content: [{ type: "text", text }],
+    });
+    expect(buffer.onSessionEvent({ type: "message_update", message: message(`[${unused}]`, "stop") })).toBe(0);
+    buffer.onSessionEvent({ type: "message_end", message: message(`[${unused}]`, "error") });
+    buffer.onSessionEvent({ type: "message_end", message: message(`[${used}] [${used}] [rag:forged:r1:c99]`, "stop") });
+    const [errored, completed] = buffer.drain();
+    expect(errored?.context_reference).toBeUndefined();
+    expect(completed?.context_reference).toEqual({ build_id: 31, attempt: 2, used_handles: [used] });
+    expect(completed?.public_payload).toEqual({ role: "assistant", text: `[${used}] [${used}] [rag:forged:r1:c99]` });
+    expect(Object.keys(completed?.public_payload ?? {})).toEqual(["role", "text"]);
+  });
+
+  it("does not turn a legacy no-build answer or tool transcript into a reference", () => {
+    const buffer = new RunEventBuffer();
+    buffer.onSessionEvent({ type: "message_end", message: {
+      role: "assistant", stopReason: "stop", content: [{ type: "text", text: "[rag:7:r1:c9]" }],
+    } });
+    expect(buffer.drain()[0]?.context_reference).toBeUndefined();
+  });
+});

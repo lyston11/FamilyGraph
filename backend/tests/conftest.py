@@ -97,6 +97,8 @@ _TABLES = (
     "context_build_items",
     "context_builds",
     "rag_chunks",
+    "rag_index_maintenance_failures",
+    "rag_index_maintenance_state",
     "rag_documents",
     "memories",
     "memory_candidates",

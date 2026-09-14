@@ -4,6 +4,7 @@ import type {
   SuggestionDismissResult,
   SuggestionItem,
   SuggestionKind,
+  SuggestionLinkedProposal,
   SuggestionOrigin,
   SuggestionState,
   SuggestionsPage,
@@ -42,6 +43,8 @@ const SUGGESTION_STATES: readonly SuggestionState[] = [
   'resolved',
   'dismissed',
   'expired',
+  'rejected',
+  'superseded',
 ]
 
 const SUGGESTION_ACTIONS: readonly SuggestionAction[] = ['open_details', 'submit', 'dismiss']
@@ -71,6 +74,29 @@ const isSuggestionKind = isOneOf(SUGGESTION_KINDS)
 const isSuggestionOrigin = isOneOf(SUGGESTION_ORIGINS)
 const isSuggestionState = isOneOf(SUGGESTION_STATES)
 const isSuggestionAction = isOneOf(SUGGESTION_ACTIONS)
+
+function decodeLinkedProposal(value: unknown): SuggestionLinkedProposal | null {
+  if (
+    !isRecord(value) ||
+    typeof value.source_fact_id !== 'number' ||
+    typeof value.revision !== 'number' ||
+    typeof value.state !== 'string' ||
+    typeof value.fact_type !== 'string'
+  ) return null
+  return {
+    source_fact_id: value.source_fact_id,
+    revision: value.revision,
+    state: value.state,
+    fact_type: value.fact_type,
+  }
+}
+
+function decodePendingConfirmations(value: unknown): Array<{ account_id: number }> {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is { account_id: number } =>
+      isRecord(entry) && typeof entry.account_id === 'number')
+    : []
+}
 
 function decodeEvidenceSummary(value: unknown): SuggestionItem['evidence_summary'] | null {
   if (!isRecord(value) || typeof value.fact_count !== 'number' || !Array.isArray(value.facts)) {
@@ -136,6 +162,8 @@ function decodeSuggestionItem(value: unknown): SuggestionItem | null {
     object_display: isRecord(value.object_display) ? value.object_display : null,
     source_state: typeof value.source_state === 'string' ? value.source_state : null,
     recipient_state: typeof value.recipient_state === 'string' ? value.recipient_state : null,
+    linked_proposal: decodeLinkedProposal(value.linked_proposal),
+    pending_confirmations: decodePendingConfirmations(value.pending_confirmations),
     evidence_summary: evidence,
     allowed_actions: actions,
     expires_at: typeof value.expires_at === 'string' ? value.expires_at : null,
@@ -177,14 +205,22 @@ function decodeSuggestionsPage(value: unknown): SuggestionsPage {
   }
 }
 
-/** 分页读取建议列表（keyset cursor；首页 cursor 传 null） */
+/** 分页读取建议列表（keyset cursor；首页 cursor 传 null；可按 kind 过滤） */
 export async function fetchSuggestions(
   spaceId: number,
   cursor?: number | null,
   limit = 20,
+  kind?: SuggestionKind,
+  targetUserId?: number,
 ): Promise<SuggestionsPage> {
   const { data } = await apiClient.get<unknown>('/steward-suggestions', {
-    params: { space_id: spaceId, ...(cursor ? { cursor } : {}), limit },
+    params: {
+      space_id: spaceId,
+      ...(cursor ? { cursor } : {}),
+      limit,
+      ...(kind ? { kind } : {}),
+      ...(targetUserId !== undefined ? { target_user_id: targetUserId } : {}),
+    },
   })
   return decodeSuggestionsPage(data)
 }
@@ -231,30 +267,15 @@ function decodeSubmitPayload(
   const suggestion = decodeSuggestionItem(value.suggestion)
   if (suggestion === null) throw new Error('建议提交响应格式无效')
   if (status === 202) {
-    const linked = value.linked_proposal
-    if (
-      !isRecord(linked) ||
-      typeof linked.source_fact_id !== 'number' ||
-      typeof linked.revision !== 'number' ||
-      typeof linked.state !== 'string' ||
-      typeof linked.fact_type !== 'string' ||
-      !Array.isArray(value.pending_confirmations)
-    ) {
+    const linked = decodeLinkedProposal(value.linked_proposal)
+    if (linked === null || !Array.isArray(value.pending_confirmations)) {
       throw new Error('建议提交响应格式无效')
     }
     // 绝不把 submitted 显示为关系已确认：linked state 原样透传
     return {
       suggestion,
-      linked_proposal: {
-        source_fact_id: linked.source_fact_id,
-        revision: linked.revision,
-        state: linked.state,
-        fact_type: linked.fact_type,
-      },
-      pending_confirmations: value.pending_confirmations.filter(
-        (entry): entry is { account_id: number } =>
-          isRecord(entry) && typeof entry.account_id === 'number',
-      ),
+      linked_proposal: linked,
+      pending_confirmations: decodePendingConfirmations(value.pending_confirmations),
     }
   }
   const linked = value.linked_preference
@@ -293,6 +314,23 @@ export async function submitSuggestion(
     },
   )
   return decodeSubmitPayload(response.data, response.status)
+}
+
+/** 恢复默认叫法（B-R5，仅本人）：CAS + 稳定抑制；同键幂等 */
+export async function restoreSuggestionTerm(
+  spaceId: number,
+  suggestionId: number,
+  body: {
+    expected_revision: number
+    expected_projection_revision: number
+    semantic_hash: string
+  },
+  idempotencyKey: string,
+): Promise<void> {
+  await apiClient.post(`/steward-suggestions/${suggestionId}/restore-term`, body, {
+    params: { space_id: spaceId },
+    headers: { 'Idempotency-Key': idempotencyKey },
+  })
 }
 
 /** 确认关系提案（仅有权当事人；owner 非端点会被服务端 404 拒绝） */

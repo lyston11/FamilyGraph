@@ -144,6 +144,7 @@ def _current_input_hash(
     session: Session, *, account: Account, space_id: int, graph_hash: str
 ) -> str:
     from app.services import steward_snapshot
+    from app.services.steward_terminology import projection_state_hash
 
     return steward_snapshot.canonical_hash(
         {
@@ -156,6 +157,7 @@ def _current_input_hash(
                 steward_snapshot.input_versions(session, space_id)
             ),
             "date": utcnow().date().isoformat(),
+            "terminology": projection_state_hash(session, account_id=account.id, space_id=space_id),
         }
     )
 
@@ -273,6 +275,26 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
                 births=births,
             ),
         )
+        # 09-13 terminology：有效自动词覆盖（读取端个人/空间词条无条件优先，
+        # 自动投影只作用于可覆盖 baseline；覆盖后来源标记为 steward）。
+        effective_term = term_view["term"]
+        effective_source = term_view["source_level"]
+        from app.services import steward_terminology
+
+        override = steward_terminology.effective_override(
+            session,
+            account_id=account.id,
+            root_user_id=actor.id,
+            space_id=space_id,
+            target_user_id=target.id,
+            concept_code=resolution.concept_code,
+            baseline_term=term_view["term"],
+            baseline_source=term_view["source_level"],
+            path=main_path,
+        )
+        if override is not None and override != effective_term:
+            effective_term = override
+            effective_source = "steward"
         session.add(
             PersonalFamilyViewEdge(
                 view_id=view.id,
@@ -284,12 +306,12 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
                 alternative_paths_json=alt_paths,
                 path_class=resolution.path_class,
                 concept_code=resolution.concept_code,
-                term=term_view["term"],
+                term=effective_term,
                 inclusion_reason_code="confirmed_path",
                 authorization_basis_json={
                     "space_id": space_id,
                     "visibility": level,
-                    "term_source_level": term_view["source_level"],
+                    "term_source_level": effective_source,
                 },
                 policy_version=POLICY_VERSION,
                 computation_version=COMPUTATION_VERSION,
@@ -923,6 +945,7 @@ def _view_payload_for_view(
                 subject_user_id=edge.from_user_id,
                 object_user_id=edge.to_user_id,
                 term=edge.term,
+                fact_type=row.relation_kind,
                 evidence_fact_count=len(evidence_fact_ids),
             )
             inferred_edges.append(
@@ -1156,15 +1179,7 @@ def rebuild_space_views(
     （raise，不发布、不推进水位）。
     """
     rows = session.scalars(
-        select(PersonalFamilyView).where(
-            PersonalFamilyView.space_id == space_id,
-            (
-                PersonalFamilyView.status.in_(("queued", "stale", "failed", "never_computed"))
-                | (PersonalFamilyView.policy_version != POLICY_VERSION)
-                | (PersonalFamilyView.computation_version != COMPUTATION_VERSION)
-                | PersonalFamilyView.input_hash.is_(None)
-            ),
-        )
+        select(PersonalFamilyView).where(PersonalFamilyView.space_id == space_id)
     ).all()
     view_ids = [row.id for row in rows]
     rebuilt = 0
@@ -1174,6 +1189,11 @@ def rebuild_space_views(
             continue
         account = session.get(Account, row.viewer_account_id)
         if account is None:
+            continue
+        if view_is_current(session, view=row, account=account, space_id=space_id):
+            _record_view_progress_ready(session, view_id=view_id, generation_id=generation_id)
+            if per_view_commit:
+                session.commit()
             continue
         try:
             if per_view_commit:

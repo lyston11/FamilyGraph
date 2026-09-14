@@ -112,6 +112,9 @@ export interface RunContextProjection {
   tool_allowlist: string[];
   messages: RunContextMessage[];
   next_event_seq: number;
+  /** Server-side build binding for this attempt; citations authenticate
+   * against it server-side.  The sidecar must never fabricate it. */
+  context_build_id: number | null;
   context_blocks?: RunContextBlock[];
   provider: RunContextProvider | null;
   cancel_requested: boolean;
@@ -126,6 +129,16 @@ export interface InternalClientOptions {
   fetchImpl?: typeof fetch;
   backoff?: BackoffPolicy;
   nowMs?: () => number;
+}
+
+function normalizeContextBuildId(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) return raw;
+  throw new InternalApiError(
+    "invalid context projection: context_build_id",
+    502,
+    "invalid_context_projection",
+  );
 }
 
 function normalizeContextBlocks(raw: unknown): RunContextBlock[] {
@@ -250,6 +263,7 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
     tool_allowlist: rawAllowlist as string[],
     messages,
     next_event_seq: nextEventSeq,
+    context_build_id: normalizeContextBuildId(raw["context_build_id"]),
     context_blocks: normalizeContextBlocks(raw["context_blocks"]),
     provider: normalizeProvider(raw["provider"]),
     cancel_requested: cancelRequested,

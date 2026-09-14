@@ -1,12 +1,6 @@
 """浏览器 Agent API 测试：会话 scope、Idempotency、并发限额、cancel、feature flag。"""
 
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_space_member,
-    login,
-)
 from sqlalchemy import func, select
 
 from app import config
@@ -16,6 +10,12 @@ from app.models.audit_log import AuditLog
 from app.models.space import FamilySpace
 from app.services import agent_queue, agent_tokens
 from app.utils import timeutil
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_space_member,
+    login,
+)
 
 
 def _allow_provider(db, space_id: int) -> None:

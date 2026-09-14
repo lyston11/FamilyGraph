@@ -920,3 +920,131 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: 管家称谓闭环质量审核修复与归档
+<!-- trellis-session: v=2 fp=45db441ad06042b9 -->
+
+**Date**: 2026-09-14
+**Task**: 管家称谓闭环质量审核修复与归档
+**Branch**: `main`
+
+### Summary
+
+直接审核并修复称谓呈现、授权、偏好生命周期和模型执行缺口；功能已串行合入 main，审核结果补入原任务归档，本轮未新建任务。
+
+### Main Changes
+
+- 按查看者校正称谓方向与通知可见性，隔离私人建议，统一建议、提案和推测树状态。
+- 保留和恢复操作重验实时语义与 CAS；修复模型输入、重试预算、轮转、租约与恢复。
+- 接通人物档案称谓入口，防止账号、空间和目标切换后的迟到响应污染状态。
+- 归档记录：.trellis/tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md；审核 worktree 与分支已清理，148 个既有脏文件哈希一致。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c8805bf` | fix(steward): close kinship authorization and terminology lifecycle gaps |
+| `d26bb83` | fix(frontend): connect kinship preferences and isolate stale suggestion responses |
+| `8ad859c` | docs(steward): archive kinship quality review and validation |
+
+### Testing
+
+- [OK] Backend 全量 1119 passed、3 skipped；mypy 187 文件通过；主检出 Ruff 与格式检查通过。
+- [OK] Frontend 68 文件、618 tests passed；lint 与 build（含 vue-tsc）通过；合并后 backend 受影响测试 59 passed。
+- [OK] git diff --check 通过；本次只补充归档与会话记录，未重复运行代码测试。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 真实模型质量和生产 smoke 尚未验证；开关与线上配置未动。原 PRD 延期的关系确认成环、证据留存问题保持延期。
+
+
+## Session 27: 按最新 Trellis 设计同步交接与架构文档
+<!-- trellis-session: v=2 fp=a9eedcfc925eb963 -->
+
+**Date**: 2026-09-14
+**Task**: 按最新 Trellis 设计同步交接与架构文档
+**Branch**: `main`
+
+### Summary
+
+更新 HANDOFF、架构总览与 README，按 main@880ad1a 和最新本地任务材料区分已集成、分支实施、规划及未验证能力；未新建或变更任务状态。
+
+### Main Changes
+
+- 明确管家自动称谓、可选偏好反馈与关系/记忆确认的边界，记录已合入质量修复和真实模型未验限制。
+- 同步 Memory/RAG A-C-B-D、独立验收复查、E 研究、渐进重算及 MR-23/MR-26 的责任、顺序和剩余门槛。
+- 识别已归档 Provider/平台开关的活动旧副本；记录渐进分支缺少最新称谓修复及迁移分叉。
+- 修正 Provider 管理路由、空间云同意职责、平台治理写入口与备份说明；v1 历史折叠保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9d7d270` | docs: align handoff and architecture with current Trellis delivery |
+
+### Testing
+
+- [OK] 60 处本地 Markdown 链接有效；v1 历史正文与原版本一致；git diff --check 通过。
+- [OK] 独立只读复核未发现需改问题；提交前 149 个既有未提交文件哈希不变，暂存区原状态保留。
+- [OK] 仅文档变更，未重跑业务测试、模型或生产 smoke；文档测试数字均注明既有证据。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 业务续作按各任务最新 PRD/design/implement 与验收矩阵推进；本轮没有部署、调整开关或清理他人 worktree。
+
+
+## Session 28: 双 Agent 记忆与 RAG：修复验收、主线集成和归档清理
+<!-- trellis-session: v=2 fp=614f14a933c895a2 -->
+
+**Date**: 2026-09-14
+**Task**: 双 Agent 记忆与 RAG：修复验收、主线集成和归档清理
+**Branch**: `main`
+
+### Summary
+
+完成双 Agent Memory/RAG 本期交付：B/D 原20组缺口和D合法索引恢复回归闭合，A/C/B/D实现及E研究合入main，七项任务归档并清理worktree/本地分支。MR-23/26的P2仍为planning；未部署或操作生产库。
+
+### Main Changes
+
+- 签名执行身份、精确引用及统一读取投影、真实RAG子预算与检索补足闭合；索引来源唯一性、正文证据、不可变片段、维护租约/事务和安全迁移经过反例验收。
+- 累计候选与最终审查以a83b5d1在主检出fast-forward合入main并push；A/C/B/D/E研究/Audit/父共七项归档，逐项使用正常worktree remove和branch -d清理。
+- [最终验收](../../tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)与[集成清理回执](../../tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/integration/closure.md)已归档；修复任务JSONL及文档链接，原始红测和哈希制品保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d1f43a5` | fix(memory): validate source contracts and repair management flows |
+| `8e91c42` | fix(agent): settle recovered compaction attempts successfully |
+| `b6688f8` | fix(rag): fence execution and preserve exact citation evidence |
+| `bc76e95` | test(rag): verify citation contracts over real listeners |
+| `aebee83` | fix(rag): fence index lifecycle and preserve source evidence |
+| `dd8157c` | test(rag): record lifecycle acceptance and cumulative checks |
+| `67e9316` | chore(task): close capability-plan research checklist and record push status |
+| `a83b5d1` | docs(agent): finalize memory and RAG acceptance evidence |
+| `d4d14e5` | docs(agent): close memory RAG integration and archive references |
+
+### Testing
+
+- [OK] 累计backend 1352 passed / 3既有skipped，Ruff/format/mypy通过；frontend 660 passed且lint/type/build通过。Agent沿用源码包树相同的118 tests检查点，最终再次build及实际Pi联调。
+- [OK] 实际main合并后隔离listener/SidecarWorker/Pi/维护smoke 95/95，exit 0；累计API 56/56、FK OFF/ON迁移oracle 8/8。迁移保持0047单头，没有真实Provider调用。
+- [OK] 归档后8个Trellis清单、336个本地链接、631个源码文件和30+24份冻结制品及19份gzip原文核验通过；10份新增集成制品哈希通过。
+- [OK] 主检出其他任务40个既有dirty/untracked路径在保护核对中逐字一致；后续新增的其他任务资料未纳入提交，snapshot和Orca worktree保留。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- MR-23/MR-26的P2保持独立planning；E的主动检索、导入、混合检索、全请求预算和跨Run持久摘要按既有采用门槛另行推进。
+- 扩展检索仍7/10、MRR 0.65；前端一次jsdom清理stderr未复现，保留记录。真实Provider质量、生产性能、线上开关及部署尚未验证。

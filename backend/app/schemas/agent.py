@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app import config
 from app.models.agent import RuntimeAgentKind as AgentKind
@@ -112,10 +112,23 @@ class ContextOut(BaseModel):
 # ---- events ----
 
 
+class ContextReferenceIn(_Strict):
+    build_id: int = Field(strict=True, ge=1)
+    attempt: int = Field(strict=True, ge=1)
+    used_handles: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(max_length=20)
+
+
 class EventIn(_Strict):
     seq: int = Field(ge=0)
     type: str = Field(min_length=1, max_length=64)
     public_payload: dict[str, Any]
+    context_reference: ContextReferenceIn | None = None
+
+    @model_validator(mode="after")
+    def check_reference_type(self) -> EventIn:
+        if self.context_reference is not None and self.type != "message.assistant_added":
+            raise ValueError("context_reference 仅用于完成的 assistant 消息")
+        return self
 
 
 class EventAppendRequest(_Strict):
@@ -189,13 +202,42 @@ class AgentMessageCreateRequest(_Strict):
     content: str = Field(min_length=1, max_length=config.AGENT_MESSAGE_MAX_LENGTH)
 
 
+class CitationOut(BaseModel):
+    """最小引用元数据合同（六字段；无摘录正文）。"""
+
+    source_type: str
+    source_id: str
+    scope: str
+    sensitivity: str
+    revision: int
+    citation_handle: str
+    document_id: int | None = None
+    chunk_id: int | None = None
+    index_version: str | None = None
+
+
 class AgentMessageOut(BaseModel):
-    """历史投影：不含 idempotency_key 等系统内部字段。"""
+    """历史投影：不含 idempotency_key 等系统内部字段。
+
+    citations 只包含当前读者仍可读的来源；unavailable_citation_count 表达
+    因来源失效/失权而不在 citations 中的引用数量（可选，旧消息缺省 0）。
+    """
 
     id: int
     role: str
     content_json: dict[str, Any]
     created_at: datetime
+    citations: list[CitationOut] = []
+    unavailable_citation_count: int = 0
+
+
+class RunEventCitationsOut(BaseModel):
+    """引用固定后备读取（GET /runs/{id}/events/{seq}/citations）。"""
+
+    run_id: int
+    seq: int
+    citations: list[CitationOut]
+    unavailable_citation_count: int
 
 
 class AgentRunRefOut(BaseModel):
@@ -302,11 +344,13 @@ class SpaceAgentSettingOut(BaseModel):
     assist_candidate: bool = False
     assist_ranking: bool = False
     assist_explanation: bool = False
+    assist_terminology: bool = False
     # 09-13 治理：辅助开关生效值（平台配置 ∧ 空间级；平台未开启时家庭端
     # 据此显示可解释提示，不暴露 env 细节）
     assist_candidate_effective: bool = False
     assist_ranking_effective: bool = False
     assist_explanation_effective: bool = False
+    assist_terminology_effective: bool = False
     # 09-13 推测层：空间级开关 + 有效开关（平台 AND 空间；平台未开启时前端
     # 据此显示可解释提示，不暴露 env 细节）
     inferred_tree: bool = False
@@ -398,5 +442,6 @@ class AgentSpaceModelSettingsRequest(_Strict):
     assist_candidate: bool | None = None
     assist_ranking: bool | None = None
     assist_explanation: bool | None = None
+    assist_terminology: bool | None = None
     # 推测层空间级开关（仅 steward 维度；assistant 维度非 None → 422）
     inferred_tree: bool | None = None

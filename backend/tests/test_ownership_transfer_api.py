@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from conftest import auth_header, create_space_member, create_user_with_pin, login
 from fastapi.testclient import TestClient
 
 from app.models.space import FamilySpace
 from app.models.v2_foundation import OwnershipTransfer
 from app.utils.timeutil import utcnow
+from conftest import auth_header, create_space_member, create_user_with_pin, login
 
 
 def _headers(client: TestClient, name: str, pin: str) -> dict[str, str]:

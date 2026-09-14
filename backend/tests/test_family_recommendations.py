@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from conftest import create_user_with_pin
-
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.services import family_recommendations, personal_family_view
 from app.utils.timeutil import utcnow
+from conftest import create_user_with_pin
 
 
 def _space(db, owner, member):

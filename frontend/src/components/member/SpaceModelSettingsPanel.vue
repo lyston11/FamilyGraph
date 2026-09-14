@@ -53,6 +53,7 @@ interface KindFormState {
   assistCandidate: boolean
   assistRanking: boolean
   assistExplanation: boolean
+  assistTerminology: boolean
   inferredTree: boolean
 }
 
@@ -64,6 +65,7 @@ function emptyForm(): KindFormState {
     assistCandidate: false,
     assistRanking: false,
     assistExplanation: false,
+    assistTerminology: false,
     inferredTree: false,
   }
 }
@@ -101,6 +103,7 @@ function syncForms(): void {
         assistCandidate: row.assist_candidate,
         assistRanking: row.assist_ranking,
         assistExplanation: row.assist_explanation,
+        assistTerminology: row.assist_terminology,
         inferredTree: row.inferred_tree,
       }
     } else if (fallbackDefault !== null) {
@@ -198,6 +201,7 @@ async function saveKind(kind: AgentConfigKind, overrides?: Partial<KindFormState
             assist_candidate: state.assistCandidate,
             assist_ranking: state.assistRanking,
             assist_explanation: state.assistExplanation,
+            assist_terminology: state.assistTerminology,
             inferred_tree: state.inferredTree,
           }
         : {}),
@@ -269,7 +273,7 @@ async function resetKind(kind: AgentConfigKind): Promise<void> {
 // ---- 开关即保存（09-06 UX 复盘 R1/R2）----
 
 /** steward 辅助开关对应的表单键 */
-type AssistFlagKey = 'assistCandidate' | 'assistRanking' | 'assistExplanation'
+type AssistFlagKey = 'assistCandidate' | 'assistRanking' | 'assistExplanation' | 'assistTerminology'
 
 /**
  * R2 守卫：仅「启用中的落库行」或「无启用行但表单选全」时辅助开关可翻动
@@ -299,7 +303,8 @@ function isFormDirty(kind: AgentConfigKind): boolean {
     kind === 'steward' &&
     (state.assistCandidate !== row.assist_candidate ||
       state.assistRanking !== row.assist_ranking ||
-      state.assistExplanation !== row.assist_explanation)
+      state.assistExplanation !== row.assist_explanation ||
+      state.assistTerminology !== row.assist_terminology)
   )
 }
 
@@ -345,7 +350,8 @@ const assistPlatformBlocked = computed<boolean>(() => {
   return (
     (row.assist_candidate && !row.assist_candidate_effective) ||
     (row.assist_ranking && !row.assist_ranking_effective) ||
-    (row.assist_explanation && !row.assist_explanation_effective)
+    (row.assist_explanation && !row.assist_explanation_effective) ||
+    (row.assist_terminology && !row.assist_terminology_effective)
   )
 })
 </script>
@@ -458,6 +464,18 @@ const assistPlatformBlocked = computed<boolean>(() => {
                 @update:value="(value: boolean) => toggleAssistFlag('assistExplanation', value)"
               />
               <span>卡片解释</span>
+            </label>
+            <label class="assist-flag" data-test="assist-flag-terminology">
+              <NSwitch
+                :value="forms[kind].assistTerminology"
+                size="small"
+                :loading="savingKind === kind"
+                :disabled="stewardAssistLocked"
+                aria-label="称谓优化"
+                data-test="assist-switch-terminology"
+                @update:value="(value: boolean) => toggleAssistFlag('assistTerminology', value)"
+              />
+              <span>称谓优化</span>
             </label>
             <label class="assist-flag" data-test="assist-flag-inferred">
               <NSwitch

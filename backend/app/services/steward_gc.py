@@ -21,8 +21,8 @@ from app.models.steward import (
     StewardPublication,
     StewardViewTarget,
 )
-from app.services import steward_snapshot
-from app.services.steward_pipeline import valid_generation, write_transaction
+from app.services import steward_delivery, steward_snapshot
+from app.services.steward_pipeline import write_transaction
 from app.services.steward_snapshot import read_transaction
 from app.utils.timeutil import utcnow
 
@@ -180,7 +180,7 @@ def _is_obsolete(session: Session, intent_id: int) -> bool:
     generation = session.get(StewardGeneration, intent.generation_id)
     if generation is None or generation.status != "published":
         return False
-    if not valid_generation(session, generation):
+    if not steward_delivery.valid_source(session, intent, generation):
         return True
     if intent.kind == "inferred_overlay":
         publication = session.get(StewardPublication, intent.space_id)

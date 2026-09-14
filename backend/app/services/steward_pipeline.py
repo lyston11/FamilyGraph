@@ -48,7 +48,7 @@ from app.services.relationship_resolver import (
     steps_to_json,
 )
 from app.services.steward_snapshot import SnapshotChanged, ViewerInput, canonical_hash
-from app.services.terms import VariantContext, resolve_term_from_snapshot
+from app.services.steward_terminology_snapshot import resolve_display_term
 from app.utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -182,7 +182,7 @@ def _view_scope(account_id: int, target_id: int) -> str:
 
 def search_fingerprint(structural_hash: str) -> str:
     return canonical_hash(
-        {"graph": structural_hash, "config": steward_snapshot.config_fingerprint()}
+        {"graph": structural_hash, "config": steward_snapshot.search_config_fingerprint()}
     )
 
 
@@ -328,13 +328,12 @@ def _edge_for(snapshot: ViewerInput, resolution: RelationshipResolution) -> dict
     if not resolution.found:
         return None
     path = steps_to_json(resolution.main_path)
-    term = resolve_term_from_snapshot(
-        snapshot.terms,
+    term = resolve_display_term(
+        snapshot,
+        target_user_id=resolution.target_user_id,
         concept_code=resolution.concept_code,
         structural_description=resolution.explanation_structural or "",
-        variant_context=VariantContext(
-            viewer_user_id=snapshot.root_user_id, path=path, births=dict(snapshot.births)
-        ),
+        path=path,
     )
     return {
         "from_user_id": snapshot.root_user_id,
@@ -557,9 +556,11 @@ def _stage_view(
         {
             "structural": structural_hash,
             "terms": [asdict(entry) for entry in snapshot.terms.entries],
+            "terminology": snapshot.terminology.fingerprint,
             "births": snapshot.births,
             "nodes": nodes,
             "policy": config.POLICY_VERSION,
+            "config": steward_snapshot.config_fingerprint(),
         }
     )
     skeleton = {
@@ -586,8 +587,8 @@ def _stage_view(
             prior_generation = session.get(StewardGeneration, previous.generation_id)
             if (
                 prior_generation is None
-                or prior_generation.input_versions_json.get("config")
-                != steward_snapshot.config_fingerprint()
+                or prior_generation.input_versions_json.get("search_config")
+                != steward_snapshot.search_config_fingerprint()
             ):
                 previous = None
         previous_id = (previous.result_view_id or previous.id) if previous is not None else None
@@ -741,6 +742,8 @@ def execute(db: Session, job: StewardJob, *, now: datetime, upper: int) -> dict[
         "inferred_projected": 0,
         "inferred_superseded": 0,
         "suggestions_projected": 0,
+        "terminology_projections": 0,
+        "terminology_suggestions": 0,
     }
     with write_transaction(bind) as session:
         require_binding(session, binding)
@@ -1216,7 +1219,8 @@ def published_pair_resolution(
         generation is None
         or generation.status != "published"
         or not generation.manifest_sealed
-        or generation.input_versions_json.get("config") != steward_snapshot.config_fingerprint()
+        or generation.input_versions_json.get("search_config")
+        != steward_snapshot.search_config_fingerprint()
     ):
         return None
     view = session.scalar(

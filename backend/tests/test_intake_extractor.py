@@ -20,14 +20,6 @@ from typing import Any
 
 import fastapi
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_agent_session,
-    create_space_member,
-    create_user_with_pin,
-    login,
-)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,6 +30,14 @@ from app.models.term_registry import TermEntry
 from app.services import agent_events, agent_queue, agent_tools, intake_extractor, terms
 from app.services import source_facts as sf
 from app.utils.timeutil import utcnow
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_agent_session,
+    create_space_member,
+    create_user_with_pin,
+    login,
+)
 
 _KINSHIP_TOOL_NAMES = [
     agent_tools.TOOL_RESOLVE_FREE_TEXT_RELATION,

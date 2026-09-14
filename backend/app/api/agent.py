@@ -23,7 +23,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Any
 
 import anyio
 from fastapi import APIRouter, Depends, Header, Query
@@ -72,8 +72,17 @@ from app.schemas.agent import (
     AgentSessionCreateRequest,
     AgentSessionOut,
     AgentSessionRenameRequest,
+    CitationOut,
+    RunEventCitationsOut,
 )
-from app.services import agent_events, agent_provider, agent_queue, audit, policy_guard
+from app.services import (
+    agent_citations,
+    agent_events,
+    agent_provider,
+    agent_queue,
+    audit,
+    policy_guard,
+)
 from app.services.agent_events import TERMINAL_STREAM_EVENT_TYPES
 from app.services.agent_provider import POLICY_ALLOWED, POLICY_DENIED_NO_LOCAL
 from app.services.agent_tools import default_allowlist
@@ -118,12 +127,27 @@ def _own_run_or_404(db: Session, account_id: int, run_id: int) -> tuple[AgentRun
     return run, agent_session
 
 
-def _message_out(message: AgentMessage) -> AgentMessageOut:
+def _message_citations(
+    db: Session, message: AgentMessage, account: Account
+) -> tuple[list[dict[str, Any]], int]:
+    return agent_citations.project_message_citations(db, message, account)
+
+
+def _message_out(db: Session, message: AgentMessage, account: Account) -> AgentMessageOut:
+    content_json = agent_citations.public_base(message.content_json)
+    raw_citations = message.content_json.get("citations")
+    projected, unavailable = _message_citations(db, message, account)
+    if isinstance(raw_citations, list):
+        # Raw stored citations (incl. identifiers of unreadable sources) are
+        # never echoed; the projected view replaces them.
+        content_json = {k: v for k, v in content_json.items() if k != "citations"}
     return AgentMessageOut(
         id=message.id,
         role=message.role,
-        content_json=message.content_json,
+        content_json=content_json,
         created_at=message.created_at,
+        citations=[CitationOut(**item) for item in projected],
+        unavailable_citation_count=unavailable,
     )
 
 
@@ -339,7 +363,7 @@ def create_agent_message(
                 {"session_id": agent_session.id},
             )
         return AgentMessageCreatedOut(
-            message=_message_out(prior),
+            message=_message_out(db, prior, account),
             run=_run_ref(_latest_run_for_message(db, prior.id)),
             replayed=True,
         )
@@ -394,7 +418,7 @@ def create_agent_message(
     if replayed:
         # 并发窗口内先到者已提交：与幂等快路径同构返回
         return AgentMessageCreatedOut(
-            message=_message_out(message), run=_run_ref(run), replayed=True
+            message=_message_out(db, message, account), run=_run_ref(run), replayed=True
         )
     # 会话展示态：updated_at 随消息前进；标题只在首条用户消息时派生一次（此后仅重命名可改）。
     agent_session.updated_at = message.created_at
@@ -408,7 +432,9 @@ def create_agent_message(
         detail={"message_id": message.id, "run_id": run.id if run else None},
     )
     db.commit()
-    return AgentMessageCreatedOut(message=_message_out(message), run=_run_ref(run), replayed=False)
+    return AgentMessageCreatedOut(
+        message=_message_out(db, message, account), run=_run_ref(run), replayed=False
+    )
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[AgentMessageOut])
@@ -425,7 +451,7 @@ def list_agent_messages(
         .where(AgentMessage.session_id == agent_session.id)
         .order_by(AgentMessage.id.asc())
     ).all()
-    return [_message_out(m) for m in rows]
+    return [_message_out(db, m, account) for m in rows]
 
 
 # ---- Run ----
@@ -454,6 +480,48 @@ def cancel_agent_run(
     run, _agent_session = _own_run_or_404(db, account.id, run_id)
     updated = agent_queue.request_cancel(db, run, actor_id=user.id)
     return _run_out(updated)
+
+
+# ---- 引用固定后备读取 ----
+
+
+@router.get("/runs/{run_id}/events/{seq}/citations", response_model=RunEventCitationsOut)
+def get_run_event_citations(
+    run_id: int,
+    seq: int,
+    db: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> RunEventCitationsOut:
+    """按 (run_id, seq) 授权补取完整引用（16 KiB 事件装不下时的固定读取路径）。
+
+    通过服务端生成的消息幂等键定位对应 assistant 消息，重验当前来源权限后
+    返回与历史读取相同的投影；不返回摘录，不枚举来源，旧消息返回空集合。
+    """
+    _user, account = identity
+    run, _agent_session = _own_run_or_404(db, account.id, run_id)
+    if seq < 0:
+        raise_api_error(404, AGENT_RUN_NOT_FOUND, "事件不存在")
+    event = db.scalar(
+        select(AgentRunEvent).where(
+            AgentRunEvent.run_id == run.id,
+            AgentRunEvent.seq == seq,
+            AgentRunEvent.type == "message.assistant_added",
+        )
+    )
+    if event is None:
+        raise_api_error(404, AGENT_RUN_NOT_FOUND, "事件不存在")
+    message = agent_citations.event_message(db, run, seq)
+    if message is None:
+        return RunEventCitationsOut(
+            run_id=run.id, seq=seq, citations=[], unavailable_citation_count=0
+        )
+    projected, unavailable = _message_citations(db, message, account)
+    return RunEventCitationsOut(
+        run_id=run.id,
+        seq=seq,
+        citations=[CitationOut(**item) for item in projected],
+        unavailable_citation_count=unavailable,
+    )
 
 
 # ---- SSE ----
@@ -486,25 +554,47 @@ async def stream_agent_run_events(
     cursors = [c for c in (_parse_cursor(last_event_id), after_event_id) if c is not None]
     cursor = max(cursors) if cursors else -1
     return StreamingResponse(
-        _event_stream(run_id, cursor),
+        _event_stream(run_id, cursor, account.id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-def _fetch_new_events(run_id: int, after_seq: int) -> list[AgentRunEvent]:
-    """短生命周期会话查询：长连接不占用请求级会话（中间件生命周期之外）。"""
-    session = SessionLocal()
-    try:
-        return list(
-            session.scalars(
-                select(AgentRunEvent)
-                .where(AgentRunEvent.run_id == run_id, AgentRunEvent.seq > after_seq)
-                .order_by(AgentRunEvent.seq.asc())
-            )
-        )
-    finally:
-        session.close()
+def _fetch_new_events(run_id: int, after_seq: int, account_id: int) -> list[dict[str, Any]] | None:
+    """Authorize and project in one short session; only immutable DTOs escape."""
+    with SessionLocal() as session:
+        account = session.get(Account, account_id)
+        run = session.get(AgentRun, run_id)
+        agent_session = session.get(AgentSession, run.session_id) if run is not None else None
+        if (
+            account is None
+            or run is None
+            or agent_session is None
+            or agent_session.account_id != account_id
+        ):
+            return None
+        rows = session.scalars(
+            select(AgentRunEvent)
+            .where(AgentRunEvent.run_id == run_id, AgentRunEvent.seq > after_seq)
+            .order_by(AgentRunEvent.seq.asc())
+        ).all()
+        return [
+            {
+                "run_id": row.run_id,
+                "seq": row.seq,
+                "type": row.type,
+                "payload": agent_citations.project_event_payload(
+                    session,
+                    run,
+                    seq=row.seq,
+                    event_type=row.type,
+                    payload=row.public_payload,
+                    account=account,
+                ),
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
 
 
 def _run_is_terminal(run_id: int) -> bool:
@@ -516,32 +606,25 @@ def _run_is_terminal(run_id: int) -> bool:
         session.close()
 
 
-def _wire_event(row: AgentRunEvent) -> bytes:
-    data = json.dumps(
-        {
-            "run_id": row.run_id,
-            "seq": row.seq,
-            "type": row.type,
-            "payload": row.public_payload,
-            "created_at": row.created_at.isoformat(),
-        },
-        ensure_ascii=False,
-    )
-    return f"id: {row.seq}\nevent: {row.type}\ndata: {data}\n\n".encode()
+def _wire_event(row: dict[str, Any]) -> bytes:
+    data = json.dumps(row, ensure_ascii=False)
+    return f"id: {row['seq']}\nevent: {row['type']}\ndata: {data}\n\n".encode()
 
 
-async def _event_stream(run_id: int, cursor: int) -> AsyncIterator[bytes]:
+async def _event_stream(run_id: int, cursor: int, account_id: int) -> AsyncIterator[bytes]:
     subscription = agent_events.notifier.subscribe(run_id)
     last_sent = time.monotonic()
     try:
         while True:
             # DB 查询放线程池，避免 SQLite 往返阻塞事件循环
-            rows = await anyio.to_thread.run_sync(_fetch_new_events, run_id, cursor)
+            rows = await anyio.to_thread.run_sync(_fetch_new_events, run_id, cursor, account_id)
+            if rows is None:
+                return
             for row in rows:
                 yield _wire_event(row)
-                cursor = row.seq
+                cursor = row["seq"]
                 last_sent = time.monotonic()
-                if row.type in TERMINAL_STREAM_EVENT_TYPES:
+                if row["type"] in TERMINAL_STREAM_EVENT_TYPES:
                     return
             if await anyio.to_thread.run_sync(_run_is_terminal, run_id):
                 # 终态但终态事件缺失（如 reaper 直接收敛）：按状态收口关闭

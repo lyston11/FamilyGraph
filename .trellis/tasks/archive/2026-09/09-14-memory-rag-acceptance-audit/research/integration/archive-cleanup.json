@@ -1,0 +1,112 @@
+{
+  "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+  "steps": [
+    {
+      "task": "09-13-memory-contract-repair",
+      "branch": "feat/09-13-memory-contract-repair",
+      "branch_commit": "d1f43a58918e100226f3212cb3eabd6a14c4ac40",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-13-memory-contract-repair",
+      "archive_commit": "509e2afb166803f286637fcb6ad21df9a9d6cdbd",
+      "worktree": "/private/tmp/familygraph-memory-rag/09-13-memory-contract-repair",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [
+        "agent/node_modules",
+        "backend/.venv",
+        "frontend/node_modules"
+      ],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    },
+    {
+      "task": "09-13-assistant-context-compaction",
+      "branch": "feat/09-13-assistant-context-compaction",
+      "branch_commit": "8e91c420ce4d8ef2f4a4d806027bd29d72382f94",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction",
+      "archive_commit": "2043833bd6a35fda04cec98895bc3f0f93a06c2b",
+      "worktree": "/private/tmp/familygraph-memory-rag/09-13-assistant-context-compaction",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [
+        "agent/node_modules",
+        "backend/.venv",
+        "frontend/node_modules"
+      ],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    },
+    {
+      "task": "09-13-rag-retrieval-citations",
+      "branch": "feat/09-13-rag-retrieval-citations",
+      "branch_commit": "bc76e95c7091fcb9977dc6595d5e65e4181f1329",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations",
+      "archive_commit": "4fd40bb7f4efefb561bb9842c24cffed64f43456",
+      "worktree": "/Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    },
+    {
+      "task": "09-13-rag-index-lifecycle",
+      "branch": "feat/09-13-rag-index-lifecycle",
+      "branch_commit": "dd8157c7b4b2cfa820be41e6573bfdf9745f9a3a",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-13-rag-index-lifecycle",
+      "archive_commit": "a64660b4e1f47a3f6fd59fca365d7db2700a7fc7",
+      "worktree": "/Users/lyston/PycharmProjects/fg-09-13-rag-index-lifecycle",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    },
+    {
+      "task": "09-13-agent-memory-capability-plan",
+      "branch": "feat/09-13-agent-memory-capability-plan",
+      "branch_commit": "67e93161460741f4fb4d8f08dddba52ba9a73173",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan",
+      "archive_commit": "b17b2f6b3f08530380d886d1b83e6e5b9df1ac15",
+      "worktree": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-capability-plan",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [
+        "backend/.venv"
+      ],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    },
+    {
+      "task": "09-14-memory-rag-acceptance-audit",
+      "branch": "feat/09-14-memory-rag-acceptance-audit",
+      "branch_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit",
+      "archive_commit": "74e0676af9dee745bc005aad77c91f34876aef06",
+      "worktree": "/Users/lyston/PycharmProjects/fg-09-14-memory-rag-acceptance-audit",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    },
+    {
+      "task": "09-13-agent-memory-rag-remediation",
+      "branch": "feat/09-13-agent-memory-rag-remediation",
+      "branch_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+      "archived_to": ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation",
+      "archive_commit": "95830116abb4f5390080db1e2b834cde9ac143c6",
+      "worktree": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation",
+      "worktree_removed": true,
+      "local_branch_removed": true,
+      "untracked_dependency_links_unlinked": [],
+      "merged_before_removal": true,
+      "business_changes_before_removal": false
+    }
+  ],
+  "planning_task_retained": "09-13-steward-memory-evidence-projections",
+  "completed": true,
+  "completed_count": 7,
+  "p2_status": "planning",
+  "p2_parent": null,
+  "main_after_archives": "95830116abb4f5390080db1e2b834cde9ac143c6"
+}

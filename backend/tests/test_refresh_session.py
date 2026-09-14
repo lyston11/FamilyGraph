@@ -3,13 +3,13 @@
 from datetime import timedelta
 
 import pytest
-from conftest import create_user_with_pin
 
 from app import config
 from app.models.audit_log import AuditLog
 from app.models.refresh_session import RefreshSession
 from app.services import refresh_session as rss
 from app.utils import security, timeutil
+from conftest import create_user_with_pin
 
 
 @pytest.fixture()

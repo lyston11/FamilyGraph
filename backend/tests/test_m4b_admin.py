@@ -11,15 +11,15 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
+
+from app.main import admin_app, app
 from conftest import (
     admin_session_headers,
     create_system_admin,
     create_user_with_pin,
     login,
 )
-from fastapi.testclient import TestClient
-
-from app.main import admin_app, app
 
 BREAK_GLASS_PENDING = "系统管理员 break-glass 家庭数据能力按 PRD 另立任务；当前无主体可执行该端点"
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from sqlalchemy import event, select, update
 from sqlalchemy.orm import Session
 
@@ -21,11 +20,13 @@ from app.services import (
     steward,
     steward_pipeline,
     steward_runtime,
+    steward_terminology_snapshot,
     terms,
 )
 from app.services.relationship_resolver import advance_search
 from app.services.source_facts import create_source_fact, transition_source_fact
 from app.utils.timeutil import utcnow
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 @pytest.fixture
@@ -94,6 +95,7 @@ def test_consumers_switch_at_publication_without_synchronous_get_rebuild(
         raise AssertionError("read consumer attempted synchronous recompute")
 
     monkeypatch.setattr(personal_family_view, "rebuild_view", no_rebuild)
+    monkeypatch.setattr(steward_terminology_snapshot, "resolve_graph", no_rebuild)
     recommendations, stats, household, presentation = read_consumers(db_session, people, space)
     assert db_session.get(StewardPublication, space.id) is None
     assert recommendations["view_status"] != "current" and recommendations["items"] == []

@@ -14,12 +14,6 @@ from typing import Any
 
 import fastapi
 import pytest
-from conftest import (
-    create_agent_fixture,
-    create_agent_session,
-    create_space_member,
-    create_user_with_pin,
-)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,6 +27,12 @@ from app.services.agent_query import TOOL_EXPLAIN_STRUCTURAL_PATH, TOOL_GET_RELA
 from app.services.derived_facts import KINSHIP_ALGO_VERSION
 from app.services.relationship_resolver import resolve_relationship
 from app.utils.timeutil import utcnow
+from conftest import (
+    create_agent_fixture,
+    create_agent_session,
+    create_space_member,
+    create_user_with_pin,
+)
 
 # ---- 造数辅助 ----
 

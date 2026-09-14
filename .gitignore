@@ -40,3 +40,7 @@ board.html
 >>>>>>> origin/main
 backend/.venv
 frontend/node_modules
+
+agent/node_modules
+backend/.venv
+backend/.ruff_cache

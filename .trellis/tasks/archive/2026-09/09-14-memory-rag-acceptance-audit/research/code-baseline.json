@@ -1,0 +1,100 @@
+{
+  "review_commit": "bd899b98871c02ad97b7791a051f126d671bfefb",
+  "review_checkout": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation",
+  "main_at_recovery": "d7629dfc4d8c1b275cd6a295d843cd8faf5b7d87",
+  "production_diff_to_review_commit": [],
+  "sources": [
+    {
+      "file": "backend/app/api/internal_agent.py",
+      "sha256": "a23e6f39e4e7e4b6c91e6e1607890f226898126a071dccc8723b2f08ed5f3e50"
+    },
+    {
+      "file": "backend/app/api/agent.py",
+      "sha256": "8b9b21c3c92c27454641e6c7901f197d6b6f0ec2868d7d39c465e79bb62ff683"
+    },
+    {
+      "file": "backend/app/services/context_builder.py",
+      "sha256": "7a0e4ff5220210ff6bb9a1bcbcbc15e66e4f11bdc4634d604159b204434ba65d"
+    },
+    {
+      "file": "backend/app/services/agent_events.py",
+      "sha256": "9bffc95355cd73936789d2f1e2ee05f12263957d6f000f356dd091c2b28ed47a"
+    },
+    {
+      "file": "backend/app/services/agent_tokens.py",
+      "sha256": "923a6d324572dabb912a25577ba4e977b1998e55734dc2a9725a06a178acb38e"
+    },
+    {
+      "file": "backend/app/services/agent_queue.py",
+      "sha256": "f38ffd3e29a98976419b5f8f1db06a514c0ec35abf33e9429516cc57ae664194"
+    },
+    {
+      "file": "backend/app/services/agent_tools.py",
+      "sha256": "7c34c60a5b1c4807dcc749d6d4dda87dbd14caacb41b160b359c014fcd7bc61c"
+    },
+    {
+      "file": "backend/app/services/provider_proxy.py",
+      "sha256": "96f68541d5ae90a33479f0f887107b628c2442704ad89c0c0e0363603c9bb722"
+    },
+    {
+      "file": "backend/app/services/memory_rag.py",
+      "sha256": "7aeb329d0af176e66c9260603f08e8adca2ae5c8390c8d30ff1dfbd538496b27"
+    },
+    {
+      "file": "backend/app/services/memory_sources.py",
+      "sha256": "69126bd8210aef55fc8316f198d38be49a59b6819988b380f07ea2587ee9b5c4"
+    },
+    {
+      "file": "backend/app/services/rag_query.py",
+      "sha256": "336a6da5eb6519791b7ed7b94f7841d844f3c53113970b7e32c8018ebcbdb499"
+    },
+    {
+      "file": "backend/app/services/rag_maintenance.py",
+      "sha256": "b64b256a070e7968bd7d1c95d6646c96a636650ecc5909e0bbb143c8f541d8cd"
+    },
+    {
+      "file": "backend/app/services/maintenance.py",
+      "sha256": "ed57b18b8653c7c8986964bbd6de85cc3da80aa1e71b5bda92a97988658f66bb"
+    },
+    {
+      "file": "backend/app/models/rag.py",
+      "sha256": "f9349923173b0ee53907c65c373981bd32e24aa3fb72f47f5d003fda6509530e"
+    },
+    {
+      "file": "backend/app/models/context.py",
+      "sha256": "2de320ba45a438219497ba36d04f5a50236a5cb83416e2b099cadffbc92be99a"
+    },
+    {
+      "file": "backend/app/schemas/agent.py",
+      "sha256": "64d6c23dbd96fb27a0e573443a0b2b91c76a67d2608717917ed491532698d792"
+    },
+    {
+      "file": "backend/migrations/versions/0044_rag_citation_contract.py",
+      "sha256": "b9008727c32eb79665bf36808ba1430b7e1a7353c435cb9e0be53c2b24065ea7"
+    },
+    {
+      "file": "backend/migrations/versions/0045_rag_index_lifecycle.py",
+      "sha256": "be5747060ea2505847460c792beca567bfe6187e537637f80cb92e64bf2c1329"
+    },
+    {
+      "file": "agent/src/session.ts",
+      "sha256": "0f0a4b6cf52da3554d71514aefaeddc61843a27b9406ac4c8d3e98288a12623a"
+    },
+    {
+      "file": "agent/src/worker.ts",
+      "sha256": "91a7d9b70eda8e6fdfff1b5b094d75f13d340f45c35c4d343ba25dd6e10f151a"
+    },
+    {
+      "file": "agent/src/events.ts",
+      "sha256": "3e9ec2a8c14c458d1dc396742ba42bc2a0832b2d2494e3a29ac692fd49b7ad5d"
+    },
+    {
+      "file": "agent/src/client.ts",
+      "sha256": "00c7f12bf1b20c4cb1c91834bb67b12e6e7fb1652f13b832b795f9f0ccac7bb0"
+    },
+    {
+      "file": "frontend/src/stores/agent.ts",
+      "sha256": "0c902ba1024bf01ddede6000012a848f35068e90dd908729807d9d6146c5ad18"
+    }
+  ]
+}

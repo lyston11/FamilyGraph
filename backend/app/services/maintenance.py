@@ -30,6 +30,7 @@ from app.db import SessionLocal
 from app.models.steward import StewardJob
 from app.services import (
     agent_queue,
+    rag_maintenance,
     steward,
     steward_assist,
     steward_delivery,
@@ -63,6 +64,9 @@ def run_maintenance_tick() -> dict[str, int]:
         "steward_failed": 0,
         "steward_assist_recovered": 0,
         "steward_assist_scheduled": 0,
+        "rag_index_scanned": 0,
+        "rag_index_materialized": 0,
+        "rag_index_failed": 0,
     }
     db = SessionLocal()
     try:
@@ -94,7 +98,28 @@ def run_maintenance_tick() -> dict[str, int]:
                     "steward assist dispatch failed; core tick unaffected (error=%s)",
                     type(exc).__name__,
                 )
+        # Core/assist retain their transaction boundary. RAG owns a separate
+        # Session so its final fence rejection cannot commit partial index work
+        # or roll back completed core work.
         db.commit()
+        if config.RAG_ENABLED:
+            with SessionLocal() as rag_db:
+                try:
+                    rag_counters = rag_maintenance.run_maintenance_batch(
+                        rag_db, worker_id="inproc-rag-maintenance"
+                    )
+                    rag_db.commit()
+                    counters["rag_index_scanned"] = int(rag_counters.get("scanned", 0) or 0)
+                    counters["rag_index_materialized"] = int(
+                        rag_counters.get("materialized", 0) or 0
+                    )
+                    counters["rag_index_failed"] = int(rag_counters.get("failed", 0) or 0)
+                except Exception as exc:  # noqa: BLE001 — 补建失败不影响 core tick
+                    rag_db.rollback()
+                    logger.warning(
+                        "rag index maintenance failed; core tick unaffected (error=%s)",
+                        type(exc).__name__,
+                    )
         return counters
     except Exception:
         db.rollback()
@@ -141,7 +166,7 @@ def start_maintenance_loop() -> asyncio.Task[None] | None:
     """
     global _task, _holders
     _holders += 1
-    if not (config.AGENT_RUNTIME_ENABLED or config.STEWARD_ENABLED):
+    if not (config.AGENT_RUNTIME_ENABLED or config.STEWARD_ENABLED or config.RAG_ENABLED):
         return None
     if _task is not None and not _task.done():
         return _task

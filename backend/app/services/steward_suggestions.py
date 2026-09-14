@@ -25,7 +25,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import config
@@ -42,6 +42,7 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.notification import Notification
+from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember
 from app.models.steward import StewardJob, StewardLlmCandidate
 from app.models.steward_suggestion import (
@@ -64,11 +65,13 @@ SUGGESTION_DOMAIN_STATUS: dict[str, str] = {
     "resolved": "done",
     "expired": "expired",
     "superseded": "revoked",
+    "dismissed": "rejected",
+    "rejected": "rejected",
 }
 
 _KIND_TITLES: dict[str, str] = {
     "relation_proposal": "Steward 有关系线索待核实",
-    "term_preference": "Steward 有称谓偏好待确认",
+    "term_preference": "管家称谓建议",
     "identity_duplicate": "发现疑似重复档案待核实",
     "missing_information": "发现资料缺口待核实",
 }
@@ -150,6 +153,8 @@ def upsert_suggestion(
     source_job_id: int | None = None,
     expires_at: datetime | None = None,
     recipient_account_ids: list[int] | None = None,
+    viewer_account_id: int | None = None,
+    notify: bool = True,
     now: datetime | None = None,
 ) -> tuple[StewardSuggestion, bool]:
     """去重投影一条建议：同 (space, dedupe_key, evidence_hash) 收敛为一行。
@@ -157,6 +162,8 @@ def upsert_suggestion(
     返回 (suggestion, created)。同 key 同证据 → 复用既有活跃行（并发生成
     收敛；唯一索引兜底）；同 key 证据变化 → 新建议 + supersede 旧活动行
     （驳回冷却只作用于旧收件人的旧证据版本）。
+    term_preference 类必须提供 viewer_account_id（B：生产维度归入去重键）；
+    ``notify=False`` 不逐条创建待办通知（B-R7：称谓建议只在称谓面板展示）。
     """
     if kind not in (
         "relation_proposal",
@@ -168,12 +175,14 @@ def upsert_suggestion(
     if origin not in ("deterministic", "model"):
         raise ValueError(f"unknown suggestion origin: {origin}")
     now = now or utcnow()
+    if kind == "term_preference" and viewer_account_id is None:
+        raise ValueError("term_preference suggestions require viewer_account_id")
     dedupe_key = compute_dedupe_key(
         kind=kind,
         subject_user_id=subject_user_id,
         object_user_id=object_user_id,
         value_json=value_json,
-        viewer_account_id=None,  # v1 无个人维度生成来源；提交面保留该维度
+        viewer_account_id=viewer_account_id,
     )
     evidence_hash = compute_evidence_hash(evidence_json)
     existing = session.scalar(
@@ -188,7 +197,10 @@ def upsert_suggestion(
     )
     if existing is not None and existing.evidence_hash == evidence_hash:
         _ensure_recipients(session, existing, recipient_account_ids or [], now)
-        _record_suggestion_notifications(session, existing, account_ids=recipient_account_ids or [])
+        if notify:
+            _record_suggestion_notifications(
+                session, existing, account_ids=recipient_account_ids or []
+            )
         return existing, False
     suggestion = StewardSuggestion(
         space_id=space_id,
@@ -201,6 +213,7 @@ def upsert_suggestion(
         evidence_hash=evidence_hash,
         dedupe_key=dedupe_key,
         policy_version=policy_version,
+        viewer_account_id=viewer_account_id,
         status="proposed",
         revision=1,
         expires_at=expires_at or default_expires_at(now),
@@ -213,8 +226,23 @@ def upsert_suggestion(
     session.flush()
     if existing is not None:
         _supersede(session, existing, suggestion.id, now)
+    if suggestion.kind == "relation_proposal":
+        proposal = find_confirmed_relation(
+            session,
+            space_id=suggestion.space_id,
+            subject_user_id=suggestion.subject_user_id,
+            object_user_id=suggestion.object_user_id,
+            fact_type=str(suggestion.value_json.get("fact_type") or ""),
+        ) or _linked_proposal(session, suggestion)
+        if proposal is not None:
+            suggestion.linked_fact_id = proposal.id
+            suggestion.status = "resolved" if proposal.state == "confirmed" else "submitted"
+            session.flush()
     _ensure_recipients(session, suggestion, recipient_account_ids or [], now)
-    _record_suggestion_notifications(session, suggestion, account_ids=recipient_account_ids or [])
+    if notify:
+        _record_suggestion_notifications(
+            session, suggestion, account_ids=recipient_account_ids or []
+        )
     return suggestion, True
 
 
@@ -294,6 +322,10 @@ def project_for_job(
     """
     now = now or utcnow()
     created = 0
+    # Old rows may predate the source_fact.confirmed consumer. Converge them in
+    # this job's space; repeated scans must not keep incrementing revisions.
+    for fact in facts:
+        resolve_for_linked_fact(session, fact_id=int(fact.id), space_id=job.space_id, now=now)
     fact_snapshots = [
         {
             "id": int(f.id),
@@ -338,6 +370,17 @@ def project_for_job(
         if isinstance(raw_object, bool) or not isinstance(raw_object, int):
             continue
         if raw_subject == raw_object:
+            continue
+        if (
+            find_confirmed_relation(
+                session,
+                space_id=job.space_id,
+                subject_user_id=raw_subject,
+                object_user_id=raw_object,
+                fact_type=raw_kind,
+            )
+            is not None
+        ):
             continue
         endpoints = {raw_subject, raw_object}
         # 证据指纹只含事实 revision 快照（候选内部行 id 不是证据：同结构候选
@@ -466,11 +509,27 @@ def _endpoints_visible(session: Session, viewer: User, suggestion: StewardSugges
         if endpoint is None:
             return False
         decision = visibility.evaluate(
-            session, viewer, endpoint, purpose=visibility.PURPOSE_PROFILE
+            session,
+            viewer,
+            endpoint,
+            space_context=suggestion.space_id,
+            purpose=visibility.PURPOSE_PROFILE,
         )
         if not decision.visible:
             return False
     return True
+
+
+def suggestion_visible(
+    session: Session, *, viewer: User, account: Account, suggestion: StewardSuggestion
+) -> bool:
+    """Shared viewer boundary for list, detail and notification projections."""
+    return (
+        suggestion.kind
+        in ("relation_proposal", "term_preference", "identity_duplicate", "missing_information")
+        and (suggestion.kind != "term_preference" or suggestion.viewer_account_id == account.id)
+        and _endpoints_visible(session, viewer, suggestion)
+    )
 
 
 def visible_suggestion_or_404(
@@ -491,10 +550,7 @@ def visible_suggestion_or_404(
         )
     ):
         raise_api_error(404, SUGGESTION_NOT_FOUND, "建议不存在")
-    if suggestion.kind == "term_preference" and suggestion.viewer_account_id != account.id:
-        raise_api_error(404, SUGGESTION_NOT_FOUND, "建议不存在")
-    # 证据端点对当前用户必须可见（隐藏人物的建议不透出）
-    if not _endpoints_visible(session, viewer, suggestion):
+    if not suggestion_visible(session, viewer=viewer, account=account, suggestion=suggestion):
         raise_api_error(404, SUGGESTION_NOT_FOUND, "建议不存在")
     return viewer, suggestion
 
@@ -510,51 +566,354 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _evidence_summary(session: Session, suggestion: StewardSuggestion) -> dict[str, Any]:
-    facts = [
-        {"fact_id": int(f["id"]), "revision": int(f["revision"])}
-        for f in suggestion.evidence_json.get("facts", [])
-        if isinstance(f, dict) and isinstance(f.get("id"), int)
-    ]
-    # F08/AC-10：整空间快照不能冒充本线索的依据。相关计数只统计与建议
-    # 端点相交的事实；无相关事实的模型线索显示为待核实（unverified_candidate）。
-    endpoints = {
-        int(uid)
-        for uid in (suggestion.subject_user_id, suggestion.object_user_id)
-        if uid is not None
-    }
-    related = [f for f in facts if _fact_touches(suggestion.evidence_json, f["fact_id"], endpoints)]
-    if related:
-        kind = "confirmed_path"
-    elif suggestion.origin == "model":
-        kind = "unverified_candidate"
-    else:
-        kind = "unavailable"
+def _same_relation(
+    fact: SourceFact, *, subject_user_id: int, object_user_id: int | None, fact_type: str
+) -> bool:
+    if fact.fact_type != fact_type:
+        return False
+    if fact_type in ("spouse", "partner", "direct_sibling"):
+        return {fact.subject_user_id, fact.object_user_id} == {subject_user_id, object_user_id}
+    return fact.subject_user_id == subject_user_id and fact.object_user_id == object_user_id
+
+
+def find_confirmed_relation(
+    session: Session,
+    *,
+    space_id: int,
+    subject_user_id: int,
+    object_user_id: int | None,
+    fact_type: str,
+) -> SourceFact | None:
+    """Exact confirmed facts make a candidate redundant; other relations do not."""
+    if object_user_id is None:
+        return None
+    candidates = session.scalars(
+        select(SourceFact)
+        .where(
+            SourceFact.state == "confirmed",
+            SourceFact.fact_type == fact_type,
+            or_(SourceFact.space_id == space_id, SourceFact.space_id.is_(None)),
+            SourceFact.subject_user_id.in_((subject_user_id, object_user_id)),
+            SourceFact.object_user_id.in_((subject_user_id, object_user_id)),
+        )
+        .order_by(SourceFact.id)
+    ).all()
+    return next(
+        (
+            fact
+            for fact in candidates
+            if _same_relation(
+                fact,
+                subject_user_id=subject_user_id,
+                object_user_id=object_user_id,
+                fact_type=fact_type,
+            )
+        ),
+        None,
+    )
+
+
+def _evidence_summary(
+    session: Session, suggestion: StewardSuggestion, *, viewer: User | None
+) -> dict[str, Any]:
+    """Only a live authorized path of the candidate's meaning can be evidence.
+
+    A model's space snapshot does not identify a supporting path. An adjacent
+    edge, or even a path of another relationship, is never counted as proof.
+    A live exact confirmed fact supplies a verified one-step path independently
+    of an obsolete snapshot; the snapshot itself never supplies proof.
+    """
+    verified: dict[int, dict[str, int]] = {}
+    fact_type = str(suggestion.value_json.get("fact_type") or "")
+    fact = find_confirmed_relation(
+        session,
+        space_id=suggestion.space_id,
+        subject_user_id=suggestion.subject_user_id,
+        object_user_id=suggestion.object_user_id,
+        fact_type=fact_type,
+    )
+    if viewer is not None and fact is not None:
+        authorized = True
+        for user_id in (fact.subject_user_id, fact.object_user_id):
+            user = session.get(User, user_id)
+            if (
+                user is None
+                or not visibility.evaluate(
+                    session,
+                    viewer,
+                    user,
+                    space_context=suggestion.space_id,
+                    purpose=visibility.PURPOSE_GRAPH,
+                ).visible
+            ):
+                authorized = False
+                break
+        if authorized:
+            verified[fact.id] = {"fact_id": fact.id, "revision": fact.revision}
+    facts = list(verified.values())
     return {
         "fact_count": len(facts),
         "facts": facts,
-        "related_fact_count": len(related),
-        "kind": kind,
+        "related_fact_count": len(facts),
+        "kind": "confirmed_path"
+        if facts
+        else ("unverified_candidate" if suggestion.kind == "relation_proposal" else "unavailable"),
     }
 
 
-def _fact_touches(evidence_json: dict[str, Any], fact_id: int, endpoints: set[int]) -> bool:
-    """证据事实是否与建议端点相交（evidence_json.facts 保存了端点快照）。"""
-    for f in evidence_json.get("facts", []):
-        if not isinstance(f, dict) or f.get("id") != fact_id:
+def _current_term_suggestion(
+    session: Session, *, account: Account, suggestion: StewardSuggestion
+) -> tuple[Any, dict[str, Any]] | None:
+    """Bind a preference action to this suggestion and the current authorized term."""
+    from app.models.steward import StewardTermProjection
+    from app.services import steward_terminology
+
+    value = suggestion.value_json
+    if (
+        suggestion.kind != "term_preference"
+        or suggestion.viewer_account_id != account.id
+        or suggestion.subject_user_id != account.user_id
+        or suggestion.object_user_id is None
+        or value.get("target_user_id") != suggestion.object_user_id
+        or type(value.get("projection_id")) is not int
+    ):
+        return None
+    projection = session.get(StewardTermProjection, value["projection_id"])
+    if (
+        projection is None
+        or projection.status not in ("active", "unchanged")
+        or projection.rule_version != steward_terminology.RULE_VERSION
+        or projection.viewer_account_id != account.id
+        or projection.root_user_id != account.user_id
+        or projection.space_id != suggestion.space_id
+        or projection.target_user_id != suggestion.object_user_id
+        or projection.concept_code != value.get("concept_code")
+        or not isinstance(value.get("term"), str)
+        or not value["term"]
+        or projection.semantic_hash != value.get("semantic_identity")
+    ):
+        return None
+    context = steward_terminology.current_target_context(
+        session,
+        viewer_account_id=account.id,
+        root_user_id=account.user_id,
+        space_id=suggestion.space_id,
+        target_user_id=suggestion.object_user_id,
+    )
+    if (
+        context is None
+        or context["concept_code"] != projection.concept_code
+        or context["semantic_hash"] != projection.semantic_hash
+        or context["baseline_source"] in ("personal", "space")
+    ):
+        return None
+    suggested_term = value["term"]
+    if projection.status == "unchanged":
+        # A deterministic long-chain baseline can be kept without storing a
+        # redundant override. Its projection still binds the semantic identity.
+        if (
+            projection.term is not None
+            or context["baseline_source"] != "derived"
+            or suggested_term != context["baseline_term"]
+            or projection.baseline_term != context["baseline_term"]
+        ):
+            return None
+    else:
+        if projection.term != suggested_term:
+            return None
+        effective = steward_terminology.effective_override(
+            session,
+            account_id=account.id,
+            root_user_id=account.user_id,
+            space_id=suggestion.space_id,
+            target_user_id=suggestion.object_user_id,
+            concept_code=context["concept_code"],
+            baseline_term=context["baseline_term"],
+            baseline_source=context["baseline_source"],
+            path=context["path"],
+        )
+        if effective != suggested_term:
+            return None
+    return projection, {
+        **context,
+        "suggested_term": suggested_term,
+        "can_restore": projection.status == "active"
+        and projection.term != context["baseline_term"],
+    }
+
+
+def _proposal_belongs_to_space(session: Session, fact: SourceFact, space_id: int) -> bool:
+    if fact.space_id is not None:
+        return fact.space_id == space_id
+    # Proposals currently become global SourceFacts. Their originating space is
+    # retained by the creation audit and the suggestion link, not by fact.space_id.
+    if (
+        session.scalar(
+            select(StewardSuggestion.id)
+            .where(
+                StewardSuggestion.space_id == space_id,
+                StewardSuggestion.linked_fact_id == fact.id,
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        return True
+    from app.models.audit_log import AuditLog
+
+    return (
+        session.scalar(
+            select(AuditLog.id)
+            .where(
+                AuditLog.action == "relationship_proposal_created",
+                func.json_extract(AuditLog.detail_json, "$.space_id") == space_id,
+                func.json_extract(AuditLog.detail_json, "$.source_fact_id") == fact.id,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def find_related_proposal(
+    session: Session,
+    *,
+    space_id: int,
+    subject_user_id: int,
+    object_user_id: int | None,
+    fact_type: str,
+) -> SourceFact | None:
+    """Reuse a same-space proposal for the same normalized directed relation."""
+    endpoints = and_(
+        SourceFact.subject_user_id == subject_user_id,
+        SourceFact.object_user_id == object_user_id,
+    )
+    if fact_type in ("spouse", "partner", "direct_sibling"):
+        endpoints = or_(
+            endpoints,
+            and_(
+                SourceFact.subject_user_id == object_user_id,
+                SourceFact.object_user_id == subject_user_id,
+            ),
+        )
+    facts = session.scalars(
+        select(SourceFact)
+        .where(
+            endpoints,
+            SourceFact.fact_type == fact_type,
+            SourceFact.provenance == "agent_proposal",
+            SourceFact.state.in_(("proposed", "confirmed")),
+            or_(SourceFact.space_id == space_id, SourceFact.space_id.is_(None)),
+        )
+        .order_by(SourceFact.id)
+    ).all()
+    return next(
+        (fact for fact in facts if _proposal_belongs_to_space(session, fact, space_id)), None
+    )
+
+
+def _linked_proposal(session: Session, suggestion: StewardSuggestion) -> SourceFact | None:
+    if suggestion.kind != "relation_proposal":
+        return None
+    fact_type = str(suggestion.value_json.get("fact_type") or "")
+    if suggestion.linked_fact_id is not None:
+        fact = session.get(SourceFact, suggestion.linked_fact_id)
+        if (
+            fact is not None
+            and (fact.provenance == "agent_proposal" or fact.state != "proposed")
+            and _same_relation(
+                fact,
+                subject_user_id=suggestion.subject_user_id,
+                object_user_id=suggestion.object_user_id,
+                fact_type=fact_type,
+            )
+            and fact.space_id in (None, suggestion.space_id)
+        ):
+            return fact
+        return None
+    return find_related_proposal(
+        session,
+        space_id=suggestion.space_id,
+        subject_user_id=suggestion.subject_user_id,
+        object_user_id=suggestion.object_user_id,
+        fact_type=fact_type,
+    )
+
+
+def link_source_proposal(
+    session: Session,
+    *,
+    space_id: int,
+    source_candidate_id: int | None,
+    proposal: SourceFact,
+    now: datetime,
+) -> None:
+    """Persist same-source links without changing anyone's dismissed receipt."""
+    if source_candidate_id is None:
+        return
+    suggestions = session.scalars(
+        select(StewardSuggestion).where(
+            StewardSuggestion.space_id == space_id,
+            StewardSuggestion.source_candidate_id == source_candidate_id,
+            StewardSuggestion.kind == "relation_proposal",
+            StewardSuggestion.status.in_(SUGGESTION_ACTIVE_STATES),
+        )
+    ).all()
+    for suggestion in suggestions:
+        if not _same_relation(
+            proposal,
+            subject_user_id=suggestion.subject_user_id,
+            object_user_id=suggestion.object_user_id,
+            fact_type=str(suggestion.value_json.get("fact_type") or ""),
+        ):
             continue
-        subject = f.get("subject_user_id")
-        object_id = f.get("object_user_id")
-        if isinstance(subject, int) and subject in endpoints:
-            return True
-        if isinstance(object_id, int) and object_id in endpoints:
-            return True
-    return False
+        status = "resolved" if proposal.state == "confirmed" else "submitted"
+        if suggestion.linked_fact_id != proposal.id or suggestion.status != status:
+            suggestion.linked_fact_id = proposal.id
+            suggestion.status = status
+            suggestion.revision += 1
+            suggestion.updated_at = now
+    session.flush()
 
 
-def _related_fact_count(session: Session, suggestion: StewardSuggestion) -> int | None:
-    summary = _evidence_summary(session, suggestion)
-    return int(summary["related_fact_count"])
+def source_state(session: Session, suggestion: StewardSuggestion) -> str:
+    """Current shared source/proposal state; no personal receipt is changed."""
+    if suggestion.status in ("expired", "superseded"):
+        return str(suggestion.status)
+    if (
+        suggestion.kind == "relation_proposal"
+        and find_confirmed_relation(
+            session,
+            space_id=suggestion.space_id,
+            subject_user_id=suggestion.subject_user_id,
+            object_user_id=suggestion.object_user_id,
+            fact_type=str(suggestion.value_json.get("fact_type") or ""),
+        )
+        is not None
+    ):
+        return "resolved"
+    proposal = _linked_proposal(session, suggestion)
+    if proposal is not None and proposal.state == "confirmed":
+        return "resolved"
+    if suggestion.source_candidate_id is not None and suggestion.kind == "relation_proposal":
+        from app.models.steward_inferred import StewardInferredEdge
+
+        edge = session.scalar(
+            select(StewardInferredEdge)
+            .where(
+                StewardInferredEdge.space_id == suggestion.space_id,
+                StewardInferredEdge.source_candidate_id == suggestion.source_candidate_id,
+            )
+            .order_by(StewardInferredEdge.id.desc())
+            .limit(1)
+        )
+        if edge is not None and edge.status in ("rejected", "superseded"):
+            return str(edge.status)
+    if proposal is not None:
+        return "submitted" if proposal.state == "proposed" else "superseded"
+    if suggestion.linked_fact_id is not None:
+        return "rejected"
+    return str(suggestion.status)
 
 
 def effective_state(
@@ -570,19 +929,21 @@ def effective_state(
     list/detail/notifications/allowed_actions 使用同一结果；命令仍在事务内
     重验，本函数只用于展示与动作过滤。
     """
-    if suggestion.status in ("resolved", "expired", "superseded"):
-        return suggestion.status
-    if suggestion.expires_at is not None and suggestion.expires_at <= utcnow():
-        return "expired"
     if recipient is None:
         recipient = _recipient_row(session, suggestion.id, account.id)
-    if (
-        recipient is not None
-        and recipient.dismissed_at is not None
-        and "dismiss" in allowed_actions(session, viewer, account, suggestion)
-    ):
+    if recipient is not None and recipient.dismissed_at is not None:
         return "dismissed"
-    return str(suggestion.status)
+    shared = source_state(session, suggestion)
+    if shared not in SUGGESTION_ACTIVE_STATES:
+        return shared
+    if suggestion.expires_at is not None and suggestion.expires_at <= utcnow():
+        return "expired"
+    if (
+        suggestion.kind == "term_preference"
+        and _current_term_suggestion(session, account=account, suggestion=suggestion) is None
+    ):
+        return "superseded"
+    return shared
 
 
 def display_actions(
@@ -594,9 +955,8 @@ def display_actions(
 ) -> list[str]:
     """有效状态过滤后的展示动作：终态/过期/本人忽略不再给 pending 处理入口。"""
     actions = list(allowed_actions(session, viewer, account, suggestion))
-    if state != suggestion.status or state in ("dismissed", "expired"):
-        if state in ("dismissed", "resolved", "expired", "superseded"):
-            actions = [a for a in actions if a in ("open_details",)]
+    if state != "proposed":
+        actions = [a for a in actions if a == "open_details"]
     return actions
 
 
@@ -627,6 +987,8 @@ def list_suggestions_page(
     space_id: int,
     cursor: int | None,
     limit: int,
+    kind: str | None = None,
+    target_user_id: int | None = None,
 ) -> dict[str, Any]:
     """分页列表（keyset by id）；只返回 active 成员可见且证据可见的建议。
 
@@ -642,12 +1004,29 @@ def list_suggestions_page(
     while len(items) < limit and not exhausted:
         stmt = (
             select(StewardSuggestion)
-            .where(StewardSuggestion.space_id == space.id)
+            .where(
+                StewardSuggestion.space_id == space.id,
+                or_(
+                    StewardSuggestion.kind != "term_preference",
+                    StewardSuggestion.viewer_account_id == account.id,
+                ),
+            )
             .order_by(StewardSuggestion.id.desc())
             .limit(limit + 1)
         )
+        if kind is not None:
+            if kind not in (
+                "relation_proposal",
+                "term_preference",
+                "identity_duplicate",
+                "missing_information",
+            ):
+                raise_api_error(422, VALIDATION_ERROR, "未知建议种类")
+            stmt = stmt.where(StewardSuggestion.kind == kind)
         if fetch_cursor is not None and fetch_cursor > 0:
             stmt = stmt.where(StewardSuggestion.id < fetch_cursor)
+        if target_user_id is not None:
+            stmt = stmt.where(StewardSuggestion.object_user_id == target_user_id)
         rows = list(session.scalars(stmt))
         if len(rows) > limit:
             rows = rows[:limit]
@@ -659,7 +1038,9 @@ def list_suggestions_page(
         for suggestion in rows:
             last_consumed_id = suggestion.id
             # 列表与详情同口径：证据端点对当前账号不可见（隐藏人物）→ 不透出
-            if not _endpoints_visible(session, viewer, suggestion):
+            if not suggestion_visible(
+                session, viewer=viewer, account=account, suggestion=suggestion
+            ):
                 continue
             try:
                 state = effective_state(
@@ -703,7 +1084,11 @@ def _serialize(
         subject_user = session.get(User, suggestion.subject_user_id)
         if subject_user is not None:
             decision = visibility.evaluate(
-                session, viewer, subject_user, purpose=visibility.PURPOSE_PROFILE
+                session,
+                viewer,
+                subject_user,
+                space_context=suggestion.space_id,
+                purpose=visibility.PURPOSE_PROFILE,
             )
             if decision.visible:
                 subject_display = visibility.payload_from_decision(decision, subject_user)
@@ -711,7 +1096,11 @@ def _serialize(
             object_user = session.get(User, suggestion.object_user_id)
             if object_user is not None:
                 decision = visibility.evaluate(
-                    session, viewer, object_user, purpose=visibility.PURPOSE_PROFILE
+                    session,
+                    viewer,
+                    object_user,
+                    space_context=suggestion.space_id,
+                    purpose=visibility.PURPOSE_PROFILE,
                 )
                 if decision.visible:
                     object_display = visibility.payload_from_decision(decision, object_user)
@@ -720,6 +1109,49 @@ def _serialize(
         if isinstance(payload, dict) and isinstance(payload.get("name"), str) and payload["name"]:
             return str(payload["name"])
         return None
+
+    evidence_summary = _evidence_summary(session, suggestion, viewer=viewer)
+    shared_state = source_state(session, suggestion)
+    linked = _linked_proposal(session, suggestion)
+    linked_proposal: dict[str, Any] | None = None
+    pending_confirmations: list[dict[str, int]] = []
+    if linked is not None:
+        linked_proposal = {
+            "source_fact_id": linked.id,
+            "revision": linked.revision,
+            "state": linked.state,
+            "fact_type": linked.fact_type,
+        }
+        if linked.state == "proposed":
+            from app.commands.relationship_proposals import eligible_confirmer_account_ids
+
+            pending_confirmations = [
+                {"account_id": account_id}
+                for account_id in eligible_confirmer_account_ids(
+                    session,
+                    subject_user_id=suggestion.subject_user_id,
+                    object_user_id=suggestion.object_user_id,
+                )
+            ]
+    value = dict(suggestion.value_json)
+    current_term = (
+        _current_term_suggestion(session, account=account, suggestion=suggestion)
+        if (account is not None and suggestion.kind == "term_preference" and state == "proposed")
+        else None
+    )
+    if suggestion.kind == "term_preference":
+        value["can_restore"] = False
+        value.pop("projection_revision", None)
+        value.pop("semantic_identity", None)
+        value.pop("semantic_hash", None)
+        if current_term is not None:
+            projection, context = current_term
+            value["projection_revision"] = projection.revision
+            value["semantic_identity"] = projection.semantic_hash
+            value["semantic_hash"] = projection.semantic_hash
+            value["can_restore"] = context["can_restore"]
+        elif state == "superseded":
+            shared_state = state
 
     presentation: dict[str, Any] | None = None
     if (
@@ -740,21 +1172,38 @@ def _serialize(
                 space_id=suggestion.space_id,
                 subject_user_id=suggestion.subject_user_id,
                 object_user_id=suggestion.object_user_id,
-                relation_state="proposal",
-                inferred=True,
-                related_fact_count=_related_fact_count(session, suggestion),
+                relation_state="confirmed"
+                if evidence_summary["related_fact_count"]
+                else "proposal",
+                inferred=not evidence_summary["related_fact_count"],
+                fact_type=str(suggestion.value_json.get("fact_type") or ""),
+                related_fact_count=evidence_summary["related_fact_count"],
+            )
+            presentation["requires_action"] = (
+                state == "proposed" and "submit" in allowed_actions_list
             )
         else:
+            term_source = (
+                (
+                    "steward"
+                    if current_term[0].status == "active"
+                    else current_term[1]["baseline_source"]
+                )
+                if current_term is not None
+                else None
+            )
             presentation = {
                 "version": kinship_presentation.PRESENTATION_VERSION,
-                "availability": "ready",
+                "availability": "ready" if current_term is not None else "unavailable",
                 "reference_user_id": viewer.id,
-                "target_user_id": suggestion.subject_user_id,
+                "target_user_id": suggestion.object_user_id,
                 "subject_user_id": suggestion.subject_user_id,
                 "object_user_id": suggestion.object_user_id,
-                "term": suggestion.value_json.get("term"),
-                "term_source_level": None,
-                "term_source_label": kinship_presentation.source_label("personal"),
+                "subject_display": subject_display,
+                "object_display": object_display,
+                "term": current_term[1]["suggested_term"] if current_term is not None else None,
+                "term_source_level": term_source,
+                "term_source_label": kinship_presentation.source_label(term_source),
                 "summary": "可选的称谓偏好建议，无需处理",
                 "relation_state": "proposal",
                 "inferred": False,
@@ -768,7 +1217,7 @@ def _serialize(
         "kind": suggestion.kind,
         "origin": suggestion.origin,
         "state": state,
-        "source_state": suggestion.status,
+        "source_state": shared_state,
         "recipient_state": "dismissed" if state == "dismissed" else None,
         "revision": suggestion.revision,
         "evidence_hash": suggestion.evidence_hash,
@@ -779,8 +1228,10 @@ def _serialize(
         "subject_display": subject_display,
         "object_display": object_display,
         "presentation": presentation,
-        "value": dict(suggestion.value_json),
-        "evidence_summary": _evidence_summary(session, suggestion),
+        "value": value,
+        "evidence_summary": evidence_summary,
+        "linked_proposal": linked_proposal,
+        "pending_confirmations": pending_confirmations,
         "allowed_actions": allowed_actions_list,
         "expires_at": suggestion.expires_at,
         "created_at": suggestion.created_at,
@@ -815,6 +1266,8 @@ def dismiss_suggestion(
     """驳回：收件人独立状态 + 冷却只作用于同一证据版本；幂等重入返回现状。"""
     now = now or utcnow()
     with command_transaction(session, immediate=True):
+        session.flush()
+        session.expire_all()
         viewer, suggestion = visible_suggestion_or_404(
             session, account=account, space_id=space_id, suggestion_id=suggestion_id
         )
@@ -826,6 +1279,8 @@ def dismiss_suggestion(
             raise_api_error(410, SUGGESTION_EXPIRED, "建议已过期")
         if suggestion.status not in SUGGESTION_ACTIVE_STATES:
             raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议已终结")
+        if source_state(session, suggestion) != "proposed":
+            raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议当前不可忽略")
         if suggestion.revision != expected_revision:
             raise_api_error(409, SUGGESTION_REVISION_CONFLICT, "建议已被其他操作更新")
         recipient = _recipient_row(session, suggestion.id, account.id)
@@ -889,6 +1344,10 @@ def submit_suggestion(
     if not key or len(key) > 120:
         raise_api_error(422, VALIDATION_ERROR, "缺少合法的 Idempotency-Key")
     with command_transaction(session, immediate=True):
+        # The lock serializes writes, but does not refresh objects loaded before
+        # another session committed. Preserve pending work, then reread live CAS inputs.
+        session.flush()
+        session.expire_all()
         viewer, suggestion = visible_suggestion_or_404(
             session, account=account, space_id=space_id, suggestion_id=suggestion_id
         )
@@ -915,19 +1374,27 @@ def submit_suggestion(
             # 证据已变化：无正式写入；新证据版本会以新建议出现
             raise_api_error(409, SUGGESTION_EVIDENCE_CHANGED, "建议证据已变化，请基于新建议操作")
 
+        recipient = _recipient_row(session, suggestion.id, account.id)
+        if recipient is not None and recipient.dismissed_at is not None:
+            raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议已忽略")
+        if source_state(session, suggestion) not in ("proposed", "submitted", "resolved"):
+            raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议已失效")
+
         if suggestion.kind == "relation_proposal":
             fact_type = str(suggestion.value_json.get("fact_type") or "")
-            proposal = relationship_proposals.create_relationship_proposal(
-                session,
-                ctx,
-                space_id=suggestion.space_id,
-                fact_type=fact_type,
-                subject_user_id=suggestion.subject_user_id,
-                object_user_id=suggestion.object_user_id,
-                evidence_json=dict(suggestion.evidence_json),
-                suggestion_id=suggestion.id,
-                commit=False,
-            )
+            proposal = _linked_proposal(session, suggestion)
+            if proposal is None:
+                proposal = relationship_proposals.create_relationship_proposal(
+                    session,
+                    ctx,
+                    space_id=suggestion.space_id,
+                    fact_type=fact_type,
+                    subject_user_id=suggestion.subject_user_id,
+                    object_user_id=suggestion.object_user_id,
+                    evidence_json=dict(suggestion.evidence_json),
+                    suggestion_id=suggestion.id,
+                    commit=False,
+                )
             confirmer_ids = relationship_proposals.eligible_confirmer_account_ids(
                 session,
                 subject_user_id=suggestion.subject_user_id,
@@ -935,12 +1402,21 @@ def submit_suggestion(
             )
             # 提案刚创建：所有合法确认主体都在待确认集合中；集合为空时提案保持
             # pending（绝不把空确认集合当作全部同意）
-            pending = [{"account_id": a} for a in confirmer_ids]
-            suggestion.status = "submitted"
+            pending = (
+                [{"account_id": a} for a in confirmer_ids] if proposal.state == "proposed" else []
+            )
+            suggestion.status = "resolved" if proposal.state == "confirmed" else "submitted"
             suggestion.revision += 1
             suggestion.updated_at = now
             suggestion.linked_fact_id = proposal.id
             suggestion.submit_key = key
+            link_source_proposal(
+                session,
+                space_id=suggestion.space_id,
+                source_candidate_id=suggestion.source_candidate_id,
+                proposal=proposal,
+                now=now,
+            )
             payload = {
                 "suggestion": _serialize(
                     session,
@@ -965,8 +1441,12 @@ def submit_suggestion(
         if suggestion.kind == "term_preference":
             if suggestion.viewer_account_id != account.id:
                 raise_api_error(404, SUGGESTION_NOT_FOUND, "建议不存在")
-            concept_code = str(suggestion.value_json.get("concept_code") or "")
-            term_text = str(suggestion.value_json.get("term") or "")
+            current = _current_term_suggestion(session, account=account, suggestion=suggestion)
+            if current is None:
+                raise_api_error(409, SUGGESTION_EVIDENCE_CHANGED, "称谓依据或个人叫法已变化")
+            projection, context = current
+            concept_code = str(context["concept_code"])
+            term_text = str(context["suggested_term"])
             entry = terms_service.set_personal_term(
                 session,
                 account_id=account.id,
@@ -979,6 +1459,11 @@ def submit_suggestion(
             suggestion.updated_at = now
             suggestion.linked_term_id = entry.id
             suggestion.submit_key = key
+            # B-R5：主动保留 = 本人偏好反馈（kept）；复用本人词条合同
+            recipient = _recipient_row(session, suggestion.id, account.id)
+            if recipient is not None:
+                recipient.preference_feedback = "kept"
+                recipient.preference_at = now
             payload = {
                 "suggestion": _serialize(
                     session,
@@ -1000,23 +1485,175 @@ def submit_suggestion(
         raise_api_error(422, SUGGESTION_SUBMIT_NOT_ALLOWED, "未知建议种类")  # pragma: no cover
 
 
-def resolve_for_linked_fact(session: Session, *, fact_id: int) -> None:
-    """关联提案被有权当事人确认入图 → submitted 建议 resolved（终局随领域对象）。"""
-    rows = list(
-        session.scalars(
-            select(StewardSuggestion).where(
-                StewardSuggestion.linked_fact_id == fact_id,
-                StewardSuggestion.status == "submitted",
+def restore_term(
+    session: Session,
+    *,
+    account: Account,
+    space_id: int,
+    suggestion_id: int,
+    expected_revision: int,
+    expected_projection_revision: int,
+    semantic_hash: str,
+    idempotency_key: str,
+    now: datetime | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """恢复默认叫法（B-R5/R-05，仅本人）：原子 CAS + 稳定抑制 + 即时回退。
+
+    - 幂等：同 Idempotency-Key 返回既有结果（成功后 revision 增长不破坏重试）；
+    - 陈旧请求（建议/投影 revision 或 semantic_hash 不匹配）→ 409 无副作用；
+    - 显式个人词条生效后不可经本操作覆盖（建议已 resolved → 409）。
+    """
+    from app.models.steward import StewardTermSuppression
+    from app.services import steward_terminology
+
+    now = now or utcnow()
+    key = idempotency_key.strip()
+    if not key or len(key) > 120:
+        raise_api_error(422, VALIDATION_ERROR, "缺少合法的 Idempotency-Key")
+    with command_transaction(session, immediate=True):
+        session.flush()
+        session.expire_all()
+        viewer, suggestion = visible_suggestion_or_404(
+            session, account=account, space_id=space_id, suggestion_id=suggestion_id
+        )
+        if suggestion.kind != "term_preference" or suggestion.viewer_account_id != account.id:
+            raise_api_error(404, SUGGESTION_NOT_FOUND, "建议不存在")
+        if suggestion.submit_key == key and suggestion.submit_result_json is not None:
+            stored = dict(suggestion.submit_result_json)
+            return int(stored.get("status_code", 200)), stored.get("payload", {})
+        if suggestion.status not in SUGGESTION_ACTIVE_STATES:
+            raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议已终结")
+        if suggestion.expires_at is not None and suggestion.expires_at <= now:
+            raise_api_error(410, SUGGESTION_EXPIRED, "建议已过期")
+        if suggestion.revision != expected_revision:
+            raise_api_error(409, SUGGESTION_REVISION_CONFLICT, "建议已被其他操作更新")
+        value = dict(suggestion.value_json)
+        recipient = _recipient_row(session, suggestion.id, account.id)
+        if recipient is not None and recipient.dismissed_at is not None:
+            raise_api_error(409, SUGGESTION_STATE_CONFLICT, "建议已忽略")
+        current = _current_term_suggestion(session, account=account, suggestion=suggestion)
+        if current is None:
+            raise_api_error(409, SUGGESTION_EVIDENCE_CHANGED, "称谓依据已变化，请基于新建议操作")
+        projection, context = current
+        if (
+            projection.revision != expected_projection_revision
+            or projection.semantic_hash != semantic_hash
+            or value.get("semantic_identity") != semantic_hash
+            or not context["can_restore"]
+        ):
+            raise_api_error(409, SUGGESTION_EVIDENCE_CHANGED, "称谓依据已变化，请基于新建议操作")
+        # 原子写：抑制该词 + 投影回退 baseline + 建议终态 restored
+        suppression_key = steward_terminology.suppression_key_for(
+            viewer_account_id=account.id,
+            space_id=suggestion.space_id,
+            target_user_id=projection.target_user_id,
+            concept_code=projection.concept_code,
+            term=projection.term,
+        )
+        if value.get("suppression_key") != suppression_key:
+            raise_api_error(409, SUGGESTION_EVIDENCE_CHANGED, "称谓建议身份已变化")
+        existing_suppression = session.scalar(
+            select(StewardTermSuppression.id).where(
+                StewardTermSuppression.viewer_account_id == account.id,
+                StewardTermSuppression.space_id == suggestion.space_id,
+                StewardTermSuppression.target_user_id == suggestion.object_user_id,
+                StewardTermSuppression.suppression_key == suppression_key,
             )
         )
-    )
-    now = utcnow()
-    for suggestion in rows:
+        if existing_suppression is None and suppression_key:
+            session.add(
+                StewardTermSuppression(
+                    viewer_account_id=account.id,
+                    space_id=suggestion.space_id,
+                    target_user_id=int(suggestion.object_user_id or 0),
+                    suppression_key=suppression_key,
+                    source_suggestion_id=suggestion.id,
+                    created_at=now,
+                )
+            )
+        baseline = context["baseline_term"]
+        projection.term = None
+        projection.origin = None
+        projection.status = "suppressed"
+        projection.revision += 1
+        projection.updated_at = now
         suggestion.status = "resolved"
         suggestion.revision += 1
         suggestion.updated_at = now
-    if rows:
+        suggestion.submit_key = key
+        recipient = _recipient_row(session, suggestion.id, account.id)
+        if recipient is not None:
+            recipient.preference_feedback = "restored"
+            recipient.preference_at = now
+        steward_terminology.request_projection_refresh(
+            session,
+            space_id=suggestion.space_id,
+            viewer_account_ids={account.id},
+        )
+        payload = {
+            "suggestion": _serialize(
+                session, suggestion, ["open_details"], "resolved", viewer=viewer, account=account
+            ),
+            "projection": {
+                "id": projection.id,
+                "revision": projection.revision,
+                "baseline_term": baseline,
+                "status": projection.status,
+            },
+        }
         session.flush()
+        suggestion.submit_result_json = _jsonable({"status_code": 200, "payload": payload})
+        session.flush()
+        return 200, payload
+
+
+def resolve_for_linked_fact(
+    session: Session,
+    *,
+    fact_id: int,
+    space_id: int | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Persist exact confirmed relation resolution in the caller's transaction.
+
+    Confirmation can come from any authorized fact provenance. A scoped fact
+    closes suggestions in that space only; a global fact applies in every
+    suggestion space. Personal dismissed receipts are independent and untouched.
+    The durable fact link keeps later revocation/deletion from reviving a todo.
+    """
+    fact = session.get(SourceFact, fact_id)
+    if fact is None or fact.state != "confirmed":
+        return 0
+    stmt = select(StewardSuggestion).where(
+        StewardSuggestion.kind == "relation_proposal",
+        StewardSuggestion.status.in_(SUGGESTION_ACTIVE_STATES),
+        StewardSuggestion.value_json["fact_type"].as_string() == fact.fact_type,
+        StewardSuggestion.subject_user_id.in_((fact.subject_user_id, fact.object_user_id)),
+        StewardSuggestion.object_user_id.in_((fact.subject_user_id, fact.object_user_id)),
+    )
+    if fact.space_id is not None:
+        stmt = stmt.where(StewardSuggestion.space_id == fact.space_id)
+    if space_id is not None:
+        stmt = stmt.where(StewardSuggestion.space_id == space_id)
+    rows = session.scalars(stmt).all()
+    moment = now or utcnow()
+    changed = 0
+    for suggestion in rows:
+        if not _same_relation(
+            fact,
+            subject_user_id=suggestion.subject_user_id,
+            object_user_id=suggestion.object_user_id,
+            fact_type=str(suggestion.value_json.get("fact_type") or ""),
+        ):
+            continue
+        suggestion.linked_fact_id = fact.id
+        suggestion.status = "resolved"
+        suggestion.revision += 1
+        suggestion.updated_at = moment
+        changed += 1
+    if changed:
+        session.flush()
+    return changed
 
 
 __all__ = [

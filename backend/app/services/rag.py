@@ -39,6 +39,7 @@ def search(
         query=query,
         agent_kind=agent_kind,
         limit=limit,
+        for_model=False,
     )
 
 

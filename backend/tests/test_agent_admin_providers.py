@@ -11,7 +11,6 @@
 旧家庭挂载 /api/admin/agent/* 已删除：其 404 由 test_system_admin_boundary.py 断言。
 """
 
-from conftest import admin_session_headers, create_agent_fixture, create_system_admin
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -22,6 +21,7 @@ from app.models.agent_provider import (
     AgentSpaceProviderSetting,
 )
 from app.services.agent_provider import resolve_for_space
+from conftest import admin_session_headers, create_agent_fixture, create_system_admin
 
 V1_AGENT = "/admin-api/v1/agent"
 SECRET = "sk-live-abc123"

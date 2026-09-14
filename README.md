@@ -2,7 +2,7 @@
 
 现代家谱协作 Web 平台：以每个人为第一人称维护家庭空间，家庭空间相连自然涌现家族视图。
 
-系统架构与设计总览见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；开发流程、任务和规范见 `.trellis/` 与根目录 [AGENTS.md](AGENTS.md)。`.agent-notes/` 仅保留早期迁移期间的历史记录。
+当前能力、Trellis 任务状态、分支集成与后续工作见 [交接说明](.trellis/HANDOFF.md)；系统架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。开发流程和任务以 `.trellis/` 与根目录 [AGENTS.md](AGENTS.md) 为入口；已标为历史的规范和 `.agent-notes/` 仅供追溯。
 
 技术栈：Vue 3 + Vite + TypeScript（前端）｜FastAPI + SQLAlchemy + SQLite(WAL)（后端）｜Docker Compose（部署）。
 
@@ -10,9 +10,12 @@
 
 ```
 backend/                 FastAPI 应用 + Alembic 迁移 + pytest/ruff/mypy 门禁
+agent/                   Assistant Pi sidecar + 内部协议与工具执行
 frontend/                家庭用户 Vue3 + Vite + TS 应用 + eslint/vitest 门禁
 system-admin-frontend/   系统管理员独立后台应用（仅访问 /admin-api）
 ```
+
+截至 2026-09-14，管家个人称谓、通知统一呈现、自动称谓建议与可选偏好反馈已合入主线；Memory/RAG 后续修复和管家渐进重算仍在独立分支验收。任务的设计、分支提交、主线集成与真实模型质量分别记录，不能相互替代。详细证据与剩余限制见交接说明。
 
 ## 启动方式一：容器模式（推荐）
 
@@ -133,7 +136,7 @@ cd system-admin-frontend   && npm run lint && npm run type-check && npm test && 
 ## 备份约束（重要）
 
 SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件**——会得到不一致快照。
-备份统一走 SQLite online backup API（`python -m app.backup`，后续任务落地），见 HANDOFF AD-6。
+备份已实现，统一使用 `python -m app.backup` 的 SQLite online backup API；具体命令见下方“备份与恢复”。
 
 ## 安全约定
 
@@ -162,7 +165,15 @@ SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件
 }
 ```
 
-通过 `/api/admin/agent/providers` 提交上述非敏感字段，并在创建请求的 `secret` 字段注入 API key。密钥只会以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、Agent Notes 或 Agent 容器环境。随后用 `/api/admin/agent/spaces/{space_id}/provider-settings` 选择 `gpt-5.6-sol` 并设置 `cloud_allowed=true`。
+系统管理员通过独立后台的 `POST /admin-api/v1/agent/providers` 提交上述非敏感字段，并在创建请求的 `secret` 字段注入 API key。密钥以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、任务文件或 Agent 容器环境。双 Agent 平台默认通过 `/admin-api/v1/agent/platform-defaults` 管理。
+
+空间管理员通过家庭侧 `PUT /api/spaces/{space_id}/model-settings` 分别配置 `assistant` / `steward` 的 `provider_id + model` 及云同意。后台 `/admin-api/v1/agent/spaces/{space_id}/provider-settings` 仅用于只读排查，不能替空间开启 `cloud_allowed`；旧 `/api/admin/agent/*` 路径已移除。
+
+### 功能开关与能力状态
+
+Memory、RAG 和 Steward 的 `candidate` / `ranking` / `explanation` / `terminology` 四类辅助开关由 `/admin-api/v1/platform-features` 治理。平台行存在时，有效值为数据库配置 AND 部署环境开关；行不存在时使用环境值。Steward 还须满足空间选择、Provider、云同意/本地要求及运行预算。
+
+`STEWARD_ASSIST_TERMINOLOGY` 默认关闭；确定性称谓计算和已保存的本人词条继续提供基础显示。自动称谓改善不产生逐条批准待办，真实关系确认与 Memory 候选确认仍遵循各自流程。代码接通不代表线上已开启；本次称谓模型链的 fake transport 验证与真实模型质量验收分开记录，见 [称谓审核记录](.trellis/tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md)。
 
 ---
 

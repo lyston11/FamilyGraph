@@ -9,13 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 import pytest
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_space_member,
-    create_user_with_pin,
-    login,
-)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -51,6 +44,7 @@ from app.services import (
     steward_pipeline,
     steward_runtime,
     steward_snapshot,
+    steward_terminology,
     steward_views,
     terms,
 )
@@ -62,6 +56,13 @@ from app.services.relationship_resolver import (
 )
 from app.services.source_facts import create_source_fact, transition_source_fact
 from app.utils.timeutil import utcnow
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_space_member,
+    create_user_with_pin,
+    login,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -386,8 +387,9 @@ def test_assist_orphan_recovery_cannot_bypass_staged_intent(db_session, monkeypa
     assert generation.status == "published"
 
 
+@pytest.mark.parametrize("change", ["name", "terminology_rule", "model_enabled"])
 def test_required_failure_stops_publication_and_budget_survives_presentation_changes(
-    db_session, monkeypatch
+    db_session, monkeypatch, change
 ):
     people, space = _family(db_session, size=2, name="budget-persist")
     monkeypatch.setattr(config, "STEWARD_STAGE_MAX_ATTEMPTS", 2)
@@ -403,7 +405,14 @@ def test_required_failure_stops_publication_and_budget_survives_presentation_cha
         with pytest.raises(steward_pipeline.RequiredTargetFailed):
             _run(db_session, space.id)
         db_session.rollback()
-    people[0].name = "only-presentation-changed"
+    if change == "name":
+        people[0].name = "only-presentation-changed"
+    elif change == "terminology_rule":
+        monkeypatch.setattr(steward_terminology, "RULE_VERSION", "test-next-terminology")
+    else:
+        monkeypatch.setattr(
+            config, "STEWARD_ASSIST_TERMINOLOGY", not config.STEWARD_ASSIST_TERMINOLOGY
+        )
     db_session.commit()
     with pytest.raises(steward_pipeline.RequiredTargetFailed):
         _run(db_session, space.id)
@@ -428,6 +437,51 @@ def test_required_failure_stops_publication_and_budget_survives_presentation_cha
     steward_demand.register(account=people[0].account, space_id=space.id, retry=True)
     db_session.refresh(budget)
     assert budget.manual_grants == 1
+
+
+@pytest.mark.parametrize("change", ["terminology_rule", "presentation_rule", "model_enabled"])
+def test_presentation_config_rebuilds_terms_without_searching_published_paths(
+    db_session, monkeypatch, change
+):
+    _people, space = _family(db_session, name="config-reuse")
+    first = _run(db_session, space.id)
+    previous = {
+        view.viewer_account_id: (view.structural_hash, view.presentation_hash)
+        for view in db_session.scalars(
+            select(StewardGenerationView).where(
+                StewardGenerationView.generation_id == first["generation_id"]
+            )
+        )
+    }
+
+    def no_search(*args, **kwargs):
+        raise AssertionError("presentation configuration must reuse the published paths")
+
+    monkeypatch.setattr(steward_runtime, "run_slice", no_search)
+    if change == "terminology_rule":
+        monkeypatch.setattr(steward_terminology, "RULE_VERSION", "test-next-terminology")
+    elif change == "presentation_rule":
+        monkeypatch.setattr(terms, "PRESENTATION_RULE_VERSION", "test-next-presentation")
+    else:
+        monkeypatch.setattr(
+            config, "STEWARD_ASSIST_TERMINOLOGY", not config.STEWARD_ASSIST_TERMINOLOGY
+        )
+    second = _run(db_session, space.id)
+    assert second["stats"]["derived_recomputed"] == 0
+    assert second["stats"]["personal_family_views_rebuilt"] == len(previous)
+    current = list(
+        db_session.scalars(
+            select(StewardGenerationView).where(
+                StewardGenerationView.generation_id == second["generation_id"]
+            )
+        )
+    )
+    assert len(current) == len(previous)
+    for view in current:
+        graph_hash, display_hash = previous[view.viewer_account_id]
+        assert view.structural_hash == graph_hash and view.presentation_hash != display_hash
+        assert view.status == "ready" and view.completed_count == view.total_count == 2
+        assert view.result_view_id is None  # Rendered terms were rebuilt for the new rules.
 
 
 def test_optional_overlay_preserves_multi_hop_and_revokes_independently(db_session, monkeypatch):

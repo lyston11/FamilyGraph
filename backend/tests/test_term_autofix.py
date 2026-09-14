@@ -12,12 +12,12 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 from app.models.term_registry import BUILTIN_SYSTEM_TERMS, BUILTIN_ZH_CN_TERMS
 from app.services import personal_family_view, terms
 from app.services import source_facts as sf
 from app.services.relationship_graph import load_birth_years
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 @pytest.fixture(autouse=True)

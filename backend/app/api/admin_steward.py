@@ -143,6 +143,7 @@ def steward_status(
         pf_state.steward_assist_candidate
         or pf_state.steward_assist_ranking
         or pf_state.steward_assist_explanation
+        or pf_state.steward_assist_terminology
     )
     switches = [
         _switch(

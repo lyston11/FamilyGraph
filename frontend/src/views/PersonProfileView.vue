@@ -6,6 +6,7 @@ import { NAlert, NButton, NSpin } from 'naive-ui'
 import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 import { pathClassLabel } from '@/components/canvas/relationshipDisplay'
 import MaskedField from '@/components/common/MaskedField.vue'
+import KinshipTermPanel from '@/components/kinship/KinshipTermPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import { usePersonalFamilyViewPolling } from '@/composables/usePersonalFamilyViewPolling'
 import { ApiError } from '@/api/errors'
@@ -85,6 +86,11 @@ watch(
 const spaceId = computed(() => spaces.currentSpaceId)
 const pollEnabled = ref(false)
 const live = usePersonalFamilyViewPolling(spaceId, pollEnabled, { autoLoad: false })
+const kinshipViewVersion = computed(() => {
+  const data = live.data.value
+  if (data === null) return undefined
+  return data.progress ? `generation:${data.progress.generation}` : `view:${data.view_version}`
+})
 const preparing = computed(() => {
   const data = live.data.value
   return data !== null && data.nodes.length === 0 && (
@@ -430,6 +436,13 @@ async function retry(): Promise<void> {
           </div>
         </dl>
       </section>
+
+      <!-- 先由授权快照确认目标可见，再开放本人的称谓偏好入口。 -->
+      <KinshipTermPanel
+        :key="`${auth.user?.id}:${spaceId}:${profileNode.user_id}`"
+        :member-id="profileNode.user_id"
+        :view-version="kinshipViewVersion"
+      />
 
       <!-- 当前用户可见的关系上下文：只读，点击打开关系说明面板 -->
       <section class="relations-card" data-test="profile-relations">

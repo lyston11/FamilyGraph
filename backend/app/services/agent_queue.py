@@ -47,6 +47,7 @@ from app.models.agent import (
     AgentSession,
 )
 from app.services import agent_events, agent_provider, audit
+from app.services.agent_execution import ExecutionIdentity, fence_execution
 from app.utils import timeutil
 
 
@@ -314,10 +315,20 @@ def lease_next(
         return LeaseGrant(job=job, run=run)
 
 
-def heartbeat(db: Session, job: AgentJob, ttl_seconds: int | None = None) -> datetime:
+def heartbeat(
+    db: Session,
+    job: AgentJob,
+    ttl_seconds: int | None = None,
+    *,
+    execution: ExecutionIdentity | None = None,
+) -> datetime:
     """续租：同步更新 job 与 run 的 lease_expires_at / heartbeat_at。"""
     ttl = ttl_seconds if ttl_seconds is not None else config.AGENT_LEASE_TTL_SECONDS
     with _immediate_tx(db):
+        if execution is not None:
+            _run, _session, job = fence_execution(db, execution, allow_cancel_requested=True)
+        else:
+            db.refresh(job)
         if job.status not in ("leased", "running"):
             raise_api_error(409, AGENT_JOB_NOT_ACTIVE, "Job 不在活跃状态，无法续租")
         run = db.get(AgentRun, job.run_id)
@@ -347,6 +358,7 @@ def settle_run(
     status: str,
     error_code: str | None = None,
     error: dict[str, object] | None = None,
+    execution: ExecutionIdentity | None = None,
 ) -> AgentRun:
     """终态落库（sidecar 结算路径）：succeeded|failed 仅可从 leased/running 进入。
 
@@ -365,7 +377,9 @@ def settle_run(
             "仅 leased/running 可进入终态",
             detail={"status": run.status},
         )
-    settled = _settle(db, run, status=status, error_code=error_code, error=error)
+    settled = _settle(
+        db, run, status=status, error_code=error_code, error=error, execution=execution
+    )
     agent_events.notifier.publish(run.id)
     return settled
 
@@ -377,11 +391,16 @@ def _settle(
     status: str,
     error_code: str | None,
     error: dict[str, object] | None,
+    execution: ExecutionIdentity | None = None,
 ) -> AgentRun:
     """终态写入 + 对应终态事件追加（同一立即事务；终态不可复活）。"""
     with _immediate_tx(db):
-        # 锁内复核取消标记：浏览器请求可能在读取与加锁之间到达
-        db.expire(run, ("cancel_requested",))
+        if execution is not None:
+            run, _session, _job = fence_execution(db, execution, allow_cancel_requested=True)
+        else:
+            db.refresh(run)
+        if run.status in RUN_TERMINAL_STATUSES:
+            raise_api_error(409, AGENT_RUN_TERMINAL, "Run 已是终态")
         effective = status
         if effective == "succeeded" and run.cancel_requested:
             effective = "cancelled"

@@ -131,6 +131,7 @@ AGENT_DISABLED = "AGENT_DISABLED"  # feature flag 关闭（RT-6 默认关）
 AGENT_TOKEN_INVALID = "AGENT_TOKEN_INVALID"  # service/run token 缺失/签名/过期/类型错
 AGENT_INTERNAL_FORBIDDEN = "AGENT_INTERNAL_FORBIDDEN"  # 用户 JWT 访问 internal 路由
 AGENT_TOKEN_SCOPE_MISMATCH = "AGENT_TOKEN_SCOPE_MISMATCH"  # token claims 与 DB 实体不一致
+AGENT_CONTEXT_INVALIDATED = "AGENT_CONTEXT_INVALIDATED"  # 同 attempt 复用 context 来源已失效
 AGENT_RUN_NOT_FOUND = "AGENT_RUN_NOT_FOUND"  # run 不存在或 token 不指向它
 AGENT_JOB_NOT_FOUND = "AGENT_JOB_NOT_FOUND"  # job 不存在或 token 不指向它
 AGENT_JOB_NOT_ACTIVE = "AGENT_JOB_NOT_ACTIVE"  # heartbeat 目标不在 leased/running

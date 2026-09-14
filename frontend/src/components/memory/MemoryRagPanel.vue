@@ -5,12 +5,12 @@
 // - 「保存」只能新建候选：打开共用编辑器预填原文，提交走 POST /memory-candidates；
 // - 数据经 memory store（空间分区 + epoch），组件不发请求。
 import { NAlert, NButton, NEmpty, NInput, NSpin } from 'naive-ui'
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { useMemoryStore } from '@/stores/memory'
 import { useSpacesStore } from '@/stores/spaces'
 import MemoryEditorDialog, { type MemoryEditorInitial } from './MemoryEditorDialog.vue'
-import type { MemoryCitation } from '@/types/memory'
+import { MEMORY_SENSITIVITY_LABELS, type RagSearchResult } from '@/types/memory'
 
 const memory = useMemoryStore()
 const spaces = useSpacesStore()
@@ -27,26 +27,63 @@ const partition = computed(() => {
 })
 const results = computed(() => partition.value?.ragResults ?? [])
 
+function clearSearchTimer(): void {
+  if (searchTimer.value) clearTimeout(searchTimer.value)
+  searchTimer.value = null
+}
+
+watch(() => currentSpace.value?.id, () => {
+  clearSearchTimer()
+  query.value = ''
+  editorOpen.value = false
+  editorInitial.value = null
+})
+onBeforeUnmount(clearSearchTimer)
+
 function onQueryInput(value: string): void {
   query.value = value
   runSearch()
 }
 
 function runSearch(): void {
-  if (searchTimer.value) clearTimeout(searchTimer.value)
+  clearSearchTimer()
   const spaceId = currentSpace.value?.id
-  if (spaceId === undefined) return
+  if (spaceId === undefined || !memory.ragEnabled) return
+  const searchQuery = query.value
   searchTimer.value = setTimeout(() => {
-    void memory.search(spaceId, query.value).catch(() => undefined)
+    searchTimer.value = null
+    void memory.search(spaceId, searchQuery).catch(() => undefined)
   }, 250)
 }
 
 /** 检索结果「保存」：只新建候选（预填原文），不做直接写入 */
-function saveResult(result: MemoryCitation): void {
+function hasSaveSource(result: RagSearchResult): boolean {
+  return Number.isSafeInteger(result.document_id) && result.document_id > 0 &&
+    Number.isSafeInteger(result.chunk_id) && result.chunk_id > 0 &&
+    Number.isSafeInteger(result.revision) && result.revision > 0 &&
+    typeof result.index_version === 'string' && result.index_version.length > 0 &&
+    typeof result.text === 'string' && result.text.trim().length > 0 &&
+    result.sensitivity in MEMORY_SENSITIVITY_LABELS &&
+    Array.isArray(result.allowed_scopes) && result.allowed_scopes.includes('private')
+}
+
+function saveResult(result: RagSearchResult): void {
+  const spaceId = currentSpace.value?.id
+  if (spaceId === undefined || !memory.memoryEnabled || !hasSaveSource(result)) return
   editorInitial.value = {
-    raw_quote: result.text ?? '',
-    summary: result.text ? result.text.slice(0, 60) : '',
+    source: {
+      kind: 'rag_chunk',
+      document_id: result.document_id,
+      chunk_id: result.chunk_id,
+      revision: result.revision,
+      index_version: result.index_version,
+      space_id: spaceId,
+    },
+    raw_quote: result.text,
+    summary: result.text.slice(0, 60),
     suggested_scope: 'private',
+    sensitivity: result.sensitivity,
+    allowed_scopes: [...result.allowed_scopes],
   }
   editorOpen.value = true
 }
@@ -58,6 +95,9 @@ function saveResult(result: MemoryCitation): void {
       选择一个空间后才能进行知识检索。
     </NAlert>
     <template v-else>
+      <NAlert v-if="!memory.memoryEnabled" type="info" :closable="false" data-test="rag-save-disabled-state">
+        记忆功能当前未启用，可以检索和阅读结果，暂时不能保存为候选。
+      </NAlert>
       <NInput
         :value="query"
         clearable
@@ -94,13 +134,18 @@ function saveResult(result: MemoryCitation): void {
             <div class="result-footer">
               <code data-test="rag-citation">{{ result.citation_handle }}</code>
               <NButton
+                v-if="memory.memoryEnabled"
                 size="tiny"
                 secondary
+                :disabled="!hasSaveSource(result)"
                 data-test="rag-save-candidate"
                 @click="saveResult(result)"
               >
                 保存为候选
               </NButton>
+              <span v-if="memory.memoryEnabled && !hasSaveSource(result)" data-test="rag-source-incomplete">
+                来源信息暂不可用，请重新检索后再保存。
+              </span>
             </div>
           </article>
         </div>

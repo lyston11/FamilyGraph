@@ -396,9 +396,11 @@ export interface AdminStewardAssistSwitches {
   candidate: boolean
   ranking: boolean
   explanation: boolean
+  terminology: boolean
   candidate_source: 'environment' | 'platform' | 'deployment'
   ranking_source: 'environment' | 'platform' | 'deployment'
   explanation_source: 'environment' | 'platform' | 'deployment'
+  terminology_source: 'environment' | 'platform' | 'deployment'
 }
 
 export interface AdminPlatformFeatureState {
@@ -416,6 +418,7 @@ export interface AdminPlatformFeaturePayload {
   steward_assist_candidate?: boolean
   steward_assist_ranking?: boolean
   steward_assist_explanation?: boolean
+  steward_assist_terminology?: boolean
 }
 
 /** 空间单维度行级设置（enabled=false 且 provider/model 空 = 显式停用）。 */

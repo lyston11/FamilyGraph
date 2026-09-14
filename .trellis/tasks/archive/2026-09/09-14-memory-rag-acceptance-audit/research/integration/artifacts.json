@@ -1,0 +1,49 @@
+{
+  "scope": "Post-merge main validation and archive/cleanup receipts; independent of the two earlier frozen manifests",
+  "artifacts": [
+    {
+      "file": "archive-cleanup.json",
+      "sha256": "0f43943c7c2130606ea6ec5159003c360d473e7f622bbc1523528e5036b81517"
+    },
+    {
+      "file": "archive-layout.json",
+      "sha256": "52f552102c35d7d973879f646ccb6fa19233b9db5b2c72f54395ae1499ef384c"
+    },
+    {
+      "file": "archive-links-applied.json",
+      "sha256": "df6f71402af37d47f275dfe2f58f7eea3db8bf9654ee5fa2f3388c0b35178d7e"
+    },
+    {
+      "file": "final-code-integrity.json",
+      "sha256": "9bfafbaaf3f0bd1f30f9748f29a8bec74d8c483269975af9774968e4a060bf8f"
+    },
+    {
+      "file": "logs/archive-cleanup.log.gz",
+      "sha256": "5dba7fb5157db3149664fed2dd6fb018bc423df3a50e09062de01ec17d711dd9",
+      "original_sha256": "93952b9050667a8b4608782c470981c284767aa6d65e8244163322f9e19a2a25",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "logs/main-agent-memory-smoke.log.gz",
+      "sha256": "f1b651238a58fe290baec6c5e32f3bdb1943dd2bd582f02569231f7a757c7837",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "encoding": "gzip; original bytes preserved after decompression"
+    },
+    {
+      "file": "main-agent-memory-smoke.json",
+      "sha256": "f3420b7bc17c8adf4275b146a9b5cc63244a5c23b9f10ce9091132a4df7f4171"
+    },
+    {
+      "file": "main-code-integrity.json",
+      "sha256": "feb741ebf70cbb92d43617bec66a9b398ad2ea70789ec5338c83f88429b77278"
+    },
+    {
+      "file": "main-integration.json",
+      "sha256": "427c50d27c2ba7bbfad34173a122f9f54528df7d1ef51527b2256b37baa96fdf"
+    },
+    {
+      "file": "verify_delivery.py",
+      "sha256": "b4e674072736d458cb16f0cbaf601eec4f2d4d94a5bf68aa0b338fb2e85b83eb"
+    }
+  ]
+}

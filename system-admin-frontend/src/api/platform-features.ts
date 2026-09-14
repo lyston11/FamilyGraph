@@ -31,9 +31,11 @@ function decodeStewardAssist(raw: unknown): AdminStewardAssistSwitches {
     candidate: expectBoolean(obj['candidate'], 'candidate'),
     ranking: expectBoolean(obj['ranking'], 'ranking'),
     explanation: expectBoolean(obj['explanation'], 'explanation'),
+    terminology: expectBoolean(obj['terminology'], 'terminology'),
     candidate_source: expectLiteral(obj['candidate_source'], SOURCES, 'candidate_source'),
     ranking_source: expectLiteral(obj['ranking_source'], SOURCES, 'ranking_source'),
     explanation_source: expectLiteral(obj['explanation_source'], SOURCES, 'explanation_source'),
+    terminology_source: expectLiteral(obj['terminology_source'], SOURCES, 'terminology_source'),
   }
 }
 

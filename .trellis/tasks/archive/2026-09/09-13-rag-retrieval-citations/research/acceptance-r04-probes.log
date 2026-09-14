@@ -1,0 +1,4 @@
+COMMAND: .venv/bin/python -P -m pytest -p conftest -p no:cacheprovider -q --tb=short /private/tmp/test_b_review_invalidation.py -k rejected_event_batch_preserves_detected_context_invalidation or empty_disabled_rag_context_remains_valid_after_plain_answer
+..                                                                       [100%]
+2 passed, 1 deselected in 1.45s
+EXIT: 0

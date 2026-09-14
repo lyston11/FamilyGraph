@@ -160,7 +160,7 @@ request_lineage_membership(
 - 读侧信任门：`reason_text_llm` 仅 schema_version=2 验证行外显；旧纯文本行视为 untrusted，读取回退模板并进后台重生成队列。
 - 评测：`tests/fixtures/steward_eval/` 版本化 fixtures（ST-5 矩阵 + 对抗例）；硬安全门禁（授权/事实约束用例）100% 通过才可开新策略的模型开关，候选召回阈值独立统计（≥0.9）；fake transport 证据只证明程序合同，真实 provider 质量分数不得伪造。
 
-## 9. 一致快照、版本化预览和原子发布（0044 / 0045）
+## 9. 一致快照、版本化预览和原子发布（0044 / 0045 / 0048）
 
 本节取代旧的单写事务和逐 viewer 写 live PFV 的执行描述。适用任务：`09-13-steward-snapshot-progressive-recompute`。
 
@@ -258,3 +258,18 @@ resolution = resolve_graph(snapshot.graph, target_user_id=target_id)
 # save_target 在有界短事务内重验完整 fence，保存完整人物结果；
 # publish 最后原子切指针/状态/水位/交付激活，不复制结果行。
 ```
+
+### 9.8 与自动称谓及 Memory/RAG 的串行集成
+
+- `0048_steward_terminology_publication` 合并 `0047_rag_lifecycle_integrity` 与 `0045_steward_staged_publication`。既有 revision ID 不改名；分别从两父分支升级，不能只测一次从空库到 head。
+- 先安装 0045 再运行 0044 术语迁移时，SQLite batch 重建 provider setting 表会丢弃其已有三个 inferred 输入触发器。0048 幂等恢复这些父级触发器；安全 unmerge 只删除本层 15 个新增 presentation 触发器。
+- 一次命令降过多个父版本时，0048 在任何 DDL 前预检计划路径上的 RAG digest/context evidence、历史 chunks/失效原因、Memory provenance 和 Steward 未完待办拒绝条件。单纯 unmerge 保留全部表与业务行；深层拒绝不能先拆当前输入栅栏。
+- `ViewerInput.terminology` 复制当前 viewer/space 的明确 usage（含关联词条内容与 revision）、稳定 suppression、非空投影及有效模型开关。`steward_terminology_snapshot.resolve_display_term` 从同一授权图/事实 revision/披露出生数据纯算 baseline 与有效自动词；个人/空间偏好优先，不能在逐目标 writer 中重读图。
+- `term_usages`、`steward_term_suppressions`、有效自动投影和空间/平台 terminology 开关同事务推进 presentation；环境开关及静态词包/规则进入配置指纹。投影的发送、重试、检查时间和 audit 字段不失效展示；没有覆盖词的 baseline-only 行不推进 presentation。
+- 输入版本另存 `search_config`（snapshot/policy/algorithm/depth/path limit），供结构路径复用与搜索失败预算使用；完整 `config` 仍约束 generation、交付及展示 hash。仅称谓规则/词包/环境开关变化必须重绘称谓、复用结构且保留失败预算；算法/策略变化必须重新搜索。升级时完整配置 hash 的格式一起更新，实际旧代保守冷算。
+- 术语生产消费 sealed generation 的 confirmed targets 和共享 `result_view_id`，发布后独立交付。同 viewer 每批最多 8 个目标，显式读快照后关闭事务再计算；writer 统一核验本次完整输入、身份、publication 和租约，原子提交批次与 receipt。缓存只在 receipt 已 commit 后接受本批版本增量，回滚不得留下可通过 ABA 的缓存。
+- 只有本地 `terminology` 交付可以在原发布代 structural/config/时间仍有效时重新读取最新 presentation；普通交付仍使用完整 fence。GC 和交付共用 `valid_source`，不能在第一个术语输出后误删同批剩余工作。自身输出导致的展示后继在该批交付期间暂缓；输入未变的扫描、其他空间、结构或配置已变的作业仍可运行。
+- 无改善的普通 baseline 不建立空自动投影；明确 usage、已有自动词/抑制及 derived 的“保留叫法”仍处理。相同有效输入完整交付后仅复用完成回执；assist 分组也在写事务外准备，注册在确定性术语交付结束后进行，保留主线逐 HTTP fence 和 unknown 恢复。
+- 前端称谓输入失效清 payload、ETag、期限和在途请求，保留同身份的坐标/视口；账号变化仍完整清理。称谓面板按 generation/legacy view_version 清旧证据与建议，同代 progress revision 不触发重复 resolve。
+- 确认关系缺省称谓只消费 `current_view_payload` 的正式发布结果，缺失时显示中性线索，不能在普通呈现读取里回退到整图搜索。候选关系依旧按其自身 `fact_type` 的有向单步解析，保留第三方视角和亚型语义。
+- 集成回归入口：`test_steward_terminology_input_versions.py`、`test_steward_terminology_publication_migration.py`、`test_rag_lifecycle_migrations.py`、`test_steward_terminology_delivery_integration.py` 及主线 terminology/suggestion quality/runtime 测试；前端 `personalFamilyViewProgress.spec.ts`、`KinshipTermPanel.spec.ts` 和 `person-profile.spec.ts`。

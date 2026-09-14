@@ -1,20 +1,24 @@
 """Publication-gated, per-object idempotent delivery.
 
-No graph search and no HTTP runs here. Core prepares indexed intents; published
-generation status is their atomic activation gate. Local effects and intent done
-share one short transaction. A poison object never rolls back another delivery.
+Core prepares indexed intents; published generation status is their atomic
+activation gate. Terminology prepares a bounded target batch outside the writer;
+local effects and intent done share one short transaction. No HTTP runs here.
+A poison object never rolls back another delivery.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import Exists
 
 from app import config
 from app.models.account import Account
@@ -26,6 +30,7 @@ from app.models.steward import (
     StewardFindingDelivery,
     StewardGeneration,
     StewardGenerationView,
+    StewardInputRevision,
     StewardJob,
     StewardLlmCandidate,
     StewardPublication,
@@ -37,6 +42,164 @@ from app.services.recommendation_matrix import evaluate_recommendation
 from app.utils.timeutil import utcnow
 
 SUGGESTION_RECIPIENT_BATCH_SIZE = 8
+_TERMINOLOGY_COMPLETE_KEY = "terminology:complete"
+logger = logging.getLogger(__name__)
+
+
+def valid_source(
+    session: Session, intent: StewardDeliveryIntent, generation: StewardGeneration
+) -> bool:
+    """Only local terminology can continue across its own presentation writes."""
+    if intent.kind == "terminology":
+        from app.services.steward_terminology import valid_delivery_generation
+
+        return valid_delivery_generation(session, generation)
+    from app.services.steward_pipeline import valid_generation
+
+    return valid_generation(session, generation)
+
+
+def terminology_blocks_core(*, now: datetime) -> Exists:
+    """Defer this space without leasing a coordinator or consuming a job attempt.
+
+    A source/authorization/config change releases the gate immediately. The
+    remaining obsolete intents can retire independently in bounded batches.
+    """
+    from app.services.steward_snapshot import SNAPSHOT_VERSION, config_fingerprint
+
+    global_revision = aliased(StewardInputRevision)
+    space_revision = aliased(StewardInputRevision)
+    changed_delivery = aliased(StewardDeliveryIntent)
+    return (
+        select(StewardDeliveryIntent.id)
+        .join(StewardGeneration, StewardGeneration.id == StewardDeliveryIntent.generation_id)
+        .join(StewardPublication, StewardPublication.generation_id == StewardGeneration.id)
+        .outerjoin(global_revision, global_revision.scope_id == 0)
+        .outerjoin(space_revision, space_revision.scope_id == StewardGeneration.space_id)
+        .where(
+            StewardDeliveryIntent.space_id == StewardJob.space_id,
+            StewardDeliveryIntent.kind == "terminology",
+            StewardDeliveryIntent.status == "pending",
+            StewardGeneration.status == "published",
+            StewardGeneration.manifest_sealed.is_(True),
+            StewardGeneration.valid_until > now,
+            StewardGeneration.input_versions_json["version"].as_string() == SNAPSHOT_VERSION,
+            StewardGeneration.input_versions_json["config"].as_string() == config_fingerprint(),
+            StewardGeneration.input_versions_json["global"][0].as_integer()
+            == func.coalesce(global_revision.structural, 0),
+            StewardGeneration.input_versions_json["space"][0].as_integer()
+            == func.coalesce(space_revision.structural, 0),
+            or_(
+                StewardGeneration.input_versions_json["global"][1].as_integer()
+                != func.coalesce(global_revision.presentation, 0),
+                StewardGeneration.input_versions_json["space"][1].as_integer()
+                != func.coalesce(space_revision.presentation, 0),
+            ),
+            select(changed_delivery.id)
+            .where(
+                changed_delivery.generation_id == StewardGeneration.id,
+                changed_delivery.kind == "terminology",
+                changed_delivery.status == "done",
+                changed_delivery.payload_json["changed"].as_boolean().is_(True),
+            )
+            .exists(),
+        )
+        .exists()
+    )
+
+
+def _terminology_already_delivered(session: Session, prior: StewardGeneration | None) -> bool:
+    from app.services import steward_snapshot, steward_terminology
+
+    if prior is None or not steward_terminology.valid_delivery_generation(session, prior):
+        return False
+    receipt = session.scalar(
+        select(StewardDeliveryIntent.payload_json).where(
+            StewardDeliveryIntent.generation_id == prior.id,
+            StewardDeliveryIntent.intent_key == _TERMINOLOGY_COMPLETE_KEY,
+            StewardDeliveryIntent.status == "done",
+        )
+    )
+    if (
+        receipt is None
+        or not receipt.get("inputs_stable")
+        or not steward_snapshot.versions_match(
+            session, space_id=prior.space_id, expected=receipt.get("final_input_versions", {})
+        )
+    ):
+        return False
+    return (
+        session.scalar(
+            select(StewardDeliveryIntent.id)
+            .where(
+                StewardDeliveryIntent.generation_id == prior.id,
+                StewardDeliveryIntent.kind == "terminology",
+                StewardDeliveryIntent.status != "done",
+            )
+            .limit(1)
+        )
+        is None
+    )
+
+
+def _terminology_intents(
+    session: Session, *, generation_id: int, prior: StewardGeneration | None
+) -> list[dict[str, Any]]:
+    from app.services import steward_terminology
+    from app.services.steward_pipeline import valid_generation
+    from app.services.steward_snapshot import canonical_hash
+
+    # A constant receipt carries completion forward. Hot scans and the one
+    # presentation-only successor must not enumerate every viewer/target again.
+    items = (
+        []
+        if _terminology_already_delivered(session, prior)
+        else steward_terminology.delivery_items_for_generation(session, generation_id=generation_id)
+    )
+    completed_keys = (
+        set(
+            session.scalars(
+                select(StewardDeliveryIntent.intent_key).where(
+                    StewardDeliveryIntent.generation_id == prior.id,
+                    StewardDeliveryIntent.kind == "terminology",
+                    StewardDeliveryIntent.status == "done",
+                    StewardDeliveryIntent.payload_json["phase"].as_string() == "target",
+                )
+            )
+        )
+        if prior is not None and valid_generation(session, prior)
+        else set()
+    )
+    intents: list[dict[str, Any]] = [
+        {
+            "key": (
+                f"terminology:{item['viewer_account_id']}:"
+                f"{item['root_user_id']}:"
+                f"{canonical_hash(sorted(target['target_user_id'] for target in item['targets']))}"
+            ),
+            "kind": "terminology",
+            "payload": {
+                "phase": "target",
+                **{k: v for k, v in item.items() if k != "generation_id"},
+            },
+        }
+        for item in items
+    ]
+    intents = [intent for intent in intents if intent["key"] not in completed_keys]
+    # Each refresh writes at most one viewer's event. All targets are terminal
+    # before any refresh; leasing the successor waits for every refresh receipt.
+    for account_id in sorted({intent["payload"]["viewer_account_id"] for intent in intents}):
+        intents.append(
+            {
+                "key": f"terminology:refresh:{account_id}",
+                "kind": "terminology",
+                "payload": {"phase": "refresh", "viewer_account_id": account_id},
+            }
+        )
+    intents.append(
+        {"key": _TERMINOLOGY_COMPLETE_KEY, "kind": "terminology", "payload": {"phase": "complete"}}
+    )
+    return intents
 
 
 def effect_fingerprint(
@@ -171,6 +334,7 @@ def prepare_intents(
                 "payload": {"candidate_id": candidate_id},
             }
         )
+    intents.extend(_terminology_intents(session, generation_id=generation_id, prior=prior))
     # Only registration occurs here; the existing assist machine owns attempts,
     # reserved/in_flight/unknown and conservative billing. Never resend unknown.
     intents.append({"key": "assist", "kind": "assist", "payload": {}})
@@ -236,7 +400,12 @@ def _card_review(
 
 
 def _apply(
-    session: Session, intent: StewardDeliveryIntent, job: StewardJob, space: FamilySpace
+    session: Session,
+    intent: StewardDeliveryIntent,
+    job: StewardJob,
+    space: FamilySpace,
+    *,
+    prepared_registration: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     from app.services import steward
 
@@ -333,9 +502,161 @@ def _apply(
             facts_brief=steward._confirmed_facts_brief(session, space, visible),
             visible=visible,
             cards=cards,
+            prepared=prepared_registration,
         )
         return {}
     raise ValueError("unknown delivery intent")
+
+
+def _record_terminology_progress(
+    session: Session,
+    generation: StewardGeneration,
+    *,
+    before_versions: dict[str, Any],
+) -> None:
+    from app.services.steward_snapshot import core_versions, input_versions
+
+    state = dict(generation.stats_json.get("terminology_delivery", {}))
+    expected = state.get("next_versions", generation.input_versions_json)
+    # Only a chain of our own, CAS-checked writes can certify the final inputs.
+    # A user changing another presentation input midway requires another scan.
+    state["source_changed"] = bool(state.get("source_changed")) or (
+        core_versions(expected) != core_versions(before_versions)
+    )
+    state["next_versions"] = input_versions(session, generation.space_id)
+    generation.stats_json = {**generation.stats_json, "terminology_delivery": state}
+
+
+def _apply_terminology(
+    session: Session,
+    intent: StewardDeliveryIntent,
+    generation: StewardGeneration,
+    job: StewardJob,
+    prepared: dict[str, Any] | None,
+) -> dict[str, int]:
+    from app.services import steward_snapshot, steward_terminology
+
+    payload = intent.payload_json
+    phase = payload["phase"]
+    if phase == "target":
+        before = steward_snapshot.input_versions(session, intent.space_id)
+        result = (
+            steward_terminology.apply_delivery_item(session, job=job, prepared=prepared)
+            if prepared is not None
+            else {"projections": 0, "suggestions": 0, "changed": False}
+        )
+        session.flush()
+        _record_terminology_progress(session, generation, before_versions=before)
+        intent.payload_json = {**payload, "changed": bool(result["changed"])}
+        if result["changed"]:
+            # An operator can retry a failed target after the first completion.
+            # Re-arm at most its viewer refresh and the constant receipt; the
+            # already registered assist attempt/unknown state is never reset.
+            for barrier in session.scalars(
+                select(StewardDeliveryIntent).where(
+                    StewardDeliveryIntent.generation_id == generation.id,
+                    StewardDeliveryIntent.intent_key.in_(
+                        (
+                            f"terminology:refresh:{payload['viewer_account_id']}",
+                            _TERMINOLOGY_COMPLETE_KEY,
+                        )
+                    ),
+                    StewardDeliveryIntent.status == "done",
+                )
+            ):
+                barrier.status, barrier.updated_at, barrier.available_at = "pending", utcnow(), None
+        return {
+            "terminology_projections": int(result["projections"]),
+            "terminology_suggestions": int(result["suggestions"]),
+        }
+    if phase == "refresh":
+        account_id = int(payload["viewer_account_id"])
+        changed = session.scalar(
+            select(StewardDeliveryIntent.id)
+            .where(
+                StewardDeliveryIntent.generation_id == generation.id,
+                StewardDeliveryIntent.kind == "terminology",
+                StewardDeliveryIntent.status == "done",
+                StewardDeliveryIntent.payload_json["phase"].as_string() == "target",
+                StewardDeliveryIntent.payload_json["viewer_account_id"].as_integer() == account_id,
+                StewardDeliveryIntent.payload_json["changed"].as_boolean().is_(True),
+            )
+            .limit(1)
+        )
+        if changed is not None:
+            steward_terminology.request_projection_refresh(
+                session, space_id=intent.space_id, viewer_account_ids={account_id}
+            )
+        return {}
+    if phase == "complete":
+        final_versions = steward_snapshot.input_versions(session, intent.space_id)
+        _record_terminology_progress(session, generation, before_versions=final_versions)
+        intent.payload_json = {
+            **payload,
+            "final_input_versions": final_versions,
+            "inputs_stable": not generation.stats_json["terminology_delivery"]["source_changed"],
+        }
+        return {}
+    raise ValueError("unknown terminology delivery phase")
+
+
+def _prerequisites_ready() -> ColumnElement[bool]:
+    sibling = aliased(StewardDeliveryIntent)
+    same_generation = (
+        sibling.generation_id == StewardDeliveryIntent.generation_id,
+        sibling.kind == "terminology",
+    )
+    pending_targets = (
+        select(sibling.id)
+        .where(
+            *same_generation,
+            sibling.payload_json["phase"].as_string() == "target",
+            sibling.status == "pending",
+        )
+        .exists()
+    )
+    pending_before_completion = (
+        select(sibling.id)
+        .where(
+            *same_generation,
+            sibling.intent_key != _TERMINOLOGY_COMPLETE_KEY,
+            or_(
+                sibling.status == "pending",
+                and_(
+                    sibling.status == "failed",
+                    sibling.payload_json["phase"].as_string() == "refresh",
+                ),
+            ),
+        )
+        .exists()
+    )
+    pending_before_assist = (
+        select(sibling.id)
+        .where(
+            *same_generation,
+            or_(
+                sibling.status == "pending",
+                and_(
+                    sibling.status == "failed",
+                    sibling.payload_json["phase"].as_string().in_(("refresh", "complete")),
+                ),
+            ),
+        )
+        .exists()
+    )
+    return and_(
+        or_(StewardDeliveryIntent.kind != "assist", ~pending_before_assist),
+        or_(
+            StewardDeliveryIntent.kind != "terminology",
+            StewardDeliveryIntent.payload_json["phase"].as_string() != "refresh",
+            ~pending_targets,
+        ),
+        or_(
+            StewardDeliveryIntent.kind != "terminology",
+            StewardDeliveryIntent.payload_json["phase"].as_string() != "complete",
+            ~pending_before_completion,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -343,6 +664,10 @@ class _Claim:
     intent_id: int
     owner: str
     attempt: int
+    kind: str = ""
+    generation_id: int = 0
+    payload: dict[str, Any] = field(default_factory=dict)
+    space_id: int = 0
 
 
 def _budget(
@@ -386,7 +711,7 @@ def _release_success(
 def _claim_due(
     bind: Engine | Connection, *, owner: str, generation_id: int | None
 ) -> _Claim | Literal["delivery_failed", "delivery_superseded", "deferred"] | None:
-    from app.services.steward_pipeline import valid_generation, write_transaction
+    from app.services.steward_pipeline import write_transaction
 
     with write_transaction(bind) as session:
         now = utcnow()
@@ -397,6 +722,7 @@ def _claim_due(
                 StewardGeneration.status == "published",
                 StewardDeliveryIntent.status == "pending",
                 StewardDeliveryIntent.kind != "inferred_overlay",
+                _prerequisites_ready(),
                 (StewardDeliveryIntent.available_at.is_(None))
                 | (StewardDeliveryIntent.available_at <= now),
                 (StewardDeliveryIntent.lease_until.is_(None))
@@ -413,7 +739,11 @@ def _claim_due(
         generation = session.get(StewardGeneration, intent.generation_id)
         assert generation is not None
         job = session.get(StewardJob, generation.job_id) if generation.job_id is not None else None
-        if job is None or job.status != "succeeded" or not valid_generation(session, generation):
+        if (
+            job is None
+            or job.status != "succeeded"
+            or not valid_source(session, intent, generation)
+        ):
             intent.status, intent.updated_at = "superseded", now
             intent.lease_owner, intent.lease_until = None, None
             return "delivery_superseded"
@@ -451,7 +781,15 @@ def _claim_due(
         intent.lease_owner = owner
         intent.lease_until = now + timedelta(seconds=config.STEWARD_LEASE_TTL_SECONDS)
         intent.updated_at = now
-        return _Claim(intent.id, owner, intent.attempt)
+        return _Claim(
+            intent.id,
+            owner,
+            intent.attempt,
+            intent.kind,
+            generation.id,
+            dict(intent.payload_json),
+            intent.space_id,
+        )
 
 
 def _matches_claim(intent: StewardDeliveryIntent | None, claim: _Claim) -> bool:
@@ -466,7 +804,7 @@ def _matches_claim(intent: StewardDeliveryIntent | None, claim: _Claim) -> bool:
 
 
 def _record_failure(bind: Engine | Connection, claim: _Claim) -> None:
-    from app.services.steward_pipeline import valid_generation, write_transaction
+    from app.services.steward_pipeline import write_transaction
 
     with write_transaction(bind) as session:
         intent = session.get(StewardDeliveryIntent, claim.intent_id)
@@ -475,7 +813,7 @@ def _record_failure(bind: Engine | Connection, claim: _Claim) -> None:
         assert intent is not None
         generation = session.get(StewardGeneration, intent.generation_id)
         assert generation is not None
-        if generation.status != "published" or not valid_generation(session, generation):
+        if generation.status != "published" or not valid_source(session, intent, generation):
             intent.status, intent.updated_at = "superseded", utcnow()
             _release_success(session, intent, generation)
             return
@@ -491,10 +829,28 @@ def _record_failure(bind: Engine | Connection, claim: _Claim) -> None:
         intent.lease_owner, intent.lease_until = None, None
 
 
+def _defer_changed_snapshot(bind: Engine | Connection, claim: _Claim) -> None:
+    from app.services.steward_pipeline import write_transaction
+
+    with write_transaction(bind) as session:
+        intent = session.get(StewardDeliveryIntent, claim.intent_id)
+        if not _matches_claim(intent, claim):
+            return
+        assert intent is not None
+        generation = session.get(StewardGeneration, intent.generation_id)
+        assert generation is not None
+        if generation.status != "published" or not valid_source(session, intent, generation):
+            intent.status = "superseded"
+        intent.updated_at, intent.available_at = utcnow(), None
+        _release_success(session, intent, generation)
+
+
 def drain(
     *, bind: Engine | Connection, limit: int | None = None, generation_id: int | None = None
 ) -> dict[str, int]:
-    from app.services.steward_pipeline import valid_generation, write_transaction
+    from app.services import steward_terminology
+    from app.services.steward_pipeline import write_transaction
+    from app.services.steward_snapshot import SnapshotChanged
 
     counters: dict[str, int] = {"delivery_done": 0, "delivery_failed": 0, "delivery_superseded": 0}
     cap = limit if limit is not None else config.STEWARD_DELIVERY_PER_TICK
@@ -508,6 +864,14 @@ def drain(
                 counters[claim] += 1
             continue
         try:
+            if claim.kind == "terminology" and claim.payload.get("phase") == "target":
+                prepared = steward_terminology.prepare_delivery_item(
+                    bind, item={**claim.payload, "generation_id": claim.generation_id}
+                )
+            elif claim.kind == "assist":
+                prepared = steward_assist.prepare_registration(bind, space_id=claim.space_id)
+            else:
+                prepared = None
             with write_transaction(bind) as session:
                 intent = session.get(StewardDeliveryIntent, claim.intent_id)
                 if not _matches_claim(intent, claim):
@@ -526,18 +890,48 @@ def drain(
                     or job is None
                     or job.status != "succeeded"
                     or space is None
-                    or not valid_generation(session, generation)
+                    or not valid_source(session, intent, generation)
                 ):
                     intent.status, intent.updated_at = "superseded", utcnow()
                     _release_success(session, intent, generation)
                     counters["delivery_superseded"] += 1
                     continue
-                applied = _apply(session, intent, job, space)
+                # A manual retry can reopen a prerequisite after we claimed.
+                if (
+                    session.scalar(
+                        select(StewardDeliveryIntent.id).where(
+                            StewardDeliveryIntent.id == intent.id, _prerequisites_ready()
+                        )
+                    )
+                    is None
+                ):
+                    _release_success(session, intent, generation)
+                    continue
+                if intent.kind == "terminology":
+                    applied = _apply_terminology(session, intent, generation, job, prepared)
+                elif intent.kind == "assist":
+                    applied = _apply(session, intent, job, space, prepared_registration=prepared)
+                else:
+                    applied = _apply(session, intent, job, space)
                 intent.status, intent.updated_at, intent.error_code = "done", utcnow(), None
                 _release_success(session, intent, generation)
-                for key, value in applied.items():
-                    counters[key] = counters.get(key, 0) + value
-                counters["delivery_done"] += 1
+            for key, value in applied.items():
+                counters[key] = counters.get(key, 0) + value
+            counters["delivery_done"] += 1
+            if claim.kind == "terminology" and prepared is not None:
+                # Cache confirmation is advisory and follows the successful
+                # commit, so a rolled-back revision can never certify a hit.
+                try:
+                    steward_terminology.confirm_delivery_item(bind, prepared=prepared)
+                except Exception as exc:
+                    logger.warning(
+                        "steward terminology cache confirmation deferred (error=%s)",
+                        type(exc).__name__,
+                    )
+        except SnapshotChanged:
+            # A current presentation input raced the detached preparation.
+            # It is fresh work, not a failed deterministic algorithm attempt.
+            _defer_changed_snapshot(bind, claim)
         except Exception:
             # The local effect and done bit rolled back together. The durable
             # claim remains until this exact owner/attempt settles or expires.
@@ -575,7 +969,6 @@ def retry_intent(
     """
     from app.errors import STEWARD_POLICY_CONFLICT, STEWARD_RERUN_TOO_FREQUENT, raise_api_error
     from app.services import steward, steward_overlay, steward_snapshot
-    from app.services.steward_pipeline import valid_generation
 
     intent = session.get(StewardDeliveryIntent, intent_id, populate_existing=True)
     if intent is None or intent.space_id != space_id:
@@ -588,7 +981,7 @@ def retry_intent(
     if (
         generation is None
         or generation.status != "published"
-        or not valid_generation(session, generation)
+        or not valid_source(session, intent, generation)
         or intent.status == "superseded"
     ):
         raise_api_error(409, "STEWARD_DELIVERY_STALE", "交付依据已失效")

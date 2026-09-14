@@ -43,7 +43,7 @@ async function toggle(key: 'memory' | 'rag'): Promise<void> {
   }
 }
 
-type AssistKind = 'candidate' | 'ranking' | 'explanation'
+type AssistKind = 'candidate' | 'ranking' | 'explanation' | 'terminology'
 
 function currentAssist(kind: AssistKind): boolean {
   return features.value?.steward_assist[kind] ?? false
@@ -63,6 +63,7 @@ async function toggleAssist(kind: AssistKind): Promise<void> {
       steward_assist_candidate: kind === 'candidate' ? next : currentAssist('candidate'),
       steward_assist_ranking: kind === 'ranking' ? next : currentAssist('ranking'),
       steward_assist_explanation: kind === 'explanation' ? next : currentAssist('explanation'),
+      steward_assist_terminology: kind === 'terminology' ? next : currentAssist('terminology'),
     })
     notice.value = `管家辅助（${kind}）已${next ? '启用' : '停用'}，已与服务端状态同步。`
   } catch (reason) {
@@ -142,7 +143,7 @@ onMounted(() => void load())
             <p class="ag-feature-kicker">能力 03</p>
             <h2>管家模型辅助</h2>
             <p>
-              Steward 推荐卡的候选补全 / 排序 / 解释三类模型辅助的平台级开关；
+              Steward 的候选补全 / 排序 / 解释 / 称谓优化四类模型辅助的平台级开关；
               仍需空间 owner 打开对应空间级开关才会实际调用模型。
             </p>
           </div>
@@ -152,6 +153,7 @@ onMounted(() => void load())
                 { kind: 'candidate', label: '候选补全' },
                 { kind: 'ranking', label: '推荐排序' },
                 { kind: 'explanation', label: '卡片解释' },
+                { kind: 'terminology', label: '称谓优化' },
               ] as const)"
               :key="assist.kind"
               type="button"

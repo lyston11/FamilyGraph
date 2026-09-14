@@ -11,7 +11,7 @@ import hashlib
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -32,6 +32,7 @@ from app.services.relationship_graph import (
     birth_from_user,
     load_graph,
 )
+from app.services.steward_terminology_snapshot import TerminologyInput
 from app.services.terms import TermSnapshot
 from app.utils.timeutil import utcnow
 
@@ -44,7 +45,8 @@ def canonical_hash(value: Any) -> str:
     ).hexdigest()
 
 
-def config_fingerprint() -> str:
+def search_config_fingerprint() -> str:
+    """Structural cache and search budgets exclude presentation-only changes."""
     from app.services.derived_facts import KINSHIP_ALGO_VERSION
 
     return canonical_hash(
@@ -54,7 +56,19 @@ def config_fingerprint() -> str:
             "algorithm": KINSHIP_ALGO_VERSION,
             "depth": relationship_resolver.MAX_PATH_DEPTH,
             "max_paths": relationship_resolver.MAX_SIMPLE_PATHS,
+        }
+    )
+
+
+def config_fingerprint() -> str:
+    from app.services.steward_terminology_snapshot import rules_fingerprint
+
+    return canonical_hash(
+        {
+            "search": search_config_fingerprint(),
             "presentation": "pfv-v4",
+            "terminology": rules_fingerprint(),
+            "terminology_model_enabled": config.STEWARD_ASSIST_TERMINOLOGY,
         }
     )
 
@@ -73,6 +87,7 @@ def input_versions(session: Session, space_id: int) -> dict[str, Any]:
         "version": SNAPSHOT_VERSION,
         "global": values.get(0, [0, 0, 0]),
         "space": values.get(space_id, [0, 0, 0]),
+        "search_config": search_config_fingerprint(),
         "config": config_fingerprint(),
     }
 
@@ -128,6 +143,7 @@ class ViewerInput:
     nodes_json: str
     births: tuple[tuple[int, tuple[str, int] | None], ...]
     captured_at: datetime
+    terminology: TerminologyInput = field(default_factory=TerminologyInput)
 
 
 def read_viewer(
@@ -153,6 +169,7 @@ def viewer_from_session(
 ) -> ViewerInput:
     """Detach all viewer inputs while the caller owns one explicit snapshot."""
     from app.services.personal_family_view import _node_display
+    from app.services.steward_terminology_snapshot import load_input
     from app.services.terms import load_term_snapshot
 
     account = session.get(Account, account_id)
@@ -207,6 +224,9 @@ def viewer_from_session(
         nodes_json=json.dumps(nodes, ensure_ascii=False, separators=(",", ":")),
         births=tuple(births),
         captured_at=utcnow(),
+        terminology=load_input(
+            session, account_id=account.id, root_user_id=actor.id, space_id=space_id
+        ),
     )
 
 

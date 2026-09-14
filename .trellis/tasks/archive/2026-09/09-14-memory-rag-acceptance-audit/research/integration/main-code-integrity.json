@@ -1,0 +1,32 @@
+{
+  "head": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+  "code_commit": "aebee83c3feda56c2df47e61a13919bf037829f9",
+  "audit_path": ".trellis/tasks/09-14-memory-rag-acceptance-audit",
+  "artifacts": [
+    {
+      "manifest": "research/artifacts.json",
+      "files_passed": 30,
+      "decompressed_passed": 6
+    },
+    {
+      "manifest": "research/final/artifacts.json",
+      "files_passed": 24,
+      "decompressed_passed": 13
+    }
+  ],
+  "package_trees": {
+    "backend": "3a5c4f70dc6537f3f5d1b3439d0a3d44011fcdab",
+    "agent": "e13401a5fb3264751e23b6a3c2993cc881184dcb",
+    "frontend": "1252cc132a00f34c11c4a2551f61b5ad36e988ac",
+    "shared": "06bb7460258941206e467fc2a2057949e656c542",
+    "scripts": "98e703d6969b081bc2a77794c1e0480e0c74507b"
+  },
+  "working_source_files_passed": {
+    "backend": 366,
+    "agent": 40,
+    "frontend": 208,
+    "shared": 1,
+    "scripts": 16
+  },
+  "passed": true
+}

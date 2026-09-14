@@ -9,13 +9,6 @@
 - 解析联动：显式停用行让解析走 setting_disabled（优先于平台默认）。
 """
 
-from conftest import (
-    auth_header,
-    create_agent_fixture,
-    create_agent_session,
-    create_user_with_pin,
-    login,
-)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -27,6 +20,13 @@ from app.services.agent_provider import (
     resolve_for_space,
 )
 from app.utils import timeutil
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_agent_session,
+    create_user_with_pin,
+    login,
+)
 
 BASE = "/api/spaces/{space_id}/model-settings"
 

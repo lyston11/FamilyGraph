@@ -155,6 +155,9 @@ class StewardSuggestionRecipient(Base):
     # 驳回冷却只作用于该收件人的同一证据版本（证据变更 supersede 后冷却失效）
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cooldown_evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 有限偏好反馈（09-13 terminology）：kept=保留为我的叫法 / restored=恢复默认
+    preference_feedback: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    preference_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover

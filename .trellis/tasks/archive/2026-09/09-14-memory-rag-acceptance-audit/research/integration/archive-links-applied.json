@@ -1,0 +1,206 @@
+{
+  "month": "2026-09",
+  "archived_tasks": [
+    "09-13-agent-memory-rag-remediation",
+    "09-13-memory-contract-repair",
+    "09-13-assistant-context-compaction",
+    "09-13-rag-retrieval-citations",
+    "09-13-rag-index-lifecycle",
+    "09-13-agent-memory-capability-plan",
+    "09-14-memory-rag-acceptance-audit"
+  ],
+  "planning_task_retained": "09-13-steward-memory-evidence-projections",
+  "changes": [
+    {
+      "file": ".trellis/HANDOFF.md",
+      "before_sha256": "88d3424afb2fd6397faf3d8a061b246a6dc35036d23b04ae386a46374486a713",
+      "after_sha256": "f4e0a8772477c5d6f565b05c3efee5b268555e37b17f37ff7c650e279147bdc4"
+    },
+    {
+      "file": ".trellis/spec/backend/assistant-history-restoration.md",
+      "before_sha256": "5de436508ff6f86a4fa2fc6bd4485bd3d48890ce794f2564243abd8a5e83a9d8",
+      "after_sha256": "0d33d85f9966d81dc62ded2b70c1333976ceee3eae02c067ce8cfb37a5e040fd"
+    },
+    {
+      "file": ".trellis/spec/backend/memory-contract.md",
+      "before_sha256": "0788c13bff78176433ee79bc06da03b495d344ad9f8ff2a23900c718b57ae483",
+      "after_sha256": "800fd029d62fee729abf4953d9bd59771a3e0fabc5650c91e6a33639e218a656"
+    },
+    {
+      "file": ".trellis/tasks/09-13-steward-memory-evidence-projections/check.jsonl",
+      "before_sha256": "d02fb25b0efc9a4620e50eaf17d779181db6941c09b17fccc8e84b4be12deda0",
+      "after_sha256": "47911dcbcada2a5478ff84c71734e5fa655cc4145ec87a43d0b86f015a3f60a8"
+    },
+    {
+      "file": ".trellis/tasks/09-13-steward-memory-evidence-projections/implement.jsonl",
+      "before_sha256": "d02fb25b0efc9a4620e50eaf17d779181db6941c09b17fccc8e84b4be12deda0",
+      "after_sha256": "47911dcbcada2a5478ff84c71734e5fa655cc4145ec87a43d0b86f015a3f60a8"
+    },
+    {
+      "file": ".trellis/tasks/09-13-steward-memory-evidence-projections/prd.md",
+      "before_sha256": "a9edb54dbb5b55e452ae8c40bcce6e5753d875f3a3fc7427485c767c57459064",
+      "after_sha256": "1551007ff57e683a31fd6f88bb10f89dd7f2cbfb1aa1f9ae2122bf96c5c58bb1"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/check.jsonl",
+      "before_sha256": "cd9d42b48153f35455f1859c7d8f31ab23f5a0a11f833878c9303b33f9e94faa",
+      "after_sha256": "e82bec575abcc5f4e992dc394d294b5792f9e0e0dbb8e773edac5facb407e4b0"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/design.md",
+      "before_sha256": "0addb59a7d5bfa90ad40f5521407a08cb2984add974100e0823961b30094a421",
+      "after_sha256": "c51f798336aeaf125d1dc88378df3c38a9707956d2ceb5248a36f05fbf9bd362"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/implement.jsonl",
+      "before_sha256": "2c39b5cd5d23ef7891e142d466e31369e126e9784550d76f067232dd2647adfc",
+      "after_sha256": "61c193cb79f1007dda5a9b70a8ffbdc11d508b5d5795f9748eb0b2dc9f1fb551"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/implement.md",
+      "before_sha256": "b1c698719e622d7336aeddd2cab387574780979a4eb677b2c2a7f26091adbf5c",
+      "after_sha256": "98df7e19bb07ac8ab5c668c9e24c32dc141cf27b5e5d63b301905985d827b3c4"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/prd.md",
+      "before_sha256": "69cd7078f2f09c6348b2bf7ff855aa6a095e0feb330354fc0cfef19499c4857f",
+      "after_sha256": "48013dc61583dc40d22d002e9b3063d1b78b525ec414c15e4b3d2fd38a277e07"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/context-budget-design-results.md",
+      "before_sha256": "ef3c9e0202f7c63f1e28f6f9458071504033755be186923f968f66871798da68",
+      "after_sha256": "9245fb78c7e50c30629c05f26bf263504704399cdcf141ea8655aab8a2a52952"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/research-validation.md",
+      "before_sha256": "dfcff9e02d50535ba1bf0a91b847f49cdd732aa2e95758d800a68d6ecfa824cc",
+      "after_sha256": "8068209034f73edd1645dbdf0eeb06933f652d4fe5432eaade15fc517825476f"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/steward-capability-handoff.md",
+      "before_sha256": "420a11fa2a758389f61a0185a50f32c407f3c968c0303a6482d2553374ce9dfd",
+      "after_sha256": "40a39cdef6909ed31bba54c34ab7f6a3e4dc3bc358f15d26d3b5e194c0ee6e0e"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/check.jsonl",
+      "before_sha256": "69f19cf36ccf369c2e14c9c4b54d21c451b3230a7ae4516252eb614a6592fadd",
+      "after_sha256": "367e7df5ad8949ca6b9ba50356e0e6651e86b229e95ab07028cbf668a291ecd5"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/implement.jsonl",
+      "before_sha256": "ba08511fd1fb62739f3d4083f63038bac0557828eaefaf7463f5c5ddf282abee",
+      "after_sha256": "11e4beaf51c50edf2ab99c021970e6adbff9249454e9a6513c079571ae051cdf"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/prd.md",
+      "before_sha256": "abf45671429e05bb603dcef77e245185d765d73361b36dbbb6a21f33a2f08097",
+      "after_sha256": "f10e6f791e135121bc966fa9fcf804dfdcd22f3ea70dca52d015ae7ac10ff325"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/research/execution.md",
+      "before_sha256": "c7b150eece35258e7f713277688b1238fafab5e29011721a2203159a09734448",
+      "after_sha256": "6b9c533eaa13c9ff9f26068f94da8ad22bf859f3f45f207897b57586ab7bda43"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction/check.jsonl",
+      "before_sha256": "448bce98b48348891e3e57bd1efaaa283069e1fcd3722061555bcb45bc194485",
+      "after_sha256": "d186d92d59bb399df642892661731fd9c9661b081c284d5750058bdf47f5692a"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction/implement.jsonl",
+      "before_sha256": "3e4eba9e2f10ba3a7d8eb73fb71070a8090b2d2dfecf73fecb8d11891ef07c98",
+      "after_sha256": "ed6c46aec1212831d36c304e5c3581461597a88e0e83c8cc7d935f92afcccac5"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-memory-contract-repair/check.jsonl",
+      "before_sha256": "448bce98b48348891e3e57bd1efaaa283069e1fcd3722061555bcb45bc194485",
+      "after_sha256": "d186d92d59bb399df642892661731fd9c9661b081c284d5750058bdf47f5692a"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-memory-contract-repair/implement.jsonl",
+      "before_sha256": "bac41fa484c85972eafa871ba9130e75e843da92ba634a76dfa6dc8a015a2222",
+      "after_sha256": "a7a410bd8316b3df35030bf695bd739778d5229f139621586f425041a551a77d"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-rag-index-lifecycle/check.jsonl",
+      "before_sha256": "28a9c2677f49c574b28def7a3bb86cd100c6d5d8812db399832c7569ba489a89",
+      "after_sha256": "334cdc8f4c74e812ad56270eda556a74f7fac31bf97c4ecc4c90cfb33db85164"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-rag-index-lifecycle/implement.jsonl",
+      "before_sha256": "9376968c415e0b9601aa9682a27ecbf09a19865c938fd7f315e84f1f946d9ef5",
+      "after_sha256": "58a04bd01d56aef125918cca5448fd69f7bac66fc516c991c0d178af3f9e7a64"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-rag-index-lifecycle/research/acceptance-final.md",
+      "before_sha256": "4739037a55e39a383b12d948a90a2e76e0c34edb628e88a016fa4b0fea501d37",
+      "after_sha256": "73cf1f165fbbe11ee15957bfd6447510f9fcc2639dddab0311748533008d39b3"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/check.jsonl",
+      "before_sha256": "5f40ad9388ef3c83d1839c0e912d32094f52f05ee02fe4092b79bf621f06f166",
+      "after_sha256": "53241483aaceecfc508cb21739724ee7beff8913d5d37ab9a9b5115abe6e2bd8"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/implement.jsonl",
+      "before_sha256": "ef4be2bd1bcf57e534ba4c7d20028cf50b5237609893fead7a9db191eda4055f",
+      "after_sha256": "e69c84d04d30539a03a195e6c7130e59a33b9bc5d2f0c0baed44a06c558008a0"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/research/acceptance-implementation.md",
+      "before_sha256": "f429d429544d56acfb8ea34ca9289733d428eaea6c0d13a1e78f270100695626",
+      "after_sha256": "1b8c7613252998d66b27d6ecc69514643169cb79d4e55ac207133ca42f25c98b"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/check.jsonl",
+      "before_sha256": "ed769ddda6e215b373fafb9dae598f4d6a1dd04e60d9cbd135f5cb68033f2ae4",
+      "after_sha256": "7adb7812c422f88f3ac7ada6434395c8b471b7b58e45110c5b3ebc70f9b0a278"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/implement.jsonl",
+      "before_sha256": "89e45f3c4d030907b174052d1cebf0f52b12a0053907f89c2ac9591fabd892e8",
+      "after_sha256": "640e56a65a622ba6174c0cf37b0be4314b65e61040f090a03ca4a794a6035b54"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/coverage-and-roadmap.md",
+      "before_sha256": "a9fa9b1aea1303e068e30dadb0b554dcc36cd289d9776371dc4efcb755fbe8b2",
+      "after_sha256": "6a191d2cfac2bb2f0b5bf16f899558d4990f457dcca5e01e7861eb384138f9d9"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/planning-sources.md",
+      "before_sha256": "f10d862fd8b94dee948843ea85fa60b2a8fbc0331807db0cd23c7ce7bdf44eea",
+      "after_sha256": "74e4bb2eb5e9f3d0cc17e972d74b7421e9a675e702004138fda017820f263105"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/validation.md",
+      "before_sha256": "cd827e9ac4ecc0ece254b1ea2bb73022555efc4a834b310ac37449445cfae22f",
+      "after_sha256": "550dd0e5fe960afcc46d28a98880ac5bfaa83e854ff213cf1973c438762c09f8"
+    },
+    {
+      "file": ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/task.json",
+      "before_sha256": "6d8b536582fbe5c74183bbc403a35aefd03e4a3ec878d47f400ee0295cd4e918",
+      "after_sha256": "00f0db3710c44b168ebe7f93b3dfe9668fac6260592b61655c8282b8b1a16a58"
+    },
+    {
+      "file": "docs/ARCHITECTURE.md",
+      "before_sha256": "54cc7128eec6156eaad7212fa85000f279dadd9da3078a391beaa3a05e0f6c42",
+      "after_sha256": "bbfd2397e1b203ac4934f28a4567eeaf051a8fae9319f26f4aa0ab9a066f3b79"
+    }
+  ],
+  "frozen_markdown_unchanged": [
+    ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/research/b-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-13-agent-memory-rag-remediation/research/d-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction/research/check.md",
+    ".trellis/tasks/archive/2026-09/09-13-assistant-context-compaction/research/implementation.md",
+    ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/research/protocol-preflight.md",
+    ".trellis/tasks/archive/2026-09/09-13-rag-retrieval-citations/research/retrieval-baseline.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/b-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/c/check.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/c/implementation.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/d-integration-check.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/protocol-preflight.md",
+    ".trellis/tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/retrieval/retrieval-baseline.md"
+  ],
+  "missing": [],
+  "applied": true
+}

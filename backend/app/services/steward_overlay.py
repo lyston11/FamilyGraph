@@ -289,6 +289,7 @@ def _snapshot(
                         subject_user_id=edge.subject_user_id,
                         object_user_id=edge.object_user_id,
                         term=term["term"],
+                        fact_type=edge.relation_kind,
                         evidence_fact_count=len(evidence_ids),
                     ),
                 }

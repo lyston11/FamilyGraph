@@ -24,6 +24,18 @@ export interface AgentMessageOut {
   role: string
   content_json: { text?: string } & Record<string, unknown>
   created_at: string
+  /** 服务端按当前读者授权投影后的引用（不回显受限来源标识）。 */
+  citations?: unknown[]
+  /** 因来源失效/失权而未列入 citations 的引用数量（可选，缺省 0）。 */
+  unavailable_citation_count?: number
+}
+
+/** GET /api/agent/runs/{run_id}/events/{seq}/citations 固定后备读取。 */
+export interface RunEventCitations {
+  run_id: number
+  seq: number
+  citations: unknown[]
+  unavailable_citation_count: number
 }
 
 export interface AgentRunRef {
@@ -127,10 +139,12 @@ export interface SpaceAgentSetting {
   assist_candidate: boolean
   assist_ranking: boolean
   assist_explanation: boolean
+  assist_terminology: boolean
   /** 09-13 治理：辅助开关生效值（平台配置 ∧ 空间级）；空间开而平台关 → 提示依据 */
   assist_candidate_effective: boolean
   assist_ranking_effective: boolean
   assist_explanation_effective: boolean
+  assist_terminology_effective: boolean
   /** 09-13 推测层空间级开关（仅 steward 维度；assistant 行恒 false） */
   inferred_tree: boolean
   /** 推测层生效 = 平台 AND 空间；空间开而平台关 → 前端显示可解释提示 */

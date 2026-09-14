@@ -9,7 +9,6 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
-from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -30,6 +29,7 @@ from app.services.relationship_resolver import (
     start_search,
 )
 from app.utils.timeutil import utcnow
+from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
 def _graph(size: int, links: list[tuple[int, int, str]]) -> RelationshipGraph:
@@ -438,6 +438,11 @@ def test_ordinary_queries_reuse_only_published_structure_even_after_terms_change
     )
     changed = derived_facts.get_or_compute(db_session, **arguments)
     assert changed.resolution == resolution
+    # Built-in presentation rules also invalidate rendered terms, not paths.
+    db_session.execute(delete(DerivedFact))
+    monkeypatch.setattr(terms, "PRESENTATION_RULE_VERSION", "test-next-presentation")
+    changed_rules = derived_facts.get_or_compute(db_session, **arguments)
+    assert changed_rules.resolution == resolution
     # A structural algorithm version is a different input, unlike a term edit.
     # Neither the legacy row nor the publication may bypass a fresh search.
     db_session.execute(delete(DerivedFact))

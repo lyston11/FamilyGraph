@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import fastapi
 import pytest
-from conftest import create_user_with_pin
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,6 +19,7 @@ from app.models.space import FamilySpace, SpaceProfileRef
 from app.models.steward import ActionCard
 from app.services import action_cards
 from app.utils import timeutil
+from conftest import create_user_with_pin
 
 
 def _err_code(exc: Exception) -> str:

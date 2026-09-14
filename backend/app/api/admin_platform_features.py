@@ -23,9 +23,11 @@ def _assist_out(state: platform_features.PlatformFeatureState) -> StewardAssistS
         candidate=state.steward_assist_candidate,
         ranking=state.steward_assist_ranking,
         explanation=state.steward_assist_explanation,
+        terminology=state.steward_assist_terminology,
         candidate_source=state.steward_assist_candidate_source,
         ranking_source=state.steward_assist_ranking_source,
         explanation_source=state.steward_assist_explanation_source,
+        terminology_source=state.steward_assist_terminology_source,
     )
 
 
@@ -80,6 +82,7 @@ def update_platform_features(
         steward_assist_candidate=body.steward_assist_candidate,
         steward_assist_ranking=body.steward_assist_ranking,
         steward_assist_explanation=body.steward_assist_explanation,
+        steward_assist_terminology=body.steward_assist_terminology,
         system_admin_id=admin.id,
     )
     admin_audit.record_access(
@@ -93,6 +96,7 @@ def update_platform_features(
             "steward_assist_candidate": body.steward_assist_candidate,
             "steward_assist_ranking": body.steward_assist_ranking,
             "steward_assist_explanation": body.steward_assist_explanation,
+            "steward_assist_terminology": body.steward_assist_terminology,
         },
         result_count=1,
         ip=_ip(request),

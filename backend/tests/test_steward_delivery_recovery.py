@@ -3,7 +3,6 @@
 from datetime import timedelta
 
 import pytest
-from conftest import admin_session_headers, auth_header, create_system_admin, login
 from sqlalchemy import func, select
 from test_steward_staged_pipeline import _family, _run
 
@@ -22,6 +21,7 @@ from app.models.steward import (
 from app.services import steward, steward_assist, steward_delivery, steward_gc, steward_runtime
 from app.services.relationship_resolver import advance_search
 from app.utils.timeutil import utcnow
+from conftest import admin_session_headers, auth_header, create_system_admin, login
 
 
 @pytest.fixture(autouse=True)
@@ -57,11 +57,11 @@ def _poison(monkeypatch):
     calls = []
     original = steward_delivery._apply
 
-    def apply(session, intent, job, space):
+    def apply(session, intent, job, space, **kwargs):
         if intent.kind == "assist":
             calls.append(intent.id)
             raise ValueError("synthetic local projection failure")
-        return original(session, intent, job, space)
+        return original(session, intent, job, space, **kwargs)
 
     monkeypatch.setattr(steward_delivery, "_apply", apply)
     return calls, original

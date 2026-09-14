@@ -2,11 +2,12 @@ import { apiClient } from '@/api/client'
 import type {
   Memory,
   MemoryCandidate,
-  MemoryCitation,
+  MemoryCandidateSource,
   MemoryScope,
   MemoryScopeKind,
   MemorySensitivity,
   PlatformFeatureFlags,
+  RagSearchResult,
 } from '@/types/memory'
 
 export async function fetchPlatformFeatures(): Promise<PlatformFeatureFlags> {
@@ -25,14 +26,13 @@ export interface ConfirmMemoryCandidatePayload {
  * 经待确认流程明确 scope 后才成为可检索记忆（V2.5 合同：无绕过审计的直接发布）。
  */
 export interface CreateMemoryCandidatePayload {
-  raw_quote: string
+  source: MemoryCandidateSource
+  idempotency_key: string
+  raw_quote?: string
   summary: string
   purpose: string
   suggested_scope: MemoryScopeKind
   sensitivity: MemorySensitivity
-  source_span?: Record<string, unknown>
-  source_message_id?: number | null
-  source_document_ref?: string | null
 }
 
 export async function fetchMemoryCandidates(includeDecided = false): Promise<MemoryCandidate[]> {
@@ -45,10 +45,7 @@ export async function fetchMemoryCandidates(includeDecided = false): Promise<Mem
 export async function createMemoryCandidate(
   payload: CreateMemoryCandidatePayload,
 ): Promise<MemoryCandidate> {
-  const { data } = await apiClient.post<MemoryCandidate>('/memory-candidates', {
-    source_span: {},
-    ...payload,
-  })
+  const { data } = await apiClient.post<MemoryCandidate>('/memory-candidates', payload)
   return data
 }
 
@@ -92,8 +89,8 @@ export async function searchRag(
   spaceId: number,
   query: string,
   limit = 20,
-): Promise<MemoryCitation[]> {
-  const { data } = await apiClient.get<MemoryCitation[]>('/rag/search', {
+): Promise<RagSearchResult[]> {
+  const { data } = await apiClient.get<RagSearchResult[]>('/rag/search', {
     params: { space_id: spaceId, q: query, limit },
   })
   return data
@@ -102,9 +99,13 @@ export async function searchRag(
 export const searchMemory = searchRag
 
 const MEMORY_ERROR_COPY: Record<string, string> = {
+  MEMORY_FEATURE_STATE_UNAVAILABLE: '能力状态暂时无法确认，请刷新后重试',
+  MEMORY_DISABLED: '记忆功能当前未启用，请联系系统管理员',
+  RAG_DISABLED: '检索与引用当前未启用，请联系系统管理员',
+  MEMORY_REFRESH_FAILED: '操作已提交，但最新状态未能加载，请刷新或重试',
   MEMORY_CANDIDATE_NOT_FOUND: '候选记忆不存在或已被处理',
-  MEMORY_SCOPE_FORBIDDEN: '只能选择本人所在的活跃空间',
-  MEMORY_SENSITIVE_SCOPE_FORBIDDEN: '高敏感内容不能共享到空间',
+  MEMORY_SCOPE_FORBIDDEN: '来源或保存范围当前不可用，请确认读取权限并刷新后重试',
+  MEMORY_SENSITIVE_SCOPE_FORBIDDEN: '敏感等级或共享范围不符合来源限制，请保留原敏感等级并缩小范围',
   MEMORY_STATE_CONFLICT: '记忆状态已变化，请刷新后重试',
   MEMORY_PRIVACY_BLOCKED: '隐私策略阻止了这个 scope，请选择更严格的范围',
   MEMORY_NOT_FOUND: '记忆不存在或已被删除',

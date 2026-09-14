@@ -20,6 +20,7 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpaceStatsStore } from '@/stores/spaceStats'
 import { useSpacesStore } from '@/stores/spaces'
+import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import { useUiStore } from '@/stores/ui'
 
 // 空间切换事务按空间类型触发新投影加载；API 层全部打桩。
@@ -238,6 +239,7 @@ describe('useSpaceContext（空间切换事务）', () => {
       vi.spyOn(household, 'clearSpace'),
       vi.spyOn(spaceStats, 'clearSpace'),
       vi.spyOn(notifications, 'clearSpace'),
+      vi.spyOn(useStewardSuggestionsStore(), 'clearSpace'),
       vi.spyOn(memory, 'resetForSpace'),
       vi.spyOn(actionCards, 'resetForSpace'),
       vi.spyOn(kinship, 'resetForSpace'),

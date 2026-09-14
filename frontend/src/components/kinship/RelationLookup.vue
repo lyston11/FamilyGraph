@@ -47,6 +47,7 @@ const SOURCE_LEVEL_LABELS: Record<TermSourceLevel, string> = {
   system: '标准称谓',
   structural: '结构描述',
   derived: '管家称谓',
+  steward: '管家称谓',
 }
 
 function sourceLabel(level: TermSourceLevel | null | undefined): string {

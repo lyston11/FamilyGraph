@@ -3,7 +3,6 @@
 from datetime import timedelta
 
 import pytest
-from conftest import create_agent_fixture, create_agent_message, create_agent_session
 from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent
 from app.services import agent_queue
 from app.utils import timeutil
+from conftest import create_agent_fixture, create_agent_message, create_agent_session
 
 
 def _enqueue(db, agent_session, *, kind="assistant", message=None, allowlist=None):

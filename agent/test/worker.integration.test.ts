@@ -13,6 +13,7 @@
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -21,7 +22,12 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { InternalClient, type ProviderPolicyResult } from "../src/client.js";
+import {
+  InternalClient,
+  type ProviderPolicyResult,
+  type RunContextBlock,
+  type RunContextMessage,
+} from "../src/client.js";
 import type { AgentConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { providerWireName } from "../src/tools.js";
@@ -44,12 +50,15 @@ interface MockJob {
   leasedAt?: number;
   /** Override for the context projection's provider resolution. */
   provider?: Record<string, unknown>;
+  messages?: RunContextMessage[];
+  contextBlocks?: RunContextBlock[];
+  contextBuildId?: number;
 }
 
 interface MockState {
   jobs: MockJob[];
   /** Keyed by String(run_id). */
-  eventsByRun: Map<string, Array<{ seq: number; type: string; public_payload: unknown }>>;
+  eventsByRun: Map<string, FgWireEvent[]>;
   toolCalls: Array<{ run_id: string; tool: string; body: Record<string, unknown> }>;
   settles: Array<{
     run_id: string;
@@ -70,6 +79,56 @@ const state: MockState = {
 };
 
 let idCounter = 0;
+const CURRENT_PROMPT = "Please echo 'ping' then say done.";
+const HISTORY_FACT = "The blue tin is kept in the attic cupboard.";
+
+function historyMessages(): RunContextMessage[] {
+  return [
+    {
+      id: 1,
+      role: "user",
+      content_json: { text: HISTORY_FACT },
+      created_at: "2026-09-01T00:00:00Z",
+    },
+    {
+      id: 2,
+      role: "assistant",
+      created_at: "2026-09-01T00:00:01Z",
+      content_json: {
+        text: "Acknowledged.",
+        thinking: "old-private-thinking",
+        tool_results: [{ text: "old-tool-result" }],
+        citations: [{ content: "old-rag-citation" }],
+      },
+    },
+    {
+      id: 3,
+      role: "user",
+      content_json: { text: CURRENT_PROMPT },
+      created_at: "2026-09-01T00:00:02Z",
+    },
+  ];
+}
+
+function compactionHistoryMessages(): RunContextMessage[] {
+  const history = historyMessages();
+  return [
+    ...history.slice(0, 2),
+    {
+      id: 3,
+      role: "user",
+      content_json: { text: "Recent synthetic note. ".repeat(4_000) },
+      created_at: "2026-09-01T00:00:02Z",
+    },
+    {
+      id: 4,
+      role: "assistant",
+      content_json: { text: "Ready." },
+      created_at: "2026-09-01T00:00:03Z",
+    },
+    { ...history[2]!, id: 5 },
+  ];
+}
 
 function makeConfig(port: number): AgentConfig {
   return {
@@ -285,7 +344,8 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
   });
 }
 
-type FgWireEvent = { seq: number; type: string; public_payload: unknown };
+type FgWireEvent = { seq: number; type: string; public_payload: unknown;
+  context_reference?: { build_id: number; attempt: number; used_handles: string[] } };
 
 function resetState(): void {
   state.jobs.length = 0;
@@ -301,6 +361,9 @@ function enqueueJob(options: {
   allowlist: string[];
   provider?: Record<string, unknown>;
   agentKind?: "assistant" | "unexpected";
+  messages?: RunContextMessage[];
+  contextBlocks?: RunContextBlock[];
+  contextBuildId?: number;
 }): string {
   idCounter += 1;
   const jobId = 4000 + idCounter;
@@ -315,13 +378,16 @@ function enqueueJob(options: {
     run_token: `run-token-${runId}`,
     allowlist: [...options.allowlist],
     ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(options.messages !== undefined ? { messages: options.messages } : {}),
+    ...(options.contextBlocks !== undefined ? { contextBlocks: options.contextBlocks } : {}),
+    contextBuildId: options.contextBuildId,
   });
   // Backend enqueue owns message.user_added at seq 0 (interactive assistant run).
   state.eventsByRun.set(String(runId), [
     {
       seq: 0,
       type: "message.user_added",
-      public_payload: { role: "user", text: "Please echo 'ping' then say done." },
+      public_payload: { role: "user", text: CURRENT_PROMPT },
     },
   ]);
   return String(runId);
@@ -338,14 +404,16 @@ function contextProjection(job: MockJob): Record<string, unknown> {
     attempt: job.attempt,
     policy_version: job.policy_version,
     tool_allowlist: [...job.allowlist],
-    messages: [
+    messages: job.messages ?? [
       {
         id: 11,
         role: "user",
-        content_json: { text: "Please echo 'ping' then say done." },
+        content_json: { text: CURRENT_PROMPT },
         created_at: new Date().toISOString(),
       },
     ],
+    ...(job.contextBlocks !== undefined ? { context_blocks: job.contextBlocks } : {}),
+    context_build_id: job.contextBuildId ?? null,
     provider:
       job.provider ??
       ({
@@ -390,8 +458,14 @@ interface ScriptOptions {
   leakSecretInPayload?: boolean;
   /** Captures the post-onPayload request payloads (what would hit the wire). */
   wirePayloads?: unknown[];
+  /** Snapshot the real Pi context before the scripted response. */
+  modelContexts?: Context[];
+  sessionEvents?: AgentSessionEvent[];
+  responseFor?: (context: Context) => AssistantMessage;
   /** Keep the provider stream open until the worker's AbortSignal fires. */
   waitForAbort?: boolean;
+  /** Simulate a provider completing successfully while cancellation is in flight. */
+  completeAfterAbort?: boolean;
 }
 
 function scriptedStream(
@@ -403,6 +477,7 @@ function scriptedStream(
   streamOptions?: SimpleStreamOptions,
 ) => AssistantMessageEventStream {
   return (_model, context, streamOptions) => {
+    options.modelContexts?.push({ ...context, messages: structuredClone(context.messages) });
     const stream = createAssistantMessageEventStream();
     void (async () => {
       // Assemble a provider-shaped request payload; invoking onPayload runs
@@ -437,16 +512,24 @@ function scriptedStream(
           if (streamOptions?.signal?.aborted) return resolve();
           streamOptions?.signal?.addEventListener("abort", () => resolve(), { once: true });
         });
-        const blocked = turns[0]![0]!;
-        const failed = { ...blocked, stopReason: "aborted" as const, errorMessage: "aborted" };
-        stream.push({ type: "start", partial: failed });
-        stream.push({ type: "error", reason: "aborted", error: failed });
-        stream.end(failed);
-        return;
+        if (!options.completeAfterAbort) {
+          const blocked = turns[0]![0]!;
+          const failed = { ...blocked, stopReason: "aborted" as const, errorMessage: "aborted" };
+          stream.push({ type: "start", partial: failed });
+          stream.push({ type: "error", reason: "aborted", error: failed });
+          stream.end(failed);
+          return;
+        }
       }
 
       const turnIndex = context.messages.filter((m) => m.role === "toolResult").length;
-      const message = turns[Math.min(turnIndex, turns.length - 1)]![0]!;
+      const message: AssistantMessage = {
+        ...(options.responseFor?.(context) ?? turns[Math.min(turnIndex, turns.length - 1)]![0]!),
+        api: _model.api,
+        provider: _model.provider,
+        model: _model.id,
+        timestamp: Date.now(),
+      };
       stream.push({ type: "start", partial: message });
       for (const [index, block] of message.content.entries()) {
         if (block.type === "text") {
@@ -473,11 +556,15 @@ function scriptedStream(
           });
         }
       }
-      stream.push({
-        type: "done",
-        reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-        message,
-      });
+      if (message.stopReason === "error") {
+        stream.push({ type: "error", reason: "error", error: message });
+      } else {
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+      }
       stream.end(message);
     })();
     return stream;
@@ -543,16 +630,47 @@ function textTurn(text: string): AssistantMessage[] {
   ];
 }
 
+function overflowRecoveryResponse(retryError?: string): (context: Context) => AssistantMessage {
+  let normalRequests = 0;
+  return (context) => {
+    const input = context.messages
+      .map((message) =>
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text)
+              .join(""),
+      )
+      .join("\n");
+    if (context.systemPrompt?.startsWith("You are a context summarization assistant.")) {
+      // Derive the checkpoint from the actual summary request, not a canned answer.
+      const fact = input.match(/The blue tin is kept in the [^.\n]+\./)?.[0];
+      return textTurn("Recovered checkpoint: " + (fact ?? "No fact in summary input."))[0]!;
+    }
+    const errorMessage = ++normalRequests === 1 ? "maximum context length exceeded" : retryError;
+    if (errorMessage) {
+      return { ...textTurn("")[0]!, stopReason: "error", errorMessage };
+    }
+    const fact = input.match(/Recovered checkpoint: (The blue tin is kept in the [^.\n]+\.)/)?.[1];
+    return textTurn("Recovered answer: " + (fact ?? "No checkpoint in retry input."))[0]!;
+  };
+}
+
 async function buildSessionFactory(
   turns: AssistantMessage[][],
   options: ScriptOptions = {},
 ): Promise<NonNullable<ConstructorParameters<typeof SidecarWorker>[0]["sessionFactory"]>> {
   const mod = await import("../src/session.js");
-  return (cfg, cl, projection, runToken, deps) =>
-    mod.buildRunSession(cfg, cl, projection, runToken, {
+  return async (cfg, cl, projection, runToken, deps) => {
+    const bundle = await mod.buildRunSession(cfg, cl, projection, runToken, {
       ...deps,
       streamOverride: scriptedStream(turns, options),
     });
+    if (options.sessionEvents)
+      bundle.session.subscribe((event) => options.sessionEvents!.push(event));
+    return bundle;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +769,202 @@ describe("worker full cycle against mock FastAPI", () => {
     await expect(client.leaseJob()).rejects.toThrow("non-assistant");
   });
 
+  it("restores history and sends the current user and RAG block once without replaying events", async () => {
+    resetState();
+    const runKey = enqueueJob({
+      allowlist: ["familygraph.echo"],
+      messages: historyMessages(),
+      contextBlocks: [
+        {
+          source_id: "current-source",
+          source_type: "memory",
+          scope: "private",
+          sensitivity: "normal",
+          revision: 1,
+          citation: "[R1]",
+          content: "current-authorized-rag-data",
+        },
+      ],
+    });
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([textTurn("done")], { modelContexts }),
+    );
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(modelContexts).toHaveLength(1);
+    expect(modelContexts[0]!.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    const requestText = JSON.stringify(modelContexts[0]!.messages);
+    expect(requestText).toContain(HISTORY_FACT);
+    expect(requestText).toContain("Acknowledged.");
+    expect(requestText.split(CURRENT_PROMPT)).toHaveLength(2);
+    expect(requestText.split("current-authorized-rag-data")).toHaveLength(2);
+    expect(requestText).not.toMatch(/old-(private|tool|rag)/);
+    expect(state.toolCalls).toHaveLength(0);
+    const events = state.eventsByRun.get(runKey) ?? [];
+    expect(events.filter((event) => event.type === "message.user_added")).toHaveLength(1);
+    expect(
+      events
+        .filter((event) => event.type === "message.assistant_added")
+        .map((event) => event.public_payload),
+    ).toEqual([{ role: "assistant", text: "done" }]);
+    expect(state.settles[0]).toMatchObject({ run_id: runKey, status: "succeeded" });
+  });
+
+  it("sends the server build and actual completed citation over the InternalClient wire", async () => {
+    resetState();
+    const handle = "rag:42:r1:c9";
+    const unused = "rag:43:r1:c10";
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"], contextBuildId: 471, contextBlocks: [
+      { source_id: "42", source_type: "memory", scope: "private", sensitivity: "normal",
+        revision: 1, citation: handle, content: "synthetic relevant material" },
+      { source_id: "43", source_type: "memory", scope: "private", sensitivity: "normal",
+        revision: 1, citation: unused, content: "synthetic unused material" },
+    ] });
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(undefined, await buildSessionFactory([
+      textTurn(`The answer [${handle}]`),
+    ], { modelContexts }));
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(JSON.stringify(modelContexts)).toContain(unused);
+    const answer = state.eventsByRun.get(runKey)?.find((e) => e.type === "message.assistant_added");
+    expect(answer?.context_reference).toEqual({ build_id: 471, attempt: 1, used_handles: [handle] });
+    expect(answer?.public_payload).toEqual({ role: "assistant", text: `The answer [${handle}]` });
+    expect(state.settles[0]).toMatchObject({ run_id: runKey, status: "succeeded" });
+  });
+
+  it.each([
+    { result: "succeeded", retryError: undefined },
+    { result: "failed", retryError: "retry request rejected" },
+  ])(
+    "settles $result from the final reply after real overflow compaction and retry",
+    async ({ retryError }) => {
+      resetState();
+      const runKey = enqueueJob({
+        allowlist: ["familygraph.echo"],
+        messages: compactionHistoryMessages(),
+      });
+      const modelContexts: Context[] = [];
+      const sessionEvents: AgentSessionEvent[] = [];
+      const { worker } = makeWorker(
+        undefined,
+        await buildSessionFactory([textTurn("")], {
+          modelContexts,
+          sessionEvents,
+          responseFor: overflowRecoveryResponse(retryError),
+        }),
+      );
+
+      expect(await worker.tryLeaseAndRun()).toBe(true);
+      expect(
+        modelContexts.map((context) =>
+          context.systemPrompt?.startsWith("You are a context summarization assistant."),
+        ),
+      ).toEqual([false, true, false]);
+      expect(sessionEvents).toContainEqual(
+        expect.objectContaining({
+          type: "compaction_end",
+          reason: "overflow",
+          aborted: false,
+          willRetry: true,
+          result: expect.objectContaining({ summary: "Recovered checkpoint: " + HISTORY_FACT }),
+        }),
+      );
+      expect(JSON.stringify(modelContexts[2]!.messages)).toContain(
+        "Recovered checkpoint: " + HISTORY_FACT,
+      );
+      const finalMessage = sessionEvents
+        .filter((event) => event.type === "message_end" && event.message.role === "assistant")
+        .at(-1);
+      expect(finalMessage).toMatchObject({
+        message: { stopReason: retryError ? "error" : "stop" },
+      });
+      if (retryError) {
+        expect(state.settles).toEqual([
+          {
+            run_id: runKey,
+            status: "failed",
+            error_code: "PROVIDER_STREAM_ERROR",
+            error: { message: retryError },
+          },
+        ]);
+      } else {
+        const assistants = (state.eventsByRun.get(runKey) ?? []).filter(
+          (event) => event.type === "message.assistant_added",
+        );
+        expect(assistants.at(-1)?.public_payload).toEqual({
+          role: "assistant",
+          text: "Recovered answer: " + HISTORY_FACT,
+        });
+        expect(state.settles).toEqual([
+          {
+            run_id: runKey,
+            status: "succeeded",
+            error_code: undefined,
+            error: undefined,
+          },
+        ]);
+      }
+    },
+  );
+
+  it("settles a persistent context overflow as a provider failure with restored history intact", async () => {
+    resetState();
+    const messages = historyMessages();
+    const current = { ...messages[2]!, id: 5 };
+    const recentText = "Recent synthetic note. ".repeat(4_000);
+    const runKey = enqueueJob({
+      allowlist: ["familygraph.echo"],
+      messages: [
+        ...messages.slice(0, 2),
+        {
+          id: 3,
+          role: "user",
+          content_json: { text: recentText },
+          created_at: "2026-09-01T00:00:02Z",
+        },
+        {
+          id: 4,
+          role: "assistant",
+          content_json: { text: "Ready." },
+          created_at: "2026-09-01T00:00:03Z",
+        },
+        current,
+      ],
+    });
+    const failed: AssistantMessage = {
+      ...textTurn("")[0]!,
+      stopReason: "error",
+      errorMessage: "maximum context length exceeded",
+    };
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([[failed]], { modelContexts }),
+    );
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    expect(modelContexts).toHaveLength(2);
+    expect(JSON.stringify(modelContexts[0]!.messages)).toContain(HISTORY_FACT);
+    expect(JSON.stringify(modelContexts[0]!.messages)).toContain(recentText);
+    expect(modelContexts[1]!.systemPrompt).toContain("context summarization assistant");
+    expect(JSON.stringify(modelContexts[1]!.messages)).toContain(HISTORY_FACT);
+    expect(state.settles).toEqual([
+      {
+        run_id: runKey,
+        status: "failed",
+        error_code: "PROVIDER_STREAM_ERROR",
+        error: { message: "maximum context length exceeded" },
+      },
+    ]);
+    expect(
+      (state.eventsByRun.get(runKey) ?? []).filter((event) => event.type === "run.settled"),
+    ).toHaveLength(0);
+  });
+
   it("blocks non-allowlisted tools without touching execute endpoint", async () => {
     resetState();
     const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
@@ -687,6 +1001,9 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(state.settles[0]!.error_code).toBe("POLICY_TOOL_BLOCKED");
     const events = state.eventsByRun.get(runKey) ?? [];
     expect(events.some((e) => e.type === "run.failed")).toBe(true);
+    expect(
+      events.filter((e) => e.type === "message.assistant_added").at(-1)?.public_payload,
+    ).toEqual({ role: "assistant", text: "ok" });
     expect(JSON.stringify(events)).not.toContain("/etc/passwd");
   }, 30000);
 
@@ -718,6 +1035,7 @@ describe("worker full cycle against mock FastAPI", () => {
     resetState();
     const runKey = enqueueJob({
       allowlist: ["familygraph.echo"],
+      messages: historyMessages(),
       provider: {
         provider_id: 9,
         model: null,
@@ -758,37 +1076,71 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(events[1]!.public_payload).toMatchObject({ error_code: "PROVIDER_DENIED_NO_LOCAL" });
   }, 30000);
 
-  it("propagates server cancellation to the Pi stream and skips settle", async () => {
-    resetState();
-    enqueueJob({ allowlist: ["familygraph.echo"] });
-    state.cancelOnNextHeartbeat = true;
-    const { worker } = makeWorker(
-      (cfg) => {
-        // Heartbeat cadence is clamped to 1s; keep the scripted stream open
-        // long enough for the cancel flag to reach the worker.
-        cfg.defaultLeaseMs = 3_000;
-      },
-      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
-    );
+  it.each([false, true])(
+    "propagates server cancellation and skips settle (late success=%s)",
+    async (completeAfterAbort) => {
+      resetState();
+      enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
+      state.cancelOnNextHeartbeat = true;
+      const sessionEvents: AgentSessionEvent[] = [];
+      const { worker } = makeWorker(
+        (cfg) => {
+          // Heartbeat cadence is clamped to 1s; keep the scripted stream open
+          // long enough for the cancel flag to reach the worker.
+          cfg.defaultLeaseMs = 3_000;
+        },
+        await buildSessionFactory([textTurn("never committed")], {
+          waitForAbort: true,
+          completeAfterAbort,
+          sessionEvents,
+        }),
+      );
 
-    expect(await worker.tryLeaseAndRun()).toBe(true);
-    expect(state.settles).toHaveLength(0);
-  }, 10000);
+      expect(await worker.tryLeaseAndRun()).toBe(true);
+      expect(state.settles).toHaveLength(0);
+      if (completeAfterAbort) {
+        expect(sessionEvents).toContainEqual(
+          expect.objectContaining({
+            type: "message_end",
+            message: expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+          }),
+        );
+      }
+    },
+    10000,
+  );
 
-  it("aborts the Pi stream when heartbeat authorization is revoked", async () => {
-    resetState();
-    enqueueJob({ allowlist: ["familygraph.echo"] });
-    state.heartbeatStatus = 403;
-    const { worker } = makeWorker(
-      (cfg) => {
-        cfg.defaultLeaseMs = 3_000;
-      },
-      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
-    );
+  it.each([false, true])(
+    "skips settle after heartbeat authorization is revoked (late success=%s)",
+    async (completeAfterAbort) => {
+      resetState();
+      enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
+      state.heartbeatStatus = 403;
+      const sessionEvents: AgentSessionEvent[] = [];
+      const { worker } = makeWorker(
+        (cfg) => {
+          cfg.defaultLeaseMs = 3_000;
+        },
+        await buildSessionFactory([textTurn("never committed")], {
+          waitForAbort: true,
+          completeAfterAbort,
+          sessionEvents,
+        }),
+      );
 
-    expect(await worker.tryLeaseAndRun()).toBe(true);
-    expect(state.settles).toHaveLength(0);
-  }, 10000);
+      expect(await worker.tryLeaseAndRun()).toBe(true);
+      expect(state.settles).toHaveLength(0);
+      if (completeAfterAbort) {
+        expect(sessionEvents).toContainEqual(
+          expect.objectContaining({
+            type: "message_end",
+            message: expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+          }),
+        );
+      }
+    },
+    10000,
+  );
 
   it("returns false when queue is empty (HTTP 204)", async () => {
     resetState();

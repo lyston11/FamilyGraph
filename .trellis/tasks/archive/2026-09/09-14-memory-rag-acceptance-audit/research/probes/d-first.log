@@ -1,0 +1,96 @@
+OBSERVATION {"case": "concurrent_document_identity", "returned_ids": [2, 1], "stored_count": 2}
+FOBSERVATION {"case": "same_revision_content_conflict", "before": [1, "orchidgrove synthetic original", 1, "fts5-trigram-v2"], "after": [1, "orchidgrove conflicting replacement without a new revision", 1, "fts5-trigram-v2"], "error": null}
+FOBSERVATION {"case": "stale_real_session", "first": {"scanned": 3, "materialized": 3, "already_current": 0, "skipped_invalid": 0, "failed": 0, "round": 0}, "before": [3, 1, "current"], "after": [1, 1, "stale"], "rejected": false}
+FOBSERVATION {"case": "tick_final_fence_atomicity", "counters": {"agent_reaped": 0, "steward_reaped": 0, "steward_scanned": 0, "steward_executed": 0, "steward_failed": 0, "steward_assist_recovered": 0, "steward_assist_scheduled": 0, "rag_index_scanned": 0, "rag_index_materialized": 0, "rag_index_failed": 0}, "document_id": 1, "cursor": 0}
+FOBSERVATION {"case": "stage_disabled_foreign_lease", "result": {"staged": 1, "flipped": 1, "skipped": 0}, "rejected": false, "version": "fts5-trigram-v3-review", "owner": "legitimate"}
+FOBSERVATION {"case": "version_switch_lifecycle", "before_hits": 1, "after_hits": 0, "stage": {"staged": 1, "flipped": 1, "skipped": 0}, "chunk_versions": ["fts5-trigram-v2", "fts5-trigram-v3-review"], "next_batch": {"scanned": 1, "materialized": 1, "already_current": 0, "skipped_invalid": 0, "failed": 0, "round": 1}, "after_next_batch_version": "fts5-trigram-v2"}
+FOBSERVATION {"case": "upgrade_after_algorithm_bump", "error": 422, "document_version": "fts5-trigram-v2"}
+FOBSERVATION {"case": "preexisting_target_conflict", "error": null, "active": "fts5-trigram-v3-review", "target_text": ["conflicting staged synthetic text"]}
+FOBSERVATION {"case": "verification_fts_restore", "first": {"scanned": 1, "materialized": 0, "already_current": 0, "skipped_invalid": 1, "failed": 0, "round": 1}, "second": {"scanned": 1, "materialized": 0, "already_current": 1, "skipped_invalid": 0, "failed": 0, "round": 2}, "hit_count": 0}
+FOBSERVATION {"case": "incomplete_chunk_set", "expected": 3, "actual": 2, "batch": {"scanned": 1, "materialized": 0, "already_current": 1, "skipped_invalid": 0, "failed": 0, "round": 1}}
+FOBSERVATION {"case": "rag_only_live_loop", "disabled_tick": {"agent_reaped": 0, "steward_reaped": 0, "steward_scanned": 0, "steward_executed": 0, "steward_failed": 0, "steward_assist_recovered": 0, "steward_assist_scheduled": 0, "rag_index_scanned": 0, "rag_index_materialized": 0, "rag_index_failed": 0}, "enabled_tick": {"agent_reaped": 0, "steward_reaped": 0, "steward_scanned": 0, "steward_executed": 0, "steward_failed": 0, "steward_assist_recovered": 0, "steward_assist_scheduled": 0, "rag_index_scanned": 1, "rag_index_materialized": 1, "rag_index_failed": 0}}
+.OBSERVATION {"case": "unknown_tombstone", "status": "invalidated", "reason": null, "batch": {"scanned": 1, "materialized": 0, "already_current": 0, "skipped_invalid": 0, "failed": 1, "round": 1}}
+.OBSERVATION {"case": "migration_conflict_preflight", "exit_code": 0, "rows": [["duplicate-source", 1, 1], ["duplicate-source", 1, 1], ["mirror-conflict", 2, 9]], "indexes": [[0, "ix_rag_documents_source", 0, "c", 0], [1, "ix_rag_documents_scope", 0, "c", 0]]}
+FOBSERVATION {"case": "downgrade_saved_dependency", "old_chunk_id": 1, "old_chunk_still_present": false, "saved_reference_still_present": true, "after_access": "unavailable"}
+F
+=================================== FAILURES ===================================
+___________ test_two_real_sessions_cannot_create_duplicate_documents ___________
+../../../familygraph-d-integration/test_d_contract_probes.py:115: in test_two_real_sessions_cannot_create_duplicate_documents
+    assert len(documents) == 1
+E   assert 2 == 1
+E    +  where 2 = len([<app.models.rag.RAGDocument object at 0x11261a450>, <app.models.rag.RAGDocument object at 0x11261a510>])
+___________ test_same_revision_conflicting_text_preserves_old_chunk ____________
+../../../familygraph-d-integration/test_d_contract_probes.py:133: in test_same_revision_conflicting_text_preserves_old_chunk
+    assert after == before
+E   AssertionError: assert (1, 'orchidgr...5-trigram-v2') == (1, 'orchidgr...5-trigram-v2')
+E
+E     At index 1 diff: 'orchidgrove conflicting replacement without a new revision' != 'orchidgrove synthetic original'
+E     Use -v to get more diff
+_____________ test_stale_session_cannot_overwrite_new_lease_cursor _____________
+../../../familygraph-d-integration/test_d_contract_probes.py:162: in test_stale_session_cannot_overwrite_new_lease_cursor
+    assert rejected
+E   assert False
+___________ test_real_tick_rolls_back_batch_when_final_fence_rejects ___________
+../../../familygraph-d-integration/test_d_contract_probes.py:184: in test_real_tick_rolls_back_batch_when_final_fence_rejects
+    assert persisted is None
+E   assert <app.models.rag.RAGDocument object at 0x1126e1160> is None
+------------------------------ Captured log call -------------------------------
+WARNING  app.services.maintenance:maintenance.py:117 rag index maintenance failed; core tick unaffected (error=MaintenanceLeaseLost)
+_____________ test_stage_respects_effective_off_and_another_lease ______________
+../../../familygraph-d-integration/test_d_contract_probes.py:208: in test_stage_respects_effective_off_and_another_lease
+    assert document.index_version == old_version
+E   AssertionError: assert 'fts5-trigram-v3-review' == 'fts5-trigram-v2'
+E
+E     - fts5-trigram-v2
+E     ?               ^
+E     + fts5-trigram-v3-review
+E     ?               ^^^^^^^^
+_________ test_stage_switch_is_searchable_and_not_undone_by_next_batch _________
+../../../familygraph-d-integration/test_d_contract_probes.py:230: in test_stage_switch_is_searchable_and_not_undone_by_next_batch
+    assert after_hits == before_hits == 1
+E   assert 0 == 1
+_____________ test_current_algorithm_version_can_be_upgrade_target _____________
+../../../familygraph-d-integration/test_d_contract_probes.py:245: in test_current_algorithm_version_can_be_upgrade_target
+    assert error is None
+E   assert 422 is None
+___________ test_stage_rejects_conflicting_preexisting_target_chunks ___________
+../../../familygraph-d-integration/test_d_contract_probes.py:265: in test_stage_rejects_conflicting_preexisting_target_chunks
+    assert document.index_version == old_version
+E   AssertionError: assert 'fts5-trigram-v3-review' == 'fts5-trigram-v2'
+E
+E     - fts5-trigram-v2
+E     ?               ^
+E     + fts5-trigram-v3-review
+E     ?               ^^^^^^^^
+_______ test_maintenance_restores_missing_fts_after_source_verification ________
+../../../familygraph-d-integration/test_d_contract_probes.py:285: in test_maintenance_restores_missing_fts_after_source_verification
+    assert len(hits) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+____________ test_maintenance_restores_incomplete_active_chunk_set _____________
+../../../familygraph-d-integration/test_d_contract_probes.py:300: in test_maintenance_restores_incomplete_active_chunk_set
+    assert actual == expected
+E   assert 2 == 3
+____________ test_migration_blocks_duplicate_and_revision_conflict _____________
+../../../familygraph-d-integration/test_d_contract_probes.py:388: in test_migration_blocks_duplicate_and_revision_conflict
+    assert result.returncode != 0
+E   AssertionError: assert 0 != 0
+E    +  where 0 = CompletedProcess(args=['/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/bin/alemb...ndex_lifecycle, D: RAG index lifecycle — invalidation reason, versioned chunk identity,\nbounded maintenance state.\n').returncode
+________________ test_downgrade_preserves_saved_rag_dependency _________________
+../../../familygraph-d-integration/test_d_contract_probes.py:426: in test_downgrade_preserves_saved_rag_dependency
+    assert remaining is not None
+E   assert None is not None
+=========================== short test summary info ============================
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_two_real_sessions_cannot_create_duplicate_documents
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_same_revision_conflicting_text_preserves_old_chunk
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_stale_session_cannot_overwrite_new_lease_cursor
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_real_tick_rolls_back_batch_when_final_fence_rejects
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_stage_respects_effective_off_and_another_lease
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_stage_switch_is_searchable_and_not_undone_by_next_batch
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_current_algorithm_version_can_be_upgrade_target
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_stage_rejects_conflicting_preexisting_target_chunks
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_maintenance_restores_missing_fts_after_source_verification
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_maintenance_restores_incomplete_active_chunk_set
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_migration_blocks_duplicate_and_revision_conflict
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_downgrade_preserves_saved_rag_dependency
+12 failed, 2 passed in 3.57s

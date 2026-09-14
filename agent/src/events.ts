@@ -88,12 +88,20 @@ export type FgEventPayloadMap = {
 };
 export type FgEventPayload = FgEventPayloadMap[FgEventType];
 
+export interface ContextReference {
+  build_id: number;
+  attempt: number;
+  used_handles: string[];
+}
+
 export interface FgEvent {
   /** Sender-assigned monotonic sequence within the run (1-based). */
   seq: number;
   type: FgEventType;
   /** Wire field name per backend EventIn schema (strict extra=forbid). */
   public_payload: FgEventPayload;
+  /** Private submission binding; never part of the public event payload. */
+  context_reference?: ContextReference;
 }
 
 type SessionEventLike = {
@@ -224,12 +232,15 @@ export class RunEventBuffer {
   private readonly pending: FgEvent[] = [];
   private webCitations: WebCitationPayload[] = [];
 
-  constructor(startSeq = 1) {
+  constructor(startSeq = 1, private readonly context?: {
+    build_id: number; attempt: number; allowed_handles: readonly string[];
+  }) {
     this.nextSeq = Number.isInteger(startSeq) && startSeq >= 0 ? startSeq : 1;
   }
 
-  push<T extends FgEventType>(type: T, public_payload: FgEventPayloadMap[T]): void {
-    this.pending.push({ seq: this.nextSeq++, type, public_payload });
+  push<T extends FgEventType>(type: T, public_payload: FgEventPayloadMap[T], context_reference?: ContextReference): void {
+    this.pending.push({ seq: this.nextSeq++, type, public_payload,
+      ...(context_reference === undefined ? {} : { context_reference }) });
   }
 
   /** Feed one session broadcast; returns count of produced events. */
@@ -248,7 +259,16 @@ export class RunEventBuffer {
         payload.web_citations = this.webCitations.slice();
         this.webCitations = [];
       }
-      this.push(item.type, item.public_payload);
+      let reference: ContextReference | undefined;
+      if (item.type === "message.assistant_added" && event.type === "message_end" &&
+          event.message?.stopReason === "stop" && this.context !== undefined) {
+        const text = (item.public_payload as AssistantMessagePayload).text;
+        const mentioned = new Set(Array.from(text.matchAll(/\[(rag:[^\s\]]{1,250})\]/gu), (m) => m[1]));
+        const handles = [...new Set(this.context.allowed_handles)]
+          .filter((handle) => mentioned.has(handle) && handle.length <= 255).slice(0, 20);
+        reference = { build_id: this.context.build_id, attempt: this.context.attempt, used_handles: handles };
+      }
+      this.push(item.type, item.public_payload, reference);
     }
     return mapped.length;
   }

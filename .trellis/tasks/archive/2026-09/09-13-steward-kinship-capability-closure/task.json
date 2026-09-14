@@ -1,0 +1,29 @@
+{
+  "id": "steward-kinship-capability-closure",
+  "name": "steward-kinship-capability-closure",
+  "title": "Steward 称谓能力闭环与推荐语义统一",
+  "description": "补齐管家个人化称谓输出、自动称谓建议和模型辅助优化，统一通知与家族树表达，并修订冲突的未完成任务。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "steward-kinship",
+  "package": null,
+  "priority": "P1",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-09-13",
+  "completedAt": "2026-09-14",
+  "branch": "feat/09-13-steward-kinship-capability-closure",
+  "base_branch": "main",
+  "worktree_path": "/Users/lyston/PycharmProjects/fg-09-13-steward-kinship-capability-closure",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-13-steward-kinship-presentation",
+    "09-13-steward-terminology-autonomy"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

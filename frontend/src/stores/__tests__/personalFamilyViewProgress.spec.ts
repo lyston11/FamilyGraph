@@ -91,6 +91,59 @@ describe('PFV version ordering and display authorization', () => {
     expect(store.positionsBySpace.get(9)?.size).toBe(0)
   })
 
+  it.each(['personal', 'space'] as const)('%s term invalidation cancels old work and payloads while preserving only this viewer layout', async (scope) => {
+    fetchView.mockResolvedValueOnce(familySnapshot()).mockResolvedValueOnce(familySnapshot({ space_id: 10 }))
+    await store.load(9)
+    await store.load(10)
+    const position = { x: 721, y: 385 }
+    const viewport = { x: -100, y: 40, zoom: 0.8 }
+    for (const spaceId of [9, 10]) {
+      store.rememberPositions(spaceId, [[2, position]])
+      store.rememberViewport(spaceId, viewport)
+      store.rememberViewMode(spaceId, 'canvas')
+    }
+
+    const oldResponse = deferred<PersonalFamilyViewResponse>()
+    const oldAcknowledgement = deferred<PersonalFamilyViewDemandResult>()
+    fetchView.mockReturnValueOnce(oldResponse.promise)
+    demandView.mockReturnValueOnce(oldAcknowledgement.promise)
+    const oldRead = store.load(9)
+    const oldFocus = store.focusTarget(9, 2)
+    const readSignal = fetchView.mock.calls.at(-1)?.[2]?.signal
+    const focusSignal = demandView.mock.calls.at(-1)?.[1]?.signal
+    if (scope === 'personal') store.invalidateTermInputs()
+    else store.invalidateTermInputs(9)
+
+    expect(readSignal?.aborted).toBe(true)
+    expect(focusSignal?.aborted).toBe(true)
+    expect(store.bySpace.has(9)).toBe(false)
+    expect(store.remainingDisplayMs(9)).toBeNull()
+    expect(store.isLoading(9)).toBe(false)
+    expect(store.bySpace.has(10)).toBe(scope === 'space')
+    for (const spaceId of [9, 10]) {
+      expect(store.positionsBySpace.get(spaceId)?.get(2)).toEqual(position)
+      expect(store.viewports.get(spaceId)).toEqual(viewport)
+      expect(store.viewModes.get(spaceId)).toBe('canvas')
+    }
+
+    fetchView.mockResolvedValueOnce(familySnapshot({ progress: familyProgress({ generation: 8 }) }))
+    await store.load(9)
+    expect(fetchView).toHaveBeenLastCalledWith(9, null, expect.objectContaining({ progressive: true }))
+    oldResponse.resolve(familySnapshot({ progress: familyProgress({ generation: 999 }) }))
+    oldAcknowledgement.resolve({ status: 'queued', focus_user_id: 2 })
+    await expect(oldRead).resolves.toBeNull()
+    await oldFocus
+    expect(store.forSpace(9)?.progress?.generation).toBe(8)
+    expect(store.positionsBySpace.get(9)?.get(2)).toEqual(position)
+
+    // Preserving layout for a term change must never carry it into another identity.
+    store.invalidateTermInputs()
+    useAuthStore().user = { ...useAuthStore().user!, id: 4 }
+    expect(store.positionsBySpace.size).toBe(0)
+    expect(store.viewports.size).toBe(0)
+    expect(store.viewModes.size).toBe(0)
+  })
+
   it('renews a matched 304 without replacing data; missing and mismatched headers never extend expiry', async () => {
     fetchView.mockResolvedValueOnce(familySnapshot())
     await store.load(9)

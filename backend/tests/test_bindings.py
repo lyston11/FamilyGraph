@@ -9,13 +9,6 @@
 import itertools
 
 import pytest
-from conftest import (
-    auth_header,
-    create_space_member,
-    create_user_with_pin,
-    login,
-    seed_space_with_owner,
-)
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +22,13 @@ from app.models.space import SpaceProfileRef
 from app.models.user import User
 from app.services import person_identity
 from app.utils import timeutil
+from conftest import (
+    auth_header,
+    create_space_member,
+    create_user_with_pin,
+    login,
+    seed_space_with_owner,
+)
 
 _key_counter = itertools.count(1)
 

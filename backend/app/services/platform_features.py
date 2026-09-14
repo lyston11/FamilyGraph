@@ -16,7 +16,7 @@ from app.utils.timeutil import utcnow
 FeatureSource = Literal["environment", "platform", "deployment"]
 
 
-StewardAssistKind = Literal["candidate", "ranking", "explanation"]
+StewardAssistKind = Literal["candidate", "ranking", "explanation", "terminology"]
 
 
 @dataclass(frozen=True)
@@ -29,9 +29,11 @@ class PlatformFeatureState:
     steward_assist_candidate: bool
     steward_assist_ranking: bool
     steward_assist_explanation: bool
+    steward_assist_terminology: bool
     steward_assist_candidate_source: FeatureSource
     steward_assist_ranking_source: FeatureSource
     steward_assist_explanation_source: FeatureSource
+    steward_assist_terminology_source: FeatureSource
     updated_at: datetime | None
 
 
@@ -48,9 +50,11 @@ def _environment_state() -> PlatformFeatureState:
         steward_assist_candidate=_steward_assist_env("candidate"),
         steward_assist_ranking=_steward_assist_env("ranking"),
         steward_assist_explanation=_steward_assist_env("explanation"),
+        steward_assist_terminology=_steward_assist_env("terminology"),
         steward_assist_candidate_source="environment",
         steward_assist_ranking_source="environment",
         steward_assist_explanation_source="environment",
+        steward_assist_terminology_source="environment",
         updated_at=None,
     )
 
@@ -76,6 +80,9 @@ def get_platform_feature_state(db: Session) -> PlatformFeatureState:
     explanation = _steward_assist_effective(
         bool(row.steward_assist_explanation), _steward_assist_env("explanation")
     )
+    terminology = _steward_assist_effective(
+        bool(row.steward_assist_terminology), _steward_assist_env("terminology")
+    )
     return PlatformFeatureState(
         memory_enabled=bool(row.memory_enabled) and config.MEMORY_ENABLED,
         rag_enabled=bool(row.rag_enabled) and config.RAG_ENABLED,
@@ -84,9 +91,11 @@ def get_platform_feature_state(db: Session) -> PlatformFeatureState:
         steward_assist_candidate=candidate[0],
         steward_assist_ranking=ranking[0],
         steward_assist_explanation=explanation[0],
+        steward_assist_terminology=terminology[0],
         steward_assist_candidate_source=candidate[1],
         steward_assist_ranking_source=ranking[1],
         steward_assist_explanation_source=explanation[1],
+        steward_assist_terminology_source=terminology[1],
         updated_at=row.updated_at,
     )
 
@@ -107,6 +116,7 @@ def set_platform_feature_state(
     steward_assist_candidate: bool | None,
     steward_assist_ranking: bool | None,
     steward_assist_explanation: bool | None,
+    steward_assist_terminology: bool | None,
     system_admin_id: int,
 ) -> PlatformFeatureState:
     """Persist both explicit platform values in the singleton row.
@@ -127,6 +137,7 @@ def set_platform_feature_state(
     resolved_candidate = _resolve("candidate", steward_assist_candidate)
     resolved_ranking = _resolve("ranking", steward_assist_ranking)
     resolved_explanation = _resolve("explanation", steward_assist_explanation)
+    resolved_terminology = _resolve("terminology", steward_assist_terminology)
     if row is None:
         row = PlatformFeatureConfig(
             id=1,
@@ -135,6 +146,7 @@ def set_platform_feature_state(
             steward_assist_candidate=resolved_candidate,
             steward_assist_ranking=resolved_ranking,
             steward_assist_explanation=resolved_explanation,
+            steward_assist_terminology=resolved_terminology,
             updated_at=now,
             updated_by_system_admin_id=system_admin_id,
         )
@@ -145,18 +157,23 @@ def set_platform_feature_state(
         row.steward_assist_candidate = resolved_candidate
         row.steward_assist_ranking = resolved_ranking
         row.steward_assist_explanation = resolved_explanation
+        row.steward_assist_terminology = resolved_terminology
         row.updated_at = now
         row.updated_by_system_admin_id = system_admin_id
     db.flush()
     steward_assist_candidate = resolved_candidate
     steward_assist_ranking = resolved_ranking
     steward_assist_explanation = resolved_explanation
+    steward_assist_terminology = resolved_terminology
     candidate = _steward_assist_effective(
         steward_assist_candidate, _steward_assist_env("candidate")
     )
     ranking = _steward_assist_effective(steward_assist_ranking, _steward_assist_env("ranking"))
     explanation = _steward_assist_effective(
         steward_assist_explanation, _steward_assist_env("explanation")
+    )
+    terminology = _steward_assist_effective(
+        steward_assist_terminology, _steward_assist_env("terminology")
     )
     return PlatformFeatureState(
         memory_enabled=memory_enabled and config.MEMORY_ENABLED,
@@ -166,15 +183,17 @@ def set_platform_feature_state(
         steward_assist_candidate=candidate[0],
         steward_assist_ranking=ranking[0],
         steward_assist_explanation=explanation[0],
+        steward_assist_terminology=terminology[0],
         steward_assist_candidate_source=candidate[1],
         steward_assist_ranking_source=ranking[1],
         steward_assist_explanation_source=explanation[1],
+        steward_assist_terminology_source=terminology[1],
         updated_at=now,
     )
 
 
 def is_steward_assist_platform_enabled(db: Session, kind: str) -> bool:
-    """平台级辅助开关生效值（DB 治理 ∧ env 部署兜底；kind ∈ candidate/ranking/explanation）。"""
+    """平台级辅助开关生效值（DB 治理 ∧ env 部署兜底；kind 含 terminology）。"""
     state = get_platform_feature_state(db)
     return bool(getattr(state, f"steward_assist_{kind}"))
 

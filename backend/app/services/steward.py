@@ -18,11 +18,10 @@ platform_operator 角色不参与任何判定。
 红线：绝不写 SourceFact、绝不发送加入申请、绝不合并空间、绝不保存自由形式
 隐藏长期记忆（checkpoint 只存进度/签名/统计）。
 
-事务模型（09-11 R1）：整个确定性执行包在一个立即事务内（SQLite 家族空间规模
-下最安全的崩溃语义——要么全部生效要么全部回滚）；模型辅助只在同事务登记批次
-行（StewardAssistBatch），所有 HTTP 由 maintenance 的事务外受限线程执行，
-本模块不存在网络调用。辅助的崩溃恢复不依赖 SAVEPOINT——批次/attempt 行的
-状态机即是崩溃合同（见 services/steward_assist.py）。
+事务模型：一致快照在事务外计算，完整目标在短事务中保存；最终只切换发布指针、
+消费水位和交付门控。确定性称谓按目标独立交付，完成后登记模型辅助批次。
+HTTP 由 maintenance 的事务外受限线程执行；批次/attempt 行保留发送与未知结果
+恢复合同（见 services/steward_assist.py）。
 """
 
 from __future__ import annotations
@@ -593,6 +592,7 @@ def lease_next_steward_job(
     """
     _require_enabled()
     ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_LEASE_TTL_SECONDS
+    from app.services.steward_delivery import terminology_blocks_core
     from app.services.steward_overlay import active_leases
 
     with _immediate_tx(db):
@@ -616,6 +616,10 @@ def lease_next_steward_job(
             return None
         # 退避未到期的作业暂不可租
         stmt = stmt.where((StewardJob.available_at.is_(None)) | (StewardJob.available_at <= moment))
+        # Finish the published generation's bounded terminology delivery before
+        # leasing its presentation successor. Other spaces remain eligible;
+        # changed structure/config immediately releases this local barrier.
+        stmt = stmt.where(~terminology_blocks_core(now=moment))
         stmt = stmt.order_by(StewardJob.created_at.asc(), StewardJob.id.asc()).limit(1)
         job = db.scalar(stmt)
         if job is None:

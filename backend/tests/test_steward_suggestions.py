@@ -15,7 +15,6 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
 from fastapi import HTTPException
 
 from app import config
@@ -27,6 +26,7 @@ from app.models.steward import StewardJob, StewardLlmCandidate
 from app.models.steward_suggestion import StewardSuggestion
 from app.services import steward_suggestions
 from app.utils import timeutil
+from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
 
 
 @pytest.fixture(autouse=True)
@@ -439,7 +439,7 @@ def test_owner_submit_creates_proposal_endpoint_confirms(db_session) -> None:
     assert db_session.get(SourceFact, fact2.id).state == "proposed"
 
 
-def test_term_preference_submit_self_only(db_session) -> None:
+def test_legacy_term_preference_without_target_or_projection_cannot_submit(db_session) -> None:
     owner, space = create_agent_fixture(db_session, name="sg-term")
     now = timeutil.utcnow()
     s = steward_suggestions.StewardSuggestion(  # type: ignore[attr-defined]
@@ -462,22 +462,22 @@ def test_term_preference_submit_self_only(db_session) -> None:
     )
     db_session.add(s)
     db_session.commit()
-    status, payload = steward_suggestions.submit_suggestion(
-        db_session,
-        _ctx(owner, owner.account),
-        account=owner.account,
-        space_id=space.id,
-        suggestion_id=s.id,
-        expected_revision=1,
-        evidence_hash=s.evidence_hash,
-        confirm=True,
-        idempotency_key="key-term-1",
-        now=now,
-    )
-    assert status == 200
-    assert payload["linked_preference"]["term"] == "老爸"
+    with pytest.raises(HTTPException) as exc:
+        steward_suggestions.submit_suggestion(
+            db_session,
+            _ctx(owner, owner.account),
+            account=owner.account,
+            space_id=space.id,
+            suggestion_id=s.id,
+            expected_revision=1,
+            evidence_hash=s.evidence_hash,
+            confirm=True,
+            idempotency_key="key-term-1",
+            now=now,
+        )
+    assert exc.value.status_code == 409
     db_session.expire_all()
-    assert db_session.get(StewardSuggestion, s.id).status == "resolved"
+    assert db_session.get(StewardSuggestion, s.id).status == "proposed"
     # 不创建关系提案
     assert db_session.query(SourceFact).count() == 0
 

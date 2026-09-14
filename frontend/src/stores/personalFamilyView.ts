@@ -109,13 +109,10 @@ export const usePersonalFamilyViewStore = defineStore('personalFamilyView', () =
     setLoading(spaceId, false)
   }
 
-  function clearSpace(spaceId: number): void {
+  function invalidateSpaceData(spaceId: number): void {
     cancelRead(spaceId)
     discardSnapshot(spaceId)
     setError(spaceId, null)
-    positionsBySpace.value.delete(spaceId)
-    viewports.value.delete(spaceId)
-    viewModes.value.delete(spaceId)
     versions.delete(spaceId)
     for (const [key, demand] of demands) {
       if (demand.spaceId === spaceId) { demand.controller.abort(); demands.delete(key) }
@@ -123,7 +120,14 @@ export const usePersonalFamilyViewStore = defineStore('personalFamilyView', () =
     for (const key of focused) if (key.startsWith(spaceId + ':')) focused.delete(key)
   }
 
-  function clear(): void {
+  function clearSpace(spaceId: number): void {
+    invalidateSpaceData(spaceId)
+    positionsBySpace.value.delete(spaceId)
+    viewports.value.delete(spaceId)
+    viewModes.value.delete(spaceId)
+  }
+
+  function invalidateAllData(): void {
     epoch += 1
     for (const request of requests.values()) request.controller.abort()
     requests.clear()
@@ -136,10 +140,20 @@ export const usePersonalFamilyViewStore = defineStore('personalFamilyView', () =
     bySpace.value = new Map()
     loadingSpaceIds.value = new Set()
     errorBySpace.value = new Map()
+    versions.clear()
+  }
+
+  function clear(): void {
+    invalidateAllData()
     positionsBySpace.value = new Map()
     viewports.value = new Map()
     viewModes.value = new Map()
-    versions.clear()
+  }
+
+  /** A known term change revokes payloads and in-flight reads, but not this viewer's layout. */
+  function invalidateTermInputs(spaceId?: number): void {
+    if (spaceId === undefined) invalidateAllData()
+    else invalidateSpaceData(spaceId)
   }
 
   watch(() => auth.user?.id ?? null, clear, { flush: 'sync' })
@@ -308,7 +322,7 @@ export const usePersonalFamilyViewStore = defineStore('personalFamilyView', () =
     bySpace, loadingSpaceIds, errorBySpace, positionsBySpace, viewports, viewModes,
     isLoading: (spaceId: number) => loadingSpaceIds.value.has(spaceId),
     errorFor: (spaceId: number) => errorBySpace.value.get(spaceId) ?? null,
-    forSpace, remainingDisplayMs, load, refresh, clearSpace, clear,
+    forSpace, remainingDisplayMs, load, refresh, clearSpace, clear, invalidateTermInputs,
     reloadAfterBridgeChange: refresh,
     getVisiblePerson, getRelationshipDetail, targetFor, focusTarget, retry,
     rememberPositions, rememberViewport, rememberViewMode,

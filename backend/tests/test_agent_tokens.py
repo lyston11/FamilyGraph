@@ -25,6 +25,7 @@ def test_run_token_roundtrip_and_ttl_cap():
     raw = issue_run_token(
         run_id=7,
         job_id=9,
+        attempt=1,
         agent_kind="assistant",
         account_id=11,
         space_id=13,
@@ -52,6 +53,7 @@ def test_tampered_token_rejected():
     raw = issue_run_token(
         run_id=1,
         job_id=1,
+        attempt=1,
         agent_kind="assistant",
         account_id=1,
         space_id=1,
@@ -73,6 +75,7 @@ def test_token_type_confusion_rejected():
     run_raw = issue_run_token(
         run_id=1,
         job_id=1,
+        attempt=1,
         agent_kind="assistant",
         account_id=1,
         space_id=1,
@@ -87,6 +90,7 @@ def test_unsupported_run_kind_rejected_at_issue_boundary():
         issue_run_token(
             run_id=1,
             job_id=1,
+            attempt=1,
             agent_kind="steward",
             account_id=1,
             space_id=1,
@@ -100,3 +104,24 @@ def test_missing_shared_secret_fails_closed(monkeypatch):
         issue_service_token()
     with pytest.raises(AgentTokenError):
         decode_service_token("whatever.token.here")
+
+
+@pytest.mark.parametrize("attempt", [True, False, 0, -1, "1", 1.5])
+def test_attempt_requires_a_positive_non_boolean_integer(attempt):
+    from app.services import agent_tokens
+
+    payload = dict(
+        run_id=1,
+        job_id=1,
+        attempt=attempt,
+        agent_kind="assistant",
+        account_id=1,
+        space_id=1,
+        tool_allowlist=[],
+    )
+    with pytest.raises(AgentTokenError):
+        issue_run_token(**payload)
+    # A correctly signed but structurally invalid value must also fail decode.
+    raw = agent_tokens._encode({"typ": RUN_TOKEN_TYPE, **payload}, ttl_seconds=60)
+    with pytest.raises(AgentTokenError):
+        decode_run_token(raw)
