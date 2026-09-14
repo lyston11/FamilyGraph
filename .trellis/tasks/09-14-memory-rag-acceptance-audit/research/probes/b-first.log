@@ -1,0 +1,114 @@
+B_BUDGET {'blocks': 6, 'stored_budget': 2000, 'wrapped_utf8_estimate': 6270}
+FB_EXACT {'mutation': 'delete', 'response': {'run_id': 1, 'seq': 2, 'citations': [{'source_type': 'memory', 'source_id': '1', 'scope': 'private', 'sensitivity': 'normal', 'revision': 1, 'citation_handle': 'rag:1:r1:c1'}], 'unavailable_citation_count': 0}}
+FB_EXACT {'mutation': 'hash', 'response': {'run_id': 1, 'seq': 2, 'citations': [{'source_type': 'memory', 'source_id': '1', 'scope': 'private', 'sensitivity': 'normal', 'revision': 1, 'citation_handle': 'rag:1:r1:c1'}], 'unavailable_citation_count': 0}}
+FB_EXACT {'mutation': 'version', 'response': {'run_id': 1, 'seq': 2, 'citations': [{'source_type': 'memory', 'source_id': '1', 'scope': 'private', 'sensitivity': 'normal', 'revision': 1, 'citation_handle': 'rag:1:r1:c1'}], 'unavailable_citation_count': 0}}
+FB_EXACT {'mutation': 'revision', 'response': {'run_id': 1, 'seq': 2, 'citations': [{'source_type': 'memory', 'source_id': '1', 'scope': 'private', 'sensitivity': 'normal', 'revision': 1, 'citation_handle': 'rag:1:r1:c1'}], 'unavailable_citation_count': 0}}
+FB_RAG_DISABLED {'status': 200, 'blocks': 1}
+FB_INTERNAL_HISTORY {'public_unavailable': 1, 'internal_stored_citations': [{'source_type': 'memory', 'source_id': '1', 'scope': 'private', 'sensitivity': 'normal', 'revision': 1, 'citation_handle': 'rag:1:r1:c1'}]}
+FB_SSE_FORGED {'fallback': {'run_id': 1, 'seq': 2, 'citations': [], 'unavailable_citation_count': 0}, 'sse_payload': {'role': 'assistant', 'text': '普通回答', 'citations': [{'source_type': 'memory', 'source_id': 'not-a-source', 'scope': 'private', 'sensitivity': 'normal', 'revision': 99, 'citation_handle': 'forged-handle', 'text': 'synthetic unverified excerpt'}]}}
+FB_FALLBACK_SCOPE {'history_count': 1, 'fallback': {'run_id': 1, 'seq': 2, 'citations': [{'source_type': 'memory', 'source_id': '1', 'scope': 'private', 'sensitivity': 'normal', 'revision': 1, 'citation_handle': 'rag:1:r1:c1'}], 'unavailable_citation_count': 0}}
+.B_STALE_ATTEMPT {'endpoint': 'context', 'http': 200, 'current_attempt': 2, 'current_status': 'leased', 'stale_answer_persisted': False, 'tool_result_persisted': False}
+FB_STALE_ATTEMPT {'endpoint': 'events', 'http': 200, 'current_attempt': 2, 'current_status': 'leased', 'stale_answer_persisted': True, 'tool_result_persisted': False}
+FB_STALE_ATTEMPT {'endpoint': 'heartbeat', 'http': 200, 'current_attempt': 2, 'current_status': 'leased', 'stale_answer_persisted': False, 'tool_result_persisted': False}
+FB_STALE_ATTEMPT {'endpoint': 'settle', 'http': 200, 'current_attempt': 2, 'current_status': 'succeeded', 'stale_answer_persisted': False, 'tool_result_persisted': False}
+FB_STALE_ATTEMPT {'endpoint': 'tool', 'http': 200, 'current_attempt': 2, 'current_status': 'running', 'stale_answer_persisted': False, 'tool_result_persisted': True}
+FB_RETRY_CONTROL {'duplicates': [2], 'fallback_unavailable': 1}
+.
+=================================== FAILURES ===================================
+____________ test_real_context_obeys_its_documented_utf8_sub_budget ____________
+../../../familygraph-b-integration-probe.py:137: in test_real_context_obeys_its_documented_utf8_sub_budget
+    assert estimated <= build.token_budget
+E   assert 6270 <= 2000
+E    +  where 2000 = <app.models.context.ContextBuild object at 0x1063b5df0>.token_budget
+_____________ test_citation_requires_exact_original_chunk[delete] ______________
+../../../familygraph-b-integration-probe.py:161: in test_citation_requires_exact_original_chunk
+    assert fallback.json()["citations"] == []
+E   AssertionError: assert [{'citation_h...normal', ...}] == []
+E
+E     Left contains one more item: {'citation_handle': 'rag:1:r1:c1', 'revision': 1, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+______________ test_citation_requires_exact_original_chunk[hash] _______________
+../../../familygraph-b-integration-probe.py:161: in test_citation_requires_exact_original_chunk
+    assert fallback.json()["citations"] == []
+E   AssertionError: assert [{'citation_h...normal', ...}] == []
+E
+E     Left contains one more item: {'citation_handle': 'rag:1:r1:c1', 'revision': 1, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+_____________ test_citation_requires_exact_original_chunk[version] _____________
+../../../familygraph-b-integration-probe.py:161: in test_citation_requires_exact_original_chunk
+    assert fallback.json()["citations"] == []
+E   AssertionError: assert [{'citation_h...normal', ...}] == []
+E
+E     Left contains one more item: {'citation_handle': 'rag:1:r1:c1', 'revision': 1, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+____________ test_citation_requires_exact_original_chunk[revision] _____________
+../../../familygraph-b-integration-probe.py:161: in test_citation_requires_exact_original_chunk
+    assert fallback.json()["citations"] == []
+E   AssertionError: assert [{'citation_h...normal', ...}] == []
+E
+E     Left contains one more item: {'citation_handle': 'rag:1:r1:c1', 'revision': 1, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+____________ test_repeated_context_invalidates_when_rag_is_disabled ____________
+../../../familygraph-b-integration-probe.py:173: in test_repeated_context_invalidates_when_rag_is_disabled
+    assert second.status_code == 409
+E   assert 200 == 409
+E    +  where 200 = <Response [200 OK]>.status_code
+___________ test_internal_history_drops_revoked_citation_identifiers ___________
+../../../familygraph-b-integration-probe.py:199: in test_internal_history_drops_revoked_citation_identifiers
+    assert historical["content_json"].get("citations", []) == []
+E   AssertionError: assert [{'citation_h...normal', ...}] == []
+E
+E     Left contains one more item: {'citation_handle': 'rag:1:r1:c1', 'revision': 1, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+_________ test_sse_does_not_trust_citations_supplied_in_public_payload _________
+../../../familygraph-b-integration-probe.py:219: in test_sse_does_not_trust_citations_supplied_in_public_payload
+    assert answer["payload"].get("citations", []) == []
+E   AssertionError: assert [{'citation_h...normal', ...}] == []
+E
+E     Left contains one more item: {'citation_handle': 'forged-handle', 'revision': 99, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+__________ test_signed_attempt_is_fenced_after_authorization[context] __________
+../../../familygraph-b-integration-probe.py:298: in test_signed_attempt_is_fenced_after_authorization
+    assert response.status_code in (403, 409), observed
+E   AssertionError: {'current_attempt': 2, 'current_status': 'leased', 'endpoint': 'context', 'http': 200, ...}
+E   assert 200 in (403, 409)
+E    +  where 200 = <Response [200 OK]>.status_code
+__________ test_signed_attempt_is_fenced_after_authorization[events] ___________
+../../../familygraph-b-integration-probe.py:298: in test_signed_attempt_is_fenced_after_authorization
+    assert response.status_code in (403, 409), observed
+E   AssertionError: {'current_attempt': 2, 'current_status': 'leased', 'endpoint': 'events', 'http': 200, ...}
+E   assert 200 in (403, 409)
+E    +  where 200 = <Response [200 OK]>.status_code
+_________ test_signed_attempt_is_fenced_after_authorization[heartbeat] _________
+../../../familygraph-b-integration-probe.py:298: in test_signed_attempt_is_fenced_after_authorization
+    assert response.status_code in (403, 409), observed
+E   AssertionError: {'current_attempt': 2, 'current_status': 'leased', 'endpoint': 'heartbeat', 'http': 200, ...}
+E   assert 200 in (403, 409)
+E    +  where 200 = <Response [200 OK]>.status_code
+__________ test_signed_attempt_is_fenced_after_authorization[settle] ___________
+../../../familygraph-b-integration-probe.py:298: in test_signed_attempt_is_fenced_after_authorization
+    assert response.status_code in (403, 409), observed
+E   AssertionError: {'current_attempt': 2, 'current_status': 'succeeded', 'endpoint': 'settle', 'http': 200, ...}
+E   assert 200 in (403, 409)
+E    +  where 200 = <Response [200 OK]>.status_code
+___________ test_signed_attempt_is_fenced_after_authorization[tool] ____________
+../../../familygraph-b-integration-probe.py:298: in test_signed_attempt_is_fenced_after_authorization
+    assert response.status_code in (403, 409), observed
+E   AssertionError: {'current_attempt': 2, 'current_status': 'running', 'endpoint': 'tool', 'http': 200, ...}
+E   assert 200 in (403, 409)
+E    +  where 200 = <Response [200 OK]>.status_code
+=========================== short test summary info ============================
+FAILED ../../../familygraph-b-integration-probe.py::test_real_context_obeys_its_documented_utf8_sub_budget
+FAILED ../../../familygraph-b-integration-probe.py::test_citation_requires_exact_original_chunk[delete]
+FAILED ../../../familygraph-b-integration-probe.py::test_citation_requires_exact_original_chunk[hash]
+FAILED ../../../familygraph-b-integration-probe.py::test_citation_requires_exact_original_chunk[version]
+FAILED ../../../familygraph-b-integration-probe.py::test_citation_requires_exact_original_chunk[revision]
+FAILED ../../../familygraph-b-integration-probe.py::test_repeated_context_invalidates_when_rag_is_disabled
+FAILED ../../../familygraph-b-integration-probe.py::test_internal_history_drops_revoked_citation_identifiers
+FAILED ../../../familygraph-b-integration-probe.py::test_sse_does_not_trust_citations_supplied_in_public_payload
+FAILED ../../../familygraph-b-integration-probe.py::test_signed_attempt_is_fenced_after_authorization[context]
+FAILED ../../../familygraph-b-integration-probe.py::test_signed_attempt_is_fenced_after_authorization[events]
+FAILED ../../../familygraph-b-integration-probe.py::test_signed_attempt_is_fenced_after_authorization[heartbeat]
+FAILED ../../../familygraph-b-integration-probe.py::test_signed_attempt_is_fenced_after_authorization[settle]
+FAILED ../../../familygraph-b-integration-probe.py::test_signed_attempt_is_fenced_after_authorization[tool]
+13 failed, 2 passed in 1.79s

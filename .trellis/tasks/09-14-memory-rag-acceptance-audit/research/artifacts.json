@@ -1,0 +1,211 @@
+{
+  "review_commit": "bd899b98871c02ad97b7791a051f126d671bfefb",
+  "c_fix_commit": "8e91c420ce4d8ef2f4a4d806027bd29d72382f94",
+  "artifacts": [
+    {
+      "file": "research/b-integration-check.md",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/.trellis/tasks/09-13-agent-memory-rag-remediation/research/b-integration-check.md",
+      "sha256": "a536bd5978bbd05240233e7e014ba877b5a369b161b2b39973e7418e8bb4bf4b",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/d-integration-check.md",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/.trellis/tasks/09-13-agent-memory-rag-remediation/research/d-integration-check.md",
+      "sha256": "8fe4ed7050b86c8edcd40935845688c4e342b91acd4660979cc062d7d4c27677",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/c/check.md",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-assistant-context-compaction/.trellis/tasks/09-13-assistant-context-compaction/research/check.md",
+      "sha256": "656b49f266daa027c159b4cac8aedb299735ebf81e66c9b66af8d5008db4915e",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/c/implementation.md",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-assistant-context-compaction/.trellis/tasks/09-13-assistant-context-compaction/research/implementation.md",
+      "sha256": "1874bcffc488be06bab1b50b3aa3bab7672190644ad58511cf69b5e3f109e706",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/protocol-preflight.md",
+      "original": "/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/09-13-rag-retrieval-citations/research/protocol-preflight.md",
+      "sha256": "f1804678f93bf247593d8a94fe307ec8b3e0c225d238c5367f0d6d302beb61c7",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/probes/test_b_contract_probes.py",
+      "original": "/private/tmp/familygraph-b-integration-probe.py",
+      "sha256": "c2e88362dfe991636fe3922193cb4703d15d6698d18acf3c80a606e063ccdc13",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/probes/test_d_contract_probes.py",
+      "original": "/private/tmp/familygraph-d-integration/test_d_contract_probes.py",
+      "sha256": "3bf3eb3769b57749d1a1019e51a49633df8f790cfda27f139ff6db03cffb5c4d",
+      "copy": "Only fixed BACKEND path changed to required FG_AUDIT_BACKEND environment variable; assertions unchanged.",
+      "original_sha256": "479bfef7ca2becaaf84d52cb048ab2f5238e54780ddb7d6768e58a4af3a01156"
+    },
+    {
+      "file": "research/probes/b-first.log",
+      "original": "/private/tmp/familygraph-b-integration-probe.log",
+      "sha256": "e3a7927175c4579881311b498cb7ecc8c4ad860b8c79bdd608c1eb8fc8cd24af",
+      "copy": "Readable view: trailing whitespace normalized only; byte-exact original retained as deterministic gzip.",
+      "original_sha256": "d45aa25570703b69abe0328583512148db6cc4d5ec588570ff5659e14c5bbb41",
+      "raw_artifact": "research/probes/raw/b-first.log.gz"
+    },
+    {
+      "file": "research/probes/b-additional.log",
+      "original": "/private/tmp/familygraph-b-integration-additional.log",
+      "sha256": "c8f3b7d60ad9bf6b38ad04f9b2398cee90a361d8ec31048020bc549853f9c0d9",
+      "copy": "Readable view: trailing whitespace normalized only; byte-exact original retained as deterministic gzip.",
+      "original_sha256": "c0d6ad014d56d90893bd2c7f9426049ef8012adbab36653df74b8bbba0e9ef17",
+      "raw_artifact": "research/probes/raw/b-additional.log.gz"
+    },
+    {
+      "file": "research/probes/b-byte-control.log",
+      "original": "/private/tmp/familygraph-b-integration-byte-control.log",
+      "sha256": "67437cefc5a8eeea6df7370abbfb4de64cf3f3a742c7158a04d71e7d8156718a",
+      "copy": "Readable view: trailing whitespace normalized only; byte-exact original retained as deterministic gzip.",
+      "original_sha256": "67437cefc5a8eeea6df7370abbfb4de64cf3f3a742c7158a04d71e7d8156718a",
+      "raw_artifact": "research/probes/raw/b-byte-control.log.gz"
+    },
+    {
+      "file": "research/probes/d-first.log",
+      "original": "/private/tmp/familygraph-d-integration/probe-results.txt",
+      "sha256": "a81a0d54cb514a8b28819dff4f1547bf126e2c9294ca79a24e41098600a3cb17",
+      "copy": "Readable view: trailing whitespace normalized only; byte-exact original retained as deterministic gzip.",
+      "original_sha256": "cc4db2b296237e78988af13834293f1662ccadcc62eceba4085d696b3544ecfa",
+      "raw_artifact": "research/probes/raw/d-first.log.gz"
+    },
+    {
+      "file": "research/probes/d-additional.log",
+      "original": "/private/tmp/familygraph-d-integration/additional-probe-results.txt",
+      "sha256": "423b7f9064ed51f4ea5c88a7b99143f19259b9db68d7ac57ac5c264cd20d1429",
+      "copy": "Readable view: trailing whitespace normalized only; byte-exact original retained as deterministic gzip.",
+      "original_sha256": "423b7f9064ed51f4ea5c88a7b99143f19259b9db68d7ac57ac5c264cd20d1429",
+      "raw_artifact": "research/probes/raw/d-additional.log.gz"
+    },
+    {
+      "file": "research/probes/d-revocation.log",
+      "original": "/private/tmp/familygraph-d-integration/revocation-probe-results.txt",
+      "sha256": "268ab74fecb2bfec75e9e195eefb32b97f4f6fb30be794c966e177e086d9a242",
+      "copy": "Readable view: trailing whitespace normalized only; byte-exact original retained as deterministic gzip.",
+      "original_sha256": "c109a4d1b391d549e80f8d380db0ea08d3bbf2e15079aec2cb1cb15428381e5f",
+      "raw_artifact": "research/probes/raw/d-revocation.log.gz"
+    },
+    {
+      "file": "research/retrieval/retrieval-fixture-v1.json",
+      "original": "/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/09-13-rag-retrieval-citations/research/retrieval-fixture-v1.json",
+      "sha256": "92f0bed8c438a0bfde6672d71e6bb47db0f039c4cd1ac07fc490a7b3ac6c675a",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/retrieval/retrieval-baseline.json",
+      "original": "/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/09-13-rag-retrieval-citations/research/retrieval-baseline.json",
+      "sha256": "fb28d1097cfc8cae58c7419800a66b9fbe7a3fb21f0fc1041cff5cf3e290e892",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/retrieval/retrieval-baseline.md",
+      "original": "/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/09-13-rag-retrieval-citations/research/retrieval-baseline.md",
+      "sha256": "86688fb361ca5fd1fa471127f519bb5ea5b3a41d852b787cef319c656bd074b0",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/retrieval/test_retrieval_probe_a.py",
+      "original": "/Users/lyston/PycharmProjects/familygraph/.trellis/tasks/09-13-rag-retrieval-citations/research/test_retrieval_probe.py",
+      "sha256": "9b2a466876746366852d3adb9fd08951e2562b46b5d5ba1c8eeaa7f3b1069921",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/retrieval/retrieval-bd899b9.json",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/.trellis/tasks/09-13-agent-memory-rag-remediation/research/retrieval-integration-baseline.json",
+      "sha256": "01b56f6232436c15ea317b9d27ec168ce36b19137a6ed51ca9523bf179ccd495",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/smoke/initial-api-smoke.json",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/.trellis/tasks/09-13-agent-memory-rag-remediation/research/initial-api-smoke.json",
+      "sha256": "225a40918c6a6af377451f1019aebc21efe1ea275a626e8ccbbe701c278773a1",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/retrieval/test_retrieval_probe.py",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/.trellis/tasks/09-13-rag-retrieval-citations/research/test_retrieval_probe.py",
+      "sha256": "61543829dddce1539d66074a2a87975f1a81bee322b95953e9351bb6211aa3ee",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/smoke/run_agent_memory_smoke.py",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/scripts/smoke/run_agent_memory_smoke.py",
+      "sha256": "686d176e4fba63662a7713e24ab0b16ac7768e04ff199fdc1322ba1a17c9aeac",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/smoke/agent_memory_worker.mjs",
+      "original": "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/scripts/smoke/agent_memory_worker.mjs",
+      "sha256": "5c636860d2a35111cb33b8463345a25beda61f0b52d3037ea302feb3c4ced0b4",
+      "copy": "verbatim"
+    },
+    {
+      "file": "research/smoke/real-agent-memory-smoke.json",
+      "sha256": "b3481e1fbd8d0d67161036e396627e43c6358028b7fbd3a88159581c2307b5bd",
+      "copy": "generated by main reviewer; synthetic-only",
+      "evidence_status": "final"
+    },
+    {
+      "file": "research/smoke/harness-strict-sse-draft.json",
+      "sha256": "d2583bae2095bb961d34b39e87409a603d0588f09cf17f01f51dd5b7bce5144c",
+      "copy": "generated by main reviewer; synthetic-only",
+      "evidence_status": "harness_draft_not_product_failure"
+    },
+    {
+      "file": "research/probes/raw/b-first.log.gz",
+      "original": "/private/tmp/familygraph-b-integration-probe.log",
+      "original_sha256": "d45aa25570703b69abe0328583512148db6cc4d5ec588570ff5659e14c5bbb41",
+      "sha256": "6524cdf45c7a834a249d9260d27da57d7cdf87f587c9fefed9b284639eb6086a",
+      "encoding": "gzip",
+      "copy": "byte-exact raw tool output after gzip decompression"
+    },
+    {
+      "file": "research/probes/raw/b-additional.log.gz",
+      "original": "/private/tmp/familygraph-b-integration-additional.log",
+      "original_sha256": "c0d6ad014d56d90893bd2c7f9426049ef8012adbab36653df74b8bbba0e9ef17",
+      "sha256": "8bd5cbc20378efa99c12759054f8705989960d23d07f9ffc319dae08464f5d1f",
+      "encoding": "gzip",
+      "copy": "byte-exact raw tool output after gzip decompression"
+    },
+    {
+      "file": "research/probes/raw/b-byte-control.log.gz",
+      "original": "/private/tmp/familygraph-b-integration-byte-control.log",
+      "original_sha256": "67437cefc5a8eeea6df7370abbfb4de64cf3f3a742c7158a04d71e7d8156718a",
+      "sha256": "0cd4aeba65e57be07e393143f6105e2cd66ac57194fe1ee4c726fd2fdfadc39b",
+      "encoding": "gzip",
+      "copy": "byte-exact raw tool output after gzip decompression"
+    },
+    {
+      "file": "research/probes/raw/d-first.log.gz",
+      "original": "/private/tmp/familygraph-d-integration/probe-results.txt",
+      "original_sha256": "cc4db2b296237e78988af13834293f1662ccadcc62eceba4085d696b3544ecfa",
+      "sha256": "f1009ff455b59f42740785f7b831a4e4e8b240fed44a41413cf18a9ecedfef17",
+      "encoding": "gzip",
+      "copy": "byte-exact raw tool output after gzip decompression"
+    },
+    {
+      "file": "research/probes/raw/d-additional.log.gz",
+      "original": "/private/tmp/familygraph-d-integration/additional-probe-results.txt",
+      "original_sha256": "423b7f9064ed51f4ea5c88a7b99143f19259b9db68d7ac57ac5c264cd20d1429",
+      "sha256": "9287c6fa9642aac19af77e2a5ef5e8d2ae148ca6aea686839afb2b7a89e00414",
+      "encoding": "gzip",
+      "copy": "byte-exact raw tool output after gzip decompression"
+    },
+    {
+      "file": "research/probes/raw/d-revocation.log.gz",
+      "original": "/private/tmp/familygraph-d-integration/revocation-probe-results.txt",
+      "original_sha256": "c109a4d1b391d549e80f8d380db0ea08d3bbf2e15079aec2cb1cb15428381e5f",
+      "sha256": "0dd6e46a327f9c5096d51317cc8036927fa9e1fa10b2761c3191e44824d75430",
+      "encoding": "gzip",
+      "copy": "byte-exact raw tool output after gzip decompression"
+    }
+  ]
+}

@@ -38,3 +38,11 @@
 - 只解 RAG 子预算与中文词法召回；全请求总预算、真实模型质量、embedding/rerank 均未实现/未测（E 边界不变）。
 - index_version `fts5-trigram-v2` 为当前唯一活动版本；存量 v1 文档的批量迁移、防复活、维护触发归 D（其fixture/迁移需消费 `_materialize_chunks` 的 upsert 语义与 document.index_version）。
 - 语义忠实度未证明：引用认证只证明来源绑定，不证明每句话被材料支持。
+
+## 2026-09-14 独立复查更新（待修复）
+
+以上保留本分支此前实际改动与测试命令记录，不能继续据此认定 B 已完成整体验收。累计 bd899b9 上的 [独立复查](../../09-14-memory-rag-acceptance-audit/research/b-integration-check.md) 记录 B-I01～10：18 个场景最新逐项 16 失败 / 2 通过，另有唯一追问和内部 context_reference 两组静态接线缺失。
+
+实际 ContextBuilder 仍使用 len//4 且未计包装；入口 attempt 比较没有进入最终 writer/admission；引用没有精确 chunk/version/hash 证据；SSE 可输出自报保留字段，internal 历史未遮蔽；同 attempt 关闭后重放/并发500、FTS补足和fallback会话定位仍未闭合。不得将上述段落中的“RAG子预算已解”“句柄认证”或其他 helper 存在扩大为已满足完整合同。
+
+已确认正面行为保留：冻结中文核心16/16、英文2/2、扩展7/10，原请求撤权后幂等、精确16384字节边界，以及50项真实listener+sidecar正常链通过。原历史/补取的普通撤销遮蔽有效；这不消除新反例。修复 PRD/设计/顺序及逐项门槛见 [新规划](../../09-14-memory-rag-acceptance-audit/prd.md)。本轮仅登记分析，没有修改 B 业务代码。

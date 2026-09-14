@@ -1,0 +1,15 @@
+OBSERVATION {"case": "stage_concurrent_source_revocation", "committed_revocation": true, "result": {"staged": 1, "flipped": 1, "skipped": 0}, "final_status": "invalidated", "final_version": "fts5-trigram-v3-review", "new_active_chunks": [2]}
+F
+=================================== FAILURES ===================================
+____________ test_stage_rechecks_source_after_concurrent_revocation ____________
+../../../familygraph-d-integration/test_d_contract_probes.py:591: in test_stage_rechecks_source_after_concurrent_revocation
+    assert document.index_version == old_version
+E   AssertionError: assert 'fts5-trigram-v3-review' == 'fts5-trigram-v2'
+E
+E     - fts5-trigram-v2
+E     ?               ^
+E     + fts5-trigram-v3-review
+E     ?               ^^^^^^^^
+=========================== short test summary info ============================
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_stage_rechecks_source_after_concurrent_revocation
+1 failed in 1.18s

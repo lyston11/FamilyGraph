@@ -15,7 +15,7 @@
   "branch": "feat/09-13-assistant-context-compaction",
   "base_branch": "feat/09-13-memory-contract-repair",
   "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-assistant-context-compaction",
-  "commit": null,
+  "commit": "8e91c420ce4d8ef2f4a4d806027bd29d72382f94",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -28,6 +28,9 @@
     "implementation_dependencies": "none; default after A and before B to keep sidecar edits serial",
     "audit_issue_scope": "MR-11; MR-12 restoration boundary; MR-24",
     "implementation_approved": "2026-09-13: parent A-C-B-D implementation approved; continue without another permission gate",
-    "implementation_status": "verified_committed_pending_integration"
+    "implementation_status": "review_fix_committed_pending_integration",
+    "review_fix_commit": "8e91c420ce4d8ef2f4a4d806027bd29d72382f94",
+    "review_fix_pushed": "false",
+    "review_fix_validation": "113 agent tests; independent Pi 0.84.3 probe; lint/type/build passed"
   }
 }

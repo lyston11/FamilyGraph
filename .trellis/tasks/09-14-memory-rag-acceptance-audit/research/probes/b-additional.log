@@ -1,0 +1,148 @@
+B_FALLBACK_SCOPE {'history_count': 1, 'fallback': {'run_id': 1, 'seq': 2, 'citations': [], 'unavailable_citation_count': 0}}
+FB_CONCURRENT_CONTEXT {'codes': [200, 500], 'persisted_builds': 1}
+FB_FTS_REFILL {'denied_copy_id': '2', 'valid_id': '3', 'limit1': [], 'limit20': ['3']}
+F
+=================================== FAILURES ===================================
+________ test_fallback_is_scoped_to_the_run_session_and_assistant_role _________
+../../../familygraph-b-integration-probe.py:242: in test_fallback_is_scoped_to_the_run_session_and_assistant_role
+    assert fallback.json()["citations"] == assistant["citations"]
+E   AssertionError: assert [] == [{'citation_h...normal', ...}]
+E
+E     Right contains one more item: {'citation_handle': 'rag:1:r1:c1', 'revision': 1, 'scope': 'private', 'sensitivity': 'normal', ...}
+E     Use -v to get more diff
+________ test_concurrent_same_attempt_context_returns_one_reused_build _________
+../../../familygraph-b-integration-probe.py:357: in test_concurrent_same_attempt_context_returns_one_reused_build
+    assert codes == [200, 200]
+E   assert [200, 500] == [200, 200]
+E
+E     At index 1 diff: 500 != 200
+E     Use -v to get more diff
+------------------------------ Captured log call -------------------------------
+ERROR    app.main:main.py:129 unhandled exception on GET /internal/agent/runs/1/context
+Traceback (most recent call last):
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.IntegrityError: UNIQUE constraint failed: context_builds.run_id, context_builds.attempt
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 165, in __call__
+    await self.app(scope, receive, _send)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 185, in __call__
+    with collapse_excgroups():
+         ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/lib/python3.12/contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/_utils.py", line 82, in collapse_excgroups
+    raise exc
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 187, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/app/main.py", line 117, in request_context_middleware
+    response = await call_next(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 163, in call_next
+    raise app_exc
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 149, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 288, in handle
+    await self.app(scope, receive, send)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 76, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/routing.py", line 73, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 301, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 214, in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/starlette/concurrency.py", line 39, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/lyston/PycharmProjects/familygraph/backend/.venv/lib/python3.12/site-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/lyston/PycharmProjects/familygraph/backend/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 2641, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/Users/lyston/PycharmProjects/familygraph/backend/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/app/api/internal_agent.py", line 462, in run_context
+    built = context_builder.ContextBuilder(db).build(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/app/services/context_builder.py", line 236, in build
+    self.db.flush()
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4352, in flush
+    self._flush(objects)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4487, in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4448, in _flush
+    flush_context.execute()
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+    return meth(
+           ^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/private/tmp/familygraph-memory-rag/09-13-agent-memory-rag-remediation/backend/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: context_builds.run_id, context_builds.attempt
+[SQL: INSERT INTO context_builds (run_id, account_id, space_id, agent_kind, query_hash, policy_version, token_budget, attempt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: (1, 1, 1, 'assistant', '4906a49adc5c472b34483976104ec1d76992745367cc22d5fbc2a4db8e8e1ed7', 'v2-foundation-1', 2000, 1, '2026-09-14 05:21:49.600740')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+___________ test_fts_refills_after_source_dependency_denies_top_hit ____________
+../../../familygraph-b-integration-probe.py:386: in test_fts_refills_after_source_dependency_denies_top_hit
+    assert limited_ids == [str(valid_id)]
+E   AssertionError: assert [] == ['3']
+E
+E     Right contains one more item: '3'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED ../../../familygraph-b-integration-probe.py::test_fallback_is_scoped_to_the_run_session_and_assistant_role
+FAILED ../../../familygraph-b-integration-probe.py::test_concurrent_same_attempt_context_returns_one_reused_build
+FAILED ../../../familygraph-b-integration-probe.py::test_fts_refills_after_source_dependency_denies_top_hit
+3 failed, 14 deselected in 1.51s

@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-14",
+  "checks": {
+    "markdown_files": 16,
+    "local_links": 60,
+    "artifact_hashes": 30,
+    "source_hashes": 23,
+    "open_findings": 20,
+    "priority_P1": 12,
+    "priority_P2": 8,
+    "reproduced_groups": 18,
+    "static_groups": 2,
+    "original_MR_coverage": 26,
+    "capability_options": 12,
+    "future_acceptance": 12,
+    "planning_acceptance": 5,
+    "python_artifacts_parsed": 5,
+    "implement_manifest_entries": 5,
+    "check_manifest_entries": 5,
+    "task_state": "planning; parent in_progress; no new implementation worktree",
+    "production_diff": [],
+    "literal_jwt_tokens": 0,
+    "raw_gzip_logs": 6
+  },
+  "errors": [],
+  "verdict": "pass"
+}

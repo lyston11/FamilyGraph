@@ -36,3 +36,11 @@
 - 管理端索引进度页面未建（与 admin 任务的所有权协调归集成通道）；观测仅服务层 counters/maintenance_status。
 - 物理擦除、外部向量库、文档导入、Steward RAG 均未接入（PRD 边界不变）。
 - `stage_index_version` 的换版触发（何时 bump RAG_INDEX_VERSION）留待明确的算法升级决定；当前唯一活动版本为 `fts5-trigram-v2`。
+
+## 2026-09-14 独立复查更新（待修复）
+
+以上历史命令结果保留；其中关于“水位、完整投影、提交前开关重估、条件lease更新、并发唯一性、降级安全”的完成描述与累计 bd899b9 实测不一致。详见 [独立复查](../../09-14-memory-rag-acceptance-audit/research/d-integration-check.md)：20个场景17失败/3通过，归并D-I01～10。
+
+双Session实际产生同源重复document，旧Session能回退cursor 3→1，真实tick吞失租后仍commit物化；stage无有效开关/worker栅栏、撤销后仍写块，合成换版后命中1→0并被下一批改回旧版。缺块/FTS被误报current，持续新增使低ID恢复饿死，FTS repair漏来源合法性。0045 downgrade在真实保存RAG依赖下删除原chunk，再upgrade仍不可用，不能把空库往返通过当数据保留证明。
+
+RAG-only晚开启补齐、未知tombstone不复活、读者临时失权不全局失效等正例继续成立。本轮仅记录分析与 [修复方案](../../09-14-memory-rag-acceptance-audit/prd.md)，未改 D 生产代码或迁移；任务保持待修，原D-AC2/4/5/6/8不能维持整体通过。

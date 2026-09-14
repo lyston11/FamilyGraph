@@ -3,7 +3,7 @@
   "name": "rag-retrieval-citations",
   "title": "中文 RAG 召回与引用闭环",
   "description": "改善中文短词和自然问句召回，建立可预算的检索与可验证的回答引用。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -12,10 +12,10 @@
   "assignee": "lyston",
   "createdAt": "2026-09-13",
   "completedAt": null,
-  "branch": null,
+  "branch": "feat/09-13-rag-retrieval-citations",
   "base_branch": "main",
-  "worktree_path": null,
-  "commit": null,
+  "worktree_path": "/Users/lyston/PycharmProjects/fg-09-13-rag-retrieval-citations",
+  "commit": "56bb895a6aa7f52b6e87de7febfa4373410b4538",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -23,10 +23,12 @@
   "relatedFiles": [],
   "notes": "",
   "meta": {
-    "planning_only": "true",
+    "planning_only": "false",
     "workstream": "B",
     "implementation_dependencies": "09-13-memory-contract-repair,09-13-assistant-context-compaction",
     "audit_issue_scope": "MR-03,MR-04,MR-09,MR-14; MR-10 RAG budget; MR-24",
-    "implementation_status": "verified_pending_commit"
+    "implementation_status": "review_failed_repair_planned",
+    "acceptance_review_task": "09-14-memory-rag-acceptance-audit",
+    "reviewed_cumulative_commit": "bd899b98871c02ad97b7791a051f126d671bfefb"
   }
 }

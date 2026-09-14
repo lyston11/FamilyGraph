@@ -1,0 +1,31 @@
+OBSERVATION {"case": "full_round_low_id_starvation", "round_history": [0, 0, 0, 0, 0], "low_id_materialized": false}
+FOBSERVATION {"case": "final_effective_flag_checkpoint", "result": {"scanned": 1, "materialized": 1, "already_current": 0, "skipped_invalid": 0, "failed": 0, "round": 1}, "rejected": false, "rag_enabled": false, "materialized": true}
+FOBSERVATION {"case": "policy_fence", "rejected": false, "state_policy": "future-policy-v99", "code_policy": "rag-index-maint-v1", "result": {"scanned": 1, "materialized": 1, "already_current": 0, "skipped_invalid": 0, "failed": 0, "round": 100}, "materialized": true}
+FOBSERVATION {"case": "fts_repair_unverified_source", "rebuilt": 1, "fts_rows": 1, "public_search_hits": 0, "source_verification": "unverified"}
+FOBSERVATION {"case": "reader_unverified_invalidation_distinction", "reader_loss_tombstone": false, "permanent_invalidation": "invalidated", "preserved_saved_quote": true}
+.
+=================================== FAILURES ===================================
+__________ test_full_round_does_not_starve_low_ids_under_new_arrivals __________
+../../../familygraph-d-integration/test_d_contract_probes.py:450: in test_full_round_does_not_starve_low_ids_under_new_arrivals
+    assert materialized is not None
+E   assert None is not None
+____________ test_batch_rechecks_effective_flag_at_final_checkpoint ____________
+../../../familygraph-d-integration/test_d_contract_probes.py:474: in test_batch_rechecks_effective_flag_at_final_checkpoint
+    assert rejected or doc_for(db_session, memory.id) is None
+E   assert (False or <app.models.rag.RAGDocument object at 0x1109f5100> is None)
+E    +  where <app.models.rag.RAGDocument object at 0x1109f5100> = doc_for(<sqlalchemy.orm.session.Session object at 0x107afca40>, 1)
+E    +    where 1 = <app.models.memory.Memory object at 0x110967fb0>.id
+_______________ test_old_policy_cannot_write_future_policy_state _______________
+../../../familygraph-d-integration/test_d_contract_probes.py:496: in test_old_policy_cannot_write_future_policy_state
+    assert rejected
+E   assert False
+_____________________ test_fts_repair_uses_source_legality _____________________
+../../../familygraph-d-integration/test_d_contract_probes.py:510: in test_fts_repair_uses_source_legality
+    assert fts_count == 0
+E   assert 1 == 0
+=========================== short test summary info ============================
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_full_round_does_not_starve_low_ids_under_new_arrivals
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_batch_rechecks_effective_flag_at_final_checkpoint
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_old_policy_cannot_write_future_policy_state
+FAILED ../../../familygraph-d-integration/test_d_contract_probes.py::test_fts_repair_uses_source_legality
+4 failed, 1 passed in 1.21s
