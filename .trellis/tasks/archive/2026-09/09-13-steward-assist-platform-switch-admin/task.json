@@ -22,5 +22,12 @@
   "parent": null,
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "original_implementation_commit": "969a5b0979b3256767890eace1b43a2be629d3b0",
+    "original_archive_commit": "4649e48ae271e106dca96a3bb875e97fbf379b3c",
+    "remediation_commit": "73b0bbd3e89005aa50dae76924079cd765b86393",
+    "remediation_completed_at": "2026-09-14",
+    "remediation_record": ".trellis/tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin/research/remediation-2026-09-14.md",
+    "reconciliation_record": ".trellis/tasks/archive/2026-09/09-13-steward-assist-platform-switch-admin/research/reconciliation-2026-09-14.json"
+  }
 }

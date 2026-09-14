@@ -87,4 +87,4 @@ STEWARD_ASSIST_RANKING / STEWARD_ASSIST_EXPLANATION` 只能通过服务器环境
 - [x] MRX-02：四类辅助显示来源；部署关闭可解释、可行动，按钮状态与来源一致，已知部署关闭不提交无效开启请求。
 - [x] MRX-03：回归测试覆盖服务端拒绝生效、正常切换和部署阻断；保持其余开关载荷语义。
 - [x] MRX-04：管理员前端 lint、type-check、全量 Vitest、build 通过；独立复核无未解决发现。
-- [ ] MRX-05：修复合入主线并 push；活动旧副本与相关会话指针清理，证据汇入原归档，清理本次 worktree/本地分支。
+- [x] MRX-05：修复合入主线并 push；活动旧副本与相关会话指针清理，证据汇入原归档，清理本次 worktree/本地分支。
