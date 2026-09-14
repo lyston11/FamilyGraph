@@ -3,7 +3,7 @@
   "name": "assistant-context-compaction",
   "title": "Assistant 历史恢复与压缩一致性",
   "description": "修复 Pi 历史状态与压缩源不同步，明确会话恢复、上下文预算和持久摘要边界。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-13",
-  "completedAt": null,
+  "completedAt": "2026-09-14",
   "branch": "feat/09-13-assistant-context-compaction",
   "base_branch": "feat/09-13-memory-contract-repair",
   "worktree_path": "/private/tmp/familygraph-memory-rag/09-13-assistant-context-compaction",
@@ -31,6 +31,10 @@
     "implementation_status": "verified_pending_integration",
     "review_fix_commit": "8e91c420ce4d8ef2f4a4d806027bd29d72382f94",
     "review_fix_pushed": "true",
-    "review_fix_validation": "113 agent tests; independent Pi 0.84.3 probe; lint/type/build passed"
+    "review_fix_validation": "113 agent tests; independent Pi 0.84.3 probe; lint/type/build passed",
+    "final_branch_commit": "8e91c420ce4d8ef2f4a4d806027bd29d72382f94",
+    "main_integration_commit": "a83b5d104e84897fe36eb17ae49b9db2772521b6",
+    "integration_target": "main",
+    "integration_status": "merged_smoke_passed"
   }
 }
