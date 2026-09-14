@@ -4,12 +4,12 @@
 
 消除行为投影重建误删其他冷却数据的风险，并让同结构推测能够记录可验证的新相关证据，同时保留用户已经表达的驳回意愿。
 
-研究来源：[能力评估 E](../archive/2026-09/09-13-agent-memory-capability-plan/prd.md)。2026-09-14 E 研究归档后，本包解除活动父子关系，是 MR-23 / MR-26 的唯一后续业务所有者。用户在查看本任务后明确回复“执行”；现已通过 `task.py start` 进入独立分支/worktree，按 MR-26 → MR-23 串行实施。E 研究已产生真实服务链的隔离复现；本次执行不新增关系提醒或授权待办。
+研究来源：[能力评估 E](../09-13-agent-memory-capability-plan/prd.md)。2026-09-14 E 研究归档后，本包解除活动父子关系，是 MR-23 / MR-26 的唯一后续业务所有者。用户在查看本任务后明确回复“执行”；现已通过 `task.py start` 进入独立分支/worktree，按 MR-26 → MR-23 串行实施。E 研究已产生真实服务链的隔离复现；本次执行不新增关系提醒或授权待办。
 
 ## Evidence
 
-- [MR-26](../archive/2026-09/09-13-agent-memory-capability-plan/research/behavior-projection-rebuild-results.md)：行为投影开启后，账户级/空间级重建均删除真实推荐服务创建的非所属冷却键；关闭时保留。
-- [MR-23](../archive/2026-09/09-13-agent-memory-capability-plan/research/steward-candidate-evidence-results.md)：相关支撑事实已进入假模型调用，但同结构候选和 Suggestion 仍保留旧证据；无关/无新增事实对照保持原状态。
+- [MR-26](../09-13-agent-memory-capability-plan/research/behavior-projection-rebuild-results.md)：行为投影开启后，账户级/空间级重建均删除真实推荐服务创建的非所属冷却键；关闭时保留。
+- [MR-23](../09-13-agent-memory-capability-plan/research/steward-candidate-evidence-results.md)：相关支撑事实已进入假模型调用，但同结构候选和 Suggestion 仍保留旧证据；无关/无新增事实对照保持原状态。
 - 上述是合成迁移库、实际生产服务和 fake transport 的证据，不证明线上发生频率或真实模型质量。
 
 ## Requirements
@@ -34,7 +34,7 @@
 
 ## Boundaries
 
-不实现 Steward shared RAG、TermRegistry 替代、行为水位系统、自动关系确认或平台 admin 开关。共享知识能力仍归 [既有 followups](../09-11-steward-capability-followups/prd.md)；已集成的平台开关和称谓闭环沿用现有合同。
+不实现 Steward shared RAG、TermRegistry 替代、行为水位系统、自动关系确认或平台 admin 开关。共享知识能力仍归 [既有 followups](../../../09-11-steward-capability-followups/prd.md)；已集成的平台开关和称谓闭环沿用现有合同。
 
 本任务是用户另行选用的 E 后续修复，不回写 A～D 的交付结论。与渐进重算任务相交的 Steward 文件和迁移串行处理；采用其先集成的接口与迁移 head，不解决或覆盖其他 worktree 的在途冲突。
 
@@ -42,6 +42,6 @@
 
 ## 与称谓闭环的职责交接
 
-用户另行选用的 [称谓闭环](../archive/2026-09/09-13-steward-kinship-capability-closure/prd.md) 负责通知个人表达、term_preference 生产、terminology 模型及专用反馈。本任务保留 MR-23 一般原子候选证据版本和 MR-26 键族修复；不将自动称谓重新设计成关系确认任务。共享 steward_suggestions/assist/models/通知文件及 migration 串行实施，使用对方先集成的合同。
+用户另行选用的 [称谓闭环](../09-13-steward-kinship-capability-closure/prd.md) 负责通知个人表达、term_preference 生产、terminology 模型及专用反馈。本任务保留 MR-23 一般原子候选证据版本和 MR-26 键族修复；不将自动称谓重新设计成关系确认任务。共享 steward_suggestions/assist/models/通知文件及 migration 串行实施，使用对方先集成的合同。
 
 共同父母等可验证路径若已足以提供派生称谓，本任务可以记录证据版本，但不能据此新增必须确认称谓的通知；内部证据换版不等于需要新增 SourceFact。称谓恢复反馈属于个人显示域，不被本任务的通用冷却或全量重建清除。

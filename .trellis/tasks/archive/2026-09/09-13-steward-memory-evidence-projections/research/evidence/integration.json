@@ -1,0 +1,29 @@
+{
+  "verified_at": "2026-09-14T17:16:43.836082+00:00",
+  "work_commits": {
+    "mr26": "cff6f8e242cff6e4d90963128ce12690c3e2a46f",
+    "mr23": "b43602d2d725a68c468ff6d2627d440cf26acc97"
+  },
+  "main_before": "6fed610e8860e7648ab16a8a9268f141616e5c87",
+  "main_integration": "fast-forward to b43602d2d725a68c468ff6d2627d440cf26acc97",
+  "verified_backend_files_matching_main": 22,
+  "migration_head": "0049_steward_candidate_evidence",
+  "archive_path": ".trellis/tasks/archive/2026-09/09-13-steward-memory-evidence-projections",
+  "archive_link_files_repaired": [
+    "implement.md",
+    "prd.md"
+  ],
+  "protected_other_session_files_unchanged": 10,
+  "cleanup": {
+    "task_worktree_removed": true,
+    "deleted_branches": [
+      "feat/09-13-steward-memory-evidence-projections",
+      "backup/09-13-steward-memory-evidence-projections",
+      "backup/09-13-steward-memory-evidence-projections-mr23"
+    ],
+    "shared_backend_venv_preserved": true,
+    "force_used": false
+  },
+  "production_data_or_config_changed": false,
+  "deployment": false
+}

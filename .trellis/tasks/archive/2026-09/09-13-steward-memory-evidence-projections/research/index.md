@@ -13,7 +13,7 @@
 - 重用真实 core、delivery 与 fake transport；捕获版本 ID 与输入 fence 分别验证。
 - 写回取得 writer 后重采样时间，调用方的未来时间只能收紧租约检查。
 
-## 已排除与未完成
+## 已排除与验收状态
 
 - 不照搬旧 harness 的新增 Suggestion 预期；不把来源失效误称为 SourceFact TTL。
 - 不为当前不可执行的相对多步迁移增加计划缓存。

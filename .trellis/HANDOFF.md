@@ -1,6 +1,6 @@
 # FamilyGraph · Trellis 当前交接
 
-> 更新：2026-09-15。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 已提交 `cff6f8e`，MR-23 已通过最终验收，待串行集成归档。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
+> 更新：2026-09-15。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 `cff6f8e` 与 MR-23 `b43602d` 已合入 main 并归档，任务 worktree/分支已清理。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
 > 当前设计与验收要求看对应任务的 `prd.md`、`design.md`、`implement.md` 及最新研究记录；已实现行为看代码、迁移、测试和 Git 集成证据。工作流以 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 为准。本页末尾保留 v1 历史，已标为历史的 `.trellis/spec/` 条款不覆盖现行任务。
 > 架构入口：[系统架构与设计](../docs/ARCHITECTURE.md)；运行与验证入口：[README](../README.md)；数据播种：[DEV-DATA-SEEDING.md](../docs/DEV-DATA-SEEDING.md)。
 
@@ -60,7 +60,7 @@
 | Memory/RAG 验收复查 | F-01～12通过；原红测、最终制品hash、代码绑定和局限分别保留，E延期能力未记作生产实现 | [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)、[验收矩阵](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md)、[实施计划](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/implement.md) |
 | E：能力扩展准入 | 研究交付已归档，生产扩展未因此上线；主动检索、聊天保存/候选、导入、混合检索、全请求预算、持久摘要等按采用门槛保持延期 | [任务](tasks/archive/2026-09/09-13-agent-memory-capability-plan/prd.md)、[12 项决定](tasks/archive/2026-09/09-13-agent-memory-capability-plan/research/capability-decision-register.md) |
 | 管家快照与渐进重算 P1 | 本地 AC1–AC9 通过；`dee91a1` 已合入 main、`27fe936` 归档，worktree/本地分支已清理 | [PRD](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/prd.md)、[集成验收](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md)、[代码与清理证据](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-final-evidence.json) |
-| MR-23/MR-26 证据与行为投影 P2 | SP-AC1～6 通过；保留独立冷却、内部证据换版、双向隔离及写锁后的租约检查已实现，待串行集成归档 | [任务](tasks/09-13-steward-memory-evidence-projections/prd.md)、[实施顺序](tasks/09-13-steward-memory-evidence-projections/implement.md)、[最终验收](tasks/09-13-steward-memory-evidence-projections/research/final-validation-summary.md) |
+| MR-23/MR-26 证据与行为投影 P2 | SP-AC1～6 通过；`cff6f8e` / `b43602d` 已合入 main 并归档，worktree/分支已清理；保留独立冷却、内部证据换版、双向隔离及写锁后的租约检查 | [任务](tasks/archive/2026-09/09-13-steward-memory-evidence-projections/prd.md)、[实施顺序](tasks/archive/2026-09/09-13-steward-memory-evidence-projections/implement.md)、[最终验收](tasks/archive/2026-09/09-13-steward-memory-evidence-projections/research/final-validation-summary.md) |
 | Steward 能力后续 P3 | shared RAG、额外个人路径解释、新地区包及有观测依据的性能研究仍延期；已交付称谓和独立 P1 重算不受此状态覆盖 | [任务](tasks/09-11-steward-capability-followups/prd.md)、[设计](tasks/09-11-steward-capability-followups/design.md) |
 | 跨空间发现 | 继续延期；个人叫法可复用不授予其他空间路径读取权 | [任务](tasks/09-11-steward-cross-space-discovery/prd.md) |
 
@@ -78,7 +78,7 @@
 
 ## 迁移与集成检查点
 
-- MR-23 验收的迁移单头为 `0049_steward_candidate_evidence`，待本任务串行集成；其父 `0048_steward_terminology_publication` 连接 `0047_rag_lifecycle_integrity` 与 `0045_steward_staged_publication`。0049 原地扩展候选表并保存不可变证据版本，有证据或已采用归因时拒绝丢弃。数据库实际应用状态须另行核查，不将代码集成当作生产迁移。
+- 当前已集成的迁移单头为 `0049_steward_candidate_evidence`；其父 `0048_steward_terminology_publication` 连接 `0047_rag_lifecycle_integrity` 与 `0045_steward_staged_publication`。0049 原地扩展候选表并保存不可变证据版本，有证据或已采用归因时拒绝丢弃。数据库实际应用状态须另行核查，不将代码集成当作生产迁移。
 - 0047已在隔离FK OFF/ON真实连接验证；重复来源/镜像冲突首项DDL前拒绝，0045/0047危险downgrade保留历史块与正文证据，不以删数据使往返通过。
 - 0048 已完成称谓 A/B、质量修复和渐进发布的主线接合；两种升级次序均保留业务数据并恢复 60 条输入触发器。深降级须在首个 DDL 前预检计划路径中的 RAG/Memory/Steward 历史及待办，拒绝后 schema 和 head 均原样保留。
 - 在隔离数据库验证合并后的 upgrade、旧数据兼容及所要求的回退限制；维护租约、引用依赖和进行中的发布不能被破坏性降级抹掉。运行期 SQLite 备份使用 `python -m app.backup`。
@@ -102,7 +102,7 @@ git merge-base --is-ancestor <commit> main
 | 称谓质量修复 | backend 1119 passed / 3 skipped，frontend 618 passed；lint、类型检查与构建通过，合并后相关 backend 59 passed；[记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md) | 3 项为既有延期的 break-glass 测试；真实 terminology 模型质量、生产 smoke 未测；关系最终确认的成环/证据留存仍按原 PRD 延期 |
 | Memory/RAG累计验收 | 后端1352/3既有skipped、前端660、agent118检查点及代码一致证明；中文16/16、英文2/2、扩展7/10；真实listener/Pi/维护95/95、API56/56、迁移8/8；[矩阵](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/acceptance-matrix.md) | B/D原20组及追加恢复回归闭合；未测真实Provider/生产规模，扩展集3项仍未命中，E可选能力与MR-23/26 P2保持边界 |
 | 渐进重算最终本地验收 | 后端 1535 passed / 3 既有 skipped，前端 740、管理员前端 111；静态检查与构建通过。30/50/200 人、两次真实 300 秒扫描、Chrome 桌面五次及移动端两主题、API smoke 56/56 均通过；[冻结源码与完整结果](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md) | 200 人全空间冷算约 416 秒，本人 ready 约 54 秒，确认骨架先出；写预算仅覆盖同进程/Engine。性能数值为本机样本，目标服务器迁移、部署与运行观测未执行 |
-| MR-23/MR-26 修复验收 | 定向 188 passed；完整后端 1594 passed / 3 既有 skipped；六个既有测试导入整理后 43 passed；Ruff/format（394 文件）、mypy（205 源文件）和独立审查通过；[验证记录](tasks/09-13-steward-memory-evidence-projections/research/validation.md) | fake transport 与合成迁移库；仅 direct_sibling 的共同父母证书，projected 为历史核验。未运行真实模型或生产迁移，未重复前端/浏览器/容量实测 |
+| MR-23/MR-26 修复验收 | 定向 188 passed；完整后端 1594 passed / 3 既有 skipped；六个既有测试导入整理后 43 passed；Ruff/format（394 文件）、mypy（205 源文件）和独立审查通过；[验证记录](tasks/archive/2026-09/09-13-steward-memory-evidence-projections/research/validation.md) | fake transport 与合成迁移库；仅 direct_sibling 的共同父母证书，projected 为历史核验。未运行真实模型或生产迁移，未重复前端/浏览器/容量实测 |
 
 各行均绑定其链接任务的冻结代码与验证环境。没有改变线上开关或部署。未来代码变化按受影响范围重新验证，smoke 退出码 2 仍代表环境阻塞。
 

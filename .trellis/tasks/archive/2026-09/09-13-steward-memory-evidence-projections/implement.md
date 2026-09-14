@@ -6,7 +6,7 @@
 
 - [x] 审阅 SP-R1～6，冻结共同 biological_parent 证书及仅内部版本、保留驳回、零新待办策略（见 design §2～3）。
 - [x] 核对当前 Steward 能力和平台开关任务的文件所有权，读取最新代码和迁移 heads。
-- [x] 读取 [称谓交接](../archive/2026-09/09-13-steward-kinship-capability-closure/research/task-alignment.md)，消费已集成 A/B 及后续质量修复；保留 viewer/非待办/自动显示语义及个人恢复反馈。
+- [x] 读取 [称谓交接](../09-13-steward-kinship-capability-closure/research/task-alignment.md)，消费已集成 A/B 及后续质量修复；保留 viewer/非待办/自动显示语义及个人恢复反馈。
 - [x] 获准实施后在主检出 task.py start，进入记录的专用分支/worktree；不改主检出业务代码。
 
 启动基线 `0db88c2`；task branch `feat/09-13-steward-memory-evidence-projections`，worktree `../fg-09-13-steward-memory-evidence-projections`。主检出既有脏文件/index 已单独取哈希快照保全。按用户要求等待后，渐进重算已在 `dee91a1` 合入 main。任务 worktree 先同步 origin/main，再 fast-forward 到包含已集成代码的本地 main；当前基线 `dee91a1`，单一迁移 head 为 `0048_steward_terminology_publication`。共有代码已释放，本包按 MR-26 → MR-23 串行实施，下一迁移采用 0049。
@@ -49,4 +49,4 @@ MR-26 已独立提交 `cff6f8e`，并创建本任务本地 backup 分支。随�
 
 完整后端为 1594 passed / 3 既有 skipped / 4 既有 warnings（156.36 秒）。全包 Ruff 发现六个既有渐进 Steward 测试的 import 顺序问题，主线程只作机械整理，随后对应 43 项回归通过（7.42 秒）；最终 Ruff、format 394 文件和 mypy 205 个源文件均通过。完整测试后生产文件与三套新测试逐字节未变，证据 manifest 已保存。
 
-独立最终 `trellis-check` 已直接阅读 MR-26/MR-23 全部实现、迁移和新增回归，没有遗留可操作缺陷。SP-AC1～6 均满足；详细命令、原红测和限制见 [验证记录](research/validation.md)，摘要见 [最终验收](research/final-validation-summary.md)。接下来仅剩已授权的串行提交、合并、推送、归档及 worktree/分支清理。
+独立最终 `trellis-check` 已直接阅读 MR-26/MR-23 全部实现、迁移和新增回归，没有遗留可操作缺陷。SP-AC1～6 均满足；详细命令、原红测和限制见 [验证记录](research/validation.md)，摘要见 [最终验收](research/final-validation-summary.md)。功能提交为 `cff6f8e`（MR-26）与 `b43602d`（MR-23）；main 已由 `6fed610` fast-forward 至 `b43602d`。Trellis 归档与任务 worktree、feat 分支及两个本地 backup 分支清理均已完成；未使用强制删除。

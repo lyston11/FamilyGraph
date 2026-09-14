@@ -3,7 +3,7 @@
   "name": "steward-memory-evidence-projections",
   "title": "Steward 证据版本与行为投影键族修复",
   "description": "修复 MR-26 行为重建键族及 MR-23 可验证相关证据版本；保留驳回，内部换版不新增关系待办。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "backend",
   "scope": "Steward behavior projections and candidate evidence versions",
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-13",
-  "completedAt": null,
+  "completedAt": "2026-09-15",
   "branch": "feat/09-13-steward-memory-evidence-projections",
   "base_branch": "main",
   "worktree_path": "/Users/lyston/PycharmProjects/fg-09-13-steward-memory-evidence-projections",
-  "commit": null,
+  "commit": "b43602d2d725a68c468ff6d2627d440cf26acc97",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -27,7 +27,7 @@
     "workstream": "E-followup",
     "audit_issue_scope": "MR-23,MR-26",
     "implementation_dependencies": "progressive-recompute merged into main; consume integrated Steward delivery and migration 0048",
-    "implementation_status": "verified",
+    "implementation_status": "completed",
     "creation_basis": "E synthetic production-path evidence; user-approved recording and remediation planning",
     "execution_authorization": "2026-09-14 user: 执行",
     "notification_policy": "internal evidence only; no new suggestions, recipients, notifications or inferred edges for versioned candidates",
@@ -40,6 +40,9 @@
     "mr23_integration_research": "research/mr23-integration-summary.md",
     "mr23_validation": "188 focused tests passed; complete backend 1594 passed / 3 existing skipped; import cleanup 43 passed; full Ruff/format and mypy 205 passed; independent final trellis-check passed",
     "migration_head": "0049_steward_candidate_evidence",
-    "acceptance_status": "SP-AC1 through SP-AC6 passed; pending authorized commit/integration/archive"
+    "acceptance_status": "SP-AC1 through SP-AC6 passed; merged into main and archived",
+    "mr23_commit": "b43602d",
+    "integration_status": "merged into main by fast-forward from 6fed610; all 22 changed backend file hashes match verified source",
+    "cleanup_status": "task worktree and feat branch removed; both local backup branches deleted normally; shared backend venv preserved"
   }
 }

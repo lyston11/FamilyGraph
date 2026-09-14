@@ -122,3 +122,9 @@ PYTHONPATH=. .venv/bin/python -m pytest -q \
 - 内部 projected 只代表历史核验，未提供个人证书 API；原 candidate→首次 job CASCADE 未改，也没有新 job GC。
 - 未调用真实模型、操作生产数据/迁移、部署或更改环境/平台/空间开关。
 - 本包无前端或公共 API 变更，未重跑两端构建、浏览器、生产 smoke 和 30/50/200 人容量实测。渐进重算的原冻结性能验收继续由其归档制品说明，不能冒充本包的新生产规模验收。
+
+## 集成与归档
+
+2026-09-15，`cff6f8e`（MR-26）和 `b43602d`（MR-23）已随任务分支 fast-forward 合入 main，原 main 为 `6fed610`。22 个改动后端文件与已验收 hash 一致，集成后仍为单一 0049 head；没有新代码变化，不重复全量测试。
+
+`task.py archive --no-commit` 完成状态与目录迁移后，立即正常删除 task worktree、feat 分支和两个本地 backup 分支；共享 backend/.venv 保留，无强制删除。归档后的 Markdown/JSONL 自引用已修正，历史上下文条目未迁移；主检出另外 10 个受保全文件仍与集成前 hash 一致。归档与 journal 单独提交，见 [集成及清理证据](evidence/integration.json)。
