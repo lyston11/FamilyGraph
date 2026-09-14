@@ -40,6 +40,6 @@
 
 ## 与称谓闭环的职责交接
 
-用户另行选用的 [称谓闭环](../09-13-steward-kinship-capability-closure/prd.md) 负责通知个人表达、term_preference 生产、terminology 模型及专用反馈。本任务保留 MR-23 一般原子候选证据版本和 MR-26 键族修复；不将自动称谓重新设计成关系确认任务。共享 steward_suggestions/assist/models/通知文件及 migration 串行实施，使用对方先集成的合同。
+用户另行选用的 [称谓闭环](../archive/2026-09/09-13-steward-kinship-capability-closure/prd.md) 负责通知个人表达、term_preference 生产、terminology 模型及专用反馈。本任务保留 MR-23 一般原子候选证据版本和 MR-26 键族修复；不将自动称谓重新设计成关系确认任务。共享 steward_suggestions/assist/models/通知文件及 migration 串行实施，使用对方先集成的合同。
 
 共同父母等可验证路径若已足以提供派生称谓，本任务可以记录证据版本，但不能据此新增必须确认称谓的通知；内部证据换版不等于需要新增 SourceFact。称谓恢复反馈属于个人显示域，不被本任务的通用冷却或全量重建清除。

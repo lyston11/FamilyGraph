@@ -8,7 +8,7 @@
 
 - [x] 为 E-O1～12 建决定记录，冻结每项数据集、指标、成功门槛和成本/延迟上限，注明哪些需要产品选择。
 - [x] 先推进不依赖新架构的 MR-23 多 job 和 MR-26 混合键族复现；记录反证同样有效，不追求证明预设结论。
-- [x] 保留 Suggestion/ActionCard/TermRegistry 的实际边界；核对 [称谓交接](../09-13-steward-kinship-capability-closure/research/task-alignment.md) 和既有任务，称谓生产/模型/专用反馈不再重复排期。
+- [x] 保留 Suggestion/ActionCard/TermRegistry 的实际边界；核对 [称谓交接](../archive/2026-09/09-13-steward-kinship-capability-closure/research/task-alignment.md) 和既有任务，称谓生产/模型/专用反馈不再重复排期。
 - [x] 比较方案与采用门槛已记录；主动检索、语义/重排的真实质量和成本比较明确延期。B/D 最终冻结词法结果单列，未执行实验不冒充通过。
 - [x] 显式原始 user 保存、自动候选和派生来源设计及反例协议完成，产品采用与运行实验明确延期。
 - [x] 导入格式、生命周期与失败/撤销/换版验证协议已定义；导入产品与运行样本实验未执行，明确延期。

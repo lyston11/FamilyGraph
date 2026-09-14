@@ -38,7 +38,7 @@ MR-15 贯穿所有议题：形成“实现存在/生产已接线/有效开关/�
 - E-R3：新工具、自动提取、外部模型外发、持久摘要、物理清理等改变产品行为的方案，在选用前补齐对应设计与范围；本任务不默认开启。
 - E-R4：完整复现 MR-23 的模型候选→数据库→后续 core→Suggestion 路径，以及 MR-26 的混合键族重建风险；直接 upsert 单测不足以闭环。
 - E-R5：把 Suggestion 冷却限制、ActionCard 已有生产读写且行为投影开关开启时生效的冷却、异步下一 core 投影分开；不推断今天线上生效。在未决定重现语义前保留同证据驳回，不主动新增提醒。
-- E-R6：沿用既有任务所有权。shared RAG 归 followups；已完成平台开关作为基线。新授权称谓闭环由 [专属总任务](../09-13-steward-kinship-capability-closure/prd.md) 负责生产与第四类开关扩展，E 不重复实现或改写其状态；MR-23/26 修复仍归既定 P2 包。
+- E-R6：沿用既有任务所有权。shared RAG 归 followups；已完成平台开关作为基线。新授权称谓闭环由 [专属总任务](../archive/2026-09/09-13-steward-kinship-capability-closure/prd.md) 负责生产与第四类开关扩展，E 不重复实现或改写其状态；MR-23/26 修复仍归既定 P2 包。
 - E-R7：研究只用合成/已授权数据；记录脱敏结果、版本与命令，不把家庭正文、密钥或完整模型 prompt 贴入 task。
 
 ## Acceptance Criteria

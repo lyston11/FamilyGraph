@@ -74,7 +74,7 @@ Steward 仍用专属 job/consumer 身份，不能伪造 generic AgentRun 来通�
 
 TermRegistry 是现有称谓持久化真源；Assistant record_term_usage 的明确同意约束保留。correction_preference/term_usage 投影只有在找到实际消费者并明确用途后才启用，不复制第二套称谓。
 
-本期称谓消费者由 [称谓闭环 B](../09-13-steward-terminology-autonomy/design.md) 负责：直接复用本人词条/合法用词与专用反馈，模型结果存为可撤销个人显示投影，既不替代 TermRegistry 也不伪造 TermUsage。它不依赖尚未修复的全量 BehaviorProjection 重建。一般 card relevance 排序与未选用反馈扩展仍按本节评估。
+本期称谓消费者由 [称谓闭环 B](../archive/2026-09/09-13-steward-terminology-autonomy/design.md) 负责：直接复用本人词条/合法用词与专用反馈，模型结果存为可撤销个人显示投影，既不替代 TermRegistry 也不伪造 TermUsage。它不依赖尚未修复的全量 BehaviorProjection 重建。一般 card relevance 排序与未选用反馈扩展仍按本节评估。
 
 MR-26 复现协议：同账户/空间同时造 card 冷却、term/correction 投影及 family_recommendations 的独立冷却键；用真实 rebuild helper 回放允许事件，再比较非目标键是否原样保留。当前 helper 无生产调用，此实验是条件性风险验证。最小修复方案只删除/重建自己拥有的键族，同一事件集重复回放结果一致，保留其他键；不顺带新增事件水位，增量回放另列可选优化。若没有消费者，继续不接 maintenance。
 

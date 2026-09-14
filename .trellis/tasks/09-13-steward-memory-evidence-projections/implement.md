@@ -6,7 +6,7 @@
 
 - [ ] 审阅 SP-R1～6，冻结支撑证据归因范围与新证据可见/通知策略。
 - [ ] 核对当前 Steward 能力和平台开关任务的文件所有权，读取最新代码和迁移 heads。
-- [ ] 读取 [称谓交接](../09-13-steward-kinship-capability-closure/research/task-alignment.md)，与其 A/B 串行修改共有文件；保留 viewer/非待办/自动显示语义及个人恢复反馈。
+- [ ] 读取 [称谓交接](../archive/2026-09/09-13-steward-kinship-capability-closure/research/task-alignment.md)，与其 A/B 串行修改共有文件；保留 viewer/非待办/自动显示语义及个人恢复反馈。
 - [ ] 获准实施后在主检出 task.py start，进入记录的专用分支/worktree；不改主检出业务代码。
 
 ## 串行步骤
