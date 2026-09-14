@@ -154,13 +154,15 @@ def main() -> int:
         return EXIT_BLOCKED
 
     data_dir = Path(tempfile.mkdtemp(prefix="fg-smoke-"))
-    public_port, admin_port = free_port(), free_port()
+    public_port, internal_port, admin_port = free_port(), free_port(), free_port()
     env = os.environ.copy()
     env.update(
         {
             "DATA_DIR": str(data_dir),
             "PUBLIC_API_PORT": str(public_port),
             "PUBLIC_API_HOST": "127.0.0.1",
+            "INTERNAL_AGENT_API_PORT": str(internal_port),
+            "INTERNAL_AGENT_API_HOST": "127.0.0.1",
             "ADMIN_API_PORT": str(admin_port),
             "ADMIN_API_HOST": "127.0.0.1",
             "SECRET_KEY": secrets.token_hex(32),
