@@ -95,7 +95,7 @@ interface CapturedRequest {
 
 interface StreamScript {
   firstResponseTokens?: number;
-  responseError?: string;
+  responseError?: string | ((context: Context) => string | undefined);
   summaryError?: string;
 }
 
@@ -124,7 +124,11 @@ function offlineStream(
       !summary && requests.filter((request) => !request.summary).length === 1
         ? (script.firstResponseTokens ?? 50)
         : 40;
-    const errorMessage = summary ? script.summaryError : script.responseError;
+    const errorMessage = summary
+      ? script.summaryError
+      : typeof script.responseError === "function"
+        ? script.responseError(context)
+        : script.responseError;
     const response: AssistantMessage = {
       role: "assistant",
       content: [{ type: "text", text }],
@@ -505,6 +509,58 @@ describe("restored Pi history", () => {
       RECENT_TEXT,
       "Ready.",
     ]);
+    expect(context).toEqual(original);
+  });
+
+  it("fails clearly when the current input still exceeds the window after one compact-and-retry", async () => {
+    const current = "超长当前输入 ".repeat(40_000);
+    const context = projection([
+      persisted(1, "user", OLD_FACT),
+      persisted(2, "assistant", "Acknowledged."),
+      persisted(3, "user", current),
+    ]);
+    context.provider!.context_window = 40_000;
+    const original = structuredClone(context);
+    const { session, requests, sessionEvents } = await build(context, {
+      responseError: (request) =>
+        request.messages.map(textOf).join("\n").length > 160_000
+          ? "maximum context length exceeded"
+          : undefined,
+    });
+    await session.prompt(current);
+
+    expect(current.length).toBe(280_000);
+    expect(requests.map((request) => request.summary)).toEqual([false, true, false]);
+    for (const request of requests.filter((entry) => !entry.summary)) {
+      expect(
+        request.context.messages.filter(
+          (message) => message.role === "user" && textOf(message) === current,
+        ),
+      ).toHaveLength(1);
+    }
+    expect(sessionEvents).toContainEqual(
+      expect.objectContaining({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: false,
+        willRetry: true,
+        result: expect.objectContaining({ summary: expect.stringContaining(OLD_FACT) }),
+      }),
+    );
+    expect(sessionEvents).toContainEqual(
+      expect.objectContaining({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: false,
+        willRetry: false,
+        errorMessage: expect.stringContaining("failed after one compact-and-retry attempt"),
+      }),
+    );
+    expect(session.agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "maximum context length exceeded",
+    });
     expect(context).toEqual(original);
   });
 

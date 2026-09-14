@@ -13,6 +13,7 @@
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -105,6 +106,26 @@ function historyMessages(): RunContextMessage[] {
       content_json: { text: CURRENT_PROMPT },
       created_at: "2026-09-01T00:00:02Z",
     },
+  ];
+}
+
+function compactionHistoryMessages(): RunContextMessage[] {
+  const history = historyMessages();
+  return [
+    ...history.slice(0, 2),
+    {
+      id: 3,
+      role: "user",
+      content_json: { text: "Recent synthetic note. ".repeat(4_000) },
+      created_at: "2026-09-01T00:00:02Z",
+    },
+    {
+      id: 4,
+      role: "assistant",
+      content_json: { text: "Ready." },
+      created_at: "2026-09-01T00:00:03Z",
+    },
+    { ...history[2]!, id: 5 },
   ];
 }
 
@@ -434,8 +455,12 @@ interface ScriptOptions {
   wirePayloads?: unknown[];
   /** Snapshot the real Pi context before the scripted response. */
   modelContexts?: Context[];
+  sessionEvents?: AgentSessionEvent[];
+  responseFor?: (context: Context) => AssistantMessage;
   /** Keep the provider stream open until the worker's AbortSignal fires. */
   waitForAbort?: boolean;
+  /** Simulate a provider completing successfully while cancellation is in flight. */
+  completeAfterAbort?: boolean;
 }
 
 function scriptedStream(
@@ -482,17 +507,19 @@ function scriptedStream(
           if (streamOptions?.signal?.aborted) return resolve();
           streamOptions?.signal?.addEventListener("abort", () => resolve(), { once: true });
         });
-        const blocked = turns[0]![0]!;
-        const failed = { ...blocked, stopReason: "aborted" as const, errorMessage: "aborted" };
-        stream.push({ type: "start", partial: failed });
-        stream.push({ type: "error", reason: "aborted", error: failed });
-        stream.end(failed);
-        return;
+        if (!options.completeAfterAbort) {
+          const blocked = turns[0]![0]!;
+          const failed = { ...blocked, stopReason: "aborted" as const, errorMessage: "aborted" };
+          stream.push({ type: "start", partial: failed });
+          stream.push({ type: "error", reason: "aborted", error: failed });
+          stream.end(failed);
+          return;
+        }
       }
 
       const turnIndex = context.messages.filter((m) => m.role === "toolResult").length;
       const message: AssistantMessage = {
-        ...turns[Math.min(turnIndex, turns.length - 1)]![0]!,
+        ...(options.responseFor?.(context) ?? turns[Math.min(turnIndex, turns.length - 1)]![0]!),
         api: _model.api,
         provider: _model.provider,
         model: _model.id,
@@ -598,16 +625,47 @@ function textTurn(text: string): AssistantMessage[] {
   ];
 }
 
+function overflowRecoveryResponse(retryError?: string): (context: Context) => AssistantMessage {
+  let normalRequests = 0;
+  return (context) => {
+    const input = context.messages
+      .map((message) =>
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text)
+              .join(""),
+      )
+      .join("\n");
+    if (context.systemPrompt?.startsWith("You are a context summarization assistant.")) {
+      // Derive the checkpoint from the actual summary request, not a canned answer.
+      const fact = input.match(/The blue tin is kept in the [^.\n]+\./)?.[0];
+      return textTurn("Recovered checkpoint: " + (fact ?? "No fact in summary input."))[0]!;
+    }
+    const errorMessage = ++normalRequests === 1 ? "maximum context length exceeded" : retryError;
+    if (errorMessage) {
+      return { ...textTurn("")[0]!, stopReason: "error", errorMessage };
+    }
+    const fact = input.match(/Recovered checkpoint: (The blue tin is kept in the [^.\n]+\.)/)?.[1];
+    return textTurn("Recovered answer: " + (fact ?? "No checkpoint in retry input."))[0]!;
+  };
+}
+
 async function buildSessionFactory(
   turns: AssistantMessage[][],
   options: ScriptOptions = {},
 ): Promise<NonNullable<ConstructorParameters<typeof SidecarWorker>[0]["sessionFactory"]>> {
   const mod = await import("../src/session.js");
-  return (cfg, cl, projection, runToken, deps) =>
-    mod.buildRunSession(cfg, cl, projection, runToken, {
+  return async (cfg, cl, projection, runToken, deps) => {
+    const bundle = await mod.buildRunSession(cfg, cl, projection, runToken, {
       ...deps,
       streamOverride: scriptedStream(turns, options),
     });
+    if (options.sessionEvents)
+      bundle.session.subscribe((event) => options.sessionEvents!.push(event));
+    return bundle;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -752,6 +810,81 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(state.settles[0]).toMatchObject({ run_id: runKey, status: "succeeded" });
   });
 
+  it.each([
+    { result: "succeeded", retryError: undefined },
+    { result: "failed", retryError: "retry request rejected" },
+  ])(
+    "settles $result from the final reply after real overflow compaction and retry",
+    async ({ retryError }) => {
+      resetState();
+      const runKey = enqueueJob({
+        allowlist: ["familygraph.echo"],
+        messages: compactionHistoryMessages(),
+      });
+      const modelContexts: Context[] = [];
+      const sessionEvents: AgentSessionEvent[] = [];
+      const { worker } = makeWorker(
+        undefined,
+        await buildSessionFactory([textTurn("")], {
+          modelContexts,
+          sessionEvents,
+          responseFor: overflowRecoveryResponse(retryError),
+        }),
+      );
+
+      expect(await worker.tryLeaseAndRun()).toBe(true);
+      expect(
+        modelContexts.map((context) =>
+          context.systemPrompt?.startsWith("You are a context summarization assistant."),
+        ),
+      ).toEqual([false, true, false]);
+      expect(sessionEvents).toContainEqual(
+        expect.objectContaining({
+          type: "compaction_end",
+          reason: "overflow",
+          aborted: false,
+          willRetry: true,
+          result: expect.objectContaining({ summary: "Recovered checkpoint: " + HISTORY_FACT }),
+        }),
+      );
+      expect(JSON.stringify(modelContexts[2]!.messages)).toContain(
+        "Recovered checkpoint: " + HISTORY_FACT,
+      );
+      const finalMessage = sessionEvents
+        .filter((event) => event.type === "message_end" && event.message.role === "assistant")
+        .at(-1);
+      expect(finalMessage).toMatchObject({
+        message: { stopReason: retryError ? "error" : "stop" },
+      });
+      if (retryError) {
+        expect(state.settles).toEqual([
+          {
+            run_id: runKey,
+            status: "failed",
+            error_code: "PROVIDER_STREAM_ERROR",
+            error: { message: retryError },
+          },
+        ]);
+      } else {
+        const assistants = (state.eventsByRun.get(runKey) ?? []).filter(
+          (event) => event.type === "message.assistant_added",
+        );
+        expect(assistants.at(-1)?.public_payload).toEqual({
+          role: "assistant",
+          text: "Recovered answer: " + HISTORY_FACT,
+        });
+        expect(state.settles).toEqual([
+          {
+            run_id: runKey,
+            status: "succeeded",
+            error_code: undefined,
+            error: undefined,
+          },
+        ]);
+      }
+    },
+  );
+
   it("settles a persistent context overflow as a provider failure with restored history intact", async () => {
     resetState();
     const messages = historyMessages();
@@ -841,6 +974,9 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(state.settles[0]!.error_code).toBe("POLICY_TOOL_BLOCKED");
     const events = state.eventsByRun.get(runKey) ?? [];
     expect(events.some((e) => e.type === "run.failed")).toBe(true);
+    expect(
+      events.filter((e) => e.type === "message.assistant_added").at(-1)?.public_payload,
+    ).toEqual({ role: "assistant", text: "ok" });
     expect(JSON.stringify(events)).not.toContain("/etc/passwd");
   }, 30000);
 
@@ -913,37 +1049,71 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(events[1]!.public_payload).toMatchObject({ error_code: "PROVIDER_DENIED_NO_LOCAL" });
   }, 30000);
 
-  it("propagates server cancellation to the Pi stream and skips settle", async () => {
-    resetState();
-    enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
-    state.cancelOnNextHeartbeat = true;
-    const { worker } = makeWorker(
-      (cfg) => {
-        // Heartbeat cadence is clamped to 1s; keep the scripted stream open
-        // long enough for the cancel flag to reach the worker.
-        cfg.defaultLeaseMs = 3_000;
-      },
-      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
-    );
+  it.each([false, true])(
+    "propagates server cancellation and skips settle (late success=%s)",
+    async (completeAfterAbort) => {
+      resetState();
+      enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
+      state.cancelOnNextHeartbeat = true;
+      const sessionEvents: AgentSessionEvent[] = [];
+      const { worker } = makeWorker(
+        (cfg) => {
+          // Heartbeat cadence is clamped to 1s; keep the scripted stream open
+          // long enough for the cancel flag to reach the worker.
+          cfg.defaultLeaseMs = 3_000;
+        },
+        await buildSessionFactory([textTurn("never committed")], {
+          waitForAbort: true,
+          completeAfterAbort,
+          sessionEvents,
+        }),
+      );
 
-    expect(await worker.tryLeaseAndRun()).toBe(true);
-    expect(state.settles).toHaveLength(0);
-  }, 10000);
+      expect(await worker.tryLeaseAndRun()).toBe(true);
+      expect(state.settles).toHaveLength(0);
+      if (completeAfterAbort) {
+        expect(sessionEvents).toContainEqual(
+          expect.objectContaining({
+            type: "message_end",
+            message: expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+          }),
+        );
+      }
+    },
+    10000,
+  );
 
-  it("aborts the Pi stream when heartbeat authorization is revoked", async () => {
-    resetState();
-    enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
-    state.heartbeatStatus = 403;
-    const { worker } = makeWorker(
-      (cfg) => {
-        cfg.defaultLeaseMs = 3_000;
-      },
-      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
-    );
+  it.each([false, true])(
+    "skips settle after heartbeat authorization is revoked (late success=%s)",
+    async (completeAfterAbort) => {
+      resetState();
+      enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
+      state.heartbeatStatus = 403;
+      const sessionEvents: AgentSessionEvent[] = [];
+      const { worker } = makeWorker(
+        (cfg) => {
+          cfg.defaultLeaseMs = 3_000;
+        },
+        await buildSessionFactory([textTurn("never committed")], {
+          waitForAbort: true,
+          completeAfterAbort,
+          sessionEvents,
+        }),
+      );
 
-    expect(await worker.tryLeaseAndRun()).toBe(true);
-    expect(state.settles).toHaveLength(0);
-  }, 10000);
+      expect(await worker.tryLeaseAndRun()).toBe(true);
+      expect(state.settles).toHaveLength(0);
+      if (completeAfterAbort) {
+        expect(sessionEvents).toContainEqual(
+          expect.objectContaining({
+            type: "message_end",
+            message: expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+          }),
+        );
+      }
+    },
+    10000,
+  );
 
   it("returns false when queue is empty (HTTP 204)", async () => {
     resetState();
