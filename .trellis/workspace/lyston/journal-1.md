@@ -961,3 +961,42 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Next Steps
 
 - 真实模型质量和生产 smoke 尚未验证；开关与线上配置未动。原 PRD 延期的关系确认成环、证据留存问题保持延期。
+
+
+## Session 27: 按最新 Trellis 设计同步交接与架构文档
+<!-- trellis-session: v=2 fp=a9eedcfc925eb963 -->
+
+**Date**: 2026-09-14
+**Task**: 按最新 Trellis 设计同步交接与架构文档
+**Branch**: `main`
+
+### Summary
+
+更新 HANDOFF、架构总览与 README，按 main@880ad1a 和最新本地任务材料区分已集成、分支实施、规划及未验证能力；未新建或变更任务状态。
+
+### Main Changes
+
+- 明确管家自动称谓、可选偏好反馈与关系/记忆确认的边界，记录已合入质量修复和真实模型未验限制。
+- 同步 Memory/RAG A-C-B-D、独立验收复查、E 研究、渐进重算及 MR-23/MR-26 的责任、顺序和剩余门槛。
+- 识别已归档 Provider/平台开关的活动旧副本；记录渐进分支缺少最新称谓修复及迁移分叉。
+- 修正 Provider 管理路由、空间云同意职责、平台治理写入口与备份说明；v1 历史折叠保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9d7d270` | docs: align handoff and architecture with current Trellis delivery |
+
+### Testing
+
+- [OK] 60 处本地 Markdown 链接有效；v1 历史正文与原版本一致；git diff --check 通过。
+- [OK] 独立只读复核未发现需改问题；提交前 149 个既有未提交文件哈希不变，暂存区原状态保留。
+- [OK] 仅文档变更，未重跑业务测试、模型或生产 smoke；文档测试数字均注明既有证据。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 业务续作按各任务最新 PRD/design/implement 与验收矩阵推进；本轮没有部署、调整开关或清理他人 worktree。
