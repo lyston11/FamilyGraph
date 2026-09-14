@@ -24,11 +24,12 @@
 
 | 场景 | 结果 |
 |---|---|
-| 空历史或只有当前 user | manager 为空，当前 user 在 prompt 时加入 |
+| 空历史或只有当前 user | manager 的消息为空（可有模型配置元数据），当前 user 在 prompt 时加入 |
 | 重复 ID / 同文本不同 ID | 同 ID 只恢复一次；不同 ID 均保留 |
 | 手动 compact | 摘要请求包含早期事实，继续 prompt 能使用摘要 |
 | 实际自动阈值触发 | SDK 发出 compaction_start/end，reason=threshold；摘要与后续请求保持旧事实 |
 | Provider overflow 且摘要失败 | 可解释失败，无静默截短或伪造成功 checkpoint，原持久 transcript 不改 |
+| Provider overflow 后压缩与重试成功 | 完整 stop 回答解除早先 Provider 错误，worker 正常结算；取消、失租与策略拒绝仍独立优先 |
 | Run 重试/新会话 | 从允许的持久正文重新构造，不复用上一轮摘要或临时 RAG |
 
 ## 5. Good / Base / Bad Cases
@@ -44,6 +45,8 @@ Bad：createAgentSession 后单独覆盖 agent.state.messages，或通过关闭�
 `agent/test/session-history.test.ts` 使用实际 Pi 与假 provider stream，拦截网络：预填一致性/无副作用、ID 边界、允许正文过滤、手动压缩、真实 prompt 前后自动阈值压缩、overflow 失败与 Run 重建。`worker.integration.test.ts` 保留当前 user/RAG 一次性、取消、lease loss 和 Provider 回归。
 
 自动路径必须经过实际 session.prompt；不能只调用 compact、私有压缩方法或 mock manager。测试结果证明接线和协议，不能替代真实模型摘要质量评估。
+
+worker 同时覆盖 overflow 后恢复成功与重试再次失败。只收到完整 Assistant stop 才解除旧 Provider 错误；工具结果、partial 或压缩事件不代表回答成功。超大当前 user 的失败回归必须验证原输入仍完整且仅出现一次。
 
 ## 7. Wrong vs Correct
 

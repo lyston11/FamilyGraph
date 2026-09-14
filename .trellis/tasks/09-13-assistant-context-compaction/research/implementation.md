@@ -87,3 +87,43 @@
 历史 assistant 正文按既有合同恢复，其中可能含过去来源的事实；本次只阻止单独重放旧 RAG blocks、工具结果、thinking 和 Provider 私有块，不能宣称完成历史派生事实撤回或物理擦除。
 
 B 后续修改 context/citation/worker 时应保留本套回归，尤其是当前 user/RAG 只一次、摘要来源与原始工具材料不重放的边界。独立检查、提交、归档与 worktree 清理由主线程负责。
+
+## 2026-09-14 独立检查修复：压缩恢复后的最终结算
+
+本轮基于 C 分支 `470b362`（初版实现提交 `2baf7a8`）。主线程明确授权修复 [独立检查](check.md) 的 P2，并提供 `/private/tmp/fg-c-review.wA3iy2/probe.mjs`；实施前已读取两者及当前任务、代码和规范。写入范围为 `agent/src/worker.ts`、两个相关测试文件及本记录；未提交、合并、改动其他分支或操作任务生命周期。
+
+### 根因与最小修复
+
+真实 Pi 0.84.3 在一次 `session.prompt()` 内可以经历 Provider overflow → 输入派生摘要 → retry 正常 stop。worker 的 `lastAssistantError` 只接收错误，未处理后续成功回答，导致 SDK 已恢复且最终回答携带旧事实，Run 仍按最初 overflow 结算失败。
+
+`agent/src/worker.ts:206` 至 `:226` 仅在新的 **assistant `message_end` 且 `stopReason=stop`** 时解除尚未恢复的 Provider 错误。部分输出、工具 turn、工具结果或 compaction 事件不会清除错误；后续新的 error 仍覆盖为最新失败。策略违规计数、服务端取消与租约失效仍先于 Provider outcome 判断，异常及事件持久化失败仍走既有失败分支。
+
+### 新增持久回归与红绿证据
+
+`worker.integration.test.ts:817` 使用真实 worker、parser、Pi SDK 和假 Provider 流，捕获普通请求 → 摘要请求 → 重试请求。`overflowRecoveryResponse`（`:628`）从实际摘要输入提取事实，重试回答从实际 checkpoint 输入提取事实；没有固定返回预期答案来替代数据路径验证。
+
+2026-09-14 13:09 Asia/Shanghai，在修改业务代码前运行 `npm test -- test/worker.integration.test.ts`：15 条中 **14 通过、1 失败**。唯一红测为恢复成功的案例；测试已验证 `compaction_end(reason=overflow, willRetry=true)`、最终 `stop` 与含旧事实的答案，失败点是 settle 实际仍为 `failed / PROVIDER_STREAM_ERROR / maximum context length exceeded`，预期为 `succeeded`。
+
+修复后受影响两文件 **35 条通过**（worker 15 + history 20），包含以下新增/加强证据：
+
+- 恢复成功 → worker succeeded；重试再次返回不同错误 → worker failed，错误是最新的 `retry request rejected`，不是旧 overflow。
+- 既有持久 overflow/摘要失败仍失败；非允许工具之后即使出现正常 stop，仍为 `POLICY_TOOL_BLOCKED`。
+- 取消和 heartbeat 403 各增加一个迟到成功回复场景（`:1053`、`:1087`）：实际 SDK 发出 assistant `message_end(stop)`，worker 仍不 settle，由服务端裁决终态。
+- `session-history.test.ts:514` 新增超大当前输入：280,000 字符中文输入，假 Provider 按请求文本长度拒绝；SDK 成功摘要一次并重试，两个普通请求都完整保留当前输入一次。再次超限后明确发出 `failed after one compact-and-retry attempt`，最终 assistant 为 error，原投影不变。没有 recent-N、当前输入截断或重复，也没有宣称任意超长请求可成功。
+
+### 本轮完整检查
+
+在 C worktree 的 `agent/` 执行，实际依赖仍为 Pi AI / coding-agent `0.84.3`：
+
+| 命令 | 结果 |
+|---|---|
+| `npm test -- test/session-history.test.ts test/worker.integration.test.ts` | 2 文件 / 35 条通过 |
+| `npm run lint` | 通过 |
+| `npm run type-check` | 通过 |
+| `npm test` | 13 文件 / **113 条通过**；本轮净增 5 条（worker 4、history 1） |
+| `npm run build` | 通过 |
+| `git diff --check` | 通过 |
+
+全包运行于 2026-09-14 13:11 Asia/Shanghai，Vitest 3.2.7，耗时 6.01s。SDK 专项继续阻断 global fetch，worker 集成只访问随机本地 mock internal API，全部 Provider 调用为假流。
+
+本补丁不改变原先关于全请求预算、真实模型质量、跨 Run 持久摘要和历史来源事实保留政策的限制。主线程负责更新规范措辞、提交本补丁、合入基于 D 的父集成分支并进行 listener smoke；本轮没有在 main 集成。

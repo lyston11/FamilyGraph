@@ -203,9 +203,9 @@ export class SidecarWorker {
           type?: string;
           message?: { role?: string; stopReason?: string; errorMessage?: string };
         };
-        // A provider stream error surfaces as an assistant message with
-        // stopReason === "error" instead of a thrown exception; never report it
-        // as a successful run.
+        // Pi can compact and retry within one prompt(). Keep a provider failure
+        // unresolved until a later assistant reply fully completes; partial
+        // responses, tool turns and compaction events do not supersede it.
         if (
           raw.type === "message_end" &&
           raw.message?.role === "assistant" &&
@@ -218,6 +218,12 @@ export class SidecarWorker {
                 ? raw.message.errorMessage
                 : undefined,
           };
+        } else if (
+          raw.type === "message_end" &&
+          raw.message?.role === "assistant" &&
+          raw.message.stopReason === "stop"
+        ) {
+          lastAssistantError.current = null;
         }
         if (raw.type === "error") {
           lastAssistantError.current = {
