@@ -23,7 +23,7 @@
 | 09-15-remote-service-guardian | P0 | 核查记录：远端 systemd 守护已存在（误判修正），无代码改动 |
 | 09-15-memory-extractor-onboard | P1 | 规则式记忆候选提取器接入，RAG 有输入 |
 | 09-15-steward-suggestion-loop | P1 | 核查结论：TTL/notify 是刻意设计（不加）；修复通知中心建议投影未渲染的可见性缺陷 |
-| 09-15-assistant-latency-optimizations | P2 | 空事件过滤、会话压缩 |
+| 09-15-assistant-latency-optimizations | P2 | 核查结论：压缩已存在且已接线（不做）；过滤工具 turn 的空 assistant 事件 |
 
 ## 跨子任务验收
 
@@ -31,7 +31,8 @@
 2. 本地 sidecar 日志不再出现 401 轮询。
 3. 远端库出现非零 `memory_candidates`（提取器产生真实候选）。
 4. ~~`steward_suggestions` 的 proposed 建议具备有限 `expires_at`；GC 后过期建议收敛。~~ **已按核查结论修正**（子任务 09-15-steward-suggestion-loop）：`term_preference` 的 `expires_at=NULL` 与 `notify=False` 是 09-14 的刻意设计（可选偏好由证据变化与显式反馈退役，而非定时器），且加 TTL 会因历史去重不带状态过滤而永久挡住重建。实际缺陷是**可见性**（`NotificationsView` 加载了建议却从不渲染），已修复为「待核实 = 通知引用行 ∪ 活跃建议投影」。物化型回收留作后续项（当前实测死建议 = 0，无触发条件）。
-5. assistant 新 run 不再产生空文本 assistant 事件。
+5. assistant 新 run 不再产生空文本 assistant 事件。**已实现并部署**：sidecar `mapSessionEvent` 对「正文为空且含 toolCall 块」的 `message_end` 返回空。**已核实证据**：隔离端到端 smoke 95/95 通过（真实 backend+sidecar+事件持久化+SSE）；远端已构建 dist 的行为探针确认 tool-only → `[]`、有正文工具 turn 与最终回答照常产出。**未取得**：真实会话的下一次新 run 时间线（需用户实际发起对话，不伪造）。
+   同时核查修正：原「会话压缩」要求**前提被证伪**——Pi 自动压缩已启用并已接线（`SettingsManager.inMemory()` 默认 `enabled=true, reserveTokens=16384`），且已归档 spec 明确要求保留、把 recent-N 截断列为错误做法。详见子任务 `design.md` §0。
 6. 全部服务运行在服务器上；本地工作区仅承担代码编辑与提交。
 
 ## 部署约束
