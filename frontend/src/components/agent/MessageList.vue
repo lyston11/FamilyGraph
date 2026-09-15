@@ -82,9 +82,9 @@ const runHint = computed(() => {
   return ''
 })
 
-/** 等待首个助手回复时显示进行中指示 */
+/** 等待首个有正文的助手回复时显示进行中指示（工具 turn 的空消息不熄灭它） */
 const showPendingIndicator = computed(
-  () => runActive.value && !props.messages.some((m) => m.role === 'assistant'),
+  () => runActive.value && !props.messages.some((m) => m.role === 'assistant' && m.text.length > 0),
 )
 
 /** 屏幕阅读器非打断播报：最新动态一句话 */
