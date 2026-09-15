@@ -1155,3 +1155,25 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+
+## Session 33: 修复家族树分支布局
+<!-- trellis-session: v=2 fp=e7586ce0faecfc01 -->
+
+**Date**: 2026-09-15
+**Task**: 修复家族树分支布局
+**Branch**: `main`
+
+### Summary
+
+按后代区间分配树状布局，修复 sibling 合块与页面旧横坐标覆盖；全前端 lint/type-check/743 tests/build 通过，集成后61项回归通过；浏览器11人样例核验，保留其他工作区改动，已归档且删除任务 worktree/分支。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `902e471` | fix(frontend): lay out family tree by descendant branches |
+
+### Status
+
+[OK] **Completed**
