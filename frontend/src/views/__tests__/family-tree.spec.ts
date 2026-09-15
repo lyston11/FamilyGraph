@@ -715,7 +715,11 @@ describe('FamilyTreeView 渐进展示与稳定交互', () => {
     await pfv.refresh(9)
     await flushPromises()
     const expandedNodes = wrapper.findComponent(VueFlow).props('nodes') as typeof initialNodes
-    expect(expandedNodes.find((node) => node.id === 'n-3')?.position.x).toBe(initialNodes.find((node) => node.id === 'n-3')?.position.x)
+    expect(expandedNodes.find((node) => node.id === 'n-3')?.position.x).not.toBe(initialNodes.find((node) => node.id === 'n-3')?.position.x)
+    // 新配偶加入后必须重新居中父母与子女，不能继续钉住旧父母 x。
+    const x = (id: number) => expandedNodes.find((node) => node.id === `n-${id}`)!.position.x
+    expect(x(3) - x(2)).toBe(280)
+    expect(x(1)).toBe((x(2) + x(3)) / 2)
     const positions = expandedNodes.map(({ id, position }) => ({ id, position }))
     mockedFetchView.mockResolvedValue(familySnapshot({ status: 'stale', nodes: [], topology_edges: [],
       progress: familyProgress({ generation: 8, revision: 2, phase: 'retrying', topology_revision: '', reason_code: 'input_changed', targets: [] }) }))

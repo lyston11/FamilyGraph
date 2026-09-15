@@ -8,7 +8,7 @@ import type { PersonalFamilyViewTopologyEdge } from '@/types/api'
  *   兄弟姐妹）要求两端同代；共享父母的兄弟姐妹自然同代——不通过称谓字符串、
  *   性别或生日推断，不补造父母或婚姻；
  * - 按「稳定 key 排序 → 连通分量 → 分量内约束传播 → 本人分量平移 →
- *   夫妻/伴侣横向布局块 → 有限次重心整理 → 消除同代重叠」执行；
+ *   夫妻/共同父母几何块 → 后代区间宽度 → 自顶向下分配独立分支」执行；
  * - 世代约束矛盾时返回 null，由视图回退自由画布并提示，绝不静默删除
  *   关系、复制人物或无限迭代；
  * - 布局块只是几何分组，不是新事实或新人物，不计入人数。
@@ -36,13 +36,11 @@ export const LAYOUT_ROW_SPACING = 240
 const COMPONENT_GAP_ROWS = 1.5
 /** 布局块之间的最小横向间隔（px） */
 const BLOCK_GAP = 24
-/** 重心整理固定迭代次数（有界，不无限循环） */
-const BARYCENTER_PASSES = 4
 
 interface AdjacencyLink {
   other: number
   /** parent：约束 rank(child)=rank(parent)+1；sym：约束两端同代 */
-  kind: 'parent' | 'sym'
+  kind: PersonalFamilyViewTopologyEdge['edge_kind']
   /** parent 边时：self 是否为 other 的家长 */
   selfIsParent: boolean
 }
@@ -60,8 +58,8 @@ function buildAdjacency(
       adjacency.get(edge.to_user_id)!.push({ other: edge.from_user_id, kind: 'parent', selfIsParent: false })
     } else {
       // spouse/partner/sibling：无向对称约束
-      adjacency.get(edge.from_user_id)!.push({ other: edge.to_user_id, kind: 'sym', selfIsParent: false })
-      adjacency.get(edge.to_user_id)!.push({ other: edge.from_user_id, kind: 'sym', selfIsParent: false })
+      adjacency.get(edge.from_user_id)!.push({ other: edge.to_user_id, kind: edge.edge_kind, selfIsParent: false })
+      adjacency.get(edge.to_user_id)!.push({ other: edge.from_user_id, kind: edge.edge_kind, selfIsParent: false })
     }
   }
   return adjacency
@@ -108,7 +106,7 @@ function assignComponentRanks(
     const currentRank = ranks.get(current)!
     for (const link of adjacency.get(current) ?? []) {
       const expected =
-        link.kind === 'sym'
+        link.kind !== 'parent'
           ? currentRank
           : link.selfIsParent
             ? currentRank + 1
@@ -132,7 +130,7 @@ interface LayoutBlock {
   x: number
 }
 
-/** 同代内按对称边（配偶/伴侣）做并查集分块；块内按稳定 id 排序 */
+/** 配偶块保持相邻；共同父母仅组成几何组，兄弟姐妹只约束同代。 */
 function buildBlocks(rank: number[], rankByUser: ReadonlyMap<number, number>, adjacency: Map<number, AdjacencyLink[]>): LayoutBlock[] {
   const parent = new Map<number, number>()
   const find = (id: number): number => {
@@ -151,22 +149,37 @@ function buildBlocks(rank: number[], rankByUser: ReadonlyMap<number, number>, ad
   for (const id of rank) parent.set(id, id)
   for (const id of rank) {
     for (const link of adjacency.get(id) ?? []) {
-      if (link.kind === 'sym' && rankByUser.get(link.other) === rankByUser.get(id)) {
+      if ((link.kind === 'spouse' || link.kind === 'partner') && rankByUser.get(link.other) === rankByUser.get(id)) {
         union(id, link.other)
       }
     }
   }
 
-  const grouped = new Map<number, number[]>()
+  // 先记录配偶组，再合并共同父母，防止共同父母的 id 排序拆散配偶。
+  const couples = new Map<number, number[]>()
   for (const id of rank) {
     const root = find(id)
-    const list = grouped.get(root) ?? []
+    const list = couples.get(root) ?? []
     list.push(id)
-    grouped.set(root, list)
+    couples.set(root, list)
+  }
+  const firstParentByChild = new Map<number, number>()
+  for (const id of rank) {
+    for (const link of adjacency.get(id) ?? []) {
+      if (link.kind !== 'parent' || !link.selfIsParent) continue
+      const first = firstParentByChild.get(link.other)
+      if (first === undefined) firstParentByChild.set(link.other, id)
+      else union(first, id)
+    }
+  }
+
+  const grouped = new Map<number, number[]>()
+  for (const members of couples.values()) {
+    const root = find(members[0]!)
+    grouped.set(root, [...(grouped.get(root) ?? []), ...members])
   }
   const blocks: LayoutBlock[] = []
   for (const members of grouped.values()) {
-    members.sort((a, b) => a - b)
     const index = new Map(members.map((id, i) => [id, i]))
     blocks.push({ members, indexOf: (userId) => index.get(userId) ?? 0, x: 0 })
   }
@@ -179,12 +192,66 @@ function blockWidth(block: LayoutBlock, cardWidth: number, colSpacing: number): 
   return (block.members.length - 1) * colSpacing + cardWidth
 }
 
-/** 把一行的块按当前顺序左到右排开，保证块间最小间隔（消除重叠） */
-function placeRow(blocks: LayoutBlock[], cardWidth: number, colSpacing: number): void {
-  let cursor = 0
+/**
+ * 每个几何块只占一个后代区间。跨支系婚姻可能连接多个父代块，此时按
+ * 真实亲子连接数、稳定成员 id 选择一个区间所有者；所有事实边照常渲染。
+ * rank 已验证严格递增，因此正反两次遍历即可分配宽度，无递归/重复子树。
+ */
+function placeBranches(
+  blocks: LayoutBlock[],
+  adjacency: Map<number, AdjacencyLink[]>,
+  cardWidth: number,
+  colSpacing: number,
+): void {
+  const ownerByUser = new Map<number, LayoutBlock>()
+  const children = new Map(blocks.map((block) => [block, [] as LayoutBlock[]]))
   for (const block of blocks) {
-    block.x = cursor
-    cursor += blockWidth(block, cardWidth, colSpacing) + BLOCK_GAP
+    for (const id of block.members) ownerByUser.set(id, block)
+  }
+  const roots: LayoutBlock[] = []
+  for (const block of blocks) {
+    const parents = new Map<LayoutBlock, Set<string>>()
+    for (const id of block.members) {
+      for (const link of adjacency.get(id) ?? []) {
+        if (link.kind !== 'parent' || link.selfIsParent) continue
+        const parent = ownerByUser.get(link.other)!
+        const links = parents.get(parent) ?? new Set<string>()
+        links.add(`${link.other}:${id}`)
+        parents.set(parent, links)
+      }
+    }
+    const parent = [...parents].sort((a, b) =>
+      b[1].size - a[1].size || a[0].members[0]! - b[0].members[0]!,
+    )[0]?.[0]
+    if (parent) children.get(parent)!.push(block)
+    else roots.push(block)
+  }
+
+  const gap = Math.max(BLOCK_GAP, colSpacing - cardWidth)
+  const widths = new Map<LayoutBlock, number>()
+  const childWidths = new Map<LayoutBlock, number>()
+  for (const block of [...blocks].reverse()) {
+    const descendants = children.get(block)!
+    const width = descendants.reduce((sum, child) => sum + widths.get(child)!, 0)
+      + Math.max(0, descendants.length - 1) * gap
+    childWidths.set(block, width)
+    widths.set(block, Math.max(blockWidth(block, cardWidth, colSpacing), width))
+  }
+  const leftByBlock = new Map<LayoutBlock, number>()
+  let cursor = 0
+  for (const root of roots) {
+    leftByBlock.set(root, cursor)
+    cursor += widths.get(root)! + gap
+  }
+  for (const block of blocks) {
+    const left = leftByBlock.get(block)!
+    const width = widths.get(block)!
+    block.x = left + (width - blockWidth(block, cardWidth, colSpacing)) / 2
+    let childLeft = left + (width - childWidths.get(block)!) / 2
+    for (const child of children.get(block)!) {
+      leftByBlock.set(child, childLeft)
+      childLeft += widths.get(child)! + gap
+    }
   }
 }
 
@@ -251,42 +318,8 @@ export function computeFamilyTreeLayout(input: FamilyTreeLayoutInput): FamilyTre
       const blocks = buildBlocks(rows.get(rank)!, shiftedRank, adjacency)
       blocks.sort((a, b) => a.members[0] - b.members[0])
       rowBlocks.set(rank, blocks)
-      placeRow(blocks, cardWidth, colSpacing)
     }
-
-    // 有限次重心整理：奇数轮自上而下按上一代重心排序，偶数轮自下而上按下一代
-    for (let pass = 0; pass < BARYCENTER_PASSES; pass += 1) {
-      const ascending = pass % 2 === 0
-      const ranks = ascending ? sortedRanks : [...sortedRanks].reverse()
-      for (const rank of ranks) {
-        const blocks = rowBlocks.get(rank)!
-        const neighborRank = ascending ? rank - 1 : rank + 1
-        const scored = blocks.map((block, index) => {
-          const neighbors: number[] = []
-          for (const id of block.members) {
-            for (const link of adjacency.get(id) ?? []) {
-              if (shiftedRank.get(link.other) === neighborRank) neighbors.push(link.other)
-            }
-          }
-          if (neighbors.length === 0) {
-            return { block, key: block.x, index }
-          }
-          const barycenter =
-            neighbors.reduce((sum, id) => {
-              const owner = rowBlocks.get(neighborRank)?.find((candidate) => candidate.members.includes(id))
-              if (!owner) return sum
-              return sum + owner.x + owner.indexOf(id) * colSpacing
-            }, 0) / neighbors.length
-          return { block, key: barycenter, index }
-        })
-        scored.sort((a, b) => a.key - b.key || a.index - b.index)
-        rowBlocks.set(
-          rank,
-          scored.map((entry) => entry.block),
-        )
-        placeRow(rowBlocks.get(rank)!, cardWidth, colSpacing)
-      }
-    }
+    placeBranches(sortedRanks.flatMap((rank) => rowBlocks.get(rank)!), adjacency, cardWidth, colSpacing)
 
     for (const rank of sortedRanks) {
       for (const block of rowBlocks.get(rank)!) {

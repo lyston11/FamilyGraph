@@ -178,6 +178,61 @@ describe('computeFamilyTreeLayout：横向布局块与重叠', () => {
   })
 })
 
+describe('computeFamilyTreeLayout：分支空间', () => {
+  it('三代两分支：父母居中、后代区间分离，兄弟姐妹边不拆散夫妻', () => {
+    const userIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    const edges = [edge('spouse', 1, 2), edge('spouse', 3, 6), edge('spouse', 4, 5),
+      edge('sibling', 3, 4),
+      ...[1, 2].flatMap((parent) => [3, 4].map((child) => edge('parent', parent, child))),
+      ...[3, 6].flatMap((parent) => [7, 8, 9].map((child) => edge('parent', parent, child))),
+      ...[4, 5].flatMap((parent) => [10, 11].map((child) => edge('parent', parent, child))),
+    ]
+    const result = computeFamilyTreeLayout({ userIds, edges, viewerId: 1 })!
+    const x = (id: number) => result.get(id)!.x
+    expect(result.size).toBe(userIds.length)
+    expect(x(6) - x(3)).toBe(LAYOUT_COL_SPACING)
+    expect(x(5) - x(4)).toBe(LAYOUT_COL_SPACING)
+    expect((x(3) + x(6)) / 2).toBe((x(7) + x(9)) / 2)
+    expect((x(4) + x(5)) / 2).toBe((x(10) + x(11)) / 2)
+    expect((x(1) + x(2)) / 2).toBe((x(7) + x(11)) / 2)
+    expect(Math.max(...[3, 6, 7, 8, 9].map(x)) + LAYOUT_CARD_WIDTH)
+      .toBeLessThan(Math.min(...[4, 5, 10, 11].map(x)))
+    expect(result.get(11)!.y).toBe(2 * LAYOUT_ROW_SPACING)
+    expect(computeFamilyTreeLayout({ userIds: [...userIds].reverse(), edges: [...edges].reverse(), viewerId: 1 }))
+      .toEqual(result)
+  })
+
+  it('无配偶事实的共同父母居中于共享子女，并且不重复摆放后代', () => {
+    const result = computeFamilyTreeLayout({ userIds: [1, 2, 3, 4, 5], viewerId: 1,
+      edges: [edge('parent', 1, 3), edge('parent', 2, 3), edge('parent', 1, 4),
+        edge('parent', 2, 4), edge('parent', 3, 5)],
+    })!
+    expect(result.size).toBe(5)
+    expect((result.get(1)!.x + result.get(2)!.x) / 2)
+      .toBe((result.get(3)!.x + result.get(4)!.x) / 2)
+    expect(result.get(5)!.x).toBe(result.get(3)!.x)
+  })
+
+  it('跨支系婚姻保留唯一人物、所有世代和稳定无重叠坐标', () => {
+    const userIds = [1, 2, 3, 4, 5, 6, 7, 8]
+    const edges = [edge('parent', 1, 3), edge('parent', 2, 4), edge('spouse', 3, 4),
+      edge('parent', 3, 5), edge('parent', 4, 5), edge('parent', 1, 6),
+      edge('parent', 2, 7), edge('parent', 6, 8)]
+    const result = computeFamilyTreeLayout({ userIds, edges, viewerId: 1 })!
+    expect(result.size).toBe(userIds.length)
+    for (const a of result.values()) {
+      expect(Number.isFinite(a.x)).toBe(true)
+      for (const b of result.values()) {
+        if (a !== b && a.y === b.y) expect(Math.abs(a.x - b.x)).toBeGreaterThanOrEqual(LAYOUT_CARD_WIDTH)
+      }
+    }
+    for (const link of edges.filter((link) => link.edge_kind === 'parent')) {
+      expect(result.get(link.to_user_id)!.y - result.get(link.from_user_id)!.y).toBe(LAYOUT_ROW_SPACING)
+    }
+    expect(computeFamilyTreeLayout({ userIds: [...userIds].reverse(), edges: [...edges].reverse(), viewerId: 1 })).toEqual(result)
+  })
+})
+
 describe('computeFamilyTreeLayout：分量、孤立节点与确定性', () => {
   it('孤立节点获得位置且不与已连接成员重叠', () => {
     const positions = computeFamilyTreeLayout({

@@ -16,6 +16,7 @@
 - [directory-structure.md](directory-structure.md)
 - [component-guidelines.md](component-guidelines.md)
 - [hook-guidelines.md](hook-guidelines.md)
+- [family-tree-layout.md](family-tree-layout.md) — 家族树分支几何与页面坐标更新
 - [state-management.md](state-management.md)
 - [action-card.md](action-card.md)
 - [type-safety.md](type-safety.md)

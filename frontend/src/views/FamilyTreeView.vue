@@ -184,6 +184,13 @@ watch([layoutIdentity, viewMode, hasRenderableNodes, emptyProjection, accessDeni
   const outcome = viewMode.value === 'tree'
     ? applyTreeViewLayout(model, viewerId.value)
     : { nodes: applyFreeCanvasLayout(model), failed: false }
+  if (viewMode.value === 'tree') {
+    // 树模式直接使用完整分支区间；逐节点保留旧 x 或向右避让会拆散子树。
+    // layoutIdentity 不包含称谓/进度，纯文本更新不会触发布局重算。
+    layoutPositions.value = new Map(outcome.nodes.map((node) => [node.userId, { x: node.x, y: node.y }]))
+    treeLayout.value = outcome
+    return
+  }
   const previous = layoutPositions.value
   const positions = new Map<number, { x: number; y: number }>()
   const occupied: { x: number; y: number }[] = []
