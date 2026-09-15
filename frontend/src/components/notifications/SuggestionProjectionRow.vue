@@ -20,14 +20,23 @@ const objectText = computed(() =>
     : props.item.object_name ?? `用户 ${props.item.object_user_id}`,
 )
 
-/** 服务端方向化呈现优先；term_preference 回退到服务端给的叫法 */
+/**
+ * 行内建议值：
+ * - term_preference 的 presentation.summary 是通用文案（「可选的称谓偏好建议，无需处理」），
+ *   真正要展示的叫法在 value.term（与 KinshipTermPanel 同口径）；
+ * - relation_proposal 用服务端方向化的 presentation.summary。
+ */
 const valueText = computed<string | null>(() => {
-  if (props.item.presentation !== null) return props.item.presentation.summary
   if (props.item.kind === 'term_preference') {
-    return typeof props.item.value.term === 'string' ? props.item.value.term : null
+    const term = props.item.value.term
+    return typeof term === 'string' && term !== '' ? term : null
   }
-  return null
+  return props.item.presentation?.summary ?? null
 })
+
+const valueLabel = computed(() =>
+  props.item.kind === 'term_preference' ? '建议叫法' : '关系线索',
+)
 </script>
 
 <template>
@@ -42,7 +51,7 @@ const valueText = computed<string | null>(() => {
           {{ SUGGESTION_STATE_LABELS[item.state] }}
         </span>
       </div>
-      <p v-if="valueText !== null" class="sug-value">建议叫法：{{ valueText }}</p>
+      <p v-if="valueText !== null" class="sug-value">{{ valueLabel }}：{{ valueText }}</p>
     </div>
     <div v-if="$slots.actions" class="sug-actions">
       <slot name="actions" />

@@ -69,8 +69,10 @@ const verifyNotifications = computed(() => sections.value.verify)
 const pendingSuggestions = computed<SuggestionItem[]>(() => {
   const currentSpaceId = spaceId.value
   if (currentSpaceId === null) return []
+  // 去重范围是全部通知行（不止待核实分区）：同一建议被任何通知引用时
+  // 都已在通知列表里可点，不再重复渲染投影行。
   const notifiedIds = new Set(
-    verifyNotifications.value
+    (page.value?.items ?? [])
       .map((item) => item.suggestion?.suggestion_id)
       .filter((id): id is number => id !== undefined),
   )
