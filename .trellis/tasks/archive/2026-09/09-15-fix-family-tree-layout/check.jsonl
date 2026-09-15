@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "检查 composable 纯逻辑与布局回退约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查前端质量门禁与回归测试"}
