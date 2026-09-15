@@ -15,6 +15,7 @@ import type {
   SuggestionSubmitPreferenceResult,
   SuggestionSubmitProposalResult,
 } from '@/types/api'
+import { SUGGESTION_ACTIVE_STATES } from '@/types/api'
 
 /**
  * Steward 建议审核状态（09-11 candidate-review）：按账号 + 明确 space_id 保存
@@ -91,7 +92,11 @@ export const useStewardSuggestionsStore = defineStore('stewardSuggestions', () =
 
   /** 活跃待核实建议（proposed/submitted 且未被本人驳回） */
   function activeForSpace(spaceId: number): SuggestionsPage['items'] {
-    return (forSpace(spaceId) ?? { items: [] }).items
+    // 服务端列表会为可回看的终态行保留 open_details，因此这里按状态过滤，
+    // 兑现「活跃待核实」语义：通知中心只把仍需处理的建议放进待核实分区。
+    return (forSpace(spaceId) ?? { items: [] }).items.filter((item) =>
+      SUGGESTION_ACTIVE_STATES.includes(item.state),
+    )
   }
 
   async function load(spaceId: number): Promise<SuggestionsPage | null> {

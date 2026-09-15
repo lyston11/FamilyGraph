@@ -130,4 +130,24 @@ describe('Steward suggestion current detail and action state', () => {
     expect(notificationsApi.fetchNotifications).not.toHaveBeenCalled()
     expect(store.detailFor(7, 70)).toBeNull()
   })
+
+  it('activeForSpace 只返回仍需处理的建议（proposed/submitted）', async () => {
+    vi.mocked(api.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [
+        suggestion({ id: 70, state: 'proposed' }),
+        suggestion({ id: 71, state: 'submitted' }),
+        suggestion({ id: 72, state: 'superseded' }),
+        suggestion({ id: 73, state: 'expired' }),
+        suggestion({ id: 74, state: 'resolved' }),
+        suggestion({ id: 75, state: 'dismissed' }),
+      ],
+      next_cursor: null,
+    })
+    const store = useStewardSuggestionsStore()
+    await store.load(7)
+    expect(store.activeForSpace(7).map((item) => item.id)).toEqual([70, 71])
+    // 服务端列表仍保留全部行（可回看语义不变），只有活跃视图被过滤
+    expect(store.forSpace(7)?.items).toHaveLength(6)
+  })
 })

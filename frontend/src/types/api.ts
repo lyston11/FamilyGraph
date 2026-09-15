@@ -898,6 +898,9 @@ export interface KinshipPresentation {
 
 export type SuggestionState = 'proposed' | 'submitted' | 'resolved' | 'dismissed' | 'expired' | 'rejected' | 'superseded'
 
+/** 仍需处理的建议状态（与后端 SUGGESTION_ACTIVE_STATES 同口径） */
+export const SUGGESTION_ACTIVE_STATES: readonly SuggestionState[] = ['proposed', 'submitted']
+
 export type SuggestionAction = 'open_details' | 'submit' | 'dismiss'
 
 /** 证据摘要：仅计数与白名单 fact id/revision（不含模型自由文本） */

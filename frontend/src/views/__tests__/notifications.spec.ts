@@ -15,7 +15,7 @@ import NotificationsView from '@/views/NotificationsView.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
 import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
-import type { NotificationsSnapshot, SuggestionItem } from '@/types/api'
+import type { KinshipPresentation, NotificationsSnapshot, SuggestionItem } from '@/types/api'
 import type { ActionCard } from '@/types/actionCard'
 
 vi.mock('@/api/notifications', () => ({
@@ -118,6 +118,26 @@ function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
+}
+
+/** 服务端方向化呈现的最小合法载荷（KinshipPresentation） */
+function presentation(): KinshipPresentation {
+  return {
+    version: 1,
+    availability: 'ready',
+    reference_user_id: 1,
+    target_user_id: 2,
+    subject_user_id: 1,
+    object_user_id: 2,
+    term: '姥姥',
+    term_source_level: 'derived',
+    term_source_label: '推得',
+    summary: '姥姥',
+    relation_state: 'proposal',
+    inferred: false,
+    evidence: { kind: 'unavailable', related_fact_count: null },
+    requires_action: false,
+  }
 }
 
 async function clickDialog(selector: string): Promise<void> {
@@ -491,6 +511,104 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     expect(document.querySelector('[data-test="suggestion-submit"]')).toBeNull()
     expect(document.querySelector('[data-test="suggestion-dismiss"]')).toBeNull()
     expect(wrapper.find('[data-test="section-history"] [data-test="open-details"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  // ---- 待核实分区渲染建议投影（09-15：term_preference 刻意不发通知，
+  //      只渲染通知行会让这类建议在通知中心永远不可见）----
+
+  it('无对应通知行的建议投影出现在待核实分区并可打开详情', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [makeSuggestion(70, { kind: 'term_preference', value: { term: '姥姥' } })],
+      next_cursor: null,
+    })
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValue(
+      makeSuggestion(70, { kind: 'term_preference', value: { term: '姥姥' } }),
+    )
+    const wrapper = await mountNotifications()
+    const rows = wrapper.findAll('[data-test="verify-suggestion-item"]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.text()).toContain('称谓偏好')
+    expect(rows[0]!.text()).toContain('姥姥')
+    expect(wrapper.find('[data-test="verify-empty"]').exists()).toBe(false)
+
+    await rows[0]!.trigger('click')
+    await flushPromises()
+    expect(suggestionsApi.fetchSuggestionDetail).toHaveBeenCalledWith(7, 70)
+    expect(wrapper.findComponent(SuggestionReviewDialog).props('suggestion')?.id).toBe(70)
+    // 建议投影行没有通知载体，不得产生已读请求
+    expect(mockedMarkRead).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('term_preference 行展示 value.term，不拿通用 presentation.summary 当叫法', async () => {
+    // 真实后端形状：term_preference 的 presentation.summary 是通用文案
+    // （「可选的称谓偏好建议，无需处理」），叫法在 value.term。
+    const generic = '可选的称谓偏好建议，无需处理'
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [
+        makeSuggestion(70, {
+          kind: 'term_preference',
+          value: { term: '姥姥' },
+          presentation: { ...presentation(), summary: generic },
+        }),
+      ],
+      next_cursor: null,
+    })
+    const wrapper = await mountNotifications()
+    const row = wrapper.find('[data-test="verify-suggestion-item"]')
+    expect(row.text()).toContain('姥姥')
+    expect(row.text()).not.toContain(generic)
+    wrapper.unmount()
+  })
+
+  it('同一建议同时有通知行与投影行时只渲染一次', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice(70)], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [makeSuggestion(70)],
+      next_cursor: null,
+    })
+    const wrapper = await mountNotifications()
+    expect(wrapper.findAll('[data-test="verify-item"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-test="verify-suggestion-item"]')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('已被通知引用的建议（即使通知归到历史）也不再渲染投影行', async () => {
+    // 去重必须覆盖全部通知行，而不只是待核实分区：
+    // 否则一条已进入历史的通知会让同一建议在页面上出现两次。
+    mockedFetchNotifications.mockResolvedValue(
+      makeSnapshot([suggestionNotice(70, { domain_status: 'done' })], 0),
+    )
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [makeSuggestion(70)],
+      next_cursor: null,
+    })
+    const wrapper = await mountNotifications()
+    expect(wrapper.findAll('[data-test="section-history"] [data-test="open-details"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-test="verify-suggestion-item"]')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('非活跃状态（superseded/expired）的建议不进入待核实分区', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [
+        makeSuggestion(70, { state: 'superseded' }),
+        makeSuggestion(71, { state: 'expired' }),
+      ],
+      next_cursor: null,
+    })
+    const wrapper = await mountNotifications()
+    expect(wrapper.findAll('[data-test="verify-suggestion-item"]')).toHaveLength(0)
+    expect(wrapper.find('[data-test="verify-empty"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

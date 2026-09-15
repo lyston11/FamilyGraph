@@ -7,9 +7,33 @@
  * - 已完成·历史：read_at 有值且领域已到终态（非 pending 即视为该通知的稳定态）；
  * - 通知：其余（含未读的领域终态告知、bridge/relation/membership 通知）。
  */
-import type { NotificationDomainStatus, NotificationItem, NotificationKind } from '@/types/api'
+import type {
+  NotificationDomainStatus,
+  NotificationItem,
+  NotificationKind,
+  SuggestionKind,
+  SuggestionState,
+} from '@/types/api'
 
 export type NotificationSection = 'pending-action' | 'verify' | 'notices' | 'history'
+
+/** 建议种类标签（与 SuggestionReviewDialog 同口径；视图行与弹层共用一份） */
+export const SUGGESTION_KIND_LABELS: Record<SuggestionKind, string> = {
+  relation_proposal: '关系线索',
+  term_preference: '称谓偏好',
+  identity_duplicate: '疑似重复档案',
+  missing_information: '资料缺口',
+}
+
+export const SUGGESTION_STATE_LABELS: Record<SuggestionState, string> = {
+  proposed: '待核实',
+  submitted: '已提交提案',
+  resolved: '已完成',
+  dismissed: '已忽略',
+  expired: '已失效',
+  rejected: '已拒绝',
+  superseded: '已替换',
+}
 
 export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   action_card: '管家建议',
