@@ -77,14 +77,14 @@ probe() { # $1=url $2=名称
     [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$1" 2>/dev/null || true)" = "200" ] && { log "OK   $2 → $1"; return 0; }
     sleep 1
   done
-  log "FAIL $2 → $1（日志见 $LOG_DIR）"
+  log "FAIL $2 -> $1 (check logs in $LOG_DIR)"
   return 1
 }
 
 FAILED=0
 probe http://localhost:8000/api/health    "家庭 API"   || FAILED=1
 probe http://localhost:8002/admin-api/health "管理员 API" || FAILED=1
-probe http://localhost:8080/health        "Agent Sidecar" || FAILED=1
+probe http://localhost:8080/healthz       "Agent Sidecar" || FAILED=1
 probe http://localhost:5173               "家庭前端"   || FAILED=1
 probe http://localhost:5174               "管理员前端" || FAILED=1
 
