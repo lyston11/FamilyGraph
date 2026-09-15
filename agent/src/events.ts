@@ -180,12 +180,26 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
       return [{ type: "turn.completed", public_payload: {} }];
     case "message_end": {
       if (event.message?.role !== "assistant") return [];
+      const text = extractText(event.message.content);
+      // A turn that carries only tool calls has no prose to show the user: the
+      // tool calls themselves are reported by tool.execution.started/completed.
+      // The judgement states the intent ("this message only carries tool
+      // calls") instead of enumerating provider stopReason values.
+      const hasToolCall =
+        Array.isArray(event.message.content) &&
+        event.message.content.some(
+          (block) =>
+            typeof block === "object" &&
+            block !== null &&
+            (block as { type?: unknown }).type === "toolCall",
+        );
+      if (text.length === 0 && hasToolCall) return [];
       return [
         {
           type: "message.assistant_added",
           // Whitelisted projection only: role + concatenated text blocks.
           // Thinking blocks, usage, provider ids, raw tool calls are dropped.
-          public_payload: { role: "assistant", text: extractText(event.message.content) },
+          public_payload: { role: "assistant", text },
         },
       ];
     }

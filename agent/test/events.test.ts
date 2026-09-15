@@ -50,6 +50,53 @@ describe("mapSessionEvent", () => {
     expect(serialized).not.toContain("gpt-x");
   });
 
+  it("drops a tool-only assistant message that has no prose", () => {
+    expect(
+      mapSessionEvent({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "tc_1", name: "familygraph.echo", arguments: { text: "hi" } },
+          ],
+          stopReason: "toolUse",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps an assistant message that answers while calling a tool", () => {
+    expect(
+      mapSessionEvent({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "let me check" },
+            { type: "toolCall", id: "tc_1", name: "familygraph.echo", arguments: {} },
+          ],
+          stopReason: "toolUse",
+        },
+      }),
+    ).toEqual([
+      {
+        type: "message.assistant_added",
+        public_payload: { role: "assistant", text: "let me check" },
+      },
+    ]);
+  });
+
+  it("keeps an empty answer without tool calls (boundary of the filter)", () => {
+    expect(
+      mapSessionEvent({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "stop" },
+      }),
+    ).toEqual([
+      { type: "message.assistant_added", public_payload: { role: "assistant", text: "" } },
+    ]);
+  });
+
   it("ignores user-role message_end and streaming updates", () => {
     expect(
       mapSessionEvent({ type: "message_end", message: { role: "user", content: [] } }),
