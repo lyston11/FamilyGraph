@@ -75,6 +75,8 @@ class MemoryCandidateInput:
     sensitivity: str = "normal"
     source_message_id: int | None = None
     source_document_ref: str | None = None
+    # 提取器类别标签（规则式 detector 提供）；仅用于幂等键稳定化，不入库字段。
+    extractor_category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,8 @@ class MemoryCandidateExtractor:
         source_message_id: int | None = None,
     ) -> list[MemoryCandidate]:
         rows: list[MemoryCandidate] = []
-        for item in self._detector(conversation_text):
+        for index, item in enumerate(self._detector(conversation_text)):
+            label = item.extractor_category or str(index)
             rows.append(
                 propose_candidate(
                     db,
@@ -145,19 +148,23 @@ class MemoryCandidateExtractor:
                     purpose=item.purpose,
                     sensitivity=item.sensitivity,
                     extractor_version=self.version,
+                    idempotency_key=f"extract:{source_message_id}:{label}:{index}",
                 )
             )
         return rows
 
     @staticmethod
     def _default_detector(text_value: str) -> list[MemoryCandidateInput]:
-        """Return no implicit candidates by default.
+        """Delegate to the deterministic rule extractor (2026-09-15 audit fix).
 
-        Product-specific extraction is an explicit opt-in detector. This keeps
-        ordinary chat from silently becoming a durable memory source.
+        Lazy import avoids a module cycle: memory_extractor imports
+        MemoryCandidateInput/propose_candidate from this module. Ordinary chat
+        still never becomes durable memory without the user's confirmation —
+        this only proposes review cards.
         """
-        del text_value
-        return []
+        from app.services.memory_extractor import rule_detector
+
+        return list(rule_detector(text_value))
 
 
 def _validate_sensitivity(value: str) -> None:

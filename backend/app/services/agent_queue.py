@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -49,6 +50,8 @@ from app.models.agent import (
 from app.services import agent_events, agent_provider, audit
 from app.services.agent_execution import ExecutionIdentity, fence_execution
 from app.utils import timeutil
+
+_logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -433,6 +436,20 @@ def _settle(
             },
             created_at=now,
         )
+        if effective == "succeeded" and run.message_id is not None:
+            # 2026-09-15 审核修复：成功结算后对本次 user 消息做确定性记忆候选
+            # 提取（只提 review card，确认仍由用户完成）。提取自身全部容错，
+            # 绝不影响终态落库；与终态同事务提交。
+            try:
+                from app.services import memory_extractor
+
+                memory_extractor.extract_after_settle(db, run)
+            except Exception:
+                _logger.warning(
+                    "memory extraction hook failed run=%s error swallowed",
+                    run.id,
+                    exc_info=True,
+                )
         db.flush()
         return run
 
