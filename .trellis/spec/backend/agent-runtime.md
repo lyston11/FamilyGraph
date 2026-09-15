@@ -33,6 +33,7 @@
 - run+job 同事务入队；本 runtime 只承载 assistant：每 session 一个 active run、每账户 ≤2 assistant 并发。Steward 是独立的确定性引擎，使用 `StewardJob`/maintenance 的每空间 active job 约束，不进入 agent runtime。
 - 终态不可复活；lease 过期 reaper 收敛（回队重试→attempt 耗尽 expired；cancel_requested 直接 cancelled）。
 - 事件先持久化再广播；(run_id, seq) 单调幂等；未知 type 拒绝不落公开流。新事件类型必须先在 `agent_events.EVENT_TYPES` 注册，sidecar 映射同步。
+- **工具 turn 不产生 assistant 事件**（09-15 assistant-latency-optimizations）：sidecar `mapSessionEvent` 对「正文为空且 content 含 `toolCall` 块」的 `message_end` 返回空，不产 `message.assistant_added`。理由是该 turn 没有可展示的正文，而工具调用本身由 `tool.execution.started/completed` 如实上报；若照旧产出 `text=""` 事件，后端会持久化一条空 assistant 消息行（并在后续 run 作为空历史重放），前端「进行中」指示（`runActive && !messages.some(m => m.role === 'assistant' && m.text.length > 0)`）也会在工具 turn 阶段提前熄灭。判据用「content 含 `toolCall` 块」而非枚举 provider 的 `stopReason`：有正文的工具 turn 照常上报，正文空且无工具调用的「空最终回答」不过滤（独立缺陷，另行处理）。过滤不占 seq 号（`RunEventBuffer.nextSeq` 按产出条目递增），后端不要求 sidecar seq 连续。
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
 

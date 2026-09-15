@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "事件投影与 seq/幂等验证口径"}
+{"file": ".trellis/spec/backend/assistant-history-restoration.md", "reason": "核验未新增压缩、未改动历史投影"}
