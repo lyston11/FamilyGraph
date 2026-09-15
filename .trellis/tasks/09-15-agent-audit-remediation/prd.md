@@ -22,7 +22,7 @@
 | 09-15-fix-sidecar-secret-sync | P0 | 本地 .env 与远端 AGENT_SERVICE_SECRET 对齐，本地 lease 验证 |
 | 09-15-remote-service-guardian | P0 | 核查记录：远端 systemd 守护已存在（误判修正），无代码改动 |
 | 09-15-memory-extractor-onboard | P1 | 规则式记忆候选提取器接入，RAG 有输入 |
-| 09-15-steward-suggestion-loop | P1 | proposed 建议 expires_at 落实 + GC 核实 + 未读提醒聚合 |
+| 09-15-steward-suggestion-loop | P1 | 核查结论：TTL/notify 是刻意设计（不加）；修复通知中心建议投影未渲染的可见性缺陷 |
 | 09-15-assistant-latency-optimizations | P2 | 空事件过滤、会话压缩 |
 
 ## 跨子任务验收
@@ -30,7 +30,7 @@
 1. 远端 `systemctl --user status familygraph-api familygraph-agent` 均 active（已确认；重启自愈由 systemd + linger 保证）。steward integrity_scan 继续产出 published generation。
 2. 本地 sidecar 日志不再出现 401 轮询。
 3. 远端库出现非零 `memory_candidates`（提取器产生真实候选）。
-4. `steward_suggestions` 的 proposed 建议具备有限 `expires_at`；GC 后过期建议收敛。
+4. ~~`steward_suggestions` 的 proposed 建议具备有限 `expires_at`；GC 后过期建议收敛。~~ **已按核查结论修正**（子任务 09-15-steward-suggestion-loop）：`term_preference` 的 `expires_at=NULL` 与 `notify=False` 是 09-14 的刻意设计（可选偏好由证据变化与显式反馈退役，而非定时器），且加 TTL 会因历史去重不带状态过滤而永久挡住重建。实际缺陷是**可见性**（`NotificationsView` 加载了建议却从不渲染），已修复为「待核实 = 通知引用行 ∪ 活跃建议投影」。物化型回收留作后续项（当前实测死建议 = 0，无触发条件）。
 5. assistant 新 run 不再产生空文本 assistant 事件。
 6. 全部服务运行在服务器上；本地工作区仅承担代码编辑与提交。
 
