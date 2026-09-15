@@ -119,6 +119,35 @@ describe('admin router guard', () => {
     expect(router.currentRoute.value.name).toBe('not-found')
   })
 
+  it('刷新页面后从 localStorage 恢复会话并放行业务页', async () => {
+    // 模拟已登录后刷新页面的场景：内存为空，但 localStorage 有 refresh token
+    localStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, 'refresh-1')
+    mockedAdminRequest.mockResolvedValueOnce(PAIR)
+
+    const router = freshRouter()
+    await router.push('/operations')
+
+    // 应该成功恢复会话并访问业务页，而不是跳转到登录页
+    expect(router.currentRoute.value.name).toBe('operations')
+    expect(mockedAdminRequest).toHaveBeenCalledWith({
+      method: 'post',
+      url: '/auth/refresh',
+      data: { refresh_token: 'refresh-1' },
+    })
+  })
+
+  it('刷新页面但 refresh token 已失效时跳转登录页', async () => {
+    localStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, 'expired-refresh')
+    mockedAdminRequest.mockRejectedValueOnce({ response: { status: 401 } })
+
+    const router = freshRouter()
+    await router.push('/operations')
+
+    // refresh 失败后应该清空会话并跳转到登录页
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY)).toBeNull()
+  })
+
   it('redirect 白名单：拒绝外部/协议相对/家庭路径', () => {
     expect(resolveSafeRedirect('/spaces/1')).toBe('/spaces/1')
     expect(resolveSafeRedirect('https://evil.example.com/x')).toBeNull()

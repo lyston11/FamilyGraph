@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 本地开发一键启动（幂等，可重复执行）：
-#   后端三 listener（8000/8001/8002）+ 家庭前端（5173）+ 管理员前端（5174）
+#   后端三 listener（8000/8001/8002）+ agent sidecar（8080）+ 家庭前端（5173）+ 管理员前端（5174）
 # 已在运行的服务自动跳过；日志写入 .dev-logs/。
 # 注意：dbx 数据库查看器已下线本地部署（2026-09-12），一律走服务器全局 dbx（远程模式经隧道 4225 访问）。
 set -euo pipefail
@@ -34,7 +34,29 @@ else
   )
 fi
 
-# ---- 2) 两个前端（vite：/api 代理 8000，/admin-api 代理 8002）----
+# ---- 2) Agent sidecar（8080 健康端点）----
+if port_up 8080; then
+  log "Agent sidecar 已在运行（8080）"
+else
+  [ -d "$ROOT/agent/node_modules" ] || fail "缺少 agent/node_modules：cd agent && npm install"
+  [ -d "$ROOT/agent/dist" ] || fail "缺少 agent/dist：cd agent && npm run build"
+  [ -f "$ROOT/.env" ] || fail "缺少根目录 .env（AGENT_SERVICE_SECRET 等），生成方式见 README"
+  log "启动 agent sidecar（8080）…"
+  (
+    cd "$ROOT/agent"
+    set -a
+    # shellcheck disable=SC1091
+    source "$ROOT/.env"
+    # 本地开发环境变量
+    export FG_API_BASE_URL="http://localhost:8000"
+    export FG_INTERNAL_API_BASE_URL="http://localhost:8001"
+    export HEALTH_PORT=8080
+    set +a
+    nohup node dist/main.js > "$LOG_DIR/agent-sidecar.log" 2>&1 &
+  )
+fi
+
+# ---- 3) 两个前端（vite：/api 代理 8000，/admin-api 代理 8002）----
 if port_up 5173; then
   log "家庭前端已在运行 → http://localhost:5173"
 else
@@ -49,7 +71,7 @@ else
   ( cd "$ROOT/system-admin-frontend" && nohup npm run dev > "$LOG_DIR/admin-frontend-5174.log" 2>&1 & )
 fi
 
-# ---- 3) 健康检查 ----
+# ---- 4) 健康检查 ----
 probe() { # $1=url $2=名称
   for _ in $(seq 1 20); do
     [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$1" 2>/dev/null || true)" = "200" ] && { log "OK   $2 → $1"; return 0; }
@@ -62,6 +84,7 @@ probe() { # $1=url $2=名称
 FAILED=0
 probe http://localhost:8000/api/health    "家庭 API"   || FAILED=1
 probe http://localhost:8002/admin-api/health "管理员 API" || FAILED=1
+probe http://localhost:8080/health        "Agent Sidecar" || FAILED=1
 probe http://localhost:5173               "家庭前端"   || FAILED=1
 probe http://localhost:5174               "管理员前端" || FAILED=1
 

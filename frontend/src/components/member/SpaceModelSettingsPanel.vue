@@ -325,6 +325,11 @@ async function toggleCloudConsent(kind: AgentConfigKind, next: boolean): Promise
  * 表单有未保存的下拉改动则随本次一并落库（避免 load() 回同步把改动静默丢弃）。
  */
 async function toggleAssistFlag(flag: AssistFlagKey, next: boolean): Promise<void> {
+  const state = forms.value.steward
+  if (state.providerId === null || !state.model) {
+    message.warning('先选择模型')
+    return
+  }
   if (savingKind.value !== null) return
   const overrides: Partial<KindFormState> = {}
   overrides[flag] = next
@@ -333,6 +338,11 @@ async function toggleAssistFlag(flag: AssistFlagKey, next: boolean): Promise<voi
 
 /** 09-13 推测层空间级开关（生效 = 平台 AND 空间；保存后 inferred_effective 随行刷新） */
 async function toggleInferredTree(next: boolean): Promise<void> {
+  const state = forms.value.steward
+  if (state.providerId === null || !state.model) {
+    message.warning('先选择模型')
+    return
+  }
   if (savingKind.value !== null) return
   await saveKind('steward', { inferredTree: next })
 }

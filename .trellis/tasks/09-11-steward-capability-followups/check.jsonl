@@ -1,5 +1,6 @@
-{"file": ".trellis/tasks/09-11-steward-complete-hardening/research/current-contracts.md", "reason": "已实现能力、领域权限与共享边界；避免重建和扩权。"}
-{"file": ".trellis/tasks/09-11-steward-complete-hardening/research/findings.md", "reason": "本次核实的缺陷、源码锚点、风险类别和主责归属。"}
+{"file": ".trellis/tasks/archive/2026-09/09-11-steward-complete-hardening/research/current-contracts.md", "reason": "已实现能力、领域权限与共享边界；避免重建和扩权。"}
+{"file": ".trellis/tasks/archive/2026-09/09-11-steward-complete-hardening/research/findings.md", "reason": "本次核实的缺陷、源码锚点、风险类别和主责归属。"}
 {"file": ".trellis/spec/backend/steward-action-card.md", "reason": "现有 canonical job、ActionCard/FSM、模型辅助基线合同；待修偏差见 findings。"}
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端回归、授权和迁移验收标准。"}
 {"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "安全错误和日志/审计脱敏约定。"}
+{"file": ".trellis/tasks/09-13-steward-kinship-capability-closure/research/task-alignment.md", "reason": "后续称谓授权与生产职责交接；保留本任务既有研究/证据版本范围"}

@@ -50,6 +50,14 @@ max_journal_lines: 2000
 #   after_archive:
 #     - "echo 'Task archived'"
 
+hooks:
+  after_start:
+    # Isolate every started task in its own branch + linked worktree at
+    # ../fg-<task-dir>, recorded into task.json (branch / worktree_path).
+    # See .trellis/scripts/hooks/auto_worktree.py and the AGENTS.md section
+    # "并行任务与 Git 隔离".
+    - "python3 .trellis/scripts/hooks/auto_worktree.py"
+
 #-------------------------------------------------------------------------------
 # Monorepo / Packages
 #-------------------------------------------------------------------------------

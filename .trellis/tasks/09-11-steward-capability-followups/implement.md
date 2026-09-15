@@ -4,6 +4,7 @@
 
 - [ ] 阅读 prd.md、design.md、notes.md 与 manifests 指向的 spec/research。
 - [ ] 确认依赖：`09-11-steward-release-observability`。
+- [ ] 读取 [称谓职责交接](../09-13-steward-kinship-capability-closure/research/task-alignment.md)；剔除已转交的称谓显示、建议生产与模型优化，不重复建实现任务。
 - [ ] 取得最新实施摘要的明确批准再 task.py start；当前仅规划。
 
 ## 有序执行

@@ -1,7 +1,7 @@
 # Steward 后续能力：授权知识、个人路径解释与地区称谓
 
-> 父任务：[09-11-steward-complete-hardening](../09-11-steward-complete-hardening/prd.md)
-> 状态：延期研究，未授权实现；优先级 P3。
+> 父任务：[09-11-steward-complete-hardening](../archive/2026-09/09-11-steward-complete-hardening/prd.md)
+> 状态：剩余共享知识、扩展地区包和个人路径解释为延期研究；优先级 P3。已明确要求的称谓生产/模型优化转交 [称谓能力闭环](../09-13-steward-kinship-capability-closure/prd.md)，不再被本任务的延期状态阻塞。
 
 ## Goal
 
@@ -9,7 +9,7 @@
 
 ## 已核实依据
 
-本任务负责 [F22](../09-11-steward-complete-hardening/research/findings.md#f22)。严重性、原始代码锚点、已实现基线与不确定性见共享 findings；这些条目是范围内证据，不声称覆盖全仓所有安全问题。
+本任务负责 [F22](../archive/2026-09/09-11-steward-complete-hardening/research/findings.md#f22)。严重性、原始代码锚点、已实现基线与不确定性见共享 findings；这些条目是范围内证据，不声称覆盖全仓所有安全问题。
 
 ## Dependencies
 
@@ -25,9 +25,13 @@
 
 补模型对 PersonalFamilyView 已授权路径的解释候选；单独绑定 viewer/root/space/input version，复用安全辅助批次，不能把空间模型输出作为每个用户的共同真相。
 
+本 R2 保留额外个人路径解释的研究；统一称谓显示、可选偏好生产、terminology 模型优化与反馈由称谓闭环任务实施。不要再次实现同一消费者或让“个人解释尚延期”覆盖已授权的称谓能力。
+
 ### R3 地区称谓内容
 
 保留现有四级词典和原文，盘点 locale 资源缺口；明确地区覆盖、同义歧义、两人共用空间别名门槛。后续新增地区必须有具体用例和词表来源。
+
+现有 zh-CN 词素/合法同义词用于本期称谓改善无需等待新地区包；新方言覆盖和空间词条晋升门槛仍由本 R3 保持原边界。
 
 ### R4 条件性能工作
 

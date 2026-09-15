@@ -1,0 +1,106 @@
+- generic [ref=f1e5]:
+  - generic:
+    - img:
+      - button "Edge from n-1 to n-2"
+    - img:
+      - button "Edge from n-3 to n-6"
+    - img:
+      - button "Edge from n-4 to n-5"
+    - img:
+      - button "Edge from n-3 to n-4"
+    - img:
+      - button "Edge from n-1 to n-3" [ref=f1e6] [cursor=pointer]
+    - img:
+      - button "Edge from n-1 to n-4" [ref=f1e9] [cursor=pointer]
+    - img:
+      - button "Edge from n-2 to n-3" [ref=f1e12] [cursor=pointer]
+    - img:
+      - button "Edge from n-2 to n-4" [ref=f1e15] [cursor=pointer]
+    - img:
+      - button "Edge from n-3 to n-7" [ref=f1e18] [cursor=pointer]
+    - img:
+      - button "Edge from n-3 to n-8" [ref=f1e21] [cursor=pointer]
+    - img:
+      - button "Edge from n-3 to n-9" [ref=f1e24] [cursor=pointer]
+    - img:
+      - button "Edge from n-6 to n-7" [ref=f1e27] [cursor=pointer]
+    - img:
+      - button "Edge from n-6 to n-8" [ref=f1e30] [cursor=pointer]
+    - img:
+      - button "Edge from n-6 to n-9" [ref=f1e33] [cursor=pointer]
+    - img:
+      - button "Edge from n-4 to n-10"
+    - img:
+      - button "Edge from n-4 to n-11" [ref=f1e36] [cursor=pointer]
+    - img:
+      - button "Edge from n-5 to n-10" [ref=f1e39] [cursor=pointer]
+    - img:
+      - button "Edge from n-5 to n-11"
+    - generic:
+      - button [ref=f1e42]:
+        - button "示例成员 1 我 家庭可见" [ref=f1e43] [cursor=pointer]:
+          - generic [ref=f1e47]:
+            - generic [aria-hidden] [ref=f1e48]: 示
+            - generic [ref=f1e49]: 示例成员 1
+            - generic [ref=f1e50]: 我
+          - generic [ref=f1e51]: 家庭可见
+      - button [ref=f1e53]:
+        - button "示例成员 2 家庭可见" [ref=f1e54] [cursor=pointer]:
+          - generic [ref=f1e58]:
+            - generic [aria-hidden] [ref=f1e59]: 示
+            - generic [ref=f1e60]: 示例成员 2
+          - generic [ref=f1e61]: 家庭可见
+      - button [ref=f1e63]:
+        - button "示例成员 3 家庭可见" [ref=f1e64] [cursor=pointer]:
+          - generic [ref=f1e68]:
+            - generic [aria-hidden] [ref=f1e69]: 示
+            - generic [ref=f1e70]: 示例成员 3
+          - generic [ref=f1e71]: 家庭可见
+      - button [ref=f1e73]:
+        - button "示例成员 4 家庭可见" [ref=f1e74] [cursor=pointer]:
+          - generic [ref=f1e78]:
+            - generic [aria-hidden] [ref=f1e79]: 示
+            - generic [ref=f1e80]: 示例成员 4
+          - generic [ref=f1e81]: 家庭可见
+      - button [ref=f1e83]:
+        - button "示例成员 5 家庭可见" [ref=f1e84] [cursor=pointer]:
+          - generic [ref=f1e88]:
+            - generic [aria-hidden] [ref=f1e89]: 示
+            - generic [ref=f1e90]: 示例成员 5
+          - generic [ref=f1e91]: 家庭可见
+      - button [ref=f1e93]:
+        - button "示例成员 6 家庭可见" [ref=f1e94] [cursor=pointer]:
+          - generic [ref=f1e98]:
+            - generic [aria-hidden] [ref=f1e99]: 示
+            - generic [ref=f1e100]: 示例成员 6
+          - generic [ref=f1e101]: 家庭可见
+      - button [ref=f1e103]:
+        - button "示例成员 7 家庭可见" [ref=f1e104] [cursor=pointer]:
+          - generic [ref=f1e108]:
+            - generic [aria-hidden] [ref=f1e109]: 示
+            - generic [ref=f1e110]: 示例成员 7
+          - generic [ref=f1e111]: 家庭可见
+      - button [ref=f1e113]:
+        - button "示例成员 8 家庭可见" [ref=f1e114] [cursor=pointer]:
+          - generic [ref=f1e118]:
+            - generic [aria-hidden] [ref=f1e119]: 示
+            - generic [ref=f1e120]: 示例成员 8
+          - generic [ref=f1e121]: 家庭可见
+      - button [ref=f1e123]:
+        - button "示例成员 9 家庭可见" [ref=f1e124] [cursor=pointer]:
+          - generic [ref=f1e128]:
+            - generic [aria-hidden] [ref=f1e129]: 示
+            - generic [ref=f1e130]: 示例成员 9
+          - generic [ref=f1e131]: 家庭可见
+      - button [ref=f1e133]:
+        - button "示例成员 10 家庭可见" [ref=f1e134] [cursor=pointer]:
+          - generic [ref=f1e138]:
+            - generic [aria-hidden] [ref=f1e139]: 示
+            - generic [ref=f1e140]: 示例成员 10
+          - generic [ref=f1e141]: 家庭可见
+      - button [ref=f1e143]:
+        - button "示例成员 11 家庭可见" [ref=f1e144] [cursor=pointer]:
+          - generic [ref=f1e148]:
+            - generic [aria-hidden] [ref=f1e149]: 示
+            - generic [ref=f1e150]: 示例成员 11
+          - generic [ref=f1e151]: 家庭可见

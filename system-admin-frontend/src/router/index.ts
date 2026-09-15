@@ -11,7 +11,7 @@
  */
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { useAdminAuthStore } from '@/stores/auth'
+import { useAdminAuthStore, ADMIN_REFRESH_TOKEN_STORAGE_KEY } from '@/stores/auth'
 import { resolveSafeRedirect } from '@/router/safeRedirect'
 
 const routes: RouteRecordRaw[] = [
@@ -112,8 +112,16 @@ export function createAdminRouter(): ReturnType<typeof createRouter> {
 export const adminRouter = createAdminRouter()
 
 export function setupAdminRouterGuards(router: ReturnType<typeof createRouter>): void {
-  router.beforeEach((to) => {
+  router.beforeEach(async (to) => {
     const auth = useAdminAuthStore()
+
+    // 恢复会话：内存无 access 但 localStorage 有 refresh（硬刷新场景）
+    if (!auth.isLoggedIn && !auth.restoring) {
+      const stored = localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY)
+      if (stored) {
+        await auth.restoreSession()
+      }
+    }
 
     if (to.name === 'login') {
       // 已登录访问登录页：按改密状态分流（避免会话内的回环）
