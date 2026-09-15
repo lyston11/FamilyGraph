@@ -120,7 +120,7 @@ class ContextProjection:
 class MemoryCandidateExtractor:
     """Small, deterministic candidate extractor seam; never indexes input text."""
 
-    version = "candidate-extractor-v1"
+    version = "memory-extractor-v1"
 
     def __init__(self, detector: Callable[[str], list[MemoryCandidateInput]] | None = None):
         self._detector = detector or self._default_detector
@@ -135,12 +135,13 @@ class MemoryCandidateExtractor:
     ) -> list[MemoryCandidate]:
         rows: list[MemoryCandidate] = []
         for index, item in enumerate(self._detector(conversation_text)):
+            resolved_message_id = item.source_message_id or source_message_id
             label = item.extractor_category or str(index)
             rows.append(
                 propose_candidate(
                     db,
                     author_account_id=author_account_id,
-                    source_message_id=item.source_message_id or source_message_id,
+                    source_message_id=resolved_message_id,
                     source_document_ref=item.source_document_ref,
                     source_quote=item.source_quote,
                     summary=item.summary,
@@ -148,7 +149,7 @@ class MemoryCandidateExtractor:
                     purpose=item.purpose,
                     sensitivity=item.sensitivity,
                     extractor_version=self.version,
-                    idempotency_key=f"extract:{source_message_id}:{label}:{index}",
+                    idempotency_key=f"extract:{resolved_message_id}:{label}:{index}",
                 )
             )
         return rows
