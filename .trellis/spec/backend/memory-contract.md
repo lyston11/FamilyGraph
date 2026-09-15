@@ -73,3 +73,53 @@ summary 最多 20,000 字符，purpose 最多 120 字符。非 manual 的原文�
 错误：收到无 source 的请求自动视为 manual；提交后才发现 DTO 缺 raw_quote；仅用搜索结果或旧快照认定当前授权；按整段文本去重用户操作。
 
 正确：显式/可验证来源、服务端原文回读、提交前响应校验、每个读写面持续检查来源；按用户操作 key 与请求 fingerprint 处理重试。新切分与批量索引生命周期由 B/D 继续实现，不能用 A 通过宣称它们已经完成。
+
+## 8. 自动候选提取（2026-09-15 补充）
+
+普通聊天此前永不产生候选（默认 detector 返回空），候选/记忆/RAG 索引长期为空。现由确定性规则提取器补齐输入侧；本段是维护该路径的合同。
+
+### Scope / Trigger
+
+修改 `backend/app/services/memory_extractor.py`、`MemoryCandidateExtractor` 的默认 detector 或幂等键构造、或在 agent 结算路径增删提取钩子时适用。
+
+### 签名与接入点
+
+- `memory_extractor.rule_detector(text) -> list[MemoryCandidateInput]`：纯函数，无 DB/模型调用，相同输入逐字节相同输出。
+- `memory_extractor.rule_detector_with_stats(text) -> (inputs, dropped)`：`dropped` 为超上限被丢弃数，供日志观测。
+- `memory_extractor.extract_after_settle(db, run) -> int`：容错钩子，**永不抛错**。
+- 接入点唯一：`agent_queue._settle` 在 `effective == "succeeded"` 且 `run.message_id` 非空时调用，与终态写入同事务。
+- `MemoryCandidateExtractor.extract(...)` 为每条候选生成 `idempotency_key=f"extract:{resolved_message_id}:{label}:{index}"`，其中 `resolved_message_id = item.source_message_id or source_message_id`（不得只用参数，否则自带 message_id 的 detector 条目会跨消息碰撞）。
+
+### Contracts
+
+- 提取产物只是 review card；确认、索引仍由用户经既有 `POST /api/memory-candidates/{id}/confirm` 完成。
+- `source_quote` 必须是完整 user 消息原文（`resolve_source` 对 `agent_message` 做全等校验）；`summary` 承载结构化概括。
+- 类别集合与顺序固定：birthday > anniversary > dietary > occupation > school > residence > preference，单消息上限 3 条。
+- `suggested_scope` 固定 `private`；sensitivity 仅 `normal`（dietary 为 `sensitive`），不产 `high`。
+- 否定/习语守卫：命中关键词前 2 字内出现 不/没/别/无/哪 时不产卡；`不吃` 后接 亏/消/准/着/过/喜爱想要会敢能得吃 时不命中。
+- 消息长度超过 `config.AGENT_MESSAGE_MAX_LENGTH` 时整条跳过（不截断），避免截断导致原文失配的静默 no-op。
+- 提取整体运行在 `db.begin_nested()` savepoint 内：任何失败（含延迟到外层 flush 的约束错误）只回滚候选，终态照常提交。
+- `MEMORY_ENABLED` 关闭时前置短路；`memory.*` 领域事件不触发 Steward 作业与 PersonalFamilyView 失效（`_schedule_steward_job` 白名单）。
+
+### Validation & Error Matrix
+
+| 情况 | 行为 |
+|---|---|
+| run 终态非 succeeded、`message_id` 为空、消息非 user、文本为空 | 返回 0，不落候选 |
+| MEMORY_ENABLED 关闭 | 返回 0，settle 不受影响 |
+| 消息超长 | 返回 0 并记 info 日志 |
+| propose 或来源校验抛错 | savepoint 回滚，warning 日志，settle 仍成功 |
+| 延迟到外层 flush 的失败 | savepoint 回滚，run 保持 succeeded，无残留写入 |
+| 同消息重复提取 | 幂等键命中同候选，行数不变 |
+| 平台操作员账号（来源 403） | 被容错层吞掉，settle 照常 |
+
+### Tests Required
+
+- `backend/tests/test_memory_extractor.py`：类别正/反例、否定守卫、上限与丢弃计数、确定性、超长跳过、settle 失败无候选、MEMORY 关闭时 settle 成功、重复提取幂等、延迟 flush 失败不击穿 settle、公共 seam 幂等键不跨消息碰撞。
+- 隔离库验证必须设 `DATA_DIR` 指向隔离目录（`config.DATABASE_URL` 由 `DATA_DIR` 计算，设 `DATABASE_URL` 环境变量无效），并用 `sqlite3 .backup` 复制主库。
+
+### Wrong vs Correct
+
+错误：把提取钩子的异常向外抛（会让终态丢失、run 停在 leased）；截断超长原文（原文失配后 422 被吞成静默 no-op）；用调用方参数而非 `item.source_message_id` 构造幂等键；在无否定守卫的情况下把「不喜欢」输出为偏好候选。
+
+正确：savepoint 隔离 + 全量容错；超长直接跳过并记日志；幂等键绑定实际来源消息；产出前做否定守卫。

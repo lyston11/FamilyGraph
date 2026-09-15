@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "记忆候选来源/幂等/确认合同"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "settle/事件事务与容错边界"}
