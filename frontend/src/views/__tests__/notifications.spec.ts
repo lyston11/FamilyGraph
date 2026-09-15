@@ -493,4 +493,62 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     expect(wrapper.find('[data-test="section-history"] [data-test="open-details"]').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  // ---- 待核实分区渲染建议投影（09-15：term_preference 刻意不发通知，
+  //      只渲染通知行会让这类建议在通知中心永远不可见）----
+
+  it('无对应通知行的建议投影出现在待核实分区并可打开详情', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [makeSuggestion(70, { kind: 'term_preference', value: { term: '姥姥' } })],
+      next_cursor: null,
+    })
+    vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValue(
+      makeSuggestion(70, { kind: 'term_preference', value: { term: '姥姥' } }),
+    )
+    const wrapper = await mountNotifications()
+    const rows = wrapper.findAll('[data-test="verify-suggestion-item"]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.text()).toContain('称谓偏好')
+    expect(rows[0]!.text()).toContain('姥姥')
+    expect(wrapper.find('[data-test="verify-empty"]').exists()).toBe(false)
+
+    await rows[0]!.trigger('click')
+    await flushPromises()
+    expect(suggestionsApi.fetchSuggestionDetail).toHaveBeenCalledWith(7, 70)
+    expect(wrapper.findComponent(SuggestionReviewDialog).props('suggestion')?.id).toBe(70)
+    // 建议投影行没有通知载体，不得产生已读请求
+    expect(mockedMarkRead).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('同一建议同时有通知行与投影行时只渲染一次', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([suggestionNotice(70)], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [makeSuggestion(70)],
+      next_cursor: null,
+    })
+    const wrapper = await mountNotifications()
+    expect(wrapper.findAll('[data-test="verify-item"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-test="verify-suggestion-item"]')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('非活跃状态（superseded/expired）的建议不进入待核实分区', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [
+        makeSuggestion(70, { state: 'superseded' }),
+        makeSuggestion(71, { state: 'expired' }),
+      ],
+      next_cursor: null,
+    })
+    const wrapper = await mountNotifications()
+    expect(wrapper.findAll('[data-test="verify-suggestion-item"]')).toHaveLength(0)
+    expect(wrapper.find('[data-test="verify-empty"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
 })

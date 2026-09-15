@@ -12,6 +12,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { useAuthStore } from '@/stores/auth'
 import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
+import { SUGGESTION_KIND_LABELS, SUGGESTION_STATE_LABELS } from '@/types/notifications'
 import type { SuggestionItem } from '@/types/api'
 
 const props = defineProps<{ spaceId: number }>()
@@ -28,22 +29,9 @@ const dismissing = ref(false)
 const resultNote = ref<string | null>(null)
 const errorNote = ref<string | null>(null)
 
-const KIND_LABELS: Record<SuggestionItem['kind'], string> = {
-  relation_proposal: '关系线索',
-  term_preference: '称谓偏好',
-  identity_duplicate: '疑似重复档案',
-  missing_information: '资料缺口',
-}
+const KIND_LABELS = SUGGESTION_KIND_LABELS
 
-const STATE_LABELS: Record<SuggestionItem['state'], string> = {
-  proposed: '待核实',
-  submitted: '已提交提案',
-  resolved: '已完成',
-  dismissed: '已忽略',
-  expired: '已失效',
-  rejected: '已拒绝',
-  superseded: '已替换',
-}
+const STATE_LABELS = SUGGESTION_STATE_LABELS
 
 const pairText = computed(() => {
   const s = suggestion.value

@@ -19,6 +19,7 @@ import { useRouter } from 'vue-router'
 
 import ActionCardInbox from '@/components/actioncard/ActionCardInbox.vue'
 import NoticeItemRow from '@/components/notifications/NoticeItemRow.vue'
+import SuggestionProjectionRow from '@/components/notifications/SuggestionProjectionRow.vue'
 import SuggestionReviewDialog from '@/components/notifications/SuggestionReviewDialog.vue'
 import { describeLoadError } from '@/api/loadError'
 import { useActionCardsStore } from '@/stores/actionCards'
@@ -55,6 +56,33 @@ const errorCopy = computed(() =>
 )
 
 const sections = computed(() => classifyNotifications(page.value?.items ?? []))
+
+/**
+ * 「待核实」分区里的建议投影行：通知中心不只依赖领域事件通知，
+ * 还直接渲染服务端授权的活跃建议（term_preference 刻意不发通知，
+ * 若只看通知行则这类建议在通知中心永远不可见）。
+ *
+ * 已在通知引用行出现过的建议按 id 去重，同一条不重复展示。
+ */
+const verifyNotifications = computed(() => sections.value.verify)
+
+const pendingSuggestions = computed<SuggestionItem[]>(() => {
+  const currentSpaceId = spaceId.value
+  if (currentSpaceId === null) return []
+  const notifiedIds = new Set(
+    verifyNotifications.value
+      .map((item) => item.suggestion?.suggestion_id)
+      .filter((id): id is number => id !== undefined),
+  )
+  return suggestions
+    .activeForSpace(currentSpaceId)
+    .filter((item) => item.space_id === currentSpaceId && !notifiedIds.has(item.id))
+})
+
+/** 待核实分区是否为空：通知引用行与建议投影行两者皆空 */
+const verifyEmpty = computed(
+  () => verifyNotifications.value.length === 0 && pendingSuggestions.value.length === 0,
+)
 
 /** 全部已读：仅影响已读状态；unread_count 来自服务端载荷 */
 const unreadCount = computed(() =>
@@ -143,12 +171,22 @@ function openSuggestion(item: NotificationItem): void {
   if (item.read_at === null) {
     void notifications.markRead(currentSpaceId, item.id).catch(() => undefined)
   }
+  openSuggestionById(id)
+}
+
+/**
+ * 按 ID 打开建议详情（始终重验当前有效状态，旧列表缓存不授予仍可执行的动作）。
+ * 通知引用行与「待核实」分区的建议投影行共用同一条路径。
+ */
+function openSuggestionById(id: number): void {
+  const currentSpaceId = spaceId.value
+  const viewerId = auth.user?.id
+  if (currentSpaceId === null || viewerId === undefined) return
   const requestEpoch = ++reviewEpoch
   reviewSuggestion.value = null
   reviewOpened.value = true
   const isCurrent = () => requestEpoch === reviewEpoch && reviewOpened.value &&
     currentSpaceId === spaceId.value && viewerId === auth.user?.id
-  // 始终按 ID 重验当前有效状态；旧列表缓存不授予仍可执行的动作。
   void suggestions
     .loadDetail(currentSpaceId, id)
     .then((detail) => {
@@ -262,15 +300,15 @@ function retry(): void {
           管家发现的关系线索和资料缺口仍需核实，查看详情不会提交任何操作。
         </p>
         <NEmpty
-          v-if="sections.verify.length === 0"
+          v-if="verifyEmpty"
           description="没有待核实的线索"
           size="small"
           data-test="verify-empty"
         />
         <ul v-else class="notice-list">
           <li
-            v-for="item in sections.verify"
-            :key="item.id"
+            v-for="item in verifyNotifications"
+            :key="`notice-${item.id}`"
             class="notice-item"
             :class="{ 'notice-item--unread': item.read_at === null }"
             data-test="verify-item"
@@ -288,6 +326,27 @@ function retry(): void {
                 </NButton>
               </template>
             </NoticeItemRow>
+          </li>
+          <!-- 建议投影行：无通知载体，因此不参与已读标记，只提供详情入口 -->
+          <li
+            v-for="item in pendingSuggestions"
+            :key="`suggestion-${item.id}`"
+            class="notice-item"
+            data-test="verify-suggestion-item"
+            @click="openSuggestionById(item.id)"
+          >
+            <SuggestionProjectionRow :item="item">
+              <template #actions>
+                <NButton
+                  size="small"
+                  secondary
+                  data-test="open-details"
+                  @click.stop="openSuggestionById(item.id)"
+                >
+                  查看详情
+                </NButton>
+              </template>
+            </SuggestionProjectionRow>
           </li>
         </ul>
       </section>
