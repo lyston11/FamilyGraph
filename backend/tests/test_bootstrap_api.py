@@ -95,20 +95,33 @@ def test_preflight_creates_single_admin_with_0600_file(db_session) -> None:
     assert db_session.query(SystemAdmin).count() == 1
 
 
+@pytest.mark.parametrize("initial_password", ["", "Seed@123"])
 def test_bootstrap_admin_can_login_and_is_forced_to_change_password(
-    admin_client, db_session
+    admin_client, db_session, monkeypatch, initial_password
 ) -> None:
-    """bootstrap 生成的凭据可直接登录 8002；首登被强制改密；改密后凭据文件删除。"""
+    """随机/部署初始密码均可登录；即使初始值较短，改密仍要求正常强度。"""
+    monkeypatch.setattr(config, "ADMIN_INITIAL_PASSWORD", initial_password)
     admin_bootstrap.run_startup_preflight(db_session)
     path = admin_bootstrap.credentials_file_path()
     content = path.read_text(encoding="utf-8")
     password = content.split("password: ", 1)[1].strip().splitlines()[0]
+    if initial_password:
+        assert password == initial_password
+    else:
+        assert len(password) >= 16
 
     pair = admin_login(admin_client, password=password)
     assert pair.status_code == 200, pair.text
     assert pair.json()["admin"]["password_must_change"] is True
 
     headers = admin_header(pair.json())
+    assert admin_client.get("/admin-api/auth/me", headers=headers).status_code == 403
+    weak = admin_client.put(
+        "/admin-api/auth/password",
+        json={"current_password": password, "new_password": "Seed@123"},
+        headers=headers,
+    )
+    assert weak.status_code == 422
     changed = admin_client.put(
         "/admin-api/auth/password",
         json={"current_password": password, "new_password": "NewStrong-9zZx"},
@@ -179,9 +192,14 @@ def test_weak_admin_jwt_config_refuses_start(monkeypatch: pytest.MonkeyPatch) ->
     importlib.reload(config)
 
 
-def test_recovery_writes_0600_file_and_bumps_version(db_session, admin_client) -> None:
-    """运维恢复：一次性密码只落 0600 文件；版本递增 + 全会话撤销 + 审计。"""
+@pytest.mark.parametrize("initial_password", ["", "Seed@123"])
+def test_recovery_writes_0600_file_and_bumps_version(
+    db_session, admin_client, monkeypatch, initial_password
+) -> None:
+    """运维恢复：配置/随机密码只落 0600 文件；版本递增 + 全会话撤销 + 审计。"""
     from app.admin_recovery import run_recovery
+
+    monkeypatch.setattr(config, "ADMIN_INITIAL_PASSWORD", initial_password)
 
     admin = create_system_admin(db_session)
     pair = admin_login(admin_client).json()
@@ -194,6 +212,10 @@ def test_recovery_writes_0600_file_and_bumps_version(db_session, admin_client) -
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     content = path.read_text(encoding="utf-8")
     recovery_password = content.split("password: ", 1)[1].strip().splitlines()[0]
+    if initial_password:
+        assert recovery_password == initial_password
+    else:
+        assert len(recovery_password) >= 16
 
     db_session.expire_all()
     assert admin.account.password_version == old_version + 1
@@ -214,6 +236,17 @@ def test_recovery_writes_0600_file_and_bumps_version(db_session, admin_client) -
     relogin = admin_login(admin_client, password=recovery_password)
     assert relogin.status_code == 200
     assert relogin.json()["admin"]["password_must_change"] is True
+
+
+@pytest.mark.parametrize("initial_password", ["   ", "a" * 73, "密" * 25, "a\nb", "a\rb", "a\x00b"])
+def test_invalid_initial_password_creates_no_admin(
+    db_session, monkeypatch, initial_password
+) -> None:
+    monkeypatch.setattr(config, "ADMIN_INITIAL_PASSWORD", initial_password)
+    with pytest.raises(ValueError, match="ADMIN_INITIAL_PASSWORD"):
+        admin_bootstrap.run_startup_preflight(db_session)
+    assert db_session.query(SystemAdmin).count() == 0
+    assert not admin_bootstrap.credentials_file_exists()
 
 
 def test_recovery_unknown_username_fails(db_session) -> None:

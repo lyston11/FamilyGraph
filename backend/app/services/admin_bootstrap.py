@@ -4,7 +4,7 @@
 1. fail-closed：检测到旧版 PIN 凭据结构（pin_hash 列）即拒绝服务——本任务
    不做 PIN 迁移，也不静默转换（design §4）；
 2. 事务锁（BEGIN IMMEDIATE）内检查无任何 system_admin 行时创建唯一
-   ``username=admin`` 账号：CSPRNG 强随机密码、bcrypt 哈希入库、明文原子写入
+   ``username=admin`` 账号：环境配置的初始密码（未配置则随机）、bcrypt 哈希入库、明文原子写入
    ``DATA_DIR/bootstrap/admin-credentials``（0600）；
 3. 密码明文只出现在该文件，不进日志/审计/数据库/响应；
 4. 已存在管理员的部署重启不生成第二账号（受控启动状态记录）。
@@ -37,6 +37,20 @@ CREDENTIALS_FILENAME = "admin-credentials"
 DEFAULT_ADMIN_USERNAME = "admin"
 
 _BOOTSTRAP_DONE = False
+
+
+def initial_password() -> str:
+    """初始化与恢复共用部署初始密码；首登仍须修改，常规改密强度规则不变。"""
+    password = config.ADMIN_INITIAL_PASSWORD
+    if not password:
+        return security.generate_strong_password()
+    if (
+        not password.strip()
+        or len(password.encode("utf-8")) > 72
+        or any(char in password for char in ("\r", "\n", "\x00"))
+    ):
+        raise ValueError("ADMIN_INITIAL_PASSWORD 必须为非空单行密码，UTF-8 长度不超过 72 字节")
+    return password
 
 
 def credentials_file_path() -> Path:
@@ -163,7 +177,7 @@ def _bootstrap_admin_if_needed(session: Session) -> None:
                 admin_count,
             )
             return
-        password = security.generate_strong_password()
+        password = initial_password()
         admin, _account = create_admin_account(
             session, username=DEFAULT_ADMIN_USERNAME, password=password
         )

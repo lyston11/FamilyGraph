@@ -54,4 +54,5 @@ cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 - **普通 404 一致性**：`/admin-api/*` 在 8000 的响应必须与随机未知路径逐字节一致（同 catch-all 处理器）；不允许 403/重定向/自定义错误页。
 - **交叉签发域拒绝**：family token→8002 与 admin token→8000 双向 401；admin JWT 依赖独立 `ADMIN_JWT_SECRET/ISSUER/AUDIENCE`，claim 版本字段与家庭刻意不同名（`token_version` vs 家庭 `ver`）。
 - **凭据文件生命周期**：空库 bootstrap 生成唯一 `admin`、`DATA_DIR/bootstrap/admin-credentials` 权限 0600、日志 grep 无明文、首登改密后删除、删除失败回置 `password_must_change` 并审计；lifespan→preflight 接线有测试。
+- **初始/恢复密码来源**：`ADMIN_INITIAL_PASSWORD` 由部署环境提供，bootstrap 与 `app.admin_recovery` 共用；未配置/空值沿用随机密码。配置值只允许非空白单行、无 NUL、UTF-8 不超过 bcrypt 的 72 字节上限。值不进入源码、日志、审计或 API 响应。初始密码可短于常规改密下限，但仍强制首次改密，常规改密强度校验不变；重启不覆盖已有账号的密码。回归覆盖配置值/随机回退、错误配置拒绝、首次改密门禁和旧会话撤销。
 - **会话撤销触发器矩阵**：改密/改用户名/锁定/运维恢复每个分支都断言 `password_version+1` 且 refresh session 全撤销；refresh 轮换断言新行 `expires_at` 与原会话一致（绝对有效期、轮换不续期）。

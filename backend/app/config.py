@@ -39,6 +39,8 @@ ADMIN_JWT_AUDIENCE: str = os.environ.get("ADMIN_JWT_AUDIENCE", "")
 ADMIN_JWT_SECRET_MIN_LENGTH: int = 32
 # bootstrap 初始密码长度（secrets.token_urlsafe 字节数 → ~24 可见字符）
 ADMIN_BOOTSTRAP_PASSWORD_BYTES: int = 18
+# 部署指定的初始/恢复密码；为空时使用随机值。仅从环境读取，不记录其值。
+ADMIN_INITIAL_PASSWORD: str = os.environ.get("ADMIN_INITIAL_PASSWORD", "")
 
 # ---- 09-05 家庭账号开通与注册（PRD 决策 2/6；design.md §3/§4）----
 # 部署开关：默认开；关闭时注册端点与未知路径同形 404（不给探测信号），等于整体回滚开关

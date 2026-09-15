@@ -4,7 +4,7 @@
 
     python -m app.admin_recovery [--username admin]
 
-行为：生成 CSPRNG 一次性恢复密码，原子写入
+行为：使用部署配置的初始密码（未配置则随机），原子写入
 ``DATA_DIR/bootstrap/admin-recovery``（0600）；同一事务内递增
 ``password_version``（全部旧 access/refresh 即刻失效）、撤销全部 refresh
 session、写安全审计 ``admin_password_recovery``、回置 ``password_must_change``。
@@ -45,7 +45,7 @@ def run_recovery(session: Session, *, username: str) -> Path:
     )
     if account is None:
         raise LookupError(f"系统管理员 {username!r} 缺少凭据账号，数据库状态异常")
-    password = security.generate_strong_password()
+    password = admin_bootstrap.initial_password()
     now = timeutil.utcnow()
     account.password_hash = security.hash_password(password)
     account.password_version += 1
