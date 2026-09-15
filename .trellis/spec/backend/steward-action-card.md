@@ -160,6 +160,24 @@ request_lineage_membership(
 - **日志红线**：异常只记关联 ID + 异常类名 + 安全错误码；`str(exc)` 原文、SQL 绑定参数、模型 payload、姓名/PIN/token/key 绝不进日志/审计/响应。新增回归用合成哨兵断言零外泄。
 - 验证脚本（临时 DATA_DIR）：`scripts/steward_e2e.py`（端到端）、`steward_capacity.py`（容量采样）、`steward_migrate_roundtrip.py`（迁移往返）；证据 JSON 已 gitignore。
 
+### Gotcha: `steward_generations` 行数下降是 GC 收敛，不是循环退化
+
+**Symptom**：巡检时发现 `steward_generations` 总数在减少（实测 53→49→40），容易误判为扫描停摆。
+
+**Cause**：`steward_gc._collectible_generations()` 按设计回收「已被同空间更新代取代、manifest 已封存、无 publication 引用、无 view 引用」的旧代（见第 12 条）。稳态是每空间保留 current + 最新预览。
+
+**Correct 判据**（不要用总数）：
+
+```sql
+select min(id), max(id), count(*) from steward_generations;   -- id 有空洞 = 确有删除
+select max(published_at) from steward_generations;            -- 必须随扫描节奏前移
+select status, count(*) from steward_jobs group by status;    -- 不应出现非 succeeded
+```
+
+实测样本：`min=1, max=680, count=40`（回收 640 行）+ 20 空间×2 条稳态 + `max(published_at)` 每 30 分钟前移 + 2310 jobs 全 succeeded。
+
+**Prevention**：判定管家循环健康看 `max(published_at)` 前移与 job 状态分布，不看 generation 总行数。
+
 ## 安全链与评测（09-11 quality-security；services/steward_guard.py）
 
 - 链路：代号投影（不发原始姓名）→ context/input policy → provider 设置/revision → `before_provider_request` 最终 payload 检查（复用 policy_guard，不经 ProviderProxy、不伪造 AgentRun）→ 有界 transport → 闭合 schema 校验（证据 ID 围栏、允许 kind、严格排列、受众范围）→ 写回栅栏 → 呈现/审核投影。

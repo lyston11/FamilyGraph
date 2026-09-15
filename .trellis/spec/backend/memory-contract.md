@@ -117,6 +117,7 @@ summary 最多 20,000 字符，purpose 最多 120 字符。非 manual 的原文�
 
 - `backend/tests/test_memory_extractor.py`：类别正/反例、否定守卫、上限与丢弃计数、确定性、超长跳过、settle 失败无候选、MEMORY 关闭时 settle 成功、重复提取幂等、延迟 flush 失败不击穿 settle、公共 seam 幂等键不跨消息碰撞。
 - 隔离库验证必须设 `DATA_DIR` 指向隔离目录（`config.DATABASE_URL` 由 `DATA_DIR` 计算，设 `DATABASE_URL` 环境变量无效），并用 `sqlite3 .backup` 复制主库。
+- 隔离库验证还必须加载部署环境变量文件（远端 `/home/ubuntu/.config/familygraph/familygraph.env`，含 `MEMORY_ENABLED=1`）：`platform_feature_configs` 无行时 `platform_features` 回落到 environment 源，未加载 env 会得到 `memory_enabled=False`，`extract_after_settle` 直接返回 0 —— 这是**假阴性**，不是链路缺陷。验证提取器前先断言 `config.MEMORY_ENABLED` 与 `get_platform_feature_state(db).memory_source`。
 
 ### Wrong vs Correct
 
