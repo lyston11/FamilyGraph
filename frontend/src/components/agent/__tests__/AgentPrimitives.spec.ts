@@ -226,6 +226,34 @@ describe('MessageList', () => {
     expect(wrapper.find('[data-test="live-region"]').text()).toContain('正在思考')
   })
 
+  it('工具 turn 的空助手消息不熄灭进行中指示', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          { id: 1, role: 'user', text: '谁是我的长辈？', createdAt: null, status: 'sent' },
+          { id: 2, role: 'assistant', text: '', createdAt: null, status: 'sent' },
+        ],
+        toolSummaries: [{ toolCallId: 't1', toolName: 'familygraph.search_space', status: 'running' }],
+        run: { id: 10, status: 'running', terminal: false },
+      },
+    })
+    expect(wrapper.find('[data-test="thinking-indicator"]').exists()).toBe(true)
+  })
+
+  it('有正文的助手消息照常熄灭进行中指示', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          { id: 1, role: 'user', text: '谁是我的长辈？', createdAt: null, status: 'sent' },
+          { id: 2, role: 'assistant', text: '根据可见路径…', createdAt: null, status: 'sent' },
+        ],
+        toolSummaries: [],
+        run: { id: 10, status: 'running', terminal: false },
+      },
+    })
+    expect(wrapper.find('[data-test="thinking-indicator"]').exists()).toBe(false)
+  })
+
   it('终态后不再显示思考指示', () => {
     const wrapper = mount(MessageList, {
       props: {

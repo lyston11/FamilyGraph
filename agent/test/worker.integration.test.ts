@@ -749,13 +749,10 @@ describe("worker full cycle against mock FastAPI", () => {
       tool_name: "familygraph.echo",
       is_error: false,
     });
-    // Assistant texts projected without provider metadata (one per turn).
+    // Assistant texts projected without provider metadata. Turn 1 carries only
+    // a tool call (no prose), so it produces no assistant event at all.
     const assistants = events.filter((e) => e.type === "message.assistant_added");
-    // Turn 1 carries only a tool call (no text), turn 2 the final text.
-    expect(assistants.map((e) => (e.public_payload as { text: string }).text)).toEqual([
-      "",
-      "done",
-    ]);
+    expect(assistants.map((e) => (e.public_payload as { text: string }).text)).toEqual(["done"]);
     expect(JSON.stringify(events)).not.toContain("openai-completions");
   }, 30000);
 
