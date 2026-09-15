@@ -60,10 +60,30 @@
 **Why**：报错要"可行动"而不是纯描述（09-06 事故：文案让用户去模型设置，但不给路径）；同时把"哪些错误带哪些动作"收敛成白名单，避免 detail 形状泄漏进组件。
 
 **Tests**：`ErrorNotice.spec.ts`（管理员见入口且点击直达 `/spaces/{id}/manage?section=models`、非管理员纯文案、无 action 不渲染、STREAM_LOST 文案回退）。
+
 ### Convention: 成员授权投影 stale-while-revalidate
 
 `spaces.loadMembers(spaceId)` 重校验同一空间时先发请求、成功后整体替换 `members`；在途期间保留旧成员关系，避免管理员入口因瞬时空数组闪断。失败必须保留旧投影并设置 `membersError`，调用方可展示失败态；路由守卫仍以本次请求结果 fail-closed。跨空间切换清空旧授权上下文，守卫刷新目标空间时传 `setCurrentSpace: false`，不得改写 `currentSpaceId`。
 
+
+## 管家建议投影在通知中心的接线（09-15 suggestion-loop）
+
+### Convention: 通知中心「待核实」= 通知引用行 ∪ 活跃建议投影
+
+**What**：`NotificationsView.vue` 的「待核实」分区同时渲染两个来源：
+1. 既有：`classifyNotification` 判为 `verify` 的通知行（`steward_suggestion` 且 `domain_status ∈ {pending, accepted}`）；
+2. 新增：`stewardSuggestions.activeForSpace(spaceId)` 的活跃建议投影——覆盖 `notify=False` 的 `term_preference`，它们**永远不会有通知行**，只靠 ① 就在通知中心完全不可见（09-15 实测 535 条建议因此只在打开对应人物资料时可见）。
+
+**Why**：`3c2daac` 已让视图 `suggestions.load()`，但 `activeForSpace` 全项目零引用——模板从不渲染其结果。加载了却不渲染，等于"管家没起作用"。
+
+**规则**：
+- **去重范围是全部通知行**，不是只有 `verify` 分区。一条已归入历史（`domain_status=done`）的通知也会让同一 `suggestion_id` 出现在页面上两次。按 `item.suggestion?.suggestion_id` 建 Set，对全部 `page.items` 过滤。
+- `activeForSpace` **兑现其名称承诺**：只返回 `state ∈ SUGGESTION_ACTIVE_STATES`（`proposed`/`submitted`，与后端 `app/models/steward_suggestion.py` 同口径）。`superseded`/`expired`/`resolved` 不进「待核实」（后端列表本身是"可回看"语义，过滤在渲染点做，不改后端返回集合）。
+- 建议投影行**不携带通知载体**，因此**不标记已读**（不调 `markRead`），只提供「查看详情」；通知行仍走 `openSuggestion`（含已读 + `openSuggestionById`）。两者共用同一个 `SuggestionReviewDialog`。
+- 行内取值按 kind 分派：`term_preference` 取 `value.term`（`presentation.summary` 对它是通用文案），`relation_proposal` 用服务端方向化的 `presentation.summary`。与 `KinshipTermPanel` 同口径。
+- 空态条件是「通知引用行与建议投影行皆空」。
+
+**Tests**：`views/__tests__/notifications.spec.ts`（投影行渲染与详情接线、`value.term` 优先于通用 summary、同一 id 双来源只渲染一次、已归历史的通知同样参与去重、非活跃状态过滤）、`stores/__tests__/stewardSuggestions.spec.ts`（`activeForSpace` 状态过滤）。
 
 ## 渐进 PFV 的版本与展示期限（09-13 / 0045）
 

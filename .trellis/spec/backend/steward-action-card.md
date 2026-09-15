@@ -147,6 +147,12 @@ request_lineage_membership(
 - `StewardSuggestion`（origin= deterministic|model；kind 仅 relation_proposal|term_preference|identity_duplicate|missing_information；evidence_json 只存允许 ID/revision；evidence_hash 去重键 = space/kind/有向端点/结构化值/证据哈希，**不含模型措辞**）+ `StewardSuggestionRecipient`（per-recipient dismissed/read/cooldown）。
 - 关系建议 submit → 202 `{suggestion, linked_proposal, pending_confirmations}`，只生成 proposed SourceFact（provenance=agent_proposal）；确认走 `commands/relationship_proposals.py`，确认人 = 端点本人 ∪ 合法代管，**空间 owner 非端点永远不能代确认**；路由禁止直接调 `transition_source_fact`。term_preference 仅本人提交并调既有个人词命令。identity_duplicate/missing_information v1 无 submit。
 - 通知复用现有 Notification（suggestion_id FK，唯一 recipient×space×suggestion，固定模板标题、状态实时投影）；未验证 rationale 绝不进通知/列表。
+- `term_preference` 的 TTL 与通知是**刻意关闭**的，不要"补上"（2026-09-15 实测 535 条全 `expires_at=NULL`、全 `proposed`，一度被误判为遗漏）：
+  - `steward_terminology.py` 在 `upsert_suggestion` 之后显式 `suggestion.expires_at = None`，注释写明可选偏好由**证据变化与显式反馈**退役，而非定时器；普通 kind 仍走 `default_expires_at`。
+  - 该 kind 以 `notify=False` 写入（可选偏好，不产生逐条待办），因此**不存在刷屏**；`term_preference` 的通知打开会一次性产生每人 N 条通知，禁止。
+  - **不要给它加 TTL**：`steward_terminology.py` 的历史去重查询不带 `status` 过滤，`expired` 行会**永久挡住重建**（无恢复路径）；而同一"挡住"对 `resolved` 是刻意保护（"恢复过/保留过的建议不重生"，见该处注释）。两者无法用同一条件区分，属需单独设计的实质行为变更。
+- 建议列表是"可回看"语义：`superseded`/`expired` 行仍可被 `open_details` 打开。需要"当前待处理"视图的调用方必须自己按 `SUGGESTION_ACTIVE_STATES`（`app/models/steward_suggestion.py`，= `("proposed", "submitted")`）过滤，不要改 `list_suggestions_page` 的返回集合。
+- `term_preference` 的可读值在 `value_json["term"]`；`presentation.summary` 对它是**通用文案**（"可选的称谓偏好建议，无需处理"），不是叫法。读取方（如前端行内展示）必须取 `value.term`。
 
 ## 可观测性与脱敏（09-11 release-observability）
 

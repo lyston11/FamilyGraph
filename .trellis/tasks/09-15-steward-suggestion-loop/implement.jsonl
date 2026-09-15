@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 按空间保存服务端授权投影、epoch 丢弃旧响应、无乐观更新"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "视图分区渲染与展示组件边界"}
