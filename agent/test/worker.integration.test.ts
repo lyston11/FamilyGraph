@@ -1269,6 +1269,29 @@ describe("worker full cycle against mock FastAPI", () => {
     ]);
   }, 30000);
 
+  it("fails when no completed answer exists at all (turn ended aborted without a sidecar abort)", async () => {
+    resetState();
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
+    // Pi can end the loop with a message that is neither stop nor length while
+    // the sidecar never initiated an abort (e.g. the server-side cancellation
+    // was not observed). No final answer was produced, so success is a lie.
+    const aborted: AssistantMessage[] = [
+      { ...textTurn("")[0]!, stopReason: "aborted", errorMessage: "aborted" },
+    ];
+    const { worker } = makeWorker(undefined, await buildSessionFactory([aborted]));
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    expect(state.settles).toEqual([
+      {
+        run_id: runKey,
+        status: "failed",
+        error_code: "PROVIDER_EMPTY_ANSWER",
+        error: { message: "model completed the run without returning any answer text" },
+      },
+    ]);
+  }, 30000);
+
   it("returns false when queue is empty (HTTP 204)", async () => {
     resetState();
     const { worker } = makeWorker();
