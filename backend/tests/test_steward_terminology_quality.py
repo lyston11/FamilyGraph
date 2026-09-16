@@ -68,6 +68,54 @@ def _model_grandmother_term(db_session, space):
     )
 
 
+def _nephew_family(db_session):
+    """本人—父亲—兄弟—侄子：resolver 产出展开式 `Um-Dm-Dm`，内置词按 `Bm-Dm` 编码。"""
+    space = _space(db_session, "nephew-autonomy", kind="household")
+    viewer = _person(db_session, space.id, "nep-viewer", gender="m")
+    father = _person(db_session, space.id, "nep-father", gender="m")
+    brother = _person(db_session, space.id, "nep-brother", gender="m")
+    nephew = _person(db_session, space.id, "nep-nephew", gender="m")
+    _confirm(db_session, "biological_parent", father.id, viewer.id, space_id=space.id)
+    _confirm(db_session, "biological_parent", father.id, brother.id, space_id=space.id)
+    _confirm(db_session, "biological_parent", brother.id, nephew.id, space_id=space.id)
+    account_id = _account_id(db_session, viewer)
+    personal_family_view.initialize_account_views(
+        db_session, account_id=account_id, user_id=viewer.id
+    )
+    db_session.commit()
+    return space, viewer, nephew
+
+
+def test_expanded_sibling_path_shows_named_term_without_any_approval(db_session):
+    """AC1：真实 job 发布后，查看者直接看到“侄子”，全程零称谓批准操作。
+
+    这条路径此前只显示“兄弟的儿子”（registry 按折叠式编码，resolver 产出展开式）。
+    改善必须由确定性规则自动生效，不依赖建议提交、通知或用户点击。
+    """
+    from app.models.steward_suggestion import StewardSuggestion
+
+    space, viewer, nephew = _nephew_family(db_session)
+    account_id = _account_id(db_session, viewer)
+    _drain(db_session, space)
+    payload = personal_family_view.current_view_payload(
+        db_session, account=db_session.get(Account, account_id), space_id=space.id
+    )
+    assert payload["status"] == "current"
+    edge = next(e for e in payload["edges"] if e["to_user_id"] == nephew.id)
+    assert edge["term"] == "侄子"
+    # 用户什么都没做：既没有待处理建议，也没有同值自我推荐。
+    assert (
+        db_session.scalar(
+            select(StewardSuggestion.id).where(
+                StewardSuggestion.space_id == space.id,
+                StewardSuggestion.kind == "term_preference",
+                StewardSuggestion.value_json["term"].as_string() == "侄子",
+            )
+        )
+        is None
+    )
+
+
 def test_deterministic_term_refreshes_family_view_without_read_side_writes(db_session):
     space, gc, _mom, gm = _grandchild_family(db_session)
     _drain(db_session, space)

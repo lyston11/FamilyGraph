@@ -192,16 +192,20 @@ def allowed_terms(
     allowed = {resolved.term} if resolved.term else set()
     if resolved.source_level in (terms.TERM_LEVEL_PERSONAL, terms.TERM_LEVEL_SPACE):
         return allowed
-    lookup_codes = {concept_code, *terms.concept_code_aliases(concept_code)}
+    aliases = set(terms.concept_code_aliases(concept_code))
     allowed.update(
         text
         for level, locale, code, text in BUILTIN_TERM_SEEDS
-        if code in lookup_codes and (level == "system" or locale == registry.locale)
+        if code in ({concept_code} | aliases) and (level == "system" or locale == registry.locale)
     )
     allowed.update(
         row.term
         for row in registry.entries
-        if row.concept_code in lookup_codes and row.level in ("system", "locale", "space")
+        # 原码贡献全部层级；别名码只贡献 locale/system——与显示路径
+        # `terms._registry_alias_term` 同口径，否则别的原码上的 space 自定义词
+        # 会经模型写回被应用到本路径（模型可绕过显示层的层级约束）。
+        if (row.concept_code == concept_code and row.level in ("system", "locale", "space"))
+        or (row.concept_code in aliases and row.level in ("system", "locale"))
     )
     if variant_context is not None:
         variant = terms._sibling_variant_term(concept_code, variant_context)

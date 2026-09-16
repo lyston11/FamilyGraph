@@ -19,7 +19,7 @@ from app.models.steward import (
     StewardTermProjection,
     StewardTermSuppression,
 )
-from app.models.term_registry import TermUsage
+from app.models.term_registry import TermEntry, TermUsage
 from app.services import (
     personal_family_view,
     steward_runtime,
@@ -335,3 +335,38 @@ def test_pure_display_needs_no_database_and_deterministic_term_survives_model_di
     )
     # Publication is fenced after an output change until the successor is ready.
     assert payload["status"] != "current"
+
+
+def test_alias_lookup_never_widens_space_or_personal_terms(db_session):
+    """别名码只贡献 locale/system 词；space/personal 词严格绑定原码。
+
+    显示路径 (`terms._registry_alias_term`) 已有此约束；模型的 allowed_terms
+    必须同口径，否则模型可把别的原码上的空间自定义词经写回应用到本路径。
+    """
+    space, viewer, _mother, grandmother = _grandchild_family(db_session)
+    account_id = _account_id(db_session, viewer)
+    # Um-Dm-Dm 的显示词来自别名码 Bm-Dm（侄子）；给 Bm-Dm 放一个空间词。
+    db_session.add(
+        TermEntry(
+            concept_code="Bm-Dm",
+            level="space",
+            space_id=space.id,
+            owner_account_id=None,
+            locale=None,
+            term="阿宝",
+            status="active",
+            revision=1,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+    )
+    db_session.commit()
+    registry = terms.load_term_snapshot(db_session, account_id=account_id, space_id=space.id)
+    # 显示层已按约束返回 locale 词，而不是空间词。
+    assert terms._resolve_registry_code(registry, "Um-Dm-Dm").term == "侄子"
+    # 别名码上的空间词不得进入本原码的模型词表。
+    allowed = steward_terminology_snapshot.allowed_terms(registry, concept_code="Um-Dm-Dm")
+    assert "侄子" in allowed
+    assert "阿宝" not in allowed
+    # 原码自己的空间词仍然有效（只限制别名码的贡献层级）。
+    assert "阿宝" in steward_terminology_snapshot.allowed_terms(registry, concept_code="Bm-Dm")
