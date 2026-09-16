@@ -86,15 +86,13 @@ describe("mapSessionEvent", () => {
     ]);
   });
 
-  it("keeps an empty answer without tool calls (boundary of the filter)", () => {
+  it("drops an empty answer without tool calls (no displayable content)", () => {
     expect(
       mapSessionEvent({
         type: "message_end",
         message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "stop" },
       }),
-    ).toEqual([
-      { type: "message.assistant_added", public_payload: { role: "assistant", text: "" } },
-    ]);
+    ).toEqual([]);
   });
 
   it("ignores user-role message_end and streaming updates", () => {

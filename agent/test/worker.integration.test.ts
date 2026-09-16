@@ -1139,6 +1139,92 @@ describe("worker full cycle against mock FastAPI", () => {
     10000,
   );
 
+  it("settles failed with PROVIDER_EMPTY_ANSWER when the model returns no answer text", async () => {
+    resetState();
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
+    const { worker } = makeWorker(undefined, await buildSessionFactory([textTurn("")]));
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    // A run without an answer is a failure, not a silent success.
+    expect(state.settles).toEqual([
+      {
+        run_id: runKey,
+        status: "failed",
+        error_code: "PROVIDER_EMPTY_ANSWER",
+        error: { message: "model completed the run without returning any answer text" },
+      },
+    ]);
+    // No blank assistant row is persisted (it would replay as empty history).
+    const events = state.eventsByRun.get(runKey) ?? [];
+    expect(events.filter((e) => e.type === "message.assistant_added")).toHaveLength(0);
+    const terminal = events[events.length - 1]!;
+    expect(terminal.type).toBe("run.failed");
+    expect(terminal.public_payload).toMatchObject({ error_code: "PROVIDER_EMPTY_ANSWER" });
+  }, 30000);
+
+  it("does not accept tool-turn prose as the final answer", async () => {
+    resetState();
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
+    const proseToolTurn: AssistantMessage[] = [
+      assistantMessage({
+        content: [
+          { type: "text", text: "let me check" },
+          {
+            type: "toolCall",
+            id: "tc_prose",
+            name: providerWireName("familygraph.echo"),
+            arguments: { text: "ping" },
+          },
+        ],
+        api: "openai-completions",
+        provider: "cloud",
+        model: "test-model",
+        usage,
+        stopReason: "toolUse",
+        timestamp: Date.now(),
+      }),
+    ];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([proseToolTurn, textTurn("")]),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    // The prose tool turn is reported, but the empty stop message that follows
+    // it is the final answer, and it carries nothing.
+    expect(state.toolCalls).toHaveLength(1);
+    const events = state.eventsByRun.get(runKey) ?? [];
+    expect(
+      events
+        .filter((e) => e.type === "message.assistant_added")
+        .map((e) => (e.public_payload as { text: string }).text),
+    ).toEqual(["let me check"]);
+    expect(state.settles).toEqual([
+      {
+        run_id: runKey,
+        status: "failed",
+        error_code: "PROVIDER_EMPTY_ANSWER",
+        error: { message: "model completed the run without returning any answer text" },
+      },
+    ]);
+  }, 30000);
+
+  it("keeps settling succeeded when the truncated final answer still has text", async () => {
+    resetState();
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
+    const truncated: AssistantMessage = { ...textTurn("partial answer")[0]!, stopReason: "length" };
+    const { worker } = makeWorker(undefined, await buildSessionFactory([[truncated]]));
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    // Truncation is a partial answer, not an empty one: no regression.
+    expect(state.settles).toEqual([
+      { run_id: runKey, status: "succeeded", error_code: undefined, error: undefined },
+    ]);
+  }, 30000);
+
   it("returns false when queue is empty (HTTP 204)", async () => {
     resetState();
     const { worker } = makeWorker();

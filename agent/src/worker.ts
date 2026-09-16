@@ -16,7 +16,7 @@
 import type { InternalClient, LeasedJob } from "./client.js";
 import type { AgentConfig } from "./config.js";
 import { redactErrorText } from "./redact.js";
-import { RunEventBuffer, type FgEvent } from "./events.js";
+import { RunEventBuffer, extractText, type FgEvent } from "./events.js";
 import type { Logger } from "./logger.js";
 import { buildRunSession } from "./session.js";
 import { peekRunTokenClaims } from "./tokens.js";
@@ -204,10 +204,19 @@ export class SidecarWorker {
       const lastAssistantError: {
         current: { stopReason: string; errorMessage?: string } | null;
       } = { current: null };
+      // Text of the last completed assistant message: the run's final answer.
+      // Kept separate from the error tracker so neither branch changes the
+      // other's reset conditions.
+      const lastAssistantText: { current: string | null } = { current: null };
       session.subscribe((event) => {
         const raw = event as {
           type?: string;
-          message?: { role?: string; stopReason?: string; errorMessage?: string };
+          message?: {
+            role?: string;
+            stopReason?: string;
+            errorMessage?: string;
+            content?: unknown;
+          };
         };
         // Pi can compact and retry within one prompt(). Keep a provider failure
         // unresolved until a later assistant reply fully completes; partial
@@ -239,6 +248,19 @@ export class SidecarWorker {
                 ? String((raw as { error?: { errorMessage?: unknown } }).error?.errorMessage)
                 : "provider stream ended in error",
           };
+        }
+        // The final answer is the LAST generation that completed: stop (full
+        // answer) or length (truncated, still has prose). toolUse is not an
+        // answer and is superseded by the turn that follows it; error is owned
+        // by the branch above; aborted is adjudicated server-side. Later
+        // messages overwrite earlier ones, so a prose tool turn followed by an
+        // empty stop message correctly leaves the run without an answer.
+        if (
+          raw.type === "message_end" &&
+          raw.message?.role === "assistant" &&
+          (raw.message.stopReason === "stop" || raw.message.stopReason === "length")
+        ) {
+          lastAssistantText.current = extractText(raw.message.content);
         }
         events.onSessionEvent(event as { type: string });
       });
@@ -305,6 +327,19 @@ export class SidecarWorker {
           message,
         });
         log.warn("run settled failed: provider stream error", { message });
+        return;
+      }
+      // No usable answer: the model completed its turn without producing any
+      // prose. Settling succeeded would leave the user with neither an answer
+      // nor an explanation.
+      if (lastAssistantText.current === null || lastAssistantText.current.length === 0) {
+        const message = "model completed the run without returning any answer text";
+        await this.flushEvents(job.run_id, job.run_token, events.drain(), active.abort.signal);
+        await this.client.settleRun(job.run_id, job.run_token, "failed", {
+          code: "PROVIDER_EMPTY_ANSWER",
+          message,
+        });
+        log.warn("run settled failed: empty final answer", { message });
         return;
       }
       // Terminal event (run.settled) is written by the backend /settle handler;

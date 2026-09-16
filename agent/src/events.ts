@@ -119,7 +119,12 @@ type SessionEventLike = {
   [key: string]: unknown;
 };
 
-function extractText(content: unknown): string {
+/**
+ * Concatenate the text blocks of a Pi message content array. Exported because
+ * the worker reuses this exact predicate to decide whether a run produced an
+ * answer; two copies would drift.
+ */
+export function extractText(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content
     .filter(
@@ -181,19 +186,12 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
     case "message_end": {
       if (event.message?.role !== "assistant") return [];
       const text = extractText(event.message.content);
-      // A turn that carries only tool calls has no prose to show the user: the
-      // tool calls themselves are reported by tool.execution.started/completed.
-      // The judgement states the intent ("this message only carries tool
-      // calls") instead of enumerating provider stopReason values.
-      const hasToolCall =
-        Array.isArray(event.message.content) &&
-        event.message.content.some(
-          (block) =>
-            typeof block === "object" &&
-            block !== null &&
-            (block as { type?: unknown }).type === "toolCall",
-        );
-      if (text.length === 0 && hasToolCall) return [];
+      // An empty assistant message has nothing to show the user, whatever the
+      // stop reason: a tool-only turn is already reported by
+      // tool.execution.started/completed, and an empty final answer has no
+      // content at all. Emitting it would persist a blank assistant row (later
+      // replayed as empty history) and render a blank bubble.
+      if (text.length === 0) return [];
       return [
         {
           type: "message.assistant_added",
