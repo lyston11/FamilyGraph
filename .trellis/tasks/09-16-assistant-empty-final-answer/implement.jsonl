@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "事件类型注册表、sidecar 映射与结算契约：message.assistant_added 投影边界、工具 turn 过滤的既有判据、终态由谁裁决"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误码分层约定：sidecar 运行期错误码不在 backend/app/errors.py 注册，只在前端文案表与 spec 登记"}
+{"file": ".trellis/spec/frontend/action-card.md", "reason": "助手消息 card_ids/card_refs 解析与渲染：R3 只隐藏空气泡、不得丢弃结构化卡片引用"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件与测试约定：MessageList 气泡结构、data-test 断言风格、可访问性基线（sr-only 与气泡同条件）"}
