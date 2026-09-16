@@ -240,12 +240,6 @@ def candidate_terms(
     return allowed
 
 
-def lookup_concept_codes(registry: terms.TermSnapshot, *, concept_code: str) -> set[str]:
-    """实施版本哈希时使用的查词闭包：原码 + 全部前缀 + 各自安全别名。"""
-    _ = registry
-    return terms.concept_lookup_codes(concept_code)
-
-
 def _registry_hash(registry: terms.TermSnapshot, concept_codes: set[str]) -> str:
     rows = [
         (row.id, row.revision, row.concept_code, row.term)
@@ -345,7 +339,9 @@ def current_target_context(
         ),
         None,
     )
-    lookup_codes = lookup_concept_codes(snapshot.terms, concept_code=concept)
+    # 查词闭包（原码 + 逐级前缀 + 各自安全别名）必须进语义哈希：别名命中会改变
+    # allowed/baseline，只哈希原码前缀会让改词后旧投影仍被判为同一语义。
+    lookup_codes = terms.concept_lookup_codes(concept)
     semantic = _hash(
         [
             snapshot.terminology.rule_version,

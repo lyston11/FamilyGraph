@@ -66,26 +66,37 @@ def _seed_wrong_rows(engine) -> None:
 
 
 def _seed_user_rows(engine) -> None:
-    """写入一条 personal 与一条 space 词条，断言迁移不碰用户数据。"""
+    """写入 personal/space 词条，断言迁移不碰用户数据。
+
+    其中刻意让用户词条文本**等于旧错误文本**（例如用户自己就把 `Sf-Bm` 叫
+    "丈夫的兄弟"）：这样 level/归属过滤才是被真正断言的——只按 concept_code 与
+    term 文本匹配的实现会静默改写用户叫法并推进 revision。
+    """
+    rows = (
+        # (concept_code, level, space_id, owner, term)
+        ("Sm-Bm", "personal", None, 1, "我的叫法"),
+        ("Sm-Bm", "space", 1, None, "空间叫法"),
+        ("Sf-Bm", "personal", None, 1, "丈夫的兄弟"),  # == Sf-Bm 的旧错误文本
+        ("Sm-Bf", "space", 1, None, "妻子的姐妹"),  # == Sm-Bf 的旧错误文本
+    )
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO term_entries "
-                "(concept_code, level, space_id, owner_account_id, locale, term, status, "
-                "revision, created_at, updated_at) "
-                "VALUES ('Sm-Bm', 'personal', NULL, 1, NULL, '我的叫法', 'active', 3, "
-                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        for code, level, space_id, owner, term in rows:
+            connection.execute(
+                text(
+                    "INSERT INTO term_entries "
+                    "(concept_code, level, space_id, owner_account_id, locale, term, "
+                    "status, revision, created_at, updated_at) "
+                    "VALUES (:code, :level, :space_id, :owner, NULL, :term, 'active', 3, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "code": code,
+                    "level": level,
+                    "space_id": space_id,
+                    "owner": owner,
+                    "term": term,
+                },
             )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO term_entries "
-                "(concept_code, level, space_id, owner_account_id, locale, term, status, "
-                "revision, created_at, updated_at) "
-                "VALUES ('Sm-Bm', 'space', 1, NULL, NULL, '空间叫法', 'active', 5, "
-                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-            )
-        )
 
 
 def _spouse_rows(engine) -> dict[str, tuple[str, int]]:
