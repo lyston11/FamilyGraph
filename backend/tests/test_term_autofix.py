@@ -469,7 +469,7 @@ def test_pfv_golden_terms_from_screenshot(db_session) -> None:
 
 def test_pfv_computation_version_bumped(db_session) -> None:
     """版本化发布升级计算合同，旧称谓缓存不能直接充当当前完整结果。"""
-    assert personal_family_view.COMPUTATION_VERSION == "pfv-v4"
+    assert personal_family_view.COMPUTATION_VERSION == "pfv-v5-term-alias"
 
 
 def test_compose_resolution_view_sibling_terms(db_session) -> None:

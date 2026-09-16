@@ -706,7 +706,12 @@ def test_valid_term_can_be_kept_and_targets_the_relative(db_session):
     assert _detail(db_session, space, viewer, suggestion)["value"]["can_restore"] is False
 
 
-def test_real_job_long_chain_baseline_can_be_kept_without_override(client, db_session):
+def test_real_job_long_chain_baseline_creates_no_self_recommendation(client, db_session):
+    """R4：derived baseline 与用户当前所见相同时，不得生成无信息量建议。
+
+    历史行为是把 baseline 本身作为 shorter_chain 建议（"建议你叫【你当前看到的】"）。
+    这里断言修复后不再产生建议，而用户仍可主动改口（见 set_personal_term 部分）。
+    """
     viewer, space = create_agent_fixture(db_session, name="sq-long-chain")
     ancestors = [_member(db_session, space, f"sq-long-ancestor-{index}", "m") for index in range(5)]
     for parent, child in zip(ancestors, [viewer, *ancestors[:-1]], strict=True):
@@ -734,7 +739,9 @@ def test_real_job_long_chain_baseline_can_be_kept_without_override(client, db_se
     )
     assert projection is not None
     assert projection.baseline_source == "derived"
+    # 投影行保留（模型重试/已检查水位等服务端元数据挂靠其上）...
     assert projection.status == "unchanged" and projection.term is None
+    # ...但不得因此产生用户可见的同值建议（R4 修复的核心）。
     suggestion = db_session.scalar(
         select(StewardSuggestion).where(
             StewardSuggestion.viewer_account_id == viewer.account.id,
@@ -742,40 +749,33 @@ def test_real_job_long_chain_baseline_can_be_kept_without_override(client, db_se
             StewardSuggestion.kind == "term_preference",
         )
     )
-    assert suggestion is not None
-    headers = _login_header(client, viewer.name)
-    response = client.get(
-        f"/api/steward-suggestions/{suggestion.id}", params={"space_id": space.id}, headers=headers
-    )
-    assert response.status_code == 200
-    detail = response.json()
-    assert detail["state"] == "proposed"
-    assert detail["value"]["can_restore"] is False
-    assert detail["presentation"]["term"] == projection.baseline_term
-    assert detail["presentation"]["term_source_level"] == "derived"
-    assert "submit" in detail["allowed_actions"]
-    baseline_term = projection.baseline_term
-    response = client.post(
-        f"/api/steward-suggestions/{suggestion.id}/submit",
-        params={"space_id": space.id},
-        headers={**headers, "Idempotency-Key": "keep-long-chain"},
-        json={
-            "expected_revision": detail["revision"],
-            "evidence_hash": detail["evidence_hash"],
-            "confirm": True,
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["linked_preference"]["term"] == baseline_term
-    db_session.expire_all()
-    preference = terms.resolve_term(
+    assert suggestion is None
+    assert len(db_session.scalars(select(SourceFact)).all()) == len(ancestors)
+
+    # R3 保留用户主动选择的入口：改口仍直接写个人词条并用于显示。
+    baseline = terms.resolve_term_or_structural(
         db_session,
         account_id=viewer.account.id,
         space_id=space.id,
-        concept_code=projection.concept_code,
+        concept_code="Um-Um-Um-Um",
+        structural_description="结构描述",
     )
-    assert preference.term == baseline_term and preference.source_level == "personal"
-    assert len(db_session.scalars(select(SourceFact)).all()) == len(ancestors)
+    terms.set_personal_term(
+        db_session,
+        account_id=viewer.account.id,
+        space_id=space.id,
+        concept_code="Um-Um-Um-Um",
+        term="老老太爷",
+    )
+    db_session.commit()
+    personal = terms.resolve_term(
+        db_session,
+        account_id=viewer.account.id,
+        space_id=space.id,
+        concept_code="Um-Um-Um-Um",
+    )
+    assert personal.term == "老老太爷" and personal.source_level == "personal"
+    assert personal.term != baseline["term"]
 
 
 @pytest.mark.parametrize("operation", ["keep", "restore"])

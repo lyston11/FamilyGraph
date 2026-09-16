@@ -50,7 +50,7 @@ from app.services import steward_snapshot, steward_terminology_snapshot, terms
 from app.services.steward_snapshot import SnapshotChanged, ViewerInput
 from app.utils.timeutil import utcnow
 
-RULE_VERSION = "terminology-v2"
+RULE_VERSION = "terminology-v3-alias-safe"
 PROMPT_VERSION = "terminology-prompt-v2"
 
 REASON_SYNONYM = "synonym"
@@ -779,7 +779,10 @@ def _apply_target(
     baseline = target["baseline_term"]
     preferred = target["preferred_term"]
     override = preferred if preferred and preferred != baseline else None
-    suggestion_term = override or (baseline if baseline_source == "derived" else None)
+    # 只有用户自己的叫法（override）才值得记为可固定/可恢复的偏好。
+    # 曾经的 derived baseline 同值建议（"建议你叫【你当前看到的】"）没有信息量，
+    # 与 R4「没有更好叫法不生成建议」冲突，已移除；baseline 改善本就自动用于显示。
+    suggestion_term = override
     previous = db.scalar(
         select(StewardTermProjection).where(
             StewardTermProjection.space_id == job.space_id,
@@ -790,7 +793,9 @@ def _apply_target(
     )
     # A baseline-only locale/system/structural row changes nothing. Model discovery
     # operates from published targets and can create its projection when needed.
-    if previous is None and override is None and suggestion_term is None:
+    # derived 仍然建立绑定语义身份的投影行（模型重试/已检查水位需要它），
+    # 只是不再因此产生用户可见的同值建议。
+    if previous is None and override is None and baseline_source != "derived":
         return {"projections": 0, "suggestions": 0, "changed": False}
     had_override = previous is not None and previous.term is not None
     projection, changed = upsert_projection(
@@ -820,7 +825,7 @@ def _apply_target(
             projection_id=projection.id,
             projection_revision=projection.revision,
             semantic_hash=target["semantic_hash"],
-            reason_code=REASON_PREFERRED_USAGE if override else REASON_SHORTER_CHAIN,
+            reason_code=REASON_PREFERRED_USAGE,
             policy_version=job.policy_version,
             origin="deterministic",
             now=now,

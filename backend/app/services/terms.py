@@ -72,7 +72,7 @@ SOURCE_LEVEL_STRUCTURAL = "structural"
 
 # 空间 locale 配置扩展点：v2 空间模型尚无 locale 列，恒用默认包
 DEFAULT_SPACE_LOCALE = "zh-CN"
-PRESENTATION_RULE_VERSION = "terms-v2-subtype-safe"
+PRESENTATION_RULE_VERSION = "terms-v3-alias-safe"
 
 # 晋升门槛：≥2 个不同合格账号的使用证据（KI-4）
 PROMOTION_MIN_ACCOUNTS = 2
@@ -263,6 +263,34 @@ def _registry_term_from_snapshot(snapshot: TermSnapshot, concept_code: str) -> T
     return snapshot.resolved.get(code, TermResolution(None, None, None))
 
 
+def _registry_alias_term(snapshot: TermSnapshot, aliases: list[str]) -> TermResolution:
+    """安全等价别名只在 locale/system 词表命中。
+
+    不把另一个原码上的 personal/space 自定义词的作用范围悄悄扩到这里；
+    调用方总是先查原码（四级优先级不变），所以本函数只在原码四级全未命中时生效。
+    """
+    candidates = [
+        entry
+        for entry in snapshot.entries
+        if entry.concept_code in aliases and entry.level in (TERM_LEVEL_LOCALE, TERM_LEVEL_SYSTEM)
+    ]
+    if not candidates:
+        return TermResolution(None, None, None)
+    best = min(candidates, key=lambda entry: (_LEVEL_ORDER[entry.level], entry.id))
+    return TermResolution(best.term, best.level, best.id)
+
+
+def _resolve_registry_code(snapshot: TermSnapshot, concept_code: str) -> TermResolution:
+    """精确码优先；未命中时按安全等价别名查 locale/system 词表。"""
+    resolved = _registry_term_from_snapshot(snapshot, concept_code)
+    if resolved.term is not None:
+        return resolved
+    aliases = concept_code_aliases(concept_code)
+    if not aliases:
+        return resolved
+    return _registry_alias_term(snapshot, aliases)
+
+
 def resolve_term(
     session: Session,
     *,
@@ -276,10 +304,15 @@ def resolve_term(
     绝不静默使用其他概念的词条。
     """
     code = validate_concept_code(concept_code)
+    # 按需路径必须与 Steward 全量 snapshot 同口径：加载别名闭包（含逐级前缀），
+    # 否则会出现「实时 API 无词、后台全量有词」的不一致。
     snapshot = _load_term_snapshot(
-        session, account_id=account_id, space_id=space_id, concept_codes={code}
+        session,
+        account_id=account_id,
+        space_id=space_id,
+        concept_codes=concept_lookup_codes(code),
     )
-    return _registry_term_from_snapshot(snapshot, code)
+    return _resolve_registry_code(snapshot, code)
 
 
 def resolve_term_alias(
@@ -840,6 +873,46 @@ def _parse_token(token: str) -> tuple[str, str | None, str | None]:
     return domain, subtype, gender
 
 
+def concept_code_aliases(concept_code: str) -> list[str]:
+    """查词用安全等价码：生物共同父母路径中的相邻 U-D 折叠为同胞码。
+
+    只在「无亚型的 U|Um|Uf」紧邻「无亚型的 D|Dm|Df」时折叠为 B|Bm|Bf（性别取
+    下行目标），每个位置只折叠一次。不跨 S/P/X，不折叠 D-U 或 B-D，不消除未知
+    性别，不引入长幼断言（长幼仍由原始码 + 出生数据判）。
+
+    这是查词用等价表达，不是图改写：原始 concept_code/path/DerivedFact 均不变。
+    返回不含原码的别名，按折叠位置升序。
+    """
+    tokens = concept_code.split("-")
+    aliases: list[str] = []
+    for index in range(len(tokens) - 1):
+        parent_domain, parent_subtype, _ = _parse_token(tokens[index])
+        child_domain, child_subtype, child_gender = _parse_token(tokens[index + 1])
+        if parent_domain != "U" or child_domain != "D":
+            continue
+        if parent_subtype is not None or child_subtype is not None:
+            continue
+        aliases.append(
+            "-".join([*tokens[:index], "B" + (child_gender or ""), *tokens[index + 2 :]])
+        )
+    return aliases
+
+
+def concept_lookup_codes(concept_code: str) -> set[str]:
+    """原码、全部逐级前缀及各自安全等价别名的查词闭包。
+
+    `_generalized_term` 的逐级前缀泛化与别名命中都依赖这些码被加载，
+    故按需 snapshot、模型 allowed_terms 与版本哈希必须使用同一闭包。
+    """
+    codes: set[str] = set()
+    tokens = concept_code.split("-")
+    for cut in range(1, len(tokens) + 1):
+        prefix = "-".join(tokens[:cut])
+        codes.add(prefix)
+        codes.update(concept_code_aliases(prefix))
+    return codes
+
+
 # 残链小词表：泛化时把未命名 hop 翻译为「关系词」（「妹夫的父亲」的「父亲」）
 _RESIDUAL_WORDS: dict[tuple[str, str | None, str | None], str] = {
     ("U", None, "m"): "父亲",
@@ -983,7 +1056,7 @@ def _generalized_term(snapshot: TermSnapshot, *, concept_code: str) -> str | Non
         prefix = "-".join(code_tokens[:cut])
         if prefix == "SELF":  # pragma: no cover - SELF 只可能是全码
             continue
-        resolved = _registry_term_from_snapshot(snapshot, prefix)
+        resolved = _resolve_registry_code(snapshot, prefix)
         if resolved.term is None:
             continue
         residual_words: list[str] = []
@@ -1059,12 +1132,11 @@ def resolve_term_or_structural(
         snapshot = TermSnapshot(account_id, space_id, DEFAULT_SPACE_LOCALE, ())
     else:
         code = validate_concept_code(concept_code)
-        tokens = code.split("-")
         snapshot = _load_term_snapshot(
             session,
             account_id=account_id,
             space_id=space_id,
-            concept_codes={"-".join(tokens[:cut]) for cut in range(1, len(tokens) + 1)},
+            concept_codes=concept_lookup_codes(code),
         )
     return resolve_term_from_snapshot(
         snapshot,
@@ -1097,7 +1169,7 @@ def resolve_term_from_snapshot(
             "source_level": SOURCE_LEVEL_STRUCTURAL,
             "entry_id": None,
         }
-    resolved = _registry_term_from_snapshot(snapshot, concept_code)
+    resolved = _resolve_registry_code(snapshot, concept_code)
     if resolved.source_level is not None and resolved.term is not None:
         variant = (
             _sibling_variant_term(concept_code, variant_context)

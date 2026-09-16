@@ -19,7 +19,7 @@ from app.services.steward_guard import candidate_digest
 from app.utils.timeutil import utcnow
 
 PARENT = "0048_steward_terminology_publication"
-HEAD = "0049_steward_candidate_evidence"
+HEAD = "0050_term_alias_spouse_fix"
 _HISTORY_TABLES = (
     "steward_suggestions",
     "steward_suggestion_recipients",
@@ -175,7 +175,9 @@ def test_in_place_upgrade_preserves_legacy_identity_and_all_confirmation_dismiss
         old_indexes = inspect(engine).get_indexes("steward_llm_candidates")
         old_unique = inspect(engine).get_unique_constraints("steward_llm_candidates")
         old_foreign_keys = inspect(engine).get_foreign_keys("steward_llm_candidates")
-        for direction, target in (("upgrade", "head"), ("downgrade", "-1"), ("upgrade", "head")):
+        # 显式目标而非相对偏移：0050 之上再加代后相对走位会撞到 0044 的合并分叉
+        # （"Ambiguous walk"），而本用例的意图始终是跨过 0049 边界回到 PARENT。
+        for direction, target in (("upgrade", "head"), ("downgrade", PARENT), ("upgrade", "head")):
             result = migrate(tmp_path, direction, target, foreign_keys=foreign_keys)
             assert result.returncode == 0, result.stderr
             assert _snapshot(engine) == before
@@ -236,7 +238,7 @@ def test_adopted_attribution_or_versions_refuse_downgrade_without_first_ddl(
                 session.commit()
                 stored = None
         before = _snapshot(engine, schema=True)
-        result = migrate(tmp_path, "downgrade", "-1", foreign_keys=foreign_keys)
+        result = migrate(tmp_path, "downgrade", PARENT, foreign_keys=foreign_keys)
         assert result.returncode != 0 and "retain data and roll forward" in result.stderr
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
         assert _snapshot(engine, schema=True) == before
@@ -263,7 +265,7 @@ def test_ambiguous_relative_deep_downgrade_preserves_entire_schema(tmp_path, for
     engine = migration_engine(tmp_path)
     try:
         before = _snapshot(engine, schema=True)
-        result = migrate(tmp_path, "downgrade", "-2", foreign_keys=foreign_keys)
+        result = migrate(tmp_path, "downgrade", "-3", foreign_keys=foreign_keys)
         assert result.returncode != 0 and "ambiguous" in result.stderr.lower()
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
         assert _snapshot(engine, schema=True) == before

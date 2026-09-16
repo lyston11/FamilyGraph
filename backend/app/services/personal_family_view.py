@@ -60,7 +60,7 @@ from app.services.source_facts import FACT_CONFIRMED
 from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
 from app.utils.timeutil import utcnow
 
-COMPUTATION_VERSION = "pfv-v4"
+COMPUTATION_VERSION = "pfv-v5-term-alias"
 POLICY_VERSION = config.POLICY_VERSION
 
 logger = logging.getLogger(__name__)

@@ -711,31 +711,26 @@ def _current_term_suggestion(
         return None
     suggested_term = value["term"]
     if projection.status == "unchanged":
-        # A deterministic long-chain baseline can be kept without storing a
-        # redundant override. Its projection still binds the semantic identity.
-        if (
-            projection.term is not None
-            or context["baseline_source"] != "derived"
-            or suggested_term != context["baseline_term"]
-            or projection.baseline_term != context["baseline_term"]
-        ):
-            return None
-    else:
-        if projection.term != suggested_term:
-            return None
-        effective = steward_terminology.effective_override(
-            session,
-            account_id=account.id,
-            root_user_id=account.user_id,
-            space_id=suggestion.space_id,
-            target_user_id=suggestion.object_user_id,
-            concept_code=context["concept_code"],
-            baseline_term=context["baseline_term"],
-            baseline_source=context["baseline_source"],
-            path=context["path"],
-        )
-        if effective != suggested_term:
-            return None
+        # 存量纯 baseline 建议（term=NULL、derived 且与当前显示相同）不再作为可操作
+        # 的当前建议：无改善即无信息量，且 baseline 改善本就自动用于显示。
+        # 这里返回 None 使有效态投影为 superseded（退出活跃消费/提交），
+        # 而不删除历史行、不伪造 resolved、不新增 TTL。
+        return None
+    if projection.term != suggested_term:
+        return None
+    effective = steward_terminology.effective_override(
+        session,
+        account_id=account.id,
+        root_user_id=account.user_id,
+        space_id=suggestion.space_id,
+        target_user_id=suggestion.object_user_id,
+        concept_code=context["concept_code"],
+        baseline_term=context["baseline_term"],
+        baseline_source=context["baseline_source"],
+        path=context["path"],
+    )
+    if effective != suggested_term:
+        return None
     return projection, {
         **context,
         "suggested_term": suggested_term,

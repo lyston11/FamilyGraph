@@ -78,6 +78,9 @@ const pendingSuggestions = computed<SuggestionItem[]>(() => {
   )
   return suggestions
     .activeForSpace(currentSpaceId)
+    // 称谓优化由管家自动应用，不是用户待办（R4）：term_preference 不进待核实，
+    // 可选「固定/恢复」入口在人物称谓区。
+    .filter((item) => item.kind !== 'term_preference')
     .filter((item) => item.space_id === currentSpaceId && !notifiedIds.has(item.id))
 })
 

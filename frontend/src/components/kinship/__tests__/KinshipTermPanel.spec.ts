@@ -118,6 +118,8 @@ describe('KinshipTermPanel current viewer and optional preference controls', () 
     expect(suggestionsApi.fetchSuggestions).toHaveBeenCalledWith(7, null, 50, 'term_preference', 2)
     const rows = wrapper.findAll('[data-test="kinship-suggestion"]')
     expect(rows).toHaveLength(3)
+    // 改善已自动生效，这里只是固定/恢复入口，不是待审批的建议。
+    expect(wrapper.find('[data-test="kinship-suggestions"]').text()).toContain('管家已自动优化')
     expect(rows[0]!.find('[data-test="kinship-keep-btn"]').exists()).toBe(true)
     expect(rows[0]!.find('[data-test="kinship-restore-btn"]').exists()).toBe(true)
     expect(rows[1]!.findAll('button')).toHaveLength(0)

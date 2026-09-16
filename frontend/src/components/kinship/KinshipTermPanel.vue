@@ -183,7 +183,7 @@ async function saveCorrection(): Promise<void> {
 
 const callingUsage = ref(false)
 
-// ---- 管家称谓建议（B-R7：可选偏好入口；不逐条待办，无需处理）----
+// ---- 管家称谓自动优化（R3/R4：改善已自动生效；此处只提供固定/恢复，不是待办）----
 
 const termSuggestions = ref<SuggestionItem[]>([])
 const suggestionBusy = ref(false)
@@ -402,9 +402,9 @@ onBeforeUnmount(() => {
         </NButton>
       </div>
 
-      <!-- 管家称谓建议（可选偏好；关闭面板/忽略不等于拒绝） -->
+      <!-- 管家自动优化（已生效；可选固定/恢复，不是审批入口） -->
       <div v-if="termSuggestions.length > 0" class="suggestions" data-test="kinship-suggestions">
-        <p class="suggestions-title">管家建议</p>
+        <p class="suggestions-title">管家已自动优化</p>
         <div
           v-for="item in termSuggestions"
           :key="item.id"

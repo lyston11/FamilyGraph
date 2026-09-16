@@ -61,12 +61,15 @@ def search_config_fingerprint() -> str:
 
 
 def config_fingerprint() -> str:
+    from app.services.personal_family_view import COMPUTATION_VERSION
     from app.services.steward_terminology_snapshot import rules_fingerprint
 
     return canonical_hash(
         {
             "search": search_config_fingerprint(),
-            "presentation": "pfv-v4",
+            # 展示合同必须跟 PFV 的计算版本同源，否则改词义/查词规则后
+            # Steward 代次不会因 presentation 变化而重算。
+            "presentation": COMPUTATION_VERSION,
             "terminology": rules_fingerprint(),
             "terminology_model_enabled": config.STEWARD_ASSIST_TERMINOLOGY,
         }

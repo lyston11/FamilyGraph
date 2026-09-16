@@ -15,7 +15,7 @@ import NotificationsView from '@/views/NotificationsView.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
 import { useAuthStore } from '@/stores/auth'
 import { useSpacesStore } from '@/stores/spaces'
-import type { KinshipPresentation, NotificationsSnapshot, SuggestionItem } from '@/types/api'
+import type { NotificationsSnapshot, SuggestionItem } from '@/types/api'
 import type { ActionCard } from '@/types/actionCard'
 
 vi.mock('@/api/notifications', () => ({
@@ -118,26 +118,6 @@ function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
-}
-
-/** 服务端方向化呈现的最小合法载荷（KinshipPresentation） */
-function presentation(): KinshipPresentation {
-  return {
-    version: 1,
-    availability: 'ready',
-    reference_user_id: 1,
-    target_user_id: 2,
-    subject_user_id: 1,
-    object_user_id: 2,
-    term: '姥姥',
-    term_source_level: 'derived',
-    term_source_label: '推得',
-    summary: '姥姥',
-    relation_state: 'proposal',
-    inferred: false,
-    evidence: { kind: 'unavailable', related_fact_count: null },
-    requires_action: false,
-  }
 }
 
 async function clickDialog(selector: string): Promise<void> {
@@ -514,25 +494,36 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     wrapper.unmount()
   })
 
-  // ---- 待核实分区渲染建议投影（09-15：term_preference 刻意不发通知，
-  //      只渲染通知行会让这类建议在通知中心永远不可见）----
+  // ---- 称谓优化不是待办（09-16 R4）：term_preference 由管家自动应用，
+  //      可选「固定/恢复」入口在人物称谓区，不进通知中心待核实 ----
 
-  it('无对应通知行的建议投影出现在待核实分区并可打开详情', async () => {
+  it('term_preference 投影行不进待核实分区（自动应用，不是用户待办）', async () => {
     mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
     vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
       space_id: 7,
       items: [makeSuggestion(70, { kind: 'term_preference', value: { term: '姥姥' } })],
       next_cursor: null,
     })
+    const wrapper = await mountNotifications()
+    expect(wrapper.findAll('[data-test="verify-suggestion-item"]')).toHaveLength(0)
+    expect(wrapper.find('[data-test="verify-empty"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('关系线索投影行仍在待核实分区并可打开详情', async () => {
+    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
+    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
+      space_id: 7,
+      items: [makeSuggestion(70, { kind: 'relation_proposal' })],
+      next_cursor: null,
+    })
     vi.mocked(suggestionsApi.fetchSuggestionDetail).mockResolvedValue(
-      makeSuggestion(70, { kind: 'term_preference', value: { term: '姥姥' } }),
+      makeSuggestion(70, { kind: 'relation_proposal' }),
     )
     const wrapper = await mountNotifications()
     const rows = wrapper.findAll('[data-test="verify-suggestion-item"]')
     expect(rows).toHaveLength(1)
-    expect(rows[0]!.text()).toContain('称谓偏好')
-    expect(rows[0]!.text()).toContain('姥姥')
-    expect(wrapper.find('[data-test="verify-empty"]').exists()).toBe(false)
+    expect(rows[0]!.text()).toContain('关系线索')
 
     await rows[0]!.trigger('click')
     await flushPromises()
@@ -540,29 +531,6 @@ describe('NotificationsView（PRD §2.6：三分区 + 已读与 ActionCard 严�
     expect(wrapper.findComponent(SuggestionReviewDialog).props('suggestion')?.id).toBe(70)
     // 建议投影行没有通知载体，不得产生已读请求
     expect(mockedMarkRead).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  it('term_preference 行展示 value.term，不拿通用 presentation.summary 当叫法', async () => {
-    // 真实后端形状：term_preference 的 presentation.summary 是通用文案
-    // （「可选的称谓偏好建议，无需处理」），叫法在 value.term。
-    const generic = '可选的称谓偏好建议，无需处理'
-    mockedFetchNotifications.mockResolvedValue(makeSnapshot([], 0))
-    vi.mocked(suggestionsApi.fetchSuggestions).mockResolvedValue({
-      space_id: 7,
-      items: [
-        makeSuggestion(70, {
-          kind: 'term_preference',
-          value: { term: '姥姥' },
-          presentation: { ...presentation(), summary: generic },
-        }),
-      ],
-      next_cursor: null,
-    })
-    const wrapper = await mountNotifications()
-    const row = wrapper.find('[data-test="verify-suggestion-item"]')
-    expect(row.text()).toContain('姥姥')
-    expect(row.text()).not.toContain(generic)
     wrapper.unmount()
   })
 

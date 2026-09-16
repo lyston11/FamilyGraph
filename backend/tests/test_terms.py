@@ -695,6 +695,119 @@ def test_usage_on_locale_word_uses_space_candidate_holder(db_session: Session) -
     assert holder.status == "active"  # 原地激活
 
 
+# ---- 安全等价查词（09-16-steward-terminology-auto-apply）----
+
+
+def test_sibling_alias_finds_existing_terms_across_the_path(db_session: Session) -> None:
+    """父母展开的旁系路径能命中已有内置词，而不是只显示“兄弟的儿子”式长链。
+
+    resolver 产出的是展开式（父亲的儿子），内置词按折叠式（兄弟）编码。
+    查词别名允许安全折叠，路径中段同样生效。
+    """
+    user, space = create_agent_fixture(db_session, name="别名1")
+    cases = {
+        "Um-Dm-Dm": "侄子",
+        "Um-Dm-Df": "侄女",
+        "Um-Um-Dm": "叔伯",
+        "Um-Um-Df": "姑姑",
+        "Um-Bm-Dm": "堂兄弟",
+        "Um-Um-Dm-Dm": "堂兄弟",
+    }
+    for code, expected in cases.items():
+        resolved = terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code=code
+        )
+        assert resolved.term == expected, f"{code} -> {resolved.term}（期望 {expected}）"
+
+
+def test_sibling_alias_rejects_unsafe_folds(db_session: Session) -> None:
+    """不得把非血亲亚型、上下行反向或已有专名的路径错误折叠。"""
+    user, space = create_agent_fixture(db_session, name="别名2")
+    # 半/继/养亚型与未知性别不得被当作普通同胞折叠。
+    for code in ("Uam-Dm", "Usm-Dm", "Uam-Dm-Dm", "Ug-Dm-Dm"):
+        resolved = terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code=code
+        )
+        assert resolved.term is None or "侄" not in str(resolved.term), code
+    # 反向或已有的精确码不应被别名改写语义。
+    grand = terms.resolve_term(
+        db_session, account_id=user.account.id, space_id=space.id, concept_code="Um-Um"
+    )
+    assert grand.term == "爷爷"
+    sibling = terms.resolve_term(
+        db_session, account_id=user.account.id, space_id=space.id, concept_code="Bm"
+    )
+    assert sibling.term == "兄弟"
+
+
+def test_alias_lookup_does_not_shadow_exact_or_personal_terms(db_session: Session) -> None:
+    """精确命中优先于别名；个人词条仍作用于原码，不被别名带到其他码。"""
+    user, space = create_agent_fixture(db_session, name="别名3")
+    father_only = terms.resolve_term(
+        db_session, account_id=user.account.id, space_id=space.id, concept_code="Um-Bm-Dm"
+    )
+    assert father_only.term == "堂兄弟"
+    terms.set_personal_term(
+        db_session,
+        account_id=user.account.id,
+        space_id=space.id,
+        concept_code="Um-Bm-Dm",
+        term="我堂哥",
+    )
+    db_session.commit()
+    exact = terms.resolve_term(
+        db_session, account_id=user.account.id, space_id=space.id, concept_code="Um-Bm-Dm"
+    )
+    assert exact.term == "我堂哥" and exact.source_level == "personal"
+    # 个人词条只绑定 Um-Bm-Dm；别名不得把它顺延到其他原码。
+    other = terms.resolve_term(
+        db_session, account_id=user.account.id, space_id=space.id, concept_code="Um-Um-Dm-Dm"
+    )
+    assert other.term != "我堂哥"
+
+
+def test_spouse_collateral_terms_direction(db_session: Session) -> None:
+    """Sm=丈夫、Sf=妻子：配偶旁系词方向必须与 `Sm-Um`=公公 一致。"""
+    user, space = create_agent_fixture(db_session, name="配偶词")
+    assert (
+        terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code="Sm-Um"
+        ).term
+        == "公公"
+    )
+    assert (
+        terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code="Sf-Um"
+        ).term
+        == "岳父"
+    )
+    assert (
+        terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code="Sm-Bm"
+        ).term
+        == "丈夫的兄弟"
+    )
+    assert (
+        terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code="Sf-Bm"
+        ).term
+        == "妻子的兄弟"
+    )
+    # 展开式同样受益于安全折叠。
+    assert (
+        terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code="Sm-Um-Dm"
+        ).term
+        == "丈夫的兄弟"
+    )
+    assert (
+        terms.resolve_term(
+            db_session, account_id=user.account.id, space_id=space.id, concept_code="Sf-Um-Dm"
+        ).term
+        == "妻子的兄弟"
+    )
+
+
 # ---- 输入校验 ----
 
 

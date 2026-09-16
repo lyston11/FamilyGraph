@@ -183,19 +183,25 @@ def allowed_terms(
     concept_code: str,
     variant_context: terms.VariantContext | None = None,
 ) -> set[str]:
-    resolved = terms._registry_term_from_snapshot(registry, concept_code)
+    """本码可合法显示/建议的全部词：原码优先，再补安全等价别名。
+
+    别名只贡献 locale/system 与内置包词，不把其他原码上的 personal/space
+    自定义词扩到这里（与 terms._registry_alias_term 同口径）。
+    """
+    resolved = terms._resolve_registry_code(registry, concept_code)
     allowed = {resolved.term} if resolved.term else set()
     if resolved.source_level in (terms.TERM_LEVEL_PERSONAL, terms.TERM_LEVEL_SPACE):
         return allowed
+    lookup_codes = {concept_code, *terms.concept_code_aliases(concept_code)}
     allowed.update(
         text
         for level, locale, code, text in BUILTIN_TERM_SEEDS
-        if code == concept_code and (level == "system" or locale == registry.locale)
+        if code in lookup_codes and (level == "system" or locale == registry.locale)
     )
     allowed.update(
         row.term
         for row in registry.entries
-        if row.concept_code == concept_code and row.level in ("system", "locale", "space")
+        if row.concept_code in lookup_codes and row.level in ("system", "locale", "space")
     )
     if variant_context is not None:
         variant = terms._sibling_variant_term(concept_code, variant_context)
@@ -232,6 +238,12 @@ def candidate_terms(
             if len(combined) <= 64:
                 allowed.add(combined)
     return allowed
+
+
+def lookup_concept_codes(registry: terms.TermSnapshot, *, concept_code: str) -> set[str]:
+    """实施版本哈希时使用的查词闭包：原码 + 全部前缀 + 各自安全别名。"""
+    _ = registry
+    return terms.concept_lookup_codes(concept_code)
 
 
 def _registry_hash(registry: terms.TermSnapshot, concept_codes: set[str]) -> str:
@@ -333,7 +345,7 @@ def current_target_context(
         ),
         None,
     )
-    tokens = concept.split("-")
+    lookup_codes = lookup_concept_codes(snapshot.terms, concept_code=concept)
     semantic = _hash(
         [
             snapshot.terminology.rule_version,
@@ -342,9 +354,7 @@ def current_target_context(
             target_user_id,
             concept,
             fact_revisions,
-            _registry_hash(
-                snapshot.terms, {"-".join(tokens[:cut]) for cut in range(1, len(tokens) + 1)}
-            ),
+            _registry_hash(snapshot.terms, lookup_codes),
             root,
             {
                 "policy_version": snapshot.terminology.policy_version,
