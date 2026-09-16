@@ -6,7 +6,7 @@
 #   - uploads/uploads-<时间戳>.tar.gz  附件目录归档
 #   - secrets/familygraph.env          部署密钥副本（chmod 600，私有仓库）
 #
-# 保留策略：30 天轮转。由服务器 systemd 用户定时器 familygraph-db-backup（每小时）无人值守调用。
+# 保留策略：30 天轮转。由服务器 systemd 用户定时器 familygraph-db-backup（每 5 小时）无人值守调用。
 # 数据三处存放：服务器 ↔ GitHub ↔ 本机；单文件 100MB 上限由轮转与附件体积兜底。
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

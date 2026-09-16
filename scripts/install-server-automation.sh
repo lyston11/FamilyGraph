@@ -3,7 +3,7 @@
 #   - familygraph-api.service                : 后端三 listener（8000 家庭 / 8001 agent 内部 / 8002 管理员）
 #   - familygraph-agent.service              : agent sidecar（assistant run 执行器，健康端口 18080）
 #   - familygraph-code-sync.service/.timer   : 每 30 分钟 commit+rebase+push
-#   - familygraph-db-backup.service/.timer   : 每小时备份到 lyston11/familygraph-backups
+#   - familygraph-db-backup.service/.timer   : 每 5 小时备份到 lyston11/familygraph-backups
 #
 # 前置条件：
 #   - backend/.venv 已创建（cd backend && python3 -m venv .venv && pip install -e '.[dev]'）
@@ -125,7 +125,7 @@ WantedBy=timers.target
 EOF
 }
 write_unit "familygraph-code-sync" "*:0/30" "$REPO_ROOT/scripts/server-sync-code.sh"
-write_unit "familygraph-db-backup" "hourly" "$REPO_ROOT/scripts/server-backup.sh"
+write_unit "familygraph-db-backup" "*-*-* 0/5:00:00" "$REPO_ROOT/scripts/server-backup.sh"
 
 systemctl --user daemon-reload
 systemctl --user enable --now familygraph-api.service familygraph-agent.service familygraph-code-sync.timer familygraph-db-backup.timer
