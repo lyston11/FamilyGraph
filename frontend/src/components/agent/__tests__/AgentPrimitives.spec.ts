@@ -358,6 +358,21 @@ describe('MessageList', () => {
     wrapper.unmount()
   })
 
+  it('空正文助手消息不进入 live region 播报（不留「助手回复：」空壳）', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          { id: 1, role: 'user', text: '谁是我的长辈？', createdAt: null, status: 'sent' },
+          { id: 2, role: 'assistant', text: '', createdAt: null, status: 'sent' },
+        ],
+        toolSummaries: [],
+        run: { id: 10, status: 'succeeded', terminal: true },
+      },
+    })
+    expect(wrapper.find('[data-test="live-region"]').text()).toBe('')
+    wrapper.unmount()
+  })
+
   it('空正文用户消息仍渲染气泡（用户消息始终渲染）', () => {
     const wrapper = mount(MessageList, {
       props: {

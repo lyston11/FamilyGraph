@@ -1225,6 +1225,50 @@ describe("worker full cycle against mock FastAPI", () => {
     ]);
   }, 30000);
 
+  it("treats the LAST completed answer as final: truncated prose then empty retry fails", async () => {
+    resetState();
+    const runKey = enqueueJob({
+      allowlist: ["familygraph.echo"],
+      messages: compactionHistoryMessages(),
+    });
+    let normalCalls = 0;
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([textTurn("unused")], {
+        responseFor: (context) => {
+          if (context.systemPrompt?.startsWith("You are a context summarization assistant.")) {
+            return textTurn("checkpoint")[0]!;
+          }
+          normalCalls += 1;
+          // First completed answer: truncated, but it carries prose. The
+          // overflow recovery then retries and that retry answers with nothing.
+          return normalCalls === 1
+            ? { ...textTurn("truncated partial prose")[0]!, stopReason: "length" }
+            : textTurn("")[0]!;
+        },
+      }),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    // The truncated turn is a real (partial) answer and stays reported...
+    expect(normalCalls).toBe(2);
+    const assistants = (state.eventsByRun.get(runKey) ?? [])
+      .filter((event) => event.type === "message.assistant_added")
+      .map((event) => (event.public_payload as { text: string }).text);
+    expect(assistants).toEqual(["truncated partial prose"]);
+    // ...but the LAST completed answer is the empty retry, so the run has no
+    // answer to show: tracking the first message instead would report success.
+    expect(state.settles).toEqual([
+      {
+        run_id: runKey,
+        status: "failed",
+        error_code: "PROVIDER_EMPTY_ANSWER",
+        error: { message: "model completed the run without returning any answer text" },
+      },
+    ]);
+  }, 30000);
+
   it("returns false when queue is empty (HTTP 204)", async () => {
     resetState();
     const { worker } = makeWorker();

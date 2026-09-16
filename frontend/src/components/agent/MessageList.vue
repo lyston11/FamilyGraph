@@ -91,7 +91,9 @@ const showPendingIndicator = computed(
 const announcement = computed(() => {
   const last = props.messages[props.messages.length - 1]
   if (showPendingIndicator.value) return runHint.value || '助手正在思考'
-  if (last && last.role === 'assistant') {
+  // 空正文助手消息不播报：与气泡/sr-only 同判据，否则屏幕阅读器会播报
+  // 「助手回复：」却没有任何内容（覆盖修复前落库的遗留空行）。
+  if (last && last.role === 'assistant' && last.text.length > 0) {
     const text = Array.from(last.text)
     return text.length > 50 ? `助手回复：${text.slice(0, 50).join('')}…` : `助手回复：${last.text}`
   }

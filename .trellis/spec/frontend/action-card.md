@@ -51,7 +51,7 @@ clear(): void
 - `accept` 只表示用户接受建议，不调用领域命令；accepted 的“发起申请”必须先打开确认弹层，再由用户显式确认调用 execute。
 - 确认弹层必须再次展示目标空间、动作和 `privacy_effect`；execute 成功后刷新 store。execute 409 失败保留 accepted 可重试，410 失败按服务端刷新为终态。
 - `MessageList` 只从当前空间 partition 找到消息引用的 card；找不到空间、卡片或有效权限时只显示文本，不凭 id 拉取跨空间详情。
-- 正文为空的 assistant 消息不渲染气泡本体与 sr-only 角色标签（覆盖修复前已落库的遗留空行与滚动发布窗口内的旧 sidecar），但其 `cardIds`/`citations`/`webCitations` **照常渲染**：空回答仍可能携带结构化卡片引用，隐藏气泡不得丢弃它们。用户消息气泡始终渲染。
+- 正文为空的 assistant 消息不渲染气泡本体、sr-only 角色标签与 live region 播报（覆盖修复前已落库的遗留空行与滚动发布窗口内的旧 sidecar），但其 `cardIds`/`citations`/`webCitations` **照常渲染**：空回答仍可能携带结构化卡片引用，隐藏气泡不得丢弃它们。用户消息气泡始终渲染。三处判据同为 `role === 'user' || text.length > 0`（live region 只对 assistant 判空），否则屏幕阅读器会播报「助手说」「助手回复：」却没有任何内容。
 - `agent.ts` 只接受 payload 中正整数 `card_ids`、`card_refs` 或单个 `card_id`，去重并过滤非法值；不把任意 payload 对象当作卡片。
 - `PanelContent` 在面板打开且当前空间确定时调用 `ensureLoaded(spaceId)`。空间切换 reset 旧 partition；auth.clearSession 清空全部卡片缓存。
 
