@@ -141,12 +141,18 @@ const items = computed(() =>
         data-test="message-item"
         :data-role="item.role"
       >
-        <div class="bubble" :class="{ failed: item.status === 'failed' }">
+        <div
+          v-if="item.role === 'user' || item.text.length > 0"
+          class="bubble"
+          :class="{ failed: item.status === 'failed' }"
+        >
           {{ item.text }}
           <span v-if="item.status === 'pending'" class="pending-mark">发送中…</span>
           <span v-else-if="item.status === 'failed'" class="failed-mark">发送失败</span>
         </div>
-        <span class="sr-only">{{ roleLabel(item.role) }}说</span>
+        <span v-if="item.role === 'user' || item.text.length > 0" class="sr-only">
+          {{ roleLabel(item.role) }}说
+        </span>
         <div v-if="item.citations.length > 0" class="message-citations" data-test="message-citations">
           <CitationList :citations="item.citations" compact />
         </div>

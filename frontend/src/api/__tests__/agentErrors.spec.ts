@@ -65,6 +65,11 @@ describe('friendlyAgentError：其余映射不变', () => {
     )
   })
 
+  it('sidecar 运行期错误码：空最终回答给出中文解释而非通用兜底', () => {
+    expect(friendlyAgentError('PROVIDER_EMPTY_ANSWER')).toBe('模型没有返回内容，请重试或换个问法')
+    expect(friendlyAgentError('PROVIDER_EMPTY_ANSWER')).not.toBe('操作失败，请稍后重试')
+  })
+
   it('客户端合成错误码映射；未知码回退 fallback 或通用文案', () => {
     expect(friendlyAgentError(CLIENT_AGENT_ERRORS.STREAM_LOST)).toBe(
       '连接中断，任务状态未知，请点击「重试」恢复',

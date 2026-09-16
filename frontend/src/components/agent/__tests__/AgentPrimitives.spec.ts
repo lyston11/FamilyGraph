@@ -240,6 +240,139 @@ describe('MessageList', () => {
     expect(wrapper.find('[data-test="thinking-indicator"]').exists()).toBe(true)
   })
 
+  // ---- 09-16-assistant-empty-final-answer R3：空正文助手消息不渲染气泡 ----
+
+  it('空正文助手消息不渲染气泡本体与 sr-only 角色标签', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          { id: 1, role: 'user', text: '谁是我的长辈？', createdAt: null, status: 'sent' },
+          { id: 2, role: 'assistant', text: '', createdAt: null, status: 'sent' },
+        ],
+        toolSummaries: [],
+        run: null,
+      },
+    })
+    // 行容器仍在（角色方向/结构化内容需要），但气泡本体与「助手说」都不渲染
+    const rows = wrapper.findAll('[data-test="message-item"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[1].find('.bubble').exists()).toBe(false)
+    expect(rows[1].find('.sr-only').exists()).toBe(false)
+    expect(rows[1].text()).toBe('')
+    expect(wrapper.text()).not.toContain('助手说')
+    // 用户消息气泡不受影响
+    expect(rows[0].find('.bubble').text()).toContain('谁是我的长辈？')
+    wrapper.unmount()
+  })
+
+  it('空正文助手消息仍渲染 citations / webCitations（不得连带丢弃结构化内容）', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          {
+            id: 2,
+            role: 'assistant',
+            text: '',
+            createdAt: null,
+            status: 'sent',
+            citations: [
+              {
+                source_type: 'memory',
+                source_id: '7',
+                scope: 'private',
+                sensitivity: 'normal',
+                revision: 1,
+                citation_handle: 'rag:7:r1:c1',
+              },
+            ],
+            webCitations: [
+              {
+                url: 'https://www.example.com/page',
+                title: 'Example',
+                excerpt: 'bounded excerpt',
+                fetched_at: '2026-09-16T00:00:00Z',
+                trust: 'external',
+              },
+            ],
+          },
+        ],
+        toolSummaries: [],
+        run: null,
+      },
+    })
+    expect(wrapper.find('[data-test="message-item"] .bubble').exists()).toBe(false)
+    expect(wrapper.find('[data-test="message-citations"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="message-web-citations"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Example')
+    wrapper.unmount()
+  })
+
+  it('空正文但带 cardIds 的助手消息仍渲染卡片引用', () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const actionCards = useActionCardsStore(pinia)
+    actionCards.partitions.set(7, {
+      cards: [
+        {
+          id: 3,
+          kind: 'lineage_request',
+          space_id: 7,
+          subject_user: { id: 10, name: '张三' },
+          object_user: { id: 11, name: '李四' },
+          reason_text: '已确认亲属关系',
+          evidence: { fact_ids: [9], path_summary: '张三 → 李四', evidence_version: 1 },
+          proposed_action: { type: 'request_lineage', params: { space_id: 7 } },
+          privacy_effect: '仅共享族谱摘要',
+          state: 'pending',
+          expires_at: null,
+          created_at: '2026-08-26T00:00:00',
+          revision: 1,
+        },
+      ],
+      loaded: true,
+      loading: false,
+      hidden: false,
+      error: null,
+    })
+    const Harness = defineComponent({
+      render() {
+        return h('div', [
+          h(NMessageProvider, () =>
+            h(MessageList, {
+              messages: [
+                { id: 2, role: 'assistant', text: '', createdAt: null, status: 'sent', cardIds: [3] },
+              ],
+              toolSummaries: [],
+              run: null,
+              spaceId: 7,
+            }),
+          ),
+        ])
+      },
+    })
+    const wrapper = mount(Harness, { global: { plugins: [pinia] } })
+    // 气泡隐藏，但结构化卡片引用不得丢弃
+    expect(wrapper.find('[data-test="message-item"] .bubble').exists()).toBe(false)
+    expect(wrapper.find('[data-test="message-cards"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="card-title"]').text()).toContain('加入族谱空间建议')
+    wrapper.unmount()
+  })
+
+  it('空正文用户消息仍渲染气泡（用户消息始终渲染）', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [{ id: 1, role: 'user', text: '', createdAt: null, status: 'sent' }],
+        toolSummaries: [],
+        run: null,
+      },
+    })
+    const row = wrapper.find('[data-test="message-item"]')
+    expect(row.attributes('data-role')).toBe('user')
+    expect(row.find('.bubble').exists()).toBe(true)
+    expect(row.find('.sr-only').text()).toBe('我说')
+    wrapper.unmount()
+  })
+
   it('有正文的助手消息照常熄灭进行中指示', () => {
     const wrapper = mount(MessageList, {
       props: {

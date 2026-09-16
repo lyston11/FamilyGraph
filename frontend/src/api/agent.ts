@@ -105,6 +105,8 @@ const AGENT_ERROR_COPY: Record<string, string> = {
   PROVIDER_DENIED_CLOUD_FORBIDDEN: '该空间未开放云端模型，请联系空间所有者调整配置',
   // sidecar 运行期 Provider 出网失败（网络/凭据/上游拒绝；上游错误已脱敏）
   PROVIDER_STREAM_ERROR: '模型服务暂时不可用，请稍后重试',
+  // sidecar 运行期：模型完成回合但没有返回任何正文（空最终回答）
+  PROVIDER_EMPTY_ANSWER: '模型没有返回内容，请重试或换个问法',
   SIDECAR_ERROR: '助手服务暂时不可用，请稍后重试',
 }
 
