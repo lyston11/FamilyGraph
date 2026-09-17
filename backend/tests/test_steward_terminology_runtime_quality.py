@@ -1,5 +1,6 @@
 """Production-job regressions for terminology governance and refresh."""
 
+import json
 from datetime import timedelta
 
 import httpx
@@ -185,6 +186,43 @@ def test_one_call_budget_rotates_from_candidate_to_terminology(db_session, monke
             )
         )
     ) == ["terminology"]
+
+
+def test_empty_terminology_result_is_marked_checked_and_not_resent(db_session):
+    """B-03：合法空 `items` 也是“已检查”结果，同语义不反复发送。"""
+    space, gc, _mom, gm = _grandchild_family(db_session)
+    _enable_provider(db_session, space)
+    _drain(db_session, space)
+    batch = steward_assist.schedule_due_batch(db_session)
+    assert batch is not None
+    account_id = _account_id(db_session, gc)
+    empty = _completions_fake(json.dumps({"version": 1, "context_hash": None, "items": []}))
+
+    assert steward_assist.execute_batch(db_session, batch.id, transport=empty) == "applied"
+    attempt = db_session.scalar(
+        select(StewardModelCall).where(
+            StewardModelCall.batch_id == batch.id,
+            StewardModelCall.assist_kind == "terminology",
+        )
+    )
+    assert attempt is not None
+    assert attempt.status == "succeeded"
+    assert attempt.output_json == {"items": []}
+    # 空结果不等于“没调用过”：投影记下本次检查，不伪造任何称谓改善
+    projection = db_session.scalar(
+        select(StewardTermProjection).where(
+            StewardTermProjection.viewer_account_id == account_id,
+            StewardTermProjection.target_user_id == gm.id,
+        )
+    )
+    assert projection is not None
+    assert projection.last_checked_hash is not None
+    assert projection.term is None
+    # 同语义不再产生新的 terminology 发送
+    groups = steward_terminology.collect_model_groups(
+        db_session, space_id=space.id, max_groups=10, max_targets=8
+    )
+    assert not any(g["viewer_account_id"] == account_id for g in groups)
 
 
 @pytest.mark.parametrize("change", ["fact_revision", "personal_preference", "revoke_membership"])
