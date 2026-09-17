@@ -153,6 +153,8 @@ request_lineage_membership(
   - **不要给它加 TTL**：`steward_terminology.py` 的历史去重查询不带 `status` 过滤，`expired` 行会**永久挡住重建**（无恢复路径）；而同一"挡住"对 `resolved` 是刻意保护（"恢复过/保留过的建议不重生"，见该处注释）。两者无法用同一条件区分，属需单独设计的实质行为变更。
 - 建议列表是"可回看"语义：`superseded`/`expired` 行仍可被 `open_details` 打开。需要"当前待处理"视图的调用方必须自己按 `SUGGESTION_ACTIVE_STATES`（`app/models/steward_suggestion.py`，= `("proposed", "submitted")`）过滤，不要改 `list_suggestions_page` 的返回集合。
 - `term_preference` 的可读值在 `value_json["term"]`；`presentation.summary` 对它是**通用文案**（"可选的称谓偏好建议，无需处理"），不是叫法。读取方（如前端行内展示）必须取 `value.term`。
+- **09-16 auto-apply**：称谓改善不再走"建议→用户逐条确认"。确定性 baseline 改善直接进显示；用户 preferred usage 与模型改善写入当前 viewer 的 `projection.term`（分别 `origin=personal`/`model`），无需建议提交或通知批准。无实际改善（与 baseline 同值）不再生成建议；存量纯 baseline 建议经 `effective_state` 显示 `superseded` 而退出活跃消费与提交，保留历史与用户反馈，不加 TTL、不伪造 `resolved`。`term_preference` 不进入"待处理/待核实"分区及待办计数（`notifications.py` 把其 `pending` 投影为 `done`），可选"固定/恢复"入口只在人物称谓区。
+- **模型候选词表与显示同口径**：`steward_terminology_snapshot.allowed_terms` 对原码接受 `system/locale/space` 词条，但**别名码只接受 `system/locale`**——与显示路径 `terms._registry_alias_term` 一致。否则别的原码上的空间自定义词会经模型写回被应用到本路径（模型绕过显示层的层级约束）。
 
 ## 可观测性与脱敏（09-11 release-observability）
 

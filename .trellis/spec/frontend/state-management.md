@@ -66,17 +66,19 @@
 `spaces.loadMembers(spaceId)` 重校验同一空间时先发请求、成功后整体替换 `members`；在途期间保留旧成员关系，避免管理员入口因瞬时空数组闪断。失败必须保留旧投影并设置 `membersError`，调用方可展示失败态；路由守卫仍以本次请求结果 fail-closed。跨空间切换清空旧授权上下文，守卫刷新目标空间时传 `setCurrentSpace: false`，不得改写 `currentSpaceId`。
 
 
-## 管家建议投影在通知中心的接线（09-15 suggestion-loop）
+## 管家建议投影在通知中心的接线（09-15 suggestion-loop / 09-16 auto-apply）
 
-### Convention: 通知中心「待核实」= 通知引用行 ∪ 活跃建议投影
+### Convention: 通知中心「待核实」= 通知引用行 ∪ 活跃**可处理**建议投影
 
 **What**：`NotificationsView.vue` 的「待核实」分区同时渲染两个来源：
 1. 既有：`classifyNotification` 判为 `verify` 的通知行（`steward_suggestion` 且 `domain_status ∈ {pending, accepted}`）；
-2. 新增：`stewardSuggestions.activeForSpace(spaceId)` 的活跃建议投影——覆盖 `notify=False` 的 `term_preference`，它们**永远不会有通知行**，只靠 ① 就在通知中心完全不可见（09-15 实测 535 条建议因此只在打开对应人物资料时可见）。
+2. 新增：`stewardSuggestions.activeForSpace(spaceId)` 的活跃建议投影，覆盖 `notify=False`、**永远不会有通知行**的 kind。
 
 **Why**：`3c2daac` 已让视图 `suggestions.load()`，但 `activeForSpace` 全项目零引用——模板从不渲染其结果。加载了却不渲染，等于"管家没起作用"。
 
 **规则**：
+- **`term_preference` 不进「待核实」**（09-16 auto-apply，R4）：称谓优化由管家自动应用到投影，可选「固定为我的叫法/恢复默认叫法」入口在 `KinshipTermPanel`，不是用户待办。`pendingSuggestions` 显式 `.filter((item) => item.kind !== 'term_preference')`；后端投影也把该 kind 的 `pending` 状态降为 `done`（`notifications.py`），因此待办计数同样不含它。历史通知仍按原权限可回看。
+- 其余 kind（`relation_proposal` 等）仍按 `SUGGESTION_ACTIVE_STATES` 进入「待核实」。
 - **去重范围是全部通知行**，不是只有 `verify` 分区。一条已归入历史（`domain_status=done`）的通知也会让同一 `suggestion_id` 出现在页面上两次。按 `item.suggestion?.suggestion_id` 建 Set，对全部 `page.items` 过滤。
 - `activeForSpace` **兑现其名称承诺**：只返回 `state ∈ SUGGESTION_ACTIVE_STATES`（`proposed`/`submitted`，与后端 `app/models/steward_suggestion.py` 同口径）。`superseded`/`expired`/`resolved` 不进「待核实」（后端列表本身是"可回看"语义，过滤在渲染点做，不改后端返回集合）。
 - 建议投影行**不携带通知载体**，因此**不标记已读**（不调 `markRead`），只提供「查看详情」；通知行仍走 `openSuggestion`（含已读 + `openSuggestionById`）。两者共用同一个 `SuggestionReviewDialog`。
