@@ -10,7 +10,7 @@
 - Memory/RAG 的 A/C/B/D 修复与 E 研究已经完成累计验收，原 B/D 20 组缺口和 D 追加恢复回归均闭合，见 [最终验收](tasks/archive/2026-09/09-14-memory-rag-acceptance-audit/research/final-acceptance.md)。管家渐进重算也已完成本地 AC1–AC9、串行集成和归档，见 [集成验收](tasks/archive/2026-09/09-13-steward-snapshot-progressive-recompute/research/integration-acceptance.md)。
 - MR-26 已限定行为重建的三个所属键族，推荐忽略冷却及未知键保留；MR-23 的共同父母证书仅内部记录与核验，不因换版新增关系通知、待办或推测边，不解除既有驳回。
 - Provider 配置 UX、平台辅助开关已有归档成果，两项的活动旧副本与相关会话指针均已清理。平台能力页已补修部署关闭时误报启用的问题，并展示四类辅助的来源与阻断原因。称谓能力也不再受早期“Agent 能力整体延期”描述约束。
-- 本页未核查线上开关或真实模型质量。新称谓模型链使用 fake transport 验证，`STEWARD_ASSIST_TERMINOLOGY` 默认关闭。**2026-09-17 补充**：已在服务器隔离库用部署既有 Provider 跑通真实 terminology 调用链与校验器（合法同义 3/3 通过）；生产开关仍为关闭，理由是穷尽扫描后不存在可改善目标（详见下表归档条目）。
+- 本页未核查线上开关或真实模型质量。新称谓模型链使用 fake transport 验证，`STEWARD_ASSIST_TERMINOLOGY` 默认关闭。**2026-09-17 补充**：已在服务器隔离库用部署既有 Provider 跑通真实 terminology 调用链与校验器（合法同义 3/3 通过）。随后按用户确认启用生产部署开关 `STEWARD_ASSIST_TERMINOLOGY=1`（仅空间 2，`cloud_allowed=1`，架构/Provider/预算不变），有效开关与真实调用已核对；真实调用在批次租约内未返回而被收敛为 `unknown`（不重放），尚无自动消费的合法改善。管理员前端硬刷新会话恢复竞态已修复（守卫等待在途轮换、挂载晚于首次导航）。见[验收记录](tasks/09-17-admin-refresh-terminology-enable/research/model-acceptance-2026-09-17.md)。
 
 ## 称谓、事实与授权的当前合同
 

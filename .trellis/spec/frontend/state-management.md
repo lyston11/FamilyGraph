@@ -53,6 +53,17 @@
 
 **Tests**：`system-admin-frontend/tests/auth.store.spec.ts`（独立 key、内存 token、硬校验）、`access-session.store.spec.ts`（票据 TTL/单目标/不持久化）、`router.guard.spec.ts`（未登录/首改密/过期分流）。
 
+### Convention: 硬刷新恢复由守卫等待在途轮换，应用挂载晚于首次导航
+
+**What**：后台应用启动时的会话恢复只有一个发起点，且所有恢复入口共用同一笔在途轮换：
+- `stores/auth.ts` 的 `runRefresh()` 是启动恢复、路由守卫与 401 重试唯一的轮换实现（`refreshInFlight` 单飞）；`restoreSession()` 复用同一笔（`restoreInFlight`），因此同一次启动至多轮换一次 refresh token。
+- `router/index.ts` 的守卫在未登录时**等待**在途恢复（`auth.restoring` 或存在 refresh key 即 `await auth.restoreSession()`），不得跳过等待后按未登录态重定向。
+- `main.ts` 在 `app.use(router)` 前发起恢复，并等 `adminRouter.isReady()` 解析后才 `app.mount`（保证 `route.meta` 已就绪）；首次导航 reject（如部署后懒加载 chunk 失效）时仍必须挂载。
+
+**Why**：硬刷新受保护页时守卫若跳过等待，会看到尚未恢复的未登录态并跳 `/login`，恢复成功后也不再重算目标路由，用户就停在登录页；恢复入口若各发一笔，第二笔携带同一份旧 refresh token 会被后端判为重放并撤销全部会话。
+
+**Tests**：`startup.session.spec.ts`（延迟恢复不提前挂载、成功留原深链、失败落登录页并清 key、首改密改派、整链只 1 次 `/auth/refresh`、首次导航失败仍挂载）、`router.guard.spec.ts`（守卫等待在途恢复）、`auth.store.spec.ts`（单飞、restoring 复位、存储不可用不卡死）。
+
 ### Convention: agent 错误横幅的结构化动作白名单（AgentErrorView.action）
 
 **What**：`stores/agent.ts` 的 partition error 用 `AgentErrorView { code, message, action? }`；`action` 只允许白名单 kind（当前仅 `'open-model-settings'`，由 `providerUnresolvedAction(code, detail)` 从 PROVIDER_UNRESOLVED + detail.reason=cloud_not_allowed 推导）。`ErrorNotice.vue` 按 kind 渲染入口，且权限（`spaces.canManageSpace`）在组件层判定——非管理员渲染纯文案。detail 原始 JSON 不进视图层（与 spec/backend/error-handling.md 的"只映射文案"同口径）。
