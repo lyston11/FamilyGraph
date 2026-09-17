@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"助手 run/lease/internal 协议与 sidecar 拓扑边界"}
+{"file":".trellis/spec/backend/assistant-history-restoration.md","reason":"完整历史恢复与 SDK 压缩不可退化的合同"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"管家辅助交付边界、写回栅栏与 unknown 语义"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端验证门禁与受影响范围要求"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"助手事件/等待反馈的浏览器状态所有权"}
+{"file":".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/latency-summary.md","reason":"两条链路已确认事实、观测口径与不可用做法"}

@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"助手 run 状态机、lease 与取消语义的分段观测边界"}
+{"file":".trellis/spec/backend/assistant-history-restoration.md","reason":"完整历史与 SDK 自动压缩必须保留"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"助手等待/失败反馈的浏览器状态约束"}
+{"file":".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/latency-summary.md","reason":"已知事件边界、历史 33s 个例与观测口径"}

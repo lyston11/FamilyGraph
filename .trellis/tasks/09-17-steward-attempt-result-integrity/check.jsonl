@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"独立核验栅栏、预算、部分成功与状态聚合未削弱"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"核验无事务跨网络、锁占用与迁移兼容"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核验回归与删失样本证据要求"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"核验错误分类解耦 connect/read/timeout 与脱敏"}
+{"file":".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/latency-summary.md","reason":"独立核验 unknown 阻断与恢复矩阵结论"}
