@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
 from datetime import datetime, timedelta
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.api.admin_deps import AdminPrincipal, require_admin_ready
 from app.api.deps import get_db
 from app.models.agent import AgentRun, AgentRunEvent
+from app.models.audit_log import AuditLog
 from app.models.steward import StewardModelCall
 from app.services import admin_audit
 from app.utils.timeutil import utcnow
@@ -44,6 +46,13 @@ _OBSERVATION_NOTES: tuple[str, ...] = (
     "样本（turn.started→该轮 assistant 正文），多轮 run 会贡献多个样本，两者不可混算",
     "tool_call 按 tool_call_id 配对；未配对（运行中/中断）的调用不计入样本",
     "run 在取得执行权前结束（queued 取消等）无 run.started，单列 runs_without_start",
+    "provider_retry 是上游 5xx/408/409/429 重试开销的**下界**，由 agent_provider_egress 审计"
+    "（target_id 即 run_id）推导：同一连续失败段内 末次失败 − 首次失败（含段内退避与重试耗时）。"
+    "审计只记完成时刻、不记请求开始，所以**首次失败尝试自身的耗时不可知**；"
+    "单次失败后即成功的段贡献 0（无法区分其退避与生成耗时）——因此真实重试开销 ≥ 该值，"
+    "不能当成全部重试耗时。provider_failed_attempts 给出同一窗口内的失败尝试总数（无歧义）。"
+    "该开销同时包含在 model_turn 内（重试发生在同一轮 turn.started→正文之间），"
+    "读 model_turn 时需参考这两项才能区分重试与纯生成",
 )
 
 
@@ -83,6 +92,9 @@ class RunPhaseBreakdown(BaseModel):
     model_turn: PhaseStats
     tool_call: PhaseStats
     settle: PhaseStats
+    provider_retry: PhaseStats
+    provider_failed_attempts: int
+    runs_with_provider_retry: int
 
 
 class AgentLatencyOut(BaseModel):
@@ -169,6 +181,56 @@ def _phase_stats(values: list[int]) -> PhaseStats:
     )
 
 
+def _provider_retry_windows(db: Session, run_ids: list[int]) -> tuple[dict[int, list[int]], int]:
+    """按 run 推导上游重试开销下界（毫秒）与失败尝试总数。
+
+    ``agent_provider_egress`` 的 ``target_id`` 就是 run_id，``detail_json.status``
+    为 succeeded/failed。重试由 pi-ai 在 5xx/408/409/429 上指数退避完成，发生在同一轮
+    ``turn.started``→正文之间，因此该开销**已被计入 model_turn**；本函数把它单独拆出，
+    供读者从 model_turn 中区分重试与纯生成（A-02：重试不得当作单次推理）。
+
+    时长语义是**下界**：审计只记请求完成时刻、不记开始时刻，故段内**首次**失败
+    自身耗时不可知；单次失败后即成功的段贡献 0（无法区分退避与生成耗时）。
+    故失败尝试数（无歧义）与时长（下界）必须成对解读。
+
+    不读/不记 prompt、响应正文。
+    """
+    if not run_ids:
+        return {}, 0
+    rows = db.execute(
+        select(AuditLog.target_id, AuditLog.detail_json, AuditLog.created_at)
+        .where(
+            AuditLog.action == "agent_provider_egress",
+            AuditLog.target_id.in_(run_ids),
+        )
+        .order_by(AuditLog.target_id, AuditLog.created_at)
+    ).all()
+
+    windows: dict[int, list[int]] = {}
+    failed_attempts = 0
+    # 当前失败段的首次与最近一次失败时刻，按 run 独立跟踪。
+    streak_first: dict[int, datetime] = {}
+    streak_last: dict[int, datetime] = {}
+    for run_id, detail_json, at in rows:
+        if run_id is None:
+            continue
+        try:
+            status = json.loads(detail_json or "{}").get("status")
+        except (TypeError, ValueError):
+            continue
+        if status == "failed":
+            failed_attempts += 1
+            streak_first.setdefault(run_id, at)
+            streak_last[run_id] = at
+            continue
+        # 非失败（succeeded）：结束本段，取段内 末次失败 − 首次失败。
+        first = streak_first.pop(run_id, None)
+        last = streak_last.pop(run_id, None)
+        if first is not None and last is not None and last > first:
+            windows.setdefault(run_id, []).append(_ms(last - first))
+    return windows, failed_attempts
+
+
 def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
     """按 run 分解 assistant 耗时；只用已持久事件，缺样本即 n=0。"""
     runs = db.execute(
@@ -195,11 +257,15 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
     for run_id, event_type, at, payload in rows:
         per_run.setdefault(run_id, []).append((event_type, at, payload or {}))
 
+    retry_windows, failed_attempts = _provider_retry_windows(db, sorted(per_run))
+
     queue_wait: list[int] = []
     first_text: list[int] = []
     model_turn: list[int] = []
     tool_call: list[int] = []
     settle: list[int] = []
+    provider_retry: list[int] = []
+    runs_with_provider_retry = 0
     runs_without_start = 0
 
     for run_id, events in per_run.items():
@@ -257,6 +323,11 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
             if tail:
                 settle.append(_ms(settled - max(tail)))
 
+        windows = retry_windows.get(run_id)
+        if windows:
+            runs_with_provider_retry += 1
+            provider_retry.extend(windows)
+
     return RunPhaseBreakdown(
         runs=len(per_run),
         runs_without_start=runs_without_start,
@@ -265,6 +336,9 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
         model_turn=_phase_stats(model_turn),
         tool_call=_phase_stats(tool_call),
         settle=_phase_stats(settle),
+        provider_retry=_phase_stats(provider_retry),
+        provider_failed_attempts=failed_attempts,
+        runs_with_provider_retry=runs_with_provider_retry,
     )
 
 
