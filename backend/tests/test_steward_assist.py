@@ -342,6 +342,126 @@ def test_ranking_rejects_invalid_permutation(db_session, monkeypatch) -> None:
     assert audit[0].error_code == steward_assist.REASON_INVALID_OUTPUT
 
 
+# ---- 09-17 B：逐笔结果保全 + 混合批次部分成功可消费 ----
+
+
+def _mixed_transport(calls, *, first_valid, second, observed):
+    """第一笔按 first_valid 返回合法解释，第二笔按 second 产生失败/超时。"""
+
+    def transport(url, headers, payload, timeout):
+        calls.append({"url": url, "timeout": timeout})
+        if len(calls) == 1:
+            return first_valid(url, headers, payload, timeout)
+        return second(url, headers, payload, timeout)
+
+    return transport
+
+
+def test_returned_result_is_persisted_before_the_next_send(db_session, monkeypatch) -> None:
+    """B-01：第一笔已返回的结果必须在第二笔发送前落库。
+
+    当前实现把结果留在内存、循环结束才统一结算；第二笔耗尽租约时第一笔
+    已返回的结果会丢失并被恢复器记为 unknown。本测试以独立 Session 在
+    第二笔发送期间观察第一笔 attempt。
+    """
+    space, _a, _b, event = _spouse_space(db_session, "assist-keep-first")
+    provider = _provider(db_session)
+    _steward_setting(db_session, space, provider, explanation=True)
+    _turn_on(monkeypatch, candidate=False, ranking=False)
+    monkeypatch.setattr(config, "STEWARD_ASSIST_BATCH_LEASE_SECONDS", 5)
+    valid = _explanation_fake([], mode="valid")
+    observed: dict[str, object] = {}
+    calls: list[dict] = []
+
+    def slow_second(url, headers, payload, timeout):
+        # 第二笔在飞期间：第一笔的终态必须已可由独立 Session 读到。
+        with SessionLocal() as reader:
+            rows = list(
+                reader.scalars(
+                    select(StewardModelCall)
+                    .where(StewardModelCall.job_id == job.id)
+                    .order_by(StewardModelCall.id)
+                )
+            )
+            observed["statuses"] = [row.status for row in rows]
+            observed["first_has_output"] = rows[0].output_json is not None
+        time.sleep(max(timeout, 0.1) + 1.0)  # 耗尽剩余租约墙钟
+        raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
+
+    _summary, job = _run_job(db_session, space, event.id)
+    batch = _batch(db_session, job.id)
+    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert [r.status for r in _calls(db_session, job.id)] == ["reserved", "reserved"]
+
+    status = steward_assist.execute_batch(
+        db_session,
+        batch.id,
+        transport=_mixed_transport(calls, first_valid=valid, second=slow_second, observed=observed),
+    )
+    assert len(calls) == 2
+    # 红断言：第二笔发送时第一笔已落库
+    assert observed["statuses"] == ["succeeded", "in_flight"]
+    assert observed["first_has_output"] is True
+    # 租约已耗尽：批次留给恢复器，未越权结算第二笔
+    assert status == "applying"
+
+    db_session.expire_all()
+    rows = _calls(db_session, job.id)
+    assert [r.status for r in rows] == ["succeeded", "in_flight"]
+    assert rows[0].output_json is not None
+
+    # 恢复：unknown 不重发，但已持久化的第一笔产物必须被应用（B-02）
+    batch = _batch(db_session, job.id)
+    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+    assert steward_assist.recover_stuck_batches(db_session) >= 1
+    db_session.expire_all()
+    assert [r.status for r in _calls(db_session, job.id)] == ["succeeded", "unknown"]
+    settled = _batch(db_session, job.id)
+    assert settled.status == "failed"  # 失败事实如实保留
+    assert settled.error_code == steward_assist.REASON_NETWORK_UNKNOWN
+    cards = _cards(db_session, space.id)
+    assert len(cards) == 2
+    assert sum(1 for card in cards if card.reason_text_llm) == 1  # 独立产物已应用
+    assert len(_calls(db_session, job.id)) == 2  # unknown 未重发
+    assert steward_assist.recover_stuck_batches(db_session) == 0
+
+
+def test_partial_batch_applies_independent_product_and_stays_failed(
+    db_session, monkeypatch
+) -> None:
+    """B-02：同批一笔 succeeded、一笔 failed 时，独立成功产物仍被应用，批次仍显失败。"""
+    space, _a, _b, event = _spouse_space(db_session, "assist-partial")
+    provider = _provider(db_session)
+    _steward_setting(db_session, space, provider, explanation=True)
+    _turn_on(monkeypatch, candidate=False, ranking=False)
+    valid = _explanation_fake([], mode="valid")
+    calls: list[dict] = []
+
+    def connect_failure(url, headers, payload, timeout):
+        raise httpx.ConnectError("connect failed", request=httpx.Request("POST", url))
+
+    _summary, job = _run_job(db_session, space, event.id)
+    batch = _batch(db_session, job.id)
+    assert steward_assist.schedule_due_batch(db_session) is not None
+
+    status = steward_assist.execute_batch(
+        db_session,
+        batch.id,
+        transport=_mixed_transport(calls, first_valid=valid, second=connect_failure, observed={}),
+    )
+    assert len(calls) == 2
+    assert status == "failed"
+    db_session.expire_all()
+    rows = _calls(db_session, job.id)
+    assert [r.status for r in rows] == ["succeeded", "failed"]
+    settled = _batch(db_session, job.id)
+    assert settled.status == "failed"
+    assert settled.error_code == steward_assist.REASON_TRANSPORT_FAILED
+    cards = _cards(db_session, space.id)
+    assert sum(1 for card in cards if card.reason_text_llm) == 1
+
+
 # ---- 解释：封闭 schema 结构化输出 + 确定性模板渲染（R2）----
 
 
@@ -1119,6 +1239,66 @@ def test_oversized_response_capped_without_full_read(db_session, monkeypatch) ->
         for r in rows
     )
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
+
+
+class _SlowChunkResponse:
+    """B-R4：每块远小于 read timeout，但总时长超过总截止。"""
+
+    request = httpx.Request("POST", "https://api.example.com/v1/responses")
+
+    def __init__(self, chunk_delay: float, max_chunks: int = 10_000) -> None:
+        self._chunk_delay = chunk_delay
+        self._max_chunks = max_chunks
+        self.chunks_served = 0
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_bytes(self):
+        while self.chunks_served < self._max_chunks:
+            time.sleep(self._chunk_delay)
+            self.chunks_served += 1
+            yield b'{"output": []}'
+
+
+class _SlowStreamCtx:
+    def __init__(self, response: _SlowChunkResponse) -> None:
+        self._response = response
+
+    def __enter__(self):
+        return self._response
+
+    def __exit__(self, *args):
+        return False
+
+
+class _SlowStubClient:
+    def __init__(self, response: _SlowChunkResponse) -> None:
+        self._response = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def stream(self, method, url, headers=None, json=None):
+        return _SlowStreamCtx(self._response)
+
+
+def test_slow_chunks_cannot_extend_past_the_total_deadline(monkeypatch) -> None:
+    """B-07：每块小于 read timeout 但总时长超预算时，仍在总截止处中止读取。"""
+    response = _SlowChunkResponse(chunk_delay=0.05)
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: _SlowStubClient(response))
+    started = time.monotonic()
+    with pytest.raises(httpx.ReadTimeout):
+        steward_assist._post_json(
+            "https://api.example.com/v1/responses", {}, {"input": []}, timeout=0.3
+        )
+    elapsed = time.monotonic() - started
+    # 总截止附近收敛，而不是等到 read timeout 或把全部块读完
+    assert 0.3 <= elapsed < 3.0
+    assert 0 < response.chunks_served < 40
 
 
 def test_transport_receives_30s_default_timeout(db_session, monkeypatch) -> None:

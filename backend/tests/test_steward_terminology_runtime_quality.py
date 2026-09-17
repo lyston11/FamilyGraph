@@ -333,24 +333,35 @@ def test_old_executor_cannot_audit_after_another_session_takes_the_lease(db_sess
             current.attempt += 1
             writer.commit()
 
+    # 另一会话在本笔请求在飞期间接管租约：旧执行者随后的逐笔结算必须被拒，
+    # 行保持 in_flight 且无 output_json，交由恢复器/新 owner 处理。
+    answer = _completions_fake(
+        _terminology_payload(
+            {
+                "target_ref": "t002",
+                "concept_code": "Uf-Uf",
+                "term": "姥姥",
+                "reason_code": "synonym",
+            }
+        )
+    )
+    took_over: list[bool] = []
+
+    def transport(url, headers, payload, timeout):
+        if not took_over:
+            took_over.append(True)
+            take_over(db_session, batch)
+        return answer(url, headers, payload, timeout)
+
     assert (
         steward_assist.execute_batch(
             db_session,
             batch.id,
-            after_send=take_over,
-            transport=_completions_fake(
-                _terminology_payload(
-                    {
-                        "target_ref": "t002",
-                        "concept_code": "Uf-Uf",
-                        "term": "姥姥",
-                        "reason_code": "synonym",
-                    }
-                )
-            ),
+            transport=transport,
         )
         == "applying"
     )
+    assert took_over == [True]
     assert batch.lease_owner == "replacement-worker"
     assert batch.attempt == original_attempt + 1
     calls = list(
@@ -360,7 +371,13 @@ def test_old_executor_cannot_audit_after_another_session_takes_the_lease(db_sess
             )
         )
     )
-    assert calls and all(call.status == "in_flight" and call.output_json is None for call in calls)
+    # 旧执行者零结算：本笔保持 in_flight（不落 output_json/计费），接管后的下一笔
+    # 因租约身份不符而未发送。
+    assert calls and all(
+        call.status in ("in_flight", "reserved") and call.output_json is None for call in calls
+    )
+    assert any(call.status == "in_flight" for call in calls)
+    assert all(call.billed_tokens is None for call in calls)
 
 
 @pytest.mark.parametrize("lease_change", ["expired", "taken_over"])

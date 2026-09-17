@@ -163,13 +163,22 @@ def _post_json(
     iter_bytes（自动按 Content-Encoding 解压）：iter_raw 返回原始压缩字节，
     gzip 响应会直接导致 JSON 解析失败（真实 liu-dada 端点默认 gzip，
     2026-09-12 真实 provider E2E 发现）；字节上界按解压后体积计。
+
+    B-R4：``timeout`` 同时是**整笔请求的墙钟总截止**。httpx 的 timeout 是
+    连接/读/写等阶段各自的等待上限，逐个收到小块数据不会重置总时长；因此在
+    读取循环内按单调时钟强制总截止，超过即中止（连接由上下文管理器关闭）。
     """
+    deadline = time.monotonic() + timeout
     with httpx.Client(timeout=timeout) as client:
         with client.stream("POST", url, headers=headers, json=payload) as response:
             response.raise_for_status()
             chunks: list[bytes] = []
             total = 0
             for chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    raise httpx.ReadTimeout(
+                        "total request deadline exceeded", request=response.request
+                    )
                 total += len(chunk)
                 if total > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
                     raise ValueError(REASON_RESPONSE_TOO_LARGE)
@@ -1181,6 +1190,88 @@ def _validate_output(
     return {"order": order} if order is not None else None
 
 
+def _settle_attempt(
+    db: Session,
+    *,
+    batch: StewardAssistBatch,
+    attempt_id: int,
+    text: str | None,
+    usage: dict[str, int] | None,
+    exc: Exception | None,
+    latency_ms: int,
+    response_bytes: int,
+) -> str | None:
+    """Settle one returned attempt inside the caller's write transaction.
+
+    B-R1: the returned result must reach durable storage while the executing
+    identity is still valid, before the next request is sent. Returns the
+    settled status, or ``None`` when the row was no longer ``in_flight``
+    (another executor settled it, or the lease was already lost).
+    """
+    fresh = db.get(StewardModelCall, attempt_id)
+    if fresh is None or fresh.status != "in_flight":
+        return None
+    fresh.latency_ms = latency_ms
+    if exc is not None:
+        status, code = _classify_transport_error(exc)
+        fresh.status = status
+        fresh.error_code = code
+        _pt, _ct, billed = _bill_usage(
+            None, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
+        )
+    else:
+        assert text is not None
+        fresh.completion_chars = len(text)
+        fresh.response_bytes = response_bytes
+        pt, ct, billed = _bill_usage(
+            usage, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
+        )
+        fresh.prompt_tokens = pt
+        fresh.completion_tokens = ct
+        fresh.total_tokens = billed
+        fresh.status = "succeeded"
+        fresh.error_code = None
+        ctx = _visible_context(db, batch.space_id)
+        card_ids: list[int] = []
+        expl_card: ActionCard | None = None
+        if fresh.assist_kind == "ranking" and fresh.subject_key:
+            parts = fresh.subject_key.split(":")
+            if len(parts) == 3:
+                card_ids = [int(x) for x in parts[2].split(",") if x]
+        elif fresh.assist_kind == "explanation" and fresh.subject_key:
+            try:
+                expl_card = db.get(ActionCard, int(fresh.subject_key.split(":", 1)[1]))
+            except (IndexError, ValueError):
+                expl_card = None
+        term_group: dict[str, Any] | None = None
+        if fresh.assist_kind == "terminology":
+            term_group = _term_group_for(db, fresh)
+            if term_group is None:
+                # 组上下文已失效：直接落 degraded（跳过常规校验）
+                fresh.status = "degraded"
+                fresh.error_code = REASON_INVALID_OUTPUT
+                fresh.billed_tokens = billed
+                db.flush()
+                return fresh.status
+        product = _validate_output(
+            fresh.assist_kind,
+            text,
+            ctx=ctx,
+            card_ids=card_ids,
+            card=expl_card,
+            db=db,
+            term_group=term_group,
+        )
+        if product is None:
+            fresh.status = "degraded"
+            fresh.error_code = REASON_INVALID_OUTPUT
+        else:
+            fresh.output_json = product
+    fresh.billed_tokens = billed
+    db.flush()
+    return fresh.status
+
+
 def execute_batch(
     db: Session,
     batch_id: int,
@@ -1259,10 +1350,6 @@ def execute_batch(
     # ---- HTTP（无事务；受总 deadline 与单次 timeout 双重上界）----
     assert runtime is not None  # 预发送栅栏已确保 provider 可用
     api = runtime.api
-    policy_blocked: list[int] = []
-    results: list[
-        tuple[StewardModelCall, str | None, dict[str, int] | None, Exception | None, int, int]
-    ] = []
     for attempt in attempts:
         if attempt.status != "reserved":
             continue
@@ -1322,7 +1409,10 @@ def execute_batch(
                 cloud_allowed=cloud_allowed,
             )
             if decision.action == "block":
-                policy_blocked.append(attempt.id)
+                # Never sent: release the reservation in this same transaction.
+                attempt.status = "skipped"
+                attempt.error_code = REASON_POLICY_BLOCKED
+                db.flush()
                 continue
             if decision.action == "redact":
                 payload = decision.value
@@ -1334,6 +1424,7 @@ def execute_batch(
             timeout = min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining)
             attempt.status = "in_flight"
             db.flush()
+            pending_id = attempt.id
         started = time.monotonic()
         text: str | None = None
         usage: dict[str, int] | None = None
@@ -1346,93 +1437,32 @@ def execute_batch(
         except Exception as caught:  # noqa: BLE001 — 异常分类为安全码，不外泄原文
             exc = caught
         latency_ms = int((time.monotonic() - started) * 1000)
-        results.append((attempt, text, usage, exc, latency_ms, response_bytes))
+        # ---- 逐笔结算（崩溃恢复点③）：在本笔执行身份仍有效时落库，再发下一笔。
+        # 后续慢请求因此无法让已返回的结果丢失（B-R1）。
+        with _immediate_tx(db):
+            db.expire_all()
+            batch = db.get(StewardAssistBatch, batch_id)
+            assert batch is not None
+            if (
+                (batch.lease_owner, batch.attempt) != lease_identity
+                or batch.lease_until is None
+                or batch.lease_until <= timeutil.utcnow()
+            ):
+                # Lease lost: leave the row for the recovery owner, never settle it.
+                return batch.status
+            _settle_attempt(
+                db,
+                batch=batch,
+                attempt_id=pending_id,
+                text=text,
+                usage=usage,
+                exc=exc,
+                latency_ms=latency_ms,
+                response_bytes=response_bytes,
+            )
 
     if after_send is not None:
         after_send(db, batch)
-
-    # ---- tx2：审计 + 保守计费（崩溃恢复点③：发送后审计前）----
-    with _immediate_tx(db):
-        db.expire_all()
-        batch = db.get(StewardAssistBatch, batch_id)
-        assert batch is not None
-        if (
-            (batch.lease_owner, batch.attempt) != lease_identity
-            or batch.lease_until is None
-            or batch.lease_until <= timeutil.utcnow()
-        ):
-            return batch.status
-        # R1：policy 拦截的 attempt 从未发送 → skipped（不消耗计费），安全原因码入审计
-        for blocked_id in policy_blocked:
-            blocked = db.get(StewardModelCall, blocked_id)
-            if blocked is not None and blocked.status == "reserved":
-                blocked.status = "skipped"
-                blocked.error_code = REASON_POLICY_BLOCKED
-                db.flush()
-        for attempt, text, usage, exc, latency_ms, response_bytes in results:
-            fresh = db.get(StewardModelCall, attempt.id)
-            assert fresh is not None
-            if fresh.status != "in_flight":
-                continue
-            fresh.latency_ms = latency_ms
-            if exc is not None:
-                status, code = _classify_transport_error(exc)
-                fresh.status = status
-                fresh.error_code = code
-                pt, ct, billed = _bill_usage(
-                    None, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
-                )
-            else:
-                assert text is not None
-                fresh.completion_chars = len(text)
-                fresh.response_bytes = response_bytes
-                pt, ct, billed = _bill_usage(
-                    usage, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
-                )
-                fresh.prompt_tokens = pt
-                fresh.completion_tokens = ct
-                fresh.total_tokens = billed
-                fresh.status = "succeeded"
-                fresh.error_code = None
-                ctx = _visible_context(db, batch.space_id)
-                card_ids: list[int] = []
-                expl_card: ActionCard | None = None
-                if fresh.assist_kind == "ranking" and fresh.subject_key:
-                    parts = fresh.subject_key.split(":")
-                    if len(parts) == 3:
-                        card_ids = [int(x) for x in parts[2].split(",") if x]
-                elif fresh.assist_kind == "explanation" and fresh.subject_key:
-                    try:
-                        expl_card = db.get(ActionCard, int(fresh.subject_key.split(":", 1)[1]))
-                    except (IndexError, ValueError):
-                        expl_card = None
-                term_group: dict[str, Any] | None = None
-                if fresh.assist_kind == "terminology":
-                    term_group = _term_group_for(db, fresh)
-                    if term_group is None:
-                        product = None
-                        # 直接落 degraded 分支：跳过常规校验
-                        fresh.status = "degraded"
-                        fresh.error_code = REASON_INVALID_OUTPUT
-                        fresh.billed_tokens = billed
-                        db.flush()
-                        continue
-                product = _validate_output(
-                    fresh.assist_kind,
-                    text,
-                    ctx=ctx,
-                    card_ids=card_ids,
-                    card=expl_card,
-                    db=db,
-                    term_group=term_group,
-                )
-                if product is None:
-                    fresh.status = "degraded"
-                    fresh.error_code = REASON_INVALID_OUTPUT
-                else:
-                    fresh.output_json = product
-            fresh.billed_tokens = billed
-            db.flush()
 
     # ---- tx3：写回栅栏重验 + CAS 应用（崩溃恢复点④：写回前）----
     return _apply_batch(
@@ -1586,19 +1616,13 @@ def _apply_batch(
                 )
             )
         )
-        # 结果不明/发送失败 → 批次终态 failed（不自动重发），产物一律不应用
+        # 结果不明/发送失败 → 批次终态 failed（不自动重发）。独立且仍通过写回栅栏
+        # 的成功产物仍要应用（B-R2）：同批其他请求失败不是拒绝它们的理由。
+        terminal_code: str | None = None
         if "unknown" in all_statuses:
-            batch.status = "failed"
-            batch.error_code = REASON_NETWORK_UNKNOWN
-            batch.updated_at = now
-            db.flush()
-            return batch.status
-        if "failed" in all_statuses:
-            batch.status = "failed"
-            batch.error_code = REASON_TRANSPORT_FAILED
-            batch.updated_at = now
-            db.flush()
-            return batch.status
+            terminal_code = REASON_NETWORK_UNKNOWN
+        elif "failed" in all_statuses:
+            terminal_code = REASON_TRANSPORT_FAILED
         kinds = sorted({a.assist_kind for a in attempts})
         # 写回栅栏第二道：返回内容应用前重验世界（禁用开关/换 provider/改证据/
         # 卡片变化/租约丢失 → 全部不应用，安全原因码入审计）。
@@ -1741,8 +1765,9 @@ def _apply_batch(
             db, space_id=batch.space_id, viewer_account_ids=changed_viewers
         )
         db.flush()
-        batch.status = "applied"
-        batch.error_code = None
+        # B-R2/B-R6：部分成果已应用仍如实保留本批的失败事实（绝不伪装完全成功）。
+        batch.status = "failed" if terminal_code is not None else "applied"
+        batch.error_code = terminal_code
         batch.updated_at = now
         return batch.status
 
@@ -1855,12 +1880,10 @@ def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
             terminal = batch.status in ("failed", "superseded")
             if terminal:
                 pass  # 已终态：只收敛残留 attempt，不改批次
-            elif has_unknown:
-                # Both persisted unknown results and interrupted sends forbid replay.
-                batch.status = "failed"
-                batch.error_code = REASON_NETWORK_UNKNOWN
             elif applied_products and batch.status == "applying":
-                # ④：审计已落库、写回未完成——事务外重跑栅栏后 CAS 应用
+                # ④：审计已落库、写回未完成——事务外重跑栅栏后 CAS 应用。
+                # B-R2：同批存在 unknown/failed 不阻止独立成功产物的恢复应用；
+                # 未知请求仍不重发，批次最终仍如实记为 failed。
                 from uuid import uuid4
 
                 batch.lease_owner = f"recovery:{uuid4().hex}"
@@ -1869,6 +1892,10 @@ def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
                     seconds=config.STEWARD_ASSIST_BATCH_LEASE_SECONDS
                 )
                 resume_apply.append((batch.id, batch.lease_owner, batch.attempt))
+            elif has_unknown:
+                # Both persisted unknown results and interrupted sends forbid replay.
+                batch.status = "failed"
+                batch.error_code = REASON_NETWORK_UNKNOWN
             elif any(
                 status in ("failed", "degraded", "succeeded")
                 for status in db.scalars(
