@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/review-summary.md", "reason": "最新审核纠正与范围；旧Spec的计时/截止事实错误待修，安全合同保持"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "本任务适用合同；主会话阅读全文，超长文件分段读完"}
+{"file": ".trellis/spec/backend/assistant-history-restoration.md", "reason": "本任务适用合同；主会话阅读全文，超长文件分段读完"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "本任务适用合同；主会话阅读全文，超长文件分段读完"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "本任务适用合同；主会话阅读全文，超长文件分段读完"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "本任务适用合同；主会话阅读全文，超长文件分段读完"}

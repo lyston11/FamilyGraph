@@ -3,4 +3,4 @@
 {"file":".trellis/spec/backend/steward-action-card.md","reason":"核验逐调用保全后写回栅栏、预算与 unknown 不重发仍成立"}
 {"file":".trellis/spec/backend/quality-guidelines.md","reason":"核验后端门禁与真实链路证据要求"}
 {"file":".trellis/spec/frontend/quality-guidelines.md","reason":"核验前端等待/失败语义与 smoke 证据口径"}
-{"file":".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/latency-summary.md","reason":"独立核验归因边界与测量口径"}
+{"file": ".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/review-summary.md", "reason": "最新复核优先于旧阶段统计/截止结论；C至I的范围与边界"}

@@ -1,4 +1,6 @@
-# 双 Agent 延迟：结论与可复用约束
+# 双 Agent 延迟：初始研究与集成期结论（历史）
+
+> 当前上下文请先读 [review-summary.md](review-summary.md)。下文保留初始/集成时证据，但“created_at可精确分段、无需源计时”“工具0ms即非主导”“SDK探针排除SSE/渲染”的结论已撤回；总截止、统计和运行版本问题已分别交C～G。末尾“egress无run_id”也不准确：target_id是run归属，但缺turn/request关联。旧数值不得当新版本性能结论。
 
 基线 `main@62a2b15`。本文只收可复用结论；逐行证据见 `evidence/latency-baseline-2026-09-17.md`。
 
