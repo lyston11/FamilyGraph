@@ -29,6 +29,8 @@ export const useAdminAuthStore = defineStore('adminAuth', () => {
   const accessToken = ref<string | null>(null)
   const admin = ref<AdminSessionOut | null>(null)
   const restoring = ref(false)
+  // 在途启动恢复：重复调用与路由守卫都复用同一笔（见 restoreSession）。
+  let restoreInFlight: Promise<boolean> | null = null
 
   const isLoggedIn = computed(() => accessToken.value !== null && admin.value !== null)
   const mustChangePassword = computed(() => admin.value?.password_must_change === true)
@@ -67,23 +69,32 @@ export const useAdminAuthStore = defineStore('adminAuth', () => {
     return pair.admin.password_must_change
   }
 
-  /** 应用启动时恢复会话：用独立 key 中的 refresh token 轮换。 */
-  async function restoreSession(): Promise<boolean> {
-    const stored = readStoredRefreshToken()
-    if (!stored) return false
-    restoring.value = true
-    try {
-      return await requestRefresh()
-    } finally {
-      restoring.value = false
+  /**
+   * 应用启动/硬刷新时恢复会话：用独立 key 中的 refresh token 轮换。
+   * 与 401 重试共用同一笔在途轮换（见 runRefresh），因此启动恢复与并发
+   * 认证恢复只轮换一次，不会各带同一份旧 token 造成后端判重放。
+   * 重复调用（含路由守卫在恢复未完成时的调用）复用同一笔在途恢复。
+   */
+  function restoreSession(): Promise<boolean> {
+    if (restoreInFlight === null) {
+      restoring.value = true
+      restoreInFlight = runRefresh().finally(() => {
+        restoring.value = false
+        restoreInFlight = null
+      })
     }
+    return restoreInFlight
   }
 
-  /** 实际轮换请求（成功写新会话，失败清会话）。 */
+  /**
+   * 实际轮换请求（成功写新会话，失败清会话）。
+   * 读取存储 token 也在 try 内：localStorage 不可用（隐私模式/禁用存储）时
+   * 同步抛错会转成失败的 Promise，不会从 restoreSession 同步抛出而卡住启动。
+   */
   async function requestRefresh(): Promise<boolean> {
-    const stored = readStoredRefreshToken()
-    if (!stored) return false
     try {
+      const stored = readStoredRefreshToken()
+      if (!stored) return false
       const pair = await apiAdminRefresh({ refresh_token: stored })
       applySession(pair)
       return true
@@ -93,18 +104,24 @@ export const useAdminAuthStore = defineStore('adminAuth', () => {
     }
   }
 
-  // 单飞在途轮换：并发 401 复用同一次请求。否则两个并发请求各带同一份
-  // 旧 refresh token 轮换，第二笔会被后端判为重放（重用）→ 撤销全部会话。
+  // 单飞在途轮换：所有恢复入口（启动恢复 / 路由守卫 / 并发 401）复用同一次
+  // 请求。否则两个并发请求各带同一份旧 refresh token 轮换，第二笔会被后端
+  // 判为重放（重用）→ 撤销全部会话。
   let refreshInFlight: Promise<boolean> | null = null
 
-  /** 401 时由 api client 调用：成功轮换返回 true（请求会重试一次）。 */
-  async function tryRefresh(): Promise<boolean> {
+  /** 所有恢复入口的唯一轮换实现：在途时复用，否则新建（无存储 token 时直接失败）。 */
+  function runRefresh(): Promise<boolean> {
     if (refreshInFlight === null) {
       refreshInFlight = requestRefresh().finally(() => {
         refreshInFlight = null
       })
     }
     return refreshInFlight
+  }
+
+  /** 401 时由 api client 调用：成功轮换返回 true（请求会重试一次）。 */
+  async function tryRefresh(): Promise<boolean> {
+    return runRefresh()
   }
 
   /** 登出：撤销远端 refresh 会话后清空本地全部状态。 */

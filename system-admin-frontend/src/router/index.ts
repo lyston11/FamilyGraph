@@ -115,10 +115,13 @@ export function setupAdminRouterGuards(router: ReturnType<typeof createRouter>):
   router.beforeEach(async (to) => {
     const auth = useAdminAuthStore()
 
-    // 恢复会话：内存无 access 但 localStorage 有 refresh（硬刷新场景）
-    if (!auth.isLoggedIn && !auth.restoring) {
-      const stored = localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY)
-      if (stored) {
+    // 硬刷新：内存无 access，但 localStorage 有 refresh（或启动恢复已在途）。
+    // 启动恢复由 main.ts 在首次导航前发起：此时 restoring 为 true，必须 await
+    // 在途恢复而不是跳过等待，否则本守卫会看到未登录态并重定向到 /login，
+    // 即使随后恢复成功也不再重算目标路由。restoreSession 复用同一笔在途轮换，
+    // 不会重复发起。
+    if (!auth.isLoggedIn) {
+      if (auth.restoring || localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY) !== null) {
         await auth.restoreSession()
       }
     }

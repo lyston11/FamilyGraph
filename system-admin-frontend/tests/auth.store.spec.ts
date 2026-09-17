@@ -25,6 +25,28 @@ import type { AdminTokenPairResponse } from '@/types/api'
 
 const mockedAdminRequest = vi.mocked(adminRequest)
 
+/** 只统计 refresh 轮换请求（并发单飞断言用）。 */
+function refreshCallCount(): number {
+  return mockedAdminRequest.mock.calls.filter(
+    (call) => (call[0] as Record<string, unknown>)['url'] === '/auth/refresh',
+  ).length
+}
+
+/** 手动控制的轮换响应：模拟「未立即 resolve」的延迟恢复。 */
+function deferredRefresh(): {
+  pending: () => Promise<AdminTokenPairResponse>
+  resolve: (value: AdminTokenPairResponse) => void
+} {
+  let resolvePending: ((value: AdminTokenPairResponse) => void) | null = null
+  return {
+    pending: () =>
+      new Promise<AdminTokenPairResponse>((resolve) => {
+        resolvePending = resolve
+      }),
+    resolve: (value) => resolvePending?.(value),
+  }
+}
+
 function tokenPair(overrides: Partial<AdminTokenPairResponse> = {}): AdminTokenPairResponse {
   return {
     access_token: 'access-1',
@@ -172,6 +194,85 @@ describe('adminAuthStore', () => {
     )
     expect(auth.accessToken).toBe('access-2')
     expect(localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY)).toBe('refresh-2')
+  })
+
+  it('restoreSession 在途期间 restoring=true，结束后复位', async () => {
+    localStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, 'stored-refresh')
+    const deferred = deferredRefresh()
+    mockedAdminRequest.mockImplementationOnce(deferred.pending)
+    const auth = useAdminAuthStore()
+
+    const restoring = auth.restoreSession()
+    expect(auth.restoring).toBe(true)
+    expect(auth.isLoggedIn).toBe(false)
+
+    deferred.resolve(tokenPair())
+    expect(await restoring).toBe(true)
+    expect(auth.restoring).toBe(false)
+    expect(auth.isLoggedIn).toBe(true)
+  })
+
+  it('restoreSession 与并发 401 tryRefresh 共用一笔轮换：同份旧 token 只请求一次', async () => {
+    // 启动恢复（硬刷新）与首个业务请求的 401 重试同时发生：若各发一笔，
+    // 第二笔携带同一份旧 refresh token 会被后端判为重放并撤销全部会话。
+    localStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, 'stale-refresh')
+    const deferred = deferredRefresh()
+    mockedAdminRequest.mockImplementationOnce(deferred.pending)
+    const auth = useAdminAuthStore()
+
+    const restore = auth.restoreSession()
+    const retry = auth.tryRefresh()
+    deferred.resolve(tokenPair({ access_token: 'access-2', refresh_token: 'refresh-2' }))
+
+    expect(await restore).toBe(true)
+    expect(await retry).toBe(true)
+    expect(refreshCallCount()).toBe(1)
+    expect(auth.accessToken).toBe('access-2')
+    expect(localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY)).toBe('refresh-2')
+  })
+
+  it('restoreSession 重复调用复用同一笔在途轮换', async () => {
+    localStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, 'stale-refresh')
+    const deferred = deferredRefresh()
+    mockedAdminRequest.mockImplementationOnce(deferred.pending)
+    const auth = useAdminAuthStore()
+
+    const first = auth.restoreSession()
+    const second = auth.restoreSession()
+    deferred.resolve(tokenPair())
+
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(refreshCallCount()).toBe(1)
+  })
+
+  it('restoreSession 遇到不可用的 localStorage 时不卡在 restoring（同步抛错转为失败）', async () => {
+    // 隐私模式/禁用存储时 getItem 会同步抛错：恢复入口必须转成失败 Promise，
+    // 否则 restoring 永久为 true，守卫每次导航都重入并再次抛错。
+    const auth = useAdminAuthStore()
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled')
+    })
+    try {
+      expect(await auth.restoreSession()).toBe(false)
+      expect(auth.restoring).toBe(false)
+      expect(auth.isLoggedIn).toBe(false)
+    } finally {
+      getItem.mockRestore()
+    }
+  })
+
+  it('restoreSession 失败：清会话且 restoring 复位', async () => {
+    localStorage.setItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY, 'expired-refresh')
+    mockedAdminRequest.mockRejectedValueOnce(
+      new AdminApiError(401, 'ADMIN_UNAUTHORIZED', '管理员认证失败，请重新登录'),
+    )
+    const auth = useAdminAuthStore()
+
+    expect(await auth.restoreSession()).toBe(false)
+    expect(auth.restoring).toBe(false)
+    expect(auth.isLoggedIn).toBe(false)
+    expect(localStorage.getItem(ADMIN_REFRESH_TOKEN_STORAGE_KEY)).toBeNull()
   })
 
   it('并发 tryRefresh 单飞：同份旧 refresh token 只发一次轮换请求', async () => {
