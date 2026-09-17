@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"事实/路径身份、四级词典优先级及 viewer 权限合同"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"自动称谓、无 TTL、发布/输入版本及模型交付边界"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"内置词存量迁移、SQLite 在线备份与隔离验证"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"账号/空间与 PFV 失效、建议共用 store 合同"}
+{"file":".trellis/spec/frontend/action-card.md","reason":"称谓偏好与真实关系待办/授权操作隔离"}
+{"file":".trellis/tasks/09-16-steward-terminology-auto-apply/research/terminology-summary.md","reason":"核实后的方向错误、别名安全性、自动应用及历史结论修正"}

@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/relationship-intelligence.md","reason":"检查 viewer 权限、真实事实不变及用户词条优先"}
+{"file":".trellis/spec/backend/steward-action-card.md","reason":"核验投影/建议一致、无改善不创建、发布和模型恢复不回归"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"核验新旧库词表迁移和隔离部署演练"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"共享 Terms 影响范围和后端验证要求"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"核验迟到响应隔离及真实待办不受称谓 UI 修改影响"}
+{"file":".trellis/spec/frontend/action-card.md","reason":"可选称谓反馈不变成关系审批或成员授权"}
+{"file":".trellis/tasks/09-16-steward-terminology-auto-apply/research/terminology-summary.md","reason":"针对编码/配偶方向/真实生产证据界限的独立检查"}
