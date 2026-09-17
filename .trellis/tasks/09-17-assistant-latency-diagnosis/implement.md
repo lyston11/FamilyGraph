@@ -61,4 +61,48 @@ cd ../backend
 - [ ] 与 B 最終结果一起更新父 AC，不混淆助手 run 与管家 batch 租约。
 - [ ] Spec/HANDOFF 和证据同步，自审后 commit/push，串行集成与部署验证；必需项通过后 archive 并清理隔离 worktree。
 
+## 本轮执行记录（2026-09-17，已完成部分，提交 `076d631`）
+
+本节取代上方清单中已兑现的条目；未列出的条目**仍未执行**。
+
+已完成：
+
+- §0：用户已批准执行、已 `start`、已用任务 worktree、未使用子智能体；重读了 Agent 设计、
+  `agent-runtime.md`、`assistant-history-restoration.md` 与相关 Spec；B 已完成后才推进本任务。
+- §1（1）：从既有 run/event 取得可用时间与状态并列出缺失。**关键更正**：
+  `agent_run_events.created_at` + `run.started`（= lease→running 落库点，
+  `agent_events._promote_to_running`）已足够分段；原 `admin_agent_latency` docstring
+  的「无法分段、应补 FSM 生命周期事件」结论与生产数据不符，已改写。未用
+  `lease_expires_at` 倒推任何时刻。
+- §1（5）：确认**不需要**新增字段/schema/迁移（历史字段缺失即 `n=0`/`null`）。
+- §2（5）部分：形成结论——样本指向**上游模型生成为主导**，非程序性排队/工具/落库。
+- §3 部分：`tests/test_admin_agent_latency.py`（含新增分段与空样本用例）、`ruff check`、
+  `ruff format --check`、`mypy app` 全绿；全量 pytest `1647 passed, 3 skipped`。
+  未跑 agent/frontend 套件——本轮未改这两端。
+- 真实只读样本：服务器隔离副本（`DATA_DIR` 显式指向并断言非生产路径）：
+  `model_turn` 逐轮 p50 33.15s、`queue_wait` p50 0.94s、`tool_call` 0ms、`settle` max 10ms。
+  证据：父任务 `research/evidence/assistant-phase-decomposition-2026-09-17.md`。
+
+仍未执行（如实保留）：
+
+- §1（2）：未穷尽 context/session/prompt 的全部错误路径（只追了事件管线与 lease→running 落库点）。
+- §1（3）：**未做**受控场景矩阵（无工具短答/只读工具/多轮工具/SDK 压缩/排队/
+  Provider 失败重试/取消失租）。
+- §1（4）：未做受控延迟注入，故「上游流首正文 vs 最终 `message_end`」「公共事件 vs
+  浏览器可见」的差值仍属**未实测**（A-03 的另一半）。
+- §2（1）–（4）：未写 fake stream 探针、未跑本地 HTTP 经 ProviderGateway、未做
+  事件/SSE/渲染时序测试。
+- §2（6）：未做真实模型对照实验（生产仅 2 个 run，样本已用尽；不重发私密历史）。
+- §3：未跑 `frontend-api-smoke.sh`（未改 API 合同）；未做浏览器真实链路验证。
+- §4：未做真实小样本对照、未部署、未与 B 合并更新父 AC（见下）。
+
+## 结论边界（不得混淆）
+
+- **「延迟诊断已完成」成立**：分段可复核，且样本指向上游模型生成。
+- **「慢响应已解决」不成立**：未做任何提速改动，父任务须保留该未解决项。
+- **未实施的选项**（需用户显式选择，见 `design.md` §5 与证据文档 §5）：
+  逐字/增量显示（delta 合同）、更快模型或更低推理档位、并发/预算扩容。
+
+---
+
 本轮没有运行上述命令或模型实验，只有规划验证。

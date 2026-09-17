@@ -39,6 +39,28 @@
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
 
+## 可观测性：助手耗时按持久事件分段（09-17 A）
+
+- **分段真源是持久事件时间戳，不是新字段**：`agent_run_events.created_at` 配合
+  `run.started`（sidecar 在 lease→running 转换点写入）、`turn.started`、
+  `message.assistant_added`、`tool.execution.started/completed`（按 `tool_call_id` 配对）与
+  `agent_runs.settled_at`，即可拆出 `queue_wait` / `first_text` / `model_turn` / `tool_call` / `settle`。
+  `GET /admin-api/v1/agent/latency` 的 `assistant_phases` 就按此实现，全部只读、不触发模型。
+- **不要再宣称“助手无法分段、需要补 FSM 生命周期事件”**：该说法与生产数据不符（原
+  `admin_agent_latency` docstring 已据此改写）。也不要新增冗余阶段字段。
+- **口径红线**：首控制事件、心跳、`turn.started`、工具事件、reasoning 一律不冒充正文首字；
+  `first_text` 每 run 一个样本（不是每轮），`model_turn` 逐轮一个样本（不得把多轮合成一笔）；
+  无正文的 turn 不得把后续 turn 的正文算到自己头上；无 `run.started` 的 run 计入
+  `runs_without_start` 而不是静默丢弃。缺失即 `n=0`/`null`，不零填充。
+- **不要新增冗余阶段字段。也不要直接透传 delta**：`mapSessionEvent` 忽略
+  `message_update`/delta 是**刻意合同**，不是遗漏——`agent/test/assistant-delta-gap.test.ts`
+  用真实 Pi SDK + fake stream 测出：上游 `text_delta` 与 SDK 的 `message_update` 均会到达，
+  但公共 `message.assistant_added` 恰好只在 `message_end` 发一次（完整答案，非部分前缀）。
+  若要把「首字更早可见」作为产品能力，必须先在 spec 中冻结 delta 合同（消息 ID/顺序号/epoch/
+  重连重放去重、终态权威正文替换临时内容、聚合频率与 SSE 大小有界、取消/失租即停、
+  citations/cardIds 只在权威事件后绑定、滚动兼容），**不得**在 `events.ts` 直接透传 SDK 事件。
+- **不得用 `lease_expires_at` 倒推**被租走时刻：run 的 lease 由心跳前移，该字段不表示实际取用时间。
+
 ## 5. Provider 治理（09-06 迁移后形态）
 
 - **治理面在系统管理员域**：system_admin 经 `/admin-api/v1/agent/*`（admin_app :8002，ADMIN_JWT + `require_admin_ready`，router 级 runtime 503 门禁）管理 Provider 注册表（`POST/GET/PATCH /agent/providers`，secret 只写不读、secretbox 密文落库）、平台默认模型（`GET/PUT /agent/platform-defaults`，单行表 `agent_platform_defaults`，provider+model 成对）与空间设置只读排查视图（`GET /agent/spaces/{space_id}/provider-settings`）。写操作审计走 `admin_audit.record_access`（admin_access_audits，actor=system_admin；secret 永不入审计）。旧家庭挂载 `/api/admin/agent/*` 已删除（家庭 listener 一律 404）；`require_platform_operator` 仅余 controlled_web 等非治理路径。

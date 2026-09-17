@@ -38,4 +38,20 @@ sidecar 相关默认值（部署 env 可能覆盖，须实测）：lease 轮询 
 
 ## 6. 待实测（未定论）
 
-当前线上各阶段占比与真实推理档位、代理是否缓冲、SDK/代理重试次数、worker 排队分布、慢 chunk 是否真实发生、本地与服务器时钟偏差。以上均为假设，不得写成已定位的生产根因。
+- 当前线上各阶段占比与真实推理档位、代理是否缓冲、SDK/代理重试次数、慢 chunk 是否真实发生、
+  本地与服务器时钟偏差。以上均为假设，不得写成已定位的生产根因。
+
+### 已实测（09-17 A，见 `evidence/assistant-phase-decomposition-2026-09-17.md`）
+
+- **助手分段可测且无需新增字段**：`agent_run_events.created_at` + `run.started`/`turn.started`/
+  `message.assistant_added`/`tool.execution.*`/`settled_at` 已足够拆解；原
+  `admin_agent_latency` docstring 的「无法分段、应补 FSM 生命周期事件」说法与数据不符，已改写。
+- **样本（n=2）**：`model_turn` 逐轮 p50 33.15s（4 个 turn）；`queue_wait` p50 0.94s；
+  `tool_call` p50/max 0ms；`settle` max 10ms。**模型生成为主导，排队/工具/落库均非主导。**
+- **delta → 可见的差值已实测**（`agent/test/assistant-delta-gap.test.ts`，真实 Pi SDK + fake stream，
+  无 egress）：上游 3 个 `text_delta` 均到达、SDK 也转发 `message_update`，但公共事件
+  `message.assistant_added` **恰好 1 次**且只在 `message_end`；首个 delta → 首次可见的差值
+  等于剩余正文生成时间。**「首段显示晚」成因已确认为发布时机，不是 SSE/渲染。**
+- **仍未实测**：真实推理档位、代理缓冲、重试次数、慢 chunk 是否真实发生、时钟偏差。
+- **仍未实施的选项**（需用户决定）：逐字/增量显示（delta 合同）、更快模型或更低推理档位、
+  并发/预算扩容。
