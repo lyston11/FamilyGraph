@@ -6,6 +6,7 @@ assistant run 总时长分位数、只读口径（无业务内容字段）与审
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -160,6 +161,7 @@ def test_latency_metrics_shape_and_percentiles(
         "window_days",
         "steward_assist",
         "assistant_runs",
+        "assistant_phases",
         "runs_by_status",
         "notes",
     }
@@ -217,6 +219,133 @@ def test_latency_metrics_window_filter_and_validation(
 def test_latency_metrics_requires_admin(admin_client: TestClient) -> None:
     resp = admin_client.get("/admin-api/v1/agent/latency")
     assert resp.status_code in (401, 403)
+
+
+def _run_with_events(
+    db_session,
+    *,
+    user,
+    space,
+    events: list[tuple[str, float, dict | None]],
+    settle_after_s: float,
+):
+    """建一个已结算 run，并按给定偏移（秒）写入持久事件。
+
+    偏移相对 run.created_at；第一个事件通常是 message.user_added（seq 0）。
+    用裸 SQL 写事件行：本测试只需 (run_id, seq, type, created_at, public_payload)，
+    不经过服务层协议校验，也不产生任何模型请求。
+    """
+    session_row = _agent_session(db_session, account_id=user.id, space_id=space.id)
+    run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    db_session.commit()
+
+    base = utcnow() - timedelta(seconds=600)
+    db_session.execute(
+        sa.text("UPDATE agent_runs SET created_at = :base WHERE id = :rid"),
+        {"base": base, "rid": run.id},
+    )
+    for seq, (event_type, offset, payload) in enumerate(events):
+        db_session.execute(
+            sa.text(
+                "INSERT INTO agent_run_events "
+                "(run_id, seq, type, public_payload, created_at) "
+                "VALUES (:rid, :seq, :type, :payload, :at)"
+            ),
+            {
+                "rid": run.id,
+                "seq": seq,
+                "type": event_type,
+                "payload": json.dumps(payload or {}),
+                "at": base + timedelta(seconds=offset),
+            },
+        )
+    db_session.execute(
+        sa.text("UPDATE agent_runs SET status = 'succeeded', settled_at = :at WHERE id = :rid"),
+        {"at": base + timedelta(seconds=settle_after_s), "rid": run.id},
+    )
+    db_session.commit()
+    return run
+
+
+def test_latency_metrics_decomposes_assistant_phases(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """分段必须由持久事件时间戳推导，且不把多轮/工具/无正文轮算错。
+
+    构造一个两轮 run：入队→取得执行权 11s，第 1 轮生成 53s（后接一次工具），
+    第 2 轮生成 40s，最后事件→结算 0.5s。另建一个未取得执行权即结束的 run
+    （无 run.started），它只能计入 runs_without_start。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-phase")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None),
+            ("run.started", 11.0, None),
+            ("turn.started", 11.0, None),
+            ("message.assistant_added", 64.0, {"role": "assistant", "text": "a"}),
+            ("tool.execution.started", 64.0, {"tool_call_id": "t1", "tool_name": "x"}),
+            ("tool.execution.completed", 65.0, {"tool_call_id": "t1", "tool_name": "x"}),
+            ("turn.completed", 65.0, None),
+            ("turn.started", 65.0, None),
+            ("message.assistant_added", 105.0, {"role": "assistant", "text": "b"}),
+            ("turn.completed", 105.0, None),
+        ],
+        settle_after_s=105.5,
+    )
+    # 未取得执行权即结束：只有入队事件，没有 run.started。
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[("message.user_added", 0.0, None)],
+        settle_after_s=1.0,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+
+    assert phases["runs"] == 2
+    assert phases["runs_without_start"] == 1
+    # 入队 → run.started（取得执行权）
+    assert phases["queue_wait"]["n"] == 1
+    assert phases["queue_wait"]["p50_ms"] == 11_000
+    # 取得执行权 → 首个 assistant 正文（每 run 一个样本，不是每轮）
+    assert phases["first_text"]["n"] == 1
+    assert phases["first_text"]["p50_ms"] == 53_000
+    # 每轮模型生成：两轮各一个样本，不是把两轮合成 94s 一笔
+    assert phases["model_turn"]["n"] == 2
+    assert phases["model_turn"]["p50_ms"] == 40_000
+    assert phases["model_turn"]["max_ms"] == 53_000
+    # 工具按 tool_call_id 配对
+    assert phases["tool_call"]["n"] == 1
+    assert phases["tool_call"]["p50_ms"] == 1_000
+    # 最后非终态事件 → 终态（两个 run 各一个样本：500ms 与 1000ms）
+    assert phases["settle"]["n"] == 2
+    assert phases["settle"]["p50_ms"] == 500
+    assert phases["settle"]["max_ms"] == 1_000
+
+
+def test_latency_metrics_phases_empty_without_events(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """无事件样本时 n=0 且分位为 null（不零填充、不伪造分段）。"""
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200
+    phases = resp.json()["assistant_phases"]
+    assert phases["runs"] == 0
+    assert phases["queue_wait"] == {"n": 0, "p50_ms": None, "p95_ms": None, "max_ms": None}
+    assert phases["first_text"]["n"] == 0
+    assert phases["model_turn"]["n"] == 0
 
 
 def test_latency_metrics_records_audit(
