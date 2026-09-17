@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -83,6 +84,13 @@ _KIND_OUTPUT_CAPS: dict[str, int] = {
 
 # 消耗预算的 attempt 状态（skipped = 从未预留，不计入）
 _BUDGETED_STATUSES = ("reserved", "in_flight", "succeeded", "failed", "degraded", "unknown")
+
+# ---- 发送预算（C-R1/R2）----
+# 单笔请求的总预算 = min(配置 timeout, 剩余租约 - 结算预留)。结算预留保证请求
+# 返回后仍有时间做逐笔结算（短事务 + BEGIN IMMEDIATE 锁等待），否则已合法取得的
+# 结果会因租约过期而无法落库。最小发送窗口以下的剩余时间不再发请求。
+_SETTLEMENT_RESERVE_SECONDS = 2.0
+_MIN_SEND_WINDOW_SECONDS = 0.1
 
 # ---- 安全原因码（白名单；异常原文/上游 body 永不落库或入日志）----
 REASON_ASSIST_DISABLED = "assist_disabled"
@@ -153,41 +161,142 @@ _PROMPTS: dict[str, str] = {
 }
 
 
-def _post_json(
+async def _post_json_async(
     url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float
 ) -> dict[str, Any]:
-    """默认 transport：httpx 同步 POST，响应体流式读取并有字节上界（F19）。
+    """可中断的总截止实现（C-R1）：``asyncio.timeout`` 覆盖连接、发送、响应头、
+    读取与解压。等待响应头或等待下一块数据期间超界会真正取消在途 I/O，
+    而不是等数据到达后再检查——后者实测 400ms 预算要到约 638ms 才返回。
 
     超出 STEWARD_ASSIST_MAX_RESPONSE_BYTES 立即中止读取并抛错（调用方记
     failed/response_too_large），绝不把无上界的响应整体读入内存。必须用
-    iter_bytes（自动按 Content-Encoding 解压）：iter_raw 返回原始压缩字节，
-    gzip 响应会直接导致 JSON 解析失败（真实 liu-dada 端点默认 gzip，
-    2026-09-12 真实 provider E2E 发现）；字节上界按解压后体积计。
+    aiter_bytes（自动按 Content-Encoding 解压）：原始字节会直接导致 gzip 响应
+    的 JSON 解析失败（真实 liu-dada 端点默认 gzip，2026-09-12 E2E 发现）；
+    字节上界按解压后体积计。
 
-    B-R4：``timeout`` 同时是**整笔请求的墙钟总截止**。httpx 的 timeout 是
-    连接/读/写等阶段各自的等待上限，逐个收到小块数据不会重置总时长；因此在
-    读取循环内按单调时钟强制总截止，超过即中止（连接由上下文管理器关闭）。
+    超时一律抛 ``httpx.ReadTimeout``（调用方按 unknown 保守计费）。刻意不为
+    "连接阶段超时" 复用 connect_failed：请求已交给 transport 之后无法证明上游
+    未处理，只有 httpx 自己抛出的 ConnectError/ConnectTimeout 才是确定未发送。
     """
     deadline = time.monotonic() + timeout
-    with httpx.Client(timeout=timeout) as client:
-        with client.stream("POST", url, headers=headers, json=payload) as response:
-            response.raise_for_status()
-            chunks: list[bytes] = []
-            total = 0
-            for chunk in response.iter_bytes():
-                if time.monotonic() > deadline:
-                    raise httpx.ReadTimeout(
-                        "total request deadline exceeded", request=response.request
-                    )
-                total += len(chunk)
-                if total > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
-                    raise ValueError(REASON_RESPONSE_TOO_LARGE)
-                chunks.append(chunk)
-    body = b"".join(chunks)
-    data = json.loads(body)
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
+                            raise ValueError(REASON_RESPONSE_TOO_LARGE)
+                        chunks.append(chunk)
+    except TimeoutError as exc:
+        raise httpx.ReadTimeout(
+            "total request deadline exceeded",
+            request=httpx.Request("POST", url),
+        ) from exc
+    # JSON 解析是同步代码，事件循环无法抢占：解析前后核对同一总截止，超界不接受
+    # 为预算内成功。有界处理超差由响应字节上界限制。
+    if time.monotonic() > deadline:
+        raise httpx.ReadTimeout(
+            "total request deadline exceeded",
+            request=httpx.Request("POST", url),
+        )
+    data = json.loads(b"".join(chunks))
     if not isinstance(data, dict):
         raise ValueError("provider response is not a JSON object")
     return data
+
+
+def _post_json(
+    url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float
+) -> dict[str, Any]:
+    """默认 transport（同步入口）：在既有工作线程内桥接一次事件循环。
+
+    辅助网络只在有界执行线程/同步测试路径调用；持有业务写事务时调用是结构性
+    错误，这里 fail-closed 而不是在事件循环里静默降级。
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover - 结构性误用
+        raise RuntimeError(
+            "steward assist transport requires a worker thread without a running event loop"
+        )
+    return asyncio.run(_post_json_async(url, headers, payload, timeout))
+
+
+def _release_remaining_unsent(
+    db: Session, *, batch_id: int, lease_identity: tuple[str | None, int], reason: str
+) -> int:
+    """把本批仍未发送的预留一次性释放为 skipped（C-R2）。
+
+    只在执行身份仍持租约时生效（身份不符则留给恢复器）；skipped 不进入
+    ``_BUDGETED_STATUSES``，因此不消耗调用/ token 预算，也不产生 unknown 计费。
+    """
+    from app.services.steward import _immediate_tx
+
+    released = 0
+    with _immediate_tx(db):
+        db.expire_all()
+        batch = db.get(StewardAssistBatch, batch_id)
+        if batch is None or (batch.lease_owner, batch.attempt) != lease_identity:
+            return 0
+        for row in db.scalars(
+            select(StewardModelCall).where(
+                StewardModelCall.batch_id == batch_id,
+                StewardModelCall.status == "reserved",
+            )
+        ):
+            row.status = "skipped"
+            row.error_code = reason
+            released += 1
+        if released:
+            db.flush()
+    return released
+
+
+def _send_budget(lease_until: Any) -> float:
+    """出事务前/后的单笔请求总预算（C-R2）。
+
+    ``min(配置 timeout, 剩余租约 - 结算预留)``：租约已过期或不足以覆盖结算
+    预留时返回 <= 0，调用方据此不发请求（未发送只释放预留，不记 unknown）。
+    """
+    if lease_until is None:
+        return 0.0
+    remaining = (lease_until - timeutil.utcnow()).total_seconds()
+    return float(
+        min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining - _SETTLEMENT_RESERVE_SECONDS)
+    )
+
+
+def _release_unsent(
+    db: Session,
+    *,
+    batch_id: int,
+    lease_identity: tuple[str | None, int],
+    attempt_id: int,
+    reason: str,
+) -> None:
+    """释放一笔从未发出的预留（C-R2）：不记 unknown、不计费。
+
+    只在本执行身份仍持租约时回退 ``in_flight → skipped``；身份已失效则留给
+    恢复器，绝不越权改写。
+    """
+    from app.services.steward import _immediate_tx
+
+    with _immediate_tx(db):
+        db.expire_all()
+        batch = db.get(StewardAssistBatch, batch_id)
+        if batch is None or (batch.lease_owner, batch.attempt) != lease_identity:
+            return
+        row = db.get(StewardModelCall, attempt_id)
+        if row is not None and row.status == "in_flight":
+            row.status = "skipped"
+            row.error_code = reason
+            db.flush()
 
 
 def _canonical_hash(value: Any) -> str:
@@ -1353,13 +1462,8 @@ def execute_batch(
     for attempt in attempts:
         if attempt.status != "reserved":
             continue
-        remaining = (
-            (batch.lease_until - timeutil.utcnow()).total_seconds()
-            if batch.lease_until is not None
-            else 0.0
-        )
-        if remaining < 0.1:
-            # Unsent reservations are released by recovery, never labeled unknown.
+        # 出事务前的粗筛：剩余时间不足以覆盖结算预留就不再进事务，也不发请求。
+        if _send_budget(batch.lease_until) < _MIN_SEND_WINDOW_SECONDS:
             break
         with _immediate_tx(db):
             db.expire_all()
@@ -1418,13 +1522,30 @@ def execute_batch(
                 payload = decision.value
             url = f"{(runtime.base_url or '').rstrip('/')}{_API_PATHS[api]}"
             headers = {"Authorization": f"Bearer {runtime.api_key}"} if runtime.api_key else {}
-            remaining = (batch.lease_until - timeutil.utcnow()).total_seconds()
-            if remaining < 0.1:
-                break
-            timeout = min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining)
+            # C-R2：事务内已消耗的等待时间不得重新授予完整 timeout；扣除结算
+            # 预留后仍不足以覆盖最小发送窗口，则本笔从未发送。
+            budget = _send_budget(batch.lease_until)
+            if budget < _MIN_SEND_WINDOW_SECONDS:
+                attempt.status = "skipped"
+                attempt.error_code = REASON_INSUFFICIENT_BUDGET
+                db.flush()
+                continue
+            timeout = budget
             attempt.status = "in_flight"
             db.flush()
             pending_id = attempt.id
+        # 事务提交到实际发送之间还有一段墙钟（BEGIN IMMEDIATE 锁等待、提交本身）。
+        # 这里再核对一次：到这一刻已没有足够窗口时，本笔从未发出，回退为 skipped
+        # （零计费、非 unknown），而不是带着不足的预算发出去。
+        if _send_budget(batch.lease_until) < _MIN_SEND_WINDOW_SECONDS:
+            _release_unsent(
+                db,
+                batch_id=batch_id,
+                lease_identity=lease_identity,
+                attempt_id=pending_id,
+                reason=REASON_INSUFFICIENT_BUDGET,
+            )
+            break
         started = time.monotonic()
         text: str | None = None
         usage: dict[str, int] | None = None
@@ -1463,6 +1584,12 @@ def execute_batch(
 
     if after_send is not None:
         after_send(db, batch)
+
+    # C-R2：仍未发送的预留（预算不足、栅栏变化等）在本人份仍有效时释放为
+    # skipped——不记 unknown、不计费。身份已失效则留给恢复器，绝不越权改写。
+    _release_remaining_unsent(
+        db, batch_id=batch_id, lease_identity=lease_identity, reason=REASON_INSUFFICIENT_BUDGET
+    )
 
     # ---- tx3：写回栅栏重验 + CAS 应用（崩溃恢复点④：写回前）----
     return _apply_batch(
