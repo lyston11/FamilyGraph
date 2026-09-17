@@ -273,6 +273,40 @@ def _run_with_events(
     return run
 
 
+def _egress(
+    db_session,
+    *,
+    run_id: int,
+    offsets_s: list[tuple[str, float, int | None]],
+) -> None:
+    """按偏移写 agent_provider_egress 审计行（target_id 即 run_id）。
+
+    与 _run_with_events 共用同一个 base（utcnow()-600s）以便时间对齐。
+    """
+    base = utcnow() - timedelta(seconds=600)
+    for status, offset, upstream_status in offsets_s:
+        db_session.execute(
+            sa.text(
+                "INSERT INTO audit_log "
+                "(actor_id, action, target_id, ip, detail_json, created_at) "
+                "VALUES (NULL, 'agent_provider_egress', :rid, NULL, :detail, :at)"
+            ),
+            {
+                "rid": run_id,
+                "detail": json.dumps(
+                    {
+                        "provider_id": 1,
+                        "status": status,
+                        "upstream_status": upstream_status,
+                        "bytes_read": 0,
+                    }
+                ),
+                "at": base + timedelta(seconds=offset),
+            },
+        )
+    db_session.commit()
+
+
 def test_latency_metrics_decomposes_assistant_phases(
     admin_client: TestClient, db_session, _admin_headers
 ) -> None:
@@ -333,6 +367,58 @@ def test_latency_metrics_decomposes_assistant_phases(
     assert phases["settle"]["n"] == 2
     assert phases["settle"]["p50_ms"] == 500
     assert phases["settle"]["max_ms"] == 1_000
+
+
+def test_latency_metrics_separates_provider_retry_from_generation(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """A-02：上游重试不得被当作单次模型推理。
+
+    第 1 轮 20s 内含一次重试：失败@6s、失败@9s、成功@21s。连续失败段内
+    末次失败−首次失败 = 3s 计入 provider_retry（下界；首次失败自身耗时不可知）。
+    第 2 轮无重试，不得被计入。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-retry")
+    run = _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None),
+            ("run.started", 1.0, None),
+            ("turn.started", 1.0, None),
+            ("message.assistant_added", 21.0, {"role": "assistant", "text": "a"}),
+            ("turn.completed", 21.0, None),
+            ("turn.started", 21.0, None),
+            ("message.assistant_added", 41.0, {"role": "assistant", "text": "b"}),
+            ("turn.completed", 41.0, None),
+        ],
+        settle_after_s=41.5,
+    )
+    _egress(
+        db_session,
+        run_id=run.id,
+        offsets_s=[
+            ("failed", 6.0, 502),
+            ("failed", 9.0, 502),
+            ("succeeded", 21.0, 200),
+            ("succeeded", 41.0, 200),
+        ],
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+
+    # model_turn 仍含重试（口径如实），两轮各一个样本。
+    assert phases["model_turn"]["n"] == 2
+    assert phases["model_turn"]["p50_ms"] == 20_000
+    # 重试开销单列：仅第 1 轮的失败段，9s − 6s = 3s（下界）。
+    assert phases["provider_retry"]["n"] == 1
+    assert phases["provider_retry"]["p50_ms"] == 3_000
+    # 失败尝试数无歧义：两次 502。
+    assert phases["provider_failed_attempts"] == 2
+    assert phases["runs_with_provider_retry"] == 1
 
 
 def test_latency_metrics_phases_empty_without_events(

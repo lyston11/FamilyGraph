@@ -52,6 +52,20 @@
   `first_text` 每 run 一个样本（不是每轮），`model_turn` 逐轮一个样本（不得把多轮合成一笔）；
   无正文的 turn 不得把后续 turn 的正文算到自己头上；无 `run.started` 的 run 计入
   `runs_without_start` 而不是静默丢弃。缺失即 `n=0`/`null`，不零填充。
+- **`model_turn` 含上游重试，必须与 `provider_retry` 成对读**（09-17 A，A-02）：pi-ai 在
+  5xx/408/409/429 上指数退避重试，重试发生在同一轮 `turn.started`→正文之间，所以重试开销
+  **已被计入 `model_turn`**。`provider_retry` 由 `agent_provider_egress` 审计
+  （**`target_id` 就是 run_id**，`detail_json` 含 `status`/`upstream_status`/`bytes_read`，
+  无 prompt/正文）推导：同一连续失败段内 `末次失败 − 首次失败`。这是**下界**——审计只记
+  完成时刻、不记请求开始，故段内首次失败自身耗时不可知；单次失败后即成功的段贡献 0。
+  `provider_failed_attempts` 给出失败尝试总数（无歧义）。**不得**把 `provider_retry` 当作
+  全部重试耗时，也不得用 `model_turn − provider_retry` 宣称“纯推理时间”而不注明下界性质。
+  实测（n=2 run，只读副本）：run 2 的 5 次 502 在**同一轮内**连续，`provider_retry` 记录
+  10.22s（该轮 `model_turn` 33.15s）；run 1 是**每轮各一次** 503，失败段长度为 1，
+  按 `末次−首次` 定义得 0——即**单次失败的段不被测量**，只能由 `provider_failed_attempts=2`
+  看出有重试。这是本指标的已知盲区，不要用它的 n 去反推「无重试」。
+  触发源是上游 502/503 不稳定，不是退避上限（实测退避远小于
+  `AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS=20000`）。
 - **不要新增冗余阶段字段。也不要直接透传 delta**：`mapSessionEvent` 忽略
   `message_update`/delta 是**刻意合同**，不是遗漏——`agent/test/assistant-delta-gap.test.ts`
   用真实 Pi SDK + fake stream 测出：上游 `text_delta` 与 SDK 的 `message_update` 均会到达，

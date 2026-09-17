@@ -48,10 +48,21 @@ sidecar 相关默认值（部署 env 可能覆盖，须实测）：lease 轮询 
   `admin_agent_latency` docstring 的「无法分段、应补 FSM 生命周期事件」说法与数据不符，已改写。
 - **样本（n=2）**：`model_turn` 逐轮 p50 33.15s（4 个 turn）；`queue_wait` p50 0.94s；
   `tool_call` p50/max 0ms；`settle` max 10ms。**模型生成为主导，排队/工具/落库均非主导。**
+- **但 `model_turn` 含上游重试退避，不是纯推理**（E3）：run 2 的 5 次 502 集中在同一轮，
+  该轮 33.15s 中 **10.22s** 是重试与退避（`provider_retry`，下界），余 22.93s 含纯生成。
+  A-02 要求“重试不误算为单次模型推理”，故 `model_turn` **必须与 `provider_retry` 成对读**；
+  `provider_failed_attempts` 给出失败尝试总数（无歧义）。
+  已知盲区：**每轮各一次失败**的形态（如 run 1 两次 503 分属两轮）段长度为 1，
+  下界指标记 0，只能用失败尝试数看出有重试。`agent_provider_egress` 的 `target_id`
+  就是 run id（run 级归属精确），但无轮次编号、也不记请求开始时刻。
+- **助手实际推理档位是 Pi SDK 默认 `medium`**（E4，真实 SDK + fake stream）：`session.ts` 不传
+  `thinkingLevel`，`SettingsManager.inMemory()` 无默认档位，SDK 落到 `DEFAULT_THINKING_LEVEL="medium"`；
+  平台无档位控制项（`thinking_levels_json` 只声明 Provider 支持的档位列表）。降档属质量取舍。
 - **delta → 可见的差值已实测**（`agent/test/assistant-delta-gap.test.ts`，真实 Pi SDK + fake stream，
   无 egress）：上游 3 个 `text_delta` 均到达、SDK 也转发 `message_update`，但公共事件
   `message.assistant_added` **恰好 1 次**且只在 `message_end`；首个 delta → 首次可见的差值
   等于剩余正文生成时间。**「首段显示晚」成因已确认为发布时机，不是 SSE/渲染。**
-- **仍未实测**：真实推理档位、代理缓冲、重试次数、慢 chunk 是否真实发生、时钟偏差。
+- **仍未实测**：真实推理档位对耗时的影响幅度、代理是否缓冲、慢 chunk 是否真实发生、时钟偏差；
+  并发 run 存在时 egress 审计无 run_id，重试只能按时间窗归属。
 - **仍未实施的选项**（需用户决定）：逐字/增量显示（delta 合同）、更快模型或更低推理档位、
-  并发/预算扩容。
+  并发/预算扩容、降低上游 5xx 重试退避上限（实测退避远小于 20s 上限，触发源是上游不稳定）。

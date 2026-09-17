@@ -1,8 +1,17 @@
 # 执行计划：双 Agent 延迟与结果保全
 
-## 0. 本轮停止点
+## 0. 执行状态（2026-09-17 更新）
 
-只交付规划。以下执行项全部待办；不得 `task.py start`、建实现 worktree、写业务代码、运行生产压测或调参。用户审阅最新 PRD/design/implement 并另行批准后才进入执行。全过程不使用子智能体。
+规划已获用户批准并执行完毕。两个子任务均已实现、验证、归档与清理；集成验收见
+`research/integration-acceptance.md`。父任务因 AC-01/AC-06/AC-07 的**真实提速与受控场景矩阵**未完成，
+**不归档为 completed**（按 R8/AC-09）。下文复选框反映实际执行结果。
+
+集成期又完成两项助手侧事实补测（只读 + 新增回归，未提速）：
+
+- **A-02 落实**：`model_turn` 含上游 5xx 重试退避，故在 `assistant_phases` 中新增
+  `provider_retry`（下界）/`provider_failed_attempts`（无歧义）/`runs_with_provider_retry`，
+  使「重试」不再被当作单次模型推理。回归 `test_latency_metrics_separates_provider_retry_from_generation`。
+- **实际推理档位**：真实 SDK 探针实测为 SDK 默认 `medium`（平台无档位控制项），已记入证据，未改动。
 
 ## 1. 任务树与依赖
 
@@ -12,41 +21,43 @@
 - 执行顺序：共同基线 → B 红测与修复 → A 针对实测瓶颈推进 → 共同复测/部署验收。单线程推进，共享 backend/provider/SQLite/端口时不并行。
 - 如后续选择逐字展示/新模型/unknown 重试，先补齐相应 PRD 和设计重新评审，不夹带进当前代码变更。
 
-## 2. 规划交付检查（本轮）
+## 2. 规划交付检查
 
-- [ ] 三个任务均有 PRD、design、implement，status=planning。
-- [ ] Research index/summary/evidence 分层，源码与旧证据引用可定位。
-- [ ] JSONL 仅精确 Spec 叶与 summary；不派发子智能体。
-- [ ] 运行任务 validate 和本地文档引用/状态检查；业务文件零改动。
-- [ ] 向用户提交规划摘要后停止。
+- [x] 三个任务均有 PRD、design、implement；已 `task.py start` 并执行完毕。
+- [x] Research index/summary/evidence 分层，源码与旧证据引用可定位。
+- [x] JSONL 仅精确 Spec 叶与 summary；未派发子智能体（按用户要求主会话直接执行）。
+- [x] 运行任务 validate；业务文件改动仅在子任务 worktree 内。
+- [x] 向用户提交规划摘要后停止，等批准后才执行。
 
-## 3. 批准后的共同基线
+## 3. 共同基线
 
-- [ ] 重读 HANDOFF、最新任务/spec、相关源码与 git 状态，核对旧任务成果，记录源码 commit。
-- [ ] 启动实际实现子任务，在其自动生成的 branch/worktree 开发；父任务不借规划授权启动实现。
-- [ ] 只读核对远端进程、实际加载配置、Provider 解析链、队列状态；敏感值不输出，排查根因不依赖 health 单点。
-- [ ] 收集既有延迟 API/安全审计与当前 run/batch 元数据。明确 API 读操作可能写访问审计；需要纯只读 DB 时使用只读连接。
-- [ ] 按同配置定义助手与管家阶段表、采样窗口、缺失字段、失败分母；记录首字与首完整消息的区别。
-- [ ] 在本地/隔离 DATA_DIR 做时序探针；不导入 app 后再猜库路径。
-- [ ] 若已有字段不足，冻结最小字段/事件方案、兼容策略与迁移判断后再写实现。
-- [ ] 在改动前保存 baseline；设定受控场景的比较项及真实小样本调用上限，不制造无依据的全局响应 SLO。
+- [x] 重读 HANDOFF、最新任务/spec、相关源码与 git 状态，记录源码 commit（`62a2b15` 基线）。
+- [x] 在子任务自动生成的 branch/worktree 开发；父任务未借规划授权启动实现。
+- [x] 只读核对远端进程、配置、Provider 解析链与队列状态；敏感值未输出。
+- [x] 收集既有延迟 API/安全审计与 run/batch 元数据；只读副本上取数，未污染生产库。
+- [x] 定义双链路阶段表与口径红线（首字 vs 首完整消息、缺失即 null 不零填充）。
+- [x] 隔离 DATA_DIR 时序探针；未导入 app 后猜库路径。
+- [x] 字段充足性已核实：助手分段**无需新增字段**（既有 `agent_run_events.created_at` 足够）。
+- [x] 改动前保存 baseline；真实小样本上限明确。**未做**：受控场景矩阵与全局 SLO。
 
-## 4. B 实施门
+## 4. B 实施门（已完成）
 
-- [ ] 完成 B 设计的 S1–S10 故障矩阵红测，特别是第一笔成功/第二笔耗尽租约与混合 recovery。
-- [ ] 每笔调用先审计后发下一笔；保持 owner/attempt/deadline 栅栏及网络事务边界。
-- [ ] 混合成功与 unknown 的独立产物恢复；校验幂等、费用、批次状态聚合与旧行兼容。
-- [ ] transport 总截止与收尾时间预留；慢 chunk 及资源回收验证，禁止后台遗留网络线程。
-- [ ] 四 kind 回归、无权限/语义变化/旧 worker 拒写、真实 unknown 禁止重放。
-- [ ] 核验 Spec 与历史声明需修正的位置，不改写历史验收当时的原始数据。
+- [x] 红测先行：逐笔保全、混合 recovery、空结果、慢 chunk 四类均先证红。
+- [x] 每笔调用先结算再发下一笔；保持 owner/attempt/deadline 栅栏及网络事务边界。
+- [x] 混合成功与 unknown 的独立产物恢复；批次仍如实 `failed`，不伪装完全成功。
+- [x] transport 总截止与收尾预算；慢 chunk 与资源回收验证。
+- [x] 四 kind 回归、失租旧 worker 拒写、真实 unknown 禁止重放。
+- [x] 修正 Spec 中的旧声明；未改写历史验收原始数据。
 
-## 5. A 实施门
+## 5. A 实施门（部分完成）
 
-- [ ] 完成 A 阶段矩阵，验证代理 egress、sidecar context/SDK/工具与前端显示的时序关联。
-- [ ] 分清 SDK/代理重试、queued、工具多轮、压缩、模型生成与消息缓冲；对每个结论给样本支持或 unknown。
-- [ ] 对已证实且不改变产品合同的问题做最小修复与回归；若无程序性瓶颈，交付可审阅选择并保持“实际提速”未完成。
-- [ ] 若提出逐字显示，先冻结跨层事件合同/引用与失败语义并让用户审阅，不仅修改 events.ts。
-- [ ] 保持空最终回答失败、非空 length 回答、取消、失租、SSE 重连和完整历史压缩回归。
+- [x] 助手分段实现并从既有持久事件取数；样本 n=2（生产仅 2 run，已用尽）。
+- [x] 分清排队/模型生成/工具/落库/发布时机；每项给样本或标 unknown。
+- [x] 已证实的问题（发布时机导致首段晚）给出双向 pin 的回归；**未做提速改动**。
+- [x] 逐字显示未实施，合同要求已写入 spec 供后续评审。
+- [x] 空最终回答、取消、失租、SSE 重连、完整历史压缩回归全绿。
+- [ ] **未完成**：受控场景矩阵（无工具/只读工具/多轮/压缩/排队/失败重试/取消失租）。
+- [ ] **未完成**：真实模型对照与提速验证（需用户先决定选项）。
 
 ## 6. 验证命令（后续，不是本轮运行记录）
 
@@ -82,13 +93,32 @@ npm run build
 
 ## 7. 真实环境与交付
 
-- [ ] 真实 Provider 测试前确定小样本上限、输入脱敏、隔离目录与授权，保持模型/档位/预算不变；不自动重发历史 unknown。
-- [ ] 通过正常链路观察 core/assist 分别完成，不能手写模型投影制造 AC。
-- [ ] 记录 before/after 全体样本及失败/删失，不把超时升高后的更慢成功当提速。
-- [ ] AC 表逐项附证据；上游慢/没有合法改善仍如实列出，必需项阻塞时不归档为 completed。
-- [ ] 更新相关 Spec/HANDOFF，补充旧归因纠正；无关旧文档错误不顺手整修。
-- [ ] 串行集成、受影响验证、push；部署另核对 commit/迁移/服务及实际功能，不用 health 代替。
-- [ ] 子任务验证通过后依次归档；父任务全部 AC 通过后归档。删除前确认分支已合 main、worktree 无未提交代码，禁止强制清理。
+- [x] 真实 Provider 测试沿用既有授权与配置，未改模型/档位/预算；未重发历史 unknown。
+- [x] 通过正常链路观察（生产只读副本）；未手写模型投影制造 AC。
+- [ ] **未完成**：before/after 真实对照（助手样本用尽，需用户先决定提速选项）。
+- [x] AC 表逐项附证据；上游慢如实列出，必需项阻塞时不归档为 completed。
+- [x] 更新相关 Spec/HANDOFF，补充旧归因纠正（“助手无法分段”说法已改写）。
+- [x] 串行集成、受影响验证、push；未部署（无生产部署需求：零迁移、无 API 破坏性变更）。
+- [x] 子任务验证通过后依次归档；父任务因必需 AC 未完成而**保留未完成**。
+
+## 9. 实际执行记录（2026-09-17）
+
+```text
+B: e482f59 fix(steward): persist each assist result before the next request
+   9c4a677 test(steward): cover legal empty terminology result as checked
+   062e4e6 docs(task): record steward result-integrity evidence and execution log
+   45f636a chore(task): archive 09-17-steward-attempt-result-integrity
+A: 076d631 feat(admin): decompose assistant latency from persisted run events
+   32b80f1 test(agent): measure the delta-to-visible gap against the real SDK
+   729216a docs(task): record assistant latency diagnosis findings and spec contract
+   358766b chore(task): archive 09-17-assistant-latency-diagnosis
+集成: 651ee07 Merge branch 'feat/09-17-assistant-latency-diagnosis'
+```
+
+验证（集成后 `main`）：后端 `1648 passed / 3 skipped` + ruff/format/mypy 全绿；agent `127 passed`
++ lint/type-check/build 全绿；API smoke `56/56`。未跑浏览器端到端（未改前端）。
+
+清理：两个子任务 worktree 与分支均已删除，主检出干净。
 
 ## 8. 交付证据结构
 

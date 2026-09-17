@@ -1,138 +1,136 @@
-# A 证据：助手耗时分段（生产真实数据 + 可复核实现）
+# 助手延迟：受控复现与真实配置证据（2026-09-17）
 
-基线 `main@45f636a`。本文记录 A 子任务的取证与实现结果，供父任务集成验收引用。
+基线 `main@62a2b15`（A 实施于 `076d631`）。本文件只记录可复核事实与复现方式，
+不写正文、prompt、thinking、凭据或用户隐私。
 
-## 1. 关键更正：既有结论「无法分段」是错的
+## 1. 结论摘要
 
-`app/api/admin_agent_latency.py` 原 docstring 声称助手侧只能给出「入队 → 终态」总时长，
-因为「被租走时刻/首事件未落库、应通过 FSM 转换点补生命周期事件」。**该说法与生产数据不符。**
+| 编号 | 结论 | 证据类型 | 状态 |
+|---|---|---|---|
+| E1 | 助手阶段可从既有持久事件拆解，无需新增字段 | 生产只读副本 + 代码 | 已证实 |
+| E2 | 模型生成是主导阶段（逐轮 p50 33.15s） | 生产只读副本 n=2 run | 已证实 |
+| E3 | 该「模型轮次」**含上游 5xx 重试与退避**，不是纯推理时间 | 生产只读副本 egress 审计 + 事件时间线 | 已证实 |
+| E4 | 助手实际推理档位是 Pi SDK 默认 `medium`，平台无档位控制项 | 真实 Pi SDK + fake stream（无 egress） | 已证实 |
+| E5 | 上游 `text_delta` 与公共 `message.assistant_added` 的差值是发布时机 | 真实 Pi SDK + fake stream | 已证实 |
+| E6 | 档位对耗时的**影响幅度**、代理缓冲、时钟偏差仍未实测 | — | 未知 |
 
-`agent_run_events` 表（迁移已在生产库）为每个事件持久化 `created_at`，且事件类型本身
-就是阶段边界：
+## 2. E1/E2：分段与主导阶段
 
-| 阶段边界 | 事件类型 |
-| --- | --- |
-| 入队 | `agent_runs.created_at` |
-| 取得执行权 | `run.started`（sidecar 在 lease → running 转换点写入） |
-| 每轮模型开始 | `turn.started` |
-| 每轮正文落地 | `message.assistant_added`（仅非空正文） |
-| 工具 | `tool.execution.started` / `tool.execution.completed`（按 `tool_call_id` 配对） |
-| 终态 | `agent_runs.settled_at` |
+真源为 `agent_run_events.created_at` 配合 `run.started`、`turn.started`、
+`message.assistant_added`、`tool.execution.started/completed` 与 `agent_runs.settled_at`。
+实现见 `backend/app/api/admin_agent_latency.py` 的 `assistant_phases`。
 
-因此**无需新增字段、无需 schema 变更、无需改热路径**即可拆解。原 docstring 的
-「应通过 FSM 转换点补生命周期事件」建议是多余工作，已改写为事实描述。
+样本窗：生产库只读副本全部 assistant run（n=2）。缺失阶段记 `null`/`n=0`，不零填充。
 
-## 2. 实现（`app/api/admin_agent_latency.py`）
-
-新增 `assistant_phases` 段，由持久事件时间戳推导，全部为只读查询（不触发模型）：
-
-| 字段 | 定义 |
-| --- | --- |
-| `queue_wait` | `run.created_at` → 该 run 最早的 `run.started` |
-| `first_text` | 该 run 最早的 `run.started` → 最早的**非空正文** `message.assistant_added`；每 run 一个样本 |
-| `model_turn` | 每个 `turn.started` → 该轮首个正文（若无正文，取该轮终止事件）；**逐轮**样本 |
-| `tool_call` | 按 `tool_call_id` 配对 `started` → `completed` |
-| `settle` | 该 run 最后一个非终态事件 → 终态 |
-| `runs` / `runs_without_start` | 样本数与**从未取得执行权**的 run 数（显式暴露，不静默丢弃） |
-
-口径约束（与 `latency-summary.md` §4 一致）：
-
-- 首控制事件、心跳、`turn.started`、工具事件、reasoning **一律不冒充**正文首字。
-- 缺失即 `n=0` / `null`，不零填充。
-- **不使用** `lease_expires_at` 倒推被租走时刻（run 的 lease 由心跳前移）。
-- 无正文的 turn 不得把后续 turn 的正文算到自己头上（实现中按 turn 区间取首个正文，
-  无正文则该轮终止事件收口）。
-
-## 3. 生产真实数据（只读，隔离副本）
-
-在服务器用 `.backup` 复制到 `/tmp` 隔离目录、`DATA_DIR` 显式指向该目录并断言路径不含
-生产 db 目录，运行探针读取 `_phase_breakdown`。生产仅 2 个 assistant run：
+run 2 时间线（真实数据，来自只读副本）：
 
 ```text
-runs: 2   by_status: {'succeeded': 2}
-queue_wait  {'n': 2, 'p50_ms': 940,    'p95_ms': 11051, 'max_ms': 11051}
-first_text  {'n': 2, 'p50_ms': 4293,   'p95_ms': 53044, 'max_ms': 53044}
-model_turn  {'n': 4, 'p50_ms': 33151,  'p95_ms': 53043, 'max_ms': 53043}
-tool_call   {'n': 2, 'p50_ms': 0,      'p95_ms': 0,     'max_ms': 0}
-settle      {'n': 2, 'p50_ms': 7,      'p95_ms': 10,    'max_ms': 10}
+seq  0  message.user_added       07:54:16.341610
+seq  1  run.started              07:54:17.282088   → 排队/取用 0.94s
+seq  2  turn.started             07:54:17.282846
+seq  3  message.assistant_added  07:54:21.575614   → 第 1 轮 4.29s（1 次请求成功，无重试）
+seq  4  tool.execution.started   07:54:21.576305
+seq  5  tool.execution.completed 07:54:21.576942   → 工具 0.6ms
+seq  6  turn.completed           07:54:21.577503
+seq  7  turn.started             07:54:21.578078
+seq  8  message.assistant_added  07:54:54.729955   → 第 2 轮 33.15s（含 5 次 502 重试）
+seq  9  turn.completed           07:54:54.730603
+seq 10  run.settled              07:54:54.741122   → 落库→结算 10.5ms
 ```
 
-逐 run 分解（SQL 与 `_phase_breakdown` 交叉核对一致）：
+逐轮 p50 33.15s；`queue_wait` p50 0.94s；`tool_call` p50/max 0ms；`settle` max 10ms。
+**排队、工具与落库都不是主导**，与「助手慢在别处」的直觉相反。
 
-| run | 总时长 | 入队→执行权 | 执行权→首正文 | 轮数 | 工具 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 103.74s | 11.05s | 53.04s | 2 | ~0ms |
-| 2 | 38.40s | 0.94s | 4.29s | 2 | ~0ms |
+## 3. E3：33.15s 中含 10.22s 重试退避（本轮新增，纠正 E2 的口径）
 
-## 4. 归因结论
+`agent_provider_egress` 审计（`audit_log.action='agent_provider_egress'`；`target_id` **就是 run id**，
+`detail_json` 含 `provider_id`/`status`/`upstream_status`/`bytes_read`，无 prompt/响应正文）。
+按 `target_id` 精确归属，run 2：
 
-- **模型生成是绝对主导**：`model_turn` 逐轮 p50 = 33.15s，两 run 的 4 个 turn 合计占各自总时长的绝大部分。
-- **排队不是主导**：`queue_wait` p50 0.94s。
-- **工具不是主导**：p50/max 均为 0ms（该样本为无实质耗时的只读工具）。
-- **本地落库/结算不是主导**：`settle` max 10ms。
+```text
+07:54:21.138  succeeded  upstream=200  bytes=98229   ← 属第 1 轮
+07:54:22.440  failed     upstream=502  bytes=0       ┐
+07:54:24.098  failed     upstream=502  bytes=0       │
+07:54:25.718  failed     upstream=502  bytes=0       │ 第 2 轮内
+07:54:28.413  failed     upstream=502  bytes=0       │
+07:54:32.660  failed     upstream=502  bytes=0       ┘
+07:54:54.719  succeeded  upstream=200  bytes=33727   ← 第 2 轮重试成功
+```
 
-因此「助手响应很慢」在本样本中**主要是上游模型生成时间**，不是本地排队、工具或落库。
-这与 `latency-summary.md` §6「待实测」中「worker 排队分布」一项相符：已实测，非主导。
+实测（只读副本上按同一算法复算）：连续失败段 `末次失败−首次失败` = **10.22s**。即：
 
-### 样本限制（不得过度解读）
+```text
+第 2 轮 33.15s ≈ 10.22s 上游 502 重试+退避（下界）+ 22.93s 其余（含纯生成）
+```
 
-- **n=2**，且是两个早期 run（id 1/2）；不足以宣称稳定 p95，只能作为个体时长与范围证据。
-- 未观测：真实推理档位、代理是否缓冲、SDK/代理重试次数、慢 chunk 是否真实发生、
-  本地与服务器时钟偏差、压缩是否触发。
-- 未做受控本地延迟注入实验（A-03 的另一半），故「上游流首正文 vs 最终 `message_end`」
-  的差值仍属未实测。
+**因此 `model_turn` 当前口径会把上游重试退避计入「模型生成」**，而 A-02 要求
+「重试不误算为单次模型推理」。已实现 `provider_retry`（下界）+ `provider_failed_attempts`
+（无歧义）两项把它单独标出，`model_turn` 口径本身保持原样（不篡改既有样本）。
 
-## 5. 展示层：delta → 可见的差值已实测
+**重要区分（run 1 vs run 2）**：重试形态不同，下界指标只能盖住一种。
 
-`mapSessionEvent` 忽略 `message_update`/delta，只在 `message_end` 转发正文。该结论此前只是
-**读代码得出**；现已用**真实 Pi SDK + fake stream**（无 egress，`fetch` 被阻断断言）把它变成
-可执行证据：`agent/test/assistant-delta-gap.test.ts`。
+- run 2：5 次 502 **集中在同一轮**（21.578→54.730），连续失败段长度 5，
+  `provider_retry` 记 `末次失败−首次失败` = 32.660−22.440 = **10.22s**；
+  该轮 `model_turn` 33.15s，余 22.93s 含纯生成（与首次失败尝试自身耗时）。
+- run 1：两次 503 分属**不同轮**（第 1 轮 05:08:00.581→05:08:19.945，第 2 轮 05:08:53.767→05:09:02.946），
+  每轮各一次失败 → 每段长度 1 → 按 `末次−首次` 定义均得 **0**。
+  即 `provider_retry` 的 `n` **不反映** run 1 的两次重试；只能由
+  `provider_failed_attempts=2` 看出有重试。这是下界指标的已知盲区。
 
-测量结果（真实 SDK 事件流，3 个 `text_delta` 各间隔 40ms）：
+重试配置（`agent/src/config.ts:107-108`，部署 env 未覆盖）：
+`AGENT_PROVIDER_STREAM_MAX_RETRIES=5`、`AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS=20000`；
+按既有合同对 5xx/408/409/429 指数退避。实测退避远小于 20s 上限，故上限不是瓶颈，
+**触发源是上游 502/503 不稳定**。
 
-| 量 | 观测 |
-| --- | --- |
-| 上游 `text_delta` 数量 | 3（确实到达，跨距 ≥ 80ms） |
-| SDK 向订阅者转发 `message_update` | 是 |
-| 公共事件 `message.assistant_added` | **恰好 1 次**（在 `message_end`） |
-| 首个 delta → 首次可见 | ≥ 80ms（等于最后一轮 delta 的到达） |
-| 发布正文 | 完整答案，不是部分前缀 |
+观测缺口（如实记录）：
 
-即：**用户可见首字严格晚于上游首块正文，差值等于「剩余正文生成时间」**。这不是猜测，
-是失败即红的断言（探针注入 delta 发布后该用例立刻失败，已还原）。
+1. `agent_provider_egress` 有 run 级精确归属（`target_id`），但**没有轮次编号**，
+   把同一 run 的多次重试拆到具体 turn 只能靠时间先后（本文件即如此；同 run 内串行时可靠）。
+2. 审计只记请求完成时刻、不记开始时刻，因此**首次失败尝试的耗时不可知**，
+   `provider_retry` 只能是下界。要得到精确的 per-attempt 重试耗时，需最小新增字段
+   （A 设计 §3 步骤 5 允许的选项），本轮未实现。
 
-因此「首段显示晚」的成因已确认为**发布时机**（`message_end` 才可见），而不是 SSE 或渲染。
-但**是否值得改**取决于用户对「首字更早但可能被终态替换」的取舍——属于产品决策，未实施。
+## 4. E4：实际推理档位是 SDK 默认 `medium`
 
-## 6. 未做的产品选择（留给用户）
+复现方式：真实 Pi SDK + fake stream，`fetch` 被拦截并断言未发生 egress
+（与 `test/assistant-delta-gap.test.ts` 同一套 harness）。探针捕获 `streamSimple`
+收到的 `options.reasoning`。
 
-按 PRD A-R3/A-06 非目标，以下**未实施**，只提供证据与选项：
+```text
+THINKING_PROBE_OPTIONS_REASONING= ["medium"]
+```
 
-1. **逐字/增量显示**：`mapSessionEvent` 忽略 `message_update`/delta，用户可见首字 =
-   `message_end` 时刻，而非上游首块正文。要改善「首段显示晚」需另立 delta 合同
-   （重连/重复 delta/消息 ID/终态替换/部分失败）。**未改**。
-2. **更快模型或更低推理档位**：会改变质量与成本，需用户决定。**未改**。
-3. **并发/预算扩容**：本样本排队非主导，证据不支持此投入。**未改**。
+原因链（源码核对）：`agent/src/session.ts:414` 的 `createAgentSession` 不传 `thinkingLevel`；
+SDK 在 `dist/core/sdk.js:115-135` 依次取 `options.thinkingLevel` → 每模型覆盖 →
+`settingsManager.getDefaultThinkingLevel()` → `DEFAULT_THINKING_LEVEL`
+（`dist/core/defaults.js:1` = `"medium"`）；sidecar 用 `SettingsManager.inMemory()`，
+无默认档位设置，故落到 `medium`。
 
-## 6. 回归
+平台侧无档位控制项：`agent_providers.thinking_levels_json` 只声明该 Provider
+**支持**的档位列表（生产为 `["low","medium","high","xhigh","max"]`），
+`agent_space_provider_settings` 无档位列，assist 与 runtime 均无档位参数。
 
-`tests/test_admin_agent_latency.py`：
+**这不是缺陷**，是未显式选择档位的默认行为；降低档位属质量取舍，须用户决定。
 
-- `test_latency_metrics_decomposes_assistant_phases`：两轮 + 一次工具 + 无 `run.started` 的
-  第二个 run，断言 `model_turn.n == 2`（不是把两轮合成一笔）、`first_text.n == 1`（每 run
-  一个样本）、工具按 id 配对、`runs_without_start == 1`。
-- `test_latency_metrics_phases_empty_without_events`：无样本时 `n=0` 且分位为 `null`。
-- 既有 `test_latency_metrics_shape_and_percentiles` 的字段白名单同步新增 `assistant_phases`。
+## 5. E5：delta → 可见的差值是发布时机
 
-## 7. 与本任务无关的既有 flaky 测试（如实记录）
+`agent/test/assistant-delta-gap.test.ts`（真实 Pi SDK + fake stream，无 egress）：
+上游 3 个 `text_delta` 全部到达、SDK 也转发 `message_update`，但公共
+`message.assistant_added` **恰好 1 次**且只在 `message_end`，内容为完整答案。
+故「首段显示晚」= 剩余正文生成时间，与 SSE/渲染无关。该测试双向 pin：
+若改为透传 delta 即失败。
 
-全量 pytest 在 `test_steward_candidate_evidence_integration.py::test_lease_expiring_while_actual_writeback_waits_for_sqlite_writer_is_not_adopted`
-上偶发失败。已核实为**先于本任务存在**，不是本次改动引入：
+## 6. 未实测（不得写成已定位根因）
 
-- 在**未含本任务任何改动**的 `62a2b15`（B 之前）检出上跑全量，同样失败（一次 1642 passed / 1 failed）。
-- 该用例单独运行连续 14 次全部通过。
-- 该用例与 `admin_agent_latency` 无 import/调用关系（`grep` 零命中）。
-- 该用例自身含真实墙钟 `time.sleep((deadline - utcnow()) + 0.03)`，全量运行时的
-  CPU/IO 争用会使其越过 `batch.lease_until` 判定边界（250ms 预算）。
+**降低推理档位能省多少时间**（档位本身已测为 `medium`）、代理是否缓冲、
+慢 chunk 是否真实发生、本地与服务器时钟偏差、并发 run 下的重试归属。
 
-归因：既有计时敏感 flaky，非本任务回归。未在本任务中修改它（超出范围）。
+## 7. 复现命令
+
+```bash
+cd agent && npx vitest run test/assistant-delta-gap.test.ts   # E5，无 egress
+cd backend && .venv/bin/python -m pytest -q tests/test_admin_agent_latency.py  # E1/E2 口径
+```
+
+E3/E4 为只读副本查询与一次性探针，非长期回归；口径已写入
+`spec/backend/agent-runtime.md` 的「助手耗时按持久事件分段」小节。
