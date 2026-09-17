@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -385,7 +386,9 @@ def test_returned_result_is_persisted_before_the_next_send(db_session, monkeypat
             )
             observed["statuses"] = [row.status for row in rows]
             observed["first_has_output"] = rows[0].output_json is not None
-        time.sleep(max(timeout, 0.1) + 1.0)  # 耗尽剩余租约墙钟
+        # 超出本笔预算 + 结算预留（C-R2 起预算不再等于全部剩余租约），
+        # 从而真正耗尽租约墙钟。
+        time.sleep(max(timeout, 0.1) + 3.0)
         raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
 
     _summary, job = _run_job(db_session, space, event.id)
@@ -1189,7 +1192,7 @@ class _HugeResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def iter_bytes(self):
+    async def aiter_bytes(self):
         while self._remaining > 0:
             step = min(len(self._chunk), self._remaining)
             self._remaining -= step
@@ -1200,21 +1203,23 @@ class _StreamCtx:
     def __init__(self, total: int) -> None:
         self._response = _HugeResponse(total)
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self._response
 
-    def __exit__(self, *args):
+    async def __aexit__(self, *args):
         return False
 
 
 class _StubClient:
+    """C：transport 改用 httpx.AsyncClient + asyncio.timeout。"""
+
     def __init__(self, total: int) -> None:
         self._total = total
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *args):
+    async def __aexit__(self, *args):
         return False
 
     def stream(self, method, url, headers=None, json=None):
@@ -1228,7 +1233,7 @@ def test_oversized_response_capped_without_full_read(db_session, monkeypatch) ->
     _turn_on(monkeypatch, candidate=False, ranking=False)
 
     total = config.STEWARD_ASSIST_MAX_RESPONSE_BYTES + 4096
-    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: _StubClient(total))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: _StubClient(total))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session)
@@ -1254,9 +1259,9 @@ class _SlowChunkResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def iter_bytes(self):
+    async def aiter_bytes(self):
         while self.chunks_served < self._max_chunks:
-            time.sleep(self._chunk_delay)
+            await asyncio.sleep(self._chunk_delay)
             self.chunks_served += 1
             yield b'{"output": []}'
 
@@ -1265,10 +1270,10 @@ class _SlowStreamCtx:
     def __init__(self, response: _SlowChunkResponse) -> None:
         self._response = response
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self._response
 
-    def __exit__(self, *args):
+    async def __aexit__(self, *args):
         return False
 
 
@@ -1276,10 +1281,10 @@ class _SlowStubClient:
     def __init__(self, response: _SlowChunkResponse) -> None:
         self._response = response
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *args):
+    async def __aexit__(self, *args):
         return False
 
     def stream(self, method, url, headers=None, json=None):
@@ -1289,7 +1294,7 @@ class _SlowStubClient:
 def test_slow_chunks_cannot_extend_past_the_total_deadline(monkeypatch) -> None:
     """B-07：每块小于 read timeout 但总时长超预算时，仍在总截止处中止读取。"""
     response = _SlowChunkResponse(chunk_delay=0.05)
-    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: _SlowStubClient(response))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: _SlowStubClient(response))
     started = time.monotonic()
     with pytest.raises(httpx.ReadTimeout):
         steward_assist._post_json(
@@ -1318,7 +1323,12 @@ def test_transport_receives_30s_default_timeout(db_session, monkeypatch) -> None
 
 def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
     """单批墙钟 deadline：lease 耗尽后剩余 attempt 不再发送（恢复器按 unknown
-    或释放处理），批次不再自动重发。"""
+    或释放处理），批次不再自动重发。
+
+    C-R2：单笔预算 = min(配置 timeout, 剩余租约 - 结算预留)，所以第一笔不再
+    吃满全部租约；第二笔在出事务前就因剩余不足以覆盖结算预留而未发送，且
+    预留被立即释放为 skipped（零计费），而不是留给恢复器。
+    """
     space, _a, _b, event = _spouse_space(db_session, "assist-deadline")
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, explanation=True)
@@ -1339,17 +1349,16 @@ def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
     assert steward_assist.schedule_due_batch(db_session) is not None
     steward_assist.execute_batch(db_session, batch.id)
 
-    # 第一张卡超时消耗全部墙钟；已发送卡保留 in_flight，未发送卡仍为 reserved。
+    # 第一张卡超时消耗本笔预算；第二张卡因剩余时间不足覆盖结算预留而未发送，
+    # 预留立即释放为 skipped（零计费、非 unknown）。
     db_session.expire_all()
     rows = _calls(db_session, job.id)
     assert len(calls) == 1
-    assert any(r.status == "in_flight" for r in rows)
-    assert all(r.status in ("in_flight", "reserved") for r in rows)
-    # lease 过期后恢复：in_flight → unknown（保守计费）
-    b = _batch(db_session, job.id)
-    b.lease_until = timeutil.utcnow() - timedelta(seconds=1)
-    db_session.commit()
-    steward_assist.recover_stuck_batches(db_session)
+    assert any(r.status == "unknown" for r in rows)
+    unsent = [r for r in rows if r.status == "skipped"]
+    assert unsent and all(r.error_code == steward_assist.REASON_INSUFFICIENT_BUDGET for r in unsent)
+    assert all(r.billed_tokens in (0, None) for r in unsent)
+    # 已发送但无法确认的一笔仍如实 unknown，批次终态 failed 且不自动重发
     assert _batch(db_session, job.id).status == "failed"
     db_session.expire_all()
     rows = _calls(db_session, job.id)
@@ -1634,14 +1643,14 @@ def test_post_json_decodes_gzip_response(monkeypatch) -> None:
         assert request.url.host == "provider.test"
         return httpx.Response(200, content=compressed, headers={"Content-Encoding": "gzip"})
 
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     class _MockClient(real_client):
         def __init__(self, *args: object, **kwargs: object) -> None:
             kwargs["transport"] = httpx.MockTransport(handler)
             super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(steward_assist.httpx, "Client", _MockClient)
+    monkeypatch.setattr(steward_assist.httpx, "AsyncClient", _MockClient)
 
     data = steward_assist._post_json("https://provider.test/v1/responses", {}, {"model": "m"}, 5.0)
     assert data["usage"]["total_tokens"] == 5
