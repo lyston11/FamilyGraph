@@ -17,12 +17,12 @@ SDK 锁定：`@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` **0.84.
 
 ## 2. 实测（真实 SDK + 本地假网关）
 
-`agent/test/retry-governance.test.ts`（9 例）驱动真实 `buildRunSession`，上游是本地
+`agent/test/retry-governance.test.ts`（10 例）驱动真实 `buildRunSession`，上游是本地
 `node:http` 服务器，按 `provider_proxy.py` 的真实响应形状作答；请求层预算设为 2 次。
 
 | 场景 | 实测出站请求数 | 会话层 `auto_retry_start` |
 | --- | --- | --- |
-| 永久 4xx（真实状态码 + `x-should-retry:false`） | **1** | 0 |
+| 永久 4xx 400/401/403（真实状态码 + `x-should-retry:false`） | **1** | 0 |
 | 暂时 502（无停止头） | **12** = (2+1)×(3+1) | 3 |
 | 503 + `x-should-retry:false` | **4** = (3+1) | 3 |
 | 截断流（200 后无终止事件） | **4** = (3+1) | 3 |
@@ -37,6 +37,10 @@ SDK 锁定：`@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` **0.84.
 Pi **会话层** `isRetryableAssistantError` 只看错误**文本**是否匹配瞬态词表
 （`502`/`service.?unavailable`/`timeout`…）。因此 5xx + 停止头仍会让整轮重启 3 次
 （上表第 3 行），而 4xx 的脱敏外壳不匹配瞬态词表，两层都不重试。
+
+上游 401/403 是**上游**的状态，不是本 run 的 run-token：它只经 provider stream 报错，
+不会走到 `worker.ts` 中处理 internal 401/403/409/410 的失租中止路径（该路径只读
+heartbeat 与内部 API 错误），因此不会把上游凭据问题误变成 run 失租。
 
 ## 3. 实现
 
@@ -76,7 +80,7 @@ D 聚合回归 `tests/test_admin_agent_latency.py::test_latency_metrics_excludes
 ```bash
 cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app
 cd backend && .venv/bin/pytest -q          # 1691 passed, 3 skipped
-cd agent && npm run lint && npm run type-check && npm test && npm run build   # 142 passed
+cd agent && npm run lint && npm run type-check && npm test && npm run build   # 143 passed
 ```
 
 ## 6. 未完成 / 未授权
