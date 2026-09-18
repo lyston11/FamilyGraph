@@ -21,7 +21,7 @@ import {
   type Model,
 } from "@earendil-works/pi-ai";
 import { InternalClient, type RunContextProjection } from "../src/client.js";
-import { mapSessionEvent } from "../src/events.js";
+import { RunEventBuffer, mapSessionEvent } from "../src/events.js";
 import { buildRunSession, type BuildSessionDeps, type SessionBundle } from "../src/session.js";
 import { makeAgentConfig } from "./helpers.js";
 
@@ -195,5 +195,48 @@ describe("assistant text delta to first visible event", () => {
         public_payload: { role: "assistant", text: ANSWER_PARTS.join("") },
       },
     ]);
+  });
+
+  it("records first_text_ms well below duration_ms for the same turn (LL-AC1)", async () => {
+    // The live baseline could not separate "the model took 33s" from "prose was
+    // ready long before the user saw it". This asserts the new source timing
+    // separates them against the real SDK: the first text delta lands at the
+    // first DELTA_INTERVAL_MS, while duration_ms spans the whole message.
+    const config = makeAgentConfig(1);
+    const client = new InternalClient(config);
+    const agentDir = mkdtempSync(join(tmpdir(), "fg-first-text-"));
+    dirs.push(agentDir);
+
+    const bundle = await buildRunSession(config, client, projection(), "synthetic-run-token", {
+      agentDir,
+      streamOverride: deltaStream([]),
+    });
+    sessions.push(bundle.session);
+
+    const buffer = new RunEventBuffer(1);
+    bundle.session.subscribe((event: AgentSessionEvent) => {
+      // Same cast convention as worker.ts; the mapper only reads type/message.
+      buffer.onSessionEvent(event as unknown as Parameters<typeof mapSessionEvent>[0]);
+    });
+
+    await bundle.session.prompt("Where is the blue tin?");
+
+    const answers = buffer
+      .drain()
+      .filter((event) => event.type === "message.assistant_added");
+    expect(answers).toHaveLength(1);
+    const timing = answers[0]!.timing!;
+
+    // Both quantities exist and are ordered, because the deltas really streamed.
+    expect(timing.first_text_ms).toBeDefined();
+    expect(timing.duration_ms).toBeGreaterThan(timing.first_text_ms!);
+    // The visible gap is at least the time the remaining deltas took to arrive.
+    expect(timing.duration_ms - timing.first_text_ms!).toBeGreaterThanOrEqual(
+      DELTA_INTERVAL_MS * (ANSWER_PARTS.length - 1) - 20,
+    );
+    // No retry happened on a clean stream, so the retry sub-components stay absent
+    // rather than being reported as a measured zero.
+    expect(timing.retry_count).toBeUndefined();
+    expect(timing.retry_wait_ms).toBeUndefined();
   });
 });
