@@ -1,0 +1,153 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - generic [ref=f1e4]:
+      - complementary [ref=f1e5]:
+        - link "FamilyGraph 我的家庭" [ref=f1e6] [cursor=pointer]:
+          - /url: /
+          - generic [ref=f1e12]: FamilyGraph
+        - generic [ref=f1e13]:
+          - generic [ref=f1e14]: 当前家族空间
+          - generic "切换当前空间" [ref=f1e15]:
+            - generic [ref=f1e17] [cursor=pointer]:
+              - generic "朱氏皇族" [ref=f1e18]
+              - img "loading" [ref=f1e22]
+        - navigation "主导航" [ref=f1e29]:
+          - link "我的家庭" [ref=f1e30] [cursor=pointer]:
+            - /url: /
+          - link "家族树" [ref=f1e35] [cursor=pointer]:
+            - /url: /family-tree
+          - link "统计" [ref=f1e42] [cursor=pointer]:
+            - /url: /stats
+        - navigation "次级导航" [ref=f1e45]:
+          - link "记忆与知识" [ref=f1e46] [cursor=pointer]:
+            - /url: /memory
+          - link "设置" [ref=f1e50] [cursor=pointer]:
+            - /url: /settings
+          - link "空间管理" [ref=f1e55] [cursor=pointer]:
+            - /url: /spaces/1/manage
+        - generic [ref=f1e64]:
+          - generic [ref=f1e65]: 当前账户
+          - strong [ref=f1e66]: 朱元璋
+      - generic [ref=f1e67]:
+        - banner [ref=f1e68]:
+          - generic [ref=f1e69]:
+            - generic [ref=f1e70]: 我的家庭
+            - strong [ref=f1e73]: 明皇室
+          - generic [ref=f1e74]:
+            - switch "切换配色主题（暮色 / 雾青）" [ref=f1e75]:
+              - generic [ref=f1e77] [cursor=pointer]:
+                - generic [ref=f1e78]: 雾青
+                - generic [ref=f1e79]: 暮色
+            - link "通知" [ref=f1e80] [cursor=pointer]:
+              - /url: /notifications
+            - button "账号菜单" [ref=f1e84] [cursor=pointer]
+        - main [ref=f1e88]:
+          - main [ref=f1e89]:
+            - generic [ref=f1e90]:
+              - generic [ref=f1e91]: 家庭空间
+              - button "退出到家族树" [ref=f1e96] [cursor=pointer]:
+                - generic [ref=f1e97]: 家族树
+            - article [ref=f1e101]:
+              - generic [ref=f1e102]:
+                - generic [ref=f1e103]:
+                  - paragraph [ref=f1e104]: 我的家庭
+                  - heading "明皇室" [level=1] [ref=f1e105]
+                - generic [ref=f1e106]: 空间管理员
+              - generic [ref=f1e109]:
+                - generic [ref=f1e110]:
+                  - generic [ref=f1e111]:
+                    - generic [aria-hidden] [ref=f1e112]: 朱
+                    - generic [ref=f1e113]:
+                      - generic [ref=f1e114]: 朱元璋
+                      - generic [ref=f1e115]: 已确档
+                  - generic [ref=f1e119]:
+                    - button "编辑资料" [ref=f1e120] [cursor=pointer]
+                    - button "隐私与公示设置" [ref=f1e126] [cursor=pointer]
+                - generic [ref=f1e132]:
+                  - generic [ref=f1e133]:
+                    - heading "家庭成员 5" [level=2] [ref=f1e134]
+                    - generic "成员展示方式" [ref=f1e135]:
+                      - generic "网格" [ref=f1e136] [cursor=pointer]:
+                        - radio "网格" [checked]
+                      - generic "列表" [ref=f1e144] [cursor=pointer]:
+                        - radio "列表"
+                  - generic [ref=f1e147]:
+                    - button "马皇后 成员 女· 生 1332-08-19 家庭可见" [ref=f1e148] [cursor=pointer]:
+                      - generic [ref=f1e149]:
+                        - generic [aria-hidden] [ref=f1e150]: 马
+                        - generic [ref=f1e151]:
+                          - generic [ref=f1e152]: 马皇后
+                          - generic [ref=f1e153]: 成员
+                      - generic [ref=f1e154]: 女· 生 1332-08-19
+                      - generic [ref=f1e155]: 家庭可见
+                    - button "朱标 成员 男· 生 1355-10-10 家庭可见" [ref=f1e156] [cursor=pointer]:
+                      - generic [ref=f1e157]:
+                        - generic [aria-hidden] [ref=f1e158]: 朱
+                        - generic [ref=f1e159]:
+                          - generic [ref=f1e160]: 朱标
+                          - generic [ref=f1e161]: 成员
+                      - generic [ref=f1e162]: 男· 生 1355-10-10
+                      - generic [ref=f1e163]: 家庭可见
+                    - button "朱棣 成员 男· 生 1360-05-02 家庭可见" [ref=f1e164] [cursor=pointer]:
+                      - generic [ref=f1e165]:
+                        - generic [aria-hidden] [ref=f1e166]: 朱
+                        - generic [ref=f1e167]:
+                          - generic [ref=f1e168]: 朱棣
+                          - generic [ref=f1e169]: 成员
+                      - generic [ref=f1e170]: 男· 生 1360-05-02
+                      - generic [ref=f1e171]: 家庭可见
+                    - button "朱世珍 成员 男· 生 1283-09-25 家庭可见" [ref=f1e172] [cursor=pointer]:
+                      - generic [ref=f1e173]:
+                        - generic [aria-hidden] [ref=f1e174]: 朱
+                        - generic [ref=f1e175]:
+                          - generic [ref=f1e176]: 朱世珍
+                          - generic [ref=f1e177]: 成员
+                      - generic [ref=f1e178]: 男· 生 1283-09-25
+                      - generic [ref=f1e179]: 家庭可见
+                    - button "朱允炆 成员 男· 生 1377-12-05 家庭可见" [ref=f1e180] [cursor=pointer]:
+                      - generic [ref=f1e181]:
+                        - generic [aria-hidden] [ref=f1e182]: 朱
+                        - generic [ref=f1e183]:
+                          - generic [ref=f1e184]: 朱允炆
+                          - generic [ref=f1e185]: 成员
+                      - generic [ref=f1e186]: 男· 生 1377-12-05
+                      - generic [ref=f1e187]: 家庭可见
+              - generic [ref=f1e188]:
+                - generic [ref=f1e189]:
+                  - generic [ref=f1e190]:
+                    - strong [ref=f1e195]: "5"
+                    - text: 位家人
+                  - generic [ref=f1e196]:
+                    - text: 数据版本
+                    - strong [ref=f1e197]: v3012
+                - navigation "家庭卡操作" [ref=f1e198]:
+                  - button "编辑资料" [ref=f1e199] [cursor=pointer]
+                  - button "待办与通知" [ref=f1e203] [cursor=pointer]
+                  - button "进入家族树" [ref=f1e207] [cursor=pointer]
+    - button "关闭家庭助手" [expanded] [ref=f1e217] [cursor=pointer]
+  - dialog [ref=f1e219]:
+    - separator "调整面板宽度" [ref=f1e220]
+    - dialog "家庭助手" [active] [ref=f1e221]:
+      - generic [ref=f1e222]:
+        - generic [aria-hidden] [ref=f1e223]: 家
+        - generic [ref=f1e224]:
+          - generic [ref=f1e225]: 家庭助手
+          - generic [ref=f1e226]: 只依据已确认的档案与事实回答
+        - button "关闭家庭助手" [ref=f1e227] [cursor=pointer]
+      - status [ref=f1e230]:
+        - generic [ref=f1e232]:
+          - text: 正在询问：
+          - strong [ref=f1e233]: 明皇室
+          - generic [ref=f1e234]: 家庭空间
+      - generic [ref=f1e237]:
+        - button "选择会话 3" [ref=f1e238] [cursor=pointer]:
+          - generic [ref=f1e239]: 选择会话
+          - generic [ref=f1e240]: "3"
+        - button "新会话" [ref=f1e243] [cursor=pointer]
+      - paragraph [ref=f1e246]: 试试问：「这个空间里谁是我的长辈？」
+      - generic [ref=f1e248]:
+        - textbox "输入消息" [ref=f1e249]:
+          - /placeholder: 问问这个空间里的家谱问题…（Enter 发送，Shift+Enter 换行）
+        - generic [ref=f1e250]:
+          - generic [aria-hidden] [ref=f1e251]: 0/8000
+          - button "发送" [disabled] [ref=f1e252]

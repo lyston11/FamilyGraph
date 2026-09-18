@@ -7,8 +7,8 @@
 - [x] 真实SDK+本地假上游先证红：永久400/401/403、连接异常审计、单失败成功、失败耗尽、流中断与session重试。
 - [x] 冻结安全机器码/header形状和分类，确认不与内部认证/失租冲突；需要改变整体次数时先提交策略表供选择。
 - [x] 实现分类与恰好一次审计；依批准方案治理两层重试，保留overflow压缩、空回答失败和取消优先级。
-- [ ] 验证上下游请求数、审计数、D统计、费用/unknown分类一致，无错误原文/密钥哨兵泄漏。
-- [ ] 定向与受影响包门禁、internal真实联调、API smoke；由F复验浏览器失败/取消呈现。
+- [x] 验证上下游请求数、审计数、D统计、费用/unknown分类一致，无错误原文/密钥哨兵泄漏。
+- [x] 定向与受影响包门禁、internal真实联调、API smoke；F 已复验浏览器失败/取消呈现（含本轮 D-F1 修复）。
 - [x] 更新 agent-runtime/错误合同和父summary；提交、串行集成、按已完成范围验收。策略阻塞未解不得标全完成。（Spec 已更新、父 summary/HANDOFF/任务图已同步、已提交并集成 main；E-R3/E-R5 数值仍阻塞，故任务保持 in_progress 不归档）
 - [x] 交G发布；归档后在合并且干净前提下清理本任务worktree/分支。（E-R5 已决策并实施；发布与真实小样本验收属 G）
 
@@ -49,5 +49,16 @@ A+B 推进，E 的策略部分据此实施（`4a850d1`，集成 `e0ee321`），�
 仍未完成（属 G，不阻塞本任务归档）：未部署、未跑真实模型；20s 阈值为可调默认值，
 需部署后按 `header_ms` 真实分布复核。
 
-F 的受控矩阵已在本任务修复 D-F1（取消分类 + 快速收敛）并复验通过（见 `evidence.md` §9）。
-本任务的错误分类、完整审计、分层重试与取消语义均已实现、集成并回归锁定。
+## D-F1 补充（2026-09-19）
+
+F 的受控矩阵发现并已在本任务闭合的取消分类缺陷（详见 `evidence.md` §9）：
+
+- [x] 后端取消分支返回机器可读 `detail.reason=cancel_requested`（`fence_execution`、provider 网关及中流复核）。
+- [x] sidecar 新增 `RunCancelledError` + `InternalClient.onRunCancelled`，取消不再只依赖心跳节奏。
+- [x] worker 心跳与 `executeJob` 两处按取消收敛，不结算。
+- [x] reaper 不等租约过期即收敛被取消 run（原 304s → 0.01s），审计记 `reason`。
+- [x] 回归：backend 真实端点 + reaper 两例；agent 客户端三例 + worker 一例（均可还原转红）。
+- [x] 门禁：backend ruff/format/mypy/`pytest` 全量；agent tsc/eslint/`vitest`；F 矩阵 A6 两格通过。
+
+E-R3/E-R5 的预算数值已由用户在 09-18 决策（次数不变 + 有界退避 + 首响应期限），
+部署与真实样本验证属 G。
