@@ -9,8 +9,8 @@
 - [x] 实现分类与恰好一次审计；依批准方案治理两层重试，保留overflow压缩、空回答失败和取消优先级。
 - [ ] 验证上下游请求数、审计数、D统计、费用/unknown分类一致，无错误原文/密钥哨兵泄漏。
 - [ ] 定向与受影响包门禁、internal真实联调、API smoke；由F复验浏览器失败/取消呈现。
-- [ ] 更新 agent-runtime/错误合同和父summary；提交、串行集成、按已完成范围验收。策略阻塞未解不得标全完成。
-- [ ] 交G发布；归档后在合并且干净前提下清理本任务worktree/分支。
+- [x] 更新 agent-runtime/错误合同和父summary；提交、串行集成、按已完成范围验收。策略阻塞未解不得标全完成。（Spec 已更新、父 summary/HANDOFF/任务图已同步、已提交并集成 main；E-R3/E-R5 数值仍阻塞，故任务保持 in_progress 不归档）
+- [ ] 交G发布；归档后在合并且干净前提下清理本任务worktree/分支。（待 E-R5 决策与 G 发布；worktree 暂留供后续补齐）
 
 ```bash
 cd backend

@@ -90,9 +90,9 @@ interface FakeGateway {
 }
 
 /** Mirrors the gateway's safe, redacted error envelopes (no upstream text). */
-function permanentRejection(): GatewayAnswer {
+function permanentRejection(status = 400): GatewayAnswer {
   return {
-    status: 400,
+    status,
     headers: { "content-type": "application/json", "x-should-retry": "false" },
     body: JSON.stringify({
       error: { code: "AGENT_PROVIDER_UPSTREAM_REJECTED", message: "Provider 拒绝了本次请求" },
@@ -273,6 +273,29 @@ describe("assistant retry governance against the real SDK", () => {
     expect(events.some((event) => event.type === "auto_retry_start")).toBe(false);
   });
 
+  it.each([401, 403])(
+    "does not turn an upstream %i into a retryable or lease-loss path",
+    async (status) => {
+      // E-AC1 names 400/401/403 explicitly. The gateway returns the upstream's
+      // real status with a redacted envelope, so the provider stream fails once
+      // and stays a provider failure: a 401/403 here is the UPSTREAM's status,
+      // not this run's run-token, and must not be confused with the internal
+      // 401/403 handling in worker.ts that aborts a lease.
+      const gateway = await startGateway(() => permanentRejection(status));
+      gateways.push(gateway);
+      const { events, session } = await build(gateway);
+
+      await session.prompt("Where is the blue tin?", { source: "rpc", expandPromptTemplates: false });
+
+      expect(gateway.requests).toBe(1);
+      expect(events.some((event) => event.type === "auto_retry_start")).toBe(false);
+      const last = events
+        .filter((event) => event.type === "message_end" && event.message.role === "assistant")
+        .at(-1);
+      expect(last).toMatchObject({ message: { stopReason: "error" } });
+    },
+  );
+
   it("stop header only binds the request layer, so 5xx must stay transient", async () => {
     // Pins WHY the gateway maps a permanent rejection to 4xx rather than to a
     // 502 carrying `x-should-retry: false`: the header silences layer 1, but
@@ -286,19 +309,6 @@ describe("assistant retry governance against the real SDK", () => {
 
     expect(gateway.requests).toBe(SESSION_RETRIES + 1);
     expect(events.filter((event) => event.type === "auto_retry_start")).toHaveLength(SESSION_RETRIES);
-  });
-
-  it("sends a permanent upstream rejection exactly once", async () => {
-    const gateway = await startGateway(() => permanentRejection());
-    gateways.push(gateway);
-    const { events, session } = await build(gateway);
-
-    await session.prompt("Where is the blue tin?", { source: "rpc", expandPromptTemplates: false });
-
-    // Layer 1 stops immediately (x-should-retry:false); layer 2 sees a
-    // non-retryable 400 envelope and does not restart the turn.
-    expect(gateway.requests).toBe(1);
-    expect(events.some((event) => event.type === "auto_retry_start")).toBe(false);
   });
 
   it("multiplies the two layers for a transient upstream failure", async () => {

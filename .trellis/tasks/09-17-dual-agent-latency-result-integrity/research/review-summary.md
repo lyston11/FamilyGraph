@@ -37,8 +37,10 @@ C 总截止 → D 计时/聚合与关联合同 → E 错误分类/完整审计/�
 | Q03 | 已闭合：新增 `agent_run_events.timing_json`（sidecar 源计时，迁移 0051）与不可变 `agent_runs.first_leased_at`；`queue_wait` 不再把 context/session 准备算进排队，短阶段不再被 250ms 批量 flush 量化成约 1ms | [D evidence](../../09-17-assistant-timing-observability/evidence.md) |
 | Q04 | 已闭合：分母改由 run 表 LEFT JOIN（`runs_without_events`/`runs_without_first_lease`/`runs_without_start`）；单次失败后成功单列 `unmeasured_retries`，尾部失败耗尽不再丢失 | 同上 |
 | Q05（部分） | 轮内压缩已作为 `model_turn` 子成分单列（`compaction`）；SSE/渲染仍需 F 的浏览器测量 | 同上 |
+| Q06 | 已闭合（待集成复验）：网关按上游真实状态码分类，4xx（除 408/409/425/429）以原状态码 + `AGENT_PROVIDER_UPSTREAM_REJECTED` + `x-should-retry:false` 返回，不再折叠为可重试 502；连接异常/响应头失败/流中断/取消/成功各写恰好一条安全 `agent_provider_egress` 终态，含 `error_class`/`retryable`/`sent` | [E evidence](../../09-17-assistant-retry-governance/evidence.md) |
+| Q07 | 已闭合工程部分（待集成复验）：真实 SDK + 本地假网关实测两层相乘，出厂配置最坏 24 次出站、整轮约 79s；`SESSION_RETRY_BUDGET` 显式冻结防 SDK 漂移。**降低总预算未批准**，策略表交 E-R5 独立决策 | 同上 |
 
-仍未闭合：Q01/Q02 已在 C 完成（待集成复验）；Q06/Q07 属 E；Q08 属 F；Q09/Q10 属 G；Q11 属 H；Q12 属 I。
+仍未闭合：Q01/Q02 已在 C 完成（待集成复验）；Q08 属 F；Q09/Q10 属 G；Q11 属 H；Q12 属 I；E-R3/E-R5 的预算数值选择待用户批准。
 
 C～G是必需闭合项；H/I是方案与决策交付，创建并不批准上线/调参。G真实小样本上限是提案（见G PRD），须单独确认费用等，不自动消耗。
 

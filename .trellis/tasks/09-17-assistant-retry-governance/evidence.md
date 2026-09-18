@@ -17,12 +17,12 @@ SDK 锁定：`@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` **0.84.
 
 ## 2. 实测（真实 SDK + 本地假网关）
 
-`agent/test/retry-governance.test.ts`（9 例）驱动真实 `buildRunSession`，上游是本地
+`agent/test/retry-governance.test.ts`（10 例）驱动真实 `buildRunSession`，上游是本地
 `node:http` 服务器，按 `provider_proxy.py` 的真实响应形状作答；请求层预算设为 2 次。
 
 | 场景 | 实测出站请求数 | 会话层 `auto_retry_start` |
 | --- | --- | --- |
-| 永久 4xx（真实状态码 + `x-should-retry:false`） | **1** | 0 |
+| 永久 4xx 400/401/403（真实状态码 + `x-should-retry:false`） | **1** | 0 |
 | 暂时 502（无停止头） | **12** = (2+1)×(3+1) | 3 |
 | 503 + `x-should-retry:false` | **4** = (3+1) | 3 |
 | 截断流（200 后无终止事件） | **4** = (3+1) | 3 |
@@ -37,6 +37,10 @@ SDK 锁定：`@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` **0.84.
 Pi **会话层** `isRetryableAssistantError` 只看错误**文本**是否匹配瞬态词表
 （`502`/`service.?unavailable`/`timeout`…）。因此 5xx + 停止头仍会让整轮重启 3 次
 （上表第 3 行），而 4xx 的脱敏外壳不匹配瞬态词表，两层都不重试。
+
+上游 401/403 是**上游**的状态，不是本 run 的 run-token：它只经 provider stream 报错，
+不会走到 `worker.ts` 中处理 internal 401/403/409/410 的失租中止路径（该路径只读
+heartbeat 与内部 API 错误），因此不会把上游凭据问题误变成 run 失租。
 
 ## 3. 实现
 
@@ -76,10 +80,44 @@ D 聚合回归 `tests/test_admin_agent_latency.py::test_latency_metrics_excludes
 ```bash
 cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app
 cd backend && .venv/bin/pytest -q          # 1691 passed, 3 skipped
-cd agent && npm run lint && npm run type-check && npm test && npm run build   # 142 passed
+cd agent && npm run lint && npm run type-check && npm test && npm run build   # 143 passed
 ```
 
-## 6. 未完成 / 未授权
+## 6. 两层预算实测（含等待总量，供 E-R5 决策）
+
+对同一永久 502（无停止头）用出厂配置（请求层 5 次 + 会话层 3 次）实测：
+
+| 量 | 实测 | 来源 |
+| --- | --- | --- |
+| 最坏出站请求数 | **24** = (5+1)×(3+1) | 假网关计数 |
+| 单轮内请求层退避 | 约 0.75s + 1.0s + 3.0s + 3.1s + 6.7s ≈ **14.6s** | 请求时间戳差 |
+| 会话层退避（`auto_retry_start.delayMs`） | 2000 + 4000 + 8000 = **14s** | SDK 事件 |
+| 整轮墙钟（全失败） | 约 **79s** | 实测 |
+| 压缩请求 | 0（overflow 走压缩，不进入任一层重试） | `_isRetryableError` 对 overflow 返回 false |
+
+请求层退避算法（`pi-ai/utils/provider-retry.js`）：`min(0.5·2^i, 8)s` × jitter(0.75～1)，
+即 0.375～0.5 / 0.75～1 / 1.5～2 / 3～4 / 6～8 秒。会话层（Pi `_prepareRetry`）：
+`baseDelayMs · 2^(attempt-1)`，无 jitter，即 2/4/8 秒。取消（abort）可中断两层等待（已测）。
+
+### E-R5 待决策略表（未批准，本轮未实施）
+
+本轮只把当前数值**显式冻结**（避免 SDK 升级静默改变出站数），**未降低**任何预算。
+下表供独立选择；金额需要当前计价口径，本轮不编造：
+
+| 选项 | 最坏请求数 | 最坏墙钟 | 取舍 |
+| --- | --- | --- | --- |
+| 现状（5 + 3，本轮冻结） | 24 | ≈79s | 上游抖动时命中率高；用户等待长、费用高 |
+| 只保留会话层（请求层 0 + 会话层 3） | 4 | ≈14s+ | 总等待大幅下降；单轮内不再吸收短抖动 |
+| 只保留请求层（5 + 0） | 6 | ≈15s | 单轮内退避，不再重启整轮；无法恢复整轮级失败 |
+| 降为 2 + 2 | 9 | ≈10s | 折中；需确认上游恢复窗口 |
+| 永久 4xx 不重试（**本轮已实现**） | 1 | 即时 | 已生效；凭据/参数错误不再浪费 24 次请求 |
+
+**费用维度无法在本仓库给出**：`backend` 与 sidecar 均把模型 cost 置零（`agent/src/session.ts`
+的 model literal `cost: {input:0,...}`，后端无价格表），仓库内不存在可信计价来源。
+可确定的是每次重试重发同一 prompt，输入 token 随请求数线性放大（本最坏例即同一 prompt 发 24 次）；
+具体金额需用户提供当前计价口径后才能填写，本任务不编造。
+
+## 7. 未完成 / 未授权
 
 - **E-R3/E-R5 策略部分未决**：本轮只消除“永久错误被当可重试 5xx”的误重试并显式冻结现有
   两层预算数值；**未降低**总次数或等待上限。改变总预算需要实际请求数、费用与可用性取舍
