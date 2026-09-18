@@ -577,6 +577,66 @@ REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
 )
 
 
+AGENT_REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    (
+        "A2a",
+        "A2",
+        "F-R1 纯工具轮 / 多轮 / 空最终回答：终态与不熄等待（真实 SDK 假上游）",
+        (
+            "test/worker.integration.test.ts",
+        ),
+    ),
+    (
+        "A5-layers",
+        "A5",
+        "F-R1/R5 单失败后成功与失败耗尽：两层重试的真实出站数与取消中断",
+        (
+            "test/retry-governance.test.ts",
+        ),
+    ),
+    (
+        "A6-lease",
+        "A6",
+        "F-R1 失租/撤权：旧执行者跳过结算且不回写（心跳拒绝路径）",
+        (
+            "test/worker.integration.test.ts",
+        ),
+    ),
+)
+
+
+def _run_agent_reused_suites(grid: Grid) -> None:
+    """把 sidecar 侧既有回归也纳入矩阵（F-R6：复用而非重写）。
+
+    这些用例在 `agent/` 下用真实 Pi SDK + 假 provider 流，覆盖纯工具轮、多轮、
+    空最终回答、单失败成功、失败耗尽与失租/撤权。它们证明**程序合同与状态机**，
+    不证明真实上游时延分布。
+    """
+    for cell_id, group, requirement, targets in AGENT_REUSED_SUITES:
+        started = time.monotonic()
+        completed = subprocess.run(
+            ["npx", "vitest", "run", *targets],
+            cwd=str(ROOT / "agent"),
+            capture_output=True,
+            text=True,
+        )
+        lines = [line for line in (completed.stdout or "").strip().splitlines() if line.strip()]
+        tail = lines[-1] if lines else ""
+        grid.cell(
+            cell_id,
+            group,
+            requirement,
+            "pass" if completed.returncode == 0 else "fail",
+            f"vitest rc={completed.returncode} {tail[:70]}",
+            {
+                "command": "cd agent && npx vitest run " + " ".join(targets),
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "targets": list(targets),
+                "scope": "sidecar 程序合同；不证明真实上游时延或模型质量",
+            },
+        )
+
+
 def _run_reused_suites(grid: Grid) -> None:
     """F-R6：把已有回归纳入同一矩阵，并写明它证明/不证明什么。"""
     for cell_id, group, requirement, targets in REUSED_SUITES:
@@ -757,6 +817,7 @@ def main() -> int:
             )
         if not args.no_reused_suites:
             _run_reused_suites(grid)
+        _run_agent_reused_suites(grid)
     except Exception as exc:  # noqa: BLE001 - harness 自身异常视为环境阻塞
         grid.cell(
             "HARNESS",

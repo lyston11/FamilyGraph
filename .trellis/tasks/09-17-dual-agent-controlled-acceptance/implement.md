@@ -17,9 +17,9 @@ C/D/E 集成（`main@802925f`）是本任务的执行前提；本任务为验收
 
 | 文件 | 内容 |
 | --- | --- |
-| `scripts/smoke/run_controlled_acceptance.py` | 助手/管家/观测/重试矩阵（29 受控格 + 6 复用套件格），自动隔离、退出即清理 |
+| `scripts/smoke/run_controlled_acceptance.py` | 助手/管家/观测/重试矩阵（29 受控格 + 9 backend 复用格 + 3 sidecar 复用格），自动隔离、退出即清理 |
 | `scripts/smoke/controlled_assistant_worker.mjs` | 真实 `SidecarWorker`/`InternalClient`/Pi session 驱动；仅 provider 流被脚本化 |
-| `scripts/smoke/run_browser_acceptance.py` | 真浏览器 + 真 sidecar 进程 + 真前端构建（14 格） |
+| `scripts/smoke/run_browser_acceptance.py` | 真浏览器 + 真 sidecar 进程 + 真前端构建（19 格，含取消呈现 UI2-6/UI2-7） |
 | `evidence/matrix.md` | 逐格结果、门禁、缺陷、证据边界 |
 | `evidence/defect-cancel.note.md` | D-F1 取消语义缺陷 + 判别实验 |
 | `evidence/defect-compaction.note.md` | D-F2 压缩归属缺陷 |
