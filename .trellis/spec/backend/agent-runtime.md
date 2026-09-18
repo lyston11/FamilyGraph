@@ -39,7 +39,28 @@
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
 
-## 可观测性：助手耗时分段与源计时（09-17 A 建立，09-17 D 修正）
+## 可观测性：助手耗时分段与源计时（09-17 A 建立，09-17 D 修正，09-18 延迟根因分析）
+
+### 延迟根因分析（2026-09-18）
+
+对 FamilyGraph agent 10-30s 响应与 Pi agent 1-2s 体感的对比调查确认：
+
+**主因：流式可见性链路中断**
+- `agent/src/events.ts` 的 `mapSessionEvent` **显式丢弃** Pi SDK 的 `message_update` / `text_delta` 事件
+- 用户在整条消息生成期间（10-30s）只能看到空白等待
+- Pi 的「1-2 秒」体感来自**首 token 或 thinking/正文开始滚动**，而非完整回答结束
+- 对本地 Pi 约 33 个会话、1.2 万条消息的统计：同一 `liu-dada/gpt-5.6-sol` 模型的完整生成时长**中位数 = 11.47 秒**，低于 3 秒的比例仅 **0.8%**
+
+**次级因素**：
+1. **请求层重试放大上游不稳定**：`providerStreamMaxRetries=5`，实测尾部 11.6-15.5s 全是退避（Pi CLI 请求层 0 次重试）
+2. **单 worker 串行 + 2 秒空闲轮询**：实测排队 0.94s-11.05s（b067079 已改为 250ms 但远端未部署）
+3. **prompt cache key 不稳定**：每 run 新建 `SessionManager.inMemory()` → sessionId 随机 → cache miss（Pi 有 90%+ cache hit）
+4. **per-chunk DB 事务**：每个 SSE chunk 都 `rollback + get(AgentRun)`（~200-500ms）
+5. **httpx client 每次 TLS 握手**：每请求新建 `AsyncClient`（~100-500ms）
+
+**优化策略**：详见 `.trellis/tasks/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
+
+### 既有源计时合同
 
 ### 已修正的旧结论（不要回退）
 
@@ -99,13 +120,18 @@
   去反推「无重试」。
   触发源是上游 502/503 不稳定，不是退避上限（实测退避远小于
   `AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS=20000`）。
-- **不要直接透传 delta**：`mapSessionEvent` 忽略 `message_update`/delta 是**刻意合同**，
-  不是遗漏——`agent/test/assistant-delta-gap.test.ts` 用真实 Pi SDK + fake stream 测出：
-  上游 `text_delta` 与 SDK 的 `message_update` 均会到达，但公共 `message.assistant_added`
-  恰好只在 `message_end` 发一次（完整答案，非部分前缀）。若要把「首字更早可见」作为产品能力，
-  必须先在 spec 中冻结 delta 合同（消息 ID/顺序号/epoch/重连重放去重、终态权威正文替换临时内容、
-  聚合频率与 SSE 大小有界、取消/失租即停、citations/cardIds 只在权威事件后绑定、滚动兼容），
-  **不得**在 `events.ts` 直接透传 SDK 事件。
+- **增量显示的安全合同**（09-18 助手低延迟优化）：
+  - **历史合同**：`mapSessionEvent` 忽略 `message_update`/delta 是刻意决策，`agent/test/assistant-delta-gap.test.ts` 已测出 SDK `text_delta` 会到达，但公共 `message.assistant_added` 恰好只在 `message_end` 发一次（完整答案，非部分前缀）
+  - **新增 `assistant.text_delta` 事件**（V2.8 起）：
+    - **后端映射**：`events.ts` 对 `message_update` 中的 `text_delta` 产生 `{type:'assistant.text_delta', delta, content_index, message_id}` 事件
+    - **前端累积**：`stores/agent.ts` 找到 pending assistant 消息并累加 `delta`
+    - **安全边界**：
+      1. 只发布 `text_delta`，`thinking_delta` / `toolcall` 仍在 message_end 一次性显示
+      2. message_end 时用最终文本**覆盖**累积 delta（以 SDK 为准）
+      3. retry 中断时清空 pending 消息（收到新 message_start）
+      4. 临时文本不入历史/Memory/RAG，只有最终文本才持久化
+    - **收益**：体感从「等 10-30s 看到答案」变成「1-2s 看到首字，然后持续滚动」（**体感收益最大**）
+    - **不改变总生成时间**，但直接决定用户体感
 - **浏览器收到/渲染时刻不由本接口证明**：SSE 到达、首帧渲染需要浏览器 `performance` 时钟，
   服务端 UTC 与浏览器 monotonic 不可直接相减；该证据由受控验收任务补齐。
 

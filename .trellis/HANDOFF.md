@@ -6,6 +6,8 @@
 
 ## 当前最需要知道的事
 
+- **2026-09-18 助手响应延迟根因分析完成**：完成 FamilyGraph agent（10-30s 空白）vs Pi agent（1-2s 体感）的对比调查。**主因是流式可见性链路中断**：`agent/src/events.ts` 显式丢弃 SDK 的 `message_update`/`text_delta` 事件，用户在整条消息生成期间（实测中位数 11.47s）只能看到空白等待。Pi 的「1-2 秒」体感来自**首 token 或 thinking/正文开始滚动**，而非完整回答结束（对本地 Pi 约 1.2 万条消息统计：同一 `liu-dada/gpt-5.6-sol` 模型的完整生成时长中位数 = 11.47 秒，低于 3 秒的比例仅 0.8%）。次级因素包括：请求层重试放大上游不稳定（实测尾部 11.6-15.5s 全是退避，Pi CLI 请求层 0 次重试）、排队轮询 2s（b067079 已改 250ms 但远端未部署）、cache key 不稳定（每 run 随机 sessionId → cache miss，Pi 有 90%+ cache hit）、per-chunk DB 事务（~200-500ms）、httpx client 每次 TLS 握手（~100-500ms）。优化策略已明确 P0/P1/P2 分级，**P0-1（部署轮询修复）成本为零**，**P0-2（安全增量显示）为体感收益最大项**。详见 [Pi vs FamilyGraph 延迟对比分析](tasks/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md) 与 [执行计划](tasks/09-18-assistant-low-latency/implement.md)。**尚未实施任何优化**，任务保持 `in_progress`。
+
 - **2026-09-17 双 Agent 最新复核**：原 A/B 已归档，但 `d8d3668` 的阻塞 I/O 总截止、助手源计时/重试统计仍有反例；只读线上核查显示代码同步后服务未加载修复，浏览器未验。父任务保持 in_progress，新增 C～I 七个子任务，见[最新结论](tasks/09-17-dual-agent-latency-result-integrity/research/review-summary.md)和[任务图/全部PRD入口](tasks/09-17-dual-agent-latency-result-integrity/research/remediation-task-map.md)。**C（管家可中断总截止）与 D（助手源计时与重试统计）已在各自分支实现并验证，待串行集成**；**E（网关错误分类与分层重试治理）的工程部分已实现并验证**——上游永久 4xx 不再折叠为可重试 502（实测最坏 24 次出站降为 1 次），每次出站尝试留恰好一条安全审计，两层预算显式冻结；**降低总重试预算仍未批准**（策略表见 E 证据，待用户选择）。F/G 仍待执行，H/I 为方案任务。尚未部署、未重启服务、未调用真实模型。下方旧成果表按原时点理解。
 
 - 管家已经自动计算个人称谓，通知、建议详情、推测面板与档案称谓区已接通同一呈现链；称谓优化不需要逐条批准。闭环及质量修复已合入，详见 [最新审核记录](tasks/archive/2026-09/09-13-steward-kinship-capability-closure/research/quality-review-2026-09-14.md)。
