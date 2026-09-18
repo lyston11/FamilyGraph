@@ -545,7 +545,7 @@ describe('agent store 临时正文投影（09-18 P0-2）', () => {
     expect(after.filter((m) => m.role === 'assistant').map((m) => m.text)).toEqual(['真正的回答'])
   })
 
-  it('终态失败后保留已显示的临时正文，但不把它当作完成答案', async () => {
+  it('终态失败后保留已显示的临时正文，但把它标为终态（不再声称生成中）', async () => {
     const store = useAgentStore()
     await seedSpaceWithRun(store, 1)
 
@@ -554,10 +554,57 @@ describe('agent store 临时正文投影（09-18 P0-2）', () => {
 
     const partition = store.partitions.get(1)
     const last = partition?.messages.at(-1)
+    // 09-18 design：failed/cancelled 保留已显示的安全部分并标终态。
     expect(last?.text).toBe('已显示的部分')
-    expect(last?.provisional).toBe(true)
+    expect(last?.provisional).toBe(false)
     expect(partition?.run?.terminal).toBe(true)
     expect(partition?.error?.code).toBe('PROVIDER_ERROR')
+  })
+
+  it('取消后保留已显示的临时正文，但不再标「生成中…」', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '被取消的半句' }))
+    expect(store.partitions.get(1)?.messages.at(-1)?.provisional).toBe(true)
+
+    streamCallbacks?.onEvent(makeEvent(2, 'run.cancelled', {}))
+
+    const partition = store.partitions.get(1)
+    const last = partition?.messages.at(-1)
+    // 正文保留（用户已经看到的内容），但不再是「仍在生成」。
+    expect(last?.text).toBe('被取消的半句')
+    expect(last?.provisional).toBe(false)
+    expect(partition?.run?.terminal).toBe(true)
+    // 取消不显示错误横幅（与失败区分）。
+    expect(partition?.error).toBeNull()
+  })
+
+  it('终态后新一条正文分片不会拼进已结束的临时正文', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '上一段' }))
+    streamCallbacks?.onEvent(makeEvent(2, 'run.cancelled', {}))
+    streamCallbacks?.onEvent(makeEvent(3, 'assistant.text_delta', { role: 'assistant', delta: '新一段' }))
+
+    const texts = (store.partitions.get(1)?.messages ?? [])
+      .filter((m) => m.role === 'assistant')
+      .map((m) => m.text)
+    // 终态气泡不得被后续分片继续追加（否则两段尝试会拼成一条假答案）。
+    expect(texts).toEqual(['上一段', '新一段'])
+  })
+
+  it('expired 终态同样把临时正文标为终态', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '超时前的半句' }))
+    streamCallbacks?.onEvent(makeEvent(2, 'run.expired', {}))
+
+    const last = store.partitions.get(1)?.messages.at(-1)
+    expect(last?.text).toBe('超时前的半句')
+    expect(last?.provisional).toBe(false)
   })
 
   it('切换会话丢弃临时正文（不跨会话/跨 run 拼接）', async () => {
