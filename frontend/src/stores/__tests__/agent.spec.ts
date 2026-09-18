@@ -494,3 +494,81 @@ describe('agent store（V2.2 Block C3）', () => {
     ])
   })
 })
+
+describe('agent store 临时正文投影（09-18 P0-2）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    streamCallbacks = null
+    sessionStorage.clear()
+  })
+
+  it('累积 text_delta 到一条临时气泡，权威消息到达后整体替换', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '你好' }))
+    streamCallbacks?.onEvent(makeEvent(2, 'assistant.text_delta', { role: 'assistant', delta: '，我是助手' }))
+
+    const provisional = store.partitions.get(1)?.messages.at(-1)
+    expect(provisional?.text).toBe('你好，我是助手')
+    expect(provisional?.provisional).toBe(true)
+    expect(provisional?.id).toBeNull()
+    // 临时气泡不参与回放去重游标，也不带引用
+    expect(provisional?.citations).toBeUndefined()
+
+    // 权威结果到达：临时投影被移除，只留最终正文（不重复追加）
+    streamCallbacks?.onEvent(
+      makeEvent(3, 'message.assistant_added', { role: 'assistant', text: '你好，我是助手。' }),
+    )
+    const messages = store.partitions.get(1)?.messages ?? []
+    expect(messages.filter((m) => m.role === 'assistant').map((m) => m.text)).toEqual([
+      '你好，我是助手。',
+    ])
+    expect(messages.some((m) => m.provisional === true)).toBe(false)
+  })
+
+  it('text_reset 立即隐藏临时正文（SDK 丢弃尝试后重新生成）', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '半句会被丢弃' }))
+    expect(store.partitions.get(1)?.messages.at(-1)?.text).toBe('半句会被丢弃')
+
+    streamCallbacks?.onEvent(makeEvent(2, 'assistant.text_reset', { role: 'assistant' }))
+    expect(
+      (store.partitions.get(1)?.messages ?? []).some((m) => m.provisional === true),
+    ).toBe(false)
+
+    streamCallbacks?.onEvent(makeEvent(3, 'assistant.text_delta', { role: 'assistant', delta: '真正的回答' }))
+    const after = store.partitions.get(1)?.messages ?? []
+    expect(after.filter((m) => m.role === 'assistant').map((m) => m.text)).toEqual(['真正的回答'])
+  })
+
+  it('终态失败后保留已显示的临时正文，但不把它当作完成答案', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '已显示的部分' }))
+    streamCallbacks?.onEvent(makeEvent(2, 'run.failed', { error_code: 'PROVIDER_ERROR' }))
+
+    const partition = store.partitions.get(1)
+    const last = partition?.messages.at(-1)
+    expect(last?.text).toBe('已显示的部分')
+    expect(last?.provisional).toBe(true)
+    expect(partition?.run?.terminal).toBe(true)
+    expect(partition?.error?.code).toBe('PROVIDER_ERROR')
+  })
+
+  it('切换会话丢弃临时正文（不跨会话/跨 run 拼接）', async () => {
+    const store = useAgentStore()
+    await seedSpaceWithRun(store, 1)
+    streamCallbacks?.onEvent(makeEvent(1, 'assistant.text_delta', { role: 'assistant', delta: '旧会话碎片' }))
+
+    mockedFetchMessages.mockResolvedValue([])
+    await store.selectSession(1, 99)
+
+    const texts = (store.partitions.get(1)?.messages ?? []).map((m) => m.text)
+    expect(texts).not.toContain('旧会话碎片')
+  })
+})

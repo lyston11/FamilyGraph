@@ -58,6 +58,11 @@ export interface AgentMessageView {
   webCitations?: WebCitation[]
   /** 由 SSE 回放合并产生的消息（刷新恢复去重标记） */
   fromReplay?: boolean
+  /**
+   * 临时正文投影（SSE `assistant.text_delta` 累积）：仅用于实时显示，不是权威结果。
+   * 没有 id/citations，不入历史；权威 `message.assistant_added` 到达时被整体替换。
+   */
+  provisional?: boolean
 }
 
 export interface ActiveRunView {
@@ -337,8 +342,41 @@ export const useAgentStore = defineStore('agent', () => {
     return partition.messages[partition.messages.length - 1]!
   }
 
-  async function retryMessageCitations(view: AgentMessageView): Promise<void> {
-    const request = view.citationRequest
+  /**
+   * 临时正文累积（SSE `assistant.text_delta`）。
+   *
+   * 只追加到分区末尾的临时助手气泡；没有就新建一条。临时消息没有 id、没有引用，
+   * 不入历史；权威 `message.assistant_added` 到达时按同一 turn 收口。
+   * 同一 Run 内 attempt 变化（auto_retry 丢弃上一份尝试）由 text_reset 清空，
+   * 不把两次尝试的正文拼在一起。
+   */
+  function appendProvisionalText(partition: SessionPartition, delta: string): void {
+    if (delta.length === 0) return
+    const last = partition.messages[partition.messages.length - 1]
+    if (last && last.role === 'assistant' && last.provisional === true) {
+      last.text += delta
+      return
+    }
+    partition.messages.push({
+      id: null,
+      role: 'assistant',
+      text: delta,
+      createdAt: null,
+      status: 'sent',
+      provisional: true,
+    })
+  }
+
+  /**
+   * 丢弃临时正文（SSE `assistant.text_reset`）：SDK 丢弃了正在重新生成的
+   * assistant 消息，已显示的分片不再对应任何消息，必须立即隐藏。
+   * 不触碰历史消息——权威结果和既有历史没有 provisional 标记。
+   */
+  function clearProvisionalText(partition: SessionPartition): void {
+    partition.messages = partition.messages.filter((m) => m.provisional !== true)
+  }
+
+  async function retryMessageCitations(view: AgentMessageView): Promise<void> {    const request = view.citationRequest
     const stillDisplayed = (): boolean => [...partitions.value.values()].some((p) => p.messages.includes(view))
     if (request === undefined || view.citationLoadState === 'loading' || !stillDisplayed()) return
     view.citationLoadState = 'loading'
@@ -391,6 +429,9 @@ export const useAgentStore = defineStore('agent', () => {
         break
       }
       case 'message.assistant_added': {
+        // 权威结果到达：同轮临时投影先移除，避免与最终正文重复渲染。
+        // 只在合并前清理，否则 mergeReplayedMessage 会去重到临时气泡上。
+        clearProvisionalText(partition)
         const view = mergeReplayedMessage(
           partition,
           'assistant',
@@ -415,6 +456,12 @@ export const useAgentStore = defineStore('agent', () => {
         }
         break
       }
+      case 'assistant.text_delta':
+        appendProvisionalText(partition, payloadString(event.payload, 'delta'))
+        break
+      case 'assistant.text_reset':
+        clearProvisionalText(partition)
+        break
       case 'turn.completed':
         break
       case 'run.settled':

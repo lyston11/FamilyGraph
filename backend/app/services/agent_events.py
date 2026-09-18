@@ -35,7 +35,7 @@ from app.services import agent_citations
 from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
 from app.utils import timeutil
 
-# notes.md 事件类型注册表（首版）
+# notes.md 事件类型注册表（V2.2）
 EVENT_TYPES: frozenset[str] = frozenset(
     {
         "run.started",
@@ -43,6 +43,8 @@ EVENT_TYPES: frozenset[str] = frozenset(
         "turn.started",
         "turn.completed",
         "message.assistant_added",
+        "assistant.text_delta",
+        "assistant.text_reset",
         "tool.execution.started",
         "tool.execution.completed",
         "run.settled",
@@ -51,6 +53,17 @@ EVENT_TYPES: frozenset[str] = frozenset(
         "run.expired",
     }
 )
+
+# 临时正文显示事件（09-18 P0-2）：只是显示投影，永不物化 AgentMessage。
+# 它们不进历史/Memory/RAG，也不带引用或权限声明——读时授权由 SSE/回放端点的
+# 账号归属复核承担。只有 message.assistant_added（message_end）是权威结果。
+PROVISIONAL_TEXT_EVENT_TYPES: frozenset[str] = frozenset(
+    {"assistant.text_delta", "assistant.text_reset"}
+)
+
+# 单条临时正文分片的上限（码点）。sidecar 按 MAX_PROSE_FRAGMENT_CHARS 分片，
+# 这里再夹一次：畸形或过大的分片会被拒绝，而不是让整批 append 一起失败。
+MAX_PROVISIONAL_DELTA_CHARS = 4000
 
 # settle 落终态时自动追加的对应事件（queue.settle 消费）
 TERMINAL_EVENT_FOR: dict[str, str] = {
@@ -154,6 +167,10 @@ def _validate_entry(entry: EventEntry) -> None:
         raise_api_error(422, AGENT_EVENT_INVALID, "未知事件类型", detail={"type": entry.type})
     if not isinstance(entry.public_payload, dict):
         raise_api_error(422, AGENT_EVENT_INVALID, "payload 必须为 JSON object")
+    if entry.type in PROVISIONAL_TEXT_EVENT_TYPES:
+        # 形状在这里收一次口：临时正文是只读显示投影，字段集闭合，
+        # 否则一个畸形分片会被原样广播给读者。
+        _validate_provisional_payload(entry)
     try:
         size = len(
             json.dumps(entry.public_payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -178,6 +195,32 @@ def _validate_entry(entry: EventEntry) -> None:
             EventTimingIn.model_validate(entry.timing)
         except ValidationError:
             raise_api_error(422, AGENT_EVENT_INVALID, "timing 格式无效")
+
+
+def _validate_provisional_payload(entry: EventEntry) -> None:
+    """临时正文事件的闭合形状校验（fail-closed）。
+
+    只有 ``role=assistant`` 与（``text_delta`` 的）非空 ``delta`` 两个字段；
+    额外键拒绝，避免 sidecar 侧协议漂移把内部字段带进公共事件流。
+    """
+    payload = entry.public_payload
+    if set(payload) - {"role", "delta"}:
+        raise_api_error(422, AGENT_EVENT_INVALID, "临时正文事件含未允许字段")
+    if payload.get("role") != "assistant":
+        raise_api_error(422, AGENT_EVENT_INVALID, "临时正文事件 role 必须为 assistant")
+    if entry.type == "assistant.text_delta":
+        delta = payload.get("delta")
+        if not isinstance(delta, str) or delta == "":
+            raise_api_error(422, AGENT_EVENT_INVALID, "text_delta 必须携带非空 delta")
+        if len(delta) > MAX_PROVISIONAL_DELTA_CHARS:
+            raise_api_error(
+                422,
+                AGENT_EVENT_INVALID,
+                "临时正文分片超限",
+                detail={"chars": len(delta)},
+            )
+    elif "delta" in payload:
+        raise_api_error(422, AGENT_EVENT_INVALID, "text_reset 不得携带 delta")
 
 
 def append_events(
