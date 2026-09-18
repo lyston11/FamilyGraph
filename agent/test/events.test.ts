@@ -432,3 +432,139 @@ describe("producer stage timing", () => {
     expect(answers[1]?.timing?.compaction_ms).toBeUndefined();
   });
 });
+
+describe("first-visible-text and auto-retry attribution", () => {
+  /**
+   * The live 2026-09-18 baseline showed a 33.15s turn and could not tell a
+   * slow generation from a failed attempt that was retried: 15s request
+   * timeout + 2s backoff + 16s fits both readings, and `auto_retry_start` is
+   * never persisted. These tests pin the two quantities that separate them.
+   */
+  const clock = (start = 0) => {
+    let current = start;
+    return { now: () => current, advance: (ms: number) => (current += ms) };
+  };
+
+  const textDelta = (text: string) => ({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason: undefined,
+    },
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text },
+  });
+
+  it("records time to first text delta separately from the whole turn", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(12_000); // reasoning before any prose reaches the wire
+    buffer.onSessionEvent(textDelta("你"));
+    time.advance(21_000); // remaining prose
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "你好" }], stopReason: "stop" },
+    });
+    const answer = buffer.drain().find((event) => event.type === "message.assistant_added");
+    expect(answer?.timing).toEqual({
+      source: "sidecar-v1",
+      duration_ms: 33_000,
+      first_text_ms: 12_000,
+    });
+  });
+
+  it("ignores thinking deltas: thinking is not the first visible text", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(5_000);
+    buffer.onSessionEvent({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm" },
+    });
+    time.advance(7_000);
+    buffer.onSessionEvent(textDelta("answer"));
+    time.advance(1_000);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "answer" }], stopReason: "stop" },
+    });
+    const answer = buffer.drain().find((event) => event.type === "message.assistant_added");
+    expect(answer?.timing?.first_text_ms).toBe(12_000);
+    expect(answer?.timing?.duration_ms).toBe(13_000);
+  });
+
+  it("counts auto-retry attempts and their backoff inside the turn", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(15_000); // request that timed out
+    buffer.onSessionEvent({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      errorMessage: "Request timed out",
+    });
+    time.advance(2_000); // backoff
+    time.advance(16_000); // the retried request finally produced prose
+    buffer.onSessionEvent(textDelta("你好"));
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "你好" }], stopReason: "stop" },
+    });
+    const answer = buffer.drain().find((event) => event.type === "message.assistant_added");
+    expect(answer?.timing?.retry_count).toBe(1);
+    expect(answer?.timing?.retry_wait_ms).toBe(2_000);
+    expect(answer?.timing?.duration_ms).toBe(33_000);
+  });
+
+  it("omits retry fields when the turn had no auto-retry", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(1_000);
+    buffer.onSessionEvent(textDelta("ok"));
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "stop" },
+    });
+    const answer = buffer.drain().find((event) => event.type === "message.assistant_added");
+    expect(answer?.timing?.retry_count).toBeUndefined();
+    expect(answer?.timing?.retry_wait_ms).toBeUndefined();
+  });
+
+  it("does not carry a retry count across turns", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 1_000,
+      errorMessage: "Request timed out",
+    });
+    time.advance(1_000);
+    buffer.onSessionEvent(textDelta("first"));
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "first" }], stopReason: "stop" },
+    });
+    // Turn 2 is clean: it must not inherit turn 1's retry or first-text time.
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(4_000);
+    buffer.onSessionEvent(textDelta("second"));
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "second" }], stopReason: "stop" },
+    });
+    const answers = buffer.drain().filter((event) => event.type === "message.assistant_added");
+    expect(answers).toHaveLength(2);
+    expect(answers[0]?.timing?.retry_count).toBe(1);
+    expect(answers[1]?.timing?.retry_count).toBeUndefined();
+    expect(answers[1]?.timing?.first_text_ms).toBe(4_000);
+  });
+});

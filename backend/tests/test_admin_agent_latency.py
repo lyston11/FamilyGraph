@@ -12,6 +12,7 @@ from datetime import timedelta
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app import config
 from app.models.agent import AgentSession
@@ -523,6 +524,219 @@ def test_latency_metrics_compaction_empty_without_source_timing(
     assert phases["compaction"]["n"] == 0
     assert phases["compaction"]["p50_ms"] is None
     assert phases["compaction"]["basis"] == "none"
+
+
+def test_latency_metrics_separates_first_visible_text_from_model_turn(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """线上 33s 单轮：首正文 12s、整轮 33s，展示缓冲 21s 必须可单独读出。
+
+    公共 assistant 事件只在 message_end 发布，所以 first_visible_text 小于
+    model_turn 的差额就是“正文已生成但用户看不到”的等待。把两者合成一个数
+    就会把展示缓冲误归为推理耗时。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-first-visible")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                34.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": 33_000, "first_text_ms": 12_000},
+            ),
+            ("turn.completed", 34.0, None, None),
+        ],
+        settle_after_s=34.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+
+    assert phases["first_visible_text"]["n"] == 1
+    assert phases["first_visible_text"]["p50_ms"] == 12_000
+    assert phases["first_visible_text"]["basis"] == "source_clock"
+    assert phases["model_turn"]["p50_ms"] == 33_000
+
+
+def test_latency_metrics_first_visible_text_empty_without_source_timing(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """历史行无 first_text_ms：必须报 n=0，不得用持久间隔冒充首正文时间。"""
+    user, space = create_agent_fixture(db_session, name="lat-first-visible-legacy")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                21.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": 20_000},
+            ),
+            ("turn.completed", 21.0, None, None),
+        ],
+        settle_after_s=21.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    phases = resp.json()["assistant_phases"]
+    assert phases["first_visible_text"]["n"] == 0
+    assert phases["first_visible_text"]["p50_ms"] is None
+    # 同一行确实有源计时，所以不是“整体缺源计时”，只是缺首正文字段。
+    assert phases["model_turn"]["n"] == 1
+
+
+def test_latency_metrics_counts_turn_retry_and_exposes_coverage(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """turn_retry 把“一次慢生成”与“失败一次后重试”分开，并如实暴露覆盖度。
+
+    第 1 轮 15s 超时 + 2s 退避 + 16s 生成（重试 1 次），第 2 轮干净。
+    两轮都上报了 first_text_ms，所以 turns_measured=2、turns_with_retry=1。
+    再把一个无源计时的历史行放进分母：它必须不参与统计。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-turn-retry")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                34.0,
+                {"role": "assistant", "text": "a"},
+                {
+                    "source": "sidecar-v1",
+                    "duration_ms": 33_000,
+                    "first_text_ms": 33_000,
+                    "retry_count": 1,
+                    "retry_wait_ms": 2_000,
+                },
+            ),
+            ("turn.completed", 34.0, None, None),
+            ("turn.started", 34.0, None, None),
+            (
+                "message.assistant_added",
+                38.0,
+                {"role": "assistant", "text": "b"},
+                {"source": "sidecar-v1", "duration_ms": 4_000, "first_text_ms": 4_000},
+            ),
+            ("turn.completed", 38.0, None, None),
+        ],
+        settle_after_s=38.5,
+        first_lease_after_s=0.5,
+    )
+    # 历史行：有 model_turn 源计时但没有首正文字段，不得计入 turn_retry 分母。
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                11.0,
+                {"role": "assistant", "text": "legacy"},
+                {"source": "sidecar-v1", "duration_ms": 10_000},
+            ),
+            ("turn.completed", 11.0, None, None),
+        ],
+        settle_after_s=11.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    retry = resp.json()["assistant_phases"]["turn_retry"]
+
+    assert retry["turns_measured"] == 2
+    assert retry["turns_with_retry"] == 1
+    assert retry["retries"] == 1
+    assert retry["retry_wait_ms"] == 2_000
+
+
+def test_latency_metrics_turn_retry_zero_without_retries(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """无重试的新行计入分母但不计入重试数：分母必须能与“零重试”区分。"""
+    user, space = create_agent_fixture(db_session, name="lat-turn-retry-zero")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                4.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": 3_000, "first_text_ms": 1_000},
+            ),
+            ("turn.completed", 4.0, None, None),
+        ],
+        settle_after_s=4.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    retry = resp.json()["assistant_phases"]["turn_retry"]
+    assert retry["turns_measured"] == 1
+    assert retry["turns_with_retry"] == 0
+    assert retry["retries"] == 0
+    assert retry["retry_wait_ms"] == 0
+
+
+def test_agent_events_rejects_out_of_range_timing_subcomponents(
+    db_session,
+) -> None:
+    """子成分不能超过所属阶段，也不能在没有重试时上报退避。
+
+    夹紧会把畸形上报伪装成合法测量，所以这里要求直接 422。
+    """
+    from app.schemas.agent import EventTimingIn
+
+    # 合法：首正文早于整轮结束，且重试字段自洽。
+    ok = EventTimingIn.model_validate(
+        {
+            "source": "sidecar-v1",
+            "duration_ms": 33_000,
+            "first_text_ms": 12_000,
+            "retry_count": 1,
+            "retry_wait_ms": 2_000,
+        }
+    )
+    assert ok.first_text_ms == 12_000
+
+    # 首正文晚于整轮：语义漂移，拒绝。
+    with pytest.raises(ValidationError):
+        EventTimingIn.model_validate(
+            {"source": "sidecar-v1", "duration_ms": 5_000, "first_text_ms": 9_000}
+        )
+    # 没有重试却报了退避：拒绝。
+    with pytest.raises(ValidationError):
+        EventTimingIn.model_validate(
+            {"source": "sidecar-v1", "duration_ms": 5_000, "retry_count": 0, "retry_wait_ms": 1}
+        )
+    # 未知字段仍被拒绝（extra=forbid 未被放宽）。
+    with pytest.raises(ValidationError):
+        EventTimingIn.model_validate(
+            {"source": "sidecar-v1", "duration_ms": 5_000, "first_token_ms": 1}
+        )
 
 
 def test_latency_metrics_counts_runs_without_events_in_denominator(

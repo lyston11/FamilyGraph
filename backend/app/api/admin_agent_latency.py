@@ -70,6 +70,14 @@ _OBSERVATION_NOTES: tuple[str, ...] = (
     "turn.started→正文之间），读 model_turn 时需参考这些计数才能区分重试与纯生成。"
     "自 E 起审计带 retryable 安全分类：retryable=false 的失败（上游永久拒绝、取消/失租、"
     "流中断）不计入重试次数，避免虚假重试段；历史行无该字段时沿用旧的 failed 口径",
+    "first_visible_text 每轮一个样本，量的是该轮 turn.started → 首个 assistant 正文增量"
+    "（text_delta）。它不等于 model_turn：公共 assistant 事件只在 message_end 发布，"
+    "所以 model_turn − first_visible_text 就是“正文已经生成但用户看不到”的展示缓冲。"
+    "thinking 增量不算首正文（用户读不到）。仅新行有该字段，历史行 n=0，不用 0 填充",
+    "turn_retry 是 Pi 会话自动重试的 SDK 自报计数（auto_retry_start/end），与 provider_retry "
+    "互补：provider_retry 只能看到已发出的请求且时长是下界，turn_retry 直接给出尝试次数与"
+    "已排定退避，因此能把“一次慢生成”与“失败一次后重试”分开（2026-09-18 线上 33s 单轮"
+    "正是这个歧义）。turns_measured 是覆盖度分母：只有上报了源计时的轮才参与，历史行为 unknown",
 )
 
 
@@ -121,6 +129,21 @@ class ProviderRetryStats(BaseModel):
     duration_lower_bound: PhaseStats
 
 
+class TurnRetryStats(BaseModel):
+    """Pi 会话自动重试（SDK 源计时，仅新行有值）。
+
+    与 ``provider_retry`` 互补：后者从网关出站审计推下界，只能看到**已发出**的
+    请求；这里直接读 SDK 自报的尝试次数，因此能把「一次慢生成」与「失败一次后
+    重试」分开——这是 2026-09-18 线上 33s 单轮无法归因的那个缺口。
+    历史行没有该字段，一律不计入分母（``turns_measured`` 会如实暴露覆盖度）。
+    """
+
+    turns_with_retry: int
+    retries: int
+    retry_wait_ms: int
+    turns_measured: int
+
+
 class RunPhaseBreakdown(BaseModel):
     """assistant run 分段：源计时优先，历史行回退持久事件间隔。"""
 
@@ -131,11 +154,13 @@ class RunPhaseBreakdown(BaseModel):
     queue_wait: PhaseStats
     prepare: PhaseStats
     first_text: PhaseStats
+    first_visible_text: PhaseStats
     model_turn: PhaseStats
     tool_call: PhaseStats
     compaction: PhaseStats
     settle: PhaseStats
     provider_retry: ProviderRetryStats
+    turn_retry: TurnRetryStats
 
 
 class AgentLatencyOut(BaseModel):
@@ -240,6 +265,16 @@ def _timing_ms(payload: dict[str, Any] | None) -> int | None:
     if not isinstance(payload, dict):
         return None
     value = payload.get("duration_ms")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _timing_int(payload: dict[str, Any] | None, key: str) -> int | None:
+    """从 timing_json 取一个非负整数子成分；缺失/非法即 None（unknown）。"""
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return value
@@ -409,10 +444,17 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
     queue_wait: list[tuple[int, bool]] = []
     prepare: list[tuple[int, bool]] = []
     first_text: list[tuple[int, bool]] = []
+    first_visible_text: list[tuple[int, bool]] = []
     model_turn: list[tuple[int, bool]] = []
     tool_call: list[tuple[int, bool]] = []
     compaction: list[tuple[int, bool]] = []
     settle: list[tuple[int, bool]] = []
+    # Pi 会话自动重试（SDK 源计时）。只在有 first_text_ms 的新行上统计，
+    # 历史行不参与分母，避免把 unknown 当成 0。
+    turn_retry_turns_with_retry = 0
+    turn_retry_total = 0
+    turn_retry_wait_ms = 0
+    turn_retry_measured = 0
     runs_without_first_lease = 0
     runs_without_start = 0
 
@@ -486,6 +528,22 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
             measured = _timing_compaction_ms(produced[1])
             if measured is not None:
                 compaction.append((measured, True))
+            # 该轮的首个正文到达时间与自动重试计数。首正文把“模型真的算得久”
+            # 与“正文被攒到 message_end 才公开”分开；重试计数把“一次慢生成”与
+            # “失败一次后重试”分开。仅新行有这两个字段。
+            first_visible = _timing_int(produced[1], "first_text_ms")
+            if first_visible is not None:
+                first_visible_text.append((first_visible, True))
+            retry_count = _timing_int(produced[1], "retry_count")
+            if first_visible is not None and retry_count is None:
+                # 新行且无重试字段：确认本轮未观测到重试，计入分母。
+                turn_retry_measured += 1
+            elif retry_count is not None:
+                turn_retry_measured += 1
+                if retry_count > 0:
+                    turn_retry_turns_with_retry += 1
+                    turn_retry_total += retry_count
+                    turn_retry_wait_ms += _timing_int(produced[1], "retry_wait_ms") or 0
 
         open_tools: dict[str, tuple[datetime, dict[str, Any] | None]] = {}
         for kind, at, payload, timing in events:
@@ -529,11 +587,18 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
         queue_wait=_stats(queue_wait),
         prepare=_stats(prepare),
         first_text=_stats(first_text),
+        first_visible_text=_stats(first_visible_text),
         model_turn=_stats(model_turn),
         tool_call=_stats(tool_call),
         compaction=_stats(compaction),
         settle=_stats(settle),
         provider_retry=provider_retry,
+        turn_retry=TurnRetryStats(
+            turns_with_retry=turn_retry_turns_with_retry,
+            retries=turn_retry_total,
+            retry_wait_ms=turn_retry_wait_ms,
+            turns_measured=turn_retry_measured,
+        ),
     )
 
 
