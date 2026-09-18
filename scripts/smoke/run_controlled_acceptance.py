@@ -1253,7 +1253,18 @@ def _scenario_cancel(
         f"{family}/api/agent/runs/{run_id}/cancel", headers=headers
     )
     report = collect_worker(worker)
-    run = wait_terminal(client, family, headers, run_id, timeout=90.0)
+    # Convergence latency matters as much as the final status: the browser keeps
+    # its "running" affordance until the server writes a terminal event, so a
+    # cancel that only converges at lease expiry leaves the user waiting.
+    cancel_at = time.monotonic()
+    run = wait_terminal(
+        client,
+        family,
+        headers,
+        run_id,
+        timeout=float(os.environ.get("FG_CANCEL_WAIT_S", "90")),
+    )
+    converged_after_s = round(time.monotonic() - cancel_at, 2)
     events = sse_events(client.get(f"{family}/api/agent/runs/{run_id}/events", headers=headers))
     types = [e["type"] for e in events]
     assistant = [e for e in events if e["type"] == "message.assistant_added"]
@@ -1265,10 +1276,17 @@ def _scenario_cancel(
         "A6",
         "F-R1 取消：run 收敛为 cancelled 而非 failed",
         "pass" if run.get("status") == "cancelled" else "fail",
-        f"cancel_http={cancelled.status_code} run={run.get('status')} error={timing.get('error_code')}",
+        f"cancel_http={cancelled.status_code} run={run.get('status')} "
+        f"db_status={timing.get('status')} converged_after_s={converged_after_s} "
+        f"error={timing.get('error_code')}",
         {
             "event_types": types,
             "worker": report,
+            "api_status": run.get("status"),
+            "db_status": timing.get("status"),
+            "db_runs": timing.get("runs"),
+            "converged_after_s": converged_after_s,
+            "cancel_wait_s": float(os.environ.get("FG_CANCEL_WAIT_S", "90")),
             "error_code": timing.get("error_code"),
             "status_before_cancel": observed,
             "sidecar_env": worker_env,
@@ -1348,9 +1366,9 @@ def _scenario_compaction(
         if e.get("timing") and e.get("run_id") == trigger["run"]["id"]
     ]
     compaction_ms = [
-        e["timing"].get("compaction_ms")
+        e["timing"].get("duration_ms")
         for e in persisted
-        if e["timing"].get("compaction_ms") is not None
+        if e["type"] == "run.compacted" and e["timing"].get("duration_ms") is not None
     ]
     model_turns = [e["timing"] for e in persisted if e["timing"].get("duration_ms")]
     persisted_timings = [
@@ -1368,11 +1386,12 @@ def _scenario_compaction(
     grid.cell(
         "A3-1",
         "A3",
-        "F-R1/A3 压缩作为 model_turn 子成分单列（compaction_ms）",
+        "F-R1/A3 压缩作为 run 级阶段单列（run.compacted，非 turn 子成分）",
         "pass" if compaction_ms else "fail",
         f"seed_turns={seeded} compaction_samples={len(compaction_ms)}",
         {
             "compaction_ms": compaction_ms,
+            "compaction_carrier": [e["type"] for e in persisted if e["type"] == "run.compacted"],
             "sdk_compaction_events": sdk_events,
             "compaction_decisions": decisions,
             "provider_call_log": calls,
@@ -1404,8 +1423,9 @@ def _scenario_compaction(
         f"summary_calls={len(summary_calls)} context_messages={checks.get('context_messages')}",
         {"provider_call_log": calls, "seeded_turns": seeded},
     )
-    # 回归锁定：真实 SDK 把压缩排在哪个轮次边界。这一格把结论变成机器可断言的
-    # 位置关系，而不是散文描述：D 的 compaction_ms 合同假定压缩发生在 turn 内。
+    # 回归锁定：真实 SDK 把压缩排在 turn 之外（prompt 前与 agent_end 之后）。
+    # 这一格把已证实的事实写成机器可断言的断言，而不是让旧合同继续 fail：
+    # 压缩不属于任何一轮，因此 model_turn 不含它，它由 run.compacted 单独承载。
     times = checks.get("session_event_times", [])
     kinds = [t["type"] for t in times]
     turn_start = kinds.index("turn_start") if "turn_start" in kinds else None
@@ -1418,19 +1438,26 @@ def _scenario_compaction(
         and msg_end is not None
         and turn_start < i < msg_end
     ]
+    compaction_starts = sum(1 for t in times if t["type"] == "compaction_start")
+    agent_end = kinds.index("agent_end") if "agent_end" in kinds else None
+    post_agent_end_starts = [
+        i
+        for i, t in enumerate(times)
+        if t["type"] == "compaction_start" and agent_end is not None and i > agent_end
+    ]
     grid.cell(
         "A3-4",
         "A3",
-        "F-R1/A3 真实 SDK 的压缩是否落在 turn 内（D 的 compaction_ms 前提）",
-        "pass" if in_turn_starts else "fail",
-        f"compaction_starts={sum(1 for t in times if t['type'] == 'compaction_start')} "
-        f"in_turn={len(in_turn_starts)}",
+        "F-R1/A3 真实 SDK 的压缩落在 turn 之外（run 级归属的前提）",
+        "pass" if compaction_starts and not in_turn_starts else "fail",
+        f"compaction_starts={compaction_starts} in_turn={len(in_turn_starts)} "
+        f"after_agent_end={len(post_agent_end_starts)}",
         {
             "session_event_times": times,
             "compaction_decisions": decisions,
             "note": (
-                "compaction_ms 只在 turn_start→message.assistant_added 之间累积；"
-                "此处按真实 SDK 广播顺序判定压缩位置。"
+                "压缩发生在 turn 之外（prompt 前与 agent_end 之后），因此由 run.compacted "
+                "按 run 级阶段承载，model_turn（turn_start→message_end）不含压缩。"
             ),
         },
     )
