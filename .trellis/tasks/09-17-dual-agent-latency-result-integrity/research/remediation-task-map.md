@@ -1,6 +1,6 @@
 # 双 Agent 最新子任务图与问题覆盖
 
-状态：用户授权创建完整规划；A/B/C/D 已归档并集成到 main；E 的工程部分已集成到 main（e0ee321），E 的预算数值选择仍未批准；**H 已归档**（方案任务，约束由 09-18 承接）；**09-18 助手低延迟进入 in_progress，P0-1 轮询优化已实现并部署**；F/G/I 仍为 planning。父任务保持 in_progress；不改归档任务历史。所有任务主会话内联、串行处理，不使用子智能体。
+状态：用户授权创建完整规划；A/B/C/D 已归档并集成到 main；E 的工程部分已集成到 main（e0ee321），E 的预算数值选择仍未批准；**H 已归档**（方案任务，约束由 09-18 承接）；**09-18 助手低延迟已完成并归档**（P0-1/P0-2/P1-1 已部署、LL-AC4 真实浏览器验收通过；P2-1 实测否决、P2-2 留档）；F/G/I 仍为 planning。父任务保持 in_progress；不改归档任务历史。所有任务主会话内联、串行处理，不使用子智能体。
 
 ## 工件入口
 
@@ -11,8 +11,8 @@
 | E / P1 | 助手网关错误分类与分层重试治理 | [PRD](../../09-17-assistant-retry-governance/prd.md) | [design](../../09-17-assistant-retry-governance/design.md) | [implement](../../09-17-assistant-retry-governance/implement.md) | 工程修复已集成 main；策略选择待批准 |
 | F / P1 | 双Agent受控场景矩阵与浏览器链路验收 | [PRD](../../09-17-dual-agent-controlled-acceptance/prd.md) | [design](../../09-17-dual-agent-controlled-acceptance/design.md) | [implement](../../09-17-dual-agent-controlled-acceptance/implement.md) | 零模型费用的真实隔离栈验收 |
 | G / P1 | 运行版本核对、部署与真实小样本验收 | [PRD](../../09-17-dual-agent-release-validation/prd.md) | [design](../../09-17-dual-agent-release-validation/design.md) | [implement](../../09-17-dual-agent-release-validation/implement.md) | 发布/真实调用另有明确执行门 |
-| ~~H~~ / P2 | ~~助手增量正文显示协议与交互方案~~ | 已归档 | 已归档 | 已归档 | 方案任务未实施；约束由 [09-18 design](../../09-18-assistant-low-latency/design.md) 承接 |
-| 09-18 / P2 | 助手低延迟响应与首段交付优化 | [PRD](../../09-18-assistant-low-latency/prd.md) | [design](../../09-18-assistant-low-latency/design.md) | [implement](../../09-18-assistant-low-latency/implement.md) | 实施中；P0-1 已部署，P0-2 增量显示进行中 |
+| ~~H~~ / P2 | ~~助手增量正文显示协议与交互方案~~ | 已归档 | 已归档 | 已归档 | 方案任务未实施；约束由 [09-18 design](../../archive/2026-09/09-18-assistant-low-latency/design.md) 承接（已完成） |
+| 09-18 / P2 | 助手低延迟响应与首段交付优化 | [PRD](../../archive/2026-09/09-18-assistant-low-latency/prd.md) | [design](../../archive/2026-09/09-18-assistant-low-latency/design.md) | [implement](../../archive/2026-09/09-18-assistant-low-latency/implement.md) | **已完成并归档**；证据见[验收](../../archive/2026-09/09-18-assistant-low-latency/research/acceptance-2026-09-18.md) |
 | I / P2 | 模型档位、排队与性能取舍评估 | [PRD](../../09-17-agent-performance-options/prd.md) | [design](../../09-17-agent-performance-options/design.md) | [implement](../../09-17-agent-performance-options/implement.md) | 评估决策，默认维持配置 |
 
 每项都包含requirements、可观察AC、依赖/非目标、兼容/回退、验证入口及完成证据；implement/check.jsonl仅引用精确Spec叶和review-summary。清单虽为未来工具注入保留，本轮与后续执行仍按用户要求由主会话完成。
@@ -41,7 +41,7 @@
 | Q08矩阵/代理/SSE/浏览器/时钟精度 | F | G环境复验；AC01/08 |
 | Q09代码同步未加载 | G | AC07/08/09 |
 | Q10真实样本不足/不同版本不可比 | G | AC01/06/07 |
-| Q11增量显示方案及安全合同 | 09-18（原H已归档） | 实现中；P0-2 落地后另补 F 式验收 |
+| Q11增量显示方案及安全合同 | 09-18（原H已归档） | **已实现并完成真实浏览器验收**（LL-AC4 通过） |
 | Q12medium/换模型/并发/轮询/预算取舍 | I | E/09-18分离；轮询基础值已由 09-18-P0-1 定；证据与决策支持AC06 |
 | Q13错误完成声明/文档/最终清理 | 父+C/D/E/F/G | AC09；不篡改原归档 |
 

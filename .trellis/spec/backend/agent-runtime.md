@@ -61,9 +61,9 @@
 
 **已实施**：P0-2 增量显示（`assistant.text_delta`/`assistant.text_reset`，见 §4「增量显示合同」）——直接消除「正文早已到达却不可见」的 10-30s 空白；P1-1 稳定 cache key（见上，TTFT 收益仍未实测）；P0-1 轮询 250ms（已部署）。
 
-**2026-09-18 验收结果**（n=17 真实短问答，`main@802925f`）：`first_text_ms` 中位数 1977ms、`duration_ms` 中位数 2618ms；「已生成但不可见」= `duration_ms − first_text_ms` 为 **151–491ms**（修复前等于整条生成时长）。完整答案 17/17 ≤ 8s；首段 16/17 ≤ 3s。**不得据此宣布「3s 必达」**：上游 `header_ms` 波动到 7.8s 时首段必然超标。证据：`.trellis/tasks/09-18-assistant-low-latency/research/acceptance-2026-09-18.md`、`browser-acceptance-2026-09-18.md`。
+**2026-09-18 验收结果**（n=17 真实短问答，`main@802925f`）：`first_text_ms` 中位数 1977ms、`duration_ms` 中位数 2618ms；「已生成但不可见」= `duration_ms − first_text_ms` 为 **151–491ms**（修复前等于整条生成时长）。完整答案 17/17 ≤ 8s；首段 16/17 ≤ 3s。**不得据此宣布「3s 必达」**：上游 `header_ms` 波动到 7.8s 时首段必然超标。证据：`.trellis/tasks/archive/2026-09/09-18-assistant-low-latency/research/acceptance-2026-09-18.md`、`browser-acceptance-2026-09-18.md`。
 
-**优化策略**：详见 `.trellis/tasks/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
+**优化策略**：详见 `.trellis/tasks/archive/2026-09/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
 
 ### 既有源计时合同
 
