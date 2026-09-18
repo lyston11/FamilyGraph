@@ -34,6 +34,6 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "2026-09-18: 5/10 子任务完成或归档：A/B/C/D completed，H archived（被 09-18 具体化）。E/09-18 in_progress，F/G/I planning。",
+  "notes": "2026-09-19: 10/12 子任务完成或归档。A/B/C/D/H/E/09-18/F/D2(压缩归属)/G2(临时正文终态) 均已归档并集成 main。剩 G（发布与真实小样本，需批准费用窗口）与 I（档位取舍决策）为 planning。F 矩阵 41/41 + 19/19 全通过；F 发现并已闭合三个缺陷：D-F1 取消收敛 failed、D-F2 compaction_ms 恒空且轮后压缩计入 settle、D-F3 取消后仍标「生成中…」。",
   "meta": {}
 }
