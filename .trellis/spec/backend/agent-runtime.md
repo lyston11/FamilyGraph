@@ -39,41 +39,73 @@
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
 
-## 可观测性：助手耗时按持久事件分段（09-17 A）
+## 可观测性：助手耗时分段与源计时（09-17 A 建立，09-17 D 修正）
 
-- **分段真源是持久事件时间戳，不是新字段**：`agent_run_events.created_at` 配合
-  `run.started`（sidecar 在 lease→running 转换点写入）、`turn.started`、
-  `message.assistant_added`、`tool.execution.started/completed`（按 `tool_call_id` 配对）与
-  `agent_runs.settled_at`，即可拆出 `queue_wait` / `first_text` / `model_turn` / `tool_call` / `settle`。
-  `GET /admin-api/v1/agent/latency` 的 `assistant_phases` 就按此实现，全部只读、不触发模型。
-- **不要再宣称“助手无法分段、需要补 FSM 生命周期事件”**：该说法与生产数据不符（原
-  `admin_agent_latency` docstring 已据此改写）。也不要新增冗余阶段字段。
+### 已修正的旧结论（不要回退）
+
+- **`created_at` 是入库时刻，不是执行时刻**：sidecar 默认每 250ms 批量 flush 事件，
+  同一批事件被集中写库。实测约 125ms 的工具执行经真实 `append_events` 后，相邻事件
+  `created_at` 只差 1.301ms。旧 spec 声称“`created_at` 配合事件即可拆出精确阶段”
+  是**事实性错误**；短阶段（工具、准备）必须用下面的源计时，不得用持久间隔冒充。
+- **`run.started` 不是首次取得执行权的时刻**：sidecar 先 `getRunContext` + 创建
+  Pi session，再由 SDK `agent_start` 触发 `run.started`。用它与入队时间相减得到的
+  “排队”会把 context/session 准备时间算进排队。首次 lease 的权威时刻是
+  `agent_runs.first_leased_at`（lease 时 attempt 0→1 写一次，不可变）。
+- **不要用 `lease_expires_at` 倒推**被租走时刻：该字段被心跳持续前移。
+
+### 源计时合同（`agent_run_events.timing_json`，迁移 0051）
+
+- 新增 nullable 列 `timing_json`，形状由 `app/schemas/agent.EventTimingIn` 定义：
+  `{source: "sidecar-v1", duration_ms, compaction_ms?}`。它是**内部证据**，
+  永不进入 `public_payload`、永不透给家庭接口。
+- `duration_ms` 是该事件处**结束**的那个阶段的 producer 单调时长：
+  `run.started` = 取得执行权 → SDK `agent_start`（context 获取 + session 创建）；
+  `message.assistant_added` = 该轮 `turn_start` → `message_end`；
+  `tool.execution.completed` = 该次 `tool_execution_start` → `end`。
+- `compaction_ms` 是该轮内 SDK 压缩（`compaction_start`→`compaction_end`）的累计时长，
+  是 `duration_ms` 的**子成分**（摘要请求发生在 turn 内），schema 强制
+  `compaction_ms ≤ duration_ms`。无压缩即缺省，**不写 0**。
+- **两侧同步**：`timing` 只允许出现在 sidecar 执行事件上（后端自有事件携带即 422），
+  未知 `source`、负值、越界、`compaction_ms` 用在非正文事件上一律 fail-closed。
+  参与幂等指纹（`EventEntry.fingerprint`），重放同 seq 同 timing 视为重复。
+- 历史行 `timing_json` 为 NULL：读取方按 unknown 处理，**不回填、不倒推**。
+
+### 聚合口径（`GET /admin-api/v1/agent/latency` 的 `assistant_phases`）
+
+- 每个 `PhaseStats` 带 `basis`（`source_clock` / `persist_interval` / `mixed` / `none`）
+  与 `native_n` / `derived_n`，**新旧样本不混成同一精度的分布**：有源计时的 run 用源计时，
+  只有历史行的 run 退回持久间隔并明确标注 basis，不得把两者合成一个中位数。
+- 分母是**全部符合窗口的 run**（LEFT JOIN 事件/审计），不是事件集合反推；
+  零事件 run 计入 `runs_without_events`，无首次 lease 计入 `runs_without_first_lease`，
+  无 `run.started` 计入 `runs_without_start`，都不静默丢弃。
 - **口径红线**：首控制事件、心跳、`turn.started`、工具事件、reasoning 一律不冒充正文首字；
   `first_text` 每 run 一个样本（不是每轮），`model_turn` 逐轮一个样本（不得把多轮合成一笔）；
-  无正文的 turn 不得把后续 turn 的正文算到自己头上；无 `run.started` 的 run 计入
-  `runs_without_start` 而不是静默丢弃。缺失即 `n=0`/`null`，不零填充。
-- **`model_turn` 含上游重试，必须与 `provider_retry` 成对读**（09-17 A，A-02）：pi-ai 在
-  5xx/408/409/429 上指数退避重试，重试发生在同一轮 `turn.started`→正文之间，所以重试开销
-  **已被计入 `model_turn`**。`provider_retry` 由 `agent_provider_egress` 审计
-  （**`target_id` 就是 run_id**，`detail_json` 含 `status`/`upstream_status`/`bytes_read`，
-  无 prompt/正文）推导：同一连续失败段内 `末次失败 − 首次失败`。这是**下界**——审计只记
-  完成时刻、不记请求开始，故段内首次失败自身耗时不可知；单次失败后即成功的段贡献 0。
-  `provider_failed_attempts` 给出失败尝试总数（无歧义）。**不得**把 `provider_retry` 当作
-  全部重试耗时，也不得用 `model_turn − provider_retry` 宣称“纯推理时间”而不注明下界性质。
+  无正文的 turn 不得把后续 turn 的正文算到自己头上。缺失即 `n=0`/`null`，不零填充。
+- **`model_turn` 含上游重试与轮内压缩，必须与 `provider_retry`、`compaction` 成对读**
+  （09-17 A/D）：pi-ai 在 5xx/408/409/429 上指数退避重试，重试发生在同一轮
+  `turn.started`→正文之间，所以重试开销**已被计入 `model_turn`**。`provider_retry` 由
+  `agent_provider_egress` 审计（**`target_id` 就是 run_id**，`detail_json` 含
+  `status`/`upstream_status`/`bytes_read`，无 prompt/正文）推导：同一连续失败段内
+  `末次失败 − 首次失败`。这是**下界**——审计只记完成时刻、不记请求开始，故段内首次
+  失败自身耗时不可知；单次失败后即成功的段贡献 0。`provider_failed_attempts` 给出失败
+  尝试总数（无歧义）。**不得**把 `provider_retry` 当作全部重试耗时，也不得用
+  `model_turn − provider_retry` 宣称“纯推理时间”而不注明下界性质，更不得忽略
+  `compaction` 子成分。
   实测（n=2 run，只读副本）：run 2 的 5 次 502 在**同一轮内**连续，`provider_retry` 记录
   10.22s（该轮 `model_turn` 33.15s）；run 1 是**每轮各一次** 503，失败段长度为 1，
   按 `末次−首次` 定义得 0——即**单次失败的段不被测量**，只能由 `provider_failed_attempts=2`
   看出有重试。这是本指标的已知盲区，不要用它的 n 去反推「无重试」。
   触发源是上游 502/503 不稳定，不是退避上限（实测退避远小于
   `AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS=20000`）。
-- **不要新增冗余阶段字段。也不要直接透传 delta**：`mapSessionEvent` 忽略
-  `message_update`/delta 是**刻意合同**，不是遗漏——`agent/test/assistant-delta-gap.test.ts`
-  用真实 Pi SDK + fake stream 测出：上游 `text_delta` 与 SDK 的 `message_update` 均会到达，
-  但公共 `message.assistant_added` 恰好只在 `message_end` 发一次（完整答案，非部分前缀）。
-  若要把「首字更早可见」作为产品能力，必须先在 spec 中冻结 delta 合同（消息 ID/顺序号/epoch/
-  重连重放去重、终态权威正文替换临时内容、聚合频率与 SSE 大小有界、取消/失租即停、
-  citations/cardIds 只在权威事件后绑定、滚动兼容），**不得**在 `events.ts` 直接透传 SDK 事件。
-- **不得用 `lease_expires_at` 倒推**被租走时刻：run 的 lease 由心跳前移，该字段不表示实际取用时间。
+- **不要直接透传 delta**：`mapSessionEvent` 忽略 `message_update`/delta 是**刻意合同**，
+  不是遗漏——`agent/test/assistant-delta-gap.test.ts` 用真实 Pi SDK + fake stream 测出：
+  上游 `text_delta` 与 SDK 的 `message_update` 均会到达，但公共 `message.assistant_added`
+  恰好只在 `message_end` 发一次（完整答案，非部分前缀）。若要把「首字更早可见」作为产品能力，
+  必须先在 spec 中冻结 delta 合同（消息 ID/顺序号/epoch/重连重放去重、终态权威正文替换临时内容、
+  聚合频率与 SSE 大小有界、取消/失租即停、citations/cardIds 只在权威事件后绑定、滚动兼容），
+  **不得**在 `events.ts` 直接透传 SDK 事件。
+- **浏览器收到/渲染时刻不由本接口证明**：SSE 到达、首帧渲染需要浏览器 `performance` 时钟，
+  服务端 UTC 与浏览器 monotonic 不可直接相减；该证据由受控验收任务补齐。
 
 ## 5. Provider 治理（09-06 迁移后形态）
 

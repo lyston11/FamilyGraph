@@ -28,7 +28,17 @@
 
 ## 顺序与职责
 
-C总截止 → D计时/聚合与关联合同 → E错误分类/完整审计/重试 → F受控全链矩阵 → G部署与真实验证。共享backend/SDK/SQLite/端口时一律串行。H/I可先写方案，收益/采用判断依赖D/F/G证据，不阻塞现配置可靠性修复。D定义请求元数据，E生产审计，F验其一致；避免三处各造一套协议。
+C 总截止 → D 计时/聚合与关联合同 → E 错误分类/完整审计/重试 → F 受控全链矩阵 → G 部署与真实验证。共享backend/SDK/SQLite/端口时一律串行。H/I可先写方案，收益/采用判断依赖D/F/G证据，不阻塞现配置可靠性修复。D定义请求元数据，E生产审计，F验其一致；避免三处各造一套协议。
+
+### 已闭合（本轮实现，待集成后复验）
+
+| ID | 结果 | 证据 |
+| --- | --- | --- |
+| Q03 | 已闭合：新增 `agent_run_events.timing_json`（sidecar 源计时，迁移 0051）与不可变 `agent_runs.first_leased_at`；`queue_wait` 不再把 context/session 准备算进排队，短阶段不再被 250ms 批量 flush 量化成约 1ms | [D evidence](../../09-17-assistant-timing-observability/evidence.md) |
+| Q04 | 已闭合：分母改由 run 表 LEFT JOIN（`runs_without_events`/`runs_without_first_lease`/`runs_without_start`）；单次失败后成功单列 `unmeasured_retries`，尾部失败耗尽不再丢失 | 同上 |
+| Q05（部分） | 轮内压缩已作为 `model_turn` 子成分单列（`compaction`）；SSE/渲染仍需 F 的浏览器测量 | 同上 |
+
+仍未闭合：Q01/Q02 已在 C 完成（待集成复验）；Q06/Q07 属 E；Q08 属 F；Q09/Q10 属 G；Q11 属 H；Q12 属 I。
 
 C～G是必需闭合项；H/I是方案与决策交付，创建并不批准上线/调参。G真实小样本上限是提案（见G PRD），须单独确认费用等，不自动消耗。
 
