@@ -255,6 +255,71 @@ CROSS_SPACE_PROBE = r"""(async () => {
 })()"""
 
 
+CANCEL_PROBE = r"""(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const items = () => [...document.querySelectorAll('[data-test=message-item]')];
+  const types = () => window.__fgProbe.events.map((e) => e.type);
+  const input = document.querySelector('[data-test=composer-input]');
+  const sendBtn = document.querySelector('[data-test=send-btn]');
+  if (!input || !sendBtn) return {error: 'no composer'};
+  // Mark the attempt's leading edge, then send.
+  window.__fgProbe.t0 = performance.now();
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value').set;
+  setter.call(input, '这个问题的回答请取消掉');
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await sleep(200);
+  sendBtn.click();
+
+  // Wait until the run is actually generating (cancel button offered) and at
+  // least one provisional frame has been painted, so the cancel lands
+  // mid-stream rather than before the model starts.
+  let sawCancelBtn = false;
+  let provisionalBefore = 0;
+  for (let i = 0; i < 300; i += 1) {
+    const btn = document.querySelector('[data-test=cancel-run-btn]');
+    const provisional = items().filter(
+      (n) => n.querySelector('[data-test=provisional-mark]')).length;
+    if (btn && provisional > 0) {
+      sawCancelBtn = true;
+      provisionalBefore = provisional;
+      break;
+    }
+    await sleep(50);
+  }
+  if (!sawCancelBtn) {
+    return {error: 'run never became cancellable', types: types()};
+  }
+  const cancelledAt = performance.now() - window.__fgProbe.t0;
+  document.querySelector('[data-test=cancel-run-btn]').click();
+
+  // Observe until a terminal event arrives.
+  let terminalAt = null;
+  for (let i = 0; i < 400; i += 1) {
+    const t = types();
+    if (t.includes('run.settled') || t.includes('run.failed') || t.includes('run.cancelled')) {
+      terminalAt = performance.now() - window.__fgProbe.t0;
+      break;
+    }
+    await sleep(50);
+  }
+  await sleep(800);
+  const finalItems = items();
+  return {
+    sawCancelBtn,
+    provisionalBefore,
+    cancelledAt: Math.round(cancelledAt),
+    terminalAt: terminalAt === null ? null : Math.round(terminalAt),
+    eventTypes: types(),
+    pendingIndicator: !!document.querySelector('[data-test=message-list] .pending'),
+    errorNotice: document.querySelector('[data-test=error-notice]')?.textContent?.trim() ?? null,
+    provisionalAfter: finalItems.filter(
+      (n) => n.querySelector('[data-test=provisional-mark]')).length,
+    assistantCount: finalItems.filter((n) => n.getAttribute('data-role') === 'assistant').length,
+  };
+})()"""
+
+
 RESUME_PROBE = r"""(async () => {
                  const runId = window.__fgProbe.lastRunId;
                  if (!runId) return {error: 'no run'};
@@ -562,6 +627,11 @@ async def drive(
                  };
                })()"""
         )
+        # F-R4 取消：在真实浏览器里点「取消回答」，验证服务端裁决的取消在页面上
+        # 呈现为「已取消」（无错误横幅、无残留临时气泡、无无限等待）。
+        # 必须真的在流中取消（等取消按钮出现且已有临时正文），否则证明不了中断语义。
+        cancel = await cdp.evaluate(CANCEL_PROBE)
+
         # F-R4 断线续传：中止在飞的 SSE 读取，再带 Last-Event-ID 重新请求，
         # 拼接结果必须无重复、无缺失（真实 API/SSE，非 route mock）。
 
@@ -599,6 +669,7 @@ async def drive(
             "probe": probe,
             "dom": dom,
             "after_refresh": after_refresh,
+            "cancel": cancel,
             "resume": resume,
             "cross_space": cross_space,
         }
@@ -1238,6 +1309,58 @@ def _grade(grid: Grid, result: dict[str, Any], state: UpstreamState) -> None:
             "before_texts": old_texts,
             "after_texts": after_texts,
             "error": cs.get("error"),
+        },
+    )
+    # F-R4 取消的浏览器呈现。拆成两格：服务端裁决（已通过）与终态标记
+    # （仍失败，见 G2）。合并成一格会让一个真实的展示缺陷藏在一个布尔里。
+    cxl = result.get("cancel") or {}
+    cxl_types = cxl.get("eventTypes") or []
+    grid.cell(
+        "UI2-6",
+        "UI2",
+        "F-R4 浏览器取消：终态由服务端裁决为 cancelled，不显示为失败",
+        "pass"
+        if cxl.get("sawCancelBtn")
+        and "run.cancelled" in cxl_types
+        and "run.failed" not in cxl_types
+        and not cxl.get("errorNotice")
+        and not cxl.get("pendingIndicator")
+        else "fail",
+        f"cancel_btn={cxl.get('sawCancelBtn')} cancelled_at_ms={cxl.get('cancelledAt')} "
+        f"terminal_at_ms={cxl.get('terminalAt')} error={cxl.get('errorNotice')}",
+        {
+            "event_types": cxl_types,
+            "provisional_before_cancel": cxl.get("provisionalBefore"),
+            "provisional_after": cxl.get("provisionalAfter"),
+            "assistant_count": cxl.get("assistantCount"),
+            "pending_indicator": cxl.get("pendingIndicator"),
+            "error_notice": cxl.get("errorNotice"),
+            "error": cxl.get("error"),
+            "note": (
+                "取消必须打在流中（已出现临时正文），否则证明不了中断语义；"
+                "终态由服务端裁决，页面不得自行显示失败。"
+            ),
+        },
+    )
+    # 09-18 design 的表格要求「failed / cancelled：保留已显示的安全部分并标终态」。
+    # 现状保留了正文，但没有标终态：取消后仍渲染「生成中…」标记。
+    # 这是展示缺陷（G2），本格如实记为 fail，不因 UI2-6 通过而掩盖。
+    grid.cell(
+        "UI2-7",
+        "UI2",
+        "F-R4 取消后临时正文标为终态（不再声称仍在生成）",
+        "pass" if cxl.get("provisionalAfter") == 0 else "fail",
+        f"provisional_after={cxl.get('provisionalAfter')} "
+        f"assistant_count={cxl.get('assistantCount')}",
+        {
+            "event_types": cxl_types,
+            "provisional_before_cancel": cxl.get("provisionalBefore"),
+            "provisional_after": cxl.get("provisionalAfter"),
+            "error": cxl.get("error"),
+            "note": (
+                "09-18 design：failed/cancelled 保留已显示的安全部分并标终态。"
+                "现状保留了正文但未标终态，MessageList 仍渲染 生成中… 标记。"
+            ),
         },
     )
     # F-R5：渲染间隔与传输间隔必须可分辨，且注入的分块延迟真的体现在渲染上。

@@ -25,10 +25,11 @@ python3 scripts/smoke/run_browser_acceptance.py --report /tmp/f-browser.json \
 ## 逐格结果
 
 `run_controlled_acceptance.py`：**38 / 38 通过**。
-`run_browser_acceptance.py`：**17 / 17 通过**。
+`run_browser_acceptance.py`：**19 / 19 通过**。
 
-D-F1/D-F2 两个缺陷已分别在 `09-17-assistant-retry-governance`（取消分类 + 快速收敛）与
-`09-19-assistant-compaction-attribution`（压缩 run 级归属）修复并集成；上表为集成后复跑。
+D-F1/D-F2/D-F3 三个缺陷已分别在 `09-17-assistant-retry-governance`（取消分类 + 快速收敛）、
+`09-19-assistant-compaction-attribution`（压缩 run 级归属）与
+`09-19-assistant-provisional-terminal-mark`（取消后终态标记）修复并集成；上表为集成后复跑。
 
 ### A 组 助手（F-R1）
 
@@ -89,6 +90,8 @@ B1c 是其中唯一在真实 HTTP transport 层测量总截止的格（不靠 fa
 | UI2-2 | 终态后无无限等待、无错误横幅 | pass | `pending=False error=None` |
 | UI2-4 | **断线后带 `Last-Event-ID` 续传：无重复、无缺序** | pass | 中止于 seq 3 → 续传 `4..12`，合并 `0..12` 连续且无重复 |
 | UI2-5 | **跨空间切换：旧空间消息不残留** | pass | 切到「第二个家族」后面板 `after=0`，旧正文零泄漏 |
+| UI2-6 | **浏览器取消：终态由服务端裁决为 cancelled，不显示为失败** | pass | `cancel_btn=True`、`run.cancelled`（无 `run.failed`）、无错误横幅、无无限等待 |
+| UI2-7 | **取消后临时正文标为终态（不再声称仍在生成）** | pass | `provisional_after=0`，已显示正文保留 |
 | UI2-3 | 分片节奏与注入上游一致 | pass | 到达间隔 `691/710/705/707/706/708ms` vs 注入 `700ms` |
 
 `UI1-2/1-3/1-4` 三格合起来正是 09-18 要求的「首段正文可见时间、权威最终替换、
@@ -106,7 +109,7 @@ B1c 是其中唯一在真实 HTTP transport 层测量总截止的格（不靠 fa
 | `ruff check .` / `ruff format --check .` / `mypy app` | 全绿（206 源文件） |
 | `pytest`（backend 全量） | **1712 passed, 3 skipped** |
 | `vitest run`（agent 全量） | 167 passed / 18 files |
-| `npm test`（frontend 全量） | 763 passed / 72 files |
+| `npm test`（frontend 全量） | 766 passed / 72 files |
 | `agent npm run lint` / `type-check` | 全绿 |
 | `frontend npm run lint` / `type-check` | 全绿 |
 | `npm run build`（agent / frontend） | 成功 |
@@ -117,7 +120,8 @@ B1c 是其中唯一在真实 HTTP transport 层测量总截止的格（不靠 fa
 
 ## 缺陷与修复（发现即记录，修复在所属任务）
 
-两个缺陷都由本矩阵发现、按 PRD「退回所属任务」修复后集成，并在此复跑通过。
+三个缺陷都由本矩阵发现、按 PRD「退回所属任务」修复后集成，并在此复跑通过。
+D-F1 修完后又暴露出「取消只能等租约过期（304s）」的第二层问题，一并闭合（见下）。
 缺陷的原始失败日志与机理记录保留在 `defect-*.note.md`，未被通过结果覆盖。
 
 ### D-F1（P1）取消在正常心跳节奏下收敛为 `failed` 而非 `cancelled` —— 已修复
@@ -149,6 +153,22 @@ B1c 是其中唯一在真实 HTTP transport 层测量总截止的格（不靠 fa
   reaper 在租约健康时收敛被取消 run、且不误回收未取消的活跃租约；agent 客户端
   分类、观察者回调、以及「仅靠 append 取消（心跳保持在 20s 外）产生 0 次 settle」。
 
+### D-F3（P2）取消后临时正文仍标「生成中…」 —— 已修复
+
+- **发现方式**：为 D-F1 补的 UI2-6 探针（真实浏览器点「取消回答」）暴露出第二层
+  问题：终态事件已到、无错误横幅、无无限等待，但 `provisional` 气泡仍在，
+  `MessageList` 继续渲染「生成中…」。
+- **为何是缺陷**：09-18 增量显示设计自己写了
+  「failed / cancelled：保留已显示的安全部分并标终态」；实现只做了「保留」，
+  没做「标终态」。用户在取消后看到一句永远「生成中…」的半截正文。
+- **修复**（`09-19-assistant-provisional-terminal-mark`，commit `25602ba`）：
+  `finishRun` 在终态分支去掉 `provisional` 标记（保留正文，不新增用户可见文案）；
+  与 `text_reset`（丢弃/隐藏）语义刻意分开。
+- **复验**：UI2-7 pass（`provisional_after=0`，正文保留）；UI2-6 拆为独立的
+  「服务端裁决」格并 pass，避免两层问题合并成一个布尔而互相掩盖。
+- **回归**（还原修复即 4 格转红）：failed/cancelled/expired 均标终态；
+  终态后新分片不会拼进已结束的气泡；`text_reset` 仍是隐藏。
+
 ### D-F2（P2）`compaction_ms` 在真实 SDK 路径下系统性为空，且轮后压缩被算进 `settle` —— 已修复
 
 - **原现象**：真实 SDK 的阈值压缩**确实发生**（`compaction_start:threshold`×2、
@@ -174,10 +194,9 @@ B1c 是其中唯一在真实 HTTP transport 层测量总截止的格（不靠 fa
 
 ## 未覆盖 / 明确不做
 
-- **取消与失权的浏览器可见语义**：UI 组没做「点取消后页面如何呈现」与
-  「权限被撤回后页面如何呈现」两格。取消的服务端收敛已在 A6-1 修复并验证
-  （0.01s 收敛为 `cancelled`），但**浏览器侧**的取消呈现仍需真实 DOM 断言；
-  失权场景需要第二个账号与 membership 变更。两者属后续增量，不在本次通过结果内。
+- **失权的浏览器可见语义**：UI 组没做「权限被撤回后页面如何呈现」一格，
+  需要第二个账号与 membership 变更，属另一轮环境搭建。
+  （取消的浏览器呈现已由 UI2-6/UI2-7 覆盖。）
 - 真实 Provider 的模型质量、线上 TTFT/p95（G 的范围，需批准费用）。
 - 跨机时钟精度（需另建探针对自建流测传输；本矩阵不声明跨机毫秒）。
 - steward 真实上游时延（fake transport 只能证明程序合同）。
