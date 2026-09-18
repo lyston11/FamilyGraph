@@ -82,19 +82,32 @@
 ### 源计时合同（`agent_run_events.timing_json`，迁移 0051）
 
 - 新增 nullable 列 `timing_json`，形状由 `app/schemas/agent.EventTimingIn` 定义：
-  `{source: "sidecar-v1", duration_ms, compaction_ms?}`。它是**内部证据**，
-  永不进入 `public_payload`、永不透给家庭接口。
+  `{source: "sidecar-v1", duration_ms, first_text_ms?, retry_count?, retry_wait_ms?}`。
+  它是**内部证据**，永不进入 `public_payload`、永不透给家庭接口。
 - `duration_ms` 是该事件处**结束**的那个阶段的 producer 单调时长：
   `run.started` = 取得执行权 → SDK `agent_start`（context 获取 + session 创建）；
   `message.assistant_added` = 该轮 `turn_start` → `message_end`；
-  `tool.execution.completed` = 该次 `tool_execution_start` → `end`。
-- `compaction_ms` 是该轮内 SDK 压缩（`compaction_start`→`compaction_end`）的累计时长，
-  是 `duration_ms` 的**子成分**（摘要请求发生在 turn 内），schema 强制
-  `compaction_ms ≤ duration_ms`。无压缩即缺省，**不写 0**。
-- **两侧同步**：`timing` 只允许出现在 sidecar 执行事件上（后端自有事件携带即 422），
-  未知 `source`、负值、越界、`compaction_ms` 用在非正文事件上一律 fail-closed。
+  `tool.execution.completed` = 该次 `tool_execution_start` → `end`；
+  `run.compacted` = 本次 prompt 内所有 SDK 压缩跨度之和（见下）。
+- **压缩是 run 级阶段，不是 turn 的子成分**（09-19 D2 修正，原合同是事实性错误）。
+  真实 SDK（pi-coding-agent 0.84.3）在 **turn 之外**压缩：prompt 前阈值检查在
+  `agent_start` 之前，轮后检查在 `agent_end` 之后、`agent_settled` 之前
+  （受控验收实测该笔 245ms）。因此：
+  - `model_turn`（`turn_start → message_end`）**本来就不含**压缩，不得把它与
+    `compaction` 当子成分相减；
+  - 压缩由 `run.compacted` 承载（`public_payload` 恒为 `{}`，timing 仍只在
+    `timing_json`），`duration_ms` 只累计 `agent_start` 之后的跨度——prompt 前那次
+    属于把会话准备好，已含在 `prepare` 里，重复上报会让各段之和超出真实墙钟；
+  - 无压缩即**不发事件**，聚合 `n=0`，不用 0 填充；
+  - `run.compacted` 是非终态事件，因此它成为「最后一个非终态事件」时，`settle`
+    阶段不再把轮后压缩算作结算开销（修正前那 245ms 被错误计入 `settle`）。
+- **两侧同步**：`timing` 只允许出现在 sidecar 执行事件上
+  （`run.started`/`message.assistant_added`/`tool.execution.completed`/`run.compacted`；
+  后端自有事件携带即 422），未知 `source`、负值、越界一律 fail-closed。
   参与幂等指纹（`EventEntry.fingerprint`），重放同 seq 同 timing 视为重复。
 - 历史行 `timing_json` 为 NULL：读取方按 unknown 处理，**不回填、不倒推**。
+  历史行也**没有** `run.compacted`（事件不存在），因此其 `compaction` 样本为 0，
+  不得据历史数据反推压缩耗时。
 
 ### 聚合口径（`GET /admin-api/v1/agent/latency` 的 `assistant_phases`）
 
@@ -107,17 +120,19 @@
 - **口径红线**：首控制事件、心跳、`turn.started`、工具事件、reasoning 一律不冒充正文首字；
   `first_text` 每 run 一个样本（不是每轮），`model_turn` 逐轮一个样本（不得把多轮合成一笔）；
   无正文的 turn 不得把后续 turn 的正文算到自己头上。缺失即 `n=0`/`null`，不零填充。
-- **`model_turn` 含上游重试与轮内压缩，必须与 `provider_retry`、`compaction` 成对读**
-  （09-17 A/D）：pi-ai 在 5xx/408/409/429 上指数退避重试，重试发生在同一轮
-  `turn.started`→正文之间，所以重试开销**已被计入 `model_turn`**。`provider_retry` 由
-  `agent_provider_egress` 审计（**`target_id` 就是 run_id**，`detail_json` 含
-  `status`/`upstream_status`/`bytes_read`，无 prompt/正文）推导：同一连续失败段内
-  `末次失败 − 首次失败`。这是**下界**——审计只记完成时刻、不记请求开始，故段内首次
-  失败自身耗时不可知；单次失败后即成功的段贡献 0 并单列 `unmeasured_retries`。
-  `provider_retry.failed_attempts` 给出失败尝试总数（无歧义），`retry_segments` 是
-  有可测窗口的段数，`exhausted_segments` 是失败耗尽的尾部段数。**不得**把 `provider_retry`
-  当作全部重试耗时，也不得用 `model_turn − provider_retry` 宣称“纯推理时间”而不注明
-  下界性质，更不得忽略 `compaction` 子成分。
+- **`model_turn` 含上游重试，必须与 `provider_retry` 成对读**（09-17 A/D）：pi-ai 在
+  5xx/408/409/429 上指数退避重试，重试发生在同一轮 `turn.started`→正文之间，所以重试
+  开销**已被计入 `model_turn`**。`provider_retry` 由 `agent_provider_egress` 审计
+  （**`target_id` 就是 run_id**，`detail_json` 含 `status`/`upstream_status`/`bytes_read`，
+  无 prompt/正文）推导：同一连续失败段内 `末次失败 − 首次失败`。这是**下界**——审计只记
+  完成时刻、不记请求开始，故段内首次失败自身耗时不可知；单次失败后即成功的段贡献 0
+  并单列 `unmeasured_retries`。`provider_retry.failed_attempts` 给出失败尝试总数
+  （无歧义），`retry_segments` 是有可测窗口的段数，`exhausted_segments` 是失败耗尽的
+  尾部段数。**不得**把 `provider_retry` 当作全部重试耗时，也不得用
+  `model_turn − provider_retry` 宣称“纯推理时间”而不注明下界性质。
+  **`compaction` 不在 `model_turn` 内**（09-19 D2）：压缩是 run 级阶段，
+  `model_turn` 本就是纯生成（含重试）；两者不得相加或相减，`compaction` 只说明
+  本次 prompt 另花了多少摘要时间。
   实测（n=2 run，只读副本）：run 2 的 5 次 502 在**同一轮内**连续，`provider_retry` 记录
   10.22s（该轮 `model_turn` 33.15s）；run 1 是**每轮各一次** 503，失败段长度为 1，
   按 `末次−首次` 定义得 0——即**单次失败的段不被测量**，只能由
