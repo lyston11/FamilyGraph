@@ -152,9 +152,16 @@ class EventTimingIn(_Strict):
 
     source: Literal["sidecar-v1"]
     duration_ms: int = Field(strict=True, ge=0, le=MAX_TIMING_MS)
-    # 该轮内 SDK 压缩（compaction_start→end）的累计时长；它是 ``duration_ms``
-    # 的**子成分**（压缩请求发生在 turn 内），与 provider_retry 一样必须单独读，
-    # 不能把 model_turn 直接称为纯生成。无压缩即缺省（None），不写 0。
+    # 该轮内 SDK 压缩（compaction_start→end）的累计时长，与 provider_retry 一样必须
+    # 单独读，不能把 model_turn 直接称为纯生成。
+    #
+    # 注意（09-17 F 受控验收实测，pi-coding-agent 0.84.3）：SDK 把阈值压缩排在轮次
+    # 边界之外（agent_end → compaction_start/end → agent_settled），因此本字段在
+    # **真实路径下恒为空**；“它是 duration_ms 的子成分、压缩发生在 turn 内”这一描述
+    # 对当前 SDK 不成立，发生压缩的轮次 model_turn **不含**摘要耗时。改法需先定下
+    # 阶段归属（不能只把窗口放宽到整轮），见 spec/backend/agent-runtime.md 与
+    # 09-17-dual-agent-controlled-acceptance/evidence/defect-compaction.note.md。
+    # 无该子成分即缺省（None），不写 0。
     compaction_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMING_MS)
     # ``turn_start`` → 首个 assistant 正文增量（``text_delta``）。thinking 增量不算。
     # 它是把“模型真的算了 33s”与“模型早就答了但正文被攒到整条消息才公开”分开的
