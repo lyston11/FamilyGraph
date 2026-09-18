@@ -224,7 +224,7 @@ def _require(
 def _snapshot(
     bind: Engine | Connection,
     binding: OverlayBinding,
-) -> tuple[ViewerInput, dict[str, Any], list[dict[str, Any]], set[int]]:
+) -> tuple[ViewerInput, dict[str, Any], list[dict[str, Any]], set[int], set[int]]:
     from app.services.personal_family_view import _inferred_hop_step
 
     with steward_snapshot.read_transaction(bind) as session:
@@ -249,7 +249,16 @@ def _snapshot(
         assert account is not None
         actor = session.get(User, account.user_id)
         assert actor is not None
-        known = {int(node["user_id"]) for node in view.skeleton_json["nodes"]}
+        # known = 已有 confirmed viewer 路径的节点（root/confirmed_path）。成员节点
+        # （space_member）已在骨架中，不算 known：推测层仍应给出其 viewer 视角建议，
+        # 但不得重复插行或改写其成员节点身份。
+        skeleton_nodes = list(view.skeleton_json["nodes"])
+        skeleton_ids = {int(node["user_id"]) for node in skeleton_nodes}
+        known = {
+            int(node["user_id"])
+            for node in skeleton_nodes
+            if node.get("inclusion_reason_code") in ("root", "confirmed_path")
+        }
         records: list[dict[str, Any]] = []
         for edge in active:
             if (
@@ -294,7 +303,13 @@ def _snapshot(
                     ),
                 }
             )
-        return snapshot, dict(intent.payload_json["input_versions"]), records, known
+        return (
+            snapshot,
+            dict(intent.payload_json["input_versions"]),
+            records,
+            known,
+            skeleton_ids,
+        )
 
 
 def _heartbeat(bind: Engine | Connection, binding: OverlayBinding) -> None:
@@ -307,7 +322,7 @@ def _heartbeat(bind: Engine | Connection, binding: OverlayBinding) -> None:
 def execute(bind: Engine | Connection, binding: OverlayBinding) -> None:
     """Preserve single inferred hop plus the full viewer-relative multi-hop path."""
     try:
-        snapshot, versions, records, known = _snapshot(bind, binding)
+        snapshot, versions, records, known, skeleton_ids = _snapshot(bind, binding)
         for record in records:
             target_id = record["new_user_id"]
             if target_id is None:
@@ -341,13 +356,13 @@ def execute(bind: Engine | Connection, binding: OverlayBinding) -> None:
                         )
                         record["viewer_path"], record["viewer_term"] = path, term["term"]
                 break
-        included = known | {
+        included = skeleton_ids | {
             uid for edge in records for uid in (edge["subject_user_id"], edge["object_user_id"])
         }
         nodes = [
             {**node, "inclusion_reason_code": "inferred_path"}
             for node in json.loads(snapshot.nodes_json)
-            if node["user_id"] in included - known
+            if node["user_id"] in included - skeleton_ids
         ]
         payload = jsonable_encoder(
             {

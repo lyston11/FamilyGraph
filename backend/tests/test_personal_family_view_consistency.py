@@ -376,7 +376,14 @@ def test_first_path_formation_reaches_safe_current_without_browser_get(db_sessio
     payload = personal_family_view.view_payload(
         db_session, account=result.user.account, space_id=space.id
     )
-    assert {node["user_id"] for node in payload["nodes"]} == {result.user.id, parent.id}
+    assert {node["user_id"] for node in payload["nodes"]} == {
+        result.user.id,
+        parent.id,
+        creator.id,
+    }
+    # creator 是空间成员但没有 viewer→creator 路径：孤立成员节点，不是 confirmed_path
+    creator_node = next(node for node in payload["nodes"] if node["user_id"] == creator.id)
+    assert creator_node["inclusion_reason_code"] == "space_member"
 
 
 def test_provisional_person_without_account_gets_no_view(db_session) -> None:

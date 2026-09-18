@@ -467,4 +467,8 @@ def test_optional_source_change_hides_old_overlay_and_preserves_confirmed_result
     assert current["progress"]["total_count"] == published["progress"]["total_count"]
     assert current["progress"]["phase"] == "ready"
     assert current["inferred_edges"] == []
-    assert extra_id not in {node["user_id"] for node in current["nodes"]}
+    # 推测层失效后推测边消失；但 extra 是 active space_profile_ref（R1 授权候选），
+    # 仍是合法节点（space_member），只是不再带 inferred_path 身份。
+    extra_nodes = [node for node in current["nodes"] if node["user_id"] == extra_id]
+    assert len(extra_nodes) == 1
+    assert extra_nodes[0]["inclusion_reason_code"] == "space_member"
