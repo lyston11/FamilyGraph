@@ -42,50 +42,30 @@
 
 **待验**：真实 agent run 的排队时间（`first_leased_at - created_at`）< 1s 仍需真实样本；未取得真实 run 前不写“已生效”。
 
-#### P0-2: 实现安全增量显示 🔥
+#### P0-2: 实现安全增量显示 🔥 ✅ 已完成（2026-09-18，待部署与真实浏览器验收）
 
-**现状**：`events.ts` 丢弃所有 `message_update`
+**现状（已修复）**：`events.ts` 曾丢弃所有 `message_update`
 
 **收益**：体感从"等 10-30s 看到答案"变成"1-2s 看到首字，然后持续滚动"（**体感收益最大**）
 
-**技术路径**：
+**已实现的协议（与规划草案不同，以下为实际交付）**：
 
-1. **后端事件映射**（`agent/src/events.ts`）：
-```typescript
-// 新增 text_delta 事件类型
-if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
-  return [{
-    type: 'assistant.text_delta',
-    delta: event.assistantMessageEvent.delta,
-    content_index: event.assistantMessageEvent.contentIndex,
-    message_id: event.messageId, // 用于关联
-  }]
-}
-```
+1. **sidecar 映射**（`agent/src/events.ts`）：新增 `assistant.text_delta` / `assistant.text_reset` 两个事件类型。
+   - `mapSessionEvent` 保持**无状态**，不映射 `message_update`（草案中的 `content_index`/`message_id` 字段已去掉：SDK 未提供跨 delta 稳定的消息 id，且聚合在 buffer 内完成，不需要它）。
+   - 有界聚合在 `RunEventBuffer`：prose 累积到非 `message_update` 事件处 flush，单帧上限 `MAX_PROSE_FRAGMENT_CHARS=2000` 码点（按码点切分）。
+   - `auto_retry_start`（SDK 丢弃失败尝试并在同 turn 内重生成）发 `assistant.text_reset`。
+2. **后端**（`backend/app/services/agent_events.py`）：注册两个类型；`_validate_provisional_payload` 做闭合形状校验（额外字段/空 delta/超 `MAX_PROVISIONAL_DELTA_CHARS=4000` 一律 422）；**不物化 `AgentMessage`**。
+3. **前端**（`stores/agent.ts`）：`assistant.text_delta` 追加到 `provisional: true` 临时气泡；`text_reset` 或权威 `message.assistant_added` 到达时移除临时投影；临时气泡不进 `replayCursor`、不进 aria-live 播报（`MessageList.vue` 显示「生成中…」）。
 
-2. **前端增量累积**（`stores/agent.ts`）：
-```typescript
-if (event.type === 'assistant.text_delta') {
-  const lastMsg = partition.messages.findLast(m => 
-    m.role === 'assistant' && !m.settled && m.id === event.message_id
-  )
-  if (lastMsg) {
-    lastMsg.text += event.delta
-  }
-}
-```
+**输出安全（已核实，不是假设）**：当前 append 路径与 sidecar `message_end` 都**没有**输出侧正文扫描（`policy_guard` 只覆盖 input/tool_call/tool_result/context/before_provider_request 与 steward 出站）。所以增量分片与完整消息面对的是同一个（缺失的）检查：不得声称「前缀检查等价」，也不得把最终覆盖当作对已泄露片段的「撤回」。若后续要收紧，必须先有实际输出侧检查。
 
-3. **安全边界**：
-   - 只发布 `text_delta`，`thinking_delta` / `toolcall` 仍在 message_end 一次性显示
-   - message_end 时用最终文本**覆盖**累积 delta（以 SDK 为准）
-   - retry 中断时清空 pending 消息（收到新 message_start）
-   - 临时文本不入历史/Memory/RAG，只有最终文本才持久化
-
-**成本**：中等（前后端改动 + retry 场景测试）
+**成本**：中等（已完成前后端改动 + 回归测试）
 
 **归属**：本任务（已承接已归档 H 的协议与安全合同，见 design「增量安全合同」）
 
-**验收**：用户发问后 1-3s 内看到首字；完整答案仍需 10-15s 但全程有反馈
+**验证（已跑）**：`agent` 160 tests（含真实 SDK 的 `assistant-delta-gap.test.ts`）、`backend` 全量 1703 passed / 1 无关 flaky（隔离复跑通过）、`frontend` 762 tests + `type-check` + `lint` + `build` 均通过。
+
+**待验**：真实浏览器首字时刻（服务端时钟不能证明浏览器渲染时刻，见 spec §4）。
 
 ---
 
