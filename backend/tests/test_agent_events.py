@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.models.agent import AgentJob, AgentRunEvent
+from app.models.agent import AgentJob, AgentMessage, AgentRunEvent
 from app.services import agent_events, agent_queue
 from app.services.agent_events import EventEntry
 from conftest import create_agent_fixture, create_agent_message, create_agent_session
@@ -142,3 +142,163 @@ def test_run_started_promotes_leased_to_running(db_session):
             db_session, queued_run, [EventEntry(seq=1, type="run.started", public_payload={})]
         )
     assert _error(exc_info.value)["code"] == "AGENT_RUN_NOT_RUNNING"
+
+
+# ---- 09-18 P0-2: 临时正文显示事件（assistant.text_delta / text_reset）----
+
+
+def test_provisional_delta_is_persisted_but_never_materialises_a_message(db_session):
+    """临时正文是显示投影：落事件但不产生 AgentMessage（否则会进历史/RAG）。"""
+    user, space = create_agent_fixture(db_session, name="pv1")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    run = _enqueue(db_session, session)
+    accepted, duplicates = agent_events.append_events(
+        db_session,
+        run,
+        [
+            EventEntry(seq=1, type="turn.started", public_payload={}),
+            EventEntry(
+                seq=2,
+                type="assistant.text_delta",
+                public_payload={"role": "assistant", "delta": "half an answer"},
+            ),
+            EventEntry(
+                seq=3,
+                type="assistant.text_reset",
+                public_payload={"role": "assistant"},
+            ),
+        ],
+    )
+    db_session.commit()
+    assert [row.type for row in accepted] == [
+        "turn.started",
+        "assistant.text_delta",
+        "assistant.text_reset",
+    ]
+    assert duplicates == []
+    # 关键不变量：临时事件不物化历史行（会话里只有 fixture 的用户消息）。
+    assert (
+        db_session.scalars(
+            select(AgentMessage).where(
+                AgentMessage.session_id == session.id, AgentMessage.role == "assistant"
+            )
+        ).all()
+        == []
+    )
+    # 公开载荷就是白名单投影本身，未混入服务端字段。
+    delta_row = db_session.scalar(
+        select(AgentRunEvent).where(
+            AgentRunEvent.run_id == run.id, AgentRunEvent.type == "assistant.text_delta"
+        )
+    )
+    assert delta_row is not None
+    assert delta_row.public_payload == {"role": "assistant", "delta": "half an answer"}
+
+
+def test_provisional_delta_rejects_extra_fields_and_oversize(db_session):
+    """形状 fail-closed：额外字段、空 delta、超长分片都在落库前拒绝。"""
+    user, space = create_agent_fixture(db_session, name="pv2")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    run = _enqueue(db_session, session)
+    agent_events.append_events(
+        db_session, run, [EventEntry(seq=1, type="turn.started", public_payload={})]
+    )
+
+    with pytest.raises(HTTPException) as extra:
+        agent_events.append_events(
+            db_session,
+            run,
+            [
+                EventEntry(
+                    seq=2,
+                    type="assistant.text_delta",
+                    public_payload={"role": "assistant", "delta": "x", "message_id": 7},
+                )
+            ],
+        )
+    assert _error(extra.value)["code"] == "AGENT_EVENT_INVALID"
+
+    with pytest.raises(HTTPException) as empty:
+        agent_events.append_events(
+            db_session,
+            run,
+            [
+                EventEntry(
+                    seq=2,
+                    type="assistant.text_delta",
+                    public_payload={"role": "assistant", "delta": ""},
+                )
+            ],
+        )
+    assert _error(empty.value)["code"] == "AGENT_EVENT_INVALID"
+
+    with pytest.raises(HTTPException) as oversize:
+        agent_events.append_events(
+            db_session,
+            run,
+            [
+                EventEntry(
+                    seq=2,
+                    type="assistant.text_delta",
+                    public_payload={
+                        "role": "assistant",
+                        "delta": "x" * (agent_events.MAX_PROVISIONAL_DELTA_CHARS + 1),
+                    },
+                )
+            ],
+        )
+    assert _error(oversize.value)["code"] == "AGENT_EVENT_INVALID"
+
+    with pytest.raises(HTTPException) as reset_delta:
+        agent_events.append_events(
+            db_session,
+            run,
+            [
+                EventEntry(
+                    seq=2,
+                    type="assistant.text_reset",
+                    public_payload={"role": "assistant", "delta": "x"},
+                )
+            ],
+        )
+    assert _error(reset_delta.value)["code"] == "AGENT_EVENT_INVALID"
+
+    # 全部拒绝：除已提交的 turn.started 外未落任何事件（seq 2 仍空闲）。
+    assert (
+        db_session.scalars(
+            select(AgentRunEvent).where(AgentRunEvent.run_id == run.id, AgentRunEvent.seq > 1)
+        ).all()
+        == []
+    )
+
+
+def test_authoritative_message_supersedes_provisional_text(db_session):
+    """终态权威消息仍按原合同物化历史行，与临时分片并存但不合并。"""
+    user, space = create_agent_fixture(db_session, name="pv3")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    run = _enqueue(db_session, session)
+    agent_events.append_events(
+        db_session,
+        run,
+        [
+            EventEntry(seq=1, type="turn.started", public_payload={}),
+            EventEntry(
+                seq=2,
+                type="assistant.text_delta",
+                public_payload={"role": "assistant", "delta": "half"},
+            ),
+            EventEntry(
+                seq=3,
+                type="message.assistant_added",
+                public_payload={"role": "assistant", "text": "the full answer"},
+            ),
+        ],
+    )
+    db_session.commit()
+    messages = db_session.scalars(
+        select(AgentMessage).where(
+            AgentMessage.session_id == session.id, AgentMessage.role == "assistant"
+        )
+    ).all()
+    assert len(messages) == 1
+    assert messages[0].content_json["text"] == "the full answer"

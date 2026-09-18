@@ -568,3 +568,111 @@ describe("first-visible-text and auto-retry attribution", () => {
     expect(answers[1]?.timing?.first_text_ms).toBe(4_000);
   });
 });
+
+describe("provisional assistant prose (09-18 P0-2)", () => {
+  const textDelta = (text: string) => ({
+    type: "message_update",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text },
+  });
+  const thinkingDelta = (text: string) => ({
+    type: "message_update",
+    message: { role: "assistant", content: [{ type: "thinking", thinking: text }] },
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: text },
+  });
+
+  it("coalesces streamed tokens instead of writing one event per token", () => {
+    const buffer = new RunEventBuffer(1);
+    buffer.onSessionEvent({ type: "turn_start" });
+    for (const token of ["a", "b", "c", "d", "e"]) buffer.onSessionEvent(textDelta(token));
+    const events = buffer.drain();
+    const deltas = events.filter((event) => event.type === "assistant.text_delta");
+    // Five tokens, one frame: the DB row count must not track token count.
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]!.public_payload).toEqual({ role: "assistant", delta: "abcde" });
+  });
+
+  it("never leaks thinking deltas into the public stream", () => {
+    const buffer = new RunEventBuffer(1);
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent(thinkingDelta("secret reasoning"));
+    buffer.onSessionEvent(textDelta("visible"));
+    const serialized = JSON.stringify(buffer.drain());
+    expect(serialized).toContain("visible");
+    expect(serialized).not.toContain("secret reasoning");
+  });
+
+  it("flushes pending prose before a boundary event so ordering is preserved", () => {
+    const buffer = new RunEventBuffer(1);
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent(textDelta("before the tool"));
+    // A tool starts mid-turn: its event must not be sequenced before prose that
+    // already streamed, or the reader would see the answer arrive out of order.
+    buffer.onSessionEvent({
+      type: "tool_execution_start",
+      toolCallId: "tc_1",
+      toolName: "familygraph.echo",
+    });
+    const events = buffer.drain();
+    const prose = events.find((event) => event.type === "assistant.text_delta")!;
+    const tool = events.find((event) => event.type === "tool.execution.started")!;
+    expect(prose.seq).toBeLessThan(tool.seq);
+  });
+
+  it("emits a reset when the SDK discards an attempt and regenerates", () => {
+    const buffer = new RunEventBuffer(1);
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent(textDelta("half an answer that will be thrown away"));
+    buffer.drain(); // the fragments reached the reader already
+    buffer.onSessionEvent({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 1_000,
+      errorMessage: "Request timed out",
+    });
+    buffer.onSessionEvent(textDelta("the real answer"));
+    const events = buffer.drain();
+    // The reader cannot be corrected by withholding later fragments: it holds
+    // text from a message that no longer exists, so an explicit reset must follow.
+    expect(events.map((event) => event.type)).toContain("assistant.text_reset");
+    const reset = events.find((event) => event.type === "assistant.text_reset")!;
+    const after = events.filter((event) => event.type === "assistant.text_delta").at(-1)!;
+    expect(reset.seq).toBeLessThan(after.seq);
+    expect(after.public_payload).toEqual({ role: "assistant", delta: "the real answer" });
+  });
+
+  it("splits an outsized delta so one frame cannot exceed the payload cap", () => {
+    const buffer = new RunEventBuffer(1);
+    buffer.onSessionEvent({ type: "turn_start" });
+    // 5000 code points: over the fragment cap, well under the backend's 16 KiB
+    // payload limit even for 4-byte characters.
+    buffer.onSessionEvent(textDelta("字".repeat(5_000)));
+    const deltas = buffer
+      .drain()
+      .filter((event) => event.type === "assistant.text_delta");
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(
+      deltas.map((event) => (event.public_payload as { delta: string }).delta).join(""),
+    ).toBe("字".repeat(5_000));
+    for (const event of deltas) {
+      expect(Buffer.byteLength(JSON.stringify(event.public_payload), "utf8")).toBeLessThan(
+        16 * 1024,
+      );
+    }
+  });
+
+  it("drops pending prose at a turn boundary so it cannot join the next bubble", () => {
+    const buffer = new RunEventBuffer(1);
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent(textDelta("unflushed tail"));
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent(textDelta("next turn"));
+    const deltas = buffer
+      .drain()
+      .filter((event) => event.type === "assistant.text_delta");
+    expect(deltas.map((event) => (event.public_payload as { delta: string }).delta)).toEqual([
+      "next turn",
+    ]);
+  });
+});

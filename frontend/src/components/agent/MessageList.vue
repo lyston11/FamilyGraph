@@ -93,7 +93,9 @@ const announcement = computed(() => {
   if (showPendingIndicator.value) return runHint.value || '助手正在思考'
   // 空正文助手消息不播报：与气泡/sr-only 同判据，否则屏幕阅读器会播报
   // 「助手回复：」却没有任何内容（覆盖修复前落库的遗留空行）。
-  if (last && last.role === 'assistant' && last.text.length > 0) {
+  // 临时正文也不播报：aria-live 会在每个分片到达时重读整段，而权威结果
+  // 到达时还会再播一次；实时滚动由气泡本身承担。
+  if (last && last.role === 'assistant' && last.text.length > 0 && last.provisional !== true) {
     const text = Array.from(last.text)
     return text.length > 50 ? `助手回复：${text.slice(0, 50).join('')}…` : `助手回复：${last.text}`
   }
@@ -146,10 +148,11 @@ const items = computed(() =>
         <div
           v-if="item.role === 'user' || item.text.length > 0"
           class="bubble"
-          :class="{ failed: item.status === 'failed' }"
+          :class="{ failed: item.status === 'failed', provisional: item.provisional === true }"
         >
           {{ item.text }}
           <span v-if="item.status === 'pending'" class="pending-mark">发送中…</span>
+          <span v-else-if="item.provisional === true" class="pending-mark" data-test="provisional-mark">生成中…</span>
           <span v-else-if="item.status === 'failed'" class="failed-mark">发送失败</span>
         </div>
         <span v-if="item.role === 'user' || item.text.length > 0" class="sr-only">

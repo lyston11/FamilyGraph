@@ -3,14 +3,21 @@
  * FamilyGraph run events. Provider-private payloads are never forwarded;
  * every event type has a closed, whitelisted payload shape (notes.md registry).
  *
- * Registry (V2.1): run.started, message.user_added, turn.started,
- * turn.completed, message.assistant_added, tool.execution.started,
- * tool.execution.completed, run.settled, run.failed, run.cancelled, run.expired.
+ * Registry (V2.2): run.started, message.user_added, turn.started,
+ * turn.completed, message.assistant_added, assistant.text_delta,
+ * assistant.text_reset, tool.execution.started, tool.execution.completed,
+ * run.settled, run.failed, run.cancelled, run.expired.
  * card.* is a reserved namespace for V2.4 and must not be emitted here.
  *
  * message.user_added and all terminal events (run.settled/run.failed/
  * run.cancelled/run.expired) are backend-owned; this sidecar emits only
- * run.started, turn.*, message.assistant_added and tool.execution.*.
+ * run.started, turn.*, message.assistant_added, assistant.text_* and
+ * tool.execution.*.
+ *
+ * assistant.text_delta/text_reset are a PROVISIONAL display projection, not
+ * history: the backend persists them as events but never materialises an
+ * AgentMessage from them, so they cannot reach history, Memory or RAG. Only
+ * message.assistant_added (message_end) is authoritative.
  */
 
 import { canonicalToolName } from "./tools.js";
@@ -21,6 +28,8 @@ export const EVENT_TYPES = [
   "turn.started",
   "turn.completed",
   "message.assistant_added",
+  "assistant.text_delta",
+  "assistant.text_reset",
   "tool.execution.started",
   "tool.execution.completed",
   "run.settled",
@@ -51,6 +60,26 @@ export interface AssistantMessagePayload {
 }
 
 /** Bounded external citation projection (backend WebCitationOut). */
+/**
+ * Provisional assistant prose fragment for live display. `delta` is a suffix
+ * to append to the reader's current provisional text for this turn; it is NOT
+ * a complete answer and must never be persisted as one.
+ */
+export interface AssistantTextDeltaPayload {
+  role: "assistant";
+  delta: string;
+}
+
+/**
+ * Drop the reader's provisional assistant text for the current turn. Emitted
+ * when the SDK discards an assistant message it is about to regenerate
+ * (auto_retry_start) — the earlier fragments were already flushed, so the
+ * reader cannot be corrected by simply withholding later ones.
+ */
+export interface AssistantTextResetPayload {
+  role: "assistant";
+}
+
 export interface WebCitationPayload {
   url: string;
   title: string;
@@ -79,6 +108,8 @@ export type FgEventPayloadMap = {
   "turn.started": Record<string, never>;
   "turn.completed": Record<string, never>;
   "message.assistant_added": AssistantMessagePayload;
+  "assistant.text_delta": AssistantTextDeltaPayload;
+  "assistant.text_reset": AssistantTextResetPayload;
   "tool.execution.started": ToolExecutionStartedPayload;
   "tool.execution.completed": ToolExecutionCompletedPayload;
   "run.settled": TerminalPayload;
@@ -219,6 +250,14 @@ function extractWebCitation(result: unknown): WebCitationPayload | null {
 }
 
 /**
+ * Upper bound on one coalesced prose fragment, in code points. The backend caps
+ * a public payload at 16 KiB of UTF-8; 2000 code points stay well inside that
+ * even for 4-byte scripts, so a burst is split into several frames instead of
+ * being rejected as an oversized payload (which would fail the whole batch).
+ */
+export const MAX_PROSE_FRAGMENT_CHARS = 2000;
+
+/**
  * Deterministic Pi→FG event mapper. Returns the list of FG events generated
  * for one session broadcast event; unknown/ignored session events yield [].
  *
@@ -251,6 +290,23 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
         },
       ];
     }
+    case "message_update": {
+      // Deliberately NOT mapped here. Live prose is the one projection that
+      // needs coalescing state (a token-per-event stream would write a DB row
+      // per token), so `RunEventBuffer.onSessionEvent` owns it and this pure
+      // mapper stays stateless. Thinking/toolcall deltas are dropped there too:
+      // the user cannot read reasoning and tool arguments are not an answer.
+      return [];
+    }
+    case "auto_retry_start": {
+      // The SDK discards the failed assistant message and regenerates inside the
+      // SAME turn (no new turn_start), so provisional prose already shown belongs
+      // to a message that no longer exists. Fragments already flushed cannot be
+      // withheld retroactively, so an explicit reset is the only correct signal.
+      return [
+        { type: "assistant.text_reset", public_payload: { role: "assistant" } },
+      ];
+    }
     case "tool_execution_start":
       return [
         {
@@ -275,8 +331,8 @@ export function mapSessionEvent(event: SessionEventLike): Array<Omit<FgEvent, "s
         },
       ];
     default:
-      // message_update/streaming deltas, agent_end, agent_settled, queue
-      // updates etc. are intentionally not persisted.
+      // agent_end, agent_settled, queue updates, thinking/toolcall deltas etc.
+      // are intentionally not persisted.
       return [];
   }
 }
@@ -309,6 +365,13 @@ export class RunEventBuffer {
   /** Auto-retries observed inside the current turn, with their scheduled backoff. */
   private turnRetryCount = 0;
   private turnRetryWaitMs = 0;
+  /**
+   * Assistant prose accumulated since the last flush, coalesced so one SSE
+   * frame carries a display chunk rather than a single token. Bounded by
+   * `MAX_PROSE_FRAGMENT_CHARS`; the existing flush cadence (250ms) is the
+   * other bound, so a slow stream still produces a frame per interval.
+   */
+  private prosePending = "";
 
   constructor(
     startSeq = 1,
@@ -392,6 +455,9 @@ export class RunEventBuffer {
       this.firstTextAt = null;
       this.turnRetryCount = 0;
       this.turnRetryWaitMs = 0;
+      // A new turn starts a new assistant message; leftover prose would be
+      // appended to the wrong bubble.
+      this.prosePending = "";
     }
     // First *readable* prose of this turn. `thinking_delta` is excluded on
     // purpose: the user cannot see reasoning, so counting it would understate
@@ -405,7 +471,20 @@ export class RunEventBuffer {
     ) {
       this.firstTextAt = this.now();
     }
+    if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+      // Coalesce; `drain()` and any non-delta event flush the pending prose so
+      // ordering relative to tools/turns stays intact.
+      const delta = event.assistantMessageEvent.delta;
+      if (typeof delta === "string" && delta.length > 0) {
+        this.prosePending += delta;
+        if (this.prosePending.length >= MAX_PROSE_FRAGMENT_CHARS) this.flushProse();
+      }
+    }
     if (event.type === "auto_retry_start") {
+      // The discarded attempt's prose is not the answer: drop it here so a
+      // reset event follows the fragments already flushed instead of the two
+      // interleaving.
+      this.prosePending = "";
       this.turnRetryCount += 1;
       const delay = Number(event.delayMs);
       if (Number.isFinite(delay) && delay > 0) this.turnRetryWaitMs += delay;
@@ -427,6 +506,12 @@ export class RunEventBuffer {
     }
 
     const mapped = mapSessionEvent(event);
+    // Any non-delta event is a sequencing boundary for the coalesced chunk: the
+    // pending prose must be assigned a seq before the boundary event, or a tool
+    // call / final answer would appear to precede prose that arrived earlier.
+    // `message_update` itself is NOT a boundary (that is the whole point of the
+    // chunk) — it is the only event whose pending prose stays unflushed.
+    if (this.prosePending.length > 0 && event.type !== "message_update") this.flushProse();
     for (const item of mapped) {
       if (item.type === "message.assistant_added" && this.webCitations.length > 0) {
         const payload = item.public_payload as AssistantMessagePayload;
@@ -481,8 +566,31 @@ export class RunEventBuffer {
   }
 
   drain(): FgEvent[] {
+    this.flushProse();
     const out = this.pending.splice(0, this.pending.length);
     return out.sort((a, b) => a.seq - b.seq);
+  }
+
+  /**
+   * Materialise the coalesced prose as one or more events, if any. Assigning
+   * seq here (rather than per token) keeps the fragment's position relative to
+   * tools/turns correct, because every caller flushes at a real boundary.
+   *
+   * A fragment is split at `MAX_PROSE_FRAGMENT_CHARS` code points rather than
+   * emitted whole: the backend rejects a public payload over 16 KiB and that
+   * rejection fails the ENTIRE append batch, so one outsized upstream delta must
+   * not be able to lose a run's other events with it.
+   */
+  private flushProse(): void {
+    if (this.prosePending.length === 0) return;
+    const pending = this.prosePending;
+    this.prosePending = "";
+    // Iterate by code point so a surrogate pair is never split in half.
+    const points = Array.from(pending);
+    for (let start = 0; start < points.length; start += MAX_PROSE_FRAGMENT_CHARS) {
+      const delta = points.slice(start, start + MAX_PROSE_FRAGMENT_CHARS).join("");
+      this.push("assistant.text_delta", { role: "assistant", delta });
+    }
   }
 
   get size(): number {

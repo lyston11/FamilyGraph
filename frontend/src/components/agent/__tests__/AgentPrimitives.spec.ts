@@ -46,6 +46,24 @@ describe('MessageList', () => {
     expect(wrapper.text()).not.toContain('policy_version')
   })
 
+  it('marks a provisional assistant bubble as still generating', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          { id: null, role: 'assistant', text: '正在流出的半句', createdAt: null, status: 'sent', provisional: true },
+        ],
+        toolSummaries: [],
+        run: { id: 100, status: 'running', terminal: false },
+      },
+    })
+    expect(wrapper.find('[data-test="message-item"]').text()).toContain('正在流出的半句')
+    expect(wrapper.find('[data-test="provisional-mark"]').exists()).toBe(true)
+    // 临时正文存在时不再显示「思考中」三点，避免与气泡重复表达
+    expect(wrapper.find('[data-test="thinking-indicator"]').exists()).toBe(false)
+    // 读屏播报不重复整段临时正文（权威结果到达时才播报一次）
+    expect(wrapper.find('[data-test="live-region"]').text()).toBe('')
+  })
+
   it('keeps available citations and unavailable counts visible with a retryable source failure', async () => {
     const agent = useAgentStore()
     const retry = vi.spyOn(agent, 'retryMessageCitations').mockResolvedValue(undefined)
