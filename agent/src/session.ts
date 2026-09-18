@@ -394,7 +394,18 @@ export async function buildRunSession(
   // Prefill it before session creation, without replaying prompts or events.
   // The backend projects messages in durable ID order; preserve that order and
   // deduplicate by ID, never by text. The latest user is sent by worker.prompt().
-  const sessionManager = SessionManager.inMemory(agentDir);
+  //
+  // The id is pinned to the FamilyGraph session, not left random per run: the
+  // SDK forwards this id as the provider's `prompt_cache_key`, so a fresh uuid
+  // every run forced a cold cache for a prefix that had not changed. Runs of
+  // one conversation now share the key and can reuse the cached prefix. The
+  // account is part of the key because the upstream cache is scoped to the
+  // provider account, and two deployments sharing one upstream must not
+  // partition each other's sessions. Only the cache key depends on it
+  // (compaction reads the entries), so this changes no other session behaviour.
+  const sessionManager = SessionManager.inMemory(agentDir, {
+    id: `fg-${projection.account_id}-${projection.session_id}`,
+  });
   const latestUserId = [...projection.messages]
     .reverse()
     .find(
