@@ -398,7 +398,7 @@ def test_events_append_persists_sidecar_timing(internal_client, db_session):
     assert replay.json() == {"accepted": [], "duplicates": [1]}
 
 
-def test_events_append_scopes_compaction_timing_to_assistant_text(internal_client, db_session):
+def test_events_append_scopes_timing_to_registered_sidecar_events(internal_client, db_session):
     """D-AC2：轮内压缩子成分只在 assistant 正文事件上合法，且随行持久化。
 
     压缩是 ``model_turn`` 的子成分，只有正文事件才能声明“本轮压缩了多少”；
@@ -425,7 +425,6 @@ def test_events_append_scopes_compaction_timing_to_assistant_text(internal_clien
                     "timing": {
                         "source": "sidecar-v1",
                         "duration_ms": 20_000,
-                        "compaction_ms": 8_000,
                     },
                 }
             ]
@@ -439,25 +438,50 @@ def test_events_append_scopes_compaction_timing_to_assistant_text(internal_clien
     assert row.timing_json == {
         "source": "sidecar-v1",
         "duration_ms": 20_000,
-        "compaction_ms": 8_000,
     }
-    assert "compaction_ms" not in row.public_payload
+    # 压缩是 run 级阶段，由独立的 run.compacted 承载；它不再是正文的 sub-component。
+    compacted = internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={
+            "events": [
+                {
+                    "seq": 2,
+                    "type": "run.compacted",
+                    "public_payload": {},
+                    "timing": {"source": "sidecar-v1", "duration_ms": 8_000},
+                }
+            ]
+        },
+        headers=_auth(token),
+    )
+    assert compacted.status_code == 200, compacted.text
+    compacted_row = db_session.execute(
+        select(AgentRunEvent).where(AgentRunEvent.run_id == run.id, AgentRunEvent.seq == 2)
+    ).scalar_one()
+    assert compacted_row.timing_json == {"source": "sidecar-v1", "duration_ms": 8_000}
+    assert compacted_row.public_payload == {}
 
     # 子成分大于总时长（物理不可能）、负数、其他事件类型携带，均 fail-closed。
+    # compaction_ms 已从协议中删除：继续上报它属未知字段，必须被拒绝（不静默忽略）。
     for seq, event_type, timing in (
         (
-            2,
+            3,
             "message.assistant_added",
-            {"source": "sidecar-v1", "duration_ms": 100, "compaction_ms": 500},
+            {"source": "sidecar-v1", "duration_ms": 100, "first_text_ms": 500},
         ),
         (
-            2,
+            3,
             "message.assistant_added",
-            {"source": "sidecar-v1", "duration_ms": 100, "compaction_ms": -1},
+            {"source": "sidecar-v1", "duration_ms": 100, "first_text_ms": -1},
         ),
         (
-            2,
-            "tool.execution.completed",
+            3,
+            "turn.completed",
+            {"source": "sidecar-v1", "duration_ms": 100},
+        ),
+        (
+            3,
+            "message.assistant_added",
             {"source": "sidecar-v1", "duration_ms": 100, "compaction_ms": 50},
         ),
     ):
@@ -491,7 +515,7 @@ def test_events_append_scopes_compaction_timing_to_assistant_text(internal_clien
         rejected = internal_client.post(
             f"/internal/agent/runs/{run.id}/events/append",
             json={
-                "events": [{"seq": 2, "type": "turn.started", "public_payload": {}, "timing": bad}]
+                "events": [{"seq": 4, "type": "turn.started", "public_payload": {}, "timing": bad}]
             },
             headers=_auth(token),
         )

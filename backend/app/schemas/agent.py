@@ -127,12 +127,13 @@ MAX_TIMING_MS = 86_400_000  # 24h：超出即畸形上报
 
 # 允许携带 producer 计时的 sidecar 事件类型（注册表子集）：每个事件承载的是
 # **在该事件处结束的那个阶段**的时长（run.started=准备、assistant 正文=该轮生成、
-# 工具完成=该次工具执行）。
+# run.compacted=整轮 prompt 的压缩、工具完成=该次工具执行）。
 _SIDECAR_TIMED_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "run.started",
         "message.assistant_added",
         "tool.execution.completed",
+        "run.compacted",
     }
 )
 
@@ -145,17 +146,17 @@ class EventTimingIn(_Strict):
     - ``run.started``：取得执行权 → SDK ``agent_start``（context 获取 + session
       创建）。它解释“取得执行权 → SDK 开始”的间隔，不能算作排队等待；
     - ``message.assistant_added``：该轮 ``turn_start`` → ``message_end``；
-    - ``tool.execution.completed``：该次 ``tool_execution_start`` → ``end``。
+    - ``tool.execution.completed``：该次 ``tool_execution_start`` → ``end``；
+    - ``run.compacted``：本次 prompt 内所有 SDK 压缩跨度之和。
 
     历史行无该记录（NULL），读取方按 unknown 处理，不用持久事件间隔冒充精确耗时。
     """
 
     source: Literal["sidecar-v1"]
     duration_ms: int = Field(strict=True, ge=0, le=MAX_TIMING_MS)
-    # 该轮内 SDK 压缩（compaction_start→end）的累计时长；它是 ``duration_ms``
-    # 的**子成分**（压缩请求发生在 turn 内），与 provider_retry 一样必须单独读，
-    # 不能把 model_turn 直接称为纯生成。无压缩即缺省（None），不写 0。
-    compaction_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMING_MS)
+    # 注意：压缩**不是**该轮的 sub-component（见 spec/backend/agent-runtime.md）。
+    # pi-coding-agent 0.84.3 在 turn 之外压缩（prompt 前与 agent_end 之后），
+    # 所以它由独立的 run.compacted 事件承载；此处不得重新加回 compaction_ms。
     # ``turn_start`` → 首个 assistant 正文增量（``text_delta``）。thinking 增量不算。
     # 它是把“模型真的算了 33s”与“模型早就答了但正文被攒到整条消息才公开”分开的
     # 唯一量；无正文的轮（仅工具调用）缺省。
@@ -170,7 +171,6 @@ class EventTimingIn(_Strict):
         # 子成分不可能超过它所归属的阶段：越界说明两侧语义漂移，拒绝而不是
         # 静默夹紧（夹紧会把畸形数据伪装成合法测量）。
         for name, value in (
-            ("compaction_ms", self.compaction_ms),
             ("first_text_ms", self.first_text_ms),
             ("retry_wait_ms", self.retry_wait_ms),
         ):
@@ -200,13 +200,6 @@ class EventIn(_Strict):
         # 否则会把服务端入库时刻伪装成 producer 测量。
         if self.timing is not None and self.type not in _SIDECAR_TIMED_EVENT_TYPES:
             raise ValueError("timing 仅用于 sidecar 执行事件")
-        # 压缩是轮内子成分，只在正文事件上有意义。
-        if (
-            self.timing is not None
-            and self.timing.compaction_ms is not None
-            and self.type != "message.assistant_added"
-        ):
-            raise ValueError("compaction_ms 仅用于 assistant 正文事件")
         return self
 
 

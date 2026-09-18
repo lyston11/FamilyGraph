@@ -449,13 +449,16 @@ def test_latency_metrics_prefers_source_clock_over_flush_batching(
     assert phases["model_turn"]["native_n"] == 1
 
 
-def test_latency_metrics_separates_compaction_from_generation(
+def test_latency_metrics_reports_compaction_as_a_run_level_phase(
     admin_client: TestClient, db_session, _admin_headers
 ) -> None:
-    """D-AC2：轮内压缩是 model_turn 的子成分，必须可单独归属。
+    """D2-AC1/AC3：压缩是 run 级阶段（run.compacted），不是 model_turn 的子成分。
 
-    两轮：第 1 轮内有 8s 压缩（该轮 model_turn=20s），第 2 轮无压缩
-    （model_turn=30s）。若不单列 compaction，就会把 8s 摘要请求当成纯生成。
+    真实 SDK（pi-coding-agent 0.84.3）在 turn 之外压缩：轮后阈值检查在 agent_end
+    之后、agent_settled 之前。所以：
+    - model_turn（turn_start→message_end）不含压缩；
+    - 压缩由 run.compacted 单独承载，每 run 至多一个样本；
+    - run.compacted 是最后一个非终态事件，因此轮后压缩不再被算进 settle。
     """
     user, space = create_agent_fixture(db_session, name="lat-compaction")
     _run_with_events(
@@ -469,17 +472,16 @@ def test_latency_metrics_separates_compaction_from_generation(
                 "message.assistant_added",
                 21.0,
                 {"role": "assistant", "text": "a"},
-                {"source": "sidecar-v1", "duration_ms": 20_000, "compaction_ms": 8_000},
+                {"source": "sidecar-v1", "duration_ms": 20_000},
             ),
             ("turn.completed", 21.0, None, None),
-            ("turn.started", 21.0, None, None),
+            # 轮后压缩（turn 之外）单独上报。
             (
-                "message.assistant_added",
-                51.0,
-                {"role": "assistant", "text": "b"},
-                {"source": "sidecar-v1", "duration_ms": 30_000},
+                "run.compacted",
+                24.0,
+                {},
+                {"source": "sidecar-v1", "duration_ms": 8_000},
             ),
-            ("turn.completed", 51.0, None, None),
         ],
         settle_after_s=51.5,
         first_lease_after_s=0.5,
@@ -489,15 +491,48 @@ def test_latency_metrics_separates_compaction_from_generation(
     assert resp.status_code == 200, resp.text
     phases = resp.json()["assistant_phases"]
 
-    # 两轮各一个 model_turn 样本，压缩是其中一轮的子成分。
-    assert phases["model_turn"]["n"] == 2
-    # nearest-rank p50：ceil(0.5*2)=1 名 → 较小值 20s，最大值是 30s。
+    # model_turn 仍是该轮纯生成（不含压缩），单轮一个样本。
+    assert phases["model_turn"]["n"] == 1
     assert phases["model_turn"]["p50_ms"] == 20_000
-    assert phases["model_turn"]["max_ms"] == 30_000
-    # 只有确实压缩过的那一轮贡献样本（无压缩的轮不得用 0 填充）。
+    # 压缩单独成 run 级样本。
     assert phases["compaction"]["n"] == 1
     assert phases["compaction"]["p50_ms"] == 8_000
     assert phases["compaction"]["basis"] == "source_clock"
+    # settle 不得再吃掉轮后压缩：它是「最后一个非终态事件 → 终态」，而
+    # run.compacted（24s）现在是那个最后事件，故结算开销 = 51.5 − 24 = 27.5s，
+    # 而不是从 21s 起算的 30.5s。
+    assert phases["settle"]["p50_ms"] == 27_500
+
+
+def test_latency_metrics_reports_no_compaction_sample_without_the_event(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """无 run.compacted 即 n=0（历史行/未压缩），不得用 0 填充或反推。"""
+    user, space = create_agent_fixture(db_session, name="lat-no-compaction")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                21.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": 20_000},
+            ),
+            ("turn.completed", 21.0, None, None),
+        ],
+        settle_after_s=21.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+    assert phases["compaction"]["n"] == 0
+    assert phases["compaction"]["p50_ms"] is None
 
 
 def test_latency_metrics_compaction_empty_without_source_timing(
