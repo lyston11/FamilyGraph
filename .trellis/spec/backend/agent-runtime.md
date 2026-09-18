@@ -116,6 +116,27 @@
 - **解析顺序（services/agent_provider.resolve_for_space，agent_kind 参数 fail-closed）**：空间显式行 → 平台默认回退（虚拟 setting，`cloud_allowed=False`/`local_required=False`——默认只决定通道档位，云同意仍归 owner；云默认在 owner 同意前 `denied_cloud_forbidden`）→ `POLICY_DENIED(no_space_setting)`。`platform_default_configured` 随 `PROVIDER_UNRESOLVED` detail 下发，供前端两态文案（通道未配置 vs 空间未选/未同意云）。
 - 策略在消息创建时前置门禁：非 allowed → 409 可解释错误（PROVIDER_UNRESOLVED / PROVIDER_LOCAL_REQUIRED_UNAVAILABLE），**绝不静默换云**。
 - P1 唯一 egress：sidecar 不持 api_key、不直连云端；模型请求经上表代理端点（run token 作 Bearer），`resolve_runtime` 为唯一解密出口。compose 中 agent 容器无外网（backend 网络 `internal:true`），外网 egress 仅 api 容器。sidecar 流重试经 `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS` 注入 pi-ai（5xx/408/409/429 指数退避）。
+
+### 错误分类与分层重试（09-17 E 建立）
+
+网关（`services/provider_proxy.py`）对**每一次真实出站尝试**写恰好一条 `agent_provider_egress` 审计，`detail` 在既有 `status`/`upstream_status`/`bytes_read` 之外带三个安全字段（机器码/布尔，无上游原文、无 prompt、无凭据）：`error_class`、`retryable`、`sent`。`sent` 是**发送确定性**：`false` 仅由连接未建立的证据得出（`ConnectError`/`ConnectTimeout`），`true` 表示上游可能已处理，不得用它声称“上游未处理”。
+
+| 来源 | `error_class` | `retryable` | `sent` | 响应 |
+| --- | --- | --- | --- | --- |
+| 策略在发送前阻断 | `blocked_by_policy` | false | false | 409 POLICY_PROVIDER_BLOCKED |
+| 上游 4xx（除 408/409/425/429） | `upstream_rejected` | false | true | 上游真实状态码 + `AGENT_PROVIDER_UPSTREAM_REJECTED` + `x-should-retry:false` |
+| 上游 408/409/425/429/5xx | `upstream_transient` | true | true | 502 + `AGENT_PROVIDER_PROXY_UNAVAILABLE`（既有形状） |
+| 连接未建立 | `transport_failure` / `transport_timeout` | true | false | 502 + `AGENT_PROVIDER_PROXY_UNAVAILABLE` |
+| 建立连接/读头阶段的其他传输错误 | `transport_failure` / `transport_protocol_error` / `transport_timeout` | false | true | 同上 |
+| 响应头之后流中断/超时/客户端断开 | `stream_interrupted` | false | true | 流已开始，连接被断开 |
+| 流中复核发现取消/失租 | `run_cancelled` | false | true | 同上 |
+| 正常结束 | （无） | （无） | （无） | `status=succeeded` |
+
+- **永久上游拒绝不得伪装为可重试 5xx**：网关保留上游真实 4xx 状态，而不是统一转 502。实测（pi-ai/pi-coding-agent 0.84.3）`x-should-retry:false` 只约束**请求层**；若永久错误仍以 5xx 返回，Pi 的会话层仍会按错误文本重启整轮，真实出站数会翻倍。两处必须同批发布。
+- **两层重试预算显式冻结**：请求层 = `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS`（可被 abort 中断，`Retry-After` 受 `maxRetryDelayMs` 约束）；会话层 = `agent/src/session.ts` 的 `SESSION_RETRY_BUDGET`（enabled/3 次/2s 起），显式声明而不继承 SDK 默认值。真实出站数是两层相乘：暂时失败最多 `(requestRetries+1)×(sessionRetries+1)`（当前配置 6×4=24），永久 4xx 恰好 1 次。改预算属策略变更，需先有实际请求数/等待总量与可用性证据（E-R3/E-R5）。
+- **压缩与重试分开**：context overflow 走自动压缩，不进任一层重试；空最终回答仍按 `PROVIDER_EMPTY_ANSWER` 结算 failed；取消/失租优先级不变（服务端权威）。
+- `AGENT_PROVIDER_UPSTREAM_REJECTED` 注册在 `app/errors.py`（后端自己会发出的码）；sidecar 仍以 `PROVIDER_STREAM_ERROR` 结算，前端文案不变。
+- 管理员延迟指标的 `provider_retry` 只计 `retryable != false` 的失败：`upstream_rejected`/`run_cancelled`/`stream_interrupted` 不是重试，计入会造出虚假重试段；历史审计行无该字段时沿用旧的 `failed` 口径，不回填。
 - Provider profile 首版固定为 `liu-dada/gpt-5.6-sol`（`openai-responses`、272000/60000、reasoning、text+image、low/medium/high/xhigh/max）；代码门禁拒绝其他云 profile，且不提供可由 Compose 环境变量关闭的绕过开关；local Provider 仍可作为本地敏感数据回退。
 
 ## 6. Wrong vs Correct：双侧独立实现合同
@@ -137,6 +158,7 @@
 - token 篡改/过期/type 错用 → 401 + audit 行存在断言。
 - SSE 断点续传无漏序、终态后连接关闭。
 - Provider 矩阵五态 + secret 不回显。
+- 重试治理：上游永久 4xx 恰好一次出站且响应体脱敏、暂时错误维持可重试形状、连接异常/流中断/取消各留恰好一条安全审计；两层重试用真实 SDK + 本地假网关对账实际请求数（`agent/test/retry-governance.test.ts`），并以 `SESSION_RETRY_BUDGET` 对照 SDK 默认值防止静默漂移。
 - sidecar 侧：mock FastAPI 强制权威形状（严格校验请求体、204 空 body、ContextOut 归一化）。
 
 ## 8. 只读领域工具层（V2.2 起）

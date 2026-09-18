@@ -67,7 +67,9 @@ _OBSERVATION_NOTES: tuple[str, ...] = (
     "审计只记完成时刻、不记请求开始，所以**首次失败尝试自身的耗时不可知**；"
     "段长为 1（一次失败后即成功）的重试真实存在但窗口为 0，单列为 unmeasured_retries，"
     "不得因此反推「无重试」。该开销同时包含在 model_turn 内（重试发生在同一轮"
-    "turn.started→正文之间），读 model_turn 时需参考这些计数才能区分重试与纯生成",
+    "turn.started→正文之间），读 model_turn 时需参考这些计数才能区分重试与纯生成。"
+    "自 E 起审计带 retryable 安全分类：retryable=false 的失败（上游永久拒绝、取消/失租、"
+    "流中断）不计入重试次数，避免虚假重试段；历史行无该字段时沿用旧的 failed 口径",
 )
 
 
@@ -324,10 +326,20 @@ def _provider_retry_windows(
         if run_id is None:
             continue
         try:
-            status = json.loads(detail_json or "{}").get("status")
+            detail = json.loads(detail_json or "{}")
         except (TypeError, ValueError):
             continue
+        status = detail.get("status")
         if status == "failed":
+            # E-AC5：本任务给 failed 补上了安全分类（error_class/retryable）。
+            # 只有**会被重试**的失败才是 provider_retry 的组成（上游暂时错误、
+            # 传输层失败）；永久拒绝（upstream_rejected）、取消/失租
+            # （run_cancelled）与流中断（stream_interrupted）不是重试，计入会
+            # 造出虚假重试段与虚假失败数。历史行无 retryable 字段时保持原语义
+            # （按 failed 计），不回填也不改写旧数据。
+            if detail.get("retryable") is False:
+                close_streak(run_id)
+                continue
             failed_attempts += 1
             runs_with_failure.add(run_id)
             streak_first.setdefault(run_id, at)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 
 import httpx
@@ -26,7 +27,11 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app import config
-from app.errors import AGENT_PROVIDER_PROXY_UNAVAILABLE, AGENT_PROVIDER_REQUEST_INVALID
+from app.errors import (
+    AGENT_PROVIDER_PROXY_UNAVAILABLE,
+    AGENT_PROVIDER_REQUEST_INVALID,
+    AGENT_PROVIDER_UPSTREAM_REJECTED,
+)
 from app.models.agent import AgentRun
 from app.services import agent_provider, audit, policy_guard
 from app.services.agent_execution import ExecutionIdentity, fence_execution
@@ -43,15 +48,44 @@ _API_PATHS = {
 }
 _TOKEN_CAP_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
+#: 4xx 中确实可重试的状态码：408 请求超时、409 冲突（上游可证暂时）、
+#: 425 Too Early、429 限流。其余 4xx 都是「请求本身不可接受」（凭据/参数/模型/路由），
+#: 重发不会成功。5xx 仍按暂时性处理（设计表：408/429/5xx 可重试）。
+_UPSTREAM_RETRYABLE_4XX = frozenset({408, 409, 425, 429})
+
+#: 让 pi-ai 的请求层重试立即停止（SDK 的 isRetryableProviderError 优先读该头）。
+_NO_RETRY_HEADERS = {"x-should-retry": "false"}
+
+
+@dataclass(frozen=True)
+class EgressFailure:
+    """一次出站尝试的安全分类结果。
+
+    ``sent`` 是发送确定性：True=已发送（上游可能已处理）、False=未建立连接
+    （未发送）、None=不可判定。它只允许由传输层证据得出，不用来声称上游未处理。
+    """
+
+    error_class: str
+    retryable: bool
+    sent: bool | None
+
 
 class ProviderProxyError(Exception):
     """代理层错误（携带 API 错误码与状态，由端点转换为统一错误外壳）。"""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        # 透给 sidecar 的安全重试提示（例如永久错误携带 x-should-retry:false）。
+        self.headers = headers
 
 
 def provider_proxy_base_url(run_id: int) -> str:
@@ -71,19 +105,64 @@ def _audit_egress(
     status: str,
     status_code: int | None,
     bytes_read: int,
+    error_class: str | None = None,
+    retryable: bool | None = None,
+    sent: bool | None = None,
 ) -> None:
+    """每次真实出站尝试的唯一安全终态。
+
+    ``status`` 保持既有取值（succeeded/failed/blocked_by_policy），D 的聚合消费
+    不受影响；``error_class``/``retryable`` 是新增的**安全分类**（机器码/布尔，
+    无上游原文、无 prompt、无凭据），供重试治理与审计对账。
+    """
+    detail: dict[str, object] = {
+        "provider_id": provider_id,
+        "status": status,
+        "upstream_status": status_code,
+        "bytes_read": bytes_read,
+    }
+    if error_class is not None:
+        detail["error_class"] = error_class
+    if retryable is not None:
+        detail["retryable"] = retryable
+    if sent is not None:
+        detail["sent"] = sent
     audit.write_audit(
         db,
         action="agent_provider_egress",
         actor_id=None,
         target_id=run if isinstance(run, int) else run.id,
-        detail={
-            "provider_id": provider_id,
-            "status": status,
-            "upstream_status": status_code,
-            "bytes_read": bytes_read,
-        },
+        detail=detail,
     )
+
+
+def _classify_transport_error(error: httpx.HTTPError) -> EgressFailure:
+    """把**建立连接/读取响应头**阶段的异常映射为安全分类与发送确定性。
+
+    连接未建立（ConnectError/ConnectTimeout）可断言**未发送**；
+    ``ReadTimeout``/``WriteTimeout``/``ReadError``/``RemoteProtocolError`` 在
+    ``send(stream=True)`` 返回前也可能发生在上游已收到请求之后，只能标为已发送，
+    不得声称“未被处理”。（已开始响应后的中断走 ``stream_interrupted``。）
+    """
+    if isinstance(error, httpx.ConnectTimeout):
+        return EgressFailure("transport_timeout", retryable=True, sent=False)
+    if isinstance(error, httpx.ConnectError):
+        return EgressFailure("transport_failure", retryable=True, sent=False)
+    if isinstance(error, httpx.TimeoutException):
+        return EgressFailure("transport_timeout", retryable=True, sent=True)
+    if isinstance(error, httpx.RemoteProtocolError):
+        return EgressFailure("transport_protocol_error", retryable=False, sent=True)
+    if isinstance(error, httpx.TransportError):
+        return EgressFailure("transport_failure", retryable=False, sent=True)
+    # 非传输类 HTTPError（如构造请求失败）：发送确定性未知，不当作可重试。
+    return EgressFailure("transport_failure", retryable=False, sent=None)
+
+
+def _classify_upstream_status(status_code: int) -> EgressFailure:
+    """上游状态码 → 安全分类：永久拒绝不得伪装为可重试上游 5xx。"""
+    if 400 <= status_code < 500 and status_code not in _UPSTREAM_RETRYABLE_4XX:
+        return EgressFailure("upstream_rejected", retryable=False, sent=True)
+    return EgressFailure("upstream_transient", retryable=True, sent=True)
 
 
 def _require_executable_run(run: AgentRun) -> None:
@@ -261,6 +340,10 @@ async def stream_provider_response(
                 status="blocked_by_policy",
                 status_code=None,
                 bytes_read=0,
+                error_class="blocked_by_policy",
+                retryable=False,
+                # 发送前拒绝：零上游请求，不得冒充已发送的上游尝试。
+                sent=False,
             )
             raise ProviderProxyError(409, "POLICY_PROVIDER_BLOCKED", "策略阻止了本次 Provider 请求")
         if decision.action == "redact":
@@ -299,9 +382,22 @@ async def stream_provider_response(
         if client is not None:
             await client.aclose()
         raise
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
         if client is not None:
             await client.aclose()
+        # 连接异常同样必须留安全终态（E-R2）；分类不读异常原文。
+        failure = _classify_transport_error(exc)
+        _audit_egress(
+            db,
+            run=run,
+            provider_id=runtime.provider_id,
+            status="failed",
+            status_code=None,
+            bytes_read=0,
+            error_class=failure.error_class,
+            retryable=failure.retryable,
+            sent=failure.sent,
+        )
         raise ProviderProxyError(
             502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
         ) from None
@@ -310,6 +406,7 @@ async def stream_provider_response(
         await upstream.aclose()
         await client.aclose()
         # 上游错误体可能携带 secret/PII：只透出脱敏通用错误（redaction 合同）
+        failure = _classify_upstream_status(upstream.status_code)
         _audit_egress(
             db,
             run=run,
@@ -317,7 +414,19 @@ async def stream_provider_response(
             status="failed",
             status_code=upstream.status_code,
             bytes_read=0,
+            error_class=failure.error_class,
+            retryable=failure.retryable,
+            sent=failure.sent,
         )
+        if not failure.retryable:
+            # 永久错误：不得伪装为可重试上游 5xx（否则 sidecar 会重试）。
+            # 保留真实上游状态供审计，响应体仍是脱敏通用错误。
+            raise ProviderProxyError(
+                upstream.status_code,
+                AGENT_PROVIDER_UPSTREAM_REJECTED,
+                "Provider 拒绝了本次请求",
+                headers=dict(_NO_RETRY_HEADERS),
+            )
         raise ProviderProxyError(502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 返回错误")
     return client, upstream, runtime.provider_id
 
@@ -341,6 +450,7 @@ async def passthrough_with_audit(
     run_id = run.id
     bytes_read = 0
     outcome = "succeeded"
+    failure: EgressFailure | None = None
     try:
         async for chunk in upstream.aiter_raw():
             # Re-check between chunks.  If the browser cancels while a relay
@@ -349,11 +459,25 @@ async def passthrough_with_audit(
             _refresh_run_gate(db, run_id)
             bytes_read += len(chunk)
             yield chunk
-    except (httpx.HTTPError, GeneratorExit, asyncio.CancelledError):
+    except ProviderProxyError:
+        # 流中复核失败：取消/失租是服务端权威裁决（请求已发出），
+        # 不能标成上游错误或“未处理”。
         outcome = "failed"
+        failure = EgressFailure("run_cancelled", retryable=False, sent=True)
+        raise
+    except httpx.HTTPError:
+        # 流中中断/超时：上游可能已处理（部分响应已发出），
+        # 标为 stream_interrupted 且 sent=True，不得声称“未被处理”。
+        outcome = "failed"
+        failure = EgressFailure("stream_interrupted", retryable=False, sent=True)
+        raise
+    except (GeneratorExit, asyncio.CancelledError):
+        outcome = "failed"
+        failure = EgressFailure("stream_interrupted", retryable=False, sent=True)
         raise
     except Exception:
         outcome = "failed"
+        failure = EgressFailure("stream_interrupted", retryable=False, sent=True)
         raise
     finally:
         await upstream.aclose()
@@ -365,5 +489,8 @@ async def passthrough_with_audit(
             status=outcome,
             status_code=upstream.status_code,
             bytes_read=bytes_read,
+            error_class=failure.error_class if failure is not None else None,
+            retryable=failure.retryable if failure is not None else None,
+            sent=failure.sent if failure is not None else None,
         )
         on_finish()

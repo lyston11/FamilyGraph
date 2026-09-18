@@ -83,7 +83,35 @@ export interface BuildSessionDeps {
   shouldStopToolCalls?: () => boolean;
   /** Abort signal propagated to Pi and pi-ai provider retries. */
   signal?: AbortSignal;
+  /** Test seam: override the frozen SDK session-retry budget. */
+  sessionRetrySettings?: SessionRetryBudget;
 }
+
+/**
+ * SDK 会话层（turn 级）重试预算。与请求层（pi-ai provider retry）分开：
+ *
+ * - 请求层：同一个 HTTP 请求内的传输/暂时性失败重试，由
+ *   `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS` 注入 pi-ai，
+ *   等待可被 abort 中断，不重发永久错误（网关以 4xx + `x-should-retry:false`
+ *   收口）；
+ * - 会话层：整轮 assistant 调用失败后由 Pi 重新发起一轮，只对可重试错误
+ *   （瞬态/传输文本）生效，context overflow 走压缩而非重试。
+ *
+ * 数值在此显式冻结，不依赖 SDK 默认值随版本变化；改值属于策略变更，需先有
+ * 实际请求数/等待总量与可用性证据（PRD E-R3/E-R5）。
+ */
+export interface SessionRetryBudget {
+  enabled: boolean;
+  maxRetries: number;
+  baseDelayMs: number;
+}
+
+/** 显式预算：与 Pi 0.84.3 默认一致（enabled/3 次/2s 起），不再隐式依赖默认。 */
+export const SESSION_RETRY_BUDGET: SessionRetryBudget = {
+  enabled: true,
+  maxRetries: 3,
+  baseDelayMs: 2_000,
+};
 
 const TOKEN_CAP_KEYS = new Set([
   "max_tokens",
@@ -411,6 +439,7 @@ export async function buildRunSession(
     }
   }
 
+  const sessionRetry = deps.sessionRetrySettings ?? SESSION_RETRY_BUDGET;
   const { session } = await createAgentSession({
     cwd: agentDir,
     agentDir,
@@ -423,7 +452,15 @@ export async function buildRunSession(
     customTools: domainTools,
     resourceLoader: loader,
     sessionManager,
-    settingsManager: SettingsManager.inMemory(),
+    // 两层重试预算显式声明（见 SESSION_RETRY_BUDGET）：请求层数值来自 config，
+    // 会话层在此冻结，避免 SDK 默认值变化静默改变真实出站次数。
+    settingsManager: SettingsManager.inMemory({
+      retry: {
+        enabled: sessionRetry.enabled,
+        maxRetries: sessionRetry.maxRetries,
+        baseDelayMs: sessionRetry.baseDelayMs,
+      },
+    }),
   });
 
   return { session, events: new RunEventBuffer(), policyGuard };
