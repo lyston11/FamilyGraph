@@ -288,3 +288,147 @@ describe("private context references", () => {
     expect(buffer.drain()[0]?.context_reference).toBeUndefined();
   });
 });
+
+describe("producer stage timing", () => {
+  /**
+   * The backend's `created_at` is the persistence time and the flusher batches
+   * every 250ms, so a 125ms tool call sharing a batch with its end event shows
+   * ~1ms. These tests pin the source-clock contract that replaces it: each
+   * event carries the monotonic duration of the stage ending at that event.
+   */
+  const clock = (start = 0) => {
+    let current = start;
+    return { now: () => current, advance: (ms: number) => (current += ms) };
+  };
+
+  it("measures prep, turn generation and tool execution from the monotonic clock", () => {
+    const time = clock(1_000);
+    const buffer = new RunEventBuffer(
+      1,
+      undefined,
+      { prepStartedAt: 1_000, now: time.now },
+    );
+    time.advance(4_200); // context fetch + session creation
+    buffer.onSessionEvent({ type: "agent_start" });
+    time.advance(30); // SDK internals before turn_start
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(20_000); // model generation for turn 1
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "a" }], stopReason: "stop" },
+    });
+    buffer.onSessionEvent({ type: "turn_end" });
+    buffer.onSessionEvent({ type: "tool_execution_start", toolCallId: "tc_1", toolName: "familygraph.echo" });
+    time.advance(125); // real tool work, well below the 250ms flush interval
+    buffer.onSessionEvent({ type: "tool_execution_end", toolCallId: "tc_1", toolName: "familygraph.echo" });
+
+    const events = buffer.drain();
+    const byType = (type: string) => events.find((event) => event.type === type);
+    expect(byType("run.started")?.timing).toEqual({ source: "sidecar-v1", duration_ms: 4_200 });
+    expect(byType("message.assistant_added")?.timing).toEqual({
+      source: "sidecar-v1",
+      duration_ms: 20_000,
+    });
+    expect(byType("tool.execution.completed")?.timing).toEqual({
+      source: "sidecar-v1",
+      duration_ms: 125,
+    });
+  });
+
+  it("pairs each turn with its own generation and ignores tool-only turns", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(1_000);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc_1", name: "familygraph.echo", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    });
+    buffer.onSessionEvent({ type: "turn_end" });
+    // Turn 2 produces the answer; it must not inherit turn 1's origin.
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(3_000);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "b" }], stopReason: "stop" },
+    });
+
+    const answered = buffer.drain().filter((event) => event.type === "message.assistant_added");
+    expect(answered).toHaveLength(1);
+    expect(answered[0]?.timing).toEqual({ source: "sidecar-v1", duration_ms: 3_000 });
+  });
+
+  it("omits timing instead of fabricating zero when an origin is missing", () => {
+    const buffer = new RunEventBuffer();
+    // No prep origin injected: the backend must read this stage as unknown.
+    buffer.onSessionEvent({ type: "agent_start" });
+    // Tool end without a paired start must not become a 0ms sample.
+    buffer.onSessionEvent({ type: "tool_execution_end", toolCallId: "orphan", toolName: "familygraph.echo" });
+    const [started, completed] = buffer.drain();
+    expect(started?.timing).toBeUndefined();
+    expect(completed?.timing).toBeUndefined();
+  });
+
+  it("never puts timing into the public payload", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    time.advance(50);
+    buffer.onSessionEvent({ type: "agent_start" });
+    const [started] = buffer.drain();
+    expect(started?.public_payload).toEqual({});
+    expect(Object.keys(started ?? {})).toEqual(["seq", "type", "public_payload", "timing"]);
+  });
+
+  it("reports SDK compaction as a sub-component of the turn it happened in", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(2_000);
+    // Summarization request inside the turn: counted in the turn AND reported
+    // separately, so the backend never reads model_turn as pure generation.
+    buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
+    time.advance(8_000);
+    buffer.onSessionEvent({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false });
+    time.advance(10_000);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "a" }], stopReason: "stop" },
+    });
+    const answer = buffer.drain().find((event) => event.type === "message.assistant_added");
+    expect(answer?.timing).toEqual({
+      source: "sidecar-v1",
+      duration_ms: 20_000,
+      compaction_ms: 8_000,
+    });
+  });
+
+  it("does not attribute a previous turn's compaction to the next turn", () => {
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
+    time.advance(5_000);
+    buffer.onSessionEvent({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false });
+    time.advance(1_000);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "a" }], stopReason: "stop" },
+    });
+    buffer.onSessionEvent({ type: "turn_end" });
+    // Turn 2 has no compaction: it must not inherit turn 1's 5s.
+    buffer.onSessionEvent({ type: "turn_start" });
+    time.advance(3_000);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "b" }], stopReason: "stop" },
+    });
+    const answers = buffer.drain().filter((event) => event.type === "message.assistant_added");
+    expect(answers).toHaveLength(2);
+    expect(answers[0]?.timing?.compaction_ms).toBe(5_000);
+    expect(answers[1]?.timing?.compaction_ms).toBeUndefined();
+  });
+});

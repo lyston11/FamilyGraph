@@ -345,7 +345,8 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
 }
 
 type FgWireEvent = { seq: number; type: string; public_payload: unknown;
-  context_reference?: { build_id: number; attempt: number; used_handles: string[] } };
+  context_reference?: { build_id: number; attempt: number; used_handles: string[] };
+  timing?: { source: string; duration_ms: number } };
 
 function resetState(): void {
   state.jobs.length = 0;
@@ -754,6 +755,20 @@ describe("worker full cycle against mock FastAPI", () => {
     const assistants = events.filter((e) => e.type === "message.assistant_added");
     expect(assistants.map((e) => (e.public_payload as { text: string }).text)).toEqual(["done"]);
     expect(JSON.stringify(events)).not.toContain("openai-completions");
+
+    // Producer stage timing: the mock backend records what the sidecar reports.
+    // created_at is persistence time (batched every 250ms), so the real stage
+    // duration must arrive as a bounded timing record on the ending event.
+    const runStarted = events.find((e) => e.type === "run.started");
+    expect(runStarted?.timing?.source).toBe("sidecar-v1");
+    expect(runStarted?.timing?.duration_ms).toBeGreaterThanOrEqual(0);
+    const toolCompleted = events.find((e) => e.type === "tool.execution.completed");
+    expect(toolCompleted?.timing?.source).toBe("sidecar-v1");
+    const answer = events.find((e) => e.type === "message.assistant_added");
+    expect(answer?.timing?.source).toBe("sidecar-v1");
+    // Timing is internal evidence: it must never appear in the public payload.
+    expect(JSON.stringify(events.map((e) => e.public_payload))).not.toContain("duration_ms");
+    expect(JSON.stringify(events.map((e) => e.public_payload))).not.toContain("sidecar-v1");
   }, 30000);
 
   it("rejects a malformed non-assistant lease response at the sidecar boundary", async () => {

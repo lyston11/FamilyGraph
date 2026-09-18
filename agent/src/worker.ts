@@ -28,6 +28,8 @@ export interface WorkerDeps {
   logger: Logger;
   /** Test seam overriding buildRunSession. */
   sessionFactory?: typeof buildRunSession;
+  /** Test seam overriding the monotonic clock used for stage timing. */
+  now?: () => number;
 }
 
 interface ActiveRun {
@@ -44,6 +46,8 @@ export class SidecarWorker {
   private readonly config: AgentConfig;
   private readonly logger: Logger;
   private readonly sessionFactory: typeof buildRunSession;
+  /** Injectable monotonic clock (tests); defaults to process.hrtime-based. */
+  private readonly now: () => number;
   private active: ActiveRun | null = null;
   private stopped = false;
 
@@ -52,6 +56,9 @@ export class SidecarWorker {
     this.config = deps.config;
     this.logger = deps.logger;
     this.sessionFactory = deps.sessionFactory ?? buildRunSession;
+    // Monotonic: process.hrtime.bigint() cannot jump backwards on clock changes,
+    // unlike Date.now(). Duration is what matters here, not wall-clock time.
+    this.now = deps.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   }
 
   get isBusy(): boolean {
@@ -160,6 +167,11 @@ export class SidecarWorker {
   private async executeJob(job: LeasedJob, active: ActiveRun): Promise<void> {
     const log = this.logger.child({ run_id: job.run_id });
     try {
+      // Stage origin for the sidecar's preparation phase: everything from
+      // receiving the lease to SDK agent_start (context fetch + session
+      // creation). run.started is emitted by the SDK, so without this origin the
+      // backend would have to misattribute that time to queue wait.
+      const prepStartedAt = this.now();
       const projection = await this.client.getRunContext(job.run_id, job.run_token, active.abort.signal);
       if (projection.agent_kind !== "assistant" || job.agent_kind !== "assistant") {
         throw new Error("sidecar received a non-assistant job");
@@ -169,7 +181,8 @@ export class SidecarWorker {
       }
       const events = new RunEventBuffer(projection.next_event_seq, projection.context_build_id === null
         ? undefined : { build_id: projection.context_build_id, attempt: projection.attempt,
-          allowed_handles: (projection.context_blocks ?? []).map((block) => block.citation) });
+          allowed_handles: (projection.context_blocks ?? []).map((block) => block.citation) },
+        { prepStartedAt, now: this.now });
       if (projection.cancel_requested) {
         active.cancelRequested = true;
         active.abort.abort();

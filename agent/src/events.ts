@@ -94,6 +94,31 @@ export interface ContextReference {
   used_handles: string[];
 }
 
+/**
+ * Producer-measured stage duration (backend `schemas/agent.EventTimingIn`).
+ *
+ * ``duration_ms`` is the monotonic duration of the stage that ENDS at this
+ * event: for ``run.started`` it is "sidecar received lease → SDK agent_start"
+ * (context fetch + session creation); for ``message.assistant_added`` it is
+ * that turn's ``turn_start`` → ``message_end``; for
+ * ``tool.execution.completed`` it is that call's start → end.
+ *
+ * The backend persists it in ``agent_run_events.timing_json`` — never in
+ * ``public_payload`` — because ``created_at`` is the persistence time and the
+ * 250ms flush batching makes it useless for short stages.
+ */
+export interface EventTiming {
+  source: "sidecar-v1";
+  duration_ms: number;
+  /**
+   * SDK compaction (`compaction_start` → `compaction_end`) accumulated inside
+   * this turn. It is a SUB-COMPONENT of ``duration_ms`` (the summarization
+   * request happens inside the turn), so `model_turn` must never be read as pure
+   * generation without it. Omitted when the turn had no compaction.
+   */
+  compaction_ms?: number;
+}
+
 export interface FgEvent {
   /** Sender-assigned monotonic sequence within the run (1-based). */
   seq: number;
@@ -102,6 +127,8 @@ export interface FgEvent {
   public_payload: FgEventPayload;
   /** Private submission binding; never part of the public event payload. */
   context_reference?: ContextReference;
+  /** Private producer timing; never part of the public event payload. */
+  timing?: EventTiming;
 }
 
 type SessionEventLike = {
@@ -243,16 +270,62 @@ export class RunEventBuffer {
   private nextSeq: number;
   private readonly pending: FgEvent[] = [];
   private webCitations: WebCitationPayload[] = [];
+  /** Monotonic start of the current turn; cleared on each turn_start. */
+  private turnStartedAt: number | null = null;
+  /** Open tool executions by tool_call_id (start timestamp). */
+  private readonly openTools = new Map<string, number>();
+  /** Monotonic start of an in-flight SDK compaction (start → end). */
+  private compactionStartedAt: number | null = null;
+  /** Compaction ms accumulated inside the current turn (sub-component). */
+  private turnCompactionMs = 0;
 
-  constructor(startSeq = 1, private readonly context?: {
-    build_id: number; attempt: number; allowed_handles: readonly string[];
-  }) {
+  constructor(
+    startSeq = 1,
+    private readonly context?: {
+      build_id: number;
+      attempt: number;
+      allowed_handles: readonly string[];
+    },
+    private readonly timing?: {
+      /** Monotonic ms when the sidecar received the lease (stage origin). */
+      prepStartedAt: number;
+      /** Injectable clock for tests; defaults to the process monotonic clock. */
+      now?: () => number;
+    },
+  ) {
     this.nextSeq = Number.isInteger(startSeq) && startSeq >= 0 ? startSeq : 1;
   }
 
-  push<T extends FgEventType>(type: T, public_payload: FgEventPayloadMap[T], context_reference?: ContextReference): void {
-    this.pending.push({ seq: this.nextSeq++, type, public_payload,
-      ...(context_reference === undefined ? {} : { context_reference }) });
+  private now(): number {
+    return this.timing?.now ? this.timing.now() : performance.now();
+  }
+
+  /**
+   * Timing for a stage ending now, or undefined when the stage has no origin
+   * (no injected prep origin, unpaired tool start, no observed turn_start).
+   * Negative deltas are dropped rather than clamped: a clock anomaly must not
+   * be reported as a real 0ms stage.
+   */
+  private elapsedFrom(origin: number | null): EventTiming | undefined {
+    if (origin === null) return undefined;
+    const duration = Math.round(this.now() - origin);
+    if (!Number.isFinite(duration) || duration < 0) return undefined;
+    return { source: "sidecar-v1", duration_ms: duration };
+  }
+
+  push<T extends FgEventType>(
+    type: T,
+    public_payload: FgEventPayloadMap[T],
+    context_reference?: ContextReference,
+    timing?: EventTiming,
+  ): void {
+    this.pending.push({
+      seq: this.nextSeq++,
+      type,
+      public_payload,
+      ...(context_reference === undefined ? {} : { context_reference }),
+      ...(timing === undefined ? {} : { timing }),
+    });
   }
 
   /** Feed one session broadcast; returns count of produced events. */
@@ -264,6 +337,30 @@ export class RunEventBuffer {
       const citation = extractWebCitation(event.result);
       if (citation !== null) this.webCitations.push(citation);
     }
+    // Stage origins are recorded before mapping so the event that ends a stage
+    // can measure it; turn_start/tool_execution_start produce no FG event.
+    if (event.type === "turn_start") {
+      this.turnStartedAt = this.now();
+      // Each turn owns its own compaction budget; a later turn must not inherit
+      // an earlier turn's summarization cost.
+      this.turnCompactionMs = 0;
+    }
+    if (event.type === "compaction_start") {
+      this.compactionStartedAt = this.now();
+    }
+    if (event.type === "compaction_end" && this.compactionStartedAt !== null) {
+      const elapsed = this.now() - this.compactionStartedAt;
+      if (Number.isFinite(elapsed) && elapsed > 0) this.turnCompactionMs += elapsed;
+      this.compactionStartedAt = null;
+    }
+    let toolStartedAt: number | null = null;
+    if (event.type === "tool_execution_start") {
+      const key = String(event.toolCallId ?? "");
+      const started = this.now();
+      this.openTools.set(key, started);
+      toolStartedAt = started;
+    }
+
     const mapped = mapSessionEvent(event);
     for (const item of mapped) {
       if (item.type === "message.assistant_added" && this.webCitations.length > 0) {
@@ -280,7 +377,23 @@ export class RunEventBuffer {
           .filter((handle) => mentioned.has(handle) && handle.length <= 255).slice(0, 20);
         reference = { build_id: this.context.build_id, attempt: this.context.attempt, used_handles: handles };
       }
-      this.push(item.type, item.public_payload, reference);
+      let timing: EventTiming | undefined;
+      if (item.type === "run.started") {
+        timing = this.elapsedFrom(this.timing?.prepStartedAt ?? null);
+      } else if (item.type === "message.assistant_added") {
+        timing = this.elapsedFrom(this.turnStartedAt);
+        // Attach this turn's compaction as a bounded sub-component so the
+        // backend can separate summarization from generation.
+        if (timing !== undefined && this.turnCompactionMs > 0) {
+          timing = { ...timing, compaction_ms: Math.round(this.turnCompactionMs) };
+        }
+        this.turnCompactionMs = 0;
+      } else if (item.type === "tool.execution.completed") {
+        const key = String((item.public_payload as ToolExecutionCompletedPayload).tool_call_id);
+        timing = this.elapsedFrom(this.openTools.get(key) ?? toolStartedAt);
+        this.openTools.delete(key);
+      }
+      this.push(item.type, item.public_payload, reference, timing);
     }
     return mapped.length;
   }
