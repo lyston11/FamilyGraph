@@ -38,6 +38,18 @@
 - `PROVIDER_EMPTY_ANSWER` 是 **sidecar 运行期错误码**，与 `PROVIDER_STREAM_ERROR`/`SIDECAR_ERROR` 同类：只在 `frontend/src/api/agent.ts` 的 `AGENT_ERROR_COPY` 与本节登记，**不在 `backend/app/errors.py` 注册**（该表收录的是后端自己会发出的码）。`error_code` 列宽 64 字符足够，无迁移。
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
+- **取消失效的已实测缺陷（09-17 F，未修）**：sidecar 检测取消的**唯一**路径是心跳
+  （`worker.ts` `startHeartbeat`，间隔 `max(floor(defaultLeaseMs/3), 1000)`；出厂
+  `AGENT_DEFAULT_LEASE_MS=60000` → **20s**），而取消后仍在飞的 `events/append` 会立刻
+  拿到 `409 AGENT_RUN_NOT_RUNNING "Run 已请求取消"`。该 409 被映射为 `ConflictError`，
+  `executeJob` 的 catch 只看 `cancelRequested`/`leaseLost`（两者都还是 false），
+  于是**由 sidecar 自造 `failed + SIDECAR_ERROR`**，覆盖服务端已裁决的取消语义；
+  用户看到「助手服务暂时不可用」而不是「已取消」。3/3 复现；把租约降到 3s
+  （心跳 1s）后同一场景不再产生 SIDECAR_ERROR，证明因果与心跳节奏绑定。
+  `agent/src/worker.ts` 的注释已明确写入「do not turn that expected rejection into a
+  sidecar failed settle」，实现与声明意图不一致。归因证据：
+  `09-17-dual-agent-controlled-acceptance` 的 `evidence/defect-cancel.note.md`。
+  在修复前**不得**把「取消后 run 可能终态为 failed」当作预期行为写进新测试。
 
 ## 可观测性：助手耗时分段与源计时（09-17 A 建立，09-17 D 修正，09-18 延迟根因分析）
 
