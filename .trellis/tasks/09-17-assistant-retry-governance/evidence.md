@@ -112,6 +112,11 @@ cd agent && npm run lint && npm run type-check && npm test && npm run build   # 
 | 降为 2 + 2 | 9 | ≈10s | 折中；需确认上游恢复窗口 |
 | 永久 4xx 不重试（**本轮已实现**） | 1 | 即时 | 已生效；凭据/参数错误不再浪费 24 次请求 |
 
+**费用维度无法在本仓库给出**：`backend` 与 sidecar 均把模型 cost 置零（`agent/src/session.ts`
+的 model literal `cost: {input:0,...}`，后端无价格表），仓库内不存在可信计价来源。
+可确定的是每次重试重发同一 prompt，输入 token 随请求数线性放大（本最坏例即同一 prompt 发 24 次）；
+具体金额需用户提供当前计价口径后才能填写，本任务不编造。
+
 ## 7. 未完成 / 未授权
 
 - **E-R3/E-R5 策略部分未决**：本轮只消除“永久错误被当可重试 5xx”的误重试并显式冻结现有
