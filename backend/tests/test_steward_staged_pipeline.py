@@ -910,3 +910,36 @@ def test_validated_clock_header_on_empty_current_and_304(db_session, client):
         assert 0 < expires - validated <= config.PERSONAL_FAMILY_VIEW_DISPLAY_TTL_SECONDS
         assert "X-PFV-Validated-At" in response.headers["access-control-expose-headers"]
         assert "date" not in response.headers  # Uvicorn supplies its own single HTTP Date.
+
+
+def test_staged_view_keeps_authorized_members_without_viewer_paths(db_session):
+    """09-18 R1/R2：生产读取路径（staged publication）也必须保留无路径成员。
+
+    朱元璋查看李氏家族空间的等价场景：授权成员与 viewer 之间没有 confirmed
+    路径时，节点仍须出现在 published payload 中（space_member），且不产生个人
+    称谓边或结构边；否则家族树会把这些成员整个丢掉。
+    """
+    people, space = _family(db_session, size=2, name="staged-isolated")
+    # 无任何关系事实的 active 成员（成员资格本身即授权）
+    isolated = create_user_with_pin(db_session, "staged-isolated-guest", "123456", gender="f")
+    create_space_member(db_session, space.id, isolated.id)
+    db_session.commit()
+    _run(db_session, space.id, deliver=True)
+
+    with steward_snapshot.read_transaction(db_session.get_bind()) as read:
+        payload, _ = steward_views.payload_for(
+            read, account=people[0].account, space_id=space.id, progressive=True
+        )
+    assert payload["status"] == "current"
+    by_id = {node["user_id"]: node for node in payload["nodes"]}
+    assert isolated.id in by_id
+    assert by_id[isolated.id]["inclusion_reason_code"] == "space_member"
+    # 无路径成员没有个人称谓边，也不出现在结构拓扑中
+    assert isolated.id not in {edge["to_user_id"] for edge in payload["edges"]}
+    assert all(
+        edge["from_user_id"] != isolated.id and edge["to_user_id"] != isolated.id
+        for edge in payload["topology_edges"]
+    )
+    # 进度分母只统计需要称谓的可达目标：孤立成员不阻塞 ready
+    assert payload["progress"]["phase"] == "ready"
+    assert isolated.id not in {target["user_id"] for target in payload["progress"]["targets"]}

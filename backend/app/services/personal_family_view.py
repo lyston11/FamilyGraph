@@ -60,7 +60,7 @@ from app.services.source_facts import FACT_CONFIRMED
 from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
 from app.utils.timeutil import utcnow
 
-COMPUTATION_VERSION = "pfv-v5-term-alias"
+COMPUTATION_VERSION = "pfv-v6-space-members"
 POLICY_VERSION = config.POLICY_VERSION
 
 logger = logging.getLogger(__name__)
@@ -210,19 +210,23 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
     session.query(PersonalFamilyViewNode).filter(PersonalFamilyViewNode.view_id == view.id).delete()
     session.query(PersonalFamilyViewEdge).filter(PersonalFamilyViewEdge.view_id == view.id).delete()
     confirmed_reached: set[int] = set()
+    node_rows: dict[int, PersonalFamilyViewNode] = {}
     for target_id in sorted(graph.node_genders):
         target = session.get(User, target_id)
         if target is None:
             continue
         if target.id == actor.id:
             resolution = None
+            reason = "root"
         else:
             resolution = resolve_relationship(
                 session, viewer_user_id=actor.id, target_user_id=target.id, space_id=space_id
             )
-            if not resolution.found:
-                continue
-            confirmed_reached.add(target.id)
+            # R2：关系路径只决定「是否有个人称谓/路径摘要」，不决定合法空间
+            # 成员是否存在。无路径的授权成员保留为 space_member 孤立节点。
+            reason = "confirmed_path" if resolution.found else "space_member"
+            if resolution.found:
+                confirmed_reached.add(target.id)
         display, level, node_decision = _node_display(
             session,
             actor,
@@ -235,20 +239,21 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
             if node_decision.fields.get("birth") == visibility.FIELD_CLEAR
             else None
         )
-        session.add(
-            PersonalFamilyViewNode(
-                view_id=view.id,
-                user_id=target.id,
-                display_json=display,
-                visibility_level=level,
-                inclusion_reason_code="root" if target.id == actor.id else "confirmed_path",
-                source_fact_ids_json=[],
-                authorization_basis_json={"space_id": space_id, "visibility": level},
-                policy_version=POLICY_VERSION,
-                computation_version=COMPUTATION_VERSION,
-            )
+        node_row = PersonalFamilyViewNode(
+            view_id=view.id,
+            user_id=target.id,
+            display_json=display,
+            visibility_level=level,
+            inclusion_reason_code=reason,
+            source_fact_ids_json=[],
+            authorization_basis_json={"space_id": space_id, "visibility": level},
+            policy_version=POLICY_VERSION,
+            computation_version=COMPUTATION_VERSION,
         )
-        if resolution is None:
+        session.add(node_row)
+        node_rows[target.id] = node_row
+        # R2：只有真正存在 confirmed 路径时才写个人称谓边；孤立成员到此为止。
+        if resolution is None or not resolution.found:
             continue
         main_path = steps_to_json(resolution.main_path)
         alt_paths = [steps_to_json(path) for path in resolution.alt_paths]
@@ -328,6 +333,7 @@ def rebuild_view(session: Session, *, account: Account, space_id: int) -> Person
         graph=graph,
         space_id=space_id,
         confirmed_reached=confirmed_reached,
+        node_rows=node_rows,
         now=now,
     )
 
@@ -398,15 +404,18 @@ def _emit_inferred_projection(
     graph: Any,
     space_id: int,
     confirmed_reached: set[int],
+    node_rows: dict[int, PersonalFamilyViewNode],
     now: Any,
 ) -> None:
     """推测层显示投影（rebuild_view 事务内；开关关闭或无活跃边时零操作）。
 
     - 逐条活跃推测边物化一行 inferred_path 边（subject/object + 单跳步 +
       确定性单跳称谓）；
-    - 端点中「尚无 confirmed 路径」者以 inferred_path 节点上树，其 viewer 视角
-      称谓经增广图确定性解析（含长幼消歧），存入边的 authorization_basis_json
-      （viewer_term/viewer_path/new_user_id）；
+    - 端点中「尚无 confirmed 路径」者：已是授权成员节点（space_member）的改标为
+      inferred_path（保留 09-13 推测角标与 viewer 称谓），其余补插 inferred_path
+      节点；无任何推测边指向的普通成员始终保持 space_member；
+    - 其 viewer 视角称谓经增广图确定性解析（含长幼消歧），存入边的
+      authorization_basis_json（viewer_term/viewer_path/new_user_id）；
     - 推测边永不写 SourceFact；确认转正走 relationship_proposals 合同。
     """
     if not steward_inferred.effective_enabled(session, space_id):
@@ -425,6 +434,8 @@ def _emit_inferred_projection(
         for edge in active
     )
     genders = graph.node_genders
+    # 主循环已物化的授权节点 id（含 space_member）：不重复插入节点行
+    # （unique(view_id, user_id) 会冲突）；需要改标 reason 时直接改 node_rows 中的行。
     nodes_added: set[int] = set()
     for edge in active:
         step, step_json = _inferred_hop_step(edge, genders)
@@ -479,9 +490,16 @@ def _emit_inferred_projection(
                         ),
                     )
                     viewer_term = term_view["term"]
-        # 端点中尚无 confirmed 路径者以 inferred_path 节点上树
+        # 端点中尚无 confirmed 路径者：已物化为授权成员节点（space_member）的，改标
+        # inferred_path 以保留 09-13 推测角标/称谓（仅当确有活跃推测边指向该端点，
+        # 不是「只要是成员就升级」）；未物化的端点补插 inferred_path 节点。
         for user_id in sorted(endpoints - known):
             if user_id in nodes_added:
+                continue
+            existing = node_rows.get(user_id)
+            if existing is not None:
+                existing.inclusion_reason_code = "inferred_path"
+                nodes_added.add(user_id)
                 continue
             target = session.get(User, user_id)
             if target is None:
@@ -622,7 +640,9 @@ def progress_for(
             "reason_code": None if node["user_id"] in complete_ids else "no_path",
         }
         for node in payload["nodes"]
-        if node["user_id"] != account.user_id and node["inclusion_reason_code"] != "inferred_path"
+        if node["user_id"] != account.user_id
+        # R4：无路径的授权成员不需要生成称谓，不进进度分母也不阻塞 ready。
+        and node["inclusion_reason_code"] not in ("inferred_path", "space_member")
     ]
     phase = _phase_for_status(payload["status"])
     reason = payload.get("stale_reason")

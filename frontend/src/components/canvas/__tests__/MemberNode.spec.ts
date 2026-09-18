@@ -39,6 +39,7 @@ interface MountOptions {
   visibilityLevel?: 'self_private' | 'household_detail' | 'lineage_summary'
   isSelf?: boolean
   term?: string | null
+  inclusionReason?: string
 }
 
 function mountNode({
@@ -46,11 +47,20 @@ function mountNode({
   visibilityLevel = 'household_detail',
   isSelf = false,
   term = null,
+  inclusionReason = 'confirmed_path',
 }: MountOptions = {}) {
   return mount(MemberNode, {
     props: {
       id: `n-${display.id}`,
-      data: { display, visibilityLevel, isSelf, term, inferred: false, inferredTerm: null },
+      data: {
+        display,
+        visibilityLevel,
+        isSelf,
+        term,
+        inferred: false,
+        inferredTerm: null,
+        inclusionReason,
+      },
     },
     // Handle 依赖 VueFlow 节点注册表（无画布上下文时 onMounted 取不到 node），
     // 名牌自身的渲染/交互合同与连接点无关，stub 隔离
@@ -79,6 +89,15 @@ describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
     expect(wrapper.find('[data-test="view-label"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="node-birth"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="masked-field"]').exists()).toBe(false)
+  })
+
+  it('space_member：授权成员但暂无亲属路径 → 安全「关系待建立」状态，不伪造称谓', () => {
+    const wrapper = mountNode({ term: null, inclusionReason: 'space_member' })
+    const chip = wrapper.find('[data-test="term-no-path-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('关系待建立')
+    // 绝不渲染 viewer 称谓 chip
+    expect(wrapper.find('[data-test="view-label"]').exists()).toBe(false)
   })
 
   it('自己节点：强调样式 + 「我」chip + self_private 徽章（icon + 文字）', () => {
@@ -124,6 +143,7 @@ describe('MemberNode 纯展示（PersonalFamilyView 口径）', () => {
         term: null,
         inferred: false,
         inferredTerm: null,
+        inclusionReason: 'confirmed_path',
       },
       },
       global: {

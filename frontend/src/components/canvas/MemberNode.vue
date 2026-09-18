@@ -97,6 +97,13 @@ function select(): void {
       <span v-else-if="data.termStatus === 'pending'" class="term-chip term-chip--pending" data-test="term-pending-chip">整理中</span>
       <span v-else-if="data.termStatus === 'failed'" class="term-chip term-chip--pending" data-test="term-failed-chip">整理未完成</span>
       <span v-else-if="data.termStatus === 'unavailable'" class="term-chip term-chip--pending" data-test="term-unavailable-chip">暂无可显示的称谓</span>
+      <!-- 09-18 R5：授权空间成员但暂无 viewer 可解析的亲属路径：显示安全的
+           「无路径」状态，不伪造称谓、不画关系线。 -->
+      <span
+        v-else-if="data.inclusionReason === 'space_member'"
+        class="term-chip term-chip--pending"
+        data-test="term-no-path-chip"
+      >关系待建立</span>
       <span v-if="display.birth !== null && !('__masked__' in display.birth)" class="birth" data-test="node-birth">
         {{ display.birth.date ?? '不详' }}
       </span>

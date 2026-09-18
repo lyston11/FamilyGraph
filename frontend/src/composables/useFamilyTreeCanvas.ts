@@ -37,6 +37,12 @@ export interface FamilyCanvasNodeData {
   inferred: boolean
   /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
   inferredTerm: string | null
+  /**
+   * 服务端 inclusion_reason_code：'space_member' = 授权空间成员但当前无 viewer
+   * 可解析的 confirmed 亲属路径（09-18 R2/R5）。仅用于安全的「无路径」提示，
+   * 不得据此伪造称谓或关系线。
+   */
+  inclusionReason: string
 }
 
 export interface FamilyCanvasNode {
@@ -51,6 +57,8 @@ export interface FamilyCanvasNode {
   inferred: boolean
   /** 推测成员的 viewer 视角称谓（backend viewer_term）；null = 暂无 */
   inferredTerm: string | null
+  /** 服务端 inclusion_reason_code（'space_member' = 授权成员但暂无亲属路径） */
+  inclusionReason: string
   x: number
   y: number
 }
@@ -163,6 +171,7 @@ export function buildFamilyCanvas(
     termStatus: data.progress?.targets.find((target) => target.user_id === node.user_id)?.status ?? null,
     inferred: node.inclusion_reason_code === 'inferred_path',
     inferredTerm: inferredTermByUser.get(node.user_id) ?? null,
+    inclusionReason: node.inclusion_reason_code,
     x: 0,
     y: 0,
   }))

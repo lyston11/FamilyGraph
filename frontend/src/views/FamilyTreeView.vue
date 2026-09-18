@@ -250,6 +250,7 @@ const flowNodes = computed<FlowNode[]>(() =>
       termStatus: node.termStatus,
       inferred: node.inferred,
       inferredTerm: node.inferredTerm,
+      inclusionReason: node.inclusionReason,
     },
     draggable: viewMode.value === 'canvas',
   })),
