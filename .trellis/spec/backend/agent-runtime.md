@@ -99,22 +99,6 @@
 - `duration_ms` 是该事件处**结束**的那个阶段的 producer 单调时长：
   `run.started` = 取得执行权 → SDK `agent_start`（context 获取 + session 创建）；
   `message.assistant_added` = 该轮 `turn_start` → `message_end`；
-<<<<<<< HEAD
-  `tool.execution.completed` = 该次 `tool_execution_start` → `end`。
-- `compaction_ms` 的**声明窗口在真实 SDK 下不成立**（09-17 F 受控验收实测，
-  pi-coding-agent 0.84.3）：SDK 把阈值压缩排在轮次边界之外
-  ——`… → message_end → turn_end → agent_end → compaction_start/end → agent_settled`，
-  而累积窗口是 `turn_start → message.assistant_added`，因此**真实路径下恒为空**
-  （实测 `compaction_start:threshold`×2、摘要请求实发 1 次，`compaction_ms` 采样 0）。
-  后果：发生压缩的轮次里 `model_turn` **不含**摘要耗时，与下方旧描述相反。
-  当前行为按实际实现记录，**不得据旧描述读 `model_turn`**。修法需先决定压缩归属
-  哪个阶段，不能只把窗口放宽到整轮（会把等待模型的时间算进压缩）；待修前以
-  sidecar 广播中 `compaction_start` 的存在作为「本轮发生过压缩」的判据。
-- 归因证据：`09-17-dual-agent-controlled-acceptance` 的
-  `evidence/defect-compaction.note.md`（含真实 SDK 广播顺序与 provider 调用日志）。
-- **两侧同步**：`timing` 只允许出现在 sidecar 执行事件上（后端自有事件携带即 422），
-  未知 `source`、负值、越界、`compaction_ms` 用在非正文事件上一律 fail-closed。
-=======
   `tool.execution.completed` = 该次 `tool_execution_start` → `end`；
   `run.compacted` = 本次 prompt 内所有 SDK 压缩跨度之和（见下）。
 - **压缩是 run 级阶段，不是 turn 的子成分**（09-19 D2 修正，原合同是事实性错误）。
@@ -132,7 +116,6 @@
 - **两侧同步**：`timing` 只允许出现在 sidecar 执行事件上
   （`run.started`/`message.assistant_added`/`tool.execution.completed`/`run.compacted`；
   后端自有事件携带即 422），未知 `source`、负值、越界一律 fail-closed。
->>>>>>> origin/main
   参与幂等指纹（`EventEntry.fingerprint`），重放同 seq 同 timing 视为重复。
 - 历史行 `timing_json` 为 NULL：读取方按 unknown 处理，**不回填、不倒推**。
   历史行也**没有** `run.compacted`（事件不存在），因此其 `compaction` 样本为 0，
