@@ -77,6 +77,9 @@ export const AGENT_EVENT_TYPES = [
   'assistant.text_reset',
   'tool.execution.started',
   'tool.execution.completed',
+  // 压缩是 run 级阶段（SDK 在 turn 之外压缩）；本事件只承载内部计时，
+  // 无可见 payload，store 默认分支忽略。
+  'run.compacted',
   'run.settled',
   'run.failed',
   'run.cancelled',

@@ -56,10 +56,12 @@ _OBSERVATION_NOTES: tuple[str, ...] = (
     "first_text 每 run 一个样本（首次取得执行权→首个 assistant 正文）；model_turn 每轮一个"
     "样本（该轮 turn.started→该轮 assistant 正文），多轮 run 会贡献多个样本，两者不可混算",
     "tool_call 按 tool_call_id 配对；未配对（运行中/中断）的调用不计入样本",
-    "compaction 是 model_turn 的子成分（该轮内 SDK compaction_start→compaction_end 累计时长，"
-    "含摘要请求），单独统计才能区分摘要与生成；仅当 sidecar 上报源计时时才有样本，"
-    "无压缩即 n=0，不用 0 填充。读 model_turn 时必须同时参考 compaction 与 provider_retry，"
-    "否则不得声称该值是纯推理时间",
+    "compaction 是 **run 级**阶段，不是 model_turn 的子成分：真实 SDK（pi-coding-agent "
+    "0.84.3）在 turn 之外压缩——prompt 前阈值检查在 agent_start 之前，轮后检查在 agent_end "
+    "之后、agent_settled 之前（实测 245ms）——所以由 sidecar 在 agent_settled 发出的 "
+    "run.compacted 承载（每 run 至多一个样本），无压缩即 n=0，不用 0 填充。model_turn "
+    "（该轮 turn_start→message_end）本就不含压缩；不要把它与 compaction 当子成分相减，"
+    "也不得据此声称该值是纯推理时间（重试仍包含在内，见 provider_retry）",
     "无事件的 run 与未取得执行权的 run 分别计数（runs_without_events / "
     "runs_without_first_lease / runs_without_start），不从事件集合反推分母",
     "provider_retry 是上游 5xx/408/409/429 重试开销的**下界**，由 agent_provider_egress 审计"
@@ -281,16 +283,11 @@ def _timing_int(payload: dict[str, Any] | None, key: str) -> int | None:
 
 
 def _timing_compaction_ms(payload: dict[str, Any] | None) -> int | None:
-    """该轮内 SDK 压缩时长（``duration_ms`` 的子成分）；无压缩/非法即 None。
+    """该 run 的压缩总时长（``run.compacted`` 的 ``duration_ms``）；无压缩/非法即 None。
 
-    不用 0 填充：0 会与“确实测到 0ms 压缩”混淆，缺省才表示本轮没有压缩。
+    不用 0 填充：0 会与“确实测到 0ms 压缩”混淆，缺省才表示本次没有压缩。
     """
-    if not isinstance(payload, dict):
-        return None
-    value = payload.get("compaction_ms")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return None
-    return value
+    return _timing_ms(payload)
 
 
 def _provider_retry_windows(
@@ -523,11 +520,8 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
             model_turn.append(
                 (native if native is not None else _ms(produced[0] - at), native is not None)
             )
-            # 该轮的压缩是 model_turn 的子成分，单独收集以区分摘要请求与生成；
-            # 它同样只在有源计时时才有意义（历史行无法区分）。
-            measured = _timing_compaction_ms(produced[1])
-            if measured is not None:
-                compaction.append((measured, True))
+            # 该轮的压缩**不是** model_turn 的子成分（SDK 在 turn 之外压缩），
+            # 因此不在这里收集：它由 run.compacted 单独承载，见下方 run 级循环。
             # 该轮的首个正文到达时间与自动重试计数。首正文把“模型真的算得久”
             # 与“正文被攒到 message_end 才公开”分开；重试计数把“一次慢生成”与
             # “失败一次后重试”分开。仅新行有这两个字段。
@@ -563,9 +557,20 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
                         )
                     )
 
-        # 结算开销 = 最后一个非终态事件（正文/工具落库）→ run 终态，
+        # 压缩是 run 级阶段（SDK 在 turn 之外压缩：prompt 前与 agent_end 之后），
+        # 由 sidecar 在 agent_settled 发出的 run.compacted 承载，每 run 至多一个样本。
+        # 它不属于任何一轮，也不与 model_turn 成对读。
+        for kind, _at, _payload, timing in events:
+            if kind != "run.compacted":
+                continue
+            measured = _timing_compaction_ms(timing)
+            if measured is not None:
+                compaction.append((measured, True))
+
+        # 结算开销 = 最后一个非终态事件（正文/工具/压缩落库）→ run 终态，
         # 即事件 flush 与 settle 写入的尾部成本；不是拿终态事件和自身相减。
         # 两个时刻都是后端 UTC，故始终是 source_clock。
+        # run.compacted 现在是那个最后的非终态事件，因此轮后压缩不再被算进结算。
         settled = settled_at.get(run_id)
         if settled is not None:
             terminal = {"run.settled", "run.failed", "run.cancelled", "run.expired"}

@@ -47,6 +47,7 @@ EVENT_TYPES: frozenset[str] = frozenset(
         "assistant.text_reset",
         "tool.execution.started",
         "tool.execution.completed",
+        "run.compacted",
         "run.settled",
         "run.failed",
         "run.cancelled",

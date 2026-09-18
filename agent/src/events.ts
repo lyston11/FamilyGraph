@@ -32,6 +32,7 @@ export const EVENT_TYPES = [
   "assistant.text_reset",
   "tool.execution.started",
   "tool.execution.completed",
+  "run.compacted",
   "run.settled",
   "run.failed",
   "run.cancelled",
@@ -112,6 +113,7 @@ export type FgEventPayloadMap = {
   "assistant.text_reset": AssistantTextResetPayload;
   "tool.execution.started": ToolExecutionStartedPayload;
   "tool.execution.completed": ToolExecutionCompletedPayload;
+  "run.compacted": Record<string, never>;
   "run.settled": TerminalPayload;
   "run.failed": TerminalPayload;
   "run.cancelled": TerminalPayload;
@@ -131,7 +133,8 @@ export interface ContextReference {
  * ``duration_ms`` is the monotonic duration of the stage that ENDS at this
  * event: for ``run.started`` it is "sidecar received lease → SDK agent_start"
  * (context fetch + session creation); for ``message.assistant_added`` it is
- * that turn's ``turn_start`` → ``message_end``; for
+ * that turn's ``turn_start`` → ``message_end``; for ``run.compacted`` it is the
+ * whole prompt's ``compaction_start`` → ``compaction_end`` total; for
  * ``tool.execution.completed`` it is that call's start → end.
  *
  * The backend persists it in ``agent_run_events.timing_json`` — never in
@@ -141,13 +144,6 @@ export interface ContextReference {
 export interface EventTiming {
   source: "sidecar-v1";
   duration_ms: number;
-  /**
-   * SDK compaction (`compaction_start` → `compaction_end`) accumulated inside
-   * this turn. It is a SUB-COMPONENT of ``duration_ms`` (the summarization
-   * request happens inside the turn), so `model_turn` must never be read as pure
-   * generation without it. Omitted when the turn had no compaction.
-   */
-  compaction_ms?: number;
   /**
    * ``turn_start`` → first ``text_delta``. Sub-component of ``duration_ms``.
    *
@@ -355,8 +351,23 @@ export class RunEventBuffer {
   private readonly openTools = new Map<string, number>();
   /** Monotonic start of an in-flight SDK compaction (start → end). */
   private compactionStartedAt: number | null = null;
-  /** Compaction ms accumulated inside the current turn (sub-component). */
-  private turnCompactionMs = 0;
+  /**
+   * Compaction ms accumulated for the whole prompt (run-level, NOT per turn).
+   *
+   * The SDK compacts outside the turn window: a pre-prompt threshold check runs
+   * before `agent_start`, and the post-run check runs after `agent_end` (still
+   * inside `_runAgentPrompt`). Measured on pi-coding-agent 0.84.3, a 245ms
+   * post-run compaction sat between `agent_end` and `agent_settled` while
+   * `turn_start → message_end` saw none of it — so this can never be a
+   * sub-component of a turn's duration.
+   *
+   * Only spans that begin after `agent_start` are counted, which excludes the
+   * pre-prompt check: that one is part of getting the session ready and is
+   * already inside the `prepare` stage.
+   */
+  private compactionMs = 0;
+  /** Set once the SDK reports `agent_start`; gates compaction accounting. */
+  private agentStarted = false;
   /**
    * Monotonic time of this turn's first assistant text delta, or null when the
    * turn has produced no prose yet. Thinking deltas never set it.
@@ -447,11 +458,8 @@ export class RunEventBuffer {
     // can measure it; turn_start/tool_execution_start produce no FG event.
     if (event.type === "turn_start") {
       this.turnStartedAt = this.now();
-      // Each turn owns its own compaction budget; a later turn must not inherit
-      // an earlier turn's summarization cost.
-      this.turnCompactionMs = 0;
-      // Same for first-text and retry accounting: a clean turn after a retried
-      // one must not inherit either.
+      // first-text and retry accounting belong to this turn only: a clean turn
+      // after a retried one must not inherit either.
       this.firstTextAt = null;
       this.turnRetryCount = 0;
       this.turnRetryWaitMs = 0;
@@ -489,12 +497,18 @@ export class RunEventBuffer {
       const delay = Number(event.delayMs);
       if (Number.isFinite(delay) && delay > 0) this.turnRetryWaitMs += delay;
     }
+    if (event.type === "agent_start") {
+      // Only now is a compaction part of the run rather than of preparation.
+      this.agentStarted = true;
+    }
     if (event.type === "compaction_start") {
       this.compactionStartedAt = this.now();
     }
     if (event.type === "compaction_end" && this.compactionStartedAt !== null) {
       const elapsed = this.now() - this.compactionStartedAt;
-      if (Number.isFinite(elapsed) && elapsed > 0) this.turnCompactionMs += elapsed;
+      if (this.agentStarted && Number.isFinite(elapsed) && elapsed > 0) {
+        this.compactionMs += elapsed;
+      }
       this.compactionStartedAt = null;
     }
     let toolStartedAt: number | null = null;
@@ -512,6 +526,17 @@ export class RunEventBuffer {
     // `message_update` itself is NOT a boundary (that is the whole point of the
     // chunk) — it is the only event whose pending prose stays unflushed.
     if (this.prosePending.length > 0 && event.type !== "message_update") this.flushProse();
+    // `run.compacted` is emitted here (not mapped) because it is the run-level
+    // total: `agent_settled` is the last SDK broadcast and the only point where
+    // every post-run compaction span has closed. It is pushed AFTER the prose
+    // boundary flush above so a chunk that arrived earlier cannot end up with a
+    // higher seq than this later event.
+    if (event.type === "agent_settled" && this.compactionMs > 0) {
+      this.push("run.compacted", {}, undefined, {
+        source: "sidecar-v1",
+        duration_ms: Math.round(this.compactionMs),
+      });
+    }
     for (const item of mapped) {
       if (item.type === "message.assistant_added" && this.webCitations.length > 0) {
         const payload = item.public_payload as AssistantMessagePayload;
@@ -534,14 +559,12 @@ export class RunEventBuffer {
         timing = this.elapsedFrom(this.turnStartedAt);
         if (timing !== undefined) {
           // Attach this turn's bounded sub-components so the backend can
-          // separate summarization, pre-prose reasoning and retries from pure
-          // generation instead of reading `model_turn` as one number.
+          // separate pre-prose reasoning and retries from pure generation
+          // instead of reading `model_turn` as one number. Compaction is NOT
+          // one of them: the SDK compacts outside the turn (see `compactionMs`).
           const firstTextMs = this.spanBetween(this.turnStartedAt, this.firstTextAt);
           timing = {
             ...timing,
-            ...(this.turnCompactionMs > 0
-              ? { compaction_ms: Math.round(this.turnCompactionMs) }
-              : {}),
             ...(firstTextMs === undefined ? {} : { first_text_ms: firstTextMs }),
             ...(this.turnRetryCount > 0
               ? {
@@ -551,7 +574,6 @@ export class RunEventBuffer {
               : {}),
           };
         }
-        this.turnCompactionMs = 0;
         this.firstTextAt = null;
         this.turnRetryCount = 0;
         this.turnRetryWaitMs = 0;
