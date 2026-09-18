@@ -29,6 +29,7 @@ import {
   ForbiddenError,
   GoneError,
   InternalApiError,
+  RunCancelledError,
   TransientError,
 } from "./errors.js";
 import { signServiceToken } from "./tokens.js";
@@ -129,6 +130,27 @@ export interface InternalClientOptions {
   fetchImpl?: typeof fetch;
   backoff?: BackoffPolicy;
   nowMs?: () => number;
+}
+
+/**
+ * Read `error.detail.reason` from a unified error envelope without trusting the
+ * body shape: any parse failure just means "no machine-readable reason".
+ * Matching on the structured reason (never the human message) keeps the
+ * classification stable across wording changes.
+ */
+function internalErrorReason(bodyText: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const error = (parsed as { error?: unknown }).error;
+    if (typeof error !== "object" || error === null) return null;
+    const detail = (error as { detail?: unknown }).detail;
+    if (typeof detail !== "object" || detail === null) return null;
+    const reason = (detail as { reason?: unknown }).reason;
+    return typeof reason === "string" ? reason : null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeContextBuildId(raw: unknown): number | null {
@@ -319,6 +341,12 @@ export class InternalClient {
   private readonly fetchImpl: typeof fetch;
   private readonly backoff: BackoffPolicy;
   private readonly nowMs: () => number;
+  /**
+   * Set by the worker. Invoked with the run id whenever the server answers a
+   * run-scoped request with `cancel_requested`, so cancellation is observed at
+   * *any* internal boundary instead of only on the heartbeat cadence.
+   */
+  onRunCancelled: ((runId: string) => void) | null = null;
 
   constructor(
     private readonly config: AgentConfig,
@@ -331,6 +359,22 @@ export class InternalClient {
       maxAttempts: config.retryMaxAttempts,
     };
     this.nowMs = options.nowMs ?? (() => Date.now());
+  }
+
+  /** Run id of a run-scoped internal path, or null for non-run endpoints. */
+  private static runIdFromPath(path: string): string | null {
+    const match = /^\/internal\/agent\/runs\/(\d+)\//.exec(path);
+    return match === null ? null : match[1]!;
+  }
+
+  private notifyRunCancelled(path: string): void {
+    const runId = InternalClient.runIdFromPath(path);
+    if (runId === null || this.onRunCancelled === null) return;
+    try {
+      this.onRunCancelled(runId);
+    } catch {
+      // An observer must never replace the protocol error being reported.
+    }
   }
 
   private async request(
@@ -367,7 +411,9 @@ export class InternalClient {
         }
         // Typed terminal errors — never retried.
         const text = await response.text().catch(() => "");
-        throw this.mapHttpError(response.status, text);
+        const mapped = this.mapHttpError(response.status, text);
+        if (mapped instanceof RunCancelledError) this.notifyRunCancelled(path);
+        throw mapped;
       } catch (error) {
         if (error instanceof InternalApiError) throw error;
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -392,7 +438,17 @@ export class InternalClient {
     const message = `internal endpoint ${status}: ${bodyText.slice(0, 300)}`;
     if (status === 401) return new AuthError(message);
     if (status === 403) return new ForbiddenError(message);
-    if (status === 409) return new ConflictError(message);
+    // A 409 carrying `detail.reason == "cancel_requested"` is the server's
+    // authoritative cancellation verdict, not a protocol conflict. Every
+    // internal write starts returning it the moment the browser cancels, so
+    // the sidecar learns about cancellation here long before the
+    // lease/3 heartbeat cadence can deliver the flag.
+    if (status === 409) {
+      if (internalErrorReason(bodyText) === "cancel_requested") {
+        return new RunCancelledError(message);
+      }
+      return new ConflictError(message);
+    }
     if (status === 410) return new GoneError(message);
     return new InternalApiError(message, status, "http_error");
   }

@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { InternalClient } from "../src/client.js";
-import { AuthError, ConflictError, GoneError, TransientError } from "../src/errors.js";
+import { AuthError, ConflictError, GoneError, RunCancelledError, TransientError } from "../src/errors.js";
 import type { AgentConfig } from "../src/config.js";
 
 function testConfig(port: number): AgentConfig {
@@ -123,6 +123,16 @@ describe("InternalClient protocol behavior", () => {
         if (req.url === "/internal/agent/runs/r1/events/append") {
           if (auth === "Bearer gone-tok") return respond(410, { detail: "lease expired" });
           if (auth === "Bearer conflict-tok") return respond(409, { detail: "already settled" });
+          if (auth === "Bearer cancelled-tok") {
+            // 统一错误外壳：机器可读的取消裁决（agent_execution.fence_execution）。
+            return respond(409, {
+              error: {
+                code: "AGENT_RUN_NOT_RUNNING",
+                message: "Run 已请求取消",
+                detail: { reason: "cancel_requested" },
+              },
+            });
+          }
           return respond(200, {
             accepted: [
               { seq: 1, event_id: 101 },
@@ -138,6 +148,16 @@ describe("InternalClient protocol behavior", () => {
         }
         if (req.url === "/internal/agent/runs/r1/settle" && req.method === "POST") {
           return respond(200, { ok: true, run_id: 42, status: "succeeded", settled_at: "2026-08-26T00:00:00Z" });
+        }
+        if (req.url === "/internal/agent/runs/7/events/append") {
+          // 数字 run id：验证观察者从请求路径取到的是 run 而不是别的字段。
+          return respond(409, {
+            error: {
+              code: "AGENT_RUN_NOT_RUNNING",
+              message: "Run 已请求取消",
+              detail: { reason: "cancel_requested" },
+            },
+          });
         }
         if (req.url === "/api/health") return respond(200, { status: "ok" });
         respond(404, { detail: "nf" });
@@ -192,6 +212,38 @@ describe("InternalClient protocol behavior", () => {
         input: {},
       }),
     ).rejects.toBeInstanceOf(Error);
+  });
+
+  it("classifies a 409 carrying detail.reason=cancel_requested as cancellation, not conflict", async () => {
+    // The server answers this on every run-scoped write once the browser cancels.
+    // Reporting it as a generic conflict let the worker settle the run `failed`
+    // with SIDECAR_ERROR, replacing the user's own cancellation.
+    const client = new InternalClient(testConfig(port));
+    await expect(
+      client.appendEvents("r1", "cancelled-tok", [
+        { seq: 1, type: "run.started", public_payload: {} },
+      ]),
+    ).rejects.toBeInstanceOf(RunCancelledError);
+    // A 409 without that machine-readable reason stays an ordinary conflict.
+    await expect(
+      client.appendEvents("r1", "conflict-tok", [{ seq: 1, type: "run.started", public_payload: {} }]),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("notifies the cancel observer for the run named in the request path", async () => {
+    const seen: string[] = [];
+    const client = new InternalClient(testConfig(port));
+    client.onRunCancelled = (runId) => seen.push(runId);
+    await expect(client.appendEvents("7", "cancelled-tok", [])).rejects.toBeInstanceOf(
+      RunCancelledError,
+    );
+    expect(seen).toEqual(["7"]);
+    // A plain conflict must not fire the observer.
+    seen.length = 0;
+    await expect(client.appendEvents("r1", "conflict-tok", [])).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    expect(seen).toEqual([]);
   });
 
   it("retries transient network failures and succeeds", async () => {

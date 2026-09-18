@@ -4,9 +4,10 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.models.agent import AgentJob, AgentMessage, AgentRunEvent
+from app.models.agent import AgentJob, AgentMessage, AgentRun, AgentRunEvent
 from app.services import agent_events, agent_queue
 from app.services.agent_events import EventEntry
+from app.services.agent_tokens import issue_service_token
 from conftest import create_agent_fixture, create_agent_message, create_agent_session
 
 
@@ -142,6 +143,43 @@ def test_run_started_promotes_leased_to_running(db_session):
             db_session, queued_run, [EventEntry(seq=1, type="run.started", public_payload={})]
         )
     assert _error(exc_info.value)["code"] == "AGENT_RUN_NOT_RUNNING"
+
+
+def test_cancel_requested_rejection_is_machine_readable(internal_client, db_session):
+    """取消裁决必须带 detail.reason=cancel_requested（真实 internal 端点）。
+
+    sidecar 靠这个结构化原因把「服务端已裁决取消」与普通 409 协议冲突分开；
+    只看状态码或 message 文本会让在途 append 的 409 被当成冲突，进而自造
+    failed(SIDECAR_ERROR) 覆盖取消终态（F 受控验收 A6-1）。
+    """
+    user, space = create_agent_fixture(db_session, name="ev-cancel")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    db_session.commit()
+
+    lease = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"kind": "assistant", "leased_by": "sc"},
+        headers={"Authorization": f"Bearer {issue_service_token()}"},
+    )
+    assert lease.status_code == 200, lease.text
+    run_id = lease.json()["run_id"]
+    run_token = lease.json()["run_token"]
+    db_session.expire_all()
+    run = db_session.get(AgentRun, run_id)
+    assert run is not None
+    run.cancel_requested = True
+    db_session.commit()
+
+    response = internal_client.post(
+        f"/internal/agent/runs/{run_id}/events/append",
+        json={"events": [{"seq": 1, "type": "run.started", "public_payload": {}}]},
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "AGENT_RUN_NOT_RUNNING"
+    assert error["detail"] == {"reason": "cancel_requested"}
 
 
 # ---- 09-18 P0-2: 临时正文显示事件（assistant.text_delta / text_reset）----
