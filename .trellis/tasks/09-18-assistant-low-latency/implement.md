@@ -71,28 +71,30 @@
 
 ### 🟡 P1 - 近期执行（中成本 + 中高收益）
 
-#### P1-1: 稳定 prompt cache key 💾
+#### P1-1: 稳定 prompt cache key 💾 ✅ 已完成（2026-09-18，待部署）
 
-**现状**：每 run 新建 `SessionManager.inMemory()` → sessionId 是随机 uuidv7 → cache miss
+**现状（已修复）**：每 run 新建 `SessionManager.inMemory()` → sessionId 是随机 uuidv7 → `prompt_cache_key` 每次变化 → cache miss
 
-**收益**：同一 FG 会话的第 2+ 次 run，TTFT 节省 20-40%（保守估计 1-4s）
+**已核实的前提（不是假设）**：
+- 本部署 `agent_providers.api = openai-responses`（远端实际值），而 `openai-responses` 的 `buildParams` 在 `cacheRetention !== "none"` 时**总是**发 `prompt_cache_key`（那个 `api.openai.com` 门控属于 `openai-completions`，不是生产路径）。已用真实 `streamSimple` + 假 fetch 捕获请求体验证：key = 传入的 sessionId。
+- SDK 链路：`sdk.js` 把 `sessionManager.getSessionId()` 放进 stream options → 适配器 `clampOpenAIPromptCacheKey(options.sessionId)`（上限 64 字符）。
+- 同一上游同模型在本地 Pi 下有 72%（261/359 行）cacheRead>0，说明上游确实有缓存能力，不是无效优化。
 
-**技术路径**：
+**实际实现（与草案不同）**：
 ```typescript
-// agent/src/session.ts buildRunSession
-const piSessionId = `fg-${agentSession.id}` // 用 FG session.id 作稳定 key
-const sessionManager = new SessionManager(
-  agentDir,
-  '', // 无 sessionFile
-  piSessionId, // 传入稳定 sessionId
-  false,
-  settingsOptions
-)
+const sessionManager = SessionManager.inMemory(agentDir, {
+  id: `fg-${projection.account_id}-${projection.session_id}`,
+});
 ```
+- 草案的 `new SessionManager(agentDir, "", piSessionId, false, settingsOptions)` 已废弃：那个 4 参位置签名不对应当前 SDK（实际是 `(cwd, sessionDir, sessionFile, persist, newSessionOptions, preloadedFileEntries)`），改用 `inMemory` 的 options 重载。
+- **加了 account_id**（草案只有 session.id）：上游缓存按 provider 账号隔离，同一部署下的两个 FG 账号不能互相污染对方的会话分区。
+- 只影响 cache key（压缩读的是 entries，不是 id），不改其他会话行为。
 
-**风险**：需验证 liu-dada 是否真的支持 prompt_cache（实测 Pi 有 90%+ cache hit）
+**收益**：同一 FG 会话的第 2+ 次 run 可复用前缀（估计 TTFT 省 20-40%）。**尚未实测**，需真实同会话连续两次 run 的 usage 对照。
 
-**成本**：小（传参 + 验证）
+**回归**：`agent/test/session-cache-key.test.ts`（3 个，已反向验证：去掉修复后「stable」用例失败）。agent 163 tests 全通过。
+
+**成本**：小（已改完）
 
 **归属**：09-18（本任务）
 
@@ -187,7 +189,7 @@ cd ../backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .v
 
 每项优化各自独立可回退：
 - P0-1：配置项，回退环境变量或代码
-- P0-2：事件类型，旧客户端忽略未知事件；回退需同时回退前后端
+- P0-2：事件类型，旧客户端忽略未知事件；**回退顺序为前端→sidecar→后端**（不可倒：后端对未注册事件类型返回 422，会让整批 append 失败）
 - P1-1：session 构造参数，回退后恢复随机 ID
 - P2-1/P2-2：代码逻辑，回退不影响外部合同
 

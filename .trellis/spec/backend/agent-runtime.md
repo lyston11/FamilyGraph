@@ -54,11 +54,11 @@
 **次级因素**：
 1. **请求层重试放大上游不稳定**：`providerStreamMaxRetries=5`，实测尾部 11.6-15.5s 全是退避（Pi CLI 请求层 0 次重试）。09-17 E 已建立分层分类与 `retry-after-ms` 退避上限；预算数值仍待 E-R5 批准。
 2. **单 worker 串行 + 2 秒空闲轮询**：实测排队 0.94s-11.05s。b067079 已改为 250ms + 去掉完成后睡眠，**已于 2026-09-18 部署到远端 backend 与 agent sidecar**（真实排队改善仍需样本）。
-3. **prompt cache key 不稳定**：每 run 新建 `SessionManager.inMemory()` → sessionId 随机 → cache miss（Pi 有 90%+ cache hit）
+3. **prompt cache key 不稳定**（**已修复 2026-09-18**）：每 run 新建 `SessionManager.inMemory()` → sessionId 随机 → `prompt_cache_key` 每 run 变化 → cache miss（同上游同模型在 Pi 下有 72% 行 cacheRead>0）。已核实生产 `api=openai-responses`，该适配器在 `cacheRetention !== "none"` 时总是发 `prompt_cache_key`（`api.openai.com` 门控只属于 `openai-completions`）。现固定为 `fg-${account_id}-${session_id}`：跨 run 稳定、跨会话/跨账号隔离。**真实 TTFT 收益尚未实测**。
 4. **per-chunk DB 事务**：每个 SSE chunk 都 `rollback + get(AgentRun)`（~200-500ms）
 5. **httpx client 每次 TLS 握手**：每请求新建 `AsyncClient`（~100-500ms）
 
-**已实施**：P0-2 增量显示（`assistant.text_delta`/`assistant.text_reset`，见 §4「增量显示合同」）——直接消除「正文早已到达却不可见」的 10-30s 空白。
+**已实施**：P0-2 增量显示（`assistant.text_delta`/`assistant.text_reset`，见 §4「增量显示合同」）——直接消除「正文早已到达却不可见」的 10-30s 空白；P1-1 稳定 cache key（见上）。
 
 **优化策略**：详见 `.trellis/tasks/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
 
