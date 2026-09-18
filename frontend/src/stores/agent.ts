@@ -490,6 +490,13 @@ export const useAgentStore = defineStore('agent', () => {
     if (partition.run === null || partition.run.terminal) return
     partition.run = { ...partition.run, status, terminal: true }
     partition.streamLost = false
+    // 终态到达：临时正文进入终态展示（09-18 design「保留已显示的安全部分并标终态」）。
+    // 只去掉 provisional 标记——正文保留（那是用户已经看到的内容，且不是完成答案，
+    // 不进历史/引用）；否则 MessageList 会一直渲染「生成中…」，取消后看起来仍在生成。
+    // 与 text_reset 的区别保持：reset 是「丢弃」（隐藏），终态是「保留但结束」。
+    for (const message of partition.messages) {
+      if (message.provisional === true) message.provisional = false
+    }
     if (partition.activeSessionId !== null) forgetActiveRunId(partition.activeSessionId)
     if (status === 'failed') {
       partition.error = {
