@@ -35,6 +35,27 @@ export class ConflictError extends InternalApiError {
   }
 }
 
+/**
+ * 409 whose body carries `detail.reason == "cancel_requested"`: the server has
+ * already adjudicated this run as cancelled.
+ *
+ * This is NOT a protocol conflict to report as a sidecar failure. The run is
+ * still `running` in the DB (cancel_requested does not change the status), so
+ * every in-flight internal write starts returning 409 the moment the browser
+ * cancels — long before the lease/3 heartbeat cadence can observe the flag.
+ * Treating it as an ordinary conflict let the catch-all settle the run `failed`
+ * with `SIDECAR_ERROR`, overwriting the server's cancelled verdict and showing
+ * the user "助手服务暂时不可用" instead of "已取消".
+ *
+ * `agent_queue.request_cancel` keeps a sidecar `failed` as-is, so the only
+ * correct behaviour is to stop issuing work and never settle.
+ */
+export class RunCancelledError extends InternalApiError {
+  constructor(message: string) {
+    super(message, 409, "run_cancelled");
+  }
+}
+
 export class GoneError extends InternalApiError {
   /** 410 — lease lost / job reaped; worker must drop the run immediately. */
   constructor(message: string) {

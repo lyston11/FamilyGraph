@@ -15,6 +15,7 @@
 
 import type { InternalClient, LeasedJob } from "./client.js";
 import type { AgentConfig } from "./config.js";
+import { RunCancelledError } from "./errors.js";
 import { redactErrorText } from "./redact.js";
 import { RunEventBuffer, extractText, type FgEvent } from "./events.js";
 import type { Logger } from "./logger.js";
@@ -56,6 +57,13 @@ export class SidecarWorker {
     this.config = deps.config;
     this.logger = deps.logger;
     this.sessionFactory = deps.sessionFactory ?? buildRunSession;
+    // Cancellation must not wait for the heartbeat cadence. The server answers
+    // `cancel_requested` on *any* run-scoped request once the browser cancels
+    // (append/tools/provider all fence on it), so observe it at the transport
+    // and converge immediately. With the shipped 60s lease the heartbeat is
+    // 20s apart — far longer than the in-flight append that discovers the
+    // cancel — and the missed signal used to surface as a bogus SIDECAR_ERROR.
+    this.client.onRunCancelled = (runId) => this.markCancelRequested(runId);
     // Monotonic: process.hrtime.bigint() cannot jump backwards on clock changes,
     // unlike Date.now(). Duration is what matters here, not wall-clock time.
     this.now = deps.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
@@ -137,6 +145,12 @@ export class SidecarWorker {
           }
         })
         .catch((error) => {
+          // A cancellation verdict is not a lease loss: converge as cancelled so
+          // the run is never settled failed by the sidecar.
+          if (error instanceof RunCancelledError) {
+            this.markCancelRequested(job.run_id);
+            return;
+          }
           const status =
             error instanceof Error && "status" in error
               ? (error as { status?: number }).status
@@ -371,6 +385,16 @@ export class SidecarWorker {
       // intentionally rejects the in-flight Pi/internal request; do not turn
       // that expected rejection into a sidecar ``failed`` settle that could
       // race the server's cancelled terminal state.
+      //
+      // ``RunCancelledError`` is the server's explicit cancellation verdict on
+      // an internal write (409 + detail.reason=cancel_requested). It reaches
+      // here before the heartbeat can, so it must be honoured on its own —
+      // relying only on the flags let the catch-all below settle the run
+      // ``failed`` with SIDECAR_ERROR, hiding the user's own cancellation.
+      if (error instanceof RunCancelledError) {
+        this.markCancelRequested(job.run_id);
+        return;
+      }
       if (active.cancelRequested || active.leaseLost) return;
       const rawErrorCode =
         error instanceof Error && "errorCode" in error

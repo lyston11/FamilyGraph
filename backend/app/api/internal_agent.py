@@ -407,8 +407,11 @@ async def proxy_provider_chat_completions(
     except provider_proxy.ProviderProxyError as exc:
         db.commit()  # 审计先提交（拒绝路径惯例）
         # 安全重试提示（例如永久错误的 x-should-retry:false）必须真的下发，
-        # 否则 sidecar 会按 5xx 继续重试。
-        raise_api_error(exc.status_code, exc.code, exc.message, headers=exc.headers)
+        # 否则 sidecar 会按 5xx 继续重试。机器可读 detail（如 cancel_requested）
+        # 同理：sidecar 靠它区分「服务端已裁决取消」与普通协议冲突。
+        raise_api_error(
+            exc.status_code, exc.code, exc.message, detail=exc.detail, headers=exc.headers
+        )
     media_type = upstream.headers.get("content-type", "application/json")
     return StreamingResponse(
         provider_proxy.passthrough_with_audit(

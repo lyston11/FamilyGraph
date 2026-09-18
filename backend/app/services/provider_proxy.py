@@ -89,6 +89,7 @@ class ProviderProxyError(Exception):
         code: str,
         message: str,
         headers: dict[str, str] | None = None,
+        detail: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -96,6 +97,8 @@ class ProviderProxyError(Exception):
         self.message = message
         # 透给 sidecar 的安全重试提示（例如永久错误携带 x-should-retry:false）。
         self.headers = headers
+        # 机器可读拒绝原因（如 cancel_requested）：sidecar 不得依赖 message 文本。
+        self.detail = detail
 
 
 def provider_proxy_base_url(run_id: int) -> str:
@@ -212,7 +215,9 @@ def _require_executable_run(run: AgentRun) -> None:
         # Cancellation is server-authoritative.  A sidecar heartbeat may race
         # with a new provider request, so the gateway must reject it even while
         # the FSM still says leased/running.
-        raise ProviderProxyError(409, "AGENT_RUN_NOT_RUNNING", "Run 已请求取消")
+        raise ProviderProxyError(
+            409, "AGENT_RUN_NOT_RUNNING", "Run 已请求取消", detail={"reason": "cancel_requested"}
+        )
 
 
 def _refresh_run_gate(db: Session, run: AgentRun | int) -> AgentRun:
@@ -271,7 +276,12 @@ def _admit_upstream_request(
     )
     if result.rowcount != 1:
         db.rollback()
-        raise ProviderProxyError(409, "AGENT_RUN_NOT_RUNNING", "Run 已停止或请求取消")
+        raise ProviderProxyError(
+            409,
+            "AGENT_RUN_NOT_RUNNING",
+            "Run 已停止或请求取消",
+            detail={"reason": "cancel_requested"},
+        )
     db.commit()
     fresh = db.get(AgentRun, run_id)
     if fresh is None:  # pragma: no cover - row was matched by UPDATE
