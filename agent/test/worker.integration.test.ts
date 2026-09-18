@@ -68,6 +68,13 @@ interface MockState {
   }>;
   cancelOnNextHeartbeat: boolean;
   heartbeatStatus?: number;
+  /**
+   * Reject every events/append with the server's cancellation verdict
+   * (409 + detail.reason=cancel_requested), as FastAPI does once the browser
+   * has cancelled. Deliberately independent of the heartbeat: this is the
+   * signal that arrives first in production.
+   */
+  cancelAppends: boolean;
 }
 
 const state: MockState = {
@@ -76,6 +83,7 @@ const state: MockState = {
   toolCalls: [],
   settles: [],
   cancelOnNextHeartbeat: false,
+  cancelAppends: false,
 };
 
 let idCounter = 0;
@@ -235,6 +243,18 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
         return respond(200, contextProjection(job));
       }
       if (req.method === "POST" && url.endsWith("/events/append")) {
+        if (state.cancelAppends) {
+          // Authoritative cancellation verdict from fence_execution: the run is
+          // still `running` server-side, so only this reason distinguishes
+          // "cancelled" from a real protocol conflict.
+          return respond(409, {
+            error: {
+              code: "AGENT_RUN_NOT_RUNNING",
+              message: "Run 已请求取消",
+              detail: { reason: "cancel_requested" },
+            },
+          });
+        }
         const body = (await readBody(req)) as { events?: Array<FgWireEvent> };
         const seen = state.eventsByRun.get(String(job.run_id)) ?? [];
         const accepted: Array<{ seq: number; event_id: number }> = [];
@@ -353,6 +373,7 @@ function resetState(): void {
   state.toolCalls.length = 0;
   state.settles.length = 0;
   state.cancelOnNextHeartbeat = false;
+  state.cancelAppends = false;
   state.heartbeatStatus = undefined;
   state.eventsByRun.clear();
 }
@@ -1087,6 +1108,30 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(events.map((e) => e.type)).toEqual(["message.user_added", "run.failed"]);
     expect(events[1]!.public_payload).toMatchObject({ error_code: "PROVIDER_DENIED_NO_LOCAL" });
   }, 30000);
+
+  it("converges as cancelled when an in-flight append carries the server cancel verdict", async () => {
+    // Production ordering: the browser cancels, the NEXT internal write is
+    // rejected with 409 + detail.reason=cancel_requested, and the lease/3
+    // heartbeat (20s at the shipped 60s lease) has not fired yet. Treating that
+    // 409 as a plain conflict settled the run `failed` with SIDECAR_ERROR,
+    // overwriting the server's cancelled verdict and telling the user the
+    // assistant had broken down.
+    resetState();
+    enqueueJob({ allowlist: ["familygraph.echo"], messages: historyMessages() });
+    state.cancelAppends = true;
+    const { worker } = makeWorker(
+      (cfg) => {
+        // Keep the heartbeat far away so only the append can report the cancel.
+        cfg.defaultLeaseMs = 60_000;
+      },
+      await buildSessionFactory([textTurn("never committed")]),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+    // The server owns the cancelled terminal state; the sidecar must not settle
+    // failed on top of it. A failed settle here is the regression.
+    expect(state.settles).toHaveLength(0);
+  }, 10000);
 
   it.each([false, true])(
     "propagates server cancellation and skips settle (late success=%s)",

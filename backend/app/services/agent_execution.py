@@ -105,7 +105,15 @@ def fence_execution(
     if run.status not in allowed_statuses or job.status not in allowed_statuses:
         raise_api_error(409, AGENT_RUN_NOT_RUNNING, "Run/Job 不在可执行状态")
     if not allow_cancel_requested and (run.cancel_requested or job.cancel_requested):
-        raise_api_error(409, AGENT_RUN_NOT_RUNNING, "Run 已请求取消")
+        # 机器可读的取消标记：调用方（sidecar）必须按「服务端已裁决取消」收敛，
+        # 而不是把它当作普通 409 冲突自造 failed 终态。与 agent_tools 的
+        # cancel_requested 分支同形，避免依赖 message 文本匹配。
+        raise_api_error(
+            409,
+            AGENT_RUN_NOT_RUNNING,
+            "Run 已请求取消",
+            detail={"reason": "cancel_requested"},
+        )
     now = utcnow()
     if (
         run.lease_expires_at is None
