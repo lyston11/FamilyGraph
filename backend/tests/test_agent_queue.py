@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent
+from app.models.audit_log import AuditLog
 from app.services import agent_queue
 from app.utils import timeutil
 from conftest import create_agent_fixture, create_agent_message, create_agent_session
@@ -215,6 +216,57 @@ def test_cancel_from_queued_writes_event(db_session):
         .order_by(AgentRunEvent.seq.desc())
     )
     assert event is not None and event.type == "run.cancelled"
+
+
+def test_reaper_converges_a_cancelled_run_without_waiting_for_lease_expiry(db_session):
+    """取消是终态意图：不等 lease 自然过期就收敛。
+
+    在途 sidecar 看到取消裁决后就不再写入也不结算（见 worker 的取消语义），
+    若只靠 lease 过期收敛，浏览器会把取消后的等待一直转到租约结束（实测
+    304s，而 AGENT_LEASE_TTL_SECONDS 默认 300）。
+    """
+    user, space = create_agent_fixture(db_session, name="reap-cancel")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None and grant.job.status == "leased"
+    # 租约仍然健康（远未到期），但浏览器已请求取消。
+    assert grant.job.lease_expires_at is not None
+    assert grant.job.lease_expires_at > timeutil.utcnow()
+
+    agent_queue.request_cancel(db_session, grant.run, actor_id=None)
+    db_session.commit()
+
+    assert agent_queue.reaper_pass(db_session) == 1
+    db_session.expire_all()
+    run = db_session.get(AgentRun, grant.run.id)
+    job = db_session.get(AgentJob, grant.job.id)
+    assert run is not None and run.status == "cancelled"
+    assert job is not None and job.status == "cancelled"
+    assert run.error_code is None
+    terminal = db_session.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == run.id)
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert terminal is not None and terminal.type == "run.cancelled"
+    audit_row = db_session.scalar(select(AuditLog).where(AuditLog.action == "agent_lease_expired"))
+    assert audit_row is not None
+    assert audit_row.detail["reason"] == "cancel_requested"
+
+
+def test_reaper_still_waits_for_expiry_when_not_cancelled(db_session):
+    """非取消的活跃租约不得被 reaper 提前回收（防止上面放宽条件后误伤）。"""
+    user, space = create_agent_fixture(db_session, name="reap-live")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+
+    assert agent_queue.reaper_pass(db_session) == 0
+    db_session.expire_all()
+    run = db_session.get(AgentRun, grant.run.id)
+    assert run is not None and run.status == "leased"
 
 
 def test_prune_finished_removes_only_old_terminal_runs(db_session):

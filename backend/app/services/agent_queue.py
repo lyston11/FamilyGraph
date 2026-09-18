@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import config
@@ -524,6 +524,12 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
     """回收过期 lease：attempt 未耗尽回队（可重试），耗尽判 expired 终态。
 
     返回处理的 job 数；每次处理写安全审计（可观测崩溃/超时恢复语义）。
+
+    ``cancel_requested`` 是服务端权威的取消意图，不等 lease 自然过期：
+    在途 sidecar 看到取消裁决后就不再写入也不结算（F 的 A6 语义），所以
+    只靠「等 lease 过期」会让浏览器把取消后的等待一直转到租约结束
+    （实测 304s，而 ``AGENT_LEASE_TTL_SECONDS`` 默认 300）。取消是终态意图，
+    与租约是否过期无关，因此这里直接按终态收敛。
     """
     moment = now or timeutil.utcnow()
 
@@ -532,15 +538,20 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
             db.scalars(
                 select(AgentJob).where(
                     AgentJob.status.in_(("leased", "running")),
-                    AgentJob.lease_expires_at.is_not(None),
-                    AgentJob.lease_expires_at < moment,
+                    or_(
+                        AgentJob.cancel_requested.is_(True),
+                        and_(
+                            AgentJob.lease_expires_at.is_not(None),
+                            AgentJob.lease_expires_at < moment,
+                        ),
+                    ),
                 )
             )
         )
         for job in stale:
             exhausted = job.attempt >= job.max_attempts
             if job.cancel_requested:
-                # 已请求取消的执行不再回队重试：lease 过期即按取消终态收敛（结果丢弃）
+                # 已请求取消的执行不再回队重试：直接按取消终态收敛（结果丢弃）
                 outcome = "cancelled"
             else:
                 outcome = "expired" if exhausted else "queued"
@@ -575,7 +586,12 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
                 action="agent_lease_expired",
                 actor_id=None,
                 target_id=job.run_id,
-                detail={"job_id": job.id, "attempt": job.attempt, "outcome": outcome},
+                detail={
+                    "job_id": job.id,
+                    "attempt": job.attempt,
+                    "outcome": outcome,
+                    "reason": "cancel_requested" if job.cancel_requested else "lease_expired",
+                },
             )
         return len(stale)
 
