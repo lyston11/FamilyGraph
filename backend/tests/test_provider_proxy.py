@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -56,6 +57,8 @@ class _FakeAsyncClient:
     last: dict[str, Any] | None = None
     response: _FakeUpstream
     raise_on_send: Exception | None = None
+    # 等待响应头阶段的延迟：用于验证「首响应期限」不会让请求无限挂起。
+    send_delay_seconds: float = 0.0
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         _FakeAsyncClient.last_request = None
@@ -64,6 +67,8 @@ class _FakeAsyncClient:
         return {"method": method, "url": url, "content": content, "headers": dict(headers or {})}
 
     async def send(self, request: Any, *, stream: bool = False):
+        if _FakeAsyncClient.send_delay_seconds:
+            await asyncio.sleep(_FakeAsyncClient.send_delay_seconds)
         if _FakeAsyncClient.raise_on_send is not None:
             raise _FakeAsyncClient.raise_on_send
         _FakeAsyncClient.last = request
@@ -82,6 +87,7 @@ def _install_fake(
     _FakeAsyncClient.response = _FakeUpstream(chunks, status_code, **upstream_kwargs)
     _FakeAsyncClient.raise_on_send = None
     _FakeAsyncClient.last = None
+    _FakeAsyncClient.send_delay_seconds = 0.0
     monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _FakeAsyncClient)
 
 
@@ -396,6 +402,105 @@ def test_proxy_maps_network_failure_to_502(internal_client, db_session, monkeypa
     assert "boom" not in response.text
 
 
+def test_proxy_bounds_time_to_response_headers(internal_client, db_session, monkeypatch):
+    """E-AC3/低延迟：上游迟迟不返回响应头时必须按期收敛，而不是无限挂起。
+
+    实测线上出现过「单次 503 拖 29.8s 才返回」（bytes=0），把整轮从 ~20s 拉到 ~53s。
+    期限只约束**等待响应头**这一阶段；响应头之后的流式生成不受影响，避免误杀长回答。
+    """
+    monkeypatch.setattr(provider_proxy.config, "AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS", 0.05)
+    _install_fake(monkeypatch, [b"{}"])
+    _FakeAsyncClient.send_delay_seconds = 5.0
+    run_id, token = _leased_run(internal_client, db_session, "proxy-header-timeout")
+
+    started = time.monotonic()
+    response = _provider_call(internal_client, run_id, token)
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "AGENT_PROVIDER_PROXY_UNAVAILABLE"
+    # 必须在期限附近收敛，而不是等满上游的 5s。
+    assert elapsed < 2.0, f"header deadline not enforced: {elapsed:.3f}s"
+
+    rows = _egress_rows(db_session, run_id)
+    assert len(rows) == 1, "每次出站尝试恰好一条终态审计"
+    detail = rows[0].detail
+    assert detail["status"] == "failed"
+    assert detail["upstream_status"] is None
+    assert detail["error_class"] == "transport_timeout"
+    assert detail["retryable"] is True
+    # 请求已发出（连接已建立），不得声称「未被上游处理」。
+    assert detail["sent"] is True
+    # gateway-side 首响应计时：让期限阈值有实测依据，而不是拍一个数。
+    assert detail["header_ms"] >= 40, detail["header_ms"]
+
+
+def test_proxy_bounds_client_retry_backoff_for_transient_failures(
+    internal_client, db_session, monkeypatch
+):
+    """E-R5 选定策略：暂时错误给出**有界**的重试提示，避免请求层退避累加成十几秒。
+
+    实测 run 2 turn 2：5 次快速 502 本身只约 4.5s，但请求层退避（含成功前最后一次）
+    约 11.6–15.5s，把整轮拉到 33s。**次数不变**（可用性证据显示 5 次重试确实被用满：
+    2 个 run、11 次出站尝试、7 次失败，最终都靠重试成功），只把退避压到有界值。
+    """
+    _install_fake(monkeypatch, [b'{"error": "busy"}'], status_code=502)
+    run_id, token = _leased_run(internal_client, db_session, "proxy-backoff-bound")
+
+    response = _provider_call(internal_client, run_id, token)
+    assert response.status_code == 502
+    # pi-ai 优先读 retry-after-ms，因此该头直接决定请求层退避，而不是 0.5/1/2/4/8s。
+    # 取默认退避的第一级（500ms）：对少次数重试不劣于默认，对用满预算的轮次大幅缩短。
+    assert response.headers.get("retry-after-ms") == "500"
+    # 仍是可重试形状：不得把有界退避误写成「停止重试」。
+    assert response.headers.get("x-should-retry") is None
+
+
+def test_proxy_does_not_shorten_upstream_rate_limit_retry(internal_client, db_session, monkeypatch):
+    """429 是上游自己的限流信号：不得换成我们的一秒提示，否则会变成每秒捶打。"""
+    _install_fake(monkeypatch, [b'{"error": "rate limited"}'], status_code=429)
+    run_id, token = _leased_run(internal_client, db_session, "proxy-rate-limit")
+
+    response = _provider_call(internal_client, run_id, token)
+    assert response.status_code == 502
+    assert response.headers.get("retry-after-ms") is None
+
+
+def test_proxy_audits_gateway_side_header_timing(internal_client, db_session, monkeypatch):
+    """成功路径也要落 gateway-side 首响应耗时（E-R3：期限需有实测依据）。
+
+    这是唯一能回答「上游多久才开始响应」的观测点；sidecar 的 `first_text_ms` 是
+    正文增量时间，不能当响应头时间用。
+    """
+    _install_fake(monkeypatch, [b'{"ok": true}'])
+    _FakeAsyncClient.send_delay_seconds = 0.05
+    run_id, token = _leased_run(internal_client, db_session, "proxy-header-timing")
+
+    response = _provider_call(internal_client, run_id, token)
+    assert response.status_code == 200
+
+    rows = _egress_rows(db_session, run_id)
+    assert len(rows) == 1
+    detail = rows[0].detail
+    assert detail["status"] == "succeeded"
+    assert detail["header_ms"] >= 40, detail["header_ms"]
+    # 仍是安全字段：无上游原文、无 prompt、无凭据。
+    assert "sk-real-secret-value" not in rows[0].detail_json
+
+
+def test_proxy_does_not_bound_streaming_phase(internal_client, db_session, monkeypatch):
+    """响应头之后的流式生成不受首响应期限约束（否则会误杀长回答）。"""
+    monkeypatch.setattr(provider_proxy.config, "AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS", 0.05)
+    _install_fake(monkeypatch, [b'{"a": ', b"1}"])
+    run_id, token = _leased_run(internal_client, db_session, "proxy-stream-unbounded")
+
+    response = _provider_call(internal_client, run_id, token)
+    assert response.status_code == 200
+    assert response.content == b'{"a": 1}'
+    rows = _egress_rows(db_session, run_id)
+    assert rows[0].detail["status"] == "succeeded"
+
+
 def test_proxy_rejects_empty_body_before_upstream(internal_client, db_session, monkeypatch):
     """空 body fail-closed，不能创建上游 client 或发出请求。"""
     from app.services import agent_queue
@@ -645,6 +750,8 @@ def test_proxy_marks_permanent_upstream_rejection_non_retryable(
     assert response.json()["error"]["code"] == "AGENT_PROVIDER_UPSTREAM_REJECTED"
     # 显式重试提示：请求层即便面对 5xx 形状也会立即停止。
     assert response.headers.get("x-should-retry") == "false"
+    # 永久错误不得携带重试延迟提示（那不是「稍后重试」，是重发也不会成功）。
+    assert response.headers.get("retry-after-ms") is None
     # 上游错误体（含 secret 形文本）绝不透传。
     assert b"sk-real-secret-value" not in response.content
 

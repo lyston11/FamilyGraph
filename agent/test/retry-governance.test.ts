@@ -120,6 +120,25 @@ function transientFailure(): GatewayAnswer {
   };
 }
 
+/**
+ * Mirrors the gateway's bounded-backoff hint for transient failures.
+ *
+ * The gateway answers a transient upstream error with `retry-after-ms` so the
+ * request layer does not accumulate `min(0.5·2^i, 8)s` (15.5s across 5
+ * retries). Retry **count** is deliberately unchanged: production evidence
+ * (2 runs / 11 egress attempts / 7 failures, both runs succeeding) shows the
+ * full request budget does get consumed, so lowering it would fail those runs.
+ */
+function transientFailureWithBoundedBackoff(retryAfterMs: number): GatewayAnswer {
+  return {
+    status: 502,
+    headers: { "content-type": "application/json", "retry-after-ms": String(retryAfterMs) },
+    body: JSON.stringify({
+      error: { code: "AGENT_PROVIDER_PROXY_UNAVAILABLE", message: "Provider 返回错误" },
+    }),
+  };
+}
+
 function successAnswer(): GatewayAnswer {
   return {
     status: 200,
@@ -324,6 +343,37 @@ describe("assistant retry governance against the real SDK", () => {
     expect(gateway.requests).toBe(perTurn * turns);
     const retryStarts = events.filter((event) => event.type === "auto_retry_start");
     expect(retryStarts).toHaveLength(SESSION_RETRIES);
+  });
+
+  it("bounds request-layer backoff via retry-after-ms without changing the retry count", async () => {
+    // Production evidence (run 2 turn 2): 5 fast 502s cost only ~4.5s of real
+    // upstream time, but exponential backoff added ~11.6-15.5s and pushed the
+    // turn to 33s. The gateway now pins a short bounded delay instead. This
+    // test proves the hint actually governs layer 1 (pi-ai prefers
+    // `retry-after-ms` over its exponential schedule) and that the retry
+    // COUNT is untouched — the availability evidence says the budget is used.
+    const boundedMs = 40;
+    let attempt = 0;
+    const gateway = await startGateway(() => {
+      attempt += 1;
+      return attempt <= REQUEST_RETRIES
+        ? transientFailureWithBoundedBackoff(boundedMs)
+        : successAnswer();
+    });
+    gateways.push(gateway);
+    const { session } = await build(gateway);
+
+    const started = Date.now();
+    await session.prompt("Where is the blue tin?", { source: "rpc", expandPromptTemplates: false });
+    const elapsedMs = Date.now() - started;
+
+    // Count unchanged: the failure is absorbed inside one turn.
+    expect(gateway.requests).toBe(REQUEST_RETRIES + 1);
+    // Backoff is the gateway's hint, not the SDK's exponential default. The
+    // default schedule for these two retries alone is 0.5s + 1.0s = 1.5s of
+    // pure sleep, so a 1000ms ceiling separates the two cleanly while leaving
+    // room for session-setup overhead (~400ms observed).
+    expect(elapsedMs).toBeLessThan(1000);
   });
 
   it("aborts both layers when the run is cancelled during backoff", async () => {
