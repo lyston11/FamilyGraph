@@ -383,53 +383,95 @@ describe("producer stage timing", () => {
     expect(Object.keys(started ?? {})).toEqual(["seq", "type", "public_payload", "timing"]);
   });
 
-  it("reports SDK compaction as a sub-component of the turn it happened in", () => {
+  it("reports SDK compaction as a run-level stage, not a turn sub-component", () => {
+    // Real SDK ordering (pi-coding-agent 0.84.3, measured by F's A3-4): the
+    // post-run threshold check runs AFTER agent_end and before agent_settled,
+    // so the turn window (turn_start -> message_end) never contains it. The
+    // previous synthetic ordering (compaction inside the turn) does not occur.
     const time = clock(0);
     const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "agent_start" });
     buffer.onSessionEvent({ type: "turn_start" });
     time.advance(2_000);
-    // Summarization request inside the turn: counted in the turn AND reported
-    // separately, so the backend never reads model_turn as pure generation.
-    buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
-    time.advance(8_000);
-    buffer.onSessionEvent({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false });
-    time.advance(10_000);
     buffer.onSessionEvent({
       type: "message_end",
       message: { role: "assistant", content: [{ type: "text", text: "a" }], stopReason: "stop" },
     });
-    const answer = buffer.drain().find((event) => event.type === "message.assistant_added");
-    expect(answer?.timing).toEqual({
-      source: "sidecar-v1",
-      duration_ms: 20_000,
-      compaction_ms: 8_000,
+    buffer.onSessionEvent({ type: "turn_end" });
+    buffer.onSessionEvent({ type: "agent_end" });
+    // Post-run compaction, outside the turn.
+    buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
+    time.advance(8_000);
+    buffer.onSessionEvent({
+      type: "compaction_end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
     });
+    buffer.onSessionEvent({ type: "agent_settled" });
+
+    const events = buffer.drain();
+    const answer = events.find((event) => event.type === "message.assistant_added");
+    // model_turn stays pure generation: no compaction attached.
+    expect(answer?.timing).toEqual({ source: "sidecar-v1", duration_ms: 2_000 });
+    const compacted = events.find((event) => event.type === "run.compacted");
+    expect(compacted?.timing).toEqual({ source: "sidecar-v1", duration_ms: 8_000 });
+    // Still internal evidence only.
+    expect(compacted?.public_payload).toEqual({});
   });
 
-  it("does not attribute a previous turn's compaction to the next turn", () => {
+  it("sums every compaction span and emits nothing when there was none", () => {
     const time = clock(0);
     const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "agent_start" });
     buffer.onSessionEvent({ type: "turn_start" });
-    buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
-    time.advance(5_000);
-    buffer.onSessionEvent({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false });
     time.advance(1_000);
     buffer.onSessionEvent({
       type: "message_end",
       message: { role: "assistant", content: [{ type: "text", text: "a" }], stopReason: "stop" },
     });
     buffer.onSessionEvent({ type: "turn_end" });
-    // Turn 2 has no compaction: it must not inherit turn 1's 5s.
-    buffer.onSessionEvent({ type: "turn_start" });
-    time.advance(3_000);
+    buffer.onSessionEvent({ type: "agent_end" });
+    for (const ms of [2_000, 3_000]) {
+      buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
+      time.advance(ms);
+      buffer.onSessionEvent({
+        type: "compaction_end",
+        reason: "threshold",
+        aborted: false,
+        willRetry: false,
+      });
+    }
+    buffer.onSessionEvent({ type: "agent_settled" });
+    const compacted = buffer.drain().filter((event) => event.type === "run.compacted");
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0]?.timing?.duration_ms).toBe(5_000);
+
+    // No compaction -> no event at all (never a zero sample).
+    const clean = clock(0);
+    const noCompaction = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: clean.now });
+    noCompaction.onSessionEvent({ type: "agent_start" });
+    noCompaction.onSessionEvent({ type: "agent_settled" });
+    expect(noCompaction.drain().some((event) => event.type === "run.compacted")).toBe(false);
+  });
+
+  it("excludes the pre-prompt compaction from the run total", () => {
+    // The pre-prompt threshold check runs before agent_start and is part of
+    // getting the session ready, i.e. already inside the `prepare` stage.
+    // Counting it here would double-report it and inflate the wall clock.
+    const time = clock(0);
+    const buffer = new RunEventBuffer(1, undefined, { prepStartedAt: 0, now: time.now });
+    buffer.onSessionEvent({ type: "compaction_start", reason: "threshold" });
+    time.advance(5_000);
     buffer.onSessionEvent({
-      type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "b" }], stopReason: "stop" },
+      type: "compaction_end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
     });
-    const answers = buffer.drain().filter((event) => event.type === "message.assistant_added");
-    expect(answers).toHaveLength(2);
-    expect(answers[0]?.timing?.compaction_ms).toBe(5_000);
-    expect(answers[1]?.timing?.compaction_ms).toBeUndefined();
+    buffer.onSessionEvent({ type: "agent_start" });
+    buffer.onSessionEvent({ type: "agent_settled" });
+    expect(buffer.drain().some((event) => event.type === "run.compacted")).toBe(false);
   });
 });
 
