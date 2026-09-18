@@ -1,12 +1,14 @@
 /**
- * A-03 measurement: the gap between upstream assistant text deltas and the
+ * A-03 / 09-18 P0-2: the gap between upstream assistant text deltas and the
  * first *visible* assistant event, against the real Pi SDK, with no egress.
  *
- * The product contract is that `mapSessionEvent` publishes an assistant
- * message only at `message_end` (see spec/backend/agent-runtime.md §4). That
- * makes "first visible text" strictly later than "first upstream text delta".
- * This test measures that gap so the claim is executable evidence rather than
- * an assumption, and it fails if the delta is ever silently published.
+ * The product contract (spec/backend/agent-runtime.md §4) is that live prose is
+ * published as provisional `assistant.text_delta` fragments while the turn
+ * streams, and that `message_end` still publishes the authoritative
+ * `message.assistant_added` whose text is the complete answer. This test makes
+ * both halves executable: it fails if deltas stop being published (the original
+ * 10-30s blank wait) or if the authoritative message stops carrying the full
+ * answer / starts duplicating the provisional text.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -135,7 +137,7 @@ describe("assistant text delta to first visible event", () => {
     expect(fetchBlocked).not.toHaveBeenCalled();
   });
 
-  it("publishes nothing until message_end, so first visible text trails the first delta", async () => {
+  it("publishes provisional prose as it streams, then the authoritative full text", async () => {
     const config = makeAgentConfig(1);
     const client = new InternalClient(config);
     const agentDir = mkdtempSync(join(tmpdir(), "fg-delta-gap-"));
@@ -154,11 +156,13 @@ describe("assistant text delta to first visible event", () => {
     type MappableEvent = Parameters<typeof mapSessionEvent>[0];
     const published: Array<{ type: string; at: number }> = [];
     const seen: string[] = [];
+    const buffer = new RunEventBuffer(1);
     bundle.session.subscribe((event: AgentSessionEvent) => {
       seen.push(event.type);
       for (const mapped of mapSessionEvent(event as unknown as MappableEvent)) {
         published.push({ type: mapped.type, at: Date.now() });
       }
+      buffer.onSessionEvent(event as unknown as MappableEvent);
     });
 
     await bundle.session.prompt("Where is the blue tin?");
@@ -168,19 +172,38 @@ describe("assistant text delta to first visible event", () => {
     const deltaSpan = deltaTimes[deltaTimes.length - 1]! - deltaTimes[0]!;
     expect(deltaSpan).toBeGreaterThanOrEqual(DELTA_INTERVAL_MS * (ANSWER_PARTS.length - 1));
 
-    // The SDK does surface streaming updates to subscribers...
+    // The SDK surfaces streaming updates, and the public mapping no longer
+    // discards them: the reader sees prose before the message completes.
     expect(seen).toContain("message_update");
-    // ...but the public mapping deliberately ignores them: no delta is ever
-    // published, so the user cannot see text before the message completes.
-    const assistantEvents = published.filter((item) => item.type === "message.assistant_added");
+    const events = buffer.drain();
+    const deltas = events.filter((event) => event.type === "assistant.text_delta");
+    expect(deltas.length).toBeGreaterThan(0);
+
+    // Provisional fragments concatenate to exactly the streamed answer — no
+    // duplication and no dropped text, because the buffer coalesces rather than
+    // rewriting.
+    const provisional = deltas
+      .map((event) => (event.public_payload as { delta: string }).delta)
+      .join("");
+    expect(provisional).toBe(ANSWER_PARTS.join(""));
+
+    // The authoritative message still arrives exactly once, carrying the full
+    // answer; the client replaces the provisional text with it rather than
+    // appending (so the two must not be summed by a consumer).
+    const assistantEvents = events.filter((event) => event.type === "message.assistant_added");
     expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents[0]!.public_payload).toEqual({
+      role: "assistant",
+      text: ANSWER_PARTS.join(""),
+    });
 
-    // The gap is the measured A-03 quantity: first visible text minus first delta.
-    const firstVisible = assistantEvents[0]!.at;
-    const gapMs = firstVisible - deltaTimes[0]!;
-    expect(gapMs).toBeGreaterThanOrEqual(DELTA_INTERVAL_MS * (ANSWER_PARTS.length - 1));
+    // Provisional prose precedes the authoritative message in stream order.
+    const seqOf = (type: string): number =>
+      events.find((event) => event.type === type)!.seq;
+    expect(seqOf("assistant.text_delta")).toBeLessThan(seqOf("message.assistant_added"));
 
-    // And the published body is the complete answer, not a partial prefix.
+    // The gap the A-03 baseline measured is now bounded by the coalescing
+    // window, not by the whole generation.
     const mapped = mapSessionEvent({
       type: "message_end",
       message: {

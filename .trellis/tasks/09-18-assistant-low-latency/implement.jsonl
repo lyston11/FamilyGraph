@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"助手 run/lease/internal 协议、事件注册表与 sidecar 拓扑边界"}
+{"file":".trellis/spec/backend/assistant-history-restoration.md","reason":"完整历史恢复与自动压缩不可因提速退化的合同"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端门禁与受影响范围验证要求"}
+{"file":".trellis/tasks/09-18-assistant-low-latency/research/latency-evidence-2026-09-18.md","reason":"线上实测分段与归因缺口；本任务实施顺序的依据"}

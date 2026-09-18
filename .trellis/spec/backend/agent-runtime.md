@@ -52,11 +52,13 @@
 - 对本地 Pi 约 33 个会话、1.2 万条消息的统计：同一 `liu-dada/gpt-5.6-sol` 模型的完整生成时长**中位数 = 11.47 秒**，低于 3 秒的比例仅 **0.8%**
 
 **次级因素**：
-1. **请求层重试放大上游不稳定**：`providerStreamMaxRetries=5`，实测尾部 11.6-15.5s 全是退避（Pi CLI 请求层 0 次重试）
-2. **单 worker 串行 + 2 秒空闲轮询**：实测排队 0.94s-11.05s（b067079 已改为 250ms 但远端未部署）
+1. **请求层重试放大上游不稳定**：`providerStreamMaxRetries=5`，实测尾部 11.6-15.5s 全是退避（Pi CLI 请求层 0 次重试）。09-17 E 已建立分层分类与 `retry-after-ms` 退避上限；预算数值仍待 E-R5 批准。
+2. **单 worker 串行 + 2 秒空闲轮询**：实测排队 0.94s-11.05s。b067079 已改为 250ms + 去掉完成后睡眠，**已于 2026-09-18 部署到远端 backend 与 agent sidecar**（真实排队改善仍需样本）。
 3. **prompt cache key 不稳定**：每 run 新建 `SessionManager.inMemory()` → sessionId 随机 → cache miss（Pi 有 90%+ cache hit）
 4. **per-chunk DB 事务**：每个 SSE chunk 都 `rollback + get(AgentRun)`（~200-500ms）
 5. **httpx client 每次 TLS 握手**：每请求新建 `AsyncClient`（~100-500ms）
+
+**已实施**：P0-2 增量显示（`assistant.text_delta`/`assistant.text_reset`，见 §4「增量显示合同」）——直接消除「正文早已到达却不可见」的 10-30s 空白。
 
 **优化策略**：详见 `.trellis/tasks/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
 
@@ -120,18 +122,16 @@
   去反推「无重试」。
   触发源是上游 502/503 不稳定，不是退避上限（实测退避远小于
   `AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS=20000`）。
-- **增量显示的安全合同**（09-18 助手低延迟优化）：
-  - **历史合同**：`mapSessionEvent` 忽略 `message_update`/delta 是刻意决策，`agent/test/assistant-delta-gap.test.ts` 已测出 SDK `text_delta` 会到达，但公共 `message.assistant_added` 恰好只在 `message_end` 发一次（完整答案，非部分前缀）
-  - **新增 `assistant.text_delta` 事件**（V2.8 起）：
-    - **后端映射**：`events.ts` 对 `message_update` 中的 `text_delta` 产生 `{type:'assistant.text_delta', delta, content_index, message_id}` 事件
-    - **前端累积**：`stores/agent.ts` 找到 pending assistant 消息并累加 `delta`
-    - **安全边界**：
-      1. 只发布 `text_delta`，`thinking_delta` / `toolcall` 仍在 message_end 一次性显示
-      2. message_end 时用最终文本**覆盖**累积 delta（以 SDK 为准）
-      3. retry 中断时清空 pending 消息（收到新 message_start）
-      4. 临时文本不入历史/Memory/RAG，只有最终文本才持久化
-    - **收益**：体感从「等 10-30s 看到答案」变成「1-2s 看到首字，然后持续滚动」（**体感收益最大**）
-    - **不改变总生成时间**，但直接决定用户体感
+- **增量显示合同**（09-18 助手低延迟 P0-2 建立；承接已归档的 H 任务）：
+  - **两个新事件类型**：`assistant.text_delta`（临时正文分片）与 `assistant.text_reset`（丢弃临时正文）。它们与 `message.assistant_added` 的区别是**权威性**：前者是显示投影，后者是结果。
+  - **临时事件永不物化 `AgentMessage`**：`append_events` 只对 `message.assistant_added` 建历史行，因此临时分片不可能进历史、Memory 或 RAG 索引，也不带引用/权限声明（读时授权由 SSE/回放端点的账号归属复核承担）。这是「临时文本不入历史」的**机制**，不是约定。
+  - **payload 闭合形状**（`_validate_provisional_payload`，fail-closed）：只允许 `{role:"assistant", delta}`（`text_reset` 不得带 `delta`）；额外字段、空 `delta`、超过 `MAX_PROVISIONAL_DELTA_CHARS`（4000 码点）都在落库前拒绝。
+  - **sidecar 侧有界聚合在 `RunEventBuffer`**，不在 `mapSessionEvent`：纯映射函数保持无状态，`onSessionEvent` 累积 prose 并在**非 `message_update` 事件**处 flush，因此一个 token 不会写一行 DB，且分片相对工具/轮次事件的顺序正确（`message_update` 是唯一不 flush 的事件）。单帧按 `MAX_PROSE_FRAGMENT_CHARS`（2000 码点，按码点切分以免拆开代理对）拆分——后端 16 KiB 载荷上限会拒绝整批 append，所以超大 delta 必须拆分而不是整体发出。
+  - **`assistant.text_reset` 是必需的，不是可选优化**：SDK 的 `auto_retry_start` 会丢弃失败的 assistant 消息并在**同一 turn 内**重新生成（不重新发 `turn_start`），而已经 flush 出去的分片无法被「后续少发」收回。因此 sidecar 在重试边界丢弃未 flush 的 prose 并发出 reset；前端收到后立即隐藏临时正文。
+  - **前端投影**（`stores/agent.ts`）：`assistant.text_delta` 追加到分区末尾的临时气泡（`provisional: true`，无 id/引用），`assistant.text_reset` 或权威 `message.assistant_added` 到达时**整体移除**临时投影再合并权威消息（顺序不能反，否则去重会命中临时气泡）。临时气泡不参与 `replayCursor`，也不进 aria-live 播报（逐片重读整段会与权威播报重复）。
+  - **输出安全（已核实的事实，不是假设）**：当前后端 append 路径与 sidecar `message_end` 都**没有**对 assistant 正文做输出侧扫描（`policy_guard` 只覆盖 input/tool_call/tool_result/context/before_provider_request 与 steward 出站）。因此增量分片与完整消息面对的是同一个（缺失的）输出检查：**不得**声称「前缀安全检查等价」，也不得把最终覆盖当作对已泄露片段的「撤回」。改变该结论前必须先有实际的输出侧检查。
+  - **验证**：`agent/test/events.test.ts` 锁定聚合、thinking 不外泄、顺序、reset、拆分、跨轮不拼接；`agent/test/assistant-delta-gap.test.ts` 对真实 SDK 锁定「分片先于权威消息且拼接等于完整答案」；`backend/tests/test_agent_events.py` 锁定不物化历史与形状拒绝；`frontend/src/stores/__tests__/agent.spec.ts` 与 `AgentPrimitives.spec.ts` 锁定累积/替换/重置/终态保留/切换丢弃。
+  - **不改变总生成时间**：本项只消除「正文早已到达却不可见」的等待（实测该等待为完整生成时长量级），推理耗时仍由 `first_text_ms`/`model_turn` 单独报告。
 - **浏览器收到/渲染时刻不由本接口证明**：SSE 到达、首帧渲染需要浏览器 `performance` 时钟，
   服务端 UTC 与浏览器 monotonic 不可直接相减；该证据由受控验收任务补齐。
 

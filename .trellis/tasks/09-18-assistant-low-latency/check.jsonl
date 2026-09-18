@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"核验事件注册表/计时合同与租约语义未被削弱"}
+{"file":".trellis/spec/backend/assistant-history-restoration.md","reason":"核验自动压缩与完整历史恢复未因提速退化"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核验后端门禁与真实链路证据要求"}
+{"file":".trellis/tasks/09-18-assistant-low-latency/research/latency-evidence-2026-09-18.md","reason":"核验验收数值确实来自同口径实测而非推断"}

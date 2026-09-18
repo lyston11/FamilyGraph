@@ -3,7 +3,7 @@
   "name": "assistant-incremental-delivery",
   "title": "H：助手增量正文显示协议与交互方案",
   "description": "形成可审阅的增量正文协议、重放去重、引用与权限及交互方案；产品选择前不实施。",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-17",
-  "completedAt": null,
+  "completedAt": "2026-09-18",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "09-17-dual-agent-latency-result-integrity",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "2026-09-18 归档：本任务为方案任务（planning，未实施）。其 PRD/design 的全部约束（临时/最终正文权威替换、run/attempt/seq、输出安全门槛、有界性、发布顺序、回退）已由 09-18-assistant-low-latency 承接并折入其 design「增量安全合同」；增量协议与安全的唯一来源改为 09-18。归档时核实：当前 append 路径与 message_end 均无输出侧扫描，故不得声称前缀安全检查等价。",
   "meta": {}
 }

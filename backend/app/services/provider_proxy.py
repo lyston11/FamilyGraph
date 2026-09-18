@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -55,6 +56,15 @@ _UPSTREAM_RETRYABLE_4XX = frozenset({408, 409, 425, 429})
 
 #: 让 pi-ai 的请求层重试立即停止（SDK 的 isRetryableProviderError 优先读该头）。
 _NO_RETRY_HEADERS = {"x-should-retry": "false"}
+
+#: 暂时错误的**有界退避**提示（毫秒）。pi-ai 的 `getRetryDelayMs` 优先读 `retry-after-ms`，
+#: 否则退回 `min(0.5·2^i, 8)s`：当前预算（5 次）的最坏退避是 0.5+1+2+4+8 = 15.5s，
+#: 在 3s 首段目标下不可接受。实测线上 5 次快速 502 本身只需约 4.5s，却因退避累加把整轮拉到 33s。
+#: 取 500ms = 默认退避的**第一级**：对任意重试次数都不劣于默认（1 次重试同值），
+#: 且 5 次重试从 15.5s 降到 2.5s。不取更大值是因为那会让少次数重试反而变慢。
+#: **次数不变**：可用性证据显示 5 次重试确实会被用满（2 个 run / 11 次出站 / 7 次失败，
+#: 最终都靠重试成功），降次数会让这类轮次直接失败。
+_TRANSIENT_RETRY_HEADERS = {"retry-after-ms": "500"}
 
 
 @dataclass(frozen=True)
@@ -108,12 +118,15 @@ def _audit_egress(
     error_class: str | None = None,
     retryable: bool | None = None,
     sent: bool | None = None,
+    header_ms: int | None = None,
 ) -> None:
     """每次真实出站尝试的唯一安全终态。
 
     ``status`` 保持既有取值（succeeded/failed/blocked_by_policy），D 的聚合消费
     不受影响；``error_class``/``retryable`` 是新增的**安全分类**（机器码/布尔，
     无上游原文、无 prompt、无凭据），供重试治理与审计对账。
+    ``header_ms`` 是 gateway-side 等待**响应头**的耗时：这是判断上游首响应期限
+    是否合理的唯一依据（sidecar 的 `first_text_ms` 是正文增量时间，不可代替）。
     """
     detail: dict[str, object] = {
         "provider_id": provider_id,
@@ -127,6 +140,8 @@ def _audit_egress(
         detail["retryable"] = retryable
     if sent is not None:
         detail["sent"] = sent
+    if header_ms is not None:
+        detail["header_ms"] = header_ms
     audit.write_audit(
         db,
         action="agent_provider_egress",
@@ -163,6 +178,31 @@ def _classify_upstream_status(status_code: int) -> EgressFailure:
     if 400 <= status_code < 500 and status_code not in _UPSTREAM_RETRYABLE_4XX:
         return EgressFailure("upstream_rejected", retryable=False, sent=True)
     return EgressFailure("upstream_transient", retryable=True, sent=True)
+
+
+def _await_response_headers(
+    send_coro: Any,
+    *,
+    header_timeout_seconds: float,
+) -> Any:
+    """等待上游响应头，并施加**仅针对这一阶段**的期限，返回 (response, header_ms)。
+
+    连接超时与总超时都拦不住「连接已建立、但上游迟迟不返回响应头」：实测线上单次
+    503 拖了 29.8s（bytes_read=0）才返回。这里给响应头阶段一个独立期限，同时用
+    ``wait_for`` 在超时时**取消**等待（httpx 的 read timeout 只中断等待，不取消）。
+
+    响应头之后的流式生成不在本期限范围内：长回答可以继续流式输出，不会被误杀。
+    返回的 ``header_ms`` 是该阶段的实测耗时，写入安全审计供期限调参。
+    """
+
+    async def _timed() -> Any:
+        started = time.monotonic()
+        response = await send_coro
+        return response, int((time.monotonic() - started) * 1000)
+
+    if header_timeout_seconds <= 0:
+        return _timed()
+    return asyncio.wait_for(_timed(), timeout=header_timeout_seconds)
 
 
 def _require_executable_run(run: AgentRun) -> None:
@@ -281,8 +321,11 @@ async def stream_provider_response(
     user_agent: str | None = None,
     expected_api: str | None = None,
     execution: ExecutionIdentity | None = None,
-) -> tuple[Any, Any, int]:
-    """向已注册 Provider 转发一次 chat/completions 请求，返回 (client, 上游流, provider_id)。
+) -> tuple[Any, Any, int, int | None]:
+    """向已注册 Provider 转发一次 chat/completions 请求。
+
+    返回 ``(client, 上游流, provider_id, header_ms)``。header_ms 是 gateway-side 等待
+    响应头的实测耗时，写入安全审计供首响应期限调参。
 
     调用方（端点）负责把流式响应透传回 sidecar；client 与流由
     passthrough_with_audit 在结束后统一关闭（避免连接泄漏）。
@@ -374,14 +417,37 @@ async def stream_provider_response(
         # upstream POST.  A later cancellation may stop the stream, but cannot
         # retroactively revoke an already-admitted request.
         _admit_upstream_request(db, run.id, execution=execution)
-        upstream = await client.send(
-            client.build_request("POST", target, content=body, headers=headers),
-            stream=True,
+        upstream, header_ms = await _await_response_headers(
+            client.send(
+                client.build_request("POST", target, content=body, headers=headers),
+                stream=True,
+            ),
+            header_timeout_seconds=float(config.AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS),
         )
     except ProviderProxyError:
         if client is not None:
             await client.aclose()
         raise
+    except TimeoutError:
+        if client is not None:
+            await client.aclose()
+        # 首响应期限到期：请求已发出（连接已建立），上游可能已处理，
+        # 不得声称「未发送」；可重试交给请求层预算决定。
+        _audit_egress(
+            db,
+            run=run,
+            provider_id=runtime.provider_id,
+            status="failed",
+            status_code=None,
+            bytes_read=0,
+            error_class="transport_timeout",
+            retryable=True,
+            sent=True,
+            header_ms=int(float(config.AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS) * 1000),
+        )
+        raise ProviderProxyError(
+            502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
+        ) from None
     except httpx.HTTPError as exc:
         if client is not None:
             await client.aclose()
@@ -417,6 +483,7 @@ async def stream_provider_response(
             error_class=failure.error_class,
             retryable=failure.retryable,
             sent=failure.sent,
+            header_ms=header_ms,
         )
         if not failure.retryable:
             # 永久错误：不得伪装为可重试上游 5xx（否则 sidecar 会重试）。
@@ -427,8 +494,21 @@ async def stream_provider_response(
                 "Provider 拒绝了本次请求",
                 headers=dict(_NO_RETRY_HEADERS),
             )
-        raise ProviderProxyError(502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 返回错误")
-    return client, upstream, runtime.provider_id
+        # 暂时错误：保留既有可重试形状，但把请求层退避压到有界值。
+        # 429 是上游自己的限流信号，换成一秒提示会变成每秒捶打上游；
+        # 上游已给 Retry-After 时尊重上游，否则给短退避。
+        transient_headers: dict[str, str] = {}
+        if upstream.status_code != 429 and not (
+            upstream.headers.get("retry-after") or upstream.headers.get("retry-after-ms")
+        ):
+            transient_headers = dict(_TRANSIENT_RETRY_HEADERS)
+        raise ProviderProxyError(
+            502,
+            AGENT_PROVIDER_PROXY_UNAVAILABLE,
+            "Provider 返回错误",
+            headers=transient_headers,
+        )
+    return client, upstream, runtime.provider_id, header_ms
 
 
 async def passthrough_with_audit(
@@ -439,6 +519,7 @@ async def passthrough_with_audit(
     client: Any,
     upstream: Any,
     on_finish: Any,
+    header_ms: int | None = None,
 ) -> Any:
     """流式透传生成器：逐块回传 sidecar，结束后统计字节数并落用量审计。
 
@@ -492,5 +573,6 @@ async def passthrough_with_audit(
             error_class=failure.error_class if failure is not None else None,
             retryable=failure.retryable if failure is not None else None,
             sent=failure.sent if failure is not None else None,
+            header_ms=header_ms,
         )
         on_finish()

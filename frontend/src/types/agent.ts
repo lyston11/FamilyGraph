@@ -73,6 +73,8 @@ export const AGENT_EVENT_TYPES = [
   'turn.started',
   'turn.completed',
   'message.assistant_added',
+  'assistant.text_delta',
+  'assistant.text_reset',
   'tool.execution.started',
   'tool.execution.completed',
   'run.settled',
