@@ -1,6 +1,6 @@
 # 双 Agent 最新子任务图与问题覆盖
 
-状态：用户授权创建完整规划；C～I全为planning，未start。父任务保持in_progress；A/B已归档，不改其历史。所有任务主会话内联、串行处理，不使用子智能体。
+状态：用户授权创建完整规划；A/B/C/D 已归档并集成到 main；**E 的工程部分已在分支实现并验证（待集成）**，E 的预算数值选择仍未批准；F～I 仍为 planning。父任务保持 in_progress；不改归档任务历史。所有任务主会话内联、串行处理，不使用子智能体。
 
 ## 工件入口
 
@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- | --- |
 | C / P1 | 管家可中断总截止与结算收尾预算 | [PRD](../../09-17-steward-hard-deadline/prd.md) | [design](../../09-17-steward-hard-deadline/design.md) | [implement](../../09-17-steward-hard-deadline/implement.md) | 工程修复，待批准执行 |
 | D / P1 | 助手真实阶段计时与重试统计修复 | [PRD](../../09-17-assistant-timing-observability/prd.md) | [design](../../09-17-assistant-timing-observability/design.md) | [implement](../../09-17-assistant-timing-observability/implement.md) | 工程修复，待批准执行 |
-| E / P1 | 助手网关错误分类与分层重试治理 | [PRD](../../09-17-assistant-retry-governance/prd.md) | [design](../../09-17-assistant-retry-governance/design.md) | [implement](../../09-17-assistant-retry-governance/implement.md) | 工程修复+策略选择 |
+| E / P1 | 助手网关错误分类与分层重试治理 | [PRD](../../09-17-assistant-retry-governance/prd.md) | [design](../../09-17-assistant-retry-governance/design.md) | [implement](../../09-17-assistant-retry-governance/implement.md) | 工程修复已实现（待集成）；策略选择待批准 |
 | F / P1 | 双Agent受控场景矩阵与浏览器链路验收 | [PRD](../../09-17-dual-agent-controlled-acceptance/prd.md) | [design](../../09-17-dual-agent-controlled-acceptance/design.md) | [implement](../../09-17-dual-agent-controlled-acceptance/implement.md) | 零模型费用的真实隔离栈验收 |
 | G / P1 | 运行版本核对、部署与真实小样本验收 | [PRD](../../09-17-dual-agent-release-validation/prd.md) | [design](../../09-17-dual-agent-release-validation/design.md) | [implement](../../09-17-dual-agent-release-validation/implement.md) | 发布/真实调用另有明确执行门 |
 | H / P2 | 助手增量正文显示协议与交互方案 | [PRD](../../09-17-assistant-incremental-delivery/prd.md) | [design](../../09-17-assistant-incremental-delivery/design.md) | [implement](../../09-17-assistant-incremental-delivery/implement.md) | 方案评审，非已选上线功能 |
@@ -46,7 +46,7 @@ H/I可以先研究，不阻塞C～G现配置修复。D负责字段和聚合，E�
 
 ## 仍待决定，不伪装已批准
 
-- E：工程性分类/审计修复可独立规划；改变总retry次数/等待上限必须有实际请求预算和可用性取舍，不在本轮选数值。
+- E：工程性分类/审计修复已实现（永久 4xx 不再误重试 + 恰好一次安全审计 + 两层预算显式冻结）；改变总retry次数/等待上限仍必须有实际请求预算和可用性取舍，不在本轮选数值。实测最坏请求数/墙钟与候选策略表见 [E 证据](../../09-17-assistant-retry-governance/evidence.md)。
 - G：发布窗口、回退版本与真实调用预算在执行前确认。PRD提出6逻辑/12物理请求、token/时间上限只是审阅提案，金额仍待当前计价核对，不等于调用授权。
 - H：采用与否、部分文本保留/失败交互待方案评审，输出安全是不可豁免前提。
 - I：是否降档/换模型/扩容/真实A/B待可靠证据；维持当前配置是合法结论，不以任务创建代替选择。
