@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "核验成员资格、空间授权与关系边的边界不被修复扩大。"}
+{"file": ".trellis/spec/architecture/5--5.md", "reason": "核验 PFV 孤立节点合同、confirmed topology 与推测层隔离。"}
+{"file": ".trellis/spec/frontend/family-tree-layout.md", "reason": "核验孤立分量保留、确定性布局与无虚假连线。"}
