@@ -313,6 +313,10 @@ def lease_next(
         run.max_attempts = job.max_attempts
         run.lease_expires_at = expires
         run.heartbeat_at = now
+        # 首次取得执行权的权威时刻（09-17 D）：只在 attempt 0→1 时写一次。
+        # lease_expires_at 被心跳持续前移，不能反推被租走时刻；该列不可变。
+        if run.first_leased_at is None:
+            run.first_leased_at = now
         run.updated_at = now
         db.flush()
         return LeaseGrant(job=job, run=run)

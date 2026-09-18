@@ -585,6 +585,7 @@ def append_events_endpoint(
             type=e.type,
             public_payload=e.public_payload,
             context_reference=e.context_reference.model_dump() if e.context_reference else None,
+            timing=e.timing.model_dump(exclude_none=True) if e.timing else None,
         )
         for e in body.events
     ]

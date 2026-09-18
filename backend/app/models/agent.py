@@ -144,6 +144,9 @@ class AgentRun(Base):
     )
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 首次取得执行权的权威时刻（09-17 D）：attempt 0→1 时写一次，此后不可变。
+    # lease_expires_at 被心跳持续前移，不能反推被租走时刻；排队等待必须用本列。
+    first_leased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 浏览器取消请求：leased/running 时置位，settle 把本应 succeeded 的终态改判为 cancelled
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=sa.false(), nullable=False
@@ -191,6 +194,13 @@ class AgentRunEvent(Base):
     # Bounded internal record: {context_build_id, attempt, used_handles}.
     # Participates in storage/schema checks; never copied into public_payload.
     context_reference_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Sidecar-sourced timing metadata (09-17 D).  ``created_at`` above is the
+    # backend persistence time, and the sidecar flushes in 250ms batches, so it
+    # cannot express real execution duration (a 125ms tool call sharing a batch
+    # with its end event shows ~1ms).  Bounded internal record
+    # {source, duration_ms}; historical rows stay NULL and must be read as
+    # unknown.  Never copied into public_payload.
+    timing_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover

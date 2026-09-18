@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,7 @@ from app.errors import (
     raise_api_error,
 )
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent, AgentSession
+from app.schemas.agent import ContextReferenceIn, EventTimingIn
 from app.services import agent_citations
 from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
 from app.utils import timeutil
@@ -72,6 +74,8 @@ class EventEntry:
     type: str
     public_payload: dict[str, Any]
     context_reference: dict[str, Any] | None = None
+    # 有界内部计时（09-17 D）：只含 source/duration_ms，永不进 public_payload。
+    timing: dict[str, Any] | None = None
 
     def fingerprint(self, run_id: int, attempt: int) -> str:
         canonical = json.dumps(
@@ -83,6 +87,7 @@ class EventEntry:
                 "type": self.type,
                 "public_payload": self.public_payload,
                 "context_reference": self.context_reference,
+                "timing": self.timing,
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -124,6 +129,7 @@ def insert_event(
     created_at: datetime | None = None,
     request_fingerprint: str | None = None,
     context_reference: dict[str, Any] | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> AgentRunEvent:
     """低层插入：供服务内部（入队首个事件 / settle 终态事件）与 append_events 复用。"""
     if event_type not in EVENT_TYPES:
@@ -135,6 +141,7 @@ def insert_event(
         public_payload=public_payload,
         request_fingerprint=request_fingerprint,
         context_reference_json=context_reference,
+        timing_json=timing,
         created_at=created_at or timeutil.utcnow(),
     )
     db.add(row)
@@ -156,10 +163,6 @@ def _validate_entry(entry: EventEntry) -> None:
     if size > MAX_PAYLOAD_BYTES:
         raise_api_error(422, AGENT_EVENT_INVALID, "payload 超限")
     if entry.context_reference is not None:
-        from pydantic import ValidationError
-
-        from app.schemas.agent import ContextReferenceIn
-
         try:
             ref = ContextReferenceIn.model_validate(entry.context_reference)
         except ValidationError:
@@ -168,6 +171,13 @@ def _validate_entry(entry: EventEntry) -> None:
             ref.used_handles
         ):
             raise_api_error(422, AGENT_EVENT_INVALID, "context_reference 使用无效")
+    if entry.timing is not None:
+        # 与 internal schema 同源校验：形状/上下界/子成分一致性一次收紧，
+        # 避免服务层与 API 层两套判定漂移。
+        try:
+            EventTimingIn.model_validate(entry.timing)
+        except ValidationError:
+            raise_api_error(422, AGENT_EVENT_INVALID, "timing 格式无效")
 
 
 def append_events(
@@ -290,6 +300,7 @@ def append_events(
                 public_payload=payload,
                 request_fingerprint=fingerprint,
                 context_reference=context_record,
+                timing=entry.timing,
             )
         )
         expected_next += 1

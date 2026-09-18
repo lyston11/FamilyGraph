@@ -118,16 +118,80 @@ class ContextReferenceIn(_Strict):
     used_handles: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(max_length=20)
 
 
+# 有界内部计时记录（09-17 D）。
+# ``agent_run_events.created_at`` 是后端入库时刻，sidecar 默认每 250ms 批量 flush，
+# 因此同批入库的 125ms 工具执行与其结束事件只差约 1ms。该结构承载 producer 侧的
+# 单调时长，与 ``context_reference`` 同模式：只存数字与来源标记，永不进入
+# ``public_payload``，也永不记录 prompt/正文/thinking/工具结果。
+MAX_TIMING_MS = 86_400_000  # 24h：超出即畸形上报
+
+# 允许携带 producer 计时的 sidecar 事件类型（注册表子集）：每个事件承载的是
+# **在该事件处结束的那个阶段**的时长（run.started=准备、assistant 正文=该轮生成、
+# 工具完成=该次工具执行）。
+_SIDECAR_TIMED_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "run.started",
+        "message.assistant_added",
+        "tool.execution.completed",
+    }
+)
+
+
+class EventTimingIn(_Strict):
+    """producer 侧阶段计时；单位毫秒，单调测量，不跨进程相减。
+
+    ``duration_ms`` 是本事件处结束的那个阶段的时长：
+
+    - ``run.started``：取得执行权 → SDK ``agent_start``（context 获取 + session
+      创建）。它解释“取得执行权 → SDK 开始”的间隔，不能算作排队等待；
+    - ``message.assistant_added``：该轮 ``turn_start`` → ``message_end``；
+    - ``tool.execution.completed``：该次 ``tool_execution_start`` → ``end``。
+
+    历史行无该记录（NULL），读取方按 unknown 处理，不用持久事件间隔冒充精确耗时。
+    """
+
+    source: Literal["sidecar-v1"]
+    duration_ms: int = Field(strict=True, ge=0, le=MAX_TIMING_MS)
+    # 该轮内 SDK 压缩（compaction_start→end）的累计时长；它是 ``duration_ms``
+    # 的**子成分**（压缩请求发生在 turn 内），与 provider_retry 一样必须单独读，
+    # 不能把 model_turn 直接称为纯生成。无压缩即缺省（None），不写 0。
+    compaction_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMING_MS)
+
+    @model_validator(mode="after")
+    def check_subcomponents(self) -> EventTimingIn:
+        # 子成分不可能超过它所归属的阶段：越界说明两侧语义漂移，拒绝而不是
+        # 静默夹紧（夹紧会把畸形数据伪装成合法测量）。
+        if self.compaction_ms is not None and self.compaction_ms > self.duration_ms:
+            raise ValueError("compaction_ms 不能超过 duration_ms")
+        return self
+
+
 class EventIn(_Strict):
     seq: int = Field(ge=0)
     type: str = Field(min_length=1, max_length=64)
     public_payload: dict[str, Any]
     context_reference: ContextReferenceIn | None = None
+    timing: EventTimingIn | None = None
 
     @model_validator(mode="after")
     def check_reference_type(self) -> EventIn:
         if self.context_reference is not None and self.type != "message.assistant_added":
             raise ValueError("context_reference 仅用于完成的 assistant 消息")
+        return self
+
+    @model_validator(mode="after")
+    def check_timing_type(self) -> EventIn:
+        # 计时是 sidecar 的执行证据；后端自有事件（入队/终态）不得携带，
+        # 否则会把服务端入库时刻伪装成 producer 测量。
+        if self.timing is not None and self.type not in _SIDECAR_TIMED_EVENT_TYPES:
+            raise ValueError("timing 仅用于 sidecar 执行事件")
+        # 压缩是轮内子成分，只在正文事件上有意义。
+        if (
+            self.timing is not None
+            and self.timing.compaction_ms is not None
+            and self.type != "message.assistant_added"
+        ):
+            raise ValueError("compaction_ms 仅用于 assistant 正文事件")
         return self
 
 
