@@ -136,13 +136,16 @@ const sessionManager = new SessionManager(
 
 ### 🟢 P2 - 优化补齐（低成本 + 小收益，积少成多）
 
-#### P2-1: 减少 per-chunk DB 事务
+#### P2-1: 减少 per-chunk DB 事务 —— ❌ 实测否决，不做（2026-09-18）
 
-**现状**：每个 SSE chunk 都 `rollback + get(AgentRun)`
+**实测**：`_refresh_run_gate` 在远端真实库上 median **368µs** / p95 **409µs**（300 次），
+每 run 分片数仅 1–8 → 每 run 总开销 < **5ms**，不是计划估算的 200–500ms。
 
-**收益**：~200-500ms
+**不做理由（安全，不是省事）**：该复核是「流中取消/失租立即停止转发」的实现点。改为仅流首尾检查会
+破坏 `test_proxy_audits_cancellation_during_stream_once` 锁定的合同（取消后零块透传、恰好一条审计）。
+用安全的取消语义换 <5ms 不成立。
 
-**技术路径**：
+<details><summary>原计划（未执行，保留为方案来源）</summary>
 ```python
 # provider_proxy.py passthrough_with_audit
 _refresh_run_gate(db, run_id)  # 只在流开始检查一次
@@ -154,9 +157,20 @@ finally:
     _refresh_run_gate(db, run_id)  # 流结束再检查
 ```
 
-**归属**：09-18（本任务）
+**归属**：09-18（本任务）—— 结论：不实施
 
-#### P2-2: 复用 httpx client
+</details>
+
+#### P2-2: 复用 httpx client —— ⏸️ 收益已实测，本轮不实施（2026-09-18）
+
+**实测（真实上游 `api.liu-dada.com`，服务端各 6 次）**：fresh client 59ms → 复用 client 10ms，
+**节省 ≈49.5ms/请求**；本批 run 最多 6 次请求 ≈ 0.3s。
+
+**本轮不做的理由**：收益真实但只占实测 `duration_ms` 中位数（2618ms）的 ~1–2%；
+且这是网关核心生命周期改动（连接池、并发、关闭、与 `passthrough_with_audit` finally 关闭语义互斥），
+E 与 F 正处理同一文件的流式路径。数据已留档，适合另立实现，不在本任务收尾内夹带。
+
+<details><summary>原计划（未执行，保留为方案来源）</summary>
 
 **现状**：每请求 `async with httpx.AsyncClient()` → TLS 握手每次重来
 
@@ -176,7 +190,9 @@ async def passthrough_with_audit(..., request: Request):
     client = request.app.state.proxy_client
 ```
 
-**归属**：09-18（本任务）
+**归属**：09-18（本任务）—— 结论：留档待另立
+
+</details>
 
 ---
 
@@ -186,11 +202,18 @@ async def passthrough_with_audit(..., request: Request):
 - **thinking level 降档**：可能节省 2-5s，但复杂推理质量下降（归 I 任务）
 
 
-## 验收与收尾
+## 验收与收尾（2026-09-18 完成）
 
-- 按 `prd.md` 的 LL-AC1～AC6 逐条给证据；真实提速结论必须有同配置前后对照。
-- 未达目标保持 `in_progress`，不归档、不写"已生效"。
-- 更新 `agent-runtime` spec 与父任务 summary；提交、串行集成、清理 worktree/分支。
+- [x] 按 `prd.md` 的 LL-AC1～AC6 逐条给证据：[验收证据](research/acceptance-2026-09-18.md)、
+      [浏览器增量验收](research/browser-acceptance-2026-09-18.md)。
+- [x] 真实同配置对照：`duration_ms − first_text_ms` 由「整条生成时长」降到 151–491ms；
+      短问答首段中位数 1977ms（n=17，未宣布 3s 必达）、完整 100% ≤ 8s。
+- [x] P2-1 实测否决、P2-2 留档待另立（理由与数据见上），不夹带进收尾。
+- [x] 门禁：agent 163 / backend 1705 passed(3 skipped) / frontend 762；lint、type-check、mypy、
+      ruff、format、build 全绿。
+- [x] 部署与真实浏览器链路已独立核实（版本、启动时刻、事件注册、dist 产物）。
+- [x] 已交付项：P0-1（轮询）、P0-2（增量显示 + 浏览器验收）、P1-1（cache key，收益保持未实测）。
+- [ ] 待闭环（属其他任务，不阻塞本任务归档）：E-R5 已决策并集成；F/G/I 仍在各自任务。
 
 ## 命令
 
