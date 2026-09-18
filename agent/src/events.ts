@@ -117,6 +117,25 @@ export interface EventTiming {
    * generation without it. Omitted when the turn had no compaction.
    */
   compaction_ms?: number;
+  /**
+   * ``turn_start`` → first ``text_delta``. Sub-component of ``duration_ms``.
+   *
+   * This is the quantity that separates "the model took 33s to answer" from
+   * "the model answered early but the text stayed invisible until the whole
+   * message finished": the public assistant event is still published only at
+   * ``message_end``. Thinking deltas do NOT count — the user cannot read them.
+   * Omitted when the turn produced no prose at all (tool-only turn).
+   */
+  first_text_ms?: number;
+  /**
+   * Pi session auto-retries observed inside this turn and the backoff they
+   * scheduled. Recorded because a failed attempt is otherwise
+   * indistinguishable from one slow generation in the persisted event stream
+   * (15s request timeout + 2s backoff + 16s looks exactly like a 33s turn).
+   * Omitted when the turn had no auto-retry.
+   */
+  retry_count?: number;
+  retry_wait_ms?: number;
 }
 
 export interface FgEvent {
@@ -138,6 +157,10 @@ type SessionEventLike = {
     content?: unknown;
     [key: string]: unknown;
   };
+  /** Present on `message_update`; carries the streaming delta kind. */
+  assistantMessageEvent?: { type?: string; delta?: string; [key: string]: unknown };
+  /** Present on `auto_retry_start`: the backoff the SDK scheduled. */
+  delayMs?: number;
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
@@ -278,6 +301,14 @@ export class RunEventBuffer {
   private compactionStartedAt: number | null = null;
   /** Compaction ms accumulated inside the current turn (sub-component). */
   private turnCompactionMs = 0;
+  /**
+   * Monotonic time of this turn's first assistant text delta, or null when the
+   * turn has produced no prose yet. Thinking deltas never set it.
+   */
+  private firstTextAt: number | null = null;
+  /** Auto-retries observed inside the current turn, with their scheduled backoff. */
+  private turnRetryCount = 0;
+  private turnRetryWaitMs = 0;
 
   constructor(
     startSeq = 1,
@@ -313,6 +344,18 @@ export class RunEventBuffer {
     return { source: "sidecar-v1", duration_ms: duration };
   }
 
+  /**
+   * Milliseconds between two recorded origins, with the same guard as
+   * `elapsedFrom`: a missing origin or a backwards clock yields undefined
+   * rather than a fabricated 0ms stage.
+   */
+  private spanBetween(start: number | null, end: number | null): number | undefined {
+    if (start === null || end === null) return undefined;
+    const duration = Math.round(end - start);
+    if (!Number.isFinite(duration) || duration < 0) return undefined;
+    return duration;
+  }
+
   push<T extends FgEventType>(
     type: T,
     public_payload: FgEventPayloadMap[T],
@@ -344,6 +387,28 @@ export class RunEventBuffer {
       // Each turn owns its own compaction budget; a later turn must not inherit
       // an earlier turn's summarization cost.
       this.turnCompactionMs = 0;
+      // Same for first-text and retry accounting: a clean turn after a retried
+      // one must not inherit either.
+      this.firstTextAt = null;
+      this.turnRetryCount = 0;
+      this.turnRetryWaitMs = 0;
+    }
+    // First *readable* prose of this turn. `thinking_delta` is excluded on
+    // purpose: the user cannot see reasoning, so counting it would understate
+    // the wait the PRD's 3s first-segment target is about.
+    if (
+      event.type === "message_update" &&
+      event.assistantMessageEvent?.type === "text_delta" &&
+      typeof event.assistantMessageEvent.delta === "string" &&
+      event.assistantMessageEvent.delta.length > 0 &&
+      this.firstTextAt === null
+    ) {
+      this.firstTextAt = this.now();
+    }
+    if (event.type === "auto_retry_start") {
+      this.turnRetryCount += 1;
+      const delay = Number(event.delayMs);
+      if (Number.isFinite(delay) && delay > 0) this.turnRetryWaitMs += delay;
     }
     if (event.type === "compaction_start") {
       this.compactionStartedAt = this.now();
@@ -382,12 +447,29 @@ export class RunEventBuffer {
         timing = this.elapsedFrom(this.timing?.prepStartedAt ?? null);
       } else if (item.type === "message.assistant_added") {
         timing = this.elapsedFrom(this.turnStartedAt);
-        // Attach this turn's compaction as a bounded sub-component so the
-        // backend can separate summarization from generation.
-        if (timing !== undefined && this.turnCompactionMs > 0) {
-          timing = { ...timing, compaction_ms: Math.round(this.turnCompactionMs) };
+        if (timing !== undefined) {
+          // Attach this turn's bounded sub-components so the backend can
+          // separate summarization, pre-prose reasoning and retries from pure
+          // generation instead of reading `model_turn` as one number.
+          const firstTextMs = this.spanBetween(this.turnStartedAt, this.firstTextAt);
+          timing = {
+            ...timing,
+            ...(this.turnCompactionMs > 0
+              ? { compaction_ms: Math.round(this.turnCompactionMs) }
+              : {}),
+            ...(firstTextMs === undefined ? {} : { first_text_ms: firstTextMs }),
+            ...(this.turnRetryCount > 0
+              ? {
+                  retry_count: this.turnRetryCount,
+                  retry_wait_ms: Math.round(this.turnRetryWaitMs),
+                }
+              : {}),
+          };
         }
         this.turnCompactionMs = 0;
+        this.firstTextAt = null;
+        this.turnRetryCount = 0;
+        this.turnRetryWaitMs = 0;
       } else if (item.type === "tool.execution.completed") {
         const key = String((item.public_payload as ToolExecutionCompletedPayload).tool_call_id);
         timing = this.elapsedFrom(this.openTools.get(key) ?? toolStartedAt);

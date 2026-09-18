@@ -103,7 +103,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       readString(env, "AGENT_SIDECAR_ID") ??
       `sidecar-${process.pid.toString(36)}`,
     healthPort: readInt(env, "HEALTH_PORT", 8080),
-    leasePollIntervalMs: readInt(env, "AGENT_LEASE_POLL_MS", 2000),
+    // 250ms, not 2000ms: a queued run waits on average half the poll interval
+    // before the serial sidecar notices it, so 2000ms added ~1s of pure
+    // queue_wait against the 3s first-segment target. Measured cost of the
+    // extra polls (an empty lease is one BEGIN IMMEDIATE + SELECT): 0.418ms per
+    // call, i.e. 1.7ms/s of write-lock work at 250ms vs 0.2ms/s at 2000ms.
+    leasePollIntervalMs: readInt(env, "AGENT_LEASE_POLL_MS", 250),
     providerStreamMaxRetries: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRIES", 5),
     providerStreamMaxRetryDelayMs: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS", 20000),
     defaultLeaseMs: readInt(env, "AGENT_DEFAULT_LEASE_MS", 60_000),

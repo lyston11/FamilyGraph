@@ -156,13 +156,28 @@ class EventTimingIn(_Strict):
     # 的**子成分**（压缩请求发生在 turn 内），与 provider_retry 一样必须单独读，
     # 不能把 model_turn 直接称为纯生成。无压缩即缺省（None），不写 0。
     compaction_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMING_MS)
+    # ``turn_start`` → 首个 assistant 正文增量（``text_delta``）。thinking 增量不算。
+    # 它是把“模型真的算了 33s”与“模型早就答了但正文被攒到整条消息才公开”分开的
+    # 唯一量；无正文的轮（仅工具调用）缺省。
+    first_text_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMING_MS)
+    # 该轮内 Pi 会话自动重试的次数与已排定的退避总量。缺失即“本轮未观测到重试”，
+    # 与“确认无重试”同义；历史行一律 NULL，读取方按 unknown 处理。
+    retry_count: int | None = Field(default=None, strict=True, ge=0, le=1000)
+    retry_wait_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMING_MS)
 
     @model_validator(mode="after")
     def check_subcomponents(self) -> EventTimingIn:
         # 子成分不可能超过它所归属的阶段：越界说明两侧语义漂移，拒绝而不是
         # 静默夹紧（夹紧会把畸形数据伪装成合法测量）。
-        if self.compaction_ms is not None and self.compaction_ms > self.duration_ms:
-            raise ValueError("compaction_ms 不能超过 duration_ms")
+        for name, value in (
+            ("compaction_ms", self.compaction_ms),
+            ("first_text_ms", self.first_text_ms),
+            ("retry_wait_ms", self.retry_wait_ms),
+        ):
+            if value is not None and value > self.duration_ms:
+                raise ValueError(f"{name} 不能超过 duration_ms")
+        if self.retry_count is not None and self.retry_count == 0 and self.retry_wait_ms:
+            raise ValueError("retry_wait_ms 不能在没有重试时上报")
         return self
 
 

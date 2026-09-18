@@ -76,9 +76,10 @@ export class SidecarWorker {
 
   private async pollLoop(): Promise<void> {
     while (!this.stopped) {
+      let didWork = false;
       try {
         if (this.active === null) {
-          await this.tryLeaseAndRun();
+          didWork = await this.tryLeaseAndRun();
         }
       } catch (error) {
         // Never let the poll loop die; transient errors just delay the next poll.
@@ -86,6 +87,11 @@ export class SidecarWorker {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      // A run that just finished means the queue may still hold more work (the
+      // sidecar is serial), so re-poll immediately. Sleeping first would add
+      // `leasePollIntervalMs` of pure latency to every queued run after the
+      // first, which shows up as queue_wait on the backend.
+      if (didWork) continue;
       await this.sleep(this.config.leasePollIntervalMs);
     }
   }

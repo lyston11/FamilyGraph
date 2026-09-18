@@ -15,7 +15,7 @@ describe("loadConfig", () => {
     const config = loadConfig(BASE_ENV as unknown as NodeJS.ProcessEnv);
     expect(config.apiBaseUrl).toBe("http://api:8000");
     expect(config.serviceSecret).toBe("secret-abc");
-    expect(config.leasePollIntervalMs).toBe(2000);
+    expect(config.leasePollIntervalMs).toBe(250);
     expect(config.healthPort).toBe(8080);
     expect(config.providers.cloud.model).toBe("gpt-test");
     expect(config.providers.cloud.apiKey).toBeUndefined();
