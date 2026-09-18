@@ -67,12 +67,15 @@
 1. **请求层重试放大上游不稳定**：`providerStreamMaxRetries=5`，实测尾部 11.6-15.5s 全是退避（Pi CLI 请求层 0 次重试）。09-17 E 已建立分层分类与 `retry-after-ms` 退避上限；预算数值仍待 E-R5 批准。
 2. **单 worker 串行 + 2 秒空闲轮询**：实测排队 0.94s-11.05s。b067079 已改为 250ms + 去掉完成后睡眠，**已于 2026-09-18 部署到远端 backend 与 agent sidecar**（真实排队改善仍需样本）。
 3. **prompt cache key 不稳定**（**已修复 2026-09-18**）：每 run 新建 `SessionManager.inMemory()` → sessionId 随机 → `prompt_cache_key` 每 run 变化 → cache miss（同上游同模型在 Pi 下有 72% 行 cacheRead>0）。已核实生产 `api=openai-responses`，该适配器在 `cacheRetention !== "none"` 时总是发 `prompt_cache_key`（`api.openai.com` 门控只属于 `openai-completions`）。现固定为 `fg-${account_id}-${session_id}`：跨 run 稳定、跨会话/跨账号隔离。**真实 TTFT 收益尚未实测**。
-4. **per-chunk DB 事务**：每个 SSE chunk 都 `rollback + get(AgentRun)`（~200-500ms）
-5. **httpx client 每次 TLS 握手**：每请求新建 `AsyncClient`（~100-500ms）
+4. **per-chunk DB 事务**：每个 SSE chunk 都 `rollback + get(AgentRun)`。**2026-09-18 实测否决**：远端真实库上 median 368µs / p95 409µs，每 run 分片数 1–8 → 每 run 总开销 < 5ms，与早期「~200-500ms」估算差两个数量级。该复核同时是「流中取消/失租立即停止转发」的实现点，改为仅流首尾检查会破坏 `test_proxy_audits_cancellation_during_stream_once` 锁定的合同，故**不实施**。
+5. **httpx client 每次 TLS 握手**：每请求新建 `AsyncClient`。**2026-09-18 实测**：真实上游上节省 ≈49.5ms/请求（59ms → 10ms，服务端各 6 次），远小于早期估算；属网关核心生命周期改动，**留档待另立**，本轮未实施。
+6. **首响应头本身**：本批真实 `header_ms` 实测 1032–7844ms（无工具轮），是当前首段等待的主导项，属上游行为。
 
-**已实施**：P0-2 增量显示（`assistant.text_delta`/`assistant.text_reset`，见 §4「增量显示合同」）——直接消除「正文早已到达却不可见」的 10-30s 空白；P1-1 稳定 cache key（见上）。
+**已实施**：P0-2 增量显示（`assistant.text_delta`/`assistant.text_reset`，见 §4「增量显示合同」）——直接消除「正文早已到达却不可见」的 10-30s 空白；P1-1 稳定 cache key（见上，TTFT 收益仍未实测）；P0-1 轮询 250ms（已部署）。
 
-**优化策略**：详见 `.trellis/tasks/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
+**2026-09-18 验收结果**（n=17 真实短问答，`main@802925f`）：`first_text_ms` 中位数 1977ms、`duration_ms` 中位数 2618ms；「已生成但不可见」= `duration_ms − first_text_ms` 为 **151–491ms**（修复前等于整条生成时长）。完整答案 17/17 ≤ 8s；首段 16/17 ≤ 3s。**不得据此宣布「3s 必达」**：上游 `header_ms` 波动到 7.8s 时首段必然超标。证据：`.trellis/tasks/archive/2026-09/09-18-assistant-low-latency/research/acceptance-2026-09-18.md`、`browser-acceptance-2026-09-18.md`。
+
+**优化策略**：详见 `.trellis/tasks/archive/2026-09/09-18-assistant-low-latency/research/pi-vs-familygraph-latency.md`
 
 ### 既有源计时合同
 
@@ -153,7 +156,10 @@
   - **验证**：`agent/test/events.test.ts` 锁定聚合、thinking 不外泄、顺序、reset、拆分、跨轮不拼接；`agent/test/assistant-delta-gap.test.ts` 对真实 SDK 锁定「分片先于权威消息且拼接等于完整答案」；`backend/tests/test_agent_events.py` 锁定不物化历史与形状拒绝；`frontend/src/stores/__tests__/agent.spec.ts` 与 `AgentPrimitives.spec.ts` 锁定累积/替换/重置/终态保留/切换丢弃。
   - **不改变总生成时间**：本项只消除「正文早已到达却不可见」的等待（实测该等待为完整生成时长量级），推理耗时仍由 `first_text_ms`/`model_turn` 单独报告。
 - **浏览器收到/渲染时刻不由本接口证明**：SSE 到达、首帧渲染需要浏览器 `performance` 时钟，
-  服务端 UTC 与浏览器 monotonic 不可直接相减；该证据由受控验收任务补齐。
+  服务端 UTC 与浏览器 monotonic 不可直接相减。**2026-09-18 已补测**（见任务 `09-18-assistant-low-latency`
+  的 `research/browser-acceptance-2026-09-18.md`）：浏览器侧首段 2328–4689ms，且**探针不携带 run id，
+  不可与服务端 run 配对**；另有已知盲区——SDK 分片与权威消息落在同一 250ms drain 窗口时，临时气泡
+  可能从未以非空文本被绘制，探针随即观测不到（**未观测 ≠ 用户没看到**）。
 
 ## 5. Provider 治理（09-06 迁移后形态）
 
