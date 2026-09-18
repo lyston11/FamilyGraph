@@ -650,6 +650,84 @@ def test_latency_metrics_counts_single_failure_then_success(
     assert retry["runs_with_failure"] == 1
 
 
+def _egress_classified(
+    db_session,
+    *,
+    run_id: int,
+    rows: list[tuple[str, float, int | None, str | None, bool | None]],
+) -> None:
+    """写带 E 安全分类的 egress 审计行（error_class/retryable）。"""
+    base = utcnow() - timedelta(seconds=600)
+    for status, offset, upstream_status, error_class, retryable in rows:
+        detail: dict[str, object] = {
+            "provider_id": 1,
+            "status": status,
+            "upstream_status": upstream_status,
+            "bytes_read": 0,
+        }
+        if error_class is not None:
+            detail["error_class"] = error_class
+        if retryable is not None:
+            detail["retryable"] = retryable
+        db_session.execute(
+            sa.text(
+                "INSERT INTO audit_log "
+                "(actor_id, action, target_id, ip, detail_json, created_at) "
+                "VALUES (NULL, 'agent_provider_egress', :rid, NULL, :detail, :at)"
+            ),
+            {
+                "rid": run_id,
+                "detail": json.dumps(detail),
+                "at": base + timedelta(seconds=offset),
+            },
+        )
+    db_session.commit()
+
+
+def test_latency_metrics_excludes_non_retryable_failures(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """E-AC5：D 能消费 E 的新审计而不造出虚假重试次数。
+
+    同一 run 内：一次可重试的 502、一次永久拒绝（retryable=false）、
+    一次取消终态。只有可重试的 502 属于 provider_retry；旧语义会把三者
+    当成一个长度 3 的失败段并声称有重试。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-nonretryable")
+    run = _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None, None),
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+        ],
+        settle_after_s=30.0,
+        first_lease_after_s=0.5,
+    )
+    _egress_classified(
+        db_session,
+        run_id=run.id,
+        rows=[
+            ("failed", 5.0, 502, "upstream_transient", True),
+            ("failed", 9.0, 401, "upstream_rejected", False),
+            ("failed", 12.0, None, "run_cancelled", False),
+        ],
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    retry = resp.json()["assistant_phases"]["provider_retry"]
+    # 只有可重试的那次进入重试统计（单次失败→无可测窗口）。
+    assert retry["failed_attempts"] == 1
+    assert retry["runs_with_failure"] == 1
+    assert retry["runs_with_retry"] == 0
+    assert retry["unmeasured_retries"] == 1
+    assert retry["retry_segments"] == 0
+    assert retry["exhausted_segments"] == 0
+
+
 def test_latency_metrics_counts_exhausted_retry_streak(
     admin_client: TestClient, db_session, _admin_headers
 ) -> None:

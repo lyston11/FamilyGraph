@@ -1,6 +1,7 @@
 # 错误处理规范（初始规范 v0）
 
 - 统一错误响应结构：`{"error": {"code": "MACHINE_CODE", "message": "用户可读文案", "detail": {...可选}}}`。
+- 上游 Provider 永久拒绝与暂时失败必须可区分（09-17 E）：永久 4xx 以真实状态码 + `AGENT_PROVIDER_UPSTREAM_REJECTED` 返回并携带 `x-should-retry:false`，不得统一折叠为可重试的 502；上游错误体永不透传。分类、审计字段与两层重试预算见 `agent-runtime.md` §5。
 - 全局 exception handler 分类：HTTPException(业务) / ValidationError(422 保持 FastAPI 默认外壳但映射 code) / 未捕获异常(500 + 日志，不向客户端泄露堆栈)。
 - 业务错误码常量表集中在 `app/errors.py`，如 AUTH_INVALID_CREDENTIALS、PIN_CHANGE_REQUIRED、RELATION_CYCLE_FORBIDDEN、VISIBILITY_MASKED。
 - 认证失败永远返回同一文案"名字或 PIN 码错误"，不区分账号不存在/PIN 错误（防枚举）。
