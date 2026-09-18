@@ -173,3 +173,30 @@ E 的策略部分据此落地（提交 `4a850d1`，已集成 main `e0ee321`）�
 - 未部署、未跑真实模型与浏览器链路（属 F/G）。
 - 「首响应期限 20s」是**可调默认值**：`header_ms` 已落审计，部署后应用真实分布复核该阈值，
   本轮不宣称它已是实测最优。
+
+## 9. F 受控验收发现的取消分类缺陷（D-F1，已闭合）
+
+F 的真实链路矩阵（`09-17-dual-agent-controlled-acceptance`，A6-1）在**集成后**发现：
+取消一个正在生成的 run，终态是 `failed / SIDECAR_ERROR` 而不是 `cancelled`，3/3 复现。
+
+机理与修复（详见该任务 `evidence/defect-cancel.note.md`）：
+
+- 取消检测原先**只**来自心跳（间隔 `max(floor(leaseMs/3),1000)`，出厂 60s 租约 → 20s），
+  而在飞的 `events/append` 在取消后立刻返回 409；该 409 被当作普通 `ConflictError`，
+  `executeJob` 的 catch 因两个标志都为 false 而自造 `failed`，覆盖了服务端已裁决的取消。
+- 修复分三层（commit `46d7ac9`）：后端取消分支返回机器可读
+  `detail.reason=cancel_requested`（`fence_execution`、provider 网关及中流复核）；
+  sidecar 把它映射为新的 `RunCancelledError` 并经 `InternalClient.onRunCancelled`
+  让任何 run-scoped 响应都能上报取消；worker 在心跳与 catch 两处都按取消收敛。
+- 修复后暴露第二层问题（commit `cfb51e2`）：取消不再由 sidecar 结算，但也没有路径收敛它，
+  只能等租约自然过期（实测 **304s** 浏览器仍在「进行中」）。因 `cancel_requested` 是
+  终态意图而非租约条件，reaper 改为同时选取被取消的 job 并直接按 `cancelled` 收敛
+  （不回队），审计记 `reason` 区分取消与真实过期。
+
+复验：F 的 A6-1 pass，`converged_after_s=0.01`（原 304s）；A6-2 仍 pass。
+回归（均可还原修复转红）：backend 真实端点 409 + `detail.reason`；reaper 在租约健康时
+收敛被取消 run、且不误回收未取消的活跃租约；agent 客户端分类/观察者回调，以及
+「仅靠 append 取消（心跳保持在 20s 外）产生 0 次 settle」。
+
+该缺陷属本任务 E-R1「区分取消/失租」与 E-AC3「取消后留安全终态、活动连接有界关闭」
+的范围，因此在本任务修复而不是新开任务。E 的预算数值决策（E-R3/E-R5）不受影响。
