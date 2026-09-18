@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/review-summary.md", "reason": "父任务最新审核结论与范围；旧Spec的计时事实错误待修，安全合同保持"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "源计时合同与聚合口径的唯一权威执行摘要；本任务改其压缩归属"}
+{"file": ".trellis/spec/backend/assistant-history-restoration.md", "reason": "SDK 压缩接线与保留默认自动压缩的合同；本任务不改压缩开关"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "backend 门禁命令与提交前必过项"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "frontend 门禁命令；事件类型表同步需过 type-check"}
