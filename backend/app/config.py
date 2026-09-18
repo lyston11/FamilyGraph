@@ -121,6 +121,12 @@ AGENT_PROVIDER_PROXY_TIMEOUT_SECONDS: int = int(
 AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS: int = int(
     os.environ.get("AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS", "10")
 )
+# 等待上游**响应头**的期限（秒）。实测线上出现过单次 503 拖 29.8s 才返回，把整轮
+# 从约 20s 拉到约 53s；连接与总超时都拦不住这种「连接已建立但迟迟不响应」。
+# 只约束响应头阶段：响应头之后的长回答流式生成不受影响。
+AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS: float = float(
+    os.environ.get("AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS", "20")
+)
 AGENT_PROVIDER_PROXY_MAX_BYTES: int = int(
     os.environ.get("AGENT_PROVIDER_PROXY_MAX_BYTES", str(10 * 1024 * 1024))
 )

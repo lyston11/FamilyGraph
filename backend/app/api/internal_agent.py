@@ -393,7 +393,7 @@ async def proxy_provider_chat_completions(
         chunks.append(chunk)
     body = b"".join(chunks)
     try:
-        client, upstream, provider_id = await provider_proxy.stream_provider_response(
+        client, upstream, provider_id, header_ms = await provider_proxy.stream_provider_response(
             db,
             run=run,
             space_id=agent_session.space_id,
@@ -418,6 +418,7 @@ async def proxy_provider_chat_completions(
             client=client,
             upstream=upstream,
             on_finish=db.commit,
+            header_ms=header_ms,
         ),
         status_code=upstream.status_code,
         media_type=media_type,
