@@ -287,11 +287,18 @@ def test_topology_multi_parent_remarriage_no_dangling_edges(db_session) -> None:
         ("spouse", None, min(bio_father.id, ex_wife.id), max(bio_father.id, ex_wife.id)),
         ("spouse", None, min(bio_father.id, new_wife.id), max(bio_father.id, new_wife.id)),
     }
-    # 每人只有一个人物节点；与 viewer 无已确认路径的孤立成员不进入 PFV
-    # （既有 confirmed-reachable 合同），更不会产生结构边。
+    # 每人只有一个人物节点；与 viewer 无已确认路径的孤立成员仍是合法空间成员，
+    # 保留为 space_member 节点（09-18 R2），但不产生任何结构边。
     node_ids = [node["user_id"] for node in payload["nodes"]]
     assert len(node_ids) == len(set(node_ids))
-    assert isolated.id not in node_ids
+    assert isolated.id in node_ids
+    isolated_node = next(node for node in payload["nodes"] if node["user_id"] == isolated.id)
+    assert isolated_node["inclusion_reason_code"] == "space_member"
+    # 孤立成员没有个人称谓边（不伪造 confirmed_path）
+    assert all(
+        edge["from_user_id"] != isolated.id and edge["to_user_id"] != isolated.id
+        for edge in payload["edges"]
+    )
     # 无悬空边：结构边端点必然都在本次授权节点集合内
     assert all(
         edge["from_user_id"] in node_ids and edge["to_user_id"] in node_ids

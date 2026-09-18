@@ -189,6 +189,10 @@ def viewer_from_session(
     if actor is None or actor.deleted_at is not None or member is None:
         raise SnapshotChanged
     graph = load_graph(session, viewer_user_id=actor.id, space_id=space_id, extra_edges=extra_edges)
+    # R2：节点候选集与关系路径分离。授权候选（active 成员/引用/本人，且通过
+    # PURPOSE_GRAPH 重验）全部物化；无 viewer→target confirmed 路径的成员保留为
+    # space_member 孤立节点，不写个人称谓边，也不伪造 confirmed_path。
+    reached = relationship_resolver.reachable_targets(graph)
     nodes: list[dict[str, Any]] = []
     births: list[tuple[int, tuple[str, int] | None]] = []
     for user_id in sorted(graph.node_genders):
@@ -202,12 +206,18 @@ def viewer_from_session(
             space_id,
             bridge_authorized=user_id in graph.bridge_user_ids,
         )
+        if user_id == actor.id:
+            reason = "root"
+        elif user_id in reached:
+            reason = "confirmed_path"
+        else:
+            reason = "space_member"
         nodes.append(
             {
                 "user_id": user_id,
                 "display": display,
                 "visibility_level": level,
-                "inclusion_reason_code": "root" if user_id == actor.id else "confirmed_path",
+                "inclusion_reason_code": reason,
             }
         )
         births.append(

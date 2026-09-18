@@ -4,9 +4,10 @@
 
 本任务修复现有家族树的直接关系与摆位，涉及后端 PFV 响应、前端解码/画布/关系说明。事实、权限、个人称谓算法保持各自现有职责。
 
-数据流：confirmed SourceFact → 当前 PFV 授权节点内的直接关系 → topology_edges → 前端结构布局与连线。原 edges 继续用于本人到各亲属的称谓和路径说明；inferred_edges 继续由已有推测层处理。
+数据流：授权候选成员（active space_members / active profile refs / viewer）经 PFV 的 `PURPOSE_GRAPH` 可见性重验后形成完整 nodes 集合；confirmed SourceFact 只生成其中两端均获准的 topology_edges。原 edges 继续用于有 confirmed viewer→target 路径时的个人称谓和路径说明；无路径但有权限的空间成员保留为孤立节点，不生成个人 edge；inferred_edges 继续由已有推测层处理。
 
-不从原 edges 的端点或有限路径并集恢复完整结构；不访问旧 /api/graph/me，不引入旧图 store 或位置数据。事实查询、类型映射复用关系服务；节点可见性复用 PFV。
+**成员资格与关系路径修正（2026-09-18）**：此前把 PFV 节点误写成 confirmed-reachable 集合，导致合法的 `join_request`/跨空间成员在没有关系事实时从家族树消失。空间成员资格可以独立于关系边存在；`resolve_relationship()` 只决定个人路径/称谓是否可生成，不决定授权节点是否存在。孤立节点必须保留并由布局分量分离，不能伪造关系事实。
+
 
 ## 2. 新增响应合同
 

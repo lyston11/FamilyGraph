@@ -42,77 +42,59 @@
 
 **待验**：真实 agent run 的排队时间（`first_leased_at - created_at`）< 1s 仍需真实样本；未取得真实 run 前不写“已生效”。
 
-#### P0-2: 实现安全增量显示 🔥
+#### P0-2: 实现安全增量显示 🔥 ✅ 已完成（2026-09-18，待部署与真实浏览器验收）
 
-**现状**：`events.ts` 丢弃所有 `message_update`
+**现状（已修复）**：`events.ts` 曾丢弃所有 `message_update`
 
 **收益**：体感从"等 10-30s 看到答案"变成"1-2s 看到首字，然后持续滚动"（**体感收益最大**）
 
-**技术路径**：
+**已实现的协议（与规划草案不同，以下为实际交付）**：
 
-1. **后端事件映射**（`agent/src/events.ts`）：
-```typescript
-// 新增 text_delta 事件类型
-if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
-  return [{
-    type: 'assistant.text_delta',
-    delta: event.assistantMessageEvent.delta,
-    content_index: event.assistantMessageEvent.contentIndex,
-    message_id: event.messageId, // 用于关联
-  }]
-}
-```
+1. **sidecar 映射**（`agent/src/events.ts`）：新增 `assistant.text_delta` / `assistant.text_reset` 两个事件类型。
+   - `mapSessionEvent` 保持**无状态**，不映射 `message_update`（草案中的 `content_index`/`message_id` 字段已去掉：SDK 未提供跨 delta 稳定的消息 id，且聚合在 buffer 内完成，不需要它）。
+   - 有界聚合在 `RunEventBuffer`：prose 累积到非 `message_update` 事件处 flush，单帧上限 `MAX_PROSE_FRAGMENT_CHARS=2000` 码点（按码点切分）。
+   - `auto_retry_start`（SDK 丢弃失败尝试并在同 turn 内重生成）发 `assistant.text_reset`。
+2. **后端**（`backend/app/services/agent_events.py`）：注册两个类型；`_validate_provisional_payload` 做闭合形状校验（额外字段/空 delta/超 `MAX_PROVISIONAL_DELTA_CHARS=4000` 一律 422）；**不物化 `AgentMessage`**。
+3. **前端**（`stores/agent.ts`）：`assistant.text_delta` 追加到 `provisional: true` 临时气泡；`text_reset` 或权威 `message.assistant_added` 到达时移除临时投影；临时气泡不进 `replayCursor`、不进 aria-live 播报（`MessageList.vue` 显示「生成中…」）。
 
-2. **前端增量累积**（`stores/agent.ts`）：
-```typescript
-if (event.type === 'assistant.text_delta') {
-  const lastMsg = partition.messages.findLast(m => 
-    m.role === 'assistant' && !m.settled && m.id === event.message_id
-  )
-  if (lastMsg) {
-    lastMsg.text += event.delta
-  }
-}
-```
+**输出安全（已核实，不是假设）**：当前 append 路径与 sidecar `message_end` 都**没有**输出侧正文扫描（`policy_guard` 只覆盖 input/tool_call/tool_result/context/before_provider_request 与 steward 出站）。所以增量分片与完整消息面对的是同一个（缺失的）检查：不得声称「前缀检查等价」，也不得把最终覆盖当作对已泄露片段的「撤回」。若后续要收紧，必须先有实际输出侧检查。
 
-3. **安全边界**：
-   - 只发布 `text_delta`，`thinking_delta` / `toolcall` 仍在 message_end 一次性显示
-   - message_end 时用最终文本**覆盖**累积 delta（以 SDK 为准）
-   - retry 中断时清空 pending 消息（收到新 message_start）
-   - 临时文本不入历史/Memory/RAG，只有最终文本才持久化
-
-**成本**：中等（前后端改动 + retry 场景测试）
+**成本**：中等（已完成前后端改动 + 回归测试）
 
 **归属**：本任务（已承接已归档 H 的协议与安全合同，见 design「增量安全合同」）
 
-**验收**：用户发问后 1-3s 内看到首字；完整答案仍需 10-15s 但全程有反馈
+**验证（已跑）**：`agent` 160 tests（含真实 SDK 的 `assistant-delta-gap.test.ts`）、`backend` 全量 1703 passed / 1 无关 flaky（隔离复跑通过）、`frontend` 762 tests + `type-check` + `lint` + `build` 均通过。
+
+**待验**：真实浏览器首字时刻（服务端时钟不能证明浏览器渲染时刻，见 spec §4）。
 
 ---
 
 ### 🟡 P1 - 近期执行（中成本 + 中高收益）
 
-#### P1-1: 稳定 prompt cache key 💾
+#### P1-1: 稳定 prompt cache key 💾 ✅ 已完成（2026-09-18，待部署）
 
-**现状**：每 run 新建 `SessionManager.inMemory()` → sessionId 是随机 uuidv7 → cache miss
+**现状（已修复）**：每 run 新建 `SessionManager.inMemory()` → sessionId 是随机 uuidv7 → `prompt_cache_key` 每次变化 → cache miss
 
-**收益**：同一 FG 会话的第 2+ 次 run，TTFT 节省 20-40%（保守估计 1-4s）
+**已核实的前提（不是假设）**：
+- 本部署 `agent_providers.api = openai-responses`（远端实际值），而 `openai-responses` 的 `buildParams` 在 `cacheRetention !== "none"` 时**总是**发 `prompt_cache_key`（那个 `api.openai.com` 门控属于 `openai-completions`，不是生产路径）。已用真实 `streamSimple` + 假 fetch 捕获请求体验证：key = 传入的 sessionId。
+- SDK 链路：`sdk.js` 把 `sessionManager.getSessionId()` 放进 stream options → 适配器 `clampOpenAIPromptCacheKey(options.sessionId)`（上限 64 字符）。
+- 同一上游同模型在本地 Pi 下有 72%（261/359 行）cacheRead>0，说明上游确实有缓存能力，不是无效优化。
 
-**技术路径**：
+**实际实现（与草案不同）**：
 ```typescript
-// agent/src/session.ts buildRunSession
-const piSessionId = `fg-${agentSession.id}` // 用 FG session.id 作稳定 key
-const sessionManager = new SessionManager(
-  agentDir,
-  '', // 无 sessionFile
-  piSessionId, // 传入稳定 sessionId
-  false,
-  settingsOptions
-)
+const sessionManager = SessionManager.inMemory(agentDir, {
+  id: `fg-${projection.account_id}-${projection.session_id}`,
+});
 ```
+- 草案的 `new SessionManager(agentDir, "", piSessionId, false, settingsOptions)` 已废弃：那个 4 参位置签名不对应当前 SDK（实际是 `(cwd, sessionDir, sessionFile, persist, newSessionOptions, preloadedFileEntries)`），改用 `inMemory` 的 options 重载。
+- **加了 account_id**（草案只有 session.id）：上游缓存按 provider 账号隔离，同一部署下的两个 FG 账号不能互相污染对方的会话分区。
+- 只影响 cache key（压缩读的是 entries，不是 id），不改其他会话行为。
 
-**风险**：需验证 liu-dada 是否真的支持 prompt_cache（实测 Pi 有 90%+ cache hit）
+**收益**：同一 FG 会话的第 2+ 次 run 可复用前缀（估计 TTFT 省 20-40%）。**尚未实测**，需真实同会话连续两次 run 的 usage 对照。
 
-**成本**：小（传参 + 验证）
+**回归**：`agent/test/session-cache-key.test.ts`（3 个，已反向验证：去掉修复后「stable」用例失败）。agent 163 tests 全通过。
+
+**成本**：小（已改完）
 
 **归属**：09-18（本任务）
 
@@ -230,7 +212,7 @@ cd ../backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .v
 
 每项优化各自独立可回退：
 - P0-1：配置项，回退环境变量或代码
-- P0-2：事件类型，旧客户端忽略未知事件；回退需同时回退前后端
+- P0-2：事件类型，旧客户端忽略未知事件；**回退顺序为前端→sidecar→后端**（不可倒：后端对未注册事件类型返回 422，会让整批 append 失败）
 - P1-1：session 构造参数，回退后恢复随机 ID
 - P2-1/P2-2：代码逻辑，回退不影响外部合同
 

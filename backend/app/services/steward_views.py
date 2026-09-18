@@ -299,6 +299,25 @@ def payload_for(
         root_user_id=current.user_id,
         core_nodes=nodes,
     )
+    # R2/R3 与 09-13 推测层显示合同的一致口径：无 viewer confirmed 路径的授权成员
+    # 保留为 space_member 节点；仅当确有活跃推测边指向该端点时，才按推测层既有
+    # 合同改标 inferred_path（保留推测角标/称谓与推测节点摆位）。
+    inferred_endpoints = {
+        uid
+        for edge in inferred_edges
+        for uid in (edge["subject_user_id"], edge["object_user_id"], edge["new_user_id"])
+        if uid is not None
+    }
+    if inferred_endpoints:
+        nodes = [
+            (
+                {**node, "inclusion_reason_code": "inferred_path"}
+                if int(node["user_id"]) in inferred_endpoints
+                and node.get("inclusion_reason_code") == "space_member"
+                else node
+            )
+            for node in nodes
+        ]
     payload: dict[str, Any] = {
         "space_id": space_id,
         "status": "current"

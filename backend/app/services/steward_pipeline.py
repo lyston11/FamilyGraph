@@ -550,11 +550,15 @@ def _stage_view(
         (uid for uid in reached if uid != snapshot.root_user_id),
         key=lambda uid: (reached[uid], uid),
     )
-    nodes = [node for node in json.loads(snapshot.nodes_json) if node["user_id"] in reached]
+    # 骨架节点 = 全部授权候选（含无 viewer 路径的 space_member），逐条已在
+    # 快照阶段过 PURPOSE_GRAPH 重验；称谓目标仍只取可达目标。
+    skeleton_nodes = list(json.loads(snapshot.nodes_json))
+    authorized_ids = {int(node["user_id"]) for node in skeleton_nodes}
+    nodes = skeleton_nodes
     facts = tuple(
         fact
         for fact in snapshot.graph.confirmed_facts
-        if fact.subject_user_id in reached and fact.object_user_id in reached
+        if fact.subject_user_id in authorized_ids and fact.object_user_id in authorized_ids
     )
     topology = topology_edges_from_facts(facts)  # type: ignore[arg-type]
     structural_hash = snapshot.graph.snapshot_hash
@@ -580,7 +584,9 @@ def _stage_view(
             if step.fact_id >= 0
         ],
     }
-    topology_revision = canonical_hash({"nodes": sorted(reached), "topology_edges": topology})
+    topology_revision = canonical_hash(
+        {"nodes": sorted(authorized_ids), "topology_edges": topology}
+    )
     with write_transaction(bind) as session:
         generation = require_generation(session, binding, generation_id)
         previous = _latest_view(

@@ -1,6 +1,6 @@
 # 低延迟响应设计草案
 
-状态：in_progress（P0-1 已实现并部署）。体验目标已由用户确认（3s 首段/8s 完整），重试降额仍待 E-R5 批准。增量显示合同由本任务承接（原 H 任务已归档，见文末「增量安全合同」）。
+状态：in_progress（P0-1 已实现并部署；P0-2 增量显示已实现并通过全量回归，待部署与真实浏览器验收）。体验目标已由用户确认（3s 首段/8s 完整），重试降额仍待 E-R5 批准。增量显示合同由本任务承接（原 H 任务已归档，见文末「增量安全合同」）。
 
 ## 数据流与测量
 
@@ -35,7 +35,16 @@ E 的快速失败测试约 79s 是样本，不是硬上限。总等待包含各�
 
 H（`09-17-assistant-incremental-delivery`）为方案任务、未进入实现，其 PRD/design 的全部约束已由本任务吸收，原目录移入 `archive/2026-09/`。以下为实施时必须满足的合同：
 
-**数据路径**：SDK text_delta → sidecar 有界聚合 → 后端 schema/权限校验 → 持久事件后广播 → frontend 按 run×attempt×message 临时投影 → 权威 `message.assistant_added` 覆盖。
+**数据路径**：SDK text_delta → sidecar 有界聚合（`RunEventBuffer`）→ 后端 schema/权限校验 → 持久事件后广播 → frontend 按 run×turn 临时投影 → 权威 `message.assistant_added` 整体替换。
+
+**实施结果与规划差异（2026-09-18，以实际交付为准）**：
+
+- **未采用 `message_key`/`message_revision`/`delta_seq`/`text_fragment`/`final` 字段**：已核对 SDK（pi-ai 0.84.3）的 `AssistantMessageEvent` 不携带跨 delta 稳定的消息 id，`message_update` 只给 `contentIndex` 与 `partial`；而聚合在 `RunEventBuffer` 内完成，天然只有一个进行中的 turn，所以身份是 **(run, turn)** 而不是 message key。实际字段是闭合的两个：`assistant.text_delta = {role:"assistant", delta}`、`assistant.text_reset = {role:"assistant"}`。没有 `final` 标记——权威性由事件类型（`message.assistant_added`）区分，不靠 payload 布尔位。
+- **attempt 变化用 `auto_retry_start` → `text_reset`，不用 `message_start`**：已核对 SDK，`auto_retry_start` 会丢弃失败的 assistant 消息并在**同一 turn 内**重生成（不重新发 `turn_start`）。因此“收到新 message_start 才清空”的草案判据在本 SDK 上**永远不会触发**；已 flush 的分片也无法靠后续少发收回，必须显式 reset。
+- **有界性已冻结**（原计划等 F 基线后再定）：单帧上限 `MAX_PROSE_FRAGMENT_CHARS = 2000` 码点（按码点切分以免拆开代理对）；flush 边界是“任何非 `message_update` 事件”，因此聚合窗口由既有 250ms drain 节拍自然上界；后端再夹一次 `MAX_PROVISIONAL_DELTA_CHARS = 4000`，超限 422。理由：后端 16 KiB 载荷上限会拒绝**整批** append，所以超大 delta 必须拆分而不能整体发出。
+- **输出安全采用合同允许的“明示未覆盖”分支**：已核实 append 路径与 `message_end` 均无输出侧扫描，本实现**不声称**前缀检查等价，也不把最终覆盖当作对已泄露片段的撤回；该事实已写入 `spec/backend/agent-runtime.md` §4 作为显式记录。若后续加入输出侧检查，增量分片必须与完整消息同门禁。
+- **发布顺序在本仓库内是硬约束**：后端对未知事件类型返回 422（`_validate_entry`），因此**后端必须先于 sidecar 部署**，否则 sidecar 的新事件会让整批 append 失败、run 直接失败。旧前端不受影响（`stores/agent.ts` switch 的 default 分支忽略未知类型，已实测）。
+- **回退**：前端先关（停止渲染临时气泡）→ sidecar 停产生（移除两处 emit）→ 后端最后移除注册。任一步都不需要迁移，也不删除任何用户历史（临时事件本就不物化 `AgentMessage`）。
 
 **状态与权威规则**：
 
@@ -49,11 +58,11 @@ H（`09-17-assistant-incremental-delivery`）为方案任务、未进入实现�
 | attempt 变化 / 账号空间切换 | 丢弃旧临时投影 | 不拼接不同执行或主体的片段 |
 | 断线 / 刷新 | 从合法重放或权威快照恢复 | 不从 localStorage 恢复正文 |
 
-**字段候选**（最终以后端 schema 为准，extra-forbid 要求两端联调）：`run_id`、`attempt`、`message_key`、`message_revision`、`delta_seq`、`text_fragment`、`final`。事件持久 ID 负责 SSE 续传，业务 seq 负责消息拼接，两者不能混用。
+**字段**（已冻结，实现见上）：`assistant.text_delta = {role:"assistant", delta}`；`assistant.text_reset = {role:"assistant"}`。两端 extra-forbid，额外字段 422。事件持久 seq 负责 SSE 续传；消息拼接是「按到达顺序追加到当前临时气泡」，不需要额外业务序号（同一 run 内 sidecar 已保证顺序）。
 
 **输出安全**：临时文本不得绕过输出 policy guard。已核实当前 append 路径与 message_end 均无输出侧扫描，因此不得以「已有 guard」为由放行增量；必须按上述有界策略发布，并在实现中给出该结论的显式处理（保留缓冲或明示未覆盖）。thinking、工具参数/结果不作正文。
 
-**有界性**：聚合间隔、单帧上限、单 run 缓存上限在 F 基线后冻结；背压时合并或快照恢复，不丢权威终态。
+**有界性**：已冻结——单帧 2000 码点（sidecar）/ 4000 码点（后端硬夹），flush 边界为任何非 `message_update` 事件；背压时靠聚合天然合并，不丢权威终态（`drain()` 先 flush 再取队列）。
 
 **发布顺序与回退**：backend 先接受新事件类型 → sidecar 再产生 → frontend 最后启用；旧客户端继续收完整 message 事件。回退停止产生临时事件、保留最终完整正文链，存量未完成投影安全收敛，不删除用户历史。
 
