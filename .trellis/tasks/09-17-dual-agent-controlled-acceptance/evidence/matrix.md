@@ -24,7 +24,7 @@ python3 scripts/smoke/run_browser_acceptance.py --report /tmp/f-browser.json \
 
 ## 逐格结果
 
-`run_controlled_acceptance.py`：**38 / 38 通过**。
+`run_controlled_acceptance.py`：**41 / 41 通过**。
 `run_browser_acceptance.py`：**19 / 19 通过**。
 
 D-F1/D-F2/D-F3 三个缺陷已分别在 `09-17-assistant-retry-governance`（取消分类 + 快速收敛）、
@@ -32,6 +32,22 @@ D-F1/D-F2/D-F3 三个缺陷已分别在 `09-17-assistant-retry-governance`（取
 `09-19-assistant-provisional-terminal-mark`（取消后终态标记）修复并集成；上表为集成后复跑。
 
 ### A 组 助手（F-R1）
+
+F-R1 列举的 11 类场景与格的对应（缺一格即视为未覆盖）：
+
+| F-R1 场景 | 覆盖格 | 执行方式 |
+| --- | --- | --- |
+| 无工具 | A1-run、A1-1..A1-5 | 受控场景（真实 sidecar 进程内驱动） |
+| 只读工具 | A2b-run、A2b-1/2 | 受控场景 |
+| 纯工具轮 | A2a | 复用 `agent/test/worker.integration.test.ts`（真实 Pi SDK + 假上游） |
+| 多轮 | A2a、A3-2/A3-3 | 同上 + 受控场景 |
+| 自动压缩 | A3-1..A3-4 | 受控场景（真实 SDK 阈值路径） |
+| 两 run 排队 | A4-1/A4-2 | 受控场景 |
+| 单失败成功 | A5-layers | 复用 `agent/test/retry-governance.test.ts` |
+| 失败耗尽 | A5-layers、A5-transient | 同上 + 受控场景 |
+| 空最终回答 | A2a | 复用 `agent/test/worker.integration.test.ts` |
+| 取消 | A6-1/A6-2 | 受控场景 + UI2-6/UI2-7（真浏览器） |
+| 失租 | A6-lease、B3 | 复用 agent 回归 + 管家受控格 |
 
 | 格 | 断言 | 结果 | 关键证据 |
 | --- | --- | --- | --- |
@@ -69,6 +85,17 @@ D-F1/D-F2/D-F3 三个缺陷已分别在 `09-17-assistant-retry-governance`（取
 **B 组证据边界**：这些用例用 fake transport 与注入时钟，证明**程序合同**（预算、栅栏、
 幂等、四 kind、空结果处置），不证明真实上游的时延分布或模型输出质量。
 B1c 是其中唯一在真实 HTTP transport 层测量总截止的格（不靠 fake 时钟）。
+
+### sidecar 复用套件（真实 Pi SDK + 假 provider 流）
+
+| 格 | 覆盖 | 结果 |
+| --- | --- | --- |
+| A2a | 纯工具轮 / 多轮 / 空最终回答的终态与「不熄等待」 | pass（`worker.integration.test.ts`） |
+| A5-layers | 单失败后成功、失败耗尽的真实出站数、退避中取消中断 | pass（`retry-governance.test.ts`） |
+| A6-lease | 心跳拒绝（撤权/失租）后跳过结算且不回写 | pass（`worker.integration.test.ts`） |
+
+**证据边界**：这三格证明 sidecar 的程序合同与状态机；不证明真实上游的时延分布、
+模型质量或线上可用性（属 G）。
 
 ### D/E 组 观测与错误分类（复用）
 
