@@ -1,5 +1,6 @@
 """Agent Run SSE 流测试：回放、Last-Event-ID 断点续传、挂起至事件、终态关闭、鉴权。"""
 
+import json
 import threading
 import time
 
@@ -194,3 +195,89 @@ def test_invalid_last_event_id_is_ignored(client, db_session):
     )
     events = _parse_sse(response.text.splitlines())
     assert [e["id"] for e in events] == [0, 1, 2]
+
+
+def test_provisional_prose_reaches_the_browser_wire_unchanged(client, db_session):
+    """09-18 P0-2：临时正文分片必须原样到达浏览器线缆（不被投影过滤/改写）。
+
+    只证明持久化不够：SSE 端点经 `project_event_payload` 二次投影，且它是
+    前端唯一的数据来源。这里锁定「分片 + reset + 权威消息」三者都在线上，
+    顺序不变，且临时载荷不含任何服务端内部字段。
+    """
+    user, _space, _agent_session, run = _seed_run(db_session, "sseprovisional")
+    _append(db_session, run, 1, "turn.started")
+    _append(
+        db_session,
+        run,
+        2,
+        "assistant.text_delta",
+        {"role": "assistant", "delta": "第一段"},
+    )
+    _append(
+        db_session,
+        run,
+        3,
+        "assistant.text_delta",
+        {"role": "assistant", "delta": "第二段"},
+    )
+    _append(db_session, run, 4, "assistant.text_reset", {"role": "assistant"})
+    _append(
+        db_session,
+        run,
+        5,
+        "assistant.text_delta",
+        {"role": "assistant", "delta": "重试后的正文"},
+    )
+    _append(
+        db_session,
+        run,
+        6,
+        "message.assistant_added",
+        {"role": "assistant", "text": "重试后的正文"},
+    )
+    _append(db_session, run, 7, "run.settled", {})
+
+    token = login(client, "sseprovisional", "123456").json()
+    sink: list = []
+    thread = _drain_stream(
+        client,
+        f"/api/agent/runs/{run.id}/events?after_event_id=0",
+        auth_header(token),
+        sink,
+    )
+    thread.join(timeout=10)
+    assert not thread.is_alive(), f"SSE 未关闭：{sink}"
+
+    events = _parse_sse([line for line in sink if isinstance(line, str)])
+    kinds = [event["event"] for event in events]
+    assert kinds == [
+        "turn.started",
+        "assistant.text_delta",
+        "assistant.text_delta",
+        "assistant.text_reset",
+        "assistant.text_delta",
+        "message.assistant_added",
+        "run.settled",
+    ]
+
+    deltas = [
+        json.loads(event["data"]) for event in events if event["event"] == "assistant.text_delta"
+    ]
+    # 顺序与内容原样到达：前端按到达顺序追加即可还原（reset 后重新累积）。
+    assert [row["payload"]["delta"] for row in deltas] == [
+        "第一段",
+        "第二段",
+        "重试后的正文",
+    ]
+    # 临时载荷就是闭合投影本身，没有服务端内部字段泄漏。
+    for row in deltas:
+        assert set(row["payload"]) == {"role", "delta"}
+        assert "context_reference" not in row["payload"]
+        assert "citations" not in row["payload"]
+
+    reset = next(event for event in events if event["event"] == "assistant.text_reset")
+    assert json.loads(reset["data"])["payload"] == {"role": "assistant"}
+
+    # 权威消息仍然携带完整答案，临时分片不改变它。
+    authoritative = next(event for event in events if event["event"] == "message.assistant_added")
+    assert json.loads(authoritative["data"])["payload"]["text"] == "重试后的正文"
