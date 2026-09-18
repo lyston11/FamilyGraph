@@ -72,7 +72,7 @@
 
 ### 聚合口径（`GET /admin-api/v1/agent/latency` 的 `assistant_phases`）
 
-- 每个 `PhaseStats` 带 `basis`（`source_clock` / `persist_interval` / `mixed` / `none`）
+- 每个 `PhaseStats` 带 `basis`（`source_clock` / `persisted_interval` / `mixed` / `none`）
   与 `native_n` / `derived_n`，**新旧样本不混成同一精度的分布**：有源计时的 run 用源计时，
   只有历史行的 run 退回持久间隔并明确标注 basis，不得把两者合成一个中位数。
 - 分母是**全部符合窗口的 run**（LEFT JOIN 事件/审计），不是事件集合反推；
@@ -87,14 +87,16 @@
   `agent_provider_egress` 审计（**`target_id` 就是 run_id**，`detail_json` 含
   `status`/`upstream_status`/`bytes_read`，无 prompt/正文）推导：同一连续失败段内
   `末次失败 − 首次失败`。这是**下界**——审计只记完成时刻、不记请求开始，故段内首次
-  失败自身耗时不可知；单次失败后即成功的段贡献 0。`provider_failed_attempts` 给出失败
-  尝试总数（无歧义）。**不得**把 `provider_retry` 当作全部重试耗时，也不得用
-  `model_turn − provider_retry` 宣称“纯推理时间”而不注明下界性质，更不得忽略
-  `compaction` 子成分。
+  失败自身耗时不可知；单次失败后即成功的段贡献 0 并单列 `unmeasured_retries`。
+  `provider_retry.failed_attempts` 给出失败尝试总数（无歧义），`retry_segments` 是
+  有可测窗口的段数，`exhausted_segments` 是失败耗尽的尾部段数。**不得**把 `provider_retry`
+  当作全部重试耗时，也不得用 `model_turn − provider_retry` 宣称“纯推理时间”而不注明
+  下界性质，更不得忽略 `compaction` 子成分。
   实测（n=2 run，只读副本）：run 2 的 5 次 502 在**同一轮内**连续，`provider_retry` 记录
   10.22s（该轮 `model_turn` 33.15s）；run 1 是**每轮各一次** 503，失败段长度为 1，
-  按 `末次−首次` 定义得 0——即**单次失败的段不被测量**，只能由 `provider_failed_attempts=2`
-  看出有重试。这是本指标的已知盲区，不要用它的 n 去反推「无重试」。
+  按 `末次−首次` 定义得 0——即**单次失败的段不被测量**，只能由
+  `provider_retry.failed_attempts=2` 看出有重试。这是本指标的已知盲区，不要用它的 n
+  去反推「无重试」。
   触发源是上游 502/503 不稳定，不是退避上限（实测退避远小于
   `AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS=20000`）。
 - **不要直接透传 delta**：`mapSessionEvent` 忽略 `message_update`/delta 是**刻意合同**，
