@@ -226,14 +226,15 @@ def _run_with_events(
     *,
     user,
     space,
-    events: list[tuple[str, float, dict | None]],
+    events: list[tuple[str, float, dict | None, dict | None]],
     settle_after_s: float,
+    first_lease_after_s: float | None = None,
 ):
     """建一个已结算 run，并按给定偏移（秒）写入持久事件。
 
     偏移相对 run.created_at；第一个事件通常是 message.user_added（seq 0）。
-    用裸 SQL 写事件行：本测试只需 (run_id, seq, type, created_at, public_payload)，
-    不经过服务层协议校验，也不产生任何模型请求。
+    第四个元组项是该事件的 sidecar 源计时（``timing_json``），None 表示历史行。
+    用裸 SQL 写事件行：本测试只需协议列，不经过服务层校验，也不产生模型请求。
     """
     session_row = _agent_session(db_session, account_id=user.id, space_id=space.id)
     run = agent_queue.enqueue_run(
@@ -250,18 +251,24 @@ def _run_with_events(
         sa.text("UPDATE agent_runs SET created_at = :base WHERE id = :rid"),
         {"base": base, "rid": run.id},
     )
-    for seq, (event_type, offset, payload) in enumerate(events):
+    if first_lease_after_s is not None:
+        db_session.execute(
+            sa.text("UPDATE agent_runs SET first_leased_at = :at WHERE id = :rid"),
+            {"at": base + timedelta(seconds=first_lease_after_s), "rid": run.id},
+        )
+    for seq, (event_type, offset, payload, timing) in enumerate(events):
         db_session.execute(
             sa.text(
                 "INSERT INTO agent_run_events "
-                "(run_id, seq, type, public_payload, created_at) "
-                "VALUES (:rid, :seq, :type, :payload, :at)"
+                "(run_id, seq, type, public_payload, timing_json, created_at) "
+                "VALUES (:rid, :seq, :type, :payload, :timing, :at)"
             ),
             {
                 "rid": run.id,
                 "seq": seq,
                 "type": event_type,
                 "payload": json.dumps(payload or {}),
+                "timing": None if timing is None else json.dumps(timing),
                 "at": base + timedelta(seconds=offset),
             },
         )
@@ -312,9 +319,9 @@ def test_latency_metrics_decomposes_assistant_phases(
 ) -> None:
     """分段必须由持久事件时间戳推导，且不把多轮/工具/无正文轮算错。
 
-    构造一个两轮 run：入队→取得执行权 11s，第 1 轮生成 53s（后接一次工具），
-    第 2 轮生成 40s，最后事件→结算 0.5s。另建一个未取得执行权即结束的 run
-    （无 run.started），它只能计入 runs_without_start。
+    构造一个两轮 run：入队→首次取得执行权 9s，准备 2s，第 1 轮生成 53s
+    （后接一次工具），第 2 轮生成 40s，最后事件→结算 0.5s。另建一个未取得
+    执行权即结束的 run（无 run.started），它只能计入 runs_without_start。
     """
     user, space = create_agent_fixture(db_session, name="lat-phase")
     _run_with_events(
@@ -322,25 +329,26 @@ def test_latency_metrics_decomposes_assistant_phases(
         user=user,
         space=space,
         events=[
-            ("message.user_added", 0.0, None),
-            ("run.started", 11.0, None),
-            ("turn.started", 11.0, None),
-            ("message.assistant_added", 64.0, {"role": "assistant", "text": "a"}),
-            ("tool.execution.started", 64.0, {"tool_call_id": "t1", "tool_name": "x"}),
-            ("tool.execution.completed", 65.0, {"tool_call_id": "t1", "tool_name": "x"}),
-            ("turn.completed", 65.0, None),
-            ("turn.started", 65.0, None),
-            ("message.assistant_added", 105.0, {"role": "assistant", "text": "b"}),
-            ("turn.completed", 105.0, None),
+            ("message.user_added", 0.0, None, None),
+            ("run.started", 11.0, None, None),
+            ("turn.started", 11.0, None, None),
+            ("message.assistant_added", 64.0, {"role": "assistant", "text": "a"}, None),
+            ("tool.execution.started", 64.0, {"tool_call_id": "t1", "tool_name": "x"}, None),
+            ("tool.execution.completed", 65.0, {"tool_call_id": "t1", "tool_name": "x"}, None),
+            ("turn.completed", 65.0, None, None),
+            ("turn.started", 65.0, None, None),
+            ("message.assistant_added", 105.0, {"role": "assistant", "text": "b"}, None),
+            ("turn.completed", 105.0, None, None),
         ],
         settle_after_s=105.5,
+        first_lease_after_s=9.0,
     )
     # 未取得执行权即结束：只有入队事件，没有 run.started。
     _run_with_events(
         db_session,
         user=user,
         space=space,
-        events=[("message.user_added", 0.0, None)],
+        events=[("message.user_added", 0.0, None, None)],
         settle_after_s=1.0,
     )
 
@@ -349,10 +357,15 @@ def test_latency_metrics_decomposes_assistant_phases(
     phases = resp.json()["assistant_phases"]
 
     assert phases["runs"] == 2
+    assert phases["runs_without_first_lease"] == 1
     assert phases["runs_without_start"] == 1
-    # 入队 → run.started（取得执行权）
+    # 入队 → 首次取得执行权（不可变列，不是续租字段）
     assert phases["queue_wait"]["n"] == 1
-    assert phases["queue_wait"]["p50_ms"] == 11_000
+    assert phases["queue_wait"]["p50_ms"] == 9_000
+    assert phases["queue_wait"]["basis"] == "source_clock"
+    # 取得执行权 → run.started（context + session 准备）：不得归入排队
+    assert phases["prepare"]["n"] == 1
+    assert phases["prepare"]["p50_ms"] == 2_000
     # 取得执行权 → 首个 assistant 正文（每 run 一个样本，不是每轮）
     assert phases["first_text"]["n"] == 1
     assert phases["first_text"]["p50_ms"] == 53_000
@@ -367,6 +380,177 @@ def test_latency_metrics_decomposes_assistant_phases(
     assert phases["settle"]["n"] == 2
     assert phases["settle"]["p50_ms"] == 500
     assert phases["settle"]["max_ms"] == 1_000
+    # 历史行无源计时：如实标注样本来源，不冒充精确执行耗时
+    assert phases["model_turn"]["basis"] == "persisted_interval"
+    assert phases["model_turn"]["native_n"] == 0
+    assert phases["model_turn"]["derived_n"] == 2
+    assert phases["settle"]["basis"] == "source_clock"
+
+
+def test_latency_metrics_prefers_source_clock_over_flush_batching(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """D-AC1：批量 flush 不得把 125ms 工具工作显示为约 1ms。
+
+    同一批入库使工具起止事件只相差 1.3ms；producer 源计时给出真实 125ms。
+    报告必须取源计时，并如实标注 basis/native_n，不把持久间隔当执行耗时。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-source")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None, None),
+            (
+                "run.started",
+                1.0,
+                None,
+                {"source": "sidecar-v1", "duration_ms": 4_500},
+            ),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                21.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": 20_000},
+            ),
+            ("tool.execution.started", 21.0, {"tool_call_id": "t1", "tool_name": "x"}, None),
+            (
+                "tool.execution.completed",
+                21.0013,
+                {"tool_call_id": "t1", "tool_name": "x"},
+                {"source": "sidecar-v1", "duration_ms": 125},
+            ),
+            ("turn.completed", 21.0013, None, None),
+        ],
+        settle_after_s=21.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+
+    # 工具：源计时 125ms，不是 1.3ms 的持久间隔
+    assert phases["tool_call"]["n"] == 1
+    assert phases["tool_call"]["p50_ms"] == 125
+    assert phases["tool_call"]["basis"] == "source_clock"
+    assert phases["tool_call"]["native_n"] == 1
+    assert phases["tool_call"]["derived_n"] == 0
+    # 准备阶段：源计时优先
+    assert phases["prepare"]["n"] == 1
+    assert phases["prepare"]["p50_ms"] == 4_500
+    assert phases["prepare"]["basis"] == "source_clock"
+    # 该轮生成：源计时优先
+    assert phases["model_turn"]["n"] == 1
+    assert phases["model_turn"]["p50_ms"] == 20_000
+    assert phases["model_turn"]["native_n"] == 1
+
+
+def test_latency_metrics_separates_compaction_from_generation(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """D-AC2：轮内压缩是 model_turn 的子成分，必须可单独归属。
+
+    两轮：第 1 轮内有 8s 压缩（该轮 model_turn=20s），第 2 轮无压缩
+    （model_turn=30s）。若不单列 compaction，就会把 8s 摘要请求当成纯生成。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-compaction")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                21.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": 20_000, "compaction_ms": 8_000},
+            ),
+            ("turn.completed", 21.0, None, None),
+            ("turn.started", 21.0, None, None),
+            (
+                "message.assistant_added",
+                51.0,
+                {"role": "assistant", "text": "b"},
+                {"source": "sidecar-v1", "duration_ms": 30_000},
+            ),
+            ("turn.completed", 51.0, None, None),
+        ],
+        settle_after_s=51.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+
+    # 两轮各一个 model_turn 样本，压缩是其中一轮的子成分。
+    assert phases["model_turn"]["n"] == 2
+    # nearest-rank p50：ceil(0.5*2)=1 名 → 较小值 20s，最大值是 30s。
+    assert phases["model_turn"]["p50_ms"] == 20_000
+    assert phases["model_turn"]["max_ms"] == 30_000
+    # 只有确实压缩过的那一轮贡献样本（无压缩的轮不得用 0 填充）。
+    assert phases["compaction"]["n"] == 1
+    assert phases["compaction"]["p50_ms"] == 8_000
+    assert phases["compaction"]["basis"] == "source_clock"
+
+
+def test_latency_metrics_compaction_empty_without_source_timing(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """历史行无源计时：压缩必须报 n=0，不能从持久间隔反推。"""
+    user, space = create_agent_fixture(db_session, name="lat-compaction-legacy")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            ("message.assistant_added", 21.0, {"role": "assistant", "text": "a"}, None),
+            ("turn.completed", 21.0, None, None),
+        ],
+        settle_after_s=21.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    phases = resp.json()["assistant_phases"]
+    assert phases["compaction"]["n"] == 0
+    assert phases["compaction"]["p50_ms"] is None
+    assert phases["compaction"]["basis"] == "none"
+
+
+def test_latency_metrics_counts_runs_without_events_in_denominator(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """D-AC3：零事件 run 不能从分母消失（不从事件集合反推 run 集合）。"""
+    user, space = create_agent_fixture(db_session, name="lat-noevent")
+    session_row = _agent_session(db_session, account_id=user.id, space_id=space.id)
+    run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    run.status = "failed"
+    run.settled_at = utcnow()
+    db_session.commit()
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+    assert phases["runs"] == 1
+    assert phases["runs_without_events"] == 1
+    assert phases["runs_without_first_lease"] == 1
+    # 无 run.started 的 run 不得被当成“无事件以外的失败”或伪造分段
+    assert phases["queue_wait"]["n"] == 0
+    assert phases["queue_wait"]["basis"] == "none"
 
 
 def test_latency_metrics_separates_provider_retry_from_generation(
@@ -384,16 +568,17 @@ def test_latency_metrics_separates_provider_retry_from_generation(
         user=user,
         space=space,
         events=[
-            ("message.user_added", 0.0, None),
-            ("run.started", 1.0, None),
-            ("turn.started", 1.0, None),
-            ("message.assistant_added", 21.0, {"role": "assistant", "text": "a"}),
-            ("turn.completed", 21.0, None),
-            ("turn.started", 21.0, None),
-            ("message.assistant_added", 41.0, {"role": "assistant", "text": "b"}),
-            ("turn.completed", 41.0, None),
+            ("message.user_added", 0.0, None, None),
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            ("message.assistant_added", 21.0, {"role": "assistant", "text": "a"}, None),
+            ("turn.completed", 21.0, None, None),
+            ("turn.started", 21.0, None, None),
+            ("message.assistant_added", 41.0, {"role": "assistant", "text": "b"}, None),
+            ("turn.completed", 41.0, None, None),
         ],
         settle_after_s=41.5,
+        first_lease_after_s=0.5,
     )
     _egress(
         db_session,
@@ -413,12 +598,127 @@ def test_latency_metrics_separates_provider_retry_from_generation(
     # model_turn 仍含重试（口径如实），两轮各一个样本。
     assert phases["model_turn"]["n"] == 2
     assert phases["model_turn"]["p50_ms"] == 20_000
+    retry = phases["provider_retry"]
     # 重试开销单列：仅第 1 轮的失败段，9s − 6s = 3s（下界）。
-    assert phases["provider_retry"]["n"] == 1
-    assert phases["provider_retry"]["p50_ms"] == 3_000
-    # 失败尝试数无歧义：两次 502。
-    assert phases["provider_failed_attempts"] == 2
-    assert phases["runs_with_provider_retry"] == 1
+    assert retry["retry_segments"] == 1
+    assert retry["duration_lower_bound"]["n"] == 1
+    assert retry["duration_lower_bound"]["p50_ms"] == 3_000
+    # 失败尝试数与影响范围无歧义：两次 502，均属同一 run。
+    assert retry["failed_attempts"] == 2
+    assert retry["runs_with_failure"] == 1
+    assert retry["runs_with_retry"] == 1
+    # 段长为 2，不是“单次失败后成功”。
+    assert retry["unmeasured_retries"] == 0
+
+
+def test_latency_metrics_counts_single_failure_then_success(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """D-AC3：一次失败后成功确实发生了重试，但窗口长度为 0。
+
+    旧实现把它计成 0 时长样本，读者会误读为“无重试”。现在单列
+    ``unmeasured_retries``，时长下界不包含它。
+    """
+    user, space = create_agent_fixture(db_session, name="lat-single-retry")
+    run = _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None, None),
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            ("message.assistant_added", 21.0, {"role": "assistant", "text": "a"}, None),
+            ("turn.completed", 21.0, None, None),
+        ],
+        settle_after_s=21.5,
+        first_lease_after_s=0.5,
+    )
+    _egress(
+        db_session,
+        run_id=run.id,
+        offsets_s=[("failed", 5.0, 503), ("succeeded", 21.0, 200)],
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    retry = resp.json()["assistant_phases"]["provider_retry"]
+    assert retry["failed_attempts"] == 1
+    assert retry["unmeasured_retries"] == 1
+    assert retry["retry_segments"] == 0
+    assert retry["duration_lower_bound"]["n"] == 0
+    assert retry["runs_with_failure"] == 1
+
+
+def test_latency_metrics_counts_exhausted_retry_streak(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """D-AC3：失败耗尽的尾部段不得因“没有后续成功”而丢失。"""
+    user, space = create_agent_fixture(db_session, name="lat-exhausted")
+    run = _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None, None),
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+        ],
+        settle_after_s=30.0,
+        first_lease_after_s=0.5,
+    )
+    _egress(
+        db_session,
+        run_id=run.id,
+        offsets_s=[
+            ("failed", 5.0, 502),
+            ("failed", 9.0, 502),
+            ("failed", 15.0, 502),
+        ],
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    retry = resp.json()["assistant_phases"]["provider_retry"]
+    assert retry["failed_attempts"] == 3
+    assert retry["exhausted_segments"] == 1
+    assert retry["retry_segments"] == 1
+    # 尾部段仍有可测窗口：15s − 5s = 10s（下界）。
+    assert retry["duration_lower_bound"]["p50_ms"] == 10_000
+
+
+def test_latency_metrics_rejects_negative_timing(
+    admin_client: TestClient, db_session, _admin_headers
+) -> None:
+    """D-AC4：畸形 timing（负值）按 unknown 处理，不进入分布也不报错。"""
+    user, space = create_agent_fixture(db_session, name="lat-bad-timing")
+    _run_with_events(
+        db_session,
+        user=user,
+        space=space,
+        events=[
+            ("message.user_added", 0.0, None, None),
+            ("run.started", 1.0, None, None),
+            ("turn.started", 1.0, None, None),
+            (
+                "message.assistant_added",
+                21.0,
+                {"role": "assistant", "text": "a"},
+                {"source": "sidecar-v1", "duration_ms": -5},
+            ),
+            ("turn.completed", 21.0, None, None),
+        ],
+        settle_after_s=21.5,
+        first_lease_after_s=0.5,
+    )
+
+    resp = admin_client.get("/admin-api/v1/agent/latency", headers=_admin_headers)
+    assert resp.status_code == 200, resp.text
+    phases = resp.json()["assistant_phases"]
+    # 负值不是时长：回退为持久间隔并标注来源，不伪造 0 也不 500。
+    assert phases["model_turn"]["n"] == 1
+    assert phases["model_turn"]["native_n"] == 0
+    assert phases["model_turn"]["p50_ms"] == 20_000
 
 
 def test_latency_metrics_phases_empty_without_events(
@@ -429,9 +729,13 @@ def test_latency_metrics_phases_empty_without_events(
     assert resp.status_code == 200
     phases = resp.json()["assistant_phases"]
     assert phases["runs"] == 0
-    assert phases["queue_wait"] == {"n": 0, "p50_ms": None, "p95_ms": None, "max_ms": None}
+    assert phases["queue_wait"]["n"] == 0
+    assert phases["queue_wait"]["p50_ms"] is None
+    assert phases["queue_wait"]["basis"] == "none"
     assert phases["first_text"]["n"] == 0
     assert phases["model_turn"]["n"] == 0
+    assert phases["provider_retry"]["failed_attempts"] == 0
+    assert phases["provider_retry"]["duration_lower_bound"]["n"] == 0
 
 
 def test_latency_metrics_records_audit(

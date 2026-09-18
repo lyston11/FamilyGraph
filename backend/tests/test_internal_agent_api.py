@@ -1,5 +1,6 @@
 """Internal Agent HTTP 协议测试：两级认证、fail-closed 审计、feature flag。"""
 
+import pytest
 from sqlalchemy import select
 
 from app import config
@@ -334,6 +335,194 @@ def test_events_append_and_settle_via_api(internal_client, db_session):
     )
     assert again.status_code == 409
     assert again.json()["error"]["code"] == "AGENT_RUN_TERMINAL"
+
+
+def test_events_append_persists_sidecar_timing(internal_client, db_session):
+    """D：producer 源计时落内部列，不进 public_payload；类型受限且可幂等重放。
+
+    `created_at` 是入库时刻（250ms 批量 flush 会压缩短阶段），所以精确时长
+    必须来自 sidecar 的 timing；它只能由 sidecar 执行事件携带，且越界/未知输入
+    fail-closed。
+    """
+    from app.models.agent import AgentRun, AgentRunEvent
+
+    _, _, _, run = _seed(db_session, name="timing")
+    lease_response = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"kind": "assistant", "leased_by": "sc"},
+        headers=_auth(issue_service_token()),
+    )
+    token = lease_response.json()["run_token"]
+    # 首次取得执行权的权威时刻在 lease 时落库（attempt 0→1）。
+    db_session.expire_all()
+    assert db_session.get(AgentRun, run.id).first_leased_at is not None
+
+    append = internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={
+            "events": [
+                {
+                    "seq": 1,
+                    "type": "run.started",
+                    "public_payload": {},
+                    "timing": {"source": "sidecar-v1", "duration_ms": 4200},
+                }
+            ]
+        },
+        headers=_auth(token),
+    )
+    assert append.status_code == 200, append.text
+    row = db_session.execute(
+        select(AgentRunEvent).where(AgentRunEvent.run_id == run.id, AgentRunEvent.seq == 1)
+    ).scalar_one()
+    assert row.timing_json == {"source": "sidecar-v1", "duration_ms": 4200}
+    # 计时是内部证据：公开 payload 不含它
+    assert "timing" not in row.public_payload
+
+    # 幂等重放：同 seq 同内容（含 timing）视为重复，不重复落行。
+    replay = internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={
+            "events": [
+                {
+                    "seq": 1,
+                    "type": "run.started",
+                    "public_payload": {},
+                    "timing": {"source": "sidecar-v1", "duration_ms": 4200},
+                }
+            ]
+        },
+        headers=_auth(token),
+    )
+    assert replay.status_code == 200
+    assert replay.json() == {"accepted": [], "duplicates": [1]}
+
+
+def test_events_append_scopes_compaction_timing_to_assistant_text(internal_client, db_session):
+    """D-AC2：轮内压缩子成分只在 assistant 正文事件上合法，且随行持久化。
+
+    压缩是 ``model_turn`` 的子成分，只有正文事件才能声明“本轮压缩了多少”；
+    其他 sidecar 事件携带它会把摘要开销错配到准备/工具阶段。
+    """
+    from app.models.agent import AgentRunEvent
+
+    _, _, _, run = _seed(db_session, name="timing-compaction")
+    lease_response = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"kind": "assistant", "leased_by": "sc"},
+        headers=_auth(issue_service_token()),
+    )
+    token = lease_response.json()["run_token"]
+
+    accepted = internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={
+            "events": [
+                {
+                    "seq": 1,
+                    "type": "message.assistant_added",
+                    "public_payload": {"role": "assistant", "text": "a"},
+                    "timing": {
+                        "source": "sidecar-v1",
+                        "duration_ms": 20_000,
+                        "compaction_ms": 8_000,
+                    },
+                }
+            ]
+        },
+        headers=_auth(token),
+    )
+    assert accepted.status_code == 200, accepted.text
+    row = db_session.execute(
+        select(AgentRunEvent).where(AgentRunEvent.run_id == run.id, AgentRunEvent.seq == 1)
+    ).scalar_one()
+    assert row.timing_json == {
+        "source": "sidecar-v1",
+        "duration_ms": 20_000,
+        "compaction_ms": 8_000,
+    }
+    assert "compaction_ms" not in row.public_payload
+
+    # 子成分大于总时长（物理不可能）、负数、其他事件类型携带，均 fail-closed。
+    for seq, event_type, timing in (
+        (
+            2,
+            "message.assistant_added",
+            {"source": "sidecar-v1", "duration_ms": 100, "compaction_ms": 500},
+        ),
+        (
+            2,
+            "message.assistant_added",
+            {"source": "sidecar-v1", "duration_ms": 100, "compaction_ms": -1},
+        ),
+        (
+            2,
+            "tool.execution.completed",
+            {"source": "sidecar-v1", "duration_ms": 100, "compaction_ms": 50},
+        ),
+    ):
+        rejected = internal_client.post(
+            f"/internal/agent/runs/{run.id}/events/append",
+            json={
+                "events": [
+                    {
+                        "seq": seq,
+                        "type": event_type,
+                        "public_payload": {
+                            "tool_call_id": "tc_1",
+                            "tool_name": "familygraph.echo",
+                            "is_error": False,
+                        },
+                        "timing": timing,
+                    }
+                ]
+            },
+            headers=_auth(token),
+        )
+        assert rejected.status_code == 422, (event_type, timing, rejected.text)
+
+    # 后端自有事件不得携带 producer 计时（防伪精度）；负值/越界/未知 source 拒绝。
+    for bad in (
+        {"source": "sidecar-v1", "duration_ms": 10},
+        {"source": "sidecar-v1", "duration_ms": -1},
+        {"source": "sidecar-v1", "duration_ms": 86_400_001},
+        {"source": "unknown", "duration_ms": 5},
+    ):
+        rejected = internal_client.post(
+            f"/internal/agent/runs/{run.id}/events/append",
+            json={
+                "events": [{"seq": 2, "type": "turn.started", "public_payload": {}, "timing": bad}]
+            },
+            headers=_auth(token),
+        )
+        assert rejected.status_code == 422, bad
+
+
+@pytest.mark.parametrize("bad_timing", ["x", 5, {"duration_ms": 5}])
+def test_events_append_rejects_malformed_timing(internal_client, db_session, bad_timing):
+    """timing 必须是闭合对象；非对象/缺字段 fail-closed。"""
+    _, _, _, run = _seed(db_session, name="bad-timing")
+    lease_response = internal_client.post(
+        "/internal/agent/jobs/lease",
+        json={"kind": "assistant", "leased_by": "sc"},
+        headers=_auth(issue_service_token()),
+    )
+    token = lease_response.json()["run_token"]
+    response = internal_client.post(
+        f"/internal/agent/runs/{run.id}/events/append",
+        json={
+            "events": [
+                {
+                    "seq": 1,
+                    "type": "run.started",
+                    "public_payload": {},
+                    "timing": bad_timing,
+                }
+            ]
+        },
+        headers=_auth(token),
+    )
+    assert response.status_code == 422
 
 
 def test_feature_flag_disabled_returns_503(internal_client, db_session, monkeypatch):

@@ -19,7 +19,7 @@ from app.services.steward_guard import candidate_digest
 from app.utils.timeutil import utcnow
 
 PARENT = "0048_steward_terminology_publication"
-HEAD = "0050_term_alias_spouse_fix"
+HEAD = "0051_run_event_timing"
 _HISTORY_TABLES = (
     "steward_suggestions",
     "steward_suggestion_recipients",
