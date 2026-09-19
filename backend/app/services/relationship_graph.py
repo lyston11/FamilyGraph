@@ -8,6 +8,10 @@
   本人，逐一过 visibility.evaluate(space_context, purpose=agent) 剪枝，
   与 V2.2 agent_query._space_candidate_ids 同一口径；不可见节点连边一并剪除
   （防存在性泄露）。
+- 路径口径（09-19）：事实至少一端接入节点集合，且两端点都对 viewer 可见
+  （purpose=graph）。中间人可以不是本空间成员（例如共享父母）——不如此则
+  亲属路径会被切断；但中间人**不进入节点集合**，只进入路径证据可见集
+  （``path_genders`` / ``path_user_ids``）。
 - 边词汇：parent 四型（subject 是 object 的家长，子方向查询反向遍历）、
   spouse/partner（对称，subtype 区分）、direct_sibling（对称，父母未知时独立
   成立，不反推父母）。
@@ -26,7 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, TypeVar
@@ -69,7 +73,7 @@ _SYMMETRIC_KIND_BY_FACT_TYPE = {
 # 遍历与主路径排序的确定性依据：邻接表按键排序，同键按 (to_id, edge_type, fact_id)
 _EDGE_ORDER = {EDGE_PARENT: 0, EDGE_SIBLING: 1, EDGE_SPOUSE: 2, EDGE_PARTNER: 3, EDGE_BRIDGE: 4}
 
-GRAPH_SNAPSHOT_VERSION = "authorized-graph-v2"
+GRAPH_SNAPSHOT_VERSION = "authorized-graph-v3"
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -190,9 +194,17 @@ class RelationshipGraph:
 
     viewer_user_id: int
     space_id: int
+    # 节点集合：仅当前空间的授权候选（active 成员 ∪ active 引用 ∪ 本人，经
+    # PURPOSE_GRAPH 重验）。消费方据此决定「谁出现在家族树/谁是称谓目标」。
     node_genders: Mapping[int, str]
+    # 邻接表覆盖路径可见集内的全部节点：路径枚举需要穿过不是本空间成员的
+    # 中间人（例如共享父母），否则亲属称谓会被切断。
     adjacency: Mapping[int, Sequence[GraphEdge]]
     snapshot_hash: str
+    # 路径证据可见集（含中间人）的性别表。**不是**节点集合：不得用它决定节点
+    # 是否进入家族树、也不得据此扩大任何字段投影；它只用于路径编码/描述与
+    # 路径证据的逐条重验。恒为 node_genders 的超集。
+    path_genders: Mapping[int, str] = field(default_factory=dict)
     bridge_user_ids: frozenset[int] = frozenset()
     confirmed_facts: tuple[GraphFact, ...] = ()
     bridges: tuple[GraphBridge, ...] = ()
@@ -201,11 +213,17 @@ class RelationshipGraph:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "node_genders", FrozenMapping(self.node_genders))
+        object.__setattr__(self, "path_genders", FrozenMapping(self.path_genders))
         object.__setattr__(
             self,
             "adjacency",
             FrozenMapping({uid: tuple(edges) for uid, edges in self.adjacency.items()}),
         )
+
+    @property
+    def path_user_ids(self) -> frozenset[int]:
+        """路径证据可见集的 id 集合（含中间人），供逐条重验使用。"""
+        return frozenset(self.path_genders)
 
 
 def birth_from_user(user: User) -> tuple[str, int] | None:
@@ -282,6 +300,41 @@ def _visible_node_ids(session: Session, *, viewer_user_id: int, space_id: int) -
             continue
         decision = visibility.evaluate(
             session, viewer, target, space_context=space_id, purpose=visibility.PURPOSE_AGENT
+        )
+        if decision.visible:
+            visible.add(uid)
+    return visible
+
+
+def _path_visible_user_ids(
+    session: Session,
+    *,
+    viewer_user_id: int,
+    space_id: int,
+    facts: Iterable[SourceFact],
+) -> set[int]:
+    """路径证据可见集：本批事实端点中对 viewer 可见的人（含中间人）。
+
+    口径为 ``PURPOSE_GRAPH``，与 PFV/Steward 展示同源。只对本批事实的端点
+    逐个求值——不扫全库（``visibility.visible_user_ids`` 是全库口径，既越
+    过「跨 lineage 连接必须走显式 bridge」的边界，也要付全量成本）。
+
+    返回集只用于路径枚举与逐条重验；**不**决定节点集合，也不扩大字段投影。
+    """
+    viewer = session.get(User, viewer_user_id)
+    if viewer is None:
+        return set()
+    endpoints: set[int] = set()
+    for fact in facts:
+        endpoints.add(fact.subject_user_id)
+        endpoints.add(fact.object_user_id)
+    visible: set[int] = set()
+    for uid in sorted(endpoints):
+        target = session.get(User, uid)
+        if target is None:
+            continue
+        decision = visibility.evaluate(
+            session, viewer, target, space_context=space_id, purpose=visibility.PURPOSE_GRAPH
         )
         if decision.visible:
             visible.add(uid)
@@ -420,15 +473,46 @@ def load_graph(
     visible.update(bridge_user_ids)
 
     authorized_space_ids = {space_id, *bridge_space_ids}
-    participating = scoped_confirmed_facts(
-        session, space_ids=authorized_space_ids, visible_ids=visible
+    # 事实口径（09-19 D3）：不再要求「两端点都在节点集合内」——那会把共享父母
+    # 这类不是本空间成员的中间人整条边剔除，从而切断亲属路径（朱元璋在李氏家族
+    # 看不到姐姐/姐夫）。新口径：
+    #   1. 至少一端接入本空间（节点集合），保证每条入图事实真的连到本空间的人，
+    #      不把与本空间无关的事实子图拉进邻接表；
+    #   2. 两端点都对 viewer 可见（PURPOSE_GRAPH），保证不泄露不可见人物。
+    # 中间人因此可以出现在邻接表里参与路径枚举，但绝不进入 node_genders。
+    connected = [
+        fact
+        for fact in scoped_confirmed_facts(session, space_ids=authorized_space_ids)
+        if fact.subject_user_id in visible or fact.object_user_id in visible
+    ]
+    path_visible = _path_visible_user_ids(
+        session, viewer_user_id=viewer_user_id, space_id=space_id, facts=connected
     )
+    # 显式 bridge 授权是独立的跨空间授权（spec §11）：另一侧 anchor 与其空间
+    # active 成员按最小 lineage_summary 参与路径计算，与 _visible_node_ids 的
+    # 既有 union 语义一致（不重走 evaluate，否则 bridge 路径会整体失效）。
+    path_visible |= bridge_user_ids
+    participating = [
+        fact
+        for fact in connected
+        if fact.subject_user_id in path_visible and fact.object_user_id in path_visible
+    ]
 
     genders: dict[int, str] = {}
+    path_genders: dict[int, str] = {}
     for uid in sorted(visible):
         user = session.get(User, uid)
         if user is not None:
             genders[uid] = user.gender
+            path_genders[uid] = user.gender
+    # 路径可见集还包含参与路径的中间人（不在本空间候选内）：邻接表会引用它们，
+    # 路径编码/描述与逐条重验都需要它们的性别。
+    for uid in sorted(path_visible):
+        if uid in path_genders:
+            continue
+        user = session.get(User, uid)
+        if user is not None:
+            path_genders[uid] = user.gender
 
     adjacency: dict[int, list[GraphEdge]] = {uid: [] for uid in genders}
     for fact in participating:
@@ -606,6 +690,7 @@ def load_graph(
         node_genders=genders,
         adjacency=adjacency,
         snapshot_hash=snapshot_hash,
+        path_genders=path_genders,
         bridge_user_ids=frozenset(bridge_user_ids),
         confirmed_facts=confirmed_facts,
         bridges=tuple(bridge_snapshots),

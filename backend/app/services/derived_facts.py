@@ -110,11 +110,11 @@ def resolution_from_cached_row(
         concept_code=row.concept_code,
         main_path=main_path,
         alt_paths=alt_paths,
-        alt_descriptions=tuple(describe_path(path, graph.node_genders) for path in alt_paths),
+        alt_descriptions=tuple(describe_path(path, graph.path_genders) for path in alt_paths),
         explanation_structural=(
             "这是你自己。"
             if row.viewer_user_id == row.target_user_id
-            else describe_path(main_path, graph.node_genders)
+            else describe_path(main_path, graph.path_genders)
         ),
         snapshot_hash=graph.snapshot_hash,
         node_genders=graph.node_genders,

@@ -192,6 +192,8 @@ def viewer_from_session(
     # R2：节点候选集与关系路径分离。授权候选（active 成员/引用/本人，且通过
     # PURPOSE_GRAPH 重验）全部物化；无 viewer→target confirmed 路径的成员保留为
     # space_member 孤立节点，不写个人称谓边，也不伪造 confirmed_path。
+    # 09-19：邻接表含路径中间人（不是本空间成员），故「可达」不再等于「授权目标」——
+    # 节点集合由 graph.node_genders 决定，可达判定必须同时要求它。
     reached = relationship_resolver.reachable_targets(graph)
     nodes: list[dict[str, Any]] = []
     births: list[tuple[int, tuple[str, int] | None]] = []
@@ -208,7 +210,7 @@ def viewer_from_session(
         )
         if user_id == actor.id:
             reason = "root"
-        elif user_id in reached:
+        elif user_id in reached and user_id in graph.node_genders:
             reason = "confirmed_path"
         else:
             reason = "space_member"
