@@ -2,6 +2,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NButton, NForm, NFormItem, NInput, NModal, NRadio, useMessage } from 'naive-ui'
+import { Lightbulb } from 'lucide-vue-next'
 
 import { ApiError } from '@/api/errors'
 import { getSafeInternalRedirect } from '@/router/redirect'
@@ -12,6 +13,7 @@ import { useAuthStore } from '@/stores/auth'
  * 登录页（沉浸页，meta.chrome='blank'）：名字 + PIN（密码态输入）。
  * 同名同 PIN 撞车时后端返回 409 challenge，弹候选选择列表消歧（HANDOFF A1/A2）。
  * 视觉：居中"名牌"卡——纸墨主题宣纸底双线框 + 朱砂印章 + 宋体标题；清雅主题白底圆角卡。
+ * 右侧体验账号小卡片为公开 dev 演示值（与 app/dev_seed.py 演示集同源），纯静态展示。
  */
 const auth = useAuthStore()
 const router = useRouter()
@@ -21,6 +23,8 @@ const message = useMessage()
 const form = reactive({ name: '', pin: '' })
 const submitting = ref(false)
 const errorMessage = ref('')
+/** 体验账号卡片展开态（默认收起为「体验账号」小卡片，点开就地展开详情） */
+const demoOpen = ref(false)
 
 // ---- 消歧弹窗状态 ----
 const challengeVisible = ref(false)
@@ -164,6 +168,38 @@ async function confirmCandidate(): Promise<void> {
       </NForm>
     </section>
 
+    <!-- 体验账号：收起时只是一张「体验账号」小卡片，点开就地展开详情
+         （不用浮层，窄屏不会盖住登录表单）。公开 dev 演示值，
+         与 app/dev_seed.py 演示集同源，纯静态展示。 -->
+    <aside class="demo-card" :class="{ 'is-open': demoOpen }">
+      <button
+        type="button"
+        class="demo-trigger"
+        data-test="demo-account-trigger"
+        :aria-expanded="demoOpen"
+        aria-controls="demo-account-detail"
+        @click="demoOpen = !demoOpen"
+      >
+        <Lightbulb :size="15" aria-hidden="true" />
+        <span>体验账号</span>
+      </button>
+      <template v-if="demoOpen">
+        <div id="demo-account-detail" class="demo-body" data-test="demo-account-card">
+          <p class="demo-name">朱元璋</p>
+          <dl class="demo-rows">
+            <div class="demo-row">
+              <dt>名字</dt>
+              <dd>朱元璋</dd>
+            </div>
+            <div class="demo-row">
+              <dt>PIN 码</dt>
+              <dd class="demo-pin">123456</dd>
+            </div>
+          </dl>
+        </div>
+      </template>
+    </aside>
+
     <!-- 同名同 PIN 候选选择弹窗 -->
     <NModal
       v-model:show="challengeVisible"
@@ -209,8 +245,11 @@ async function confirmCandidate(): Promise<void> {
 
 <style scoped>
 .login-view {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
   min-height: 100vh;
   padding: 24px;
   box-sizing: border-box;
@@ -263,6 +302,107 @@ async function confirmCandidate(): Promise<void> {
 
 [data-theme='modern'] .plate::before {
   display: none;
+}
+
+/* ---- 体验账号：收起是小卡片，点开就地展开详情（不用浮层，窄屏也不遮表单）---- */
+.demo-card {
+  position: relative;
+  align-self: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 9px 14px;
+  background: var(--fg-glass-surface-raised);
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  border: 1px dashed color-mix(in srgb, var(--fg-accent) 45%, var(--fg-glass-border));
+  /* 不对称圆角 + 微倾：斜贴便签感，不做端正卡片 */
+  border-radius: 14px 5px 16px 7px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--fg-ink) 10%, transparent);
+  box-sizing: border-box;
+  transform: rotate(-1.6deg);
+  transition: padding 0.25s ease, border-color 0.25s ease;
+}
+
+.demo-card.is-open {
+  padding: 22px 20px 18px;
+  border-style: solid;
+}
+
+/* 收起态就是这张卡本身（写明白是「体验账号」，不靠图标猜） */
+.demo-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  font-family: var(--fg-font-body);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--fg-accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.demo-trigger:hover {
+  color: var(--fg-accent-hover);
+}
+
+.demo-body {
+  animation: demoCardIn 0.28s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+@keyframes demoCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.demo-name {
+  margin: 14px 0 14px;
+  font-family: var(--fg-font-display);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--fg-ink);
+}
+
+.demo-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.demo-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.demo-row dt {
+  flex: none;
+  width: 3.8em;
+  font-size: 12px;
+  color: var(--fg-ink-faint);
+}
+
+.demo-row dd {
+  margin: 0;
+  font-size: 15px;
+  color: var(--fg-ink-secondary);
+}
+
+/* PIN 等宽数字 + 字距，降低抄错概率 */
+.demo-pin {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.22em;
+  color: var(--fg-ink);
 }
 
 .brand {

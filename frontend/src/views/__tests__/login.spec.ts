@@ -304,4 +304,20 @@ describe('LoginView 注册入口（09-05 决策 19）', () => {
     expect(wrapper.find('[data-test="register-entry"]').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('体验账号：默认只显示胶囊，点击后展开演示账号详情卡', async () => {
+    const { wrapper } = await mountLogin(createPinia())
+
+    expect(wrapper.find('[data-test="demo-account-trigger"]').exists()).toBe(true)
+    expect(document.querySelector('[data-test="demo-account-card"]')).toBeNull()
+
+    await wrapper.find('[data-test="demo-account-trigger"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="demo-account-card"]')).not.toBeNull(),
+    )
+    const card = document.querySelector('[data-test="demo-account-card"]')
+    expect(card?.textContent).toContain('朱元璋')
+    expect(card?.textContent).toContain('123456')
+    wrapper.unmount()
+  })
 })
