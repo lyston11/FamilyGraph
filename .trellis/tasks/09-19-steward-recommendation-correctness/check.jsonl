@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "保留 staged 主链、授权、状态机、通知与预算；超过注入上限须分段读全文"}
+{"file": ".trellis/spec/backend/steward-candidate-evidence.md", "reason": "保留 legacy/unsupported 兼容与 versioned 双向内部隔离、证据历史"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "亲属事实方向、称谓与推测层消费者边界"}
+{"file": ".trellis/spec/architecture/0--0-v2-2026-08-26-v1.md", "reason": "可见性、空间成员与显式空间创建合同，不扩大跨空间发现"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "短事务、SQLite WAL、隔离 DATA_DIR 与在线备份"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "红绿回归、静态检查与分层验收"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复用错误 envelope、命令失败与事务回滚语义"}
+{"file": ".trellis/tasks/09-19-steward-recommendation-correctness/research/diagnosis-summary.md", "reason": "已核对根因、统计纠正、待审合同修订与范围限制"}

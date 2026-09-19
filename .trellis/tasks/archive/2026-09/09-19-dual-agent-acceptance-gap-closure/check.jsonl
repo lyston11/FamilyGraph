@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/09-17-dual-agent-latency-result-integrity/research/review-summary.md", "reason": "最新审核纠正与任务路由；本任务补 F 的缺口，需沿用其证据边界口径"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "助手运行时合同；取消/失租、事件类型、源计时与压缩归属均以此为准。该文件超过注入上限会被截断，必须分段读完全文，不得把截断注入当作已读"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "空间键控 store 与 epoch 清理合同；撤权浏览器语义涉及 resetForSpace 与迟到响应拒收"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "受影响包门禁与测试要求"}

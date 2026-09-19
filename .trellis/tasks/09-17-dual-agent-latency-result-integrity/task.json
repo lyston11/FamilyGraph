@@ -30,7 +30,9 @@
     "09-17-agent-performance-options",
     "09-18-assistant-low-latency",
     "09-19-assistant-compaction-attribution",
-    "09-19-assistant-provisional-terminal-mark"
+    "09-19-assistant-provisional-terminal-mark",
+    "09-19-dual-agent-acceptance-gap-closure",
+    "09-19-assistant-revoked-membership-convergence"
   ],
   "parent": null,
   "relatedFiles": [],
