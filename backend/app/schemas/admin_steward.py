@@ -97,6 +97,10 @@ class StewardMetricsOut(BaseModel):
     assist_failed: int = 0
     assist_degraded: int = 0
     assist_unknown: int = 0
+    # 09-19 R6：skipped（从未发送）单独计数；prompt_too_large 是确定性输入问题，
+    # 它的计数使「某空间候选辅助已停止工作」可被运营者发现。
+    assist_skipped: int = 0
+    assist_skipped_prompt_too_large: int = 0
     budget_reserved_tokens: int = 0
     budget_consumed_tokens: int = 0
     pfv_stale: int = 0
