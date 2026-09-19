@@ -269,6 +269,115 @@ def test_reaper_still_waits_for_expiry_when_not_cancelled(db_session):
     assert run is not None and run.status == "leased"
 
 
+def test_reaper_converges_a_revoked_membership_without_retrying(db_session):
+    """执行身份被永久撤销：直接终态收敛，不回队重试（09-19 受控验收发现）。
+
+    撤权后每次内部请求（含心跳）都被 ``_authorize_run`` 拒，sidecar 不再续租也
+    不结算。旧逻辑把租约丢失当可重试，新 attempt 立刻又 403，直到 attempt 耗尽
+    （约 3×300s）才收口 expired：用户看着假「生成中…」，失败分母还被记成租约超时。
+    """
+    from app.models.space import SpaceMember
+
+    user, space = create_agent_fixture(db_session, name="reap-revoked")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None and grant.job.attempt == 1
+    # 模拟 owner 撤权（真实路径是 space_members 的 FSM 转换）。
+    member = db_session.scalar(
+        select(SpaceMember).where(SpaceMember.space_id == space.id, SpaceMember.user_id == user.id)
+    )
+    assert member is not None
+    member.status = "removed"
+    db_session.commit()
+
+    assert agent_queue.reaper_pass(db_session) == 1
+    db_session.expire_all()
+    run = db_session.get(AgentRun, grant.run.id)
+    job = db_session.get(AgentJob, grant.job.id)
+    assert run is not None and run.status == "failed"
+    assert run.error_code == "AGENT_MEMBERSHIP_REVOKED"
+    assert run.settled_at is not None
+    assert job is not None and job.status == "failed"
+    # 关键：没有回队重试（attempt 不增加、状态不是 queued）。
+    assert job.attempt == 1
+    terminal = db_session.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == run.id)
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert terminal is not None and terminal.type == "run.failed"
+    assert terminal.public_payload["error_code"] == "AGENT_MEMBERSHIP_REVOKED"
+    audit_row = db_session.scalar(select(AuditLog).where(AuditLog.action == "agent_lease_expired"))
+    assert audit_row is not None
+    assert audit_row.detail["reason"] == "membership_revoked"
+
+
+def test_reaper_reports_revocation_even_when_attempts_exhausted(db_session):
+    """attempt 已耗尽的撤权 Run 仍归因为撤权，不是租约超时。
+
+    判定顺序：先看执行身份是否永久失效，再看 attempt。否则撤权会被记成
+    ``expired``，运维会把它误读为 worker/机器问题。
+    """
+    from app.models.space import SpaceMember
+
+    user, space = create_agent_fixture(db_session, name="reap-revoked-exhausted")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+    grant.job.attempt = grant.job.max_attempts  # 重试已耗尽
+    member = db_session.scalar(
+        select(SpaceMember).where(SpaceMember.space_id == space.id, SpaceMember.user_id == user.id)
+    )
+    assert member is not None
+    member.status = "removed"
+    db_session.commit()
+
+    assert agent_queue.reaper_pass(db_session) == 1
+    db_session.expire_all()
+    run = db_session.get(AgentRun, grant.run.id)
+    assert run is not None and run.status == "failed"
+    assert run.error_code == "AGENT_MEMBERSHIP_REVOKED"
+
+
+def test_reaper_still_requeues_a_healthy_expired_lease(db_session):
+    """成员资格仍有效的普通租约过期：保持既有回队语义（回归）。"""
+    user, space = create_agent_fixture(db_session, name="reap-healthy")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+    grant.job.lease_expires_at = timeutil.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    assert agent_queue.reaper_pass(db_session) == 1
+    db_session.expire_all()
+    job = db_session.get(AgentJob, grant.job.id)
+    run = db_session.get(AgentRun, grant.run.id)
+    assert job is not None and job.status == "queued"
+    assert run is not None and run.status == "queued"
+    assert run.settled_at is None
+
+
+def test_reaper_expires_a_healthy_lease_when_attempts_exhausted(db_session):
+    """成员资格有效且 attempt 耗尽：仍是 ``expired``（回归既有语义）。"""
+    user, space = create_agent_fixture(db_session, name="reap-healthy-exhausted")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+    grant.job.attempt = grant.job.max_attempts
+    grant.job.lease_expires_at = timeutil.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    assert agent_queue.reaper_pass(db_session) == 1
+    db_session.expire_all()
+    run = db_session.get(AgentRun, grant.run.id)
+    assert run is not None and run.status == "expired"
+    assert run.error_code == "AGENT_LEASE_EXPIRED"
+
+
 def test_prune_finished_removes_only_old_terminal_runs(db_session):
     user, space = create_agent_fixture(db_session, name="prune")
     session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)

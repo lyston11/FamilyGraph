@@ -108,6 +108,8 @@ const AGENT_ERROR_COPY: Record<string, string> = {
   // sidecar 运行期：模型完成回合但没有返回任何正文（空最终回答）
   PROVIDER_EMPTY_ANSWER: '模型没有返回内容，请重试或换个问法',
   SIDECAR_ERROR: '助手服务暂时不可用，请稍后重试',
+  // 服务端收敛：执行期间空间成员资格被撤销（不是服务故障，重试也不会成功）
+  AGENT_MEMBERSHIP_REVOKED: '你已不是该空间的活跃成员，本次回答已停止',
 }
 
 /** 客户端合成错误码 */

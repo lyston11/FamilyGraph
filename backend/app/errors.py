@@ -150,6 +150,9 @@ AGENT_TOOL_CALL_IN_PROGRESS = (
 )
 AGENT_EVENT_INVALID = "AGENT_EVENT_INVALID"  # 未知事件类型/非法 payload，不落公开流
 AGENT_LEASE_EXPIRED = "AGENT_LEASE_EXPIRED"  # reaper 收敛：租约过期且 attempt 耗尽
+AGENT_MEMBERSHIP_REVOKED = (
+    "AGENT_MEMBERSHIP_REVOKED"  # reaper 收敛：执行身份成员资格被永久撤销（不可重试）
+)
 AGENT_EVENT_SEQ_CONFLICT = "AGENT_EVENT_SEQ_CONFLICT"  # seq 冲突或空洞（RT-4 单调）
 
 # ---- V2.1 浏览器 Agent API 与 Provider 治理（RT-4/RT-5/RT-6）----

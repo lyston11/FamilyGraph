@@ -65,6 +65,15 @@ describe('friendlyAgentError：其余映射不变', () => {
     )
   })
 
+  it('撤权收敛码（09-19）说明是权限变化，不是服务故障', () => {
+    expect(friendlyAgentError('AGENT_MEMBERSHIP_REVOKED')).toBe(
+      '你已不是该空间的活跃成员，本次回答已停止',
+    )
+    // 不得回退成「稍后重试」——重试不可能成功（授权是永久失效）。
+    expect(friendlyAgentError('AGENT_MEMBERSHIP_REVOKED')).not.toContain('重试')
+    expect(friendlyAgentError('AGENT_MEMBERSHIP_REVOKED')).not.toBe('操作失败，请稍后重试')
+  })
+
   it('sidecar 运行期错误码：空最终回答给出中文解释而非通用兜底', () => {
     expect(friendlyAgentError('PROVIDER_EMPTY_ANSWER')).toBe('模型没有返回内容，请重试或换个问法')
     expect(friendlyAgentError('PROVIDER_EMPTY_ANSWER')).not.toBe('操作失败，请稍后重试')

@@ -31,6 +31,7 @@ from app.errors import (
     AGENT_JOB_NOT_ACTIVE,
     AGENT_KIND_UNSUPPORTED,
     AGENT_LEASE_EXPIRED,
+    AGENT_MEMBERSHIP_REVOKED,
     AGENT_RUN_ACCOUNT_LIMIT,
     AGENT_RUN_NOT_RUNNING,
     AGENT_RUN_SESSION_BUSY,
@@ -38,6 +39,7 @@ from app.errors import (
     IDEMPOTENCY_PAYLOAD_CONFLICT,
     raise_api_error,
 )
+from app.models.account import Account
 from app.models.agent import (
     RUN_ACTIVE_STATUSES,
     RUN_TERMINAL_STATUSES,
@@ -47,6 +49,7 @@ from app.models.agent import (
     AgentRun,
     AgentSession,
 )
+from app.models.space import SpaceMember
 from app.services import agent_events, agent_provider, audit
 from app.services.agent_execution import ExecutionIdentity, fence_execution
 from app.utils import timeutil
@@ -530,10 +533,21 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
     只靠「等 lease 过期」会让浏览器把取消后的等待一直转到租约结束
     （实测 304s，而 ``AGENT_LEASE_TTL_SECONDS`` 默认 300）。取消是终态意图，
     与租约是否过期无关，因此这里直接按终态收敛。
+
+    ``membership revoked`` 同理（09-19 受控验收发现）：执行身份被永久撤销后，
+    每次内部请求（含心跳）都被 ``_authorize_run`` 拒（403
+    ``active_membership_missing``），sidecar 不再续租也不再结算，于是没有任何
+    一方写终态。旧逻辑把它当作可重试的租约丢失回队，新 attempt 立刻又 403，
+    直到 ``attempt`` 耗尽（约 3×300s）才收口为 ``expired``。用户在这 15 分钟里
+    看着一个永远不会完成的「生成中…」，而 ``expired`` 还把「授权永久失效」
+    记成「租约超时」。重试不可能改变结果，因此与取消一样直接终态化。
     """
     moment = now or timeutil.utcnow()
 
     with _immediate_tx(db):
+        # 两组合并：① 租约过期或已请求取消；② 执行身份的成员资格已永久撤销
+        # （即使租约仍然健康）。第二组让撤权在下一个维护 tick 内收敛，而不是等
+        # 满一个租约周期——否则用户会看着「生成中…」直到 300s 后才收口。
         stale = list(
             db.scalars(
                 select(AgentJob).where(
@@ -544,6 +558,7 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
                             AgentJob.lease_expires_at.is_not(None),
                             AgentJob.lease_expires_at < moment,
                         ),
+                        AgentJob.id.in_(_revoked_membership_job_ids(db)),
                     ),
                 )
             )
@@ -553,8 +568,18 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
             if job.cancel_requested:
                 # 已请求取消的执行不再回队重试：直接按取消终态收敛（结果丢弃）
                 outcome = "cancelled"
+                error_code: str | None = None
+                reason = "cancel_requested"
+            elif _execution_identity_revoked(db, job):
+                # 永久失效先于 attempt 判定：否则一个 attempt 已耗尽的撤权 Run
+                # 会被记成 expired（租约超时），继续混淆失败分母。
+                outcome = "failed"
+                error_code = AGENT_MEMBERSHIP_REVOKED
+                reason = "membership_revoked"
             else:
                 outcome = "expired" if exhausted else "queued"
+                error_code = AGENT_LEASE_EXPIRED if exhausted else None
+                reason = "lease_expired"
             job.status = outcome
             job.lease_expires_at = None
             job.heartbeat_at = None
@@ -565,7 +590,7 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
             run.lease_expires_at = None
             run.heartbeat_at = None
             run.updated_at = moment
-            if outcome in ("expired", "cancelled"):
+            if outcome in ("expired", "cancelled", "failed"):
                 run.settled_at = moment
                 # 终态事件由服务端唯一写入（不含 sidecar）：reaper 与 settle/cancel 同口径
                 agent_events.insert_event(
@@ -575,12 +600,12 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
                     event_type=agent_events.TERMINAL_EVENT_FOR[outcome],
                     public_payload={
                         "status": outcome,
-                        **({"error_code": AGENT_LEASE_EXPIRED} if outcome == "expired" else {}),
+                        **({"error_code": error_code} if error_code else {}),
                     },
                     created_at=moment,
                 )
-            if outcome == "expired":
-                run.error_code = AGENT_LEASE_EXPIRED
+            if error_code is not None:
+                run.error_code = error_code
             audit.write_audit(
                 db,
                 action="agent_lease_expired",
@@ -590,10 +615,67 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
                     "job_id": job.id,
                     "attempt": job.attempt,
                     "outcome": outcome,
-                    "reason": "cancel_requested" if job.cancel_requested else "lease_expired",
+                    "reason": reason,
                 },
             )
         return len(stale)
+
+
+def _revoked_membership_job_ids(db: Session) -> sa.Select[tuple[int]]:
+    """活跃 job 中「执行身份成员资格已失效」的 id 集合（SQL 侧过滤，不拉全表）。
+
+    与 ``fence_execution`` / ``_authorize_run`` 使用**同一判据**
+    （job.space_id + 账号对应 user + status='active'），不另立一套授权规则。
+    账号/会话缺失也归为失效：身份已不可解析，重试不可能成功。
+    """
+    member = sa.orm.aliased(SpaceMember)
+    active_member = (
+        select(member.id)
+        .where(
+            member.space_id == AgentJob.space_id,
+            member.user_id == Account.user_id,
+            member.status == "active",
+        )
+        .exists()
+    )
+    return (
+        select(AgentJob.id)
+        .join(AgentRun, AgentRun.job_id == AgentJob.id)
+        .outerjoin(AgentSession, AgentSession.id == AgentRun.session_id)
+        .outerjoin(Account, Account.id == AgentSession.account_id)
+        .where(AgentJob.status.in_(("leased", "running")), ~active_member)
+    )
+
+
+def _execution_identity_revoked(db: Session, job: AgentJob) -> bool:
+    """执行身份是否已永久失效（成员资格不再是 active）。
+
+    与 ``fence_execution`` / ``_authorize_run`` 使用**同一判据**（空间 + 账号对应
+    用户 + status='active'），不另立一套授权规则。
+
+    只在该查询**成功且返回 None** 时判为失效；查询本身失败会向上抛异常，让整个
+    tick 回滚并在下一 tick 重试——不得把「读不到」当作「已失效」而终态化健康 Run。
+
+    账号/会话缺失也归为失效（与 SQL 侧 ``_revoked_membership_job_ids`` 一致）：
+    执行身份已不可解析，重试同样不可能成功。
+    """
+    run = db.get(AgentRun, job.run_id)
+    if run is None:
+        return True
+    agent_session = db.get(AgentSession, run.session_id)
+    if agent_session is None:
+        return True
+    account = db.get(Account, agent_session.account_id)
+    if account is None:
+        return True
+    member = db.scalar(
+        select(SpaceMember.id).where(
+            SpaceMember.space_id == job.space_id,
+            SpaceMember.user_id == account.user_id,
+            SpaceMember.status == "active",
+        )
+    )
+    return member is None
 
 
 def prune_finished(db: Session, *, older_than: datetime) -> int:
