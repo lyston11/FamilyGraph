@@ -395,10 +395,10 @@ def request_join_by_user(
 
         space = _space_or_404(session, primary_space_id)
         # 亲属门禁：必须与该空间至少一名 active 成员（含 owner）有已确认的亲属
-        # 联系。用申请人自己的授权可见图（不能借目标空间的图口径——那只含空间
-        # 成员，会把申请人与目标成员之间的纽带隐去）；actor 本人在对方的亲属链
-        # 上不算「有联系」，故排除本人。
-        from app.services.relationship_graph import viewer_reachable_user_ids
+        # 联系。用申请人自己的事实口径（不能借目标空间的图口径——那只含空间成员，
+        # 会把申请人与目标成员之间的纽带隐去）；亲缘是事实而非可见性属性，故不
+        # 按逐人可见性剪枝，否则经不可见长辈的链条会单向断掉。
+        from app.services.relationship_graph import shares_confirmed_kinship
 
         member_ids = set(
             session.scalars(
@@ -407,9 +407,7 @@ def request_join_by_user(
                 )
             ).all()
         )
-        if not (
-            viewer_reachable_user_ids(session, viewer_user_id=actor.id) & (member_ids - {actor.id})
-        ):
+        if not shares_confirmed_kinship(session, viewer_user_id=actor.id, user_ids=member_ids):
             raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该家庭空间没有已确认的亲属关系")
 
         member, created = space_fsm.invite(

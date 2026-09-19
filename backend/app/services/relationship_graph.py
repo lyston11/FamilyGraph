@@ -366,24 +366,21 @@ def scoped_confirmed_facts(
     return sorted(rows, key=lambda fact: fact.id)
 
 
-def viewer_reachable_user_ids(session: Session, *, viewer_user_id: int) -> set[int]:
-    """viewer 在自己的授权口径下可经 confirmed 亲属链到达的人（含本人）。
+def shares_confirmed_kinship(session: Session, *, viewer_user_id: int, user_ids: set[int]) -> bool:
+    """viewer 是否与 ``user_ids`` 中某人存在 confirmed 亲属链（准入门禁用）。
 
-    准入门禁用（join_request）：只问「我与对方家族是否有已确认的亲属联系」，
-    因此不能用目标空间的图口径——那个口径按设计只暴露空间内成员，会把申请人
-    自己一侧的中间人连同目标成员一起隐去，导致门禁永不通过。
+    只问「有无亲属联系」——因此：
+    - 事实口径用申请人自己的授权空间（含全局 NULL 事实），不按逐人可见性剪枝：
+      亲缘是事实不是可见性属性；若要求中间人可见，经不可见长辈的链条会单向
+      断掉（姐姐能看到弟弟，弟弟反而看不到姐姐），门禁就变成方向相关的了；
+    - 亲属链按无向连通处理，方向不影响结论。
 
-    口径：
-    - 事实范围 = 申请人 active 空间（含全局 NULL）内的 confirmed 事实；
-    - 两端点都必须对申请人可见（``space_context=None``，与既有资料可见性
-      门禁同一口径）——不返回申请人本来就看不到的人；
-    - 亲属链按无向连通处理：准入只问「有无亲属联系」，方向不影响结论。
-
-    只读、不写状态、不扩大任何字段投影。
+    只返回布尔值：不把「申请人看不到但确实存在的人」交给调用方，避免任何
+    形式的未授权回传。只读、不写状态、不扩大字段投影。
     """
-    viewer = session.get(User, viewer_user_id)
-    if viewer is None:
-        return set()
+    targets = {uid for uid in user_ids if uid != viewer_user_id}
+    if not targets or session.get(User, viewer_user_id) is None:
+        return False
     space_ids = set(
         session.scalars(
             select(SpaceMember.space_id).where(
@@ -391,38 +388,23 @@ def viewer_reachable_user_ids(session: Session, *, viewer_user_id: int) -> set[i
             )
         ).all()
     )
-    facts = scoped_confirmed_facts(session, space_ids=space_ids or {0})
-    endpoint_visible: dict[int, bool] = {viewer_user_id: True}
-
-    def _visible(uid: int) -> bool:
-        cached = endpoint_visible.get(uid)
-        if cached is not None:
-            return cached
-        target = session.get(User, uid)
-        ok = (
-            target is not None
-            and visibility.evaluate(
-                session, viewer, target, purpose=visibility.PURPOSE_PROFILE
-            ).visible
-        )
-        endpoint_visible[uid] = ok
-        return ok
-
     adjacency: dict[int, set[int]] = {}
-    for fact in facts:
+    for fact in scoped_confirmed_facts(session, space_ids=space_ids or {0}):
         subject_id, object_id = fact.subject_user_id, fact.object_user_id
-        if subject_id == object_id or not _visible(subject_id) or not _visible(object_id):
+        if subject_id == object_id:
             continue
         adjacency.setdefault(subject_id, set()).add(object_id)
         adjacency.setdefault(object_id, set()).add(subject_id)
-    reached = {viewer_user_id}
+    seen = {viewer_user_id}
     stack = [viewer_user_id]
     while stack:
         for nxt in adjacency.get(stack.pop(), ()):
-            if nxt not in reached:
-                reached.add(nxt)
+            if nxt in targets:
+                return True
+            if nxt not in seen:
+                seen.add(nxt)
                 stack.append(nxt)
-    return reached
+    return False
 
 
 def topology_edges_from_facts(facts: Iterable[SourceFact]) -> list[dict[str, Any]]:
