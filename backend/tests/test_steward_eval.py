@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,8 +65,8 @@ def _load_cases() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 
 def _prompt_version() -> str:
-    canonical = json.dumps(steward_assist._PROMPTS, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    # 单一真源：报告字段必须与运行时发送的 prompt 同源（09-19 R4/AC3）
+    return steward_assist.prompt_version()
 
 
 def test_steward_eval_hard_gate_and_recall() -> None:

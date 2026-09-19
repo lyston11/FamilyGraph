@@ -16,14 +16,17 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
+from app.models.account import Account
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember
 from app.models.steward import ActionCard, BehaviorProjection
+from app.models.user import User
 from app.services import action_cards
 from app.services import source_facts as sf
 from app.services import steward as steward_service
@@ -168,10 +171,14 @@ def _make_lineage_card(
 
 @pytest.fixture()
 def spouse_scene(db_session: Session):
-    """甲、乙互为 confirmed spouse，同属一个 household 空间，卡发给甲。"""
+    """甲、乙互为 confirmed spouse，同属一个 lineage 空间（尚未共享任何家庭），卡发给甲。
+
+    09-19：卡空间不再是双方共处的 household——那正是「已共同在一个家庭里仍推荐共建」
+    的误报场景（见 test_no_household_card_when_pair_already_shares_one）。
+    """
     jia = create_user_with_pin(db_session, "甲", "123456")
     yi = create_user_with_pin(db_session, "乙", "123456")
-    space = _make_space(db_session, jia, kind="household", name="甲家")
+    space = _make_space(db_session, jia, kind="lineage", name="甲宗族")
     create_space_member(db_session, space.id, yi.id)  # 乙也是 active 成员
     fact = _confirm_fact(
         db_session,
@@ -224,7 +231,7 @@ def test_list_cards_happy_and_guards(
     monkeypatch.setattr(config, "STEWARD_ENABLED", True)
     jia = create_user_with_pin(db_session, "甲", "123456")
     yi = create_user_with_pin(db_session, "乙", "123456")
-    space = _make_space(db_session, jia)
+    space = _make_space(db_session, jia, kind="lineage")
     create_space_member(db_session, space.id, yi.id)
     fact = _confirm_fact(
         db_session, fact_type="spouse", subject_id=jia.id, object_id=yi.id, space_id=space.id
@@ -440,7 +447,7 @@ def test_concurrent_accept_one_wins_one_409(
     monkeypatch.setattr(config, "STEWARD_ENABLED", True)
     jia = create_user_with_pin(db_session, "甲", "123456")
     yi = create_user_with_pin(db_session, "乙", "123456")
-    space = _make_space(db_session, jia)
+    space = _make_space(db_session, jia, kind="lineage")
     create_space_member(db_session, space.id, yi.id)
     fact = _confirm_fact(
         db_session, fact_type="spouse", subject_id=jia.id, object_id=yi.id, space_id=space.id
@@ -512,11 +519,12 @@ def test_execute_create_household_success_and_no_lineage_merge(
     assert body["id"] == card.id
     assert body["state"] == "executed"
 
-    # AC-ST8：仅新建一个 household 空间，无 lineage 新增
+    # AC-ST8：仅新建一个 household 空间，无新增 lineage
     new_spaces = db_session.query(FamilySpace).filter(FamilySpace.id != space.id).all()
     assert len(new_spaces) == 1
     assert new_spaces[0].kind == "household"
-    assert db_session.query(FamilySpace).filter(FamilySpace.kind == "lineage").count() == 0
+    # 卡所在空间本身是 lineage（1），新建的空间不是 lineage
+    assert db_session.query(FamilySpace).filter(FamilySpace.kind == "lineage").count() == 1
 
     # 双方都是新空间的 active 成员
     new_space = new_spaces[0]
@@ -832,3 +840,268 @@ def test_execute_rejected_when_cooldown_active(
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "CARD_EXECUTE_REJECTED"
     assert r.json()["error"]["detail"]["reason"] == "cooldown_active"
+
+
+# ---- 09-19：共同家庭判定贯穿读取 / accept / execute ----
+
+
+def _join_shared_household(session: Session, a: Any, b: Any, *, name: str) -> FamilySpace:
+    home = _make_space(session, a, kind="household", name=name)
+    create_space_member(session, home.id, b.id)
+    session.commit()
+    return home
+
+
+def test_list_hides_card_whose_pair_already_shares_a_household(
+    client: TestClient, db_session: Session, spouse_scene: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """双方已在别处共同生活：待处理列表不再返回共建卡（GET 不落库）。"""
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    jia = spouse_scene["jia"]
+    yi = spouse_scene["yi"]
+    space = spouse_scene["space"]
+    card = spouse_scene["card"]
+    headers = _login_header(client, jia)
+    assert (
+        client.get("/api/action-cards", params={"space_id": space.id}, headers=headers).json() != []
+    )
+
+    _join_shared_household(db_session, jia, yi, name="甲家1")
+    listed = client.get("/api/action-cards", params={"space_id": space.id}, headers=headers).json()
+    assert listed == []
+    # 读侧过滤不改变持久状态：后台复核才退役
+    db_session.refresh(card)
+    assert card.state == "accepted"
+
+
+def test_accept_rejected_when_household_now_shared(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """旧页面 accept：共同家庭已存在时 409，卡片不进入 accepted。"""
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    jia = create_user_with_pin(db_session, "甲", "123456")
+    yi = create_user_with_pin(db_session, "乙", "123456")
+    space = _make_space(db_session, jia, kind="lineage")
+    create_space_member(db_session, space.id, yi.id)
+    fact = _confirm_fact(
+        db_session, fact_type="spouse", subject_id=jia.id, object_id=yi.id, space_id=space.id
+    )
+    evidence = {
+        "primary_fact_id": fact.id,
+        "facts": [{"id": fact.id, "type": fact.fact_type, "revision": fact.revision}],
+        "inputs": {"share_household_membership": False},
+    }
+    card, _ = action_cards.create_card(
+        db_session,
+        kind="household_link",
+        space_id=space.id,
+        recipient_account_id=jia.account.id,
+        subject_user_id=jia.id,
+        object_user_id=yi.id,
+        evidence_json=evidence,
+        proposed_action_json={"action": "create_household"},
+        reason_text="卡片",
+    )
+    db_session.commit()
+    _join_shared_household(db_session, jia, yi, name="甲家2")
+
+    resp = client.post(f"/api/action-cards/{card.id}/accept", headers=_login_header(client, jia))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "CARD_EXECUTE_REJECTED"
+    db_session.refresh(card)
+    assert card.state == "pending"
+
+
+def test_execute_rejected_when_household_became_shared_after_read(
+    client: TestClient, db_session: Session, spouse_scene: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """先读到卡（accepted）后双方才获得共同家庭 → execute 拒绝且不新建空间。"""
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    jia = spouse_scene["jia"]
+    yi = spouse_scene["yi"]
+    card = spouse_scene["card"]
+    headers = _login_header(client, jia)
+
+    spaces_before = db_session.query(FamilySpace).count()
+    _join_shared_household(db_session, jia, yi, name="甲家3")
+
+    resp = client.post(f"/api/action-cards/{card.id}/execute", json={}, headers=headers)
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["error"]["code"] == "CARD_EXECUTE_REJECTED"
+    assert body["error"]["detail"]["reason"] == "household_already_shared"
+    assert db_session.query(FamilySpace).count() == spaces_before + 1  # 只多出测试加入的空间
+    db_session.refresh(card)
+    assert card.state == "accepted"
+
+
+def test_second_execute_after_successful_household_creation_is_rejected(
+    client: TestClient, db_session: Session, spouse_scene: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一对的两张旧卡并发/先后执行：第一次成功后第二次不得再建第二个家庭。"""
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    jia = spouse_scene["jia"]
+    yi = spouse_scene["yi"]
+    space = spouse_scene["space"]
+    card = spouse_scene["card"]
+    headers = _login_header(client, jia)
+
+    # 反方向同 dedupe 组的第二张卡（独立 recipient 路径）
+    fact2 = _confirm_fact(
+        db_session, fact_type="spouse", subject_id=yi.id, object_id=jia.id, space_id=space.id
+    )
+    evidence = {
+        "primary_fact_id": fact2.id,
+        "facts": [{"id": fact2.id, "type": fact2.fact_type, "revision": fact2.revision}],
+        "inputs": {"share_household_membership": False},
+    }
+    other, _ = action_cards.create_card(
+        db_session,
+        kind="household_link",
+        space_id=space.id,
+        recipient_account_id=jia.account.id,
+        subject_user_id=yi.id,
+        object_user_id=jia.id,
+        evidence_json=evidence,
+        proposed_action_json={"action": "create_household"},
+        reason_text="卡片",
+    )
+    assert other is not None
+    action_cards.transition_card(db_session, other, "view", expected_revision=other.revision)
+    action_cards.transition_card(db_session, other, "accept", expected_revision=other.revision)
+    db_session.commit()
+
+    first = client.post(f"/api/action-cards/{card.id}/execute", json={}, headers=headers)
+    assert first.status_code == 200, first.text
+
+    second = client.post(f"/api/action-cards/{other.id}/execute", json={}, headers=headers)
+    assert second.status_code == 409, second.text
+    assert second.json()["error"]["detail"]["reason"] == "household_already_shared"
+    assert db_session.query(FamilySpace).filter(FamilySpace.kind == "household").count() == 1
+
+
+def test_lineage_card_kept_when_pair_shares_household(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """共同家庭只抑制共建卡，lineage 申请卡仍可读取与执行。"""
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    jia = create_user_with_pin(db_session, "甲", "123456")
+    yi = create_user_with_pin(db_session, "乙", "123456")
+    home = _make_space(db_session, jia, kind="household", name="甲家4")
+    create_space_member(db_session, home.id, yi.id)
+    yi_lineage = _make_space(db_session, yi, kind="lineage", name="乙宗族")
+    fact = _confirm_fact(
+        db_session, fact_type="spouse", subject_id=jia.id, object_id=yi.id, space_id=home.id
+    )
+    card = _make_lineage_card(
+        db_session,
+        space=home,
+        recipient_account_id=jia.account.id,
+        subject=jia,
+        obj=yi,
+        fact=fact,
+        target_space_id=yi_lineage.id,
+    )
+    headers = _login_header(client, jia)
+    listed = client.get("/api/action-cards", params={"space_id": home.id}, headers=headers).json()
+    assert [item["kind"] for item in listed] == ["lineage_request"]
+
+    resp = client.post(f"/api/action-cards/{card.id}/execute", json={}, headers=headers)
+    assert resp.status_code == 200, resp.text
+
+
+def test_two_workers_executing_household_cards_create_exactly_one_space(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """两个独立执行者并发 execute：恰好创建一个家庭空间，另一个被拒。
+
+    `execute_card` 用 `BEGIN IMMEDIATE` 在写锁内完成「读资格 → 写空间」：第二个
+    执行者必须等第一个提交后才能读，届时已能看到新家庭并返回 409。
+
+    已实测该用例确实守护写锁：把 `command_transaction(db, immediate=True)` 改回
+    `command_transaction(db)` 后，本用例连续 5 次稳定失败（两个执行者都读到「尚未
+    共同生活」并各建一个空间，状态 `[200, 200]`），恢复写锁后通过。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from app.api import action_cards as action_cards_api
+    from app.db import SessionLocal
+
+    monkeypatch.setattr(config, "STEWARD_ENABLED", True)
+    jia = create_user_with_pin(db_session, "甲", "123456")
+    yi = create_user_with_pin(db_session, "乙", "123456")
+    space = _make_space(db_session, jia, kind="lineage")
+    create_space_member(db_session, space.id, yi.id)
+    fact = _confirm_fact(
+        db_session, fact_type="spouse", subject_id=jia.id, object_id=yi.id, space_id=space.id
+    )
+    evidence = {
+        "primary_fact_id": fact.id,
+        "facts": [{"id": fact.id, "type": fact.fact_type, "revision": fact.revision}],
+        "inputs": {"share_household_membership": False},
+    }
+    card, _ = action_cards.create_card(
+        db_session,
+        kind="household_link",
+        space_id=space.id,
+        recipient_account_id=jia.account.id,
+        subject_user_id=jia.id,
+        object_user_id=yi.id,
+        evidence_json=evidence,
+        proposed_action_json={"action": "create_household"},
+        reason_text="卡片",
+    )
+    assert card is not None
+    action_cards.transition_card(db_session, card, "view", expected_revision=card.revision)
+    action_cards.transition_card(db_session, card, "accept", expected_revision=card.revision)
+    db_session.commit()
+    card_id = card.id
+    account_id = jia.account.id
+    space_id = space.id
+
+    gate = Barrier(2, timeout=10)
+
+    def execute() -> int:
+        with SessionLocal() as db:
+            account = db.get(Account, account_id)
+            assert account is not None
+            user = db.get(User, account.user_id)
+            assert user is not None
+            gate.wait(timeout=10)  # 两个执行者同时进入，最大化重叠窗口
+            try:
+                action_cards_api.execute_card(
+                    card_id,
+                    action_cards_api.ExecuteRequest(),
+                    _FakeRequest(),
+                    db=db,
+                    identity=(user, account),
+                )
+                return 200
+            except HTTPException as exc:
+                db.rollback()
+                return int(exc.status_code)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = sorted(pool.map(lambda _: execute(), range(2)))
+
+    # 恰好一个成功；另一个被既有安全屏障拒绝——可能落在 409（共同家庭判定）
+    # 或 410（先提交者已把卡片置为 executed）。两者都不产生第二个空间。
+    assert statuses[0] == 200, statuses
+    assert statuses[1] in (409, 410), statuses
+    db_session.expire_all()
+    households = list(
+        db_session.scalars(
+            select(FamilySpace).where(FamilySpace.kind == "household", FamilySpace.id != space_id)
+        )
+    )
+    assert len(households) == 1, households
+    # 被拒的一方不产生任何空间副作用，卡片仍保持 accepted
+    refreshed = db_session.get(ActionCard, card_id)
+    assert refreshed is not None and refreshed.state == "executed"
+
+
+class _FakeRequest:
+    """execute_card 只用 request.client.host 取审计 IP。"""
+
+    client = None

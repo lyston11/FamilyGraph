@@ -51,7 +51,7 @@ from app.models.steward_suggestion import (
     StewardSuggestionRecipient,
 )
 from app.models.user import User
-from app.services import steward_candidate_evidence, visibility
+from app.services import steward_candidate_evidence, steward_candidate_policy, visibility
 from app.services.action_cards import compute_evidence_hash
 from app.services.family_projection import authorized_space_or_404
 from app.utils.timeutil import utcnow
@@ -335,6 +335,9 @@ def project_for_job(
         }
         for f in facts
     ]
+    # 负向安全判据只按本批授权事实构造一次：模型把父→子/祖→孙误判为同辈时，
+    # 该候选不得进入公开审核投影（无建议、无 recipient、无通知）。
+    conflict_index = steward_candidate_policy.build_conflict_index_from_facts(facts)
 
     # 模型候选 → relation_proposal（payload 合同三键；旧裸 JSON 永不公开）。
     # 09-11 E2E 修正：候选由辅助批次在 job 结算后写回（job_id=注册 job），
@@ -380,6 +383,15 @@ def project_for_job(
                 subject_user_id=raw_subject,
                 object_user_id=raw_object,
                 fact_type=raw_kind,
+            )
+            is not None
+        ):
+            continue
+        if (
+            conflict_index.conflicts(
+                relation_kind=raw_kind,
+                subject_user_id=raw_subject,
+                object_user_id=raw_object,
             )
             is not None
         ):
@@ -873,8 +885,22 @@ def link_source_proposal(
     session.flush()
 
 
-def source_state(session: Session, suggestion: StewardSuggestion) -> str:
-    """Current shared source/proposal state; no personal receipt is changed."""
+def source_state(
+    session: Session,
+    suggestion: StewardSuggestion,
+    *,
+    conflict_index: steward_candidate_policy.CandidateConflictIndex | None = None,
+) -> str:
+    """Current shared source/proposal state; no personal receipt is changed.
+
+    与投影入口共用同一负向判据：与已确认亲子/生物祖先冲突的模型线索即使
+    证据 hash 未变也不再是有效待核实项（读取、列表、提交一致）。
+
+    优先级：已产生的正式结果（同类型关系已确认 / 关联提案已确认）先于冲突
+    退役。否则一条真实已完成的线索会因另一条无关冲突事实而被显示为「已撤销」
+    （已提交/已关联事实的历史不得被自动撤回，见 R8）。冲突只压掉尚未产生
+    正式结果的活动线索。
+    """
     if suggestion.status in ("expired", "superseded"):
         return str(suggestion.status)
     if (
@@ -889,9 +915,24 @@ def source_state(session: Session, suggestion: StewardSuggestion) -> str:
         is not None
     ):
         return "resolved"
-    proposal = _linked_proposal(session, suggestion)
-    if proposal is not None and proposal.state == "confirmed":
+    linked = _linked_proposal(session, suggestion)
+    if linked is not None and linked.state == "confirmed":
         return "resolved"
+    # 尚无正式结果：与已确认亲子/生物祖先冲突的模型线索不再是有效待核实项。
+    if suggestion.kind == "relation_proposal":
+        index = conflict_index or steward_candidate_policy.build_conflict_index(
+            session, space_id=suggestion.space_id
+        )
+        if (
+            index.conflicts(
+                relation_kind=str(suggestion.value_json.get("fact_type") or ""),
+                subject_user_id=int(suggestion.subject_user_id),
+                object_user_id=int(suggestion.object_user_id or 0),
+            )
+            is not None
+        ):
+            return "superseded"
+    proposal = linked
     if suggestion.source_candidate_id is not None and suggestion.kind == "relation_proposal":
         from app.models.steward_inferred import StewardInferredEdge
 
@@ -920,6 +961,7 @@ def effective_state(
     account: Account,
     suggestion: StewardSuggestion,
     recipient: StewardSuggestionRecipient | None = None,
+    conflict_index: steward_candidate_policy.CandidateConflictIndex | None = None,
 ) -> str:
     """本人有效状态读模型（A-R5）：共享状态 ∩ 本人忽略/过期，读时即生效。
 
@@ -930,7 +972,7 @@ def effective_state(
         recipient = _recipient_row(session, suggestion.id, account.id)
     if recipient is not None and recipient.dismissed_at is not None:
         return "dismissed"
-    shared = source_state(session, suggestion)
+    shared = source_state(session, suggestion, conflict_index=conflict_index)
     if shared not in SUGGESTION_ACTIVE_STATES:
         return shared
     if suggestion.expires_at is not None and suggestion.expires_at <= utcnow():
@@ -994,6 +1036,8 @@ def list_suggestions_page(
     已返回项的 id（客户端以其为 keyset 继续），保证不漏行。
     """
     space, viewer = authorized_space_or_404(session, account=account, space_id=space_id)
+    # 一页一次构造负向判据，避免逐行重查整图。
+    conflict_index = steward_candidate_policy.build_conflict_index(session, space_id=space.id)
     limit = max(1, min(int(limit), 100))
     items: list[dict[str, Any]] = []
     fetch_cursor = cursor
@@ -1041,7 +1085,11 @@ def list_suggestions_page(
                 continue
             try:
                 state = effective_state(
-                    session, viewer=viewer, account=account, suggestion=suggestion
+                    session,
+                    viewer=viewer,
+                    account=account,
+                    suggestion=suggestion,
+                    conflict_index=conflict_index,
                 )
             except Exception:  # noqa: BLE001 — 端点消失等异常按 404 语义丢弃该行
                 continue
@@ -1049,7 +1097,15 @@ def list_suggestions_page(
             if not allowed:
                 continue
             items.append(
-                _serialize(session, suggestion, allowed, state, viewer=viewer, account=account)
+                _serialize(
+                    session,
+                    suggestion,
+                    allowed,
+                    state,
+                    viewer=viewer,
+                    account=account,
+                    conflict_index=conflict_index,
+                )
             )
             if len(items) >= limit:
                 break
@@ -1071,6 +1127,7 @@ def _serialize(
     *,
     viewer: User | None = None,
     account: Account | None = None,
+    conflict_index: steward_candidate_policy.CandidateConflictIndex | None = None,
 ) -> dict[str, Any]:
     # A-R1/F11：人物展示值经当前 viewer 的可见性投影；不可见端点遮罩，
     # 绝不直接输出 ORM name。旧 subject_name/object_name 字段保留兼容，
@@ -1108,7 +1165,7 @@ def _serialize(
         return None
 
     evidence_summary = _evidence_summary(session, suggestion, viewer=viewer)
-    shared_state = source_state(session, suggestion)
+    shared_state = source_state(session, suggestion, conflict_index=conflict_index)
     linked = _linked_proposal(session, suggestion)
     linked_proposal: dict[str, Any] | None = None
     pending_confirmations: list[dict[str, int]] = []
@@ -1243,9 +1300,26 @@ def get_suggestion_detail(
     viewer, suggestion = visible_suggestion_or_404(
         session, account=account, space_id=space_id, suggestion_id=suggestion_id
     )
-    state = effective_state(session, viewer=viewer, account=account, suggestion=suggestion)
+    conflict_index = steward_candidate_policy.build_conflict_index(
+        session, space_id=suggestion.space_id
+    )
+    state = effective_state(
+        session,
+        viewer=viewer,
+        account=account,
+        suggestion=suggestion,
+        conflict_index=conflict_index,
+    )
     actions = display_actions(session, viewer, account, suggestion, state)
-    return _serialize(session, suggestion, actions, state, viewer=viewer, account=account)
+    return _serialize(
+        session,
+        suggestion,
+        actions,
+        state,
+        viewer=viewer,
+        account=account,
+        conflict_index=conflict_index,
+    )
 
 
 # ---- dismiss（按收件人；CAS revision；同证据版本冷却）----

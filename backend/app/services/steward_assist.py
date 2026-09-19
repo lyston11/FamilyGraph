@@ -122,6 +122,26 @@ _API_PATHS = {
     "openai-responses": "/responses",
 }
 
+# 候选 prompt 契约条款（09-19 R1-R3）。拆成常量是为了让回归能逐条断言，
+# 而不是用模糊子串匹配（改了措辞就通过）。
+#
+# 方向语义与 source_facts 模块 docstring 的合同同源：``*_parent`` 类 subject 是
+# object 的父/母/监护人；spouse/partner/direct_sibling 对称。此前该合同只写在
+# 服务端代码里，从未下发模型（诊断证据 1/2）。
+_CANDIDATE_DIRECTION_CLAUSE = (
+    "方向语义（务必遵守）：biological_parent/adoptive_parent/step_parent/guardian"
+    " 的 subject 是 object 的父/母/监护人（有向，不可反向理解）；"
+    "spouse/partner/direct_sibling 是对称关系，subject 与 object 互换等价。"
+)
+_CANDIDATE_CONFLICT_CLAUSE = (
+    "不得输出与事实清单矛盾或重复的候选：同一对端点已有任一亲属事实时，"
+    "不得再输出与之冲突的另一种 kind（例如已有 biological_parent(A,B) 时"
+    "不得再输出 direct_sibling(A,B)），也不得重复输出清单中已有的关系。"
+)
+_CANDIDATE_EXAMPLE_CLAUSE = (
+    '示例（仅示范形状，不含任何真实姓名）：[{"kind":"spouse","subject":"n001",' '"object":"n002"}]'
+)
+
 # 09-11 R1/R2：prompt 输入只含节点代号/已确认 fact 白名单；输出封闭 schema
 # （候选=原子事实类型+节点代号；排序=严格排列；解释=结构化 reason_code/
 # supporting_fact_ids/template_slots，由确定性模板渲染，见 services/steward_guard）。
@@ -133,6 +153,9 @@ _PROMPTS: dict[str, str] = {
         "kind 只能是 biological_parent/adoptive_parent/step_parent/guardian/spouse/"
         "partner/direct_sibling 之一（祖辈、称谓等派生概念禁止）；subject/object"
         " 必须来自花名册中的节点代号且互不相同；不得编造其他节点；不得输出理由文本。"
+        + _CANDIDATE_DIRECTION_CLAUSE
+        + _CANDIDATE_CONFLICT_CLAUSE
+        + _CANDIDATE_EXAMPLE_CLAUSE
     ),
     "ranking": (
         "你是家庭空间管家助手。对给定的推荐卡按对用户的实际有用程度排序。"
@@ -535,6 +558,16 @@ def _visible_context(db: Session, space_id: int) -> ProjectionContext:
     return ProjectionContext(visible, minor_ids=minor_ids)
 
 
+def prompt_version() -> str:
+    """全部辅助 system prompt 的规范化哈希（09-19 R4）。
+
+    评测报告的 ``prompt_version`` 字段取此值；任何 prompt 文本变更都会改变它，
+    使「换了措辞但没换版本」无法通过。
+    """
+    canonical = json.dumps(_PROMPTS, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _candidate_facts(db: Session, space_id: int, ctx: ProjectionContext) -> list[dict[str, Any]]:
     """候选投影输入的已确认事实白名单（id/type/revision + 双端点 id）。"""
     from app.services import steward as steward_service
@@ -556,6 +589,45 @@ def _candidate_facts(db: Session, space_id: int, ctx: ProjectionContext) -> list
             }
         )
     return facts
+
+
+def candidate_user_content(db: Session, space_id: int, ctx: ProjectionContext) -> str:
+    """候选辅助的 user 内容：按 prompt 字节预算取确定前缀子集（09-19 R7）。
+
+    空间事实数超过 ``STEWARD_ASSIST_MAX_PROMPT_BYTES`` 时，此前整批候选辅助
+    静默停摆（诊断证据 3）。这里按 fact_id 升序（``_candidate_facts`` 的稳定
+    顺序）取能装下的前缀，使大空间仍能工作且子集确定、可复现——同一输入永远
+    得到同一子集，``input_hash``/``prompt_digest`` 因此稳定，发送前 fence 不会
+    误判。不引入截断标记（不依赖模型理解元信息），也不放宽任何输出校验。
+
+    单条事实本身过长、或上限小到连空事实集都装不下时返回原样全量投影：由
+    ``_reserve_attempt`` 的既有字节上界如实结算为 ``prompt_too_large``（不在这里
+    伪造可发送的输入，也不静默发送注定零候选的空输入）。
+    """
+    facts = _candidate_facts(db, space_id, ctx)
+    full = steward_guard.project_candidate_input(facts, ctx)
+    # 实际发送的是 f"{system}\n{user}"，预算必须含 system 与分隔符。
+    overhead = len(_PROMPTS["candidate"].encode("utf-8")) + 1
+    cap = config.STEWARD_ASSIST_MAX_PROMPT_BYTES
+    if overhead + len(full.encode("utf-8")) <= cap:
+        return full
+    # 取满足「system + 分隔符 + 投影 ≤ 上限」的最长前缀；投影长度随事实数单调
+    # 不减，故此处即确定的最大可发送子集。
+    low, high = 0, len(facts)
+    while low < high:
+        mid = (low + high + 1) // 2
+        candidate = steward_guard.project_candidate_input(facts[:mid], ctx)
+        if overhead + len(candidate.encode("utf-8")) <= cap:
+            low = mid
+        else:
+            high = mid - 1
+    if low == 0:
+        # 连空事实集都装不下（上限 ≤ system + 空投影；monkeypatch 极小值或单条事实
+        # 极长都会走到这里）。此时能装下的子集是 0 条，发送空输入只会得到零候选、
+        # 却把「确定性输入问题」伪装成正常成功——返回全量原样，交 `_reserve_attempt`
+        # 的既有字节上界如实结算为 `prompt_too_large`。
+        return full
+    return steward_guard.project_candidate_input(facts[:low], ctx)
 
 
 def _ranking_targets(db: Session, card_ids: list[int]) -> list[ActionCard]:
@@ -1050,9 +1122,7 @@ def schedule_due_batch(
                     job=job,
                     kind="candidate",
                     subject_key="facts",
-                    user_content=steward_guard.project_candidate_input(
-                        _candidate_facts(db, batch.space_id, ctx), ctx
-                    ),
+                    user_content=candidate_user_content(db, batch.space_id, ctx),
                     runtime=runtime,
                     budget=budget,
                     lease_no=lease_no,
@@ -1622,9 +1692,7 @@ def _user_content_for(db: Session, attempt: StewardModelCall) -> str:
         return "{}"
     if kind == "candidate":
         ctx = _visible_context(db, attempt.space_id)
-        return steward_guard.project_candidate_input(
-            _candidate_facts(db, attempt.space_id, ctx), ctx
-        )
+        return candidate_user_content(db, attempt.space_id, ctx)
     if kind == "ranking":
         parts = subject.split(":")
         card_ids = [int(x) for x in parts[-1].split(",") if x] if len(parts) >= 2 else []
@@ -1729,12 +1797,13 @@ def _apply_batch(
         # Expired executors leave persisted products for the recovery owner.
         if batch.lease_until is None or batch.lease_until <= now:
             return batch.status
-        all_statuses = [
-            row[0]
-            for row in db.execute(
-                select(StewardModelCall.status).where(StewardModelCall.batch_id == batch.id)
-            ).all()
-        ]
+        attempt_rows = db.execute(
+            select(StewardModelCall.status, StewardModelCall.error_code).where(
+                StewardModelCall.batch_id == batch.id
+            )
+        ).all()
+        all_statuses = [row[0] for row in attempt_rows]
+        all_error_codes = {row[1] for row in attempt_rows if row[1] is not None}
         attempts = list(
             db.scalars(
                 select(StewardModelCall).where(
@@ -1750,6 +1819,11 @@ def _apply_batch(
             terminal_code = REASON_NETWORK_UNKNOWN
         elif "failed" in all_statuses:
             terminal_code = REASON_TRANSPORT_FAILED
+        elif REASON_PROMPT_TOO_LARGE in all_error_codes:
+            # 09-19 R5：确定性输入问题（同一输入永远超限），不是上游不确定性——
+            # 不归入 unknown、不计费、不重放，但批次终态必须如实反映「本批候选
+            # 未产生」，不再伪装 applied。预算类 skipped 是良性可重试状态，不在此列。
+            terminal_code = REASON_PROMPT_TOO_LARGE
         kinds = sorted({a.assist_kind for a in attempts})
         # 写回栅栏第二道：返回内容应用前重验世界（禁用开关/换 provider/改证据/
         # 卡片变化/租约丢失 → 全部不应用，安全原因码入审计）。
@@ -2125,7 +2199,9 @@ __all__ = [
     "REASON_ASSIST_DISABLED",
     "assist_enabled",
     "batch_calls",
+    "candidate_user_content",
     "execute_batch",
+    "prompt_version",
     "launch_batch",
     "prepare_registration",
     "recover_stuck_batches",

@@ -254,6 +254,8 @@ def test_admin_status_and_jobs_responses_never_leak(
         "assist_failed",
         "assist_degraded",
         "assist_unknown",
+        "assist_skipped",
+        "assist_skipped_prompt_too_large",
         "budget_reserved_tokens",
         "budget_consumed_tokens",
         "pfv_stale",

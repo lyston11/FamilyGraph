@@ -27,6 +27,7 @@
 - [steward-action-card.md](steward-action-card.md)
 - [steward-behavior-rebuild.md](steward-behavior-rebuild.md)
 - [steward-candidate-evidence.md](steward-candidate-evidence.md)
+- [steward-recommendation-suppression.md](steward-recommendation-suppression.md)
 - [controlled-web.md](controlled-web.md)
 - [assistant-history-restoration.md](assistant-history-restoration.md)
 

@@ -41,7 +41,7 @@ from app.errors import (
 from app.models.account import Account
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace
-from app.models.steward import ActionCard
+from app.models.steward import CARD_ACTIVE_STATES, ActionCard
 from app.models.user import User
 from app.schemas.action_card import (
     CardOut,
@@ -226,6 +226,14 @@ def list_cards(
             )
         )
     )
+    # 读侧有效状态：资格已丧失的活动卡不再作为待处理项返回（GET 不落库，持久
+    # 退役由后台 review/supersede FSM 完成）。终态历史卡照常返回供回看。
+    rows = [
+        card
+        for card in rows
+        if card.state not in CARD_ACTIVE_STATES
+        or not steward_service.card_household_conflict(db, card)
+    ]
     from app.services import steward_assist
 
     # R5：一次查询当前收件人卡片的已验证解释，避免逐卡查询
@@ -248,6 +256,15 @@ def _transition_card_endpoint(
     # 校验当前账号仍是卡片所属空间的 active 成员（撤权后禁止任何操作）
     _require_active_member(db, user.id, card.space_id)
     _reject_if_terminal(card)
+    if action == ACTION_ACCEPT:
+        # accept 前重验：双方已在共同家庭时不再把共建卡推到可执行态（旧页面/旧链接）。
+        if steward_service.card_household_conflict(db, card):
+            raise_api_error(
+                409,
+                CARD_EXECUTE_REJECTED,
+                "该推荐已不再适用",
+                detail={"card_id": card.id, "reason": "household_already_shared"},
+            )
     audit.write_audit(
         db,
         action=f"card_{action}",
@@ -459,14 +476,19 @@ def execute_card(
     6. 目标 membership 仍未 active（household：新建空间不存在成员冲突；
        lineage：actor 未 active）；
     7. VisibilityPolicy 仍允许（actor 对对方 visible）；
-    8. kind cooldown 仍允许。
+    8. kind cooldown 仍允许；
+    9. 推荐资格仍成立（含双方是否已共享任一 household）：与列表/通知/后台复核
+       同一判据。
 
     任一失败 → 409 CARD_EXECUTE_REJECTED{detail.reason}，卡片保持 accepted。
     成功 → 调用对应 Foundation domain command，产生 DomainEvent，把 executed_event_id
     落卡并 transition execute；绝不静默写 SourceFact 或自动发送（ST-6 红线）。
+
+    BEGIN IMMEDIATE：本入口是「读取资格判定后再写入」的多步命令，必须在写锁内
+    完成判定与写入，否则两个并发 execute 会各自通过检查并各建一个家庭空间。
     """
     user, account = identity
-    with command_transaction(db):
+    with command_transaction(db, immediate=True):
         card = _load_card_for_recipient(db, card_id, account.id)
         _require_active_member(db, user.id, card.space_id)
         if card.state != "accepted":
@@ -518,6 +540,10 @@ def execute_card(
             db, space_id=card.space_id, account_id=account.id, kind=card.kind
         ):
             _execute_reject(card, "cooldown_active")
+        # 9. 推荐资格仍成立（含双方是否已共享 household）：与列表/通知/后台复核
+        # 同一判据，防止先读旧卡再获得共同家庭后仍创建重复家庭。
+        if steward_service.card_household_conflict(db, card):
+            _execute_reject(card, "household_already_shared")
 
         audit.write_audit(
             db,

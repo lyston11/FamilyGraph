@@ -339,8 +339,20 @@ def _collect_metrics(
         status: int(
             db.scalar(select(sa.func.count()).where(StewardModelCall.status == status)) or 0
         )
-        for status in ("failed", "degraded", "unknown")
+        for status in ("failed", "degraded", "unknown", "skipped")
     }
+    # 09-19 R6/AC5：skipped 是「本笔未发送」的良性状态，但其中 prompt_too_large
+    # 是确定性输入问题（同一输入永远超限）。单独计数，使运营者能发现某空间候选
+    # 辅助已停止工作，而不是只看到 applied。
+    assist_skipped_prompt_too_large = int(
+        db.scalar(
+            select(sa.func.count()).where(
+                StewardModelCall.status == "skipped",
+                StewardModelCall.error_code == "prompt_too_large",
+            )
+        )
+        or 0
+    )
     budget_reserved = int(
         db.scalar(
             select(sa.func.coalesce(sa.func.sum(StewardModelCall.reserved_input_tokens), 0)).where(
@@ -383,6 +395,8 @@ def _collect_metrics(
         assist_failed=assist_counts["failed"],
         assist_degraded=assist_counts["degraded"],
         assist_unknown=assist_counts["unknown"],
+        assist_skipped=assist_counts["skipped"],
+        assist_skipped_prompt_too_large=assist_skipped_prompt_too_large,
         budget_reserved_tokens=budget_reserved,
         budget_consumed_tokens=budget_consumed,
         pfv_stale=pfv_stale,

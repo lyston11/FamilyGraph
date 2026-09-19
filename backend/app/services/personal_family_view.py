@@ -420,7 +420,7 @@ def _emit_inferred_projection(
     """
     if not steward_inferred.effective_enabled(session, space_id):
         return
-    active = steward_inferred.active_edges(session, space_id)
+    active = steward_inferred.active_edges(session, space_id, exclude_conflicted=True)
     if not active:
         return
     known = confirmed_reached | {actor.id}

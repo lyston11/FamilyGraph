@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "辅助批次/预算/租约/写回栅栏与 prompt 上界合同；超注入上限须分段读"}
+{"file": ".trellis/spec/backend/steward-candidate-evidence.md", "reason": "候选输出契约与归因状态；不得伪造证书或降低校验"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "方向合同、LLM 不提升写入权限、后端永远重验"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "评测门槛、红绿回归与静态检查"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "安全错误码、脱敏与 fail-closed"}
+{"file": ".trellis/tasks/09-19-steward-candidate-prompt-contract/research/diagnosis-summary.md", "reason": "实测 prompt 契约缺失、规模阈值与静默降级证据、结构去重盲区与观测缺口"}
