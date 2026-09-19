@@ -139,10 +139,25 @@ def _empty(
 
 
 def _path_valid(
-    path: Any, *, source: int, target: int, visible: set[int], witnesses: set[tuple[Any, ...]]
+    path: Any,
+    *,
+    source: int,
+    target: int,
+    visible: set[int],
+    witnesses: set[tuple[Any, ...]],
+    path_visible: set[int] | None = None,
 ) -> bool:
+    """重验一条保存的路径：步证据在 witnesses 内、节点当前可见、首尾一致。
+
+    09-19 D3：中间人可以不是本空间成员（例如共享父母），故路径节点用
+    ``path_visible``（路径证据可见集）校验；source/target 仍必须在授权节点
+    集合 ``visible`` 内。未传路径可见集时退化为旧口径（两者同一集合）。
+    """
     if not isinstance(path, list) or not path:
         return source == target
+    nodes = path_visible if path_visible is not None else visible
+    if source not in visible or target not in visible:
+        return False
     cursor = source
     for step in path:
         if not isinstance(step, dict) or step.get("from") != cursor:
@@ -155,7 +170,7 @@ def _path_valid(
             step.get("direction"),
             step.get("fact_id"),
         )
-        if key not in witnesses or step.get("from") not in visible or step.get("to") not in visible:
+        if key not in witnesses or step.get("from") not in nodes or step.get("to") not in nodes:
             return False
         cursor = step["to"]
     return cursor == target
@@ -230,6 +245,8 @@ def payload_for(
     skeleton = view.skeleton_json
     nodes = list(skeleton.get("nodes", []))
     visible = {int(node["user_id"]) for node in nodes}
+    # 旧骨架（09-19 之前）没有 path_user_ids：退化为节点集合，行为不变。
+    path_visible = {int(uid) for uid in skeleton.get("path_user_ids", [])} or visible
     witnesses = {tuple(step) for step in skeleton.get("evidence_steps", [])}
     rows = session.execute(
         select(
@@ -258,6 +275,7 @@ def payload_for(
                 target=target_id,
                 visible=visible,
                 witnesses=witnesses,
+                path_visible=path_visible,
             ):
                 status, reason = "failed", "evidence_invalid"
             else:
@@ -270,6 +288,7 @@ def payload_for(
                         target=target_id,
                         visible=visible,
                         witnesses=witnesses,
+                        path_visible=path_visible,
                     )
                 ]
                 edges.append(edge)

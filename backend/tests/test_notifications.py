@@ -155,8 +155,19 @@ def test_invite_notification_live_domain_status(client, db_session) -> None:
 def test_join_request_notification_to_manager(client, db_session) -> None:
     manager, space = create_agent_fixture(db_session, name="nt-join")
     requester = create_user_with_pin(db_session, "nt-joiner", "123456")
-    # join-by-user 要求申请人对目标用户可见：代管创建者链接（custodian）提供可见性
+    # join-by-user 要求申请人对目标用户可见：代管创建者链接（custodian）提供可见性。
     manager.created_by = requester.id
+    # 09-19 准入边界：另需与目标空间 active 成员存在 confirmed 亲属路径。
+    from app.services import source_facts as sf
+
+    fact = sf.create_source_fact(
+        db_session,
+        fact_type="biological_parent",
+        subject_user_id=manager.id,
+        object_user_id=requester.id,
+        provenance="manual_entry",
+    )
+    sf.transition_source_fact(db_session, fact, "confirm")
     db_session.commit()
 
     resp = client.post(

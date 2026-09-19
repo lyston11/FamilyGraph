@@ -567,7 +567,8 @@ def _resolution_for_paths(
     ordered = sorted(paths, key=_path_sort_key)
     main_path = ordered[0]
     alts = tuple(ordered[1 : ALT_PATH_LIMIT + 1])
-    genders = graph.node_genders
+    # 路径编码/描述用路径可见集（含中间人）；节点集合仍由 graph.node_genders 承载。
+    genders = graph.path_genders
     return RelationshipResolution(
         viewer_user_id=viewer_user_id,
         target_user_id=target_user_id,

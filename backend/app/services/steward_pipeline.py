@@ -546,14 +546,16 @@ def _stage_view(
     demand_revision: int,
 ) -> _Work | None:
     reached = reachable_targets(snapshot.graph)
-    target_ids = sorted(
-        (uid for uid in reached if uid != snapshot.root_user_id),
-        key=lambda uid: (reached[uid], uid),
-    )
     # 骨架节点 = 全部授权候选（含无 viewer 路径的 space_member），逐条已在
     # 快照阶段过 PURPOSE_GRAPH 重验；称谓目标仍只取可达目标。
+    # 09-19：邻接表含路径中间人，故称谓目标必须同时限定在授权节点集合内——
+    # 中间人不得成为某人的家族树称谓目标。
     skeleton_nodes = list(json.loads(snapshot.nodes_json))
     authorized_ids = {int(node["user_id"]) for node in skeleton_nodes}
+    target_ids = sorted(
+        (uid for uid in reached if uid != snapshot.root_user_id and uid in authorized_ids),
+        key=lambda uid: (reached[uid], uid),
+    )
     nodes = skeleton_nodes
     facts = tuple(
         fact
@@ -577,6 +579,9 @@ def _stage_view(
         "nodes": nodes,
         "topology_edges": topology,
         "target_ids": target_ids,
+        # 路径证据可见集（含中间人）：读取端逐条重验路径中间节点可见性用。
+        # 它不是节点集合——节点仍由 "nodes" 决定。
+        "path_user_ids": sorted(snapshot.graph.path_user_ids),
         "evidence_steps": [
             [from_id, step.to_id, step.edge_type, step.subtype, step.direction, step.fact_id]
             for from_id, steps in snapshot.graph.adjacency.items()

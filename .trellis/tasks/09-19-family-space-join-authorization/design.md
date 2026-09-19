@@ -159,19 +159,35 @@ else:
 
 ## 4. D1：亲属关系门禁
 
-在 `request_join_by_user` 内、目标空间解析之后、`space_fsm.invite` 之前插入：
+### 4.1 实现采用的口径（与初稿的差异已记录）
+
+初稿写的是「`load_graph` + `reachable_targets`，用与展示同一图口径」。实现时发现两点使该方案不成立，改为新增专用只读原语 `shares_confirmed_kinship`：
+
+1. **不能用目标空间的图口径**：那个口径按设计只暴露目标空间的成员，会把申请人与目标成员之间的纽带（乃至目标成员本身）全部隐去，门禁就永远不通过。实测 朱元璋 与 李贞 的双向关系在该口径下全部不可达。
+2. **不能按逐人可见性剪枝**：亲缘是**事实**而非可见性属性。若要求中间人可见，经不可见长辈的链条会单向断掉——实测李贞的可达集含朱元璋，而朱元璋的可达集不含李贞；那样门禁就变成方向相关的了。
+
+最终口径（`backend/app/services/relationship_graph.py::shares_confirmed_kinship`）：
 
 ```python
-graph = load_graph(session, viewer_user_id=actor.id, space_id=primary_space_id)
-reached = relationship_resolver.reachable_targets(graph)
-member_ids = {active members of primary_space_id}          # 含 owner
-if not (reached.keys() & member_ids - {actor.id}):
+def shares_confirmed_kinship(session, *, viewer_user_id: int, user_ids: set[int]) -> bool:
+    """事实口径 = 申请人自己的 active 空间（含全局 NULL）；无向连通；只返回布尔值。"""
+    targets = {uid for uid in user_ids if uid != viewer_user_id}
+    ...  BFS  ...
+    # 命中 targets 立即 True；visited 用集合去重
+```
+
+**只返回布尔值**：不把「申请人看不到但确实存在的人」交给调用方，因此不存在任何形式的未授权回传。只读、不写状态、不扩大字段投影。
+
+实测一致性：全库逐 (空间, 非成员用户) 组合比对 `shares_confirmed_kinship` 与「事实图无剪枝连通性」，0 mismatch（51 名用户 × 20 个空间）。
+
+调用点（在 `command_transaction` 内，同一写锁）：
+
+```python
+if not shares_confirmed_kinship(session, viewer_user_id=actor.id, user_ids=member_ids):
     raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该家庭空间没有已确认的亲属关系")
 ```
 
-- 复用 `load_graph` + `reachable_targets`（一次 BFS），不新增图算法；
-- 「有亲属路径」= 与空间内至少一名 active 成员（含 owner）可达；viewer 自己在空间内时天然可达但不算「有联系」，故 `- {actor.id}`；
-- 门禁在 `command_transaction` 内执行，与 pending 行创建同一写锁，无检查-插入竞态；
+- 门禁在目标空间解析之后、`space_fsm.invite` 之前，与 pending 行创建同一写锁，无检查-插入竞态；
 - 新错误码 `SPACE_JOIN_NO_RELATION`（`backend/app/errors.py`），403 语义；
 - 防枚举：目标不可见仍是既有 `404 USER_NOT_FOUND`（在门禁之前判定），门禁只对「已可见目标」生效，不泄露空间存在性。
 

@@ -565,3 +565,152 @@ def test_api_safe_empty_states_include_topology_edges(db_session, client, _pfv_e
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
     assert response.json()["topology_edges"] == []
+
+
+# ---- 09-19 D3：路径可经非本空间成员的中间人 ----
+
+
+def _bridge_family(db_session, name: str):
+    """viewer 与两名本空间成员之间的亲属链经过不在本空间的共享父母。
+
+    结构：共享父母（不在本空间）→ viewer / aunt / child。可见性由 v1 直系边提供
+    （与 dev seed 一致：同一批关系同时写 relations 与 SourceFact），结构证据则
+    只来自 confirmed SourceFact。
+    返回 (viewer, space, aunt, child, parents)。
+    """
+    from app.models.relation import Relation
+    from app.services import terms as terms_service
+    from app.utils.timeutil import utcnow
+
+    viewer, space = create_agent_fixture(db_session, name=name)
+    # 清表夹具会连带清掉 term_entries 的内置 system/locale 种子；称谓断言需要
+    # 真实词表（与 test_terms / test_term_autofix 同款做法）。
+    terms_service.seed_builtin_packs(db_session)
+    grandpa = create_user_with_pin(
+        db_session,
+        f"{name}-gp-m",
+        "123456",
+        gender="m",
+        birth={"cal_type": "solar", "date": "1283-01-01"},
+    )
+    grandma = create_user_with_pin(
+        db_session,
+        f"{name}-gp-f",
+        "123456",
+        gender="f",
+        birth={"cal_type": "solar", "date": "1286-01-01"},
+    )
+    # 出生数据让长幼消歧可判（与生产演示数据同构：姐姐 / 弟弟）
+    aunt = create_user_with_pin(
+        db_session,
+        f"{name}-aunt",
+        "123456",
+        gender="f",
+        birth={"cal_type": "solar", "date": "1326-01-01"},
+    )
+    child = create_user_with_pin(
+        db_session,
+        f"{name}-child",
+        "123456",
+        gender="m",
+        birth={"cal_type": "solar", "date": "1339-01-01"},
+    )
+    if viewer.birth is None:
+        viewer.birth = {"cal_type": "solar", "date": "1328-01-01"}
+    db_session.flush()
+    # 长幼消歧需要 birth 对 viewer 明文：与生产演示数据一致地开放 dates 披露类别。
+    from app.models.v2_foundation import DisclosurePreference
+
+    now = utcnow()
+    for user in (viewer, aunt, child):
+        db_session.add(
+            DisclosurePreference(
+                profile_id=user.id,
+                category="dates",
+                scope="global",
+                space_id=None,
+                allowed=True,
+                updated_at=now,
+            )
+        )
+    db_session.flush()
+    for member in (aunt, child):
+        create_space_member(db_session, space.id, member.id)
+    for parent in (grandpa, grandma):
+        for descendant in (viewer, aunt, child):
+            # v1 直系边：提供可见性（visible ≠ 结构真源）
+            db_session.add(
+                Relation(
+                    from_user=parent.id,
+                    to_user=descendant.id,
+                    dir_class="elder",
+                    created_by=parent.id,
+                    status="active",
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+            )
+            # confirmed 全局事实：唯一结构真源（路径证据）
+            _confirm(db_session, "biological_parent", parent.id, descendant.id, None)
+    db_session.commit()
+    return viewer, space, aunt, child, (grandpa, grandma)
+
+
+def test_topology_path_through_non_member_intermediary(db_session) -> None:
+    """AC5：中间人不是本空间成员时，亲属称谓仍必须解析出来（不得退化为无路径）。"""
+    viewer, space, aunt, child, _grandparents = _bridge_family(db_session, "topo-through")
+    _materialize(db_session, viewer.account, space.id)
+    payload = _payload(db_session, viewer.account, space.id)
+
+    edges = {edge["to_user_id"]: edge for edge in payload["edges"]}
+    assert set(edges) == {aunt.id, child.id}
+    # 路径经共享父母（不在本空间）→ 姐姐/弟弟，而不是 space_member 无路径
+    assert edges[aunt.id]["term"] == "姐姐"
+    assert edges[aunt.id]["concept_code"] == "Um-Df"
+    assert edges[child.id]["concept_code"] == "Um-Dm"
+    reasons = {node["user_id"]: node["inclusion_reason_code"] for node in payload["nodes"]}
+    assert reasons[aunt.id] == "confirmed_path"
+    assert reasons[child.id] == "confirmed_path"
+
+
+def test_topology_intermediary_never_becomes_node_or_topology_edge(db_session) -> None:
+    """AC6：中间人不得成为家族树节点，也不得产生结构边。"""
+    viewer, space, aunt, child, grandparents = _bridge_family(db_session, "topo-notnode")
+    _materialize(db_session, viewer.account, space.id)
+    payload = _payload(db_session, viewer.account, space.id)
+
+    node_ids = {node["user_id"] for node in payload["nodes"]}
+    for grandparent in grandparents:
+        assert grandparent.id not in node_ids
+    # 授权节点恰好是 viewer + 两名成员
+    assert node_ids == {viewer.id, aunt.id, child.id}
+    # 结构边两端点必须都在授权节点集合内（无悬空边）
+    for edge in payload["topology_edges"]:
+        assert edge["from_user_id"] in node_ids and edge["to_user_id"] in node_ids
+
+
+def test_topology_intermediary_revocation_removes_path(db_session) -> None:
+    """AC8：中间人证据失效后，依赖它的路径不再返回。"""
+    viewer, space, aunt, _child, grandparents = _bridge_family(db_session, "topo-midrevoke")
+    _materialize(db_session, viewer.account, space.id)
+    payload = _payload(db_session, viewer.account, space.id)
+    assert any(edge["to_user_id"] == aunt.id for edge in payload["edges"])
+
+    # 撤掉共享父母全部事实：aunt 与本空间仍 active 成员，但路径证据已断
+    rows = db_session.scalars(
+        select(sf.SourceFact).where(
+            sf.SourceFact.subject_user_id.in_([g.id for g in grandparents]),
+            sf.SourceFact.state == "confirmed",
+        )
+    ).all()
+    assert rows
+    for fact in rows:
+        sf.transition_source_fact(db_session, fact, "revoke")
+    db_session.commit()
+    _materialize(db_session, viewer.account, space.id)
+    payload = _payload(db_session, viewer.account, space.id)
+
+    assert not [edge for edge in payload["edges"] if edge["to_user_id"] == aunt.id]
+    # 成员本身仍在（09-18 孤立成员不丢失），但降级为 space_member 无路径
+    reasons = {node["user_id"]: node["inclusion_reason_code"] for node in payload["nodes"]}
+    assert reasons[aunt.id] == "space_member"

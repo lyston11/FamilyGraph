@@ -14,6 +14,7 @@
 
 - concept_code 为代数编码（如 `Um-Um` 爷爷、`Uf-Um` 外公、`Um-Uf` 奶奶、`Um-Uf-Bm` 舅爷爷）：U/D 上下行 + m/f 性别 + B/W 边类型（血/姻），父系母系方向可区分。
 - 图只消费 confirmed 且 (space_id 匹配 OR 全局 NULL) 的事实；可见节点 = active 成员 ∪ active space_profile_refs ∪ 本人，再经 `visibility.evaluate(purpose=agent)` 单点判定。
+- **路径口径 ≠ 节点口径（09-19）**：事实入图要求「至少一端是空间候选」且两端点按 `PURPOSE_GRAPH` 可见；路径中间人可以是空间外的人（如共享父母）——否则亲属链会被切断。中间人只进路径证据可见集，不进节点集合；`GRAPH_SNAPSHOT_VERSION=authorized-graph-v3`。所有「可达目标」消费方必须额外要求目标在节点集合内。
 - 多路径按最少确认边 → 较少不确定边 → 稳定 ID 次序选主路径；环/事实不足不强行给唯一结论。direct_sibling 不虚构父母。
 
 ## 四级推断与 Extractor

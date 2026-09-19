@@ -302,14 +302,14 @@ def current_target_context(
     if cursor != target_user_id:
         return None
     steps = steps_from_json(path)
-    concept = concept_code_for_path(steps, snapshot.graph.node_genders)
+    concept = concept_code_for_path(steps, snapshot.graph.path_genders)
     if concept is None or concept == "SELF":
         return None
     variants = terms.VariantContext(viewer_user_id=root, path=path, births=dict(snapshot.births))
     baseline = terms.resolve_term_from_snapshot(
         snapshot.terms,
         concept_code=concept,
-        structural_description=describe_path(steps, snapshot.graph.node_genders),
+        structural_description=describe_path(steps, snapshot.graph.path_genders),
         variant_context=variants,
     )
     age_order = "unknown"

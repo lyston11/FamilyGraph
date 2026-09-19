@@ -10,7 +10,7 @@
 | 附件元数据/下载 | full | full | full | invisible | invisible |
 | 搜索命中 | — | — | 允许(full 详情) | 允许(摘要) | 不可命中 |
 | 统计聚合 | — | — | 计入范围 | 计入范围 | 不计入 |
-| join_request | 目标空间 owner 可见审批 | — | — | — | — |
+| join_request | 需与该空间 active 成员有 confirmed 亲属链；由该空间 space_admin 审批（本人不得自批），不可见目标 404 防枚举 | — | — | — | — |
 | 空间邀请（invite） | — | active 成员可邀请；受邀人需接受 | — | — | — |
 | 空间管理者申请 | 提交（identity_confirmed active member）与查看本人申请 | — | — | — | — |
 | 管理者申请裁决 | platform_operator only（队列/approve/reject + audit；见 §0.7） | — | — | — | — |

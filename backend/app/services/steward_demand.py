@@ -115,10 +115,11 @@ def register(
             ):
                 return "already_active"
             if focus_user_id is not None:
-                reached = reachable_targets(
-                    load_graph(session, viewer_user_id=current.user_id, space_id=space_id)
-                )
-                if focus_user_id not in reached:
+                graph = load_graph(session, viewer_user_id=current.user_id, space_id=space_id)
+                # 09-19：邻接表含路径中间人，「可达」不再等于「授权目标」——
+                # 重点关注目标必须是本空间的授权节点。
+                reached = reachable_targets(graph)
+                if focus_user_id not in reached or focus_user_id not in graph.node_genders:
                     raise_api_error(422, "VALIDATION_ERROR", "重点关注目标不在当前授权骨架内")
         with write_transaction(bind) as session:
             authorize(session, account=account, space_id=space_id)

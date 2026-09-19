@@ -60,7 +60,7 @@ from app.services.source_facts import FACT_CONFIRMED
 from app.services.terms import VariantContext, resolve_term_or_structural, space_locale
 from app.utils.timeutil import utcnow
 
-COMPUTATION_VERSION = "pfv-v6-space-members"
+COMPUTATION_VERSION = "pfv-v7-path-visible"
 POLICY_VERSION = config.POLICY_VERSION
 
 logger = logging.getLogger(__name__)
@@ -768,20 +768,33 @@ def _path_evidence_valid(
     path: Any,
     space_id: int,
     visible_ids: set[int],
+    path_visible_ids: set[int] | None = None,
     inferred_edge: StewardInferredEdge | None = None,
 ) -> bool:
     """逐步重验一条路径：每一步事实存在、confirmed、空间适用、端点/方向一致，
-    且路径上所有节点（含中间人）当前对 actor 可见。任一步失败整条无效。"""
+    且路径上所有节点（含中间人）当前对 actor 可见。任一步失败整条无效。
+
+    09-19 D3：中间人可以不是本空间成员（例如共享父母），因此路径节点用
+    ``path_visible_ids``（路径证据可见集）校验；两个端点仍必须留在授权节点
+    集合 ``visible_ids`` 内——不返回指向外人的边。未传路径可见集时退化为
+    旧口径（两者同一集合）。
+    """
     if not isinstance(path, list):
         return False
-    for step in path:
+    path_nodes = path_visible_ids if path_visible_ids is not None else visible_ids
+    last_index = len(path) - 1
+    for index, step in enumerate(path):
         if not isinstance(step, dict):
             return False
         from_user, to_user = step.get("from"), step.get("to")
         fact_id = step.get("fact_id")
         if not isinstance(from_user, int) or not isinstance(to_user, int):
             return False
-        if from_user not in visible_ids or to_user not in visible_ids:
+        if from_user not in path_nodes or to_user not in path_nodes:
+            return False
+        if index == 0 and from_user not in visible_ids:
+            return False
+        if index == last_index and to_user not in visible_ids:
             return False
         edge_type = step.get("edge_type")
         if not isinstance(fact_id, int):
@@ -874,6 +887,9 @@ def _view_payload_for_view(
     ).all()
     authorized_nodes: list[dict[str, Any]] = []
     visible_ids: set[int] = set()
+    # 09-19 D3：路径中间人可能不是本空间成员，故中间节点用路径证据可见集重验；
+    # 两端点仍用授权节点集合 visible_ids。
+    path_visible_ids = set(graph.path_user_ids)
     for node in nodes:
         target = session.get(User, node.user_id)
         if target is None:
@@ -938,6 +954,7 @@ def _view_payload_for_view(
                 path=edge.path_json,
                 space_id=space_id,
                 visible_ids=visible_ids,
+                path_visible_ids=path_visible_ids,
                 inferred_edge=row,
             ):
                 continue
@@ -950,6 +967,7 @@ def _view_payload_for_view(
                 path=viewer_path,
                 space_id=space_id,
                 visible_ids=visible_ids,
+                path_visible_ids=path_visible_ids,
                 inferred_edge=row,
             ):
                 viewer_path = []
@@ -991,13 +1009,23 @@ def _view_payload_for_view(
         # R3：主路径与替代路径分别重验；主路径失效整条边不输出，
         # 失效的替代路径单独剔除，绝不回传未验证的保存 path_json。
         if not _path_evidence_valid(
-            session, path=edge.path_json, space_id=space_id, visible_ids=visible_ids
+            session,
+            path=edge.path_json,
+            space_id=space_id,
+            visible_ids=visible_ids,
+            path_visible_ids=path_visible_ids,
         ):
             continue
         verified_alts = [
             path
             for path in (edge.alternative_paths_json or [])
-            if _path_evidence_valid(session, path=path, space_id=space_id, visible_ids=visible_ids)
+            if _path_evidence_valid(
+                session,
+                path=path,
+                space_id=space_id,
+                visible_ids=visible_ids,
+                path_visible_ids=path_visible_ids,
+            )
         ]
         served_edges.append((edge, verified_alts))
     # 结构拓扑：confirmed 直接亲属事实（当前空间或全局、两端点均在本次授权
