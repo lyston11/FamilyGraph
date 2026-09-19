@@ -38,18 +38,34 @@
 - `PROVIDER_EMPTY_ANSWER` 是 **sidecar 运行期错误码**，与 `PROVIDER_STREAM_ERROR`/`SIDECAR_ERROR` 同类：只在 `frontend/src/api/agent.ts` 的 `AGENT_ERROR_COPY` 与本节登记，**不在 `backend/app/errors.py` 注册**（该表收录的是后端自己会发出的码）。`error_code` 列宽 64 字符足够，无迁移。
 - **副作用工具红线**：服务端 (run_id, tool_call_id) 去重表 V2.4 才落地；在此之前禁止注册任何有副作用的工具（现有 echo/probe_scope 只读）。
 - **取消门禁**：`cancel_requested` 是服务端权威状态。工具执行在 dispatch 前复核；ProviderGateway 在建立上游连接前及流式 chunk 边界复核，取消后拒绝/中断并记 failed egress audit。sidecar 的 AbortController/Pi `session.abort()` 只是加速路径，不能替代后端复核。
-- **取消失效的已实测缺陷（09-17 F，未修）**：sidecar 检测取消的**唯一**路径是心跳
-  （`worker.ts` `startHeartbeat`，间隔 `max(floor(defaultLeaseMs/3), 1000)`；出厂
-  `AGENT_DEFAULT_LEASE_MS=60000` → **20s**），而取消后仍在飞的 `events/append` 会立刻
-  拿到 `409 AGENT_RUN_NOT_RUNNING "Run 已请求取消"`。该 409 被映射为 `ConflictError`，
-  `executeJob` 的 catch 只看 `cancelRequested`/`leaseLost`（两者都还是 false），
-  于是**由 sidecar 自造 `failed + SIDECAR_ERROR`**，覆盖服务端已裁决的取消语义；
-  用户看到「助手服务暂时不可用」而不是「已取消」。3/3 复现；把租约降到 3s
-  （心跳 1s）后同一场景不再产生 SIDECAR_ERROR，证明因果与心跳节奏绑定。
-  `agent/src/worker.ts` 的注释已明确写入「do not turn that expected rejection into a
-  sidecar failed settle」，实现与声明意图不一致。归因证据：
-  `09-17-dual-agent-controlled-acceptance` 的 `evidence/defect-cancel.note.md`。
-  在修复前**不得**把「取消后 run 可能终态为 failed」当作预期行为写进新测试。
+- **取消的检测与收敛（09-17 F 发现，09-17 E / 09-19 修复）**：sidecar 检测取消的
+  **唯一**路径曾是心跳（`worker.ts` `startHeartbeat`，间隔
+  `max(floor(defaultLeaseMs/3), 1000)`；出厂 `AGENT_DEFAULT_LEASE_MS=60000` → **20s**），
+  而取消后仍在飞的 `events/append` 会立刻拿到 409。旧实现把该 409 当普通
+  `ConflictError`，`executeJob` 的 catch 只看 `cancelRequested`/`leaseLost`
+  （两者都还是 false），于是**由 sidecar 自造 `failed + SIDECAR_ERROR`**，覆盖服务端
+  已裁决的取消（用户看到「助手服务暂时不可用」而不是「已取消」）。现行合同：
+  - 后端在取消分支返回**机器可读**的 `detail.reason="cancel_requested"`
+    （`fence_execution`、provider 网关及其中流复核），不靠 message 文本区分；
+  - sidecar 把该 409 映射为 `RunCancelledError`，并通过 `InternalClient.onRunCancelled`
+    让**任何** run-scoped 响应都能上报取消，不再只依赖心跳节奏；worker 在心跳与
+    `executeJob` 两处都按取消收敛、不结算。
+- **reaper 对「非可重试条件」直接终态化**：租约到期的收敛分支必须区分三种原因，
+  判定顺序为 ①`cancel_requested` → `cancelled`；②**执行身份永久失效**（成员资格非
+  active）→ `failed` + `AGENT_MEMBERSHIP_REVOKED`；③`attempt` 耗尽 → `expired` +
+  `AGENT_LEASE_EXPIRED`；④其余 → 回队。原因：取消与撤权都**不可能**因重试而成功。
+  09-19 受控验收实测——撤权后每次内部请求（含心跳）都被 `_authorize_run` 拒，
+  sidecar 既不续租也不结算，旧逻辑把租约丢失当可重试回队，新 attempt 立刻又 403，
+  直到 `attempt` 耗尽（约 `3×300s`）才收口 `expired`：用户在这 15 分钟里看着一个
+  永远不会完成的「生成中…」，而 `expired` 还把「授权永久失效」记成「租约超时」。
+  撤权判定必须与 `fence_execution`/`_authorize_run` 同判据（空间 + 账号对应 user +
+  `status='active'`），且**查询失败不得当作已失效**（让 tick 回滚重试）。
+  证据：`09-19-dual-agent-acceptance-gap-closure/evidence/defect-revocation-no-convergence.note.md`。
+- **取消/失败并发的终态归属**：`_settle` 只把 `succeeded` 改判为 `cancelled`
+  （结果丢弃 + `agent_run_settle_overridden` 审计）；**`failed` 原样保留**——取消不得
+  吞掉真实故障，否则错误分母消失。落终态后 reaper 不再改写（它只选 `leased`/`running`）。
+  回归：`test_cancel_then_failed_settle_keeps_failed`、
+  `test_reaper_does_not_override_a_run_that_already_failed_after_cancel`。
 
 ## 可观测性：助手耗时分段与源计时（09-17 A 建立，09-17 D 修正，09-18 延迟根因分析）
 
@@ -113,6 +129,9 @@
   - 无压缩即**不发事件**，聚合 `n=0`，不用 0 填充；
   - `run.compacted` 是非终态事件，因此它成为「最后一个非终态事件」时，`settle`
     阶段不再把轮后压缩算作结算开销（修正前那 245ms 被错误计入 `settle`）。
+  - **`settle` 的精度边界**：它是「最后一个非终态事件 → 终态事件」的**持久事件
+    间隔估计**，不是数据库结算的精确 CPU 耗时；它仍受 sidecar 250ms 批量 flush
+    量化影响。不得把 `settle` 当作「结算开销」的精确测量（09-19 口径修正）。
 - **两侧同步**：`timing` 只允许出现在 sidecar 执行事件上
   （`run.started`/`message.assistant_added`/`tool.execution.completed`/`run.compacted`；
   后端自有事件携带即 422），未知 `source`、负值、越界一律 fail-closed。
@@ -143,8 +162,9 @@
   尾部段数。**不得**把 `provider_retry` 当作全部重试耗时，也不得用
   `model_turn − provider_retry` 宣称“纯推理时间”而不注明下界性质。
   **`compaction` 不在 `model_turn` 内**（09-19 D2）：压缩是 run 级阶段，
-  `model_turn` 本就是纯生成（含重试）；两者不得相加或相减，`compaction` 只说明
-  本次 prompt 另花了多少摘要时间。
+  `model_turn` 本就**不含**压缩（但仍含上游重试与本地等待，**不得**称其为
+  「纯推理时间」）；两者不得相加或相减，`compaction` 只说明本次 prompt 另花了
+  多少摘要时间。
   实测（n=2 run，只读副本）：run 2 的 5 次 502 在**同一轮内**连续，`provider_retry` 记录
   10.22s（该轮 `model_turn` 33.15s）；run 1 是**每轮各一次** 503，失败段长度为 1，
   按 `末次−首次` 定义得 0——即**单次失败的段不被测量**，只能由
