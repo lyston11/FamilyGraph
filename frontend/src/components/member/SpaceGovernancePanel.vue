@@ -61,6 +61,25 @@ const pendingCount = computed(() => spaces.members.filter((m) => m.status === 'p
 // 操作后 store 内部重读服务端成员列表，无乐观本地行删除。
 const canRemoveMembers = computed(() => spaces.canManageSpace)
 
+/**
+ * 09-19 准入边界：pending 行分两类——
+ * - 他人邀请（added_by !== user_id）：受邀人本人接受，管理员只能撤回；
+ * - 本人申请加入（added_by === user_id）：只能由该空间管理员批准/拒绝，
+ *   申请人不得自批（旧界面在这里只给「撤回」，实际会因 added_by != actor 被拒）。
+ */
+function isSelfRequested(member: SpaceMemberInfo): boolean {
+  return member.added_by !== null && member.added_by === member.user_id
+}
+
+async function respondSelfRequest(member: SpaceMemberInfo, accept: boolean): Promise<void> {
+  try {
+    await spaces.resolve(member.id, accept ? 'accept' : 'reject')
+    message.success(accept ? '已批准加入申请' : '已拒绝加入申请')
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '操作失败，请稍后重试')
+  }
+}
+
 function memberRemovable(member: SpaceMemberInfo): boolean {
   return member.user_id !== myUserId.value
 }
@@ -108,10 +127,36 @@ const memberColumns = computed<DataTableColumns<SpaceMemberInfo>>(() => {
     columns.push({
       title: '操作',
       key: 'actions',
-      width: 96,
+      width: 150,
       render: (row) => {
         if (!memberRemovable(row)) return h('span')
         const isPending = row.status === 'pending'
+        if (isPending && isSelfRequested(row)) {
+          // 加入申请：管理员批准/拒绝（不能再走 withdraw，那会被后端判为无权）
+          return h('div', { class: 'pending-actions' }, [
+            h(
+              NButton,
+              {
+                size: 'small',
+                type: 'primary',
+                secondary: true,
+                'data-test': `member-approve-${row.id}`,
+                onClick: () => void respondSelfRequest(row, true),
+              },
+              { default: () => '批准' },
+            ),
+            h(
+              NButton,
+              {
+                size: 'small',
+                secondary: true,
+                'data-test': `member-reject-${row.id}`,
+                onClick: () => void respondSelfRequest(row, false),
+              },
+              { default: () => '拒绝' },
+            ),
+          ])
+        }
         return h(
           NPopconfirm,
           { trigger: 'click', positiveText: '确认', onPositiveClick: () => removeMember(row) },
@@ -315,6 +360,7 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
 .candidates, .ref-list { list-style: none; margin: 8px 0 0; padding: 0; }
 .candidate-row, .ref-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; color: var(--fg-ink); }
 .transfer-pending { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--fg-surface-sunken); border-radius: var(--fg-radius-control); font-size: 13px; color: var(--fg-ink); }
+.pending-actions { display: flex; gap: 6px; }
 .transfer-actions { display: flex; gap: 8px; }
 .hint { margin: 8px 0 0; color: var(--fg-ink-secondary); font-size: 12px; line-height: 1.5; }
 @media (max-width: 560px) { .invite-row, .transfer-row { flex-direction: column; } .summary-grid { grid-template-columns: 1fr 1fr; } }

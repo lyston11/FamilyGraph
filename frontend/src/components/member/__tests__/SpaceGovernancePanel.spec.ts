@@ -152,3 +152,64 @@ describe('SpaceGovernancePanel', () => {
     wrapper.unmount()
   })
 })
+
+describe('SpaceGovernancePanel 加入申请审批（09-19 准入边界）', () => {
+  let pinia: Pinia
+
+  beforeEach(() => {
+    pinia = createPinia()
+    document.body.innerHTML = ''
+    vi.clearAllMocks()
+  })
+
+  function seedWithPendingRequest(): void {
+    seed(pinia, 'space_admin')
+    const spaces = useSpacesStore(pinia)
+    spaces.members = [
+      ...spaces.members,
+      // 本人申请加入：added_by === user_id（由对方自己发起）
+      makeMember({
+        id: 8,
+        user_id: 42,
+        user_name: '申请者',
+        added_by: 42,
+        role: 'member',
+        status: 'pending',
+      }),
+    ]
+  }
+
+  it('本人申请行渲染批准/拒绝，不再提供撤回', () => {
+    seedWithPendingRequest()
+    const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
+
+    expect(wrapper.find('[data-test="member-approve-8"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="member-reject-8"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="member-withdraw-8"]').exists()).toBe(false)
+    // 他人邀请（added_by !== user_id）仍是撤回
+    expect(wrapper.find('[data-test="member-withdraw-3"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('批准调用既有 resolve 端点', async () => {
+    seedWithPendingRequest()
+    const spaces = useSpacesStore(pinia)
+    const resolveSpy = vi.spyOn(spaces, 'resolve').mockResolvedValue(undefined)
+    const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
+
+    await wrapper.find('[data-test="member-approve-8"]').trigger('click')
+    await vi.waitFor(() => expect(resolveSpy).toHaveBeenCalledWith(8, 'accept'))
+    wrapper.unmount()
+  })
+
+  it('拒绝调用既有 resolve 端点', async () => {
+    seedWithPendingRequest()
+    const spaces = useSpacesStore(pinia)
+    const resolveSpy = vi.spyOn(spaces, 'resolve').mockResolvedValue(undefined)
+    const wrapper = mount(ProvidedPanel, { global: { plugins: [pinia] } })
+
+    await wrapper.find('[data-test="member-reject-8"]').trigger('click')
+    await vi.waitFor(() => expect(resolveSpy).toHaveBeenCalledWith(8, 'reject'))
+    wrapper.unmount()
+  })
+})
