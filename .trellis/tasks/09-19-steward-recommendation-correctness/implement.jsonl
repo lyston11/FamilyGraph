@@ -6,3 +6,4 @@
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "红绿回归、静态检查与分层验收"}
 {"file": ".trellis/spec/backend/error-handling.md", "reason": "复用错误 envelope、命令失败与事务回滚语义"}
 {"file": ".trellis/tasks/09-19-steward-recommendation-correctness/research/diagnosis-summary.md", "reason": "已核对根因、统计纠正、待审合同修订与范围限制"}
+{"file": ".trellis/tasks/09-19-steward-recommendation-correctness/research/evidence/validation.md", "reason": "红测、守护力验证与覆盖矩阵"}
