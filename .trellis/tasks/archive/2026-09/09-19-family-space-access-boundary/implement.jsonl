@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/11--11-personalfamilyview-bridge-2026-09-01.md", "reason": "PFV 节点/路径分离和读取撤权合同"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "confirmed SourceFact、关系路径和 direct_sibling 事实合同"}
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "join_request 准入、审批和空间成员状态机"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "统一 404/403 错误形状与防枚举"}
