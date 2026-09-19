@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 from test_rag_lifecycle_migrations import migrate, migration_engine
@@ -19,7 +22,8 @@ from app.services.steward_guard import candidate_digest
 from app.utils.timeutil import utcnow
 
 PARENT = "0048_steward_terminology_publication"
-HEAD = "0051_run_event_timing"
+BACKEND = Path(__file__).parents[1]
+HEAD = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini"))).get_current_head()
 _HISTORY_TABLES = (
     "steward_suggestions",
     "steward_suggestion_recipients",
@@ -175,8 +179,8 @@ def test_in_place_upgrade_preserves_legacy_identity_and_all_confirmation_dismiss
         old_indexes = inspect(engine).get_indexes("steward_llm_candidates")
         old_unique = inspect(engine).get_unique_constraints("steward_llm_candidates")
         old_foreign_keys = inspect(engine).get_foreign_keys("steward_llm_candidates")
-        # 显式目标而非相对偏移：0050 之上再加代后相对走位会撞到 0044 的合并分叉
-        # （"Ambiguous walk"），而本用例的意图始终是跨过 0049 边界回到 PARENT。
+        # 显式目标而非相对偏移：本用例的意图始终是跨过 0049 边界回到 PARENT，
+        # 而相对走位会随新增代头而改变含义。
         for direction, target in (("upgrade", "head"), ("downgrade", PARENT), ("upgrade", "head")):
             result = migrate(tmp_path, direction, target, foreign_keys=foreign_keys)
             assert result.returncode == 0, result.stderr
@@ -265,7 +269,9 @@ def test_ambiguous_relative_deep_downgrade_preserves_entire_schema(tmp_path, for
     engine = migration_engine(tmp_path)
     try:
         before = _snapshot(engine, schema=True)
-        result = migrate(tmp_path, "downgrade", "-3", foreign_keys=foreign_keys)
+        # `-4` 从当前头跨过 0049 边界并撞上 0044 的合并分叉（相对偏移必须随代头调整，
+        # 否则会落到另一组 revision 而不再歧义）。
+        result = migrate(tmp_path, "downgrade", "-4", foreign_keys=foreign_keys)
         assert result.returncode != 0 and "ambiguous" in result.stderr.lower()
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
         assert _snapshot(engine, schema=True) == before

@@ -408,6 +408,34 @@ class JoinByUserPayload(BaseModel):
     target_user_id: int = Field(gt=0)
 
 
+class LineageAccessRequestPayload(BaseModel):
+    """家庭空间成员申请读取该家庭所属家族空间（由该家族空间管理员审批）。"""
+
+    household_space_id: int = Field(gt=0)
+
+
+@router.post("/spaces/lineage-access-requests", status_code=201, response_model=SpaceMemberOut)
+def request_lineage_access(
+    payload: LineageAccessRequestPayload,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SpaceMemberOut:
+    """申请读取家庭空间所属的家族空间：独立的 pending，由该家族空间管理员审批。
+
+    家庭空间成员资格不自动获得家族树读取权；本端点只登记申请。
+    """
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    member, _event_id = space_commands.request_lineage_access(
+        session,
+        ctx,
+        household_space_id=payload.household_space_id,
+    )
+    session.refresh(member)
+    return _member_out_with_name(session, member)
+
+
 @router.post("/space-memberships/{member_id}/accept", response_model=SpaceMemberOut)
 def accept_membership(
     member_id: int,

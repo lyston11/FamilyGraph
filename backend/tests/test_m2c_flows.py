@@ -1,8 +1,8 @@
 """m2c 加入申请、断连即时降级与幂等（architecture §4 [AD-4]）。
 
-09-19 起 join-by-user 是受限准入：申请人须与该空间的 active 成员存在 confirmed
-亲属路径（SourceFact 图，不是 v1 relations 表），且 pending 只能由该空间的
-space_admin 批准——申请人本人不得自批。
+09-19 起 join-by-user 是受限准入：申请人须与目标同属至少一个 active 家族空间
+（lineage），且 household pending 行只能由被申请的 target 本人批准——申请人
+本人不得自批。家庭空间成员资格不等于家族空间成员资格。
 """
 
 from __future__ import annotations
@@ -54,6 +54,21 @@ def _elder_relation(session, *, elder_id: int, younger_id: int) -> None:
     )
 
 
+def _lineage_space(session, *users):
+    """共同家族空间：join 准入只要求双方同属一个 active lineage。"""
+    from app.models.space import FamilySpace
+    from app.utils.timeutil import utcnow
+
+    space = FamilySpace(
+        name=f"准入lineage-{users[0].id}", kind="lineage", owner_id=users[0].id, created_at=utcnow()
+    )
+    session.add(space)
+    session.flush()
+    for user in users:
+        create_space_member(session, space.id, user.id)
+    return space
+
+
 def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     a = create_user_with_pin(db_session, "阿甲", "111111", claim_status="claimed")
     b = create_user_with_pin(
@@ -64,9 +79,9 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
         birth={"cal_type": "solar", "date": "1975-05-05"},
     )
     db_session.flush()
-    # 可见性靠 v1 直系边（既有合同），亲属门禁靠 confirmed SourceFact（结构真源）。
+    # 可见性靠 v1 直系边（既有合同）；准入资格靠「与目标同属一个 active lineage」。
     _elder_relation(db_session, elder_id=b.id, younger_id=a.id)
-    _confirm(db_session, "biological_parent", b.id, a.id)
+    _lineage_space(db_session, a, b)
     db_session.commit()
     ha = _login(client, "阿甲", "111111")
     hb = _login(client, "阿乙", "222222")
@@ -76,7 +91,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     assert created.status_code == 201, created.text
     space_id = created.json()["id"]
 
-    # 甲与乙有 confirmed 亲属路径 → 可申请
+    # 甲与乙同属一个 lineage → 可申请
     r1 = client.post("/api/spaces/join-by-user", json={"target_user_id": b.id}, headers=ha)
     assert r1.status_code == 201, r1.text
     assert r1.json()["status"] == "pending"
@@ -86,7 +101,12 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     r2 = client.post("/api/spaces/join-by-user", json={"target_user_id": b.id}, headers=ha)
     assert r2.status_code == 201
     assert r2.json()["id"] == r1.json()["id"]
-    assert db_session.query(SpaceMember).filter(SpaceMember.user_id == a.id).count() == 1
+    assert (
+        db_session.query(SpaceMember)
+        .filter(SpaceMember.space_id == space_id, SpaceMember.user_id == a.id)
+        .count()
+        == 1
+    )
 
     # 09-19：申请人不得自批自己的加入申请
     self_accept = client.post(f"/api/space-memberships/{r1.json()['id']}/accept", headers=ha)
@@ -94,7 +114,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     db_session.expire_all()
     assert db_session.get(SpaceMember, r1.json()["id"]).status == "pending"
 
-    # 该空间 space_admin 批准 → active，甲获得完整可见性
+    # 被申请的 target 本人（乙）批准 → active，甲获得 household 可见性
     acc = client.post(f"/api/space-memberships/{r1.json()['id']}/accept", headers=hb)
     assert acc.status_code == 200, acc.text
     assert acc.json()["status"] == "active"
@@ -103,8 +123,8 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     assert isinstance(detail["birth"], dict) and "__masked__" not in detail["birth"]
 
 
-def test_join_requires_confirmed_kinship_with_space_member(db_session, client: TestClient) -> None:
-    """可见性不足以申请：无 confirmed 亲属路径 → 403，且不落 pending 行。"""
+def test_join_requires_shared_lineage(db_session, client: TestClient) -> None:
+    """可见性不足以申请：不在同一个 active lineage → 403，且不落 pending 行。"""
     from app.models.space import FamilySpace
     from app.utils.timeutil import utcnow
 
@@ -116,7 +136,7 @@ def test_join_requires_confirmed_kinship_with_space_member(db_session, client: T
     db_session.flush()
     create_space_member(db_session, space.id, owner.id, role="space_admin")
     outsider = create_user_with_pin(db_session, "准入外人", "444444", claim_status="claimed")
-    # 仅凭代管创建者链接获得可见性（旧门禁下就足够，现在必须被亲属门禁拦住）
+    # 仅凭代管创建者链接获得可见性（旧门禁下就足够，现在必须被 lineage 门禁拦住）
     owner.created_by = outsider.id
     db_session.commit()
 
@@ -151,9 +171,9 @@ def test_join_target_space_resolved_from_manager_not_any_membership(
     create_space_member(db_session, space.id, plain.id)
     joiner = create_user_with_pin(db_session, "解析申请者", "777777", claim_status="claimed")
     db_session.flush()
-    # 与 owner 有亲属路径（门禁可通过）；对 plain 可见（v1 直系边）但无任何亲属关系。
+    # 与 owner 同属一个 lineage（门禁可通过）；对 plain 可见（v1 直系边）但无任何亲属关系。
     create_space_member(db_session, space.id, joiner.id, status="removed")
-    _confirm(db_session, "biological_parent", owner.id, joiner.id)
+    _lineage_space(db_session, owner, joiner)
     _elder_relation(db_session, elder_id=plain.id, younger_id=joiner.id)
     db_session.commit()
 

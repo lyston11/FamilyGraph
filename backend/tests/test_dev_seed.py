@@ -2,8 +2,9 @@
 
 - DEV_SEED_DEMO_DATA 未开启（默认 "0"）→ maybe_seed_demo_data 零写入；
 - env=1 + 空库 → 全量播种：51 用户（含出生日期）/20 空间（household×10 +
-  lineage×10，十个 household 显式配对所属 lineage）/92 成员行/74 关系/74
-  confirmed SourceFact（全局一份）/基础五类披露全局开放，PIN 123456 校验通过；
+  lineage×10，十个 household 显式配对所属 lineage）/92 成员行/74 关系/75
+  confirmed SourceFact（全局一份；含朱元璋—朱佛女 direct_sibling）/基础五类
+  披露全局开放，PIN 123456 校验通过；
   进程内重复调用（_SEED_DONE）幂等跳过；
 - env=1 + 非空库 → insert-only 增量补缺：清单缺失行自动补齐（用户按姓名 /
   空间按名 / 成员行按 (space,user) / 关系边按两人任一方向 pending|active 匹配），
@@ -301,7 +302,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     # 2 人 + lineage 收全族；跨空间成员见下方专项断言
     expected_rosters = (
         (household, 6, by_name["朱元璋"].id),
-        (lineage, 30, by_name["朱元璋"].id),
+        (lineage, 31, by_name["朱元璋"].id),
         (ma_household, 2, by_name["马皇后"].id),
         (ma_lineage, 4, by_name["马皇后"].id),
         (xu_household, 2, by_name["徐达"].id),
@@ -319,7 +320,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         (qian_household, 2, by_name["钱贵"].id),
         (qian_lineage, 3, by_name["钱贵"].id),
         (li_household, 2, by_name["李贞"].id),
-        (li_lineage, 5, by_name["李贞"].id),
+        (li_lineage, 4, by_name["李贞"].id),
     )
     for space, size, admin_id in expected_rosters:
         members = db_session.query(SpaceMember).filter_by(space_id=space.id).all()
@@ -329,6 +330,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         assert len(admin_rows) == 1
         assert admin_rows[0].user_id == admin_id
         assert sum(1 for member in members if member.role == "member") == size - 1
+    # 朱佛女 进朱氏皇族（+1）、朱元璋 离开李氏家族（-1），总数不变
     assert db_session.query(SpaceMember).count() == 92
 
     # 跨空间成员资格：帝室成员以 member 身份进入各外戚本家
@@ -396,13 +398,15 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         by_name["钱皇后"].id,
     }
     assert _member_ids(li_household) == {by_name["李贞"].id, by_name["朱元璋"].id}
+    # 朱元璋只在李家 household：家庭空间成员资格不等于家族空间成员资格，
+    # 家族树必须先经目标本人批准独立 lineage 申请才能读取。
     assert _member_ids(li_lineage) == {
         by_name["李贞"].id,
-        by_name["朱元璋"].id,
         by_name["朱佛女"].id,
         by_name["李文忠"].id,
         by_name["李景隆"].id,
     }
+    assert by_name["朱元璋"].id not in _member_ids(li_lineage)
 
     relations = db_session.query(Relation).all()
     assert len(relations) == 74
@@ -415,9 +419,13 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     assert {(by_id[r.from_user], by_id[r.to_user]) for r in elder_edges} == _SEED_ELDER_PAIRS
 
     facts = db_session.query(SourceFact).all()
-    assert len(facts) == 74  # 全局事实（space_id=NULL），十对空间共享投影
+    assert len(facts) == 75  # 全局事实（space_id=NULL），十对空间共享投影
     assert {fact.state for fact in facts} == {"confirmed"}
-    assert {fact.fact_type for fact in facts} == {"spouse", "biological_parent"}
+    assert {fact.fact_type for fact in facts} == {
+        "spouse",
+        "biological_parent",
+        "direct_sibling",
+    }
     assert {fact.space_id for fact in facts} == {None}
     # elder f→t → biological_parent(t, f)；spouse 对称（映射合同见 _map_structural_edge）
     parent_pairs = {
@@ -432,6 +440,13 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         if fact.fact_type == "spouse"
     }
     assert spouse_facts == _SEED_SPOUSE_PAIRS
+    # 朱元璋—朱佛女 姐弟：v1 结构边无 sibling 语义，由独立 confirmed 事实承载
+    sibling_facts = {
+        frozenset((by_id[fact.subject_user_id], by_id[fact.object_user_id]))
+        for fact in facts
+        if fact.fact_type == "direct_sibling"
+    }
+    assert sibling_facts == {frozenset(("朱元璋", "朱佛女"))}
 
     # R6：基础五类披露全局开放（成员互见）；高敏感五类保持关闭（Q4=b 仅为可开）
     prefs = db_session.query(DisclosurePreference).all()
@@ -452,7 +467,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
     dev_seed._SEED_DONE = False
     assert dev_seed.maybe_seed_demo_data(db_session) is False
     assert db_session.query(User).count() == 51
-    assert db_session.query(SourceFact).count() == 74
+    assert db_session.query(SourceFact).count() == 75
 
 
 def test_full_seed_initializes_personal_family_view_rows(db_session, monkeypatch) -> None:
@@ -518,14 +533,14 @@ def test_non_empty_db_backfills_manifest_and_preserves_existing_user(
     )
     assert db_session.query(DisclosurePreference).filter_by(profile_id=existing.id).count() == 0
 
-    # 固定清单全部补齐：51 演示用户 / 20 空间 / 92 成员行 / 74 关系 / 74 fact
+    # 固定清单全部补齐：51 演示用户 / 20 空间 / 92 成员行 / 74 关系 / 75 fact
     demo_users = db_session.query(User).filter(User.name != "既有用户").all()
     assert {user.name for user in demo_users} == _DEMO_NAMES
     assert len(demo_users) == 51
     assert db_session.query(FamilySpace).count() == 20
     assert db_session.query(SpaceMember).count() == 92
     assert db_session.query(Relation).count() == 74
-    assert db_session.query(SourceFact).count() == 74
+    assert db_session.query(SourceFact).count() == 75
 
 
 def test_manifest_extension_backfills_missing_rows_only(db_session, monkeypatch) -> None:
@@ -556,11 +571,11 @@ def test_manifest_extension_backfills_missing_rows_only(db_session, monkeypatch)
     dev_seed._SEED_DONE = False
     assert dev_seed.maybe_seed_demo_data(db_session) is True
 
-    # 只增：52 用户 / 93 成员行 / 75 关系 / 75 fact
+    # 只增：52 用户 / 93 成员行 / 75 关系 / 76 fact
     assert db_session.query(User).count() == 52
     assert db_session.query(SpaceMember).count() == 93
     assert db_session.query(Relation).count() == 75
-    assert db_session.query(SourceFact).count() == 75
+    assert db_session.query(SourceFact).count() == 76
     # 既有 51 用户行 id 与关键字段零变动
     for user in db_session.query(User).all():
         if user.name == "朱文奎":
@@ -605,7 +620,7 @@ def test_converged_manifest_returns_false_and_writes_nothing(db_session, monkeyp
     assert db_session.query(FamilySpace).count() == 20
     assert db_session.query(SpaceMember).count() == 92
     assert db_session.query(Relation).count() == 74
-    assert db_session.query(SourceFact).count() == 74
+    assert db_session.query(SourceFact).count() == 75
     assert db_session.query(DisclosurePreference).count() == 51 * 5
 
 

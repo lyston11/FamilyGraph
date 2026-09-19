@@ -366,47 +366,6 @@ def scoped_confirmed_facts(
     return sorted(rows, key=lambda fact: fact.id)
 
 
-def shares_confirmed_kinship(session: Session, *, viewer_user_id: int, user_ids: set[int]) -> bool:
-    """viewer 是否与 ``user_ids`` 中某人存在 confirmed 亲属链（准入门禁用）。
-
-    只问「有无亲属联系」——因此：
-    - 事实口径用申请人自己的授权空间（含全局 NULL 事实），不按逐人可见性剪枝：
-      亲缘是事实不是可见性属性；若要求中间人可见，经不可见长辈的链条会单向
-      断掉（姐姐能看到弟弟，弟弟反而看不到姐姐），门禁就变成方向相关的了；
-    - 亲属链按无向连通处理，方向不影响结论。
-
-    只返回布尔值：不把「申请人看不到但确实存在的人」交给调用方，避免任何
-    形式的未授权回传。只读、不写状态、不扩大字段投影。
-    """
-    targets = {uid for uid in user_ids if uid != viewer_user_id}
-    if not targets or session.get(User, viewer_user_id) is None:
-        return False
-    space_ids = set(
-        session.scalars(
-            select(SpaceMember.space_id).where(
-                SpaceMember.user_id == viewer_user_id, SpaceMember.status == "active"
-            )
-        ).all()
-    )
-    adjacency: dict[int, set[int]] = {}
-    for fact in scoped_confirmed_facts(session, space_ids=space_ids or {0}):
-        subject_id, object_id = fact.subject_user_id, fact.object_user_id
-        if subject_id == object_id:
-            continue
-        adjacency.setdefault(subject_id, set()).add(object_id)
-        adjacency.setdefault(object_id, set()).add(subject_id)
-    seen = {viewer_user_id}
-    stack = [viewer_user_id]
-    while stack:
-        for nxt in adjacency.get(stack.pop(), ()):
-            if nxt in targets:
-                return True
-            if nxt not in seen:
-                seen.add(nxt)
-                stack.append(nxt)
-    return False
-
-
 def topology_edges_from_facts(facts: Iterable[SourceFact]) -> list[dict[str, Any]]:
     """将 confirmed 原子事实规范化为去重、稳定排序的直接亲属结构边。
 

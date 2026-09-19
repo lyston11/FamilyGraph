@@ -14,7 +14,13 @@ import pytest
 from app import config
 from app.models.steward import ActionCard
 from app.services import action_cards
-from conftest import auth_header, create_agent_fixture, create_user_with_pin, login
+from conftest import (
+    auth_header,
+    create_agent_fixture,
+    create_space_member,
+    create_user_with_pin,
+    login,
+)
 
 ITEM_KEYS = {
     "id",
@@ -152,22 +158,22 @@ def test_invite_notification_live_domain_status(client, db_session) -> None:
     assert item["read_at"] is None  # 接受不改变已读状态
 
 
-def test_join_request_notification_to_manager(client, db_session) -> None:
+def test_join_request_notification_to_target(client, db_session) -> None:
     manager, space = create_agent_fixture(db_session, name="nt-join")
     requester = create_user_with_pin(db_session, "nt-joiner", "123456")
     # join-by-user 要求申请人对目标用户可见：代管创建者链接（custodian）提供可见性。
     manager.created_by = requester.id
-    # 09-19 准入边界：另需与目标空间 active 成员存在 confirmed 亲属路径。
-    from app.services import source_facts as sf
+    # 09-19 准入边界：另需与目标同属一个 active 家族空间（lineage）。
+    from app.models.space import FamilySpace
+    from app.utils.timeutil import utcnow
 
-    fact = sf.create_source_fact(
-        db_session,
-        fact_type="biological_parent",
-        subject_user_id=manager.id,
-        object_user_id=requester.id,
-        provenance="manual_entry",
+    lineage = FamilySpace(
+        name="nt-join-lineage", kind="lineage", owner_id=manager.id, created_at=utcnow()
     )
-    sf.transition_source_fact(db_session, fact, "confirm")
+    db_session.add(lineage)
+    db_session.flush()
+    create_space_member(db_session, lineage.id, manager.id, role="space_admin")
+    create_space_member(db_session, lineage.id, requester.id)
     db_session.commit()
 
     resp = client.post(

@@ -119,6 +119,7 @@ _SEED_SPACE_MEMBERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("陈氏", "f"),
         ("朱兴隆", "m"),
         ("朱文正", "m"),
+        ("朱佛女", "f"),
         ("朱樉", "m"),
         ("朱棡", "m"),
         ("朱橚", "m"),
@@ -229,15 +230,15 @@ _SEED_SPACE_MEMBERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("朱祁镇", "m"),
         ("钱皇后", "f"),
     ),
-    # 李氏家族：曹国长公主朱佛女（朱元璋长姐）⇄李贞，李文忠/李景隆两代曹国公；
-    # 朱元璋以 member 跨空间（兄妹关系由全局亲子事实推导渲染）
+    # 李氏家族：曹国长公主朱佛女（朱元璋长姐）⇄李贞，李文忠/李景隆两代曹国公。
+    # 朱元璋只在「李家」household：家庭空间成员资格不等于家族空间成员资格。
+    # 他要看李氏家族树必须另行提交 lineage 申请，并由李贞本人批准（seed 不代替审批）。
     "李家": (
         ("李贞", "m"),
         ("朱元璋", "m"),
     ),
     "李氏家族": (
         ("李贞", "m"),
-        ("朱元璋", "m"),
         ("朱佛女", "f"),
         ("李文忠", "m"),
         ("李景隆", "m"),
@@ -397,6 +398,11 @@ _SEED_EDGES: tuple[tuple[str, str, str], ...] = (
     ("李文忠", "朱佛女", "elder"),
     ("李景隆", "李文忠", "elder"),
 )
+
+# 直接同辈事实（朱元璋—朱佛女 姐弟）：v1 结构边只能映射亲子/配偶，无法表达
+# sibling；家族树 topology 只消费 SourceFact，故单独落 confirmed 全局事实。
+# 方向按 source_facts 约定（subject/object 无序，direct_sibling 为对称事实）。
+_SEED_SIBLING_FACTS: tuple[tuple[str, str], ...] = (("朱元璋", "朱佛女"),)
 
 
 class _SeedOutcome(NamedTuple):
@@ -748,6 +754,33 @@ def _seed_demo_family(session: Session) -> _SeedOutcome:
                 provenance="connection_accept",
                 state=sf_service.FACT_CONFIRMED,
             )
+
+    # 直接同辈事实：不建 v1 Relation（v1 无 sibling 语义），只落 confirmed
+    # 全局 SourceFact，供家族树 topology 输出姐弟结构边。
+    for left_name, right_name in _SEED_SIBLING_FACTS:
+        left_id = users[left_name].id
+        right_id = users[right_name].id
+        if _global_fact_exists(
+            session,
+            fact_type="direct_sibling",
+            subject_user_id=left_id,
+            object_user_id=right_id,
+        ) or _global_fact_exists(
+            session,
+            fact_type="direct_sibling",
+            subject_user_id=right_id,
+            object_user_id=left_id,
+        ):
+            continue
+        sf_service.create_source_fact(
+            session,
+            fact_type="direct_sibling",
+            subject_user_id=left_id,
+            object_user_id=right_id,
+            space_id=None,
+            provenance="connection_accept",
+            state=sf_service.FACT_CONFIRMED,
+        )
 
     # 基础五类披露全局开放（R6 成员互见）：只对本次新建用户设置，既有用户的
     # 披露偏好一律不动；高敏感类别不写（默认关闭，Q4=b 仅为"可开"）

@@ -17,6 +17,7 @@ import {
   fetchSpaces,
   inviteToSpace,
   removeOrWithdrawMembership,
+  requestLineageAccess,
   resolveMembership,
   respondOwnershipTransfer,
   setSpaceLineageLink,
@@ -234,6 +235,15 @@ export const useSpacesStore = defineStore('spaces', {
     async resolve(memberId: number, action: 'accept' | 'reject') {
       await resolveMembership(memberId, action)
       await this.load()
+    },
+    /**
+     * 家庭空间成员申请读取该家庭所属的家族空间（独立申请，由目标本人审批）。
+     *
+     * 只登记 pending；批准前家族树仍返回安全 404。pending 不改变我的空间列表，
+     * 故不触发列表重读。
+     */
+    async requestLineageAccess(householdSpaceId: number) {
+      return requestLineageAccess(householdSpaceId)
     },
     async leaveOrRemove(memberId: number) {
       await removeOrWithdrawMembership(memberId)

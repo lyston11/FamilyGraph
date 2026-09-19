@@ -157,6 +157,19 @@ export async function joinByUser(targetUserId: number): Promise<void> {
   await apiClient.post('/spaces/join-by-user', { target_user_id: targetUserId })
 }
 
+/**
+ * 家庭空间成员申请读取该家庭所属的家族空间（独立申请，由目标本人审批）。
+ *
+ * 家庭空间成员资格不等于家族空间成员资格：本调用只登记 pending，
+ * 批准前家族树仍不可读。
+ */
+export async function requestLineageAccess(householdSpaceId: number): Promise<SpaceMemberInfo> {
+  const { data } = await apiClient.post<SpaceMemberInfo>('/spaces/lineage-access-requests', {
+    household_space_id: householdSpaceId,
+  })
+  return data
+}
+
 // ---- owner 移交（AC-F5）----
 
 export async function createOwnershipTransfer(

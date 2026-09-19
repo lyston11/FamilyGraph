@@ -8,6 +8,7 @@ import { NMessageProvider } from 'naive-ui'
 import { ApiError } from '@/api/errors'
 import * as membersApi from '@/api/members'
 import * as householdApi from '@/api/household'
+import * as spacesApi from '@/api/spaces'
 import HouseholdCardView from '@/views/HouseholdCardView.vue'
 import householdCardSource from '@/views/HouseholdCardView.vue?raw'
 import { useAuthStore } from '@/stores/auth'
@@ -56,6 +57,7 @@ vi.mock('@/api/spaces', () => ({
   removeOrWithdrawMembership: vi.fn(),
   resolveMembership: vi.fn(),
   joinByUser: vi.fn(),
+  requestLineageAccess: vi.fn(),
   getSpacePositions: vi.fn(),
   putSpacePositions: vi.fn(),
   createOwnershipTransfer: vi.fn(),
@@ -68,6 +70,7 @@ vi.mock('@/api/spaces', () => ({
 }))
 
 const mockedFetchHouseholdCard = vi.mocked(householdApi.fetchHouseholdCard)
+const requestLineageAccess = vi.mocked(spacesApi.requestLineageAccess)
 
 function makeDisplay(id: number, name: string) {
   return {
@@ -307,6 +310,49 @@ describe('HouseholdCardView 退出与空状态', () => {
     expect(switchSpaceMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="no-lineage-hint"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="household-name"]').exists()).toBe(true)
+    // 未配对家族空间：不提供「申请进入家族空间」入口
+    expect(wrapper.find('[data-test="request-family-tree-access"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('已配对家族空间但无访问权：提供独立申请入口，不直接切换空间', async () => {
+    mockedFetchHouseholdCard.mockResolvedValue(makeCardSnapshot())
+    const { wrapper } = await mountCard([
+      makeSpace({ id: 7, kind: 'household', lineage_space_id: 9 }),
+    ])
+
+    await wrapper.find('[data-test="exit-to-family-tree"]').trigger('click')
+    await flushPromises()
+
+    // 加入家庭空间不等于加入家族空间：不得直接切到家族树
+    expect(switchSpaceMock).not.toHaveBeenCalled()
+    const entry = wrapper.find('[data-test="request-family-tree-access"]')
+    expect(entry.exists()).toBe(true)
+
+    vi.mocked(requestLineageAccess).mockResolvedValue({} as SpaceMemberInfo)
+    await entry.trigger('click')
+    await flushPromises()
+    expect(requestLineageAccess).toHaveBeenCalledWith(7)
+    expect(wrapper.find('[data-test="lineage-request-pending"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('申请失败：显示错误文案且不宣称已提交', async () => {
+    mockedFetchHouseholdCard.mockResolvedValue(makeCardSnapshot())
+    const { wrapper } = await mountCard([
+      makeSpace({ id: 7, kind: 'household', lineage_space_id: 9 }),
+    ])
+    await wrapper.find('[data-test="exit-to-family-tree"]').trigger('click')
+    await flushPromises()
+
+    vi.mocked(requestLineageAccess).mockRejectedValue(
+      new ApiError(409, 'SPACE_LINEAGE_ACCESS_UNAVAILABLE', '该家庭空间尚未关联家族空间'),
+    )
+    await wrapper.find('[data-test="request-family-tree-access"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="lineage-request-pending"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="lineage-request-error"]').text()).toContain('尚未关联家族空间')
     wrapper.unmount()
   })
 

@@ -6,6 +6,7 @@ import { ArrowUpRight, Bell, Crown, LayoutGrid, List, Network, Pencil, ShieldChe
 import MaskedField from '@/components/common/MaskedField.vue'
 import InviteMemberDialog from '@/components/member/InviteMemberDialog.vue'
 import SpaceCreateDialog from '@/components/member/SpaceCreateDialog.vue'
+import { ApiError } from '@/api/errors'
 import { describeLoadError } from '@/api/loadError'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import { useAuthStore } from '@/stores/auth'
@@ -23,6 +24,9 @@ const viewMode = ref<'grid' | 'list'>('grid')
 const inviteOpen = ref(false)
 const createOpen = ref(false)
 const noLineageHint = ref(false)
+/** 家族空间访问申请状态：pending=已提交待审批；error=提交失败文案 */
+const lineageRequestState = ref<'idle' | 'submitting' | 'pending' | 'error'>('idle')
+const lineageRequestError = ref('')
 const spaceId = computed(() => spaces.currentSpaceId)
 const isHouseholdContext = computed(() => spaces.currentSpace?.kind === 'household')
 const card = computed(() => (spaceId.value === null ? null : household.forSpace(spaceId.value)))
@@ -36,6 +40,16 @@ const householdName = computed(() => card.value?.space_name ?? spaces.currentSpa
 const members = computed<HouseholdCardMember[]>(() => card.value?.members ?? [])
 const memberCount = computed(() => members.value.length)
 const householdSpaces = computed(() => spaces.spaces.filter((space) => space.kind === 'household'))
+/**
+ * 当前家庭已配对家族空间、但本人还不是其成员：可以提交独立访问申请。
+ *
+ * 配对 ID 直接取自当前家庭空间（不依赖「我 active 的家族空间」列表——
+ * 正因为我还没加入，它才不会出现在该列表里）。
+ */
+const canRequestFamilyTree = computed(() => {
+  const current = spaces.currentSpace
+  return current?.kind === 'household' && (current.lineage_space_id ?? null) !== null
+})
 const selfStatus = computed(() => auth.user?.profile_status === 'identity_confirmed' ? '已确档' : '待确档')
 
 async function loadCard(): Promise<void> {
@@ -48,6 +62,8 @@ function retry(): void {
 onMounted(() => { void loadCard() })
 watch(spaceId, () => {
   noLineageHint.value = false
+  lineageRequestState.value = 'idle'
+  lineageRequestError.value = ''
   void loadCard()
 })
 async function exitToFamilyTree(): Promise<void> {
@@ -59,6 +75,27 @@ async function exitToFamilyTree(): Promise<void> {
   }
   // 只切到本家庭所属的 lineage（显式配对优先，owner 唯一匹配回退），不跳到其他家族。
   await spaceContext.switchSpace(target.id)
+}
+
+/**
+ * 家庭空间成员申请读取该家庭所属的家族空间。
+ *
+ * 加入别人的家庭空间不等于加入别人的家族空间：这里只提交一条独立申请，
+ * 由该家族空间的管理员审批；批准前家族树仍不可读。
+ */
+async function requestFamilyTreeAccess(): Promise<void> {
+  const current = spaces.currentSpace
+  if (!current || lineageRequestState.value === 'submitting') return
+  lineageRequestState.value = 'submitting'
+  lineageRequestError.value = ''
+  try {
+    await spaces.requestLineageAccess(current.id)
+    lineageRequestState.value = 'pending'
+  } catch (error) {
+    lineageRequestState.value = 'error'
+    lineageRequestError.value =
+      error instanceof ApiError ? error.message : '申请提交失败，请稍后重试'
+  }
 }
 function goToSettings(): void { void router.push({ name: 'settings' }) }
 function goToNotifications(): void { void router.push({ name: 'notifications' }) }
@@ -86,7 +123,26 @@ function genderText(value: HouseholdCardMember['display']['gender']): string | n
       </button>
     </div>
     <NAlert v-if="noLineageHint" type="info" :show-icon="true" class="context-alert" data-test="no-lineage-hint">
-      当前没有可用的家族空间，已保留在家庭卡。可以先在家庭空间邀请家人，或创建一个家族空间后再进入家族树。
+      <template v-if="canRequestFamilyTree">
+        <template v-if="lineageRequestState === 'pending'">
+          <span data-test="lineage-request-pending">家族空间访问申请已提交，等待对方审批；批准前家族树不可见。</span>
+        </template>
+        <template v-else>
+          <span>你还没有该家族空间的访问权。加入家庭空间不等于加入家族空间，需要单独申请。</span>
+          <NButton
+            size="small"
+            type="primary"
+            class="inline-action"
+            :loading="lineageRequestState === 'submitting'"
+            data-test="request-family-tree-access"
+            @click="requestFamilyTreeAccess"
+          >申请进入家族空间</NButton>
+          <span v-if="lineageRequestState === 'error'" class="request-error" data-test="lineage-request-error">{{ lineageRequestError }}</span>
+        </template>
+      </template>
+      <template v-else>
+        当前没有可用的家族空间，已保留在家庭卡。可以先在家庭空间邀请家人，或创建一个家族空间后再进入家族树。
+      </template>
     </NAlert>
     <section v-if="!isHouseholdContext" class="context-panel" data-test="household-context-panel">
       <h1 class="card-title">我的家庭</h1>
@@ -265,6 +321,7 @@ function genderText(value: HouseholdCardMember['display']['gender']): string | n
 .context-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 20px; padding: 32px 0; }
 .context-alert { max-width: 100%; }
 .inline-action { margin: 8px; }
+.request-error { display: block; margin-top: 4px; color: var(--fg-danger, #d03050); }
 .status-panel { padding: 40px 0; }
 .status-title { margin: 0 0 12px; font-size: 16px; }
 .status-text { max-width: 560px; margin: 0 0 20px; font-size: 13px; line-height: 1.8; color: var(--fg-ink-secondary); }

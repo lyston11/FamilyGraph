@@ -9,11 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.commands.context import ActorContext, command_transaction, load_actor
 from app.errors import (
     SPACE_FORBIDDEN_ACTOR,
+    SPACE_LINEAGE_ACCESS_UNAVAILABLE,
     SPACE_NOT_FOUND,
     USER_NOT_FOUND,
     VALIDATION_ERROR,
@@ -252,12 +253,8 @@ def respond_invitation(
     *,
     accept: bool,
 ) -> SpaceMember:
-    """pending 行决议：受邀人接受/拒绝自己的邀请，或该空间管理员处置加入申请。
-
-    09-19：本人申请（added_by == user_id）只能由该空间管理员批准/拒绝，管理员
-    以前根本进不来（旧代码只允许 member.user_id == actor.id），所以无法处置任何
-    加入申请。归属过滤在这里只做到「本人或该空间管理员」，精确的「谁能 accept
-    哪一类」由 space_fsm.transition 判定；其余一律保持既有 404 防枚举形状。
+    """pending 行决议：普通邀请由受邀人接受；本人申请加入由该空间管理员（即被
+    加入空间的那个人）审核。申请人不得自批，只能撤回自己的 pending 行。
     """
     actor = load_actor(session, ctx)
     with command_transaction(session):
@@ -343,15 +340,11 @@ def request_join_by_user(
     *,
     target_user_id: int,
 ) -> SpaceMember:
-    """家族视图摘要卡「申请进入 TA 的家庭空间」（join_request 语义）。
+    """向目标本人 household 提交 pending 加入申请。
 
-    09-19 准入边界（安全）：
-    - 可见性门禁：viewer 对 target 可见性不得为 none（防枚举 404），先于其余判定；
-    - 目标空间只按 target 的 owner/space_admin 身份解析，不再回退到「target 的
-      任意 active 成员资格」——否则会落到申请人自己所在的空间；
-    - 亲属门禁：必须与目标空间至少一名 active 成员存在 confirmed 亲属路径，
-      不得凭共享空间/引用/pending 关系进入别人的家族空间（见 SPACE_JOIN_NO_RELATION）；
-    - pending 行的审批权由 space_fsm 保证：本人申请只能由该空间管理员 accept。
+    household membership 与配对 lineage 完全分离：申请只产生目标 household 的
+    pending 行，由 target 本人批准；批准后申请人仍需另行提交 lineage 申请，不能
+    因 household membership 读取对方家族树。
     """
     from app.errors import SPACE_JOIN_NO_RELATION, SPACE_JOIN_NO_TARGET_SPACE
     from app.services import visibility
@@ -370,7 +363,11 @@ def request_join_by_user(
             # 同一 target 的解析结果确定。
             owned = (
                 session.query(FamilySpace)
-                .filter(FamilySpace.owner_id == target.id, FamilySpace.id.in_(active_ids))
+                .filter(
+                    FamilySpace.owner_id == target.id,
+                    FamilySpace.kind == "household",
+                    FamilySpace.id.in_(active_ids),
+                )
                 .order_by(FamilySpace.id)
                 .first()
             )
@@ -384,6 +381,7 @@ def request_join_by_user(
                         SpaceMember.user_id == target.id,
                         SpaceMember.role == "space_admin",
                         SpaceMember.status == "active",
+                        FamilySpace.kind == "household",
                         FamilySpace.id.in_(active_ids),
                     )
                     .order_by(FamilySpace.id)
@@ -394,22 +392,36 @@ def request_join_by_user(
             raise_api_error(409, SPACE_JOIN_NO_TARGET_SPACE, "对方尚未建立家庭空间")
 
         space = _space_or_404(session, primary_space_id)
-        # 亲属门禁：必须与该空间至少一名 active 成员（含 owner）有已确认的亲属
-        # 联系。用申请人自己的事实口径（不能借目标空间的图口径——那只含空间成员，
-        # 会把申请人与目标成员之间的纽带隐去）；亲缘是事实而非可见性属性，故不
-        # 按逐人可见性剪枝，否则经不可见长辈的链条会单向断掉。
-        from app.services.relationship_graph import shares_confirmed_kinship
-
-        member_ids = set(
+        if space.kind != "household":
+            raise_api_error(409, SPACE_JOIN_NO_TARGET_SPACE, "对方尚未建立家庭空间")
+        # 准入边界：只有与目标同属至少一个 active 家族空间（lineage）的用户才能
+        # 自行申请加入对方的家庭空间。同 lineage 可见性只是提交 pending 的资格，
+        # 不授予任何家族树读取权；批准与否由 target 本人决定。
+        lineage_ids = set(
             session.scalars(
-                select(SpaceMember.user_id).where(
-                    SpaceMember.space_id == space.id, SpaceMember.status == "active"
+                select(SpaceMember.space_id)
+                .join(FamilySpace, FamilySpace.id == SpaceMember.space_id)
+                .where(
+                    SpaceMember.user_id == actor.id,
+                    SpaceMember.status == "active",
+                    FamilySpace.kind == "lineage",
                 )
             ).all()
         )
-        if not shares_confirmed_kinship(session, viewer_user_id=actor.id, user_ids=member_ids):
-            raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该家庭空间没有已确认的亲属关系")
-
+        shares_lineage = bool(lineage_ids) and (
+            session.scalar(
+                select(SpaceMember.id)
+                .where(
+                    SpaceMember.user_id == target.id,
+                    SpaceMember.status == "active",
+                    SpaceMember.space_id.in_(lineage_ids),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        if not shares_lineage:
+            raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该账号不在同一个家族空间")
         member, created = space_fsm.invite(
             session, space=space, user_id=actor.id, added_by=actor.id
         )
@@ -448,7 +460,7 @@ def create_shared_household(
     把空间创建、卡片执行状态和审计合并进同一个短事务。
     """
     actor = load_actor(session, ctx)
-    with command_transaction(session, commit=commit):
+    with command_transaction(session, commit=commit, immediate=True):
         other = session.get(User, other_user_id)
         if other is None:
             raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
@@ -461,6 +473,47 @@ def create_shared_household(
             raise_api_error(409, VALIDATION_ERROR, "双方档案尚未完成身份确认")
 
         now = utcnow()
+        left = aliased(SpaceMember)
+        right = aliased(SpaceMember)
+        existing = (
+            session.query(FamilySpace)
+            .join(left, left.space_id == FamilySpace.id)
+            .join(right, right.space_id == FamilySpace.id)
+            .filter(
+                FamilySpace.kind == "household",
+                left.user_id == actor.id,
+                left.status == "active",
+                right.user_id == other.id,
+                right.status == "active",
+            )
+            .order_by(FamilySpace.id)
+            .first()
+        )
+        if existing is not None:
+            event = emit(
+                session,
+                event_type="space.membership.changed",
+                aggregate_type="space",
+                aggregate_id=existing.id,
+                payload={
+                    "action": "household_link_reused",
+                    "user_ids": [actor.id, other.id],
+                    "by": actor.id,
+                },
+                space_id=existing.id,
+                actor_account_id=ctx.account_id,
+            )
+            audit.write_audit(
+                session,
+                action="space_reused",
+                actor_id=actor.id,
+                target_id=existing.id,
+                ip=ctx.ip,
+                detail={"kind": "household", "linked_user_id": other.id},
+            )
+            session.flush()
+            return existing, event.id
+
         space_name = (name or "").strip() or f"{actor.name} 与 {other.name}的家庭"
         space = FamilySpace(
             name=space_name,
@@ -557,10 +610,7 @@ def request_lineage_membership(
             raise_api_error(409, VALIDATION_ERROR, "你已经是该家族空间成员")
 
         member, _created = space_fsm.invite(
-            session,
-            space=target_space,
-            user_id=actor.id,
-            added_by=actor.id,
+            session, space=target_space, user_id=actor.id, added_by=actor.id
         )
         event = emit(
             session,
@@ -582,6 +632,68 @@ def request_lineage_membership(
             target_id=target.id,
             ip=ctx.ip,
             detail={"space_id": target_space.id, "member_id": member.id},
+        )
+        session.flush()
+    return member, event.id
+
+
+def request_lineage_access(
+    session: Session, ctx: ActorContext, *, household_space_id: int
+) -> tuple[SpaceMember, int]:
+    """家庭空间成员申请读取该家庭所属家族空间（独立的第二条申请）。
+
+    家庭空间成员资格不等于家族空间成员资格：本命令只产生目标 lineage 的
+    pending 行，由该家族空间的管理员（即被加入的那个人）审核；批准前不能读取
+    任何家族树。
+    """
+    actor = load_actor(session, ctx)
+    with command_transaction(session):
+        household = _space_or_404(session, household_space_id)
+        if household.kind != "household":
+            raise_api_error(422, VALIDATION_ERROR, "只有家庭空间可以申请所属家族空间")
+        _require_active_member(session, household.id, actor.id)
+        lineage_id = household.lineage_space_id
+        if lineage_id is None:
+            raise_api_error(
+                409,
+                SPACE_LINEAGE_ACCESS_UNAVAILABLE,
+                "该家庭空间尚未关联家族空间",
+            )
+        lineage = _space_or_404(session, lineage_id)
+        if lineage.kind != "lineage":
+            raise_api_error(409, SPACE_LINEAGE_ACCESS_UNAVAILABLE, "该家庭空间尚未关联家族空间")
+        if space_fsm.is_active_member(session, lineage.id, actor.id):
+            raise_api_error(409, VALIDATION_ERROR, "你已经是该家族空间成员")
+        # 审批人 = 该家族空间的 active 管理员（即被加入的那个人）；没有可审批的
+        # 管理员时申请无处可送，按 409 明确拒绝而不是落一条无人处理的 pending。
+        approver = space_fsm.active_space_manager(session, lineage.id)
+        if approver is None or approver.user_id == actor.id:
+            raise_api_error(409, SPACE_LINEAGE_ACCESS_UNAVAILABLE, "该家族空间暂无可审批的成员")
+
+        member, _created = space_fsm.invite(
+            session, space=lineage, user_id=actor.id, added_by=actor.id
+        )
+        event = emit(
+            session,
+            event_type="space.membership.changed",
+            aggregate_type="space",
+            aggregate_id=lineage.id,
+            payload={
+                "action": "lineage_access_requested",
+                "user_id": actor.id,
+                "approver_user_id": approver.user_id,
+                "member_id": member.id,
+            },
+            space_id=lineage.id,
+            actor_account_id=ctx.account_id,
+        )
+        audit.write_audit(
+            session,
+            action="space_lineage_access_requested",
+            actor_id=actor.id,
+            target_id=approver.user_id,
+            ip=ctx.ip,
+            detail={"space_id": lineage.id, "household_space_id": household.id},
         )
         session.flush()
     return member, event.id
