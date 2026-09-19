@@ -30,7 +30,13 @@ from app.models.steward import (
 )
 from app.models.steward_inferred import StewardInferredEdge
 from app.models.user import User
-from app.services import kinship_presentation, steward_inferred, steward_runtime, steward_snapshot
+from app.services import (
+    kinship_presentation,
+    steward_candidate_policy,
+    steward_inferred,
+    steward_runtime,
+    steward_snapshot,
+)
 from app.services.relationship_graph import ExtraEdge
 from app.services.relationship_resolver import concept_code_for_path, start_search, steps_to_json
 from app.services.steward_pipeline import valid_generation, write_transaction
@@ -229,7 +235,7 @@ def _snapshot(
 
     with steward_snapshot.read_transaction(bind) as session:
         intent, view = _require(session, binding)
-        active = steward_inferred.active_edges(session, binding.space_id)
+        active = steward_inferred.active_edges(session, binding.space_id, exclude_conflicted=True)
         extra = tuple(
             ExtraEdge(
                 edge_id=edge.id,
@@ -480,6 +486,7 @@ def payload_for(
     nodes = list(raw.get("nodes", []))
     visible = {int(node["user_id"]) for node in [*core_nodes, *nodes]}
     witnesses = {tuple(step) for step in raw.get("evidence_steps", [])}
+    conflict_index = steward_candidate_policy.build_conflict_index(session, space_id=space_id)
     active = {
         edge.id: edge
         for edge in session.scalars(
@@ -494,6 +501,16 @@ def payload_for(
         edge = dict(saved)
         source = active.get(edge["id"])
         if source is None or source.revision != edge["revision"]:
+            continue
+        # 负向安全判据：与已确认亲子/生物祖先冲突的边不得从缓存 overlay 继续显示。
+        if (
+            conflict_index.conflicts(
+                relation_kind=source.relation_kind,
+                subject_user_id=int(source.subject_user_id),
+                object_user_id=int(source.object_user_id),
+            )
+            is not None
+        ):
             continue
         if not _path_valid(
             edge["path"],

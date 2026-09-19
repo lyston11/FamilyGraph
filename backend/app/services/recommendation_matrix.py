@@ -63,7 +63,7 @@ class RecommendationInput:
     # 被创建者在本空间的创建选择；对称关系取双方并集；空集按 no-space 处理
     creation_choices: frozenset[str]
     mutual_disclosure_allowed: bool = False
-    # 双方已在本 household 空间均为 active 成员
+    # 双方已在任一 household 空间同为 active 成员（跨空间负向抑制，仅布尔值）
     share_household_membership: bool = False
     # 对方指定 lineage 空间可申请：本空间为 lineage 且恰一端为 active 成员
     lineage_request_possible: bool = False

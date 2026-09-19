@@ -23,7 +23,7 @@ from app.errors import NOTIFICATION_NOT_FOUND, raise_api_error
 from app.models.account import Account
 from app.models.notification import Notification
 from app.models.space import FamilySpace, SpaceMember
-from app.models.steward import ActionCard
+from app.models.steward import CARD_ACTIVE_STATES, ActionCard
 from app.models.steward_suggestion import StewardSuggestion
 from app.models.user import User
 from app.services import visibility
@@ -181,7 +181,15 @@ def _project_item(
             or card.recipient_account_id != row.recipient_account_id
         ):
             return None  # 引用损坏（级联删除/换空间）：fail-closed 丢弃该行
-        domain_status = _CARD_DOMAIN_STATUS.get(card.state)
+        # 读侧有效状态：资格已丧失的活动卡不再作为待处理项投影（GET 不落库，
+        # 持久退役由后台 review/supersede FSM 完成）。
+        card_state = card.state
+        if card_state in CARD_ACTIVE_STATES:
+            from app.services import steward as steward_service
+
+            if steward_service.card_household_conflict(session, card):
+                card_state = "superseded"
+        domain_status = _CARD_DOMAIN_STATUS.get(card_state)
         if domain_status is None:  # pragma: no cover - FSM 枚举扩展时的防线
             return None
         action_card = {"card_id": card.id, "revision": card.revision}

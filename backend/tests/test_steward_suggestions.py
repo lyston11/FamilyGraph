@@ -404,6 +404,9 @@ def test_owner_submit_creates_proposal_endpoint_confirms(db_session) -> None:
     assert db_session.get(StewardSuggestion, s.id).status == "resolved"
 
     # owner（非端点）确认被拒
+    # 09-19：b/c 之间已有 confirmed adoptive_parent，模型 sibling 线索会被负向判据
+    # 拦截（正是本任务的目标行为）；此处改用不与之冲突的 partner 仍可验证
+    # 「非端点不能代确认」这一原意。
     s2, _ = steward_suggestions.upsert_suggestion(
         db_session,
         space_id=space.id,
@@ -411,7 +414,7 @@ def test_owner_submit_creates_proposal_endpoint_confirms(db_session) -> None:
         kind="relation_proposal",
         subject_user_id=b.id,
         object_user_id=c.id,
-        value_json={"fact_type": "direct_sibling"},
+        value_json={"fact_type": "partner"},
         evidence_json={"facts": []},
         policy_version="p1",
         recipient_account_ids=[owner.account.id, b.account.id, c.account.id],

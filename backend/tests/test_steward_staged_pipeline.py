@@ -23,6 +23,7 @@ from app.models.steward import (
     StewardFindingDelivery,
     StewardGeneration,
     StewardGenerationView,
+    StewardInferredOverlay,
     StewardJob,
     StewardPublication,
     StewardRetryBudget,
@@ -943,3 +944,74 @@ def test_staged_view_keeps_authorized_members_without_viewer_paths(db_session):
     # 进度分母只统计需要称谓的可达目标：孤立成员不阻塞 ready
     assert payload["progress"]["phase"] == "ready"
     assert isolated.id not in {target["user_id"] for target in payload["progress"]["targets"]}
+
+
+# ---- 09-19：与已确认亲子/生物祖先冲突的边不得从缓存 overlay 继续显示 ----
+
+
+def test_overlay_cache_drops_edge_that_conflicts_with_confirmed_parent(db_session, monkeypatch):
+    """存量 overlay 缓存里的错误同辈边：冲突事实出现后读取即不再显示。
+
+    覆盖 design §2.2 第 6 条：不能只阻止新边，而让已缓存 overlay 继续显示旧错边。
+    """
+    from test_steward_inferred import _candidate, _make_job
+
+    people, space = _family(db_session, size=2, name="overlay-conflict")
+    extra = create_user_with_pin(db_session, "overlay-conflict-extra", "123456", gender="f")
+    create_space_member(db_session, space.id, extra.id)
+    db_session.add(
+        AgentSpaceProviderSetting(
+            space_id=space.id,
+            agent_kind="steward",
+            provider_id=None,
+            model=None,
+            enabled=True,
+            inferred_tree=True,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(config, "STEWARD_INFERRED_TREE_ENABLED", True)
+
+    # 先在无冲突状态下投影一条同辈边并生成 overlay 缓存
+    job = _make_job(db_session, space)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=people[0].id, object_id=extra.id)
+    facts = list(db_session.scalars(select(SourceFact)))
+    assert (
+        steward_inferred.project_for_job(
+            db_session, job, facts=facts, visible={p.id for p in people} | {extra.id}
+        )
+        == 1
+    )
+    db_session.commit()
+    _run(db_session, space.id, deliver=True)
+    binding = steward_overlay.claim_due(db_session.get_bind(), owner="overlay-conflict")
+    assert binding is not None
+    steward_overlay.execute(db_session.get_bind(), binding)
+    with steward_snapshot.read_transaction(db_session.get_bind()) as read:
+        payload, _ = steward_views.payload_for(
+            read, account=people[0].account, space_id=space.id, progressive=True
+        )
+    assert len(payload["inferred_edges"]) == 1
+    overlay = db_session.scalar(select(StewardInferredOverlay))
+    assert overlay is not None and len(overlay.payload_json["edges"]) == 1
+
+    # 该对随后被确认为亲子：缓存行未变、证据 hash 未变，但读取必须排除
+    fact = create_source_fact(
+        db_session,
+        fact_type="biological_parent",
+        subject_user_id=extra.id,
+        object_user_id=people[0].id,
+        provenance="manual_entry",
+        space_id=space.id,
+    )
+    transition_source_fact(db_session, fact, "confirm")
+    db_session.commit()
+    with steward_snapshot.read_transaction(db_session.get_bind()) as read:
+        after, _ = steward_views.payload_for(
+            read, account=people[0].account, space_id=space.id, progressive=True
+        )
+    assert after["inferred_edges"] == []
+    # 缓存行本身不被读路径改写（持久退役由后台复核负责）
+    db_session.expire_all()
+    still = db_session.scalar(select(StewardInferredOverlay))
+    assert still is not None and len(still.payload_json["edges"]) == 1

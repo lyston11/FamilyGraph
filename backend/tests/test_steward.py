@@ -1444,3 +1444,240 @@ def test_settle_rejected_when_lease_expires_during_execution(
     final = db_session.get(StewardJob, job.id)
     assert final.status in ("queued", "expired")
     assert final.status != "succeeded"
+
+
+# ---- 09-19：跨空间共同家庭判定（lineage 空间仍应抑制重复共建） ----
+
+
+def test_lineage_space_spouse_shares_household_elsewhere_no_household_card(db_session) -> None:
+    """双方已在另一个 household 空间同为 active 成员 → lineage 中不再推荐共建。"""
+    lineage = _space(db_session, "cross-lin", kind="lineage")
+    a = _person(db_session, lineage.id, "CL-A", member=True)
+    b = _person(db_session, lineage.id, "CL-B", gender="f", member=True)
+    home = _space(db_session, "cross-home", kind="household")
+    create_space_member(db_session, home.id, a.id)
+    create_space_member(db_session, home.id, b.id)
+    db_session.commit()
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    summary, _ = _run_job(db_session, lineage, ev.id)
+    assert summary["stats"]["cards_created"] == 0
+    assert _cards(db_session, lineage.id) == []
+
+
+def test_lineage_space_spouse_without_shared_household_still_cards(db_session) -> None:
+    """无共同 household 时 lineage 仍正常出 household_link（不误抑制）。"""
+    lineage = _space(db_session, "cross-none", kind="lineage")
+    a = _person(db_session, lineage.id, "CN-A", member=True)
+    b = _person(db_session, lineage.id, "CN-B", gender="f", member=True)
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    summary, _ = _run_job(db_session, lineage, ev.id)
+    kinds = sorted(c.kind for c in _cards(db_session, lineage.id))
+    assert kinds == ["household_link"]
+    assert summary["stats"]["cards_created"] == 1
+
+
+def test_lineage_request_is_kept_when_household_already_shared(db_session) -> None:
+    """共同家庭已满足只去掉 create_household，不误取消合法 request_lineage。"""
+    lineage = _space(db_session, "cross-keep", kind="lineage")
+    a = _person(db_session, lineage.id, "CK-A", member=True)
+    b = _person(db_session, lineage.id, "CK-B", gender="f", member=False, ref=True)
+    home = _space(db_session, "cross-keep-home", kind="household")
+    create_space_member(db_session, home.id, a.id)
+    create_space_member(db_session, home.id, b.id)
+    db_session.commit()
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    _run_job(db_session, lineage, ev.id)
+    assert [c.kind for c in _cards(db_session, lineage.id)] == ["lineage_request"]
+
+
+@pytest.mark.parametrize(
+    "status_a,status_b",
+    [("pending", "active"), ("active", "rejected"), ("active", "removed")],
+)
+def test_non_active_membership_does_not_count_as_shared_household(
+    db_session, status_a: str, status_b: str
+) -> None:
+    """pending/rejected/退出成员不构成「已共同在一个家庭」。"""
+    lineage = _space(db_session, f"cross-{status_a}-{status_b}", kind="lineage")
+    a = _person(db_session, lineage.id, f"CS-A-{status_a}{status_b}", member=True)
+    b = _person(db_session, lineage.id, f"CS-B-{status_a}{status_b}", gender="f", member=True)
+    home = _space(db_session, f"cross-h-{status_a}-{status_b}", kind="household")
+    create_space_member(db_session, home.id, a.id, status=status_a)
+    create_space_member(db_session, home.id, b.id, status=status_b)
+    db_session.commit()
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    summary, _ = _run_job(db_session, lineage, ev.id)
+    assert summary["stats"]["cards_created"] == 1
+
+
+def test_profile_ref_and_shared_lineage_do_not_count_as_shared_household(db_session) -> None:
+    """只有共同 lineage 或 profile ref 时仍应正常出卡。"""
+    lineage = _space(db_session, "cross-ref", kind="lineage")
+    a = _person(db_session, lineage.id, "CR-A", member=True)
+    b = _person(db_session, lineage.id, "CR-B", gender="f", member=True)
+    ref_space = _space(db_session, "cross-ref-home", kind="household")
+    _ref(db_session, ref_space.id, a.id)
+    _ref(db_session, ref_space.id, b.id)
+    db_session.commit()
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    summary, _ = _run_job(db_session, lineage, ev.id)
+    assert summary["stats"]["cards_created"] == 1
+
+
+def test_stale_household_card_is_superseded_when_shared_household_appears(db_session) -> None:
+    """旧活动卡在获得共同家庭后经复核退役；不等待 TTL、证据 hash 不变。"""
+    lineage = _space(db_session, "cross-stale", kind="lineage")
+    a = _person(db_session, lineage.id, "CST-A", member=True)
+    b = _person(db_session, lineage.id, "CST-B", gender="f", member=True)
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    _run_job(db_session, lineage, ev.id)
+    card = _cards(db_session, lineage.id)[0]
+    assert card.kind == "household_link"
+    stale_hash = card.evidence_hash
+
+    # 双方此后加入同一 household 空间（当前 lineage 的输入 revision 不因此变化）
+    home = _space(db_session, "cross-stale-home", kind="household")
+    create_space_member(db_session, home.id, a.id)
+    create_space_member(db_session, home.id, b.id)
+    db_session.commit()
+
+    ev2 = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    summary, _ = _run_job(db_session, lineage, ev2.id)
+    assert summary["stats"]["cards_superseded"] >= 1
+    db_session.refresh(card)
+    assert card.state == "superseded"
+    assert card.evidence_hash == stale_hash  # 证据未变仍退役
+    assert card.failed_reason == "eligibility_lost"
+    assert action_cards.active_cards_in_space(db_session, lineage.id) == []
+
+
+def test_card_review_supersedes_accepted_household_card(db_session) -> None:
+    """accepted 卡也经后台复核退役（staged card_review 路径）。"""
+    from app.models.steward import StewardGeneration
+    from app.services import steward_delivery
+
+    lineage = _space(db_session, "cross-acc", kind="lineage")
+    a = _person(db_session, lineage.id, "CA-A", member=True)
+    b = _person(db_session, lineage.id, "CA-B", gender="f", member=True)
+    fact = _confirm(db_session, "spouse", a.id, b.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    _run_job(db_session, lineage, ev.id)
+    card = _cards(db_session, lineage.id)[0]
+    action_cards.transition_card(db_session, card, "view", expected_revision=card.revision)
+    action_cards.transition_card(db_session, card, "accept", expected_revision=card.revision)
+    db_session.commit()
+    assert card.state == "accepted"
+
+    home = _space(db_session, "cross-acc-home", kind="household")
+    create_space_member(db_session, home.id, a.id)
+    create_space_member(db_session, home.id, b.id)
+    db_session.commit()
+
+    ev2 = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    _run_job(db_session, lineage, ev2.id)
+    generation = db_session.scalar(
+        select(StewardGeneration)
+        .where(StewardGeneration.space_id == lineage.id)
+        .order_by(StewardGeneration.id.desc())
+    )
+    assert generation is not None
+    steward_delivery.drain(bind=db_session.get_bind(), generation_id=generation.id, limit=200)
+    db_session.expire_all()
+    refreshed = db_session.get(ActionCard, card.id)
+    assert refreshed is not None and refreshed.state == "superseded"
+
+
+def test_real_job_supersedes_conflicting_inferred_edge_without_evidence_change(
+    db_session, monkeypatch
+) -> None:
+    """真实作业链（core → 交付）退役与已确认亲子冲突的存量推测边。
+
+    覆盖 AC7 的持久收敛路径：证据 hash 未变，仍经既有 `inferred_review` 交付
+    意图退役；不是只在读取时隐藏。
+    """
+    from app.models.agent_provider import AgentSpaceProviderSetting
+    from app.models.steward import StewardLlmCandidate
+    from app.models.steward_inferred import StewardInferredEdge
+    from app.services import steward_inferred
+
+    monkeypatch.setattr(config, "STEWARD_INFERRED_TREE_ENABLED", True)
+    lineage = _space(db_session, "edge-conflict", kind="lineage")
+    parent = _person(db_session, lineage.id, "EC-P", member=True)
+    child = _person(db_session, lineage.id, "EC-C", gender="f", member=True)
+    db_session.add(
+        AgentSpaceProviderSetting(
+            space_id=lineage.id,
+            agent_kind="steward",
+            provider_id=None,
+            model=None,
+            enabled=True,
+            inferred_tree=True,
+        )
+    )
+    db_session.commit()
+
+    # 冲突事实出现前先投影一条同辈推测边（模拟存量错误线索）
+    job = StewardJob(
+        space_id=lineage.id,
+        cause="integrity_scan",
+        trigger_cursor=1,
+        status="succeeded",
+        policy_version=steward.POLICY_VERSION,
+        created_at=timeutil.utcnow(),
+        updated_at=timeutil.utcnow(),
+    )
+    db_session.add(job)
+    db_session.flush()
+    db_session.add(
+        StewardLlmCandidate(
+            space_id=lineage.id,
+            job_id=job.id,
+            candidate_kind="direct_sibling",
+            payload_json={
+                "kind": "direct_sibling",
+                "subject_user_id": parent.id,
+                "object_user_id": child.id,
+            },
+            candidate_digest="ec-1",
+            status="proposed",
+            created_at=timeutil.utcnow(),
+        )
+    )
+    db_session.commit()
+    assert (
+        steward_inferred.project_for_job(db_session, job, facts=[], visible={parent.id, child.id})
+        == 1
+    )
+    db_session.commit()
+    edge = db_session.scalar(
+        select(StewardInferredEdge).where(StewardInferredEdge.space_id == lineage.id)
+    )
+    assert edge is not None and edge.status == "proposed"
+    stale_hash = edge.evidence_hash
+
+    # 该对随后被确认为亲子
+    fact = _confirm(db_session, "biological_parent", parent.id, child.id, space_id=lineage.id)
+    ev = _emit_fact_event(db_session, fact)
+    db_session.commit()
+    _run_job(db_session, lineage, ev.id)
+    db_session.expire_all()
+    refreshed = db_session.get(StewardInferredEdge, edge.id)
+    assert refreshed is not None
+    assert refreshed.status == "superseded"
+    assert refreshed.evidence_hash == stale_hash  # 证据未变仍退役
+    assert steward_inferred.active_edges(db_session, lineage.id, exclude_conflicted=True) == []

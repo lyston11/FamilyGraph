@@ -37,7 +37,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app import config
 from app.errors import (
@@ -59,6 +59,7 @@ from app.models.steward import (
     CARD_KINDS,
     STEWARD_ACTIVE_JOB_STATUSES,
     STEWARD_JOB_CAUSES,
+    ActionCard,
     BehaviorProjection,
     StewardJob,
     StewardSpaceSchedule,
@@ -1485,12 +1486,9 @@ def _pair_inputs(db: Session, space: FamilySpace, fact: SourceFact) -> Recommend
     subject = db.get(User, fact.subject_user_id)
     obj = db.get(User, fact.object_user_id)
     assert subject is not None and obj is not None
-    members = _active_member_ids(db, space)
-    share_household = False
     lineage_possible = False
-    if space.kind == "household":
-        share_household = fact.subject_user_id in members and fact.object_user_id in members
-    else:
+    if space.kind != "household":
+        members = _active_member_ids(db, space)
         subj_in = fact.subject_user_id in members
         obj_in = fact.object_user_id in members
         lineage_possible = subj_in != obj_in  # 恰一端是成员：另一端可申请加入
@@ -1505,9 +1503,41 @@ def _pair_inputs(db: Session, space: FamilySpace, fact: SourceFact) -> Recommend
             if fact.fact_type == "partner"
             else False
         ),  # partner 需要双方在本空间各自明确允许披露
-        share_household_membership=share_household,
+        share_household_membership=share_active_household(
+            db, fact.subject_user_id, fact.object_user_id
+        ),
         lineage_request_possible=lineage_possible,
         in_cooldown=False,
+    )
+
+
+def share_active_household(db: Session, user_a_id: int, user_b_id: int) -> bool:
+    """两个既定端点是否已在任一 household 空间同为 active 成员。
+
+    只返回布尔值：不返回空间 ID/名称、成员名单、他空间事实或关系，不把该空间
+    加入本空间的可见集合，也不授予任何读取权。它是既有推荐矩阵的**负向抑制
+    信号**（“已经共同在一个家庭里，不再推荐共建”），不是跨空间发现能力。
+
+    active profile ref、owner 身份、pending/rejected/退出成员均不足以判定为已共享。
+    """
+    if user_a_id == user_b_id:
+        return False
+    left = aliased(SpaceMember)
+    right = aliased(SpaceMember)
+    return bool(
+        db.scalar(
+            select(FamilySpace.id)
+            .join(left, left.space_id == FamilySpace.id)
+            .join(right, right.space_id == FamilySpace.id)
+            .where(
+                FamilySpace.kind == "household",
+                left.user_id == user_a_id,
+                left.status == "active",
+                right.user_id == user_b_id,
+                right.status == "active",
+            )
+            .limit(1)
+        )
     )
 
 
@@ -1596,6 +1626,19 @@ def _recommend_cards(db: Session, space: FamilySpace, visible: set[int], *, now:
     return created
 
 
+def card_household_conflict(db: Session, card: ActionCard) -> bool:
+    """卡片是否因「双方已在某 household 空间同为 active 成员」而不再适用。
+
+    只读、不落库。只作用于 ``household_link``（create_household）：共同家庭已存在
+    时不再推荐共建，但同一对的 ``lineage_request`` 仍合法（R5）。与后台复核
+    （``_revalidate_active_cards`` / ``steward_delivery._card_review``）共用同一
+    ``_pair_inputs`` 判据，使读取、accept、execute 与生成保持一致。
+    """
+    if card.kind != _ACTION_TO_KIND[ACTION_CREATE_HOUSEHOLD]:
+        return False
+    return share_active_household(db, card.subject_user_id, int(card.object_user_id or 0))
+
+
 def _revalidate_active_cards(db: Session, space: FamilySpace, *, now: datetime) -> int:
     """活动卡复核：证据失效 → 仅取代；输入变化 → 经 create_card 换发新版（AC-ST3）。"""
     superseded = 0
@@ -1625,6 +1668,7 @@ __all__ = [
     "ACTION_SUPERSEDE",
     "POLICY_VERSION",
     "PROJECTION_KEY_PREFIXES",
+    "card_household_conflict",
     "classify_execution_error",
     "current_event_watermark",
     "enqueue_steward_job",
@@ -1641,4 +1685,5 @@ __all__ = [
     "schedule_steward_job_for_event",
     "set_kind_cooldown",
     "settle_steward_job",
+    "share_active_household",
 ]

@@ -931,3 +931,187 @@ def test_valid_restore_falls_back_without_second_session_or_replayed_effect(db_s
     assert retry["projection"] == payload["projection"]
     assert retry["suggestion"]["revision"] == payload["suggestion"]["revision"]
     assert len(db_session.scalars(select(StewardTermSuppression)).all()) == 1
+
+
+# ---- 09-19：与已确认亲子/生物祖先冲突的同辈建议不得公开 ----
+
+
+def _sibling_conflict_world(session, monkeypatch, *, name="sq-conflict"):
+    from app.services import steward_candidate_policy
+
+    monkeypatch.setattr(config, "STEWARD_INFERRED_TREE_ENABLED", True)
+    owner, space = create_agent_fixture(session, name=name)
+    parent = _member(session, space, f"{name}-p", "m")
+    child = _member(session, space, f"{name}-c", "f")
+    # 父→子 confirmed 亲子事实：模型若把这对判为同辈即为误报
+    fact = source_facts.create_source_fact(
+        session,
+        fact_type="biological_parent",
+        subject_user_id=parent.id,
+        object_user_id=child.id,
+        provenance="manual_entry",
+        space_id=space.id,
+    )
+    source_facts.transition_source_fact(session, fact, "confirm")
+    session.commit()
+    return owner, space, parent, child, steward_candidate_policy
+
+
+def test_conflicting_sibling_candidate_is_not_projected_publicly(db_session, monkeypatch):
+    """模型把父→子判为 direct_sibling：不生成建议、不生成 recipient。"""
+    from app.services import steward_inferred, steward_suggestions
+
+    owner, space, parent, child, _policy = _sibling_conflict_world(db_session, monkeypatch)
+    job = _make_job(db_session, space)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=parent.id, object_id=child.id)
+    facts = list(db_session.scalars(select(SourceFact)).all())
+
+    created = steward_suggestions.project_for_job(db_session, job, findings=[], facts=facts)
+    assert created == 0
+    assert db_session.scalars(select(StewardSuggestion)).all() == []
+    # 同批推测边投影也拒绝
+    assert (
+        steward_inferred.project_for_job(
+            db_session, job, facts=facts, visible={parent.id, child.id}
+        )
+        == 0
+    )
+    assert db_session.scalars(select(StewardInferredEdge)).all() == []
+
+
+def test_conflicting_legacy_suggestion_exits_active_consumption(db_session, monkeypatch):
+    """存量错误建议即使证据 hash 未变，也不再是有效待核实项。"""
+    from app.services import steward_suggestions
+
+    _owner, space, parent, child, _policy = _sibling_conflict_world(db_session, monkeypatch)
+    # 直接建一条历史模型建议（模拟冲突事实出现前已存在的行）
+    row = _suggestion(
+        db_session,
+        space,
+        parent,
+        child,
+        value={"fact_type": "direct_sibling"},
+    )
+    assert row.status == "proposed"
+
+    # 详情/列表口径：状态为 superseded，且不再给 submit 入口
+    detail = steward_suggestions.get_suggestion_detail(
+        db_session,
+        account=parent.account,
+        space_id=space.id,
+        suggestion_id=row.id,
+    )
+    assert detail["state"] == "superseded"
+    assert detail["allowed_actions"] == ["open_details"]
+
+    page = steward_suggestions.list_suggestions_page(
+        db_session,
+        account=parent.account,
+        space_id=space.id,
+        cursor=None,
+        limit=20,
+    )
+    item = next(i for i in page["items"] if i["id"] == row.id)
+    assert item["state"] == "superseded"
+    assert item["allowed_actions"] == ["open_details"]
+
+
+def test_conflicting_suggestion_submit_is_rejected_without_new_fact(db_session, monkeypatch):
+    """提交路径在事务内重验：不创建 SourceFact、不产生确认副作用。"""
+
+    _owner, space, parent, child, _policy = _sibling_conflict_world(db_session, monkeypatch)
+    row = _suggestion(
+        db_session,
+        space,
+        parent,
+        child,
+        value={"fact_type": "direct_sibling"},
+    )
+    before = db_session.scalars(select(SourceFact)).all()
+    with pytest.raises(HTTPException) as excinfo:
+        _submit(db_session, space, parent, row)
+    assert excinfo.value.status_code == 409
+    db_session.rollback()
+    after = db_session.scalars(select(SourceFact)).all()
+    assert len(after) == len(before)
+
+
+def test_unrelated_sibling_suggestion_still_reachable(db_session, monkeypatch):
+    """无冲突的模型同辈线索仍按既有流程可提交（不误伤 unsupported）。"""
+    from app.services import steward_suggestions
+
+    owner, space = create_agent_fixture(db_session, name="sq-clean")
+    first = _member(db_session, space, "sq-clean-a", "m")
+    second = _member(db_session, space, "sq-clean-b", "f")
+    row = _suggestion(
+        db_session,
+        space,
+        first,
+        second,
+        value={"fact_type": "direct_sibling"},
+    )
+    detail = steward_suggestions.get_suggestion_detail(
+        db_session,
+        account=first.account,
+        space_id=space.id,
+        suggestion_id=row.id,
+    )
+    assert detail["state"] == "proposed"
+    assert "submit" in detail["allowed_actions"]
+
+
+def test_confirmed_sibling_stays_resolved_despite_unrelated_conflicting_parent(db_session):
+    """已真正确认完成的线索不得因另一条冲突事实被显示为「已撤销」（R8）。
+
+    优先级回归：正式结果（同类型关系已确认）必须先于冲突退役判定；否则
+    `source_state` 会把 `resolved` 改成 `superseded`，而通知域把 superseded
+    映射为 revoked，等于向用户谎称已完成的处理被撤销。
+    """
+    from app.services import source_facts
+
+    owner, space = create_agent_fixture(db_session, name="sq-resolved")
+    first = _member(db_session, space, "sq-resolved-a", "m")
+    second = _member(db_session, space, "sq-resolved-b", "f")
+    row = _suggestion(db_session, space, first, second, value={"fact_type": "direct_sibling"})
+    assert row.status == "proposed"
+
+    # 该同辈关系被真实确认 → 建议随既有机制变 resolved
+    sibling_fact = source_facts.create_source_fact(
+        db_session,
+        fact_type="direct_sibling",
+        subject_user_id=first.id,
+        object_user_id=second.id,
+        provenance="manual_entry",
+        space_id=space.id,
+    )
+    source_facts.transition_source_fact(db_session, sibling_fact, "confirm")
+    db_session.commit()
+    steward_suggestions.resolve_for_linked_fact(
+        db_session, fact_id=sibling_fact.id, space_id=space.id
+    )
+    db_session.commit()
+    db_session.refresh(row)
+    assert row.status == "resolved"
+
+    # 之后出现一条冲突的亲子事实
+    parent_fact = source_facts.create_source_fact(
+        db_session,
+        fact_type="biological_parent",
+        subject_user_id=first.id,
+        object_user_id=second.id,
+        provenance="manual_entry",
+        space_id=space.id,
+    )
+    source_facts.transition_source_fact(db_session, parent_fact, "confirm")
+    db_session.commit()
+    db_session.refresh(row)
+
+    assert steward_suggestions.source_state(db_session, row) == "resolved"
+    detail = steward_suggestions.get_suggestion_detail(
+        db_session,
+        account=first.account,
+        space_id=space.id,
+        suggestion_id=row.id,
+    )
+    assert detail["state"] == "resolved"
+    assert detail["allowed_actions"] == ["open_details"]
