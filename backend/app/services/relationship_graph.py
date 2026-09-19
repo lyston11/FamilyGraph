@@ -366,6 +366,65 @@ def scoped_confirmed_facts(
     return sorted(rows, key=lambda fact: fact.id)
 
 
+def viewer_reachable_user_ids(session: Session, *, viewer_user_id: int) -> set[int]:
+    """viewer 在自己的授权口径下可经 confirmed 亲属链到达的人（含本人）。
+
+    准入门禁用（join_request）：只问「我与对方家族是否有已确认的亲属联系」，
+    因此不能用目标空间的图口径——那个口径按设计只暴露空间内成员，会把申请人
+    自己一侧的中间人连同目标成员一起隐去，导致门禁永不通过。
+
+    口径：
+    - 事实范围 = 申请人 active 空间（含全局 NULL）内的 confirmed 事实；
+    - 两端点都必须对申请人可见（``space_context=None``，与既有资料可见性
+      门禁同一口径）——不返回申请人本来就看不到的人；
+    - 亲属链按无向连通处理：准入只问「有无亲属联系」，方向不影响结论。
+
+    只读、不写状态、不扩大任何字段投影。
+    """
+    viewer = session.get(User, viewer_user_id)
+    if viewer is None:
+        return set()
+    space_ids = set(
+        session.scalars(
+            select(SpaceMember.space_id).where(
+                SpaceMember.user_id == viewer_user_id, SpaceMember.status == "active"
+            )
+        ).all()
+    )
+    facts = scoped_confirmed_facts(session, space_ids=space_ids or {0})
+    endpoint_visible: dict[int, bool] = {viewer_user_id: True}
+
+    def _visible(uid: int) -> bool:
+        cached = endpoint_visible.get(uid)
+        if cached is not None:
+            return cached
+        target = session.get(User, uid)
+        ok = (
+            target is not None
+            and visibility.evaluate(
+                session, viewer, target, purpose=visibility.PURPOSE_PROFILE
+            ).visible
+        )
+        endpoint_visible[uid] = ok
+        return ok
+
+    adjacency: dict[int, set[int]] = {}
+    for fact in facts:
+        subject_id, object_id = fact.subject_user_id, fact.object_user_id
+        if subject_id == object_id or not _visible(subject_id) or not _visible(object_id):
+            continue
+        adjacency.setdefault(subject_id, set()).add(object_id)
+        adjacency.setdefault(object_id, set()).add(subject_id)
+    reached = {viewer_user_id}
+    stack = [viewer_user_id]
+    while stack:
+        for nxt in adjacency.get(stack.pop(), ()):
+            if nxt not in reached:
+                reached.add(nxt)
+                stack.append(nxt)
+    return reached
+
+
 def topology_edges_from_facts(facts: Iterable[SourceFact]) -> list[dict[str, Any]]:
     """将 confirmed 原子事实规范化为去重、稳定排序的直接亲属结构边。
 

@@ -64,7 +64,15 @@ def transition(
     is_self = member.user_id == actor_id
 
     if action == "accept":
-        if not is_self:
+        # 09-19：审批主体取决于 pending 行的来源（与 notifications 区分通知对象
+        # 的判据同源：added_by == user_id 即本人申请）：
+        # - 本人申请加入（join_request）→ 只有该空间管理员可批准，申请人不得自批；
+        # - 他人邀请（管理员邀请/邀请码）→ 仍需受邀人本人接受。
+        self_requested = member.added_by == member.user_id
+        if self_requested:
+            if not is_manager:
+                raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅该家庭空间管理员可批准加入申请")
+        elif not is_self:
             raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅受邀人本人可接受")
         if member.status != "pending":
             raise_api_error(

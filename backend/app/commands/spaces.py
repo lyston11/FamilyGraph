@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.commands.context import ActorContext, command_transaction, load_actor
@@ -251,11 +252,20 @@ def respond_invitation(
     *,
     accept: bool,
 ) -> SpaceMember:
-    """受邀人接受/拒绝自己的 pending 邀请。"""
+    """pending 行决议：受邀人接受/拒绝自己的邀请，或该空间管理员处置加入申请。
+
+    09-19：本人申请（added_by == user_id）只能由该空间管理员批准/拒绝，管理员
+    以前根本进不来（旧代码只允许 member.user_id == actor.id），所以无法处置任何
+    加入申请。归属过滤在这里只做到「本人或该空间管理员」，精确的「谁能 accept
+    哪一类」由 space_fsm.transition 判定；其余一律保持既有 404 防枚举形状。
+    """
     actor = load_actor(session, ctx)
     with command_transaction(session):
         member = session.get(SpaceMember, member_id)
-        if member is None or member.user_id != actor.id:
+        if member is None or not (
+            member.user_id == actor.id
+            or space_fsm.is_space_manager(session, member.space_id, actor.id)
+        ):
             raise_api_error(404, SPACE_NOT_FOUND, "邀请不存在或已处理")
         if member.status != "pending":
             from app.errors import CONNECTION_ALREADY_RESOLVED
@@ -288,7 +298,11 @@ def respond_invitation(
                 actor_id=actor.id,
                 target_id=member.user_id,
                 ip=ctx.ip,
-                detail={"space_id": member.space_id},
+                detail={
+                    "space_id": member.space_id,
+                    # 09-19：区分「本人接受邀请」与「管理员批准加入申请」。
+                    "by_manager": member.user_id != actor.id,
+                },
             )
     return member
 
@@ -331,8 +345,15 @@ def request_join_by_user(
 ) -> SpaceMember:
     """家族视图摘要卡「申请进入 TA 的家庭空间」（join_request 语义）。
 
-    可见性门禁：viewer 对 target 可见性不得为 none（防枚举 404）。
+    09-19 准入边界（安全）：
+    - 可见性门禁：viewer 对 target 可见性不得为 none（防枚举 404），先于其余判定；
+    - 目标空间只按 target 的 owner/space_admin 身份解析，不再回退到「target 的
+      任意 active 成员资格」——否则会落到申请人自己所在的空间；
+    - 亲属门禁：必须与目标空间至少一名 active 成员存在 confirmed 亲属路径，
+      不得凭共享空间/引用/pending 关系进入别人的家族空间（见 SPACE_JOIN_NO_RELATION）；
+    - pending 行的审批权由 space_fsm 保证：本人申请只能由该空间管理员 accept。
     """
+    from app.errors import SPACE_JOIN_NO_RELATION, SPACE_JOIN_NO_TARGET_SPACE
     from app.services import visibility
 
     actor = load_actor(session, ctx)
@@ -344,23 +365,53 @@ def request_join_by_user(
         memberships = session.query(SpaceMember).filter(SpaceMember.user_id == target.id).all()
         active_ids = [m.space_id for m in memberships if space_fsm.effective_status(m) == "active"]
         primary_space_id: int | None = None
-        owned = (
-            session.query(FamilySpace)
-            .filter(FamilySpace.owner_id == target.id, FamilySpace.id.in_(active_ids))
-            .first()
-            if active_ids
-            else None
-        )
-        if owned is not None:
-            primary_space_id = owned.id
-        elif active_ids:
-            primary_space_id = active_ids[0]
+        if active_ids:
+            # owner 优先，其次 target 任管理员的 space_admin 空间；order_by 保证
+            # 同一 target 的解析结果确定。
+            owned = (
+                session.query(FamilySpace)
+                .filter(FamilySpace.owner_id == target.id, FamilySpace.id.in_(active_ids))
+                .order_by(FamilySpace.id)
+                .first()
+            )
+            if owned is not None:
+                primary_space_id = owned.id
+            else:
+                managed = (
+                    session.query(FamilySpace)
+                    .join(SpaceMember, SpaceMember.space_id == FamilySpace.id)
+                    .filter(
+                        SpaceMember.user_id == target.id,
+                        SpaceMember.role == "space_admin",
+                        SpaceMember.status == "active",
+                        FamilySpace.id.in_(active_ids),
+                    )
+                    .order_by(FamilySpace.id)
+                    .first()
+                )
+                primary_space_id = managed.id if managed is not None else None
         if primary_space_id is None:
-            from app.errors import SPACE_JOIN_NO_TARGET_SPACE
-
             raise_api_error(409, SPACE_JOIN_NO_TARGET_SPACE, "对方尚未建立家庭空间")
 
         space = _space_or_404(session, primary_space_id)
+        # 亲属门禁：必须与该空间至少一名 active 成员（含 owner）有已确认的亲属
+        # 联系。用申请人自己的授权可见图（不能借目标空间的图口径——那只含空间
+        # 成员，会把申请人与目标成员之间的纽带隐去）；actor 本人在对方的亲属链
+        # 上不算「有联系」，故排除本人。
+        from app.services.relationship_graph import viewer_reachable_user_ids
+
+        member_ids = set(
+            session.scalars(
+                select(SpaceMember.user_id).where(
+                    SpaceMember.space_id == space.id, SpaceMember.status == "active"
+                )
+            ).all()
+        )
+        if not (
+            viewer_reachable_user_ids(session, viewer_user_id=actor.id) & (member_ids - {actor.id})
+        ):
+            raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该家庭空间没有已确认的亲属关系")
+
         member, created = space_fsm.invite(
             session, space=space, user_id=actor.id, added_by=actor.id
         )
