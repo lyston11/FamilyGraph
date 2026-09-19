@@ -378,6 +378,67 @@ def test_reaper_expires_a_healthy_lease_when_attempts_exhausted(db_session):
     assert run.error_code == "AGENT_LEASE_EXPIRED"
 
 
+def test_cancel_then_failed_settle_keeps_failed(db_session):
+    """取消已请求后 sidecar 结算 failed：真实故障不被吞成 cancelled。
+
+    `_settle` 只把 succeeded 改判为 cancelled，failed 原样保留。否则用户取消
+    一次正在失败（例如上游永久 4xx）的 run 后，会看不到真实错误，运维也失去
+    故障分母。反向（取消 + succeeded → cancelled）见
+    `test_cancel_running_then_settle_overrides_to_cancelled`。
+    """
+    user, space = create_agent_fixture(db_session, name="cancel-fail")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+
+    agent_queue.request_cancel(db_session, grant.run, actor_id=None)
+    db_session.commit()
+
+    settled = agent_queue.settle_run(
+        db_session, grant.run, status="failed", error_code="PROVIDER_STREAM_ERROR"
+    )
+    db_session.expire(settled)
+    assert settled.status == "failed"
+    assert settled.error_code == "PROVIDER_STREAM_ERROR"
+    # 没有改判审计（只有 succeeded 分支写）。
+    assert (
+        db_session.scalar(select(AuditLog).where(AuditLog.action == "agent_run_settle_overridden"))
+        is None
+    )
+    terminal = db_session.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == settled.id)
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert terminal is not None and terminal.type == "run.failed"
+
+
+def test_reaper_does_not_override_a_run_that_already_failed_after_cancel(db_session):
+    """落终态后 reaper 不得把 failed 覆盖成 cancelled。
+
+    reaper 只选 leased/running；取消标记留在 job 上不得让已经如实落地的失败
+    终态被后续清理改写（否则错误分母会凭空消失）。
+    """
+    user, space = create_agent_fixture(db_session, name="cancel-fail-reap")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    _enqueue(db_session, session)
+    grant = agent_queue.lease_next(db_session, kind="assistant", leased_by="sc")
+    assert grant is not None
+
+    agent_queue.request_cancel(db_session, grant.run, actor_id=None)
+    db_session.commit()
+    agent_queue.settle_run(
+        db_session, grant.run, status="failed", error_code="PROVIDER_STREAM_ERROR"
+    )
+
+    assert agent_queue.reaper_pass(db_session) == 0
+    db_session.expire_all()
+    run = db_session.get(AgentRun, grant.run.id)
+    assert run is not None and run.status == "failed"
+    assert run.error_code == "PROVIDER_STREAM_ERROR"
+
+
 def test_prune_finished_removes_only_old_terminal_runs(db_session):
     user, space = create_agent_fixture(db_session, name="prune")
     session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)

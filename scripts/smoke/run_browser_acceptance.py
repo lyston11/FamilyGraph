@@ -320,6 +320,110 @@ CANCEL_PROBE = r"""(async () => {
 })()"""
 
 
+REVOKE_START_PROBE = r"""(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const items = () => [...document.querySelectorAll('[data-test=message-item]')];
+  const types = () => window.__fgProbe.events.map((e) => e.type);
+  const input = document.querySelector('[data-test=composer-input]');
+  const sendBtn = document.querySelector('[data-test=send-btn]');
+  if (!input || !sendBtn) return {error: 'no composer'};
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value').set;
+  setter.call(input, '撤权测试的提问');
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await sleep(200);
+  sendBtn.click();
+  // Wait until the run is genuinely streaming: the cancel button is offered
+  // and at least one provisional frame is painted. Revoking before that would
+  // test nothing about an in-flight stream.
+  for (let i = 0; i < 300; i += 1) {
+    const provisional = items().filter(
+      (n) => n.querySelector('[data-test=provisional-mark]')).length;
+    if (document.querySelector('[data-test=cancel-run-btn]') && provisional > 0) {
+      return {
+        started: true,
+        runId: window.__fgProbe.lastRunId,
+        provisionalBefore: provisional,
+        itemCountBefore: items().length,
+        textsBefore: items().map((n) => (n.textContent ?? '').trim()),
+        typesBefore: types(),
+      };
+    }
+    await sleep(50);
+  }
+  return {started: false, error: 'run never streamed', types: types()};
+})()"""
+
+
+REVOKE_OBSERVE_PROBE = r"""(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const items = () => [...document.querySelectorAll('[data-test=message-item]')];
+  const types = () => window.__fgProbe.events.map((e) => e.type);
+  const runId = window.__fgProbe.lastRunId;
+  // Let the revocation propagate through the app's own space-context refresh.
+  await sleep(6000);
+  const afterRevoke = {
+    types: types(),
+    itemCount: items().length,
+    texts: items().map((n) => (n.textContent ?? '').trim()),
+    provisional: items().filter(
+      (n) => n.querySelector('[data-test=provisional-mark]')).length,
+    pendingIndicator: !!document.querySelector('[data-test=message-list] .pending'),
+    errorNotice: document.querySelector('[data-test=error-notice]')?.textContent?.trim() ?? null,
+    path: location.pathname,
+  };
+  // Raw read attempt with the app's own credentials: records what the current
+  // API actually answers for a revoked account. Reported as an explicit
+  // evidence boundary rather than folded into a pass/fail boolean.
+  let rawReadStatus = null;
+  if (runId) {
+    try {
+      const response = await fetch(`/api/agent/runs/${runId}/events`, {
+        headers: window.__fgProbe.authHeaders(),
+      });
+      rawReadStatus = response.status;
+    } catch (err) {
+      rawReadStatus = String(err);
+    }
+  }
+  // Hard refresh + reopen: revoked content must not come back.
+  return {afterRevoke, rawReadStatus, runId};
+})()"""
+
+
+REVOKE_RELOAD_PROBE = r"""(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const items = () => [...document.querySelectorAll('[data-test=message-item]')];
+  for (let i = 0; i < 600; i += 1) {
+    if (document.querySelector('[data-test=assistant-launcher]')) break;
+    await sleep(50);
+  }
+  // Reopen the assistant drawer and, if a conversation list exists, try to
+  // select the revoked conversation again.
+  for (let i = 0; i < 60; i += 1) {
+    if (document.querySelector('[data-test=composer-input]')) break;
+    const launcher = document.querySelector('[data-test=assistant-launcher]');
+    if (!launcher) break;
+    launcher.click();
+    await sleep(250);
+  }
+  const toggle = document.querySelector('[data-test=session-toggle]');
+  if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+  await sleep(400);
+  const sessionItems = [...document.querySelectorAll('[data-test=session-item]')];
+  if (sessionItems.length > 0) sessionItems[0].click();
+  await sleep(1500);
+  return {
+    sessionCount: sessionItems.length,
+    itemCount: items().length,
+    texts: items().map((n) => (n.textContent ?? '').trim()),
+    pendingIndicator: !!document.querySelector('[data-test=message-list] .pending'),
+    errorNotice: document.querySelector('[data-test=error-notice]')?.textContent?.trim() ?? null,
+    path: location.pathname,
+  };
+})()"""
+
+
 RESUME_PROBE = r"""(async () => {
                  const runId = window.__fgProbe.lastRunId;
                  if (!runId) return {error: 'no run'};
@@ -673,6 +777,326 @@ async def drive(
             "resume": resume,
             "cross_space": cross_space,
         }
+
+
+async def drive_revocation(
+    debug_port: int,
+    base: str,
+    member_refresh_token: str,
+    member_access_token: str,
+    owner_access_token: str,
+    member_name: str,
+    screenshot: Path | None = None,
+    width: int = 1365,
+    height: int = 900,
+) -> dict[str, Any]:
+    """F-R4 失权：被撤权者本人正在收流时，另一有权主体撤销其成员资格。
+
+    与 `drive` 分开，因为它需要**两个主体**：浏览器以成员身份登录并触发真实流，
+    移除动作由 owner token 经同一个真实 listener 发起。原 F 把这格记为“属另一
+    轮环境搭建”而略过，但 F-R4 明确要求覆盖失权。
+    """
+    import websockets
+
+    # Read-only calls on behalf of the member (run/session lookups). The browser
+    # holds the refresh token; this access token is used only for the harness'
+    # own observations so we never refresh inside the page (which would rotate
+    # the token the app is using).
+    member_headers = {"Authorization": f"Bearer {member_access_token}"}
+    owner_headers = {"Authorization": f"Bearer {owner_access_token}"}
+
+    targets = json.loads(
+        subprocess.run(
+            ["curl", "-s", f"http://127.0.0.1:{debug_port}/json/list"],
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    page = next(t for t in targets if t["type"] == "page")
+    async with websockets.connect(page["webSocketDebuggerUrl"], max_size=16 * 1024 * 1024) as ws:
+        cdp = CDP(ws)
+        await cdp.call("Page.enable")
+        await cdp.call("Runtime.enable")
+        await cdp.call(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
+        )
+        await cdp.call("Page.navigate", {"url": base + "/login"})
+        for _ in range(400):
+            if await cdp.evaluate("document.readyState === 'complete'"):
+                break
+            await asyncio.sleep(0.05)
+        # Start from a clean profile: the previous phase left another account's
+        # refresh token in localStorage.
+        await cdp.evaluate("localStorage.clear()")
+        await cdp.evaluate(
+            "localStorage.setItem('fg.refresh_token', " + json.dumps(member_refresh_token) + ")"
+        )
+        await cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": PROBE})
+        await cdp.call("Page.navigate", {"url": base + "/family-tree"})
+        for _ in range(600):
+            if await cdp.evaluate("!!document.querySelector('[data-test=assistant-launcher]')"):
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise RuntimeError("revocation: assistant launcher never appeared")
+        for _ in range(60):
+            if await cdp.evaluate("!!document.querySelector('[data-test=composer-input]')"):
+                break
+            await cdp.evaluate("document.querySelector('[data-test=assistant-launcher]').click()")
+            await asyncio.sleep(0.25)
+        else:
+            raise RuntimeError("revocation: composer never appeared")
+
+        await cdp.evaluate("window.__fgProbe.t0 = performance.now()")
+        started = await cdp.evaluate(REVOKE_START_PROBE)
+        if not started.get("started"):
+            return {"started": started, "error": started.get("error", "stream never started")}
+
+        # Resolve the space the stream actually runs in, then revoke THAT
+        # membership. Revoking a different space would test nothing: the first
+        # version of this harness revoked space 1 while the stream lived in
+        # space 2, and the run happily completed.
+        run_id = int(started["runId"])
+        run_info = _get_json(f"{base}/api/agent/runs/{run_id}", member_headers)
+        session_id = int(run_info["session_id"])
+        sessions = _get_json(f"{base}/api/agent/sessions", member_headers)
+        stream_space_id = next(
+            int(row["space_id"]) for row in sessions if int(row["id"]) == session_id
+        )
+        members = _get_json(f"{base}/api/spaces/{stream_space_id}/members", owner_headers)
+        target = next(
+            (row for row in members if row.get("user_name") == member_name), None
+        )
+        if target is None or target.get("status") != "active":
+            return {
+                "started": started,
+                "error": f"{member_name} is not an active member of space {stream_space_id}",
+                "stream_space_id": stream_space_id,
+                "members": [
+                    {"user_name": r.get("user_name"), "status": r.get("status")} for r in members
+                ],
+            }
+        messages_before = _get_json(
+            f"{base}/api/agent/sessions/{session_id}/messages", member_headers
+        )
+
+        # Revoke through the real API while the member's stream is in flight.
+        # A real authorized call, not a DB poke: the FSM, audit row and domain
+        # event all happen exactly as they would for a user action.
+        revoked = await asyncio.to_thread(
+            _revoke_membership, base, owner_access_token, int(target["id"])
+        )
+
+        observed = await cdp.evaluate(REVOKE_OBSERVE_PROBE)
+        if screenshot is not None:
+            png = await cdp.call("Page.captureScreenshot", {"format": "png"})
+            screenshot.write_bytes(base64.b64decode(png["data"]))
+
+        # Hard refresh: revoked content must not reappear from history/replay.
+        await cdp.call("Page.navigate", {"url": base + "/family-tree"})
+        reloaded = await cdp.evaluate(REVOKE_RELOAD_PROBE)
+        return {
+            "started": started,
+            "stream_space_id": stream_space_id,
+            "membership": {"id": target["id"], "status": target["status"]},
+            "revoked": revoked,
+            "observed": observed,
+            "reloaded": reloaded,
+            "run_after_revoke": _await_terminal(
+                base, member_headers, run_id, timeout_s=float(os.environ.get("FG_REVOKE_WAIT_S", "90"))
+            ),
+            "messages_before": [row.get("role") for row in messages_before],
+            "messages_after": [
+                row.get("role")
+                for row in _get_json(
+                    f"{base}/api/agent/sessions/{session_id}/messages", member_headers
+                )
+            ],
+        }
+
+
+def _get_json(url: str, headers: dict[str, str]) -> Any:
+    import urllib.request
+
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.load(response)
+
+
+def _await_terminal(
+    base: str, headers: dict[str, str], run_id: int, *, timeout_s: float
+) -> dict[str, Any]:
+    """轮询 Run 终态；超时如实返回当时的 status（不伪装成终态）。"""
+    deadline = time.monotonic() + timeout_s
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        try:
+            last = _get_json(f"{base}/api/agent/runs/{run_id}", headers)
+        except Exception as exc:  # noqa: BLE001 - reported as an explicit outcome
+            return {"status": None, "error_type": type(exc).__name__}
+        if last.get("status") in ("succeeded", "failed", "cancelled", "expired"):
+            return last
+        time.sleep(0.5)
+    return {**last, "timed_out": True}
+
+
+def _revoke_membership(base: str, owner_token: str, member_id: int) -> dict[str, Any]:
+    """owner 移除成员：真实 DELETE，返回状态码与错误码（不泄露响应正文）。"""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{base}/api/space-memberships/{member_id}",
+        method="DELETE",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return {"status": response.status}
+    except urllib.error.HTTPError as error:
+        body = error.read().decode(errors="replace")
+        try:
+            code = json.loads(body).get("error", {}).get("code")
+        except json.JSONDecodeError:
+            code = None
+        return {"status": error.code, "error_code": code}
+    except Exception as exc:  # noqa: BLE001 - reported as an explicit outcome
+        return {"status": None, "error_type": type(exc).__name__}
+
+
+def _post_expect_error(
+    url: str, payload: dict[str, Any], headers: dict[str, str]
+) -> dict[str, Any]:
+    """POST 并返回状态码 + 错误码（用于断言拒绝，不泄露响应正文）。"""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", **headers},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return {"status": response.status}
+    except urllib.error.HTTPError as error:
+        body = error.read().decode(errors="replace")
+        try:
+            code = json.loads(body).get("error", {}).get("code")
+        except json.JSONDecodeError:
+            code = None
+        return {"status": error.code, "error_code": code}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": None, "error_type": type(exc).__name__}
+
+
+def _grade_revocation(grid: Grid, revocation: dict[str, Any]) -> None:
+    """F-R4 失权的逐格判定。
+
+    只有服务端授权边界是合同固定的；已渲染内容的去留、Run 收敛时刻与重连后的
+    读取能力如实记录为观察值，不折算成安全结论（见 design.md 的证据边界）。
+    """
+    started = revocation.get("started") or {}
+    revoked = revocation.get("revoked") or {}
+    observed = revocation.get("observed") or {}
+    after = observed.get("afterRevoke") or {}
+    reloaded = revocation.get("reloaded") or {}
+    new_session = revocation.get("new_session_after_revoke") or {}
+    run_after = revocation.get("run_after_revoke") or {}
+    after_texts = after.get("texts") or []
+    reloaded_texts = reloaded.get("texts") or []
+    before_texts = started.get("textsBefore") or []
+    stream_space_id = revocation.get("stream_space_id")
+
+    grid.cell(
+        "UI2-8",
+        "UI2",
+        "F-R4 失权：撤权后不得再在该空间创建新会话（服务端授权边界）",
+        "pass"
+        if revoked.get("status") == 204
+        and new_session.get("status") == 403
+        and new_session.get("error_code") == "SPACE_FORBIDDEN_ACTOR"
+        else "fail",
+        f"space={stream_space_id} revoke_http={revoked.get('status')} "
+        f"new_session_http={new_session.get('status')} code={new_session.get('error_code')} "
+        f"run={run_after.get('status')}",
+        {
+            "revoked": revoked,
+            "membership": revocation.get("membership"),
+            "new_session_after_revoke": new_session,
+            "stream_space_id": stream_space_id,
+            "stream_started": started,
+            "note": (
+                "撤权经真实 API（DELETE /api/space-memberships/{id}）由 owner 发起，"
+                "且移除的是**该流实际所在空间**的成员资格（早期版本误移了另一个空间，"
+                "使该格变成空转，已修正）；断言撤权后成员不再能创建 Agent 会话。"
+            ),
+        },
+    )
+
+    grid.cell(
+        "UI2-9",
+        "UI2",
+        "F-R4 失权：撤权后 Run 必须收敛为终态且不再声称仍在生成",
+        "pass"
+        if run_after.get("status") in ("succeeded", "failed", "cancelled", "expired")
+        and after.get("pendingIndicator") is False
+        and after.get("provisional") == 0
+        else "fail",
+        f"run={run_after.get('status')} timed_out={run_after.get('timed_out')} "
+        f"pending={after.get('pendingIndicator')} provisional={after.get('provisional')} "
+        f"items={after.get('itemCount')} error={after.get('errorNotice')}",
+        {
+            "item_count_before": started.get("itemCountBefore"),
+            "item_count_after": after.get("itemCount"),
+            "provisional_after": after.get("provisional"),
+            "texts_before": before_texts,
+            "texts_after": after_texts,
+            "error_notice": after.get("errorNotice"),
+            "path": after.get("path"),
+            "run_after_revoke": run_after,
+            "note": (
+                "断言两件事：Run 收敛为终态，且临时气泡不再声称仍在生成。"
+                "只查 pendingIndicator 是不够的——撤权后 Run 若停在 leased，"
+                "气泡会继续渲染「生成中…」而 pending 指示器已经消失。"
+            ),
+        },
+    )
+
+    grid.cell(
+        "UI2-10",
+        "UI2",
+        "F-R4 失权：刷新后不复活旧内容、不越权读到新内容",
+        "pass"
+        if not any(
+            "撤权测试" in text or "蓝" in text
+            for text in reloaded_texts
+            if text not in before_texts
+        )
+        else "fail",
+        f"reload_items={reloaded.get('itemCount')} sessions={reloaded.get('sessionCount')} "
+        f"pending={reloaded.get('pendingIndicator')} error={reloaded.get('errorNotice')} "
+        f"msg_before={revocation.get('messages_before')} "
+        f"msg_after={revocation.get('messages_after')}",
+        {
+            "session_count": reloaded.get("sessionCount"),
+            "item_count": reloaded.get("itemCount"),
+            "texts": reloaded_texts,
+            "texts_before": before_texts,
+            "pending_indicator": reloaded.get("pendingIndicator"),
+            "error_notice": reloaded.get("errorNotice"),
+            "raw_read_status_after_revoke": observed.get("rawReadStatus"),
+            "messages_before": revocation.get("messages_before"),
+            "messages_after": revocation.get("messages_after"),
+            "path": reloaded.get("path"),
+            "note": (
+                "`raw_read_status_after_revoke` 与 `messages_after` 记录现状：历史投影端点"
+                "只复核账号归属，不逐事件复核空间成员资格。这些值如实上报，"
+                "不声称撤权即时切断已持久化历史的读取。"
+            ),
+        },
+    )
 
 
 SEED = """
@@ -1109,6 +1533,43 @@ def main() -> int:
             )
         )
         _grade(grid, result, state)
+
+        # F-R4 失权：需要第二个主体（被撤权者本人收流 + owner 执行移除）。
+        # 原 F 把这格记为“属另一轮环境搭建”而略过，但 F-R4 明确要求覆盖失权。
+        member_tokens = post(
+            f"{family}/api/auth/login", {"name": "朱标", "pin": "123456"}
+        )
+        member_headers = {"Authorization": f"Bearer {member_tokens['access_token']}"}
+        revocation = asyncio.run(
+            drive_revocation(
+                debug_port,
+                base,
+                member_tokens["refresh_token"],
+                member_tokens["access_token"],
+                tokens["access_token"],
+                "朱标",
+                args.screenshot.with_name("browser-revocation.png")
+                if args.screenshot
+                else None,
+            )
+        )
+        if revocation.get("error"):
+            grid.cell(
+                "UI2-8",
+                "UI2",
+                "F-R4 失权：撤权后不得再在该空间创建新会话（服务端授权边界）",
+                "blocked",
+                str(revocation["error"])[:200],
+                revocation,
+            )
+        else:
+            # 硬安全边界（服务端，与 UI 无关）：撤权后不得再在该空间创建新会话。
+            revocation["new_session_after_revoke"] = _post_expect_error(
+                f"{family}/api/agent/sessions",
+                {"space_id": int(revocation["stream_space_id"])},
+                member_headers,
+            )
+            _grade_revocation(grid, revocation)
     except Exception as exc:  # noqa: BLE001 - harness failure is an environment block
         grid.cell("HARNESS", "env", "浏览器验收未中断完成", "fail", f"{type(exc).__name__}: {exc}")
         print(f"BLOCKED: harness 异常 {type(exc).__name__}: {exc}", file=sys.stderr)
