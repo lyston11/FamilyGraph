@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "核验 join_request 审批主体、SpaceMember FSM 不变量与邀请流程未被误伤。"}
+{"file": ".trellis/spec/architecture/11--11-personalfamilyview-bridge-2026-09-01.md", "reason": "核验节点集合未扩大、无路径成员仍为 space_member、bridge 合同未退化。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验授权矩阵/IDOR 测试已更新、受影响包门禁全绿。"}
+{"file": ".trellis/spec/architecture/6--6-visibility-py.md", "reason": "核验亲属门禁与路径可见性未绕过 visibility.evaluate、未新增可枚举信号。"}

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "空间成员状态机与 join_request 合同（目标空间 owner 审批）；本任务把实现改到与该合同一致，并区分自申请/他人邀请的审批主体。"}
+{"file": ".trellis/spec/architecture/11--11-personalfamilyview-bridge-2026-09-01.md", "reason": "PFV 节点集合、路径与 bridge 的授权边界；本任务必须保持节点集合只含空间授权候选，只放宽路径中间人口径。"}
+{"file": ".trellis/spec/architecture/6--6-visibility-py.md", "reason": "可见性四级层级与授权矩阵；亲属门禁与路径可见性都必须走 visibility.evaluate，不得自造规则。"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "SourceFact 是唯一结构真源、relations 是 v1 遗留层；亲属门禁必须基于 confirmed SourceFact 图而非 relations。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "受影响包门禁、安全改动必须更新授权矩阵测试的要求。"}
