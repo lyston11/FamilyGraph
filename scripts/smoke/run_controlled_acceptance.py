@@ -43,6 +43,10 @@ WORKER = ROOT / "scripts" / "smoke" / "controlled_assistant_worker.mjs"
 # AGENT_MESSAGE_MAX_LENGTH (8_000) and the estimator is ~4 chars/token.
 A3_SEED_TURNS = 14
 A3_SEED_CHARS = 8_000
+#: `wait_terminal` poll granularity — the terminal-visibility measurement can
+#: be late by up to this much and is reported alongside the value so nobody
+#: mistakes harness polling for server-side precision.
+WAIT_TERMINAL_POLL_SECONDS = 0.25
 # A1 注入的“首正文前”延迟；用于把延迟归到正确阶段（F-R3）。
 INJECTED_PRE_TEXT_DELAY_MS = 900
 # sidecar 批量 flush 间隔（AGENT_EVENT_FLUSH_MS 默认值），用于量化容差说明。
@@ -321,7 +325,7 @@ def wait_terminal(client: httpx.Client, base: str, headers: dict[str, str], run_
         run = client.get(f"{base}/api/agent/runs/{run_id}", headers=headers).json()
         if run.get("status") in ("succeeded", "failed", "cancelled"):
             return run
-        time.sleep(0.25)
+        time.sleep(WAIT_TERMINAL_POLL_SECONDS)
     return run
 
 
@@ -1310,14 +1314,16 @@ def _scenario_cancel(
         time.sleep(0.05)
     # Give the in-flight stream a moment so the cancel lands mid-generation.
     time.sleep(1.0)
+    # Three separately attributable latencies, all on this harness' monotonic
+    # clock. The previous version timed only "how long the terminal query took
+    # AFTER the worker had already exited", which cannot speak to what a user
+    # waits for. Cancel acceptance / terminal visibility / worker stop are
+    # different quantities and must not be collapsed into one number.
+    cancel_sent_at = time.monotonic()
     cancelled = client.post(
         f"{family}/api/agent/runs/{run_id}/cancel", headers=headers
     )
-    report = collect_worker(worker)
-    # Convergence latency matters as much as the final status: the browser keeps
-    # its "running" affordance until the server writes a terminal event, so a
-    # cancel that only converges at lease expiry leaves the user waiting.
-    cancel_at = time.monotonic()
+    cancel_accept_ms = round((time.monotonic() - cancel_sent_at) * 1000)
     run = wait_terminal(
         client,
         family,
@@ -1325,7 +1331,13 @@ def _scenario_cancel(
         run_id,
         timeout=float(os.environ.get("FG_CANCEL_WAIT_S", "90")),
     )
-    converged_after_s = round(time.monotonic() - cancel_at, 2)
+    terminal_visible_ms = round((time.monotonic() - cancel_sent_at) * 1000)
+    # Worker stop is observed last so it cannot block the two measurements
+    # above. The maintenance loop that converges a cancelled run ticks every
+    # MAINTENANCE_INTERVAL_SECONDS (default 5s), so this value is bounded by
+    # that cadence plus the harness poll granularity below.
+    report = collect_worker(worker)
+    worker_stop_ms = round((time.monotonic() - cancel_sent_at) * 1000)
     events = sse_events(client.get(f"{family}/api/agent/runs/{run_id}/events", headers=headers))
     types = [e["type"] for e in events]
     assistant = [e for e in events if e["type"] == "message.assistant_added"]
@@ -1338,7 +1350,8 @@ def _scenario_cancel(
         "F-R1 取消：run 收敛为 cancelled 而非 failed",
         "pass" if run.get("status") == "cancelled" else "fail",
         f"cancel_http={cancelled.status_code} run={run.get('status')} "
-        f"db_status={timing.get('status')} converged_after_s={converged_after_s} "
+        f"db_status={timing.get('status')} cancel_accept_ms={cancel_accept_ms} "
+        f"terminal_visible_ms={terminal_visible_ms} worker_stop_ms={worker_stop_ms} "
         f"error={timing.get('error_code')}",
         {
             "event_types": types,
@@ -1346,7 +1359,16 @@ def _scenario_cancel(
             "api_status": run.get("status"),
             "db_status": timing.get("status"),
             "db_runs": timing.get("runs"),
-            "converged_after_s": converged_after_s,
+            # End-to-end attributable latencies (harness monotonic, same host).
+            # terminal_visible_ms includes the wait_terminal poll granularity;
+            # worker_stop_ms includes the maintenance-loop cadence that
+            # converges a cancelled run. Neither is a server-side precision
+            # claim.
+            "cancel_accept_ms": cancel_accept_ms,
+            "terminal_visible_ms": terminal_visible_ms,
+            "worker_stop_ms": worker_stop_ms,
+            "terminal_poll_granularity_s": WAIT_TERMINAL_POLL_SECONDS,
+            "maintenance_interval_s": float(os.environ.get("MAINTENANCE_INTERVAL_SECONDS", "5")),
             "cancel_wait_s": float(os.environ.get("FG_CANCEL_WAIT_S", "90")),
             "error_code": timing.get("error_code"),
             "status_before_cancel": observed,
