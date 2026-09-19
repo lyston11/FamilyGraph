@@ -42,7 +42,7 @@ from app.models.steward_inferred import (
     INFERRED_RELATION_KINDS,
     StewardInferredEdge,
 )
-from app.services import steward_candidate_evidence, steward_events
+from app.services import steward_candidate_evidence, steward_candidate_policy, steward_events
 from app.services.domain_events import emit as emit_domain_event
 from app.utils.timeutil import utcnow
 
@@ -108,6 +108,7 @@ def project_for_job(
 
     evidence = _evidence_snapshot(db, job.space_id)
     confirmed_keys = _confirmed_triples(db, facts)
+    conflict_index = steward_candidate_policy.build_conflict_index_from_facts(facts)
 
     projected = (
         select(StewardInferredEdge.id)
@@ -144,7 +145,9 @@ def project_for_job(
     for candidate in candidates:
         if active_count >= cap:
             break
-        edge = _edge_from_candidate(db, job, candidate, visible, confirmed_keys, evidence, moment)
+        edge = _edge_from_candidate(
+            db, job, candidate, visible, confirmed_keys, evidence, moment, conflict_index
+        )
         if edge is None:
             continue
         db.add(edge)
@@ -191,8 +194,9 @@ def _edge_from_candidate(
     confirmed_keys: set[tuple[int, int, str]],
     evidence: dict[str, Any],
     moment: datetime,
+    conflict_index: steward_candidate_policy.CandidateConflictIndex | None = None,
 ) -> StewardInferredEdge | None:
-    """候选 → 推测边；结构不合法/不可见/重复/冷却/超限返回 None（逐条跳过）。"""
+    """候选 → 推测边；结构不合法/不可见/重复/冷却/超限/语义冲突返回 None。"""
     if steward_candidate_evidence.is_internal_candidate(db, candidate):
         return None
     payload = candidate.payload_json if isinstance(candidate.payload_json, dict) else {}
@@ -211,6 +215,18 @@ def _edge_from_candidate(
         return None
     if _triple_keys(raw_subject, raw_object, raw_kind) & confirmed_keys:
         return None  # 已有同结构 confirmed 事实
+    # 负向安全判据（与建议投影同一模块）：与已确认亲子/生物祖先冲突的
+    # 同辈候选不得上推测树，即使该三元组本身没有 confirmed 事实。
+    index = conflict_index or steward_candidate_policy.build_conflict_index(
+        db, space_id=job.space_id
+    )
+    if (
+        index.conflicts(
+            relation_kind=raw_kind, subject_user_id=raw_subject, object_user_id=raw_object
+        )
+        is not None
+    ):
+        return None
 
     evidence_hash = str(evidence["evidence_hash"])
     candidate_keys = _triple_keys(raw_subject, raw_object, raw_kind)
@@ -255,11 +271,20 @@ def _edge_from_candidate(
 
 
 def active_edges(
-    db: Session, space_id: int, *, limit: int | None = None
+    db: Session,
+    space_id: int,
+    *,
+    limit: int | None = None,
+    exclude_conflicted: bool = False,
 ) -> list[StewardInferredEdge]:
-    """空间活跃推测边（created_at 升序；上限截断）。供 PFV 增广图消费。"""
+    """空间活跃推测边（created_at 升序；上限截断）。供 PFV 增广图消费。
+
+    ``exclude_conflicted``：展示消费必须传 True，使与已确认亲子/生物祖先冲突的
+    存量边不再上树；维护枚举（如 delivery 的 inferred_review）保持缺省 False，
+    否则应退役的边永远得不到复核。
+    """
     cap = limit if limit is not None else config.STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE
-    return list(
+    rows = list(
         db.scalars(
             select(StewardInferredEdge)
             .where(
@@ -270,12 +295,26 @@ def active_edges(
             .limit(cap)
         )
     )
+    if not exclude_conflicted:
+        return rows
+    index = steward_candidate_policy.build_conflict_index(db, space_id=space_id)
+    return [
+        row
+        for row in rows
+        if index.conflicts(
+            relation_kind=row.relation_kind,
+            subject_user_id=int(row.subject_user_id),
+            object_user_id=int(row.object_user_id),
+        )
+        is None
+    ]
 
 
 def supersede_evidence_changed(
     db: Session, space_id: int, *, now: datetime | None = None, edge_ids: list[int] | None = None
 ) -> int:
-    """证据变化失效：活跃行的 evidence_hash 与当前 facts 摘要不符 → superseded。
+    """证据变化失效：活跃行与当前 facts 摘要不符，或与已确认亲子/生物祖先
+    语义冲突 → superseded（即使 evidence_hash 未变）。
 
     由管家 core 作业在投影前调用（重算时证据口径已刷新）。返回失效行数。
     """
@@ -284,16 +323,27 @@ def supersede_evidence_changed(
     moment = now or utcnow()
     evidence = _evidence_snapshot(db, space_id)
     evidence_hash = str(evidence["evidence_hash"])
-    stale = list(
+    candidates = list(
         db.scalars(
             select(StewardInferredEdge).where(
                 StewardInferredEdge.space_id == space_id,
                 StewardInferredEdge.status == INFERRED_ACTIVE_STATE,
-                StewardInferredEdge.evidence_hash != evidence_hash,
                 *([StewardInferredEdge.id.in_(edge_ids)] if edge_ids is not None else []),
             )
         )
     )
+    index = steward_candidate_policy.build_conflict_index(db, space_id=space_id)
+    stale = [
+        row
+        for row in candidates
+        if row.evidence_hash != evidence_hash
+        or index.conflicts(
+            relation_kind=row.relation_kind,
+            subject_user_id=int(row.subject_user_id),
+            object_user_id=int(row.object_user_id),
+        )
+        is not None
+    ]
     for row in stale:
         row.status = "superseded"
         row.resolved_at = moment
@@ -448,6 +498,18 @@ def confirm_edge(
             raise_api_error(409, INFERRED_EDGE_STATE_CONFLICT, "推测关系已驳回，请先撤销驳回")
         if edge.revision != expected_revision:
             raise_api_error(409, INFERRED_EDGE_REVISION_CONFLICT, "推测关系已被其他操作更新")
+        # 语义冲突重验：与已确认亲子/生物祖先矛盾的线索不得转正为关系事实。
+        if (
+            steward_candidate_policy.sibling_conflict_reason(
+                session,
+                space_id=space_id,
+                subject_user_id=int(edge.subject_user_id),
+                object_user_id=int(edge.object_user_id),
+            )
+            is not None
+            and edge.relation_kind == "direct_sibling"
+        ):
+            raise_api_error(409, INFERRED_EDGE_STATE_CONFLICT, "该推测关系与已确认事实冲突")
 
         if current_confirmed is not None:
             # Another authorized flow already confirmed the exact relation.
@@ -644,6 +706,17 @@ def reinstate_edge(
             raise_api_error(409, INFERRED_EDGE_STATE_CONFLICT, "仅已驳回的推测关系可撤销")
         if edge.revision != expected_revision:
             raise_api_error(409, INFERRED_EDGE_REVISION_CONFLICT, "推测关系已被其他操作更新")
+        if (
+            steward_candidate_policy.sibling_conflict_reason(
+                session,
+                space_id=space_id,
+                subject_user_id=int(edge.subject_user_id),
+                object_user_id=int(edge.object_user_id),
+            )
+            is not None
+            and edge.relation_kind == "direct_sibling"
+        ):
+            raise_api_error(409, INFERRED_EDGE_STATE_CONFLICT, "该推测关系与已确认事实冲突")
         active_count = int(
             session.scalar(
                 select(func.count())

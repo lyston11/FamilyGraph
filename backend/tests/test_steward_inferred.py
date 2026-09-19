@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app import config
+from app.commands.context import ActorContext
 from app.models.agent_provider import AgentSpaceProviderSetting
 from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember
@@ -100,6 +101,10 @@ def _candidate(
     session.add(row)
     session.commit()
     return row
+
+
+def _ctx(user) -> ActorContext:
+    return ActorContext(user_id=user.id, account_id=user.account.id, account_status="claimed")
 
 
 def _edges(session, space_id: int) -> list[StewardInferredEdge]:
@@ -333,3 +338,131 @@ def test_confirm_revision_conflict(db_session, monkeypatch, client) -> None:
         headers=a_header,
     )
     assert resp.status_code == 409
+
+
+# ---- 09-19：与已确认亲子/生物祖先冲突的同辈候选不得上推测树 ----
+
+
+def test_sibling_candidate_conflicting_with_confirmed_parent_is_not_projected(
+    db_session, monkeypatch
+) -> None:
+    """父→子误判为同辈：候选不投影、不生成推测边；同批合法候选照常处理。"""
+    _platform_on(monkeypatch)
+    _account, space = create_agent_fixture(db_session, name="inf-conflict")
+    _space_flag_on(db_session, space.id)
+    parent = _member(db_session, space, "inf-conflict-p", "m")
+    child = _member(db_session, space, "inf-conflict-c", "f")
+    sibling = _member(db_session, space, "inf-conflict-s", "m")
+    _confirm_fact(db_session, "biological_parent", parent.id, child.id, space.id)
+    db_session.commit()
+
+    job = _make_job(db_session, space)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=parent.id, object_id=child.id)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=child.id, object_id=parent.id)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=child.id, object_id=sibling.id)
+
+    facts = list(db_session.scalars(select(SourceFact)).all())
+    created = steward_inferred.project_for_job(
+        db_session, job, facts=facts, visible={parent.id, child.id, sibling.id}
+    )
+    assert created == 1
+    edges = _edges(db_session, space.id)
+    assert len(edges) == 1
+    assert {edges[0].subject_user_id, edges[0].object_user_id} == {child.id, sibling.id}
+
+
+def test_grandparent_candidate_conflicting_with_ancestry_is_not_projected(
+    db_session, monkeypatch
+) -> None:
+    """祖→孙（两步生物链）同样不得作为同辈线索上树。"""
+    _platform_on(monkeypatch)
+    _account, space = create_agent_fixture(db_session, name="inf-anc")
+    _space_flag_on(db_session, space.id)
+    grandparent = _member(db_session, space, "inf-anc-gp", "m")
+    parent = _member(db_session, space, "inf-anc-p", "f")
+    child = _member(db_session, space, "inf-anc-c", "m")
+    _confirm_fact(db_session, "biological_parent", grandparent.id, parent.id, space.id)
+    _confirm_fact(db_session, "biological_parent", parent.id, child.id, space.id)
+    db_session.commit()
+
+    job = _make_job(db_session, space)
+    _candidate(
+        db_session, job, kind="direct_sibling", subject_id=grandparent.id, object_id=child.id
+    )
+    facts = list(db_session.scalars(select(SourceFact)).all())
+    assert (
+        steward_inferred.project_for_job(
+            db_session, job, facts=facts, visible={grandparent.id, parent.id, child.id}
+        )
+        == 0
+    )
+    assert _edges(db_session, space.id) == []
+
+
+def test_existing_conflicting_edge_is_superseded_and_hidden(db_session, monkeypatch) -> None:
+    """存量错误推测边（证据 hash 未变）经复核退役，且不再供展示消费。"""
+    _platform_on(monkeypatch)
+    _account, space = create_agent_fixture(db_session, name="inf-stale")
+    _space_flag_on(db_session, space.id)
+    parent = _member(db_session, space, "inf-stale-p", "m")
+    child = _member(db_session, space, "inf-stale-c", "f")
+    job = _make_job(db_session, space)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=parent.id, object_id=child.id)
+    # 冲突事实出现前先投影，模拟存量错误线索
+    assert (
+        steward_inferred.project_for_job(db_session, job, facts=[], visible={parent.id, child.id})
+        == 1
+    )
+    edge = _edges(db_session, space.id)[0]
+    assert edge.status == "proposed"
+    stale_hash = edge.evidence_hash
+
+    _confirm_fact(db_session, "biological_parent", parent.id, child.id, space.id)
+    db_session.commit()
+    superseded = steward_inferred.supersede_evidence_changed(
+        db_session, space.id, edge_ids=[edge.id]
+    )
+    assert superseded == 1
+    db_session.commit()
+    db_session.refresh(edge)
+    assert edge.status == "superseded"
+    assert edge.evidence_hash == stale_hash  # 证据未变，仍退役
+
+    # 展示消费不再包含该边
+    assert steward_inferred.active_edges(db_session, space.id, exclude_conflicted=True) == []
+    # 维护枚举仍能看到活跃状态（此处已终态，故为空），确保退役路径可达
+    assert steward_inferred.active_edges(db_session, space.id) == []
+
+
+def test_conflicting_edge_confirm_is_rejected(db_session, monkeypatch) -> None:
+    """与已确认亲子冲突的推测边不得被确认转正为关系事实。"""
+    from fastapi import HTTPException
+
+    _platform_on(monkeypatch)
+    account, space = create_agent_fixture(db_session, name="inf-reject")
+    _space_flag_on(db_session, space.id)
+    parent = _member(db_session, space, "inf-reject-p", "m")
+    child = _member(db_session, space, "inf-reject-c", "f")
+    job = _make_job(db_session, space)
+    _candidate(db_session, job, kind="direct_sibling", subject_id=parent.id, object_id=child.id)
+    assert (
+        steward_inferred.project_for_job(db_session, job, facts=[], visible={parent.id, child.id})
+        == 1
+    )
+    edge = _edges(db_session, space.id)[0]
+    _confirm_fact(db_session, "biological_parent", parent.id, child.id, space.id)
+    db_session.commit()
+    facts_before = list(db_session.scalars(select(SourceFact)).all())
+
+    with pytest.raises(HTTPException) as excinfo:
+        steward_inferred.confirm_edge(
+            db_session,
+            _ctx(account),
+            account=account.account,
+            space_id=space.id,
+            edge_id=edge.id,
+            expected_revision=edge.revision,
+        )
+    assert excinfo.value.status_code == 409
+    db_session.rollback()
+    assert len(list(db_session.scalars(select(SourceFact)).all())) == len(facts_before)
