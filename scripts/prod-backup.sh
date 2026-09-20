@@ -16,6 +16,20 @@ ENV_FILE="$HOME/.config/familygraph/familygraph-prod.env"
 RETENTION_DAYS=30
 LOG_TAG="[familygraph-prod-backup]"
 
+# systemd **user** manager 可能启动于用户加入 docker 组之前（本机就是：user
+# manager 自 2026-07-27 常驻，而 docker 组在那之后才生效），其派生的单元环境
+# 不含 docker 组，docker CLI 会报 permission denied。检测到不可用时用 sg 在
+# docker 组下重新执行自身；FG_PROD_BACKUP_REEXEC 保证只发生一次。手工运行
+# （shell 已在 docker 组）不会走这条路径。
+if ! docker ps -q >/dev/null 2>&1; then
+    if [ "${FG_PROD_BACKUP_REEXEC:-}" != "1" ] && command -v sg >/dev/null 2>&1; then
+        export FG_PROD_BACKUP_REEXEC=1
+        exec sg docker -c "$(printf '%q ' "$0" "$@")"
+    fi
+    echo "$LOG_TAG 无法访问 docker（需要当前用户在 docker 组内）" >&2
+    exit 1
+fi
+
 compose() {
     docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" \
         -f "$REPO_ROOT/docker-compose.yml" \
