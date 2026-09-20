@@ -1,8 +1,9 @@
 """m2c 加入申请、断连即时降级与幂等（architecture §4 [AD-4]）。
 
-09-19 起 join-by-user 是受限准入：申请人须与目标同属至少一个 active 家族空间
-（lineage），且 household pending 行只能由被申请的 target 本人批准——申请人
-本人不得自批。家庭空间成员资格不等于家族空间成员资格。
+09-20 起 join-by-user 是家族空间限定的受限准入：申请人须与目标同属该 active
+家族空间，目标空间只能是对方在该家族空间下的家庭空间（不再回退 owner 解析）；
+household pending 行由该空间管理员批准——申请人本人不得自批。家庭空间成员资格
+不等于家族空间成员资格。
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def _elder_relation(session, *, elder_id: int, younger_id: int) -> None:
 
 
 def _lineage_space(session, *users):
-    """共同家族空间：join 准入只要求双方同属一个 active lineage。"""
+    """共同家族空间：join 准入要求双方同属该 active lineage（09-20 家族限定）。"""
     from app.models.space import FamilySpace
     from app.utils.timeutil import utcnow
 
@@ -86,19 +87,26 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     ha = _login(client, "阿甲", "111111")
     hb = _login(client, "阿乙", "222222")
 
-    # 乙建空间（owner 即 active space_admin）
-    created = client.post("/api/spaces", json={"name": "乙家"}, headers=hb)
+    # 乙建空间（owner 即 active space_admin），并配对到共同家族空间
+    lineage = _lineage_space(db_session, a, b)
+    created = client.post(
+        "/api/spaces",
+        json={"name": "乙家", "lineage_space_id": lineage.id},
+        headers=hb,
+    )
     assert created.status_code == 201, created.text
     space_id = created.json()["id"]
+    db_session.commit()
 
-    # 甲与乙同属一个 lineage → 可申请
-    r1 = client.post("/api/spaces/join-by-user", json={"target_user_id": b.id}, headers=ha)
+    # 甲与乙同属该家族空间 → 可申请（限定在该家族空间范围内）
+    payload = {"lineage_space_id": lineage.id, "target_user_id": b.id}
+    r1 = client.post("/api/spaces/join-by-user", json=payload, headers=ha)
     assert r1.status_code == 201, r1.text
     assert r1.json()["status"] == "pending"
     assert r1.json()["space_id"] == space_id
 
     # 幂等：重复 join 返回既有 pending 行（不新增）
-    r2 = client.post("/api/spaces/join-by-user", json={"target_user_id": b.id}, headers=ha)
+    r2 = client.post("/api/spaces/join-by-user", json=payload, headers=ha)
     assert r2.status_code == 201
     assert r2.json()["id"] == r1.json()["id"]
     assert (
@@ -140,9 +148,12 @@ def test_join_requires_shared_lineage(db_session, client: TestClient) -> None:
     owner.created_by = outsider.id
     db_session.commit()
 
+    # 申请人在该家族空间里，但目标不在 → 同族门禁拒绝（不落 pending）
+    lineage = _lineage_space(db_session, outsider)
+    db_session.commit()
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"target_user_id": owner.id},
+        json={"lineage_space_id": lineage.id, "target_user_id": owner.id},
         headers=_login(client, "准入外人", "444444"),
     )
     assert resp.status_code == 403, resp.text
@@ -177,15 +188,17 @@ def test_join_target_space_resolved_from_manager_not_any_membership(
     _elder_relation(db_session, elder_id=plain.id, younger_id=joiner.id)
     db_session.commit()
 
-    # 以普通成员身份作为「其空间」的解析输入：plain 不是任何空间的管理者，
-    # 故必须 409，而不是落到 owner 的 space（旧代码的 active_ids[0] 回退）。
+    # 09-20：空间解析不再看 owner，只看「对方在该家族空间下是否有家庭空间」。
+    # plain 在该家族空间下没有家庭空间 → 409（旧代码的 owner 回退已移除）。
+    lineage = _lineage_space(db_session, owner, joiner)
+    db_session.commit()
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"target_user_id": plain.id},
+        json={"lineage_space_id": lineage.id, "target_user_id": plain.id},
         headers=_login(client, "解析申请者", "777777"),
     )
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["error"]["code"] == "SPACE_JOIN_NO_TARGET_SPACE"
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["error"]["code"] == "SPACE_JOIN_NO_RELATION"
 
 
 def test_join_invisible_target_404(db_session, client: TestClient):
@@ -197,7 +210,11 @@ def test_join_invisible_target_404(db_session, client: TestClient):
     target_id = db_session.execute(
         __import__("sqlalchemy").text("SELECT id FROM users WHERE name='隐士'")
     ).scalar()
-    r = client.post("/api/spaces/join-by-user", json={"target_user_id": target_id}, headers=hs)
+    r = client.post(
+        "/api/spaces/join-by-user",
+        json={"lineage_space_id": 1, "target_user_id": target_id},
+        headers=hs,
+    )
     assert r.status_code == 404
 
 

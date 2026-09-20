@@ -517,15 +517,30 @@ export interface FamilySpace {
 }
 
 /**
- * 个人公示页邀请选择项（`GET /spaces/household-invite-options`）。
+ * 家族空间下的一个家庭空间 + 指定一方在该空间的状态（`GET /spaces/family-space-options`）。
  *
- * `target_status` 三态：active 已是成员 / pending 已有待处理邀请 / none 可邀请
- * （终态 rejected|withdrawn|removed 归入 none，可再次邀请）。
+ * `status` 三态：active 已是成员 / pending 已有待处理申请或邀请 / none 可操作
+ * （终态 rejected|withdrawn|removed 归入 none，可再次邀请/申请）。
  */
-export interface HouseholdInviteOption {
+export interface FamilySpaceOption {
   space_id: number
   space_name: string
-  target_status: 'active' | 'pending' | 'none'
+  status: 'active' | 'pending' | 'none'
+}
+
+/**
+ * 个人公示页在当前家族空间下的双向选择（`GET /spaces/family-space-options`）。
+ *
+ * `shares_lineage=false` 表示双方不同族：两个方向都不可用，只能走邀请码途径。
+ */
+export interface FamilySpaceOptions {
+  lineage_space_id: number
+  lineage_space_name: string
+  shares_lineage: boolean
+  /** 我在该家族空间下的家庭空间 + 目标在各自空间的状态（邀请方向） */
+  invite: FamilySpaceOption[]
+  /** 对方在该家族空间下的家庭空间 + 我在各自空间的状态（申请方向） */
+  join: FamilySpaceOption[]
 }
 
 export interface SpaceMemberInfo {

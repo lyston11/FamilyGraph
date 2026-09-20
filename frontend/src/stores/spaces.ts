@@ -15,7 +15,9 @@ import {
   fetchSpaceMembers,
   fetchSpaceProfileRefs,
   fetchSpaces,
+  inviteIntoFamilyHousehold,
   inviteToSpace as inviteToSpaceRequest,
+  joinByUser as joinByUserRequest,
   removeOrWithdrawMembership,
   requestLineageAccess,
   resolveMembership,
@@ -250,13 +252,29 @@ export const useSpacesStore = defineStore('spaces', {
       await this.load()
     },
     /**
-     * 邀请指定成员加入**指定**家庭空间（个人公示页入口）。
+     * 邀请指定成员加入**指定**家庭空间（空间治理面板入口）。
      *
-     * 不复用只作用于 currentSpace 的 `invite`：公示页选中的空间不一定是当前
-     * 上下文空间；授权仍由服务端按所选空间复核。只产生 pending。
+     * 不复用只作用于 currentSpace 的 `invite`：调用方可能显式指定空间；授权仍由
+     * 服务端按所选空间复核。只产生 pending。
      */
     async inviteToSpace(spaceId: number, userId: number) {
       return inviteToSpaceRequest(spaceId, userId)
+    },
+    /**
+     * 在当前家族空间范围内邀请对方加入我的家庭空间（个人公示页入口）。
+     *
+     * 服务端复核双方同族与该空间归属；只产生 pending。
+     */
+    async inviteIntoFamilyHousehold(lineageSpaceId: number, spaceId: number, userId: number) {
+      return inviteIntoFamilyHousehold(lineageSpaceId, spaceId, userId)
+    },
+    /**
+     * 申请加入对方在当前家族空间下的家庭空间（个人公示页入口）。
+     *
+     * 只产生 pending，由该家庭空间管理员批准。
+     */
+    async requestJoinInFamily(lineageSpaceId: number, targetUserId: number, spaceId?: number) {
+      return joinByUserRequest(lineageSpaceId, targetUserId, spaceId)
     },
     /** 发起 owner 移交（仅 owner；后端校验目标为活跃成员，FSM 同空间至多一个 pending） */
     async initiateTransfer(toUserId: number) {

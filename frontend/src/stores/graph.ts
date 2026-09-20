@@ -91,9 +91,13 @@ export const useGraphStore = defineStore('graph', {
       await revokeRelation(edgeId)
       await this.loadGraph(undefined, 1, this.spaceId)
     },
-    /** 家族视图摘要卡：申请进入对方家庭空间（m2c 端点） */
-    async requestJoin(targetUserId: number) {
-      await joinByUser(targetUserId)
+    /**
+     * 申请加入对方在当前家族空间下的家庭空间（m2c 端点）。
+     *
+     * 家族空间限定（09-20）：调用方必须提供当前家族空间 id。
+     */
+    async requestJoin(lineageSpaceId: number, targetUserId: number, spaceId?: number) {
+      await joinByUser(lineageSpaceId, targetUserId, spaceId)
     },
     clear() {
       this.requestSequence += 1

@@ -49,17 +49,32 @@ class SpaceOut(BaseModel):
     my_member_id: int | None = None
 
 
-class HouseholdInviteOptionOut(BaseModel):
-    """个人公示页邀请选择项：我的一个家庭空间 + 目标在该空间的状态。
+class FamilySpaceOptionOut(BaseModel):
+    """家族空间下的一个家庭空间 + 指定一方在该空间的状态。
 
-    ``target_status`` 只区分三态：``active`` 已是成员、``pending`` 已有待处理
+    ``status`` 只区分三态：``active`` 已是成员、``pending`` 已有待处理申请/
     邀请、其余（含 rejected/withdrawn/removed）一律 ``none``——终态行可以再次
-    邀请，与 space_fsm.invite 的复活语义一致。
+    邀请/申请，与 space_fsm.invite 的复活语义一致。
     """
 
     space_id: int
     space_name: str
-    target_status: Literal["active", "pending", "none"]
+    status: Literal["active", "pending", "none"]
+
+
+class FamilySpaceOptionsOut(BaseModel):
+    """个人公示页在当前家族空间下的双向选择（只读投影）。
+
+    - ``shares_lineage=false``：双方不同族，两个方向都不可用（走邀请码途径）；
+    - ``invite``：我在该家族空间下的家庭空间 + 目标在各自空间的状态；
+    - ``join``：对方在该家族空间下的家庭空间 + 我在各自空间的状态。
+    """
+
+    lineage_space_id: int
+    lineage_space_name: str
+    shares_lineage: bool
+    invite: list[FamilySpaceOptionOut]
+    join: list[FamilySpaceOptionOut]
 
 
 class SpaceMemberOut(BaseModel):

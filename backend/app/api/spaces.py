@@ -27,7 +27,7 @@ from app.schemas.space import (
     DuplicatePeopleMergeOut,
     DuplicatePeopleMergeRequest,
     EligibleManagerTarget,
-    HouseholdInviteOptionOut,
+    FamilySpaceOptionsOut,
     ManagerApplicationCreate,
     ManagerApplicationOut,
     ManagerTransferConsentDecision,
@@ -400,30 +400,68 @@ def join_by_user(
     actor, account = identity
     ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
     member = space_commands.request_join_by_user(
-        session, ctx, target_user_id=payload.target_user_id
+        session,
+        ctx,
+        lineage_space_id=payload.lineage_space_id,
+        target_user_id=payload.target_user_id,
+        space_id=payload.space_id,
     )
     session.refresh(member)
     return _member_out_with_name(session, member)
 
 
 class JoinByUserPayload(BaseModel):
+    """申请加入对方的家庭空间（限定在当前家族空间范围内）。"""
+
+    lineage_space_id: int = Field(gt=0)
     target_user_id: int = Field(gt=0)
+    space_id: int | None = Field(default=None, gt=0)
 
 
-@router.get("/spaces/household-invite-options", response_model=list[HouseholdInviteOptionOut])
-def household_invite_options(
+@router.get("/spaces/family-space-options", response_model=FamilySpaceOptionsOut)
+def family_space_options(
+    lineage_space_id: int = Query(gt=0),
     target_user_id: int = Query(gt=0),
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
-) -> list[HouseholdInviteOptionOut]:
-    """个人公示页邀请选择：我的家庭空间 + 目标在各自空间的状态（只读）。
+) -> FamilySpaceOptionsOut:
+    """当前家族空间下的双向加入选择：邀请（我的家庭空间）与申请（对方的家庭空间）。
 
-    只返回我 active 成员资格的家庭空间；目标不可见时与不可见用户同一 404。
+    双方必须同属该家族空间；不同族时两个方向都为空（走邀请码途径）。
     """
     actor, account = identity
     ctx = ActorContext.from_identity(actor, account)
-    options = space_commands.household_invite_options(session, ctx, target_user_id=target_user_id)
-    return [HouseholdInviteOptionOut(**option) for option in options]
+    options = space_commands.family_space_options(
+        session, ctx, lineage_space_id=lineage_space_id, target_user_id=target_user_id
+    )
+    return FamilySpaceOptionsOut(**options)
+
+
+class FamilyInvitationPayload(BaseModel):
+    lineage_space_id: int = Field(gt=0)
+    space_id: int = Field(gt=0)
+    user_id: int = Field(gt=0)
+
+
+@router.post("/spaces/family-invitations", status_code=201, response_model=SpaceMemberOut)
+def invite_into_family_household(
+    payload: FamilyInvitationPayload,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SpaceMemberOut:
+    """在当前家族空间范围内邀请对方加入我的家庭空间（只产生 pending）。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    member, _created = space_commands.invite_into_family_household(
+        session,
+        ctx,
+        lineage_space_id=payload.lineage_space_id,
+        space_id=payload.space_id,
+        user_id=payload.user_id,
+    )
+    session.refresh(member)
+    return _member_out_with_name(session, member)
 
 
 class LineageAccessRequestPayload(BaseModel):

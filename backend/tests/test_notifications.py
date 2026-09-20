@@ -163,7 +163,7 @@ def test_join_request_notification_to_target(client, db_session) -> None:
     requester = create_user_with_pin(db_session, "nt-joiner", "123456")
     # join-by-user 要求申请人对目标用户可见：代管创建者链接（custodian）提供可见性。
     manager.created_by = requester.id
-    # 09-19 准入边界：另需与目标同属一个 active 家族空间（lineage）。
+    # 09-20 准入边界：双方须同属该 active 家族空间，且目标的空间配对到该家族空间。
     from app.models.space import FamilySpace
     from app.utils.timeutil import utcnow
 
@@ -174,11 +174,12 @@ def test_join_request_notification_to_target(client, db_session) -> None:
     db_session.flush()
     create_space_member(db_session, lineage.id, manager.id, role="space_admin")
     create_space_member(db_session, lineage.id, requester.id)
+    space.lineage_space_id = lineage.id
     db_session.commit()
 
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"target_user_id": manager.id},
+        json={"lineage_space_id": lineage.id, "target_user_id": manager.id},
         headers=_login_header(client, "nt-joiner"),
     )
     assert resp.status_code == 201, resp.text

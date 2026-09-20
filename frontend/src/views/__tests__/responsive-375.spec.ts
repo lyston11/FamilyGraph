@@ -4,7 +4,7 @@ import memoryManagerSource from '@/components/memory/MemoryManager.vue?raw'
 import dataRightsSource from '@/components/member/DataRightsPanel.vue?raw'
 import disclosureSource from '@/components/member/DisclosureMatrix.vue?raw'
 import governanceSource from '@/components/member/SpaceGovernancePanel.vue?raw'
-import householdInviteSource from '@/components/member/InviteToHouseholdDialog.vue?raw'
+import familySpaceJoinSource from '@/components/member/FamilySpaceJoinDialog.vue?raw'
 import attachmentsSource from '@/components/member/AttachmentsSection.vue?raw'
 import memoryViewSource from '@/views/MemoryView.vue?raw'
 import notificationsSource from '@/views/NotificationsView.vue?raw'
@@ -28,7 +28,7 @@ const ALL_SOURCES = [
   ['member/DataRightsPanel.vue', dataRightsSource],
   ['member/DisclosureMatrix.vue', disclosureSource],
   ['member/SpaceGovernancePanel.vue', governanceSource],
-  ['member/InviteToHouseholdDialog.vue', householdInviteSource],
+  ['member/FamilySpaceJoinDialog.vue', familySpaceJoinSource],
   ['member/AttachmentsSection.vue', attachmentsSource],
   ['views/MemoryView.vue', memoryViewSource],
   ['views/NotificationsView.vue', notificationsSource],

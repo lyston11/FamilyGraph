@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 from app.commands.context import ActorContext, command_transaction, load_actor
 from app.errors import (
     SPACE_FORBIDDEN_ACTOR,
+    SPACE_JOIN_NO_RELATION,
     SPACE_LINEAGE_ACCESS_UNAVAILABLE,
     SPACE_NOT_FOUND,
     USER_NOT_FOUND,
@@ -338,90 +339,58 @@ def request_join_by_user(
     session: Session,
     ctx: ActorContext,
     *,
+    lineage_space_id: int,
     target_user_id: int,
+    space_id: int | None = None,
 ) -> SpaceMember:
-    """向目标本人 household 提交 pending 加入申请。
+    """在当前家族空间范围内申请加入对方的家庭空间（pending）。
 
-    household membership 与配对 lineage 完全分离：申请只产生目标 household 的
-    pending 行，由 target 本人批准；批准后申请人仍需另行提交 lineage 申请，不能
-    因 household membership 读取对方家族树。
+    家族空间限定（09-20 收紧）：
+    - 双方必须是该家族空间的 active 成员（同族）；不同族只能走邀请码途径；
+    - 目标空间只能是**对方**在该家族空间下的家庭空间（`lineage_space_id` 配对），
+      不再回退到「target 任意 owned household」的跨族解析；
+    - 只产生 pending，由该家庭空间管理员批准（`added_by == user_id` 时申请人不得自批）；
+      household membership 不等于 lineage membership，不因此获得家族树读取权。
     """
-    from app.errors import SPACE_JOIN_NO_RELATION, SPACE_JOIN_NO_TARGET_SPACE
+    from app.errors import SPACE_JOIN_NO_TARGET_SPACE
     from app.services import visibility
 
     actor = load_actor(session, ctx)
     with command_transaction(session):
+        lineage = _space_or_404(session, lineage_space_id)
+        if lineage.kind != "lineage" or not space_fsm.is_active_member(
+            session, lineage.id, actor.id
+        ):
+            raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
         target = session.get(User, target_user_id)
         if target is None or not visibility.evaluate(session, actor, target).visible:
             raise_api_error(404, USER_NOT_FOUND, "对方不存在或不可见")
+        if not space_fsm.is_active_member(session, lineage.id, target.id):
+            raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该账号不在同一个家族空间")
 
-        memberships = session.query(SpaceMember).filter(SpaceMember.user_id == target.id).all()
-        active_ids = [m.space_id for m in memberships if space_fsm.effective_status(m) == "active"]
-        primary_space_id: int | None = None
-        if active_ids:
-            # owner 优先，其次 target 任管理员的 space_admin 空间；order_by 保证
-            # 同一 target 的解析结果确定。
-            owned = (
-                session.query(FamilySpace)
-                .filter(
-                    FamilySpace.owner_id == target.id,
+        candidate_ids = list(
+            session.scalars(
+                select(FamilySpace.id)
+                .where(
                     FamilySpace.kind == "household",
-                    FamilySpace.id.in_(active_ids),
+                    FamilySpace.lineage_space_id == lineage.id,
+                    FamilySpace.id.in_(
+                        select(SpaceMember.space_id).where(
+                            SpaceMember.user_id == target.id,
+                            SpaceMember.status == "active",
+                        )
+                    ),
                 )
                 .order_by(FamilySpace.id)
-                .first()
             )
-            if owned is not None:
-                primary_space_id = owned.id
-            else:
-                managed = (
-                    session.query(FamilySpace)
-                    .join(SpaceMember, SpaceMember.space_id == FamilySpace.id)
-                    .filter(
-                        SpaceMember.user_id == target.id,
-                        SpaceMember.role == "space_admin",
-                        SpaceMember.status == "active",
-                        FamilySpace.kind == "household",
-                        FamilySpace.id.in_(active_ids),
-                    )
-                    .order_by(FamilySpace.id)
-                    .first()
-                )
-                primary_space_id = managed.id if managed is not None else None
-        if primary_space_id is None:
-            raise_api_error(409, SPACE_JOIN_NO_TARGET_SPACE, "对方尚未建立家庭空间")
+        )
+        if not candidate_ids:
+            raise_api_error(409, SPACE_JOIN_NO_TARGET_SPACE, "对方在当前家族空间下还没有家庭空间")
+        chosen_id = space_id if space_id is not None else candidate_ids[0]
+        if chosen_id not in candidate_ids:
+            raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "该家庭空间不属于当前家族空间")
+        space = _space_or_404(session, chosen_id)
 
-        space = _space_or_404(session, primary_space_id)
-        if space.kind != "household":
-            raise_api_error(409, SPACE_JOIN_NO_TARGET_SPACE, "对方尚未建立家庭空间")
-        # 准入边界：只有与目标同属至少一个 active 家族空间（lineage）的用户才能
-        # 自行申请加入对方的家庭空间。同 lineage 可见性只是提交 pending 的资格，
-        # 不授予任何家族树读取权；批准与否由 target 本人决定。
-        lineage_ids = set(
-            session.scalars(
-                select(SpaceMember.space_id)
-                .join(FamilySpace, FamilySpace.id == SpaceMember.space_id)
-                .where(
-                    SpaceMember.user_id == actor.id,
-                    SpaceMember.status == "active",
-                    FamilySpace.kind == "lineage",
-                )
-            ).all()
-        )
-        shares_lineage = bool(lineage_ids) and (
-            session.scalar(
-                select(SpaceMember.id)
-                .where(
-                    SpaceMember.user_id == target.id,
-                    SpaceMember.status == "active",
-                    SpaceMember.space_id.in_(lineage_ids),
-                )
-                .limit(1)
-            )
-            is not None
-        )
-        if not shares_lineage:
-            raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该账号不在同一个家族空间")
         member, created = space_fsm.invite(
             session, space=space, user_id=actor.id, added_by=actor.id
         )
@@ -441,7 +410,7 @@ def request_join_by_user(
                 actor_id=actor.id,
                 target_id=target.id,
                 ip=ctx.ip,
-                detail={"space_id": space.id},
+                detail={"space_id": space.id, "lineage_space_id": lineage.id},
             )
     return member
 
@@ -699,61 +668,154 @@ def request_lineage_access(
     return member, event.id
 
 
-def household_invite_options(
-    session: Session, ctx: ActorContext, *, target_user_id: int
-) -> list[dict[str, Any]]:
-    """个人公示页邀请选择：我的家庭空间 + 目标在各自空间的状态（只读）。
+def family_space_options(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    lineage_space_id: int,
+    target_user_id: int,
+) -> dict[str, Any]:
+    """当前家族空间下的双向加入选择（只读投影）。
 
-    - 只返回调用者为 active 成员、且 ``kind='household'`` 的空间；按空间 id 稳定排序；
-    - 目标必须对调用者可见（否则 404，与 join-by-user / lineage-access-requests
-      同形状，不把本端点变成存在性探针）；
+    - 调用者必须是该家族空间的 active 成员；否则与「空间不存在」同一 404；
+    - 目标必须对调用者可见，否则同一 404（不做存在性探针）；
+    - ``invite``：我在该家族空间下的家庭空间 + 目标在各自空间的状态；
+    - ``join``：对方在该家族空间下的家庭空间 + 我在各自空间的状态；
+    - 双方不同族时两个列表都为空（`shares_lineage=false`），由前端引导走邀请码；
     - 只读：不写库、不产生通知、不创建 pending 行。
     """
     from app.services import visibility
 
     actor = load_actor(session, ctx)
+    lineage = _space_or_404(session, lineage_space_id)
+    if lineage.kind != "lineage" or not space_fsm.is_active_member(session, lineage.id, actor.id):
+        raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
     target = session.get(User, target_user_id)
     if target is None or not visibility.evaluate(session, actor, target).visible:
         raise_api_error(404, USER_NOT_FOUND, "对方不存在或不可见")
 
-    space_ids = list(
-        session.scalars(
-            select(SpaceMember.space_id)
-            .join(FamilySpace, FamilySpace.id == SpaceMember.space_id)
-            .where(
-                SpaceMember.user_id == actor.id,
-                SpaceMember.status == "active",
-                FamilySpace.kind == "household",
-            )
-            .order_by(SpaceMember.space_id)
-        )
-    )
-    if not space_ids:
-        return []
-
-    names: dict[int, str] = {
-        space_id: name
-        for space_id, name in session.execute(
-            select(FamilySpace.id, FamilySpace.name).where(FamilySpace.id.in_(space_ids))
-        ).all()
+    shares_lineage = space_fsm.is_active_member(session, lineage.id, target.id)
+    options: dict[str, Any] = {
+        "lineage_space_id": lineage.id,
+        "lineage_space_name": lineage.name,
+        "shares_lineage": shares_lineage,
+        "invite": [],
+        "join": [],
     }
-    target_rows = session.execute(
-        select(SpaceMember.space_id, SpaceMember.status).where(
-            SpaceMember.user_id == target.id, SpaceMember.space_id.in_(space_ids)
-        )
-    ).all()
-    target_status: dict[int, str] = {space_id: status for space_id, status in target_rows}
-    options: list[dict[str, Any]] = []
-    for space_id in space_ids:
-        status = target_status.get(space_id)
-        options.append(
-            {
-                "space_id": space_id,
-                "space_name": names.get(space_id, ""),
-                "target_status": status if status in ("active", "pending") else "none",
-            }
-        )
+    if not shares_lineage:
+        return options
+
+    def _households_of(user_id: int) -> list[tuple[int, str]]:
+        return [
+            (space_id, name)
+            for space_id, name in session.execute(
+                select(FamilySpace.id, FamilySpace.name)
+                .where(
+                    FamilySpace.kind == "household",
+                    FamilySpace.lineage_space_id == lineage.id,
+                    FamilySpace.id.in_(
+                        select(SpaceMember.space_id).where(
+                            SpaceMember.user_id == user_id,
+                            SpaceMember.status == "active",
+                        )
+                    ),
+                )
+                .order_by(FamilySpace.id)
+            ).all()
+        ]
+
+    def _status_map(user_id: int, space_ids: list[int]) -> dict[int, str]:
+        if not space_ids:
+            return {}
+        return {
+            space_id: status
+            for space_id, status in session.execute(
+                select(SpaceMember.space_id, SpaceMember.status).where(
+                    SpaceMember.user_id == user_id, SpaceMember.space_id.in_(space_ids)
+                )
+            ).all()
+        }
+
+    mine = _households_of(actor.id)
+    theirs = _households_of(target.id)
+    target_status = _status_map(target.id, [space_id for space_id, _ in mine])
+    my_status = _status_map(actor.id, [space_id for space_id, _ in theirs])
+
+    def _normalized(status: str | None) -> str:
+        return status if status in ("active", "pending") else "none"
+
+    options["invite"] = [
+        {
+            "space_id": space_id,
+            "space_name": name,
+            "status": _normalized(target_status.get(space_id)),
+        }
+        for space_id, name in mine
+    ]
+    options["join"] = [
+        {"space_id": space_id, "space_name": name, "status": _normalized(my_status.get(space_id))}
+        for space_id, name in theirs
+    ]
     return options
+
+
+def invite_into_family_household(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    lineage_space_id: int,
+    space_id: int,
+    user_id: int,
+) -> tuple[SpaceMember, bool]:
+    """在当前家族空间范围内邀请对方加入我的家庭空间。
+
+    与空间治理面板的 ``invite_member`` 的区别只在于准入：本命令要求
+    - 调用者与受邀人同属该家族空间；
+    - 目标空间是**调用者**在该家族空间下的家庭空间。
+    仍然只产生 pending（受邀人本人接受后才 active）。
+    """
+    actor = load_actor(session, ctx)
+    with command_transaction(session):
+        lineage = _space_or_404(session, lineage_space_id)
+        if lineage.kind != "lineage" or not space_fsm.is_active_member(
+            session, lineage.id, actor.id
+        ):
+            raise_api_error(404, SPACE_NOT_FOUND, "家庭空间不存在")
+        target = session.get(User, user_id)
+        if target is None:
+            raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
+        if not space_fsm.is_active_member(session, lineage.id, target.id):
+            raise_api_error(403, SPACE_JOIN_NO_RELATION, "你与该账号不在同一个家族空间")
+        space = _space_or_404(session, space_id)
+        if (
+            space.kind != "household"
+            or space.lineage_space_id != lineage.id
+            or not space_fsm.is_active_member(session, space.id, actor.id)
+        ):
+            raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "该家庭空间不属于当前家族空间")
+
+        member, created = space_fsm.invite(
+            session, space=space, user_id=target.id, added_by=actor.id
+        )
+        if created:
+            emit(
+                session,
+                event_type="space.membership.changed",
+                aggregate_type="space",
+                aggregate_id=space.id,
+                payload={"action": "invited", "user_id": target.id, "by": actor.id},
+                space_id=space.id,
+                actor_account_id=ctx.account_id,
+            )
+            audit.write_audit(
+                session,
+                action="space_invite_sent",
+                actor_id=actor.id,
+                target_id=target.id,
+                ip=ctx.ip,
+                detail={"space_id": space.id, "lineage_space_id": lineage.id},
+            )
+    return member, created
 
 
 def save_positions(

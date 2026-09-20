@@ -589,23 +589,43 @@ def run_cases(suite: Suite, family: str, admin: str, data_dir: Path) -> None:
         )
     )
 
-    # 公示页邀请选择：只读聚合，返回我的家庭空间 + 目标状态（此处以本人为可见目标）
-    started = time.monotonic()
-    resp = client.get(
-        f"{family}/api/spaces/household-invite-options",
-        params={"target_user_id": family_user_id},
-        headers=fam_headers,
+    # 公示页双向加入选择：家族空间限定，返回邀请/申请两组（以本人为可见目标）
+    lineage_space_id = next(
+        (
+            s.get("id")
+            for s in spaces
+            if isinstance(s, dict) and s.get("kind") == "lineage"
+        ),
+        None,
     )
-    record(
-        suite,
-        "family-household-invite-options",
-        "family",
-        "GET",
-        "/spaces/household-invite-options",
-        resp,
-        started,
-        200,
-    )
+    if lineage_space_id is None:
+        suite.add(
+            Result(
+                "family-family-space-options",
+                "family",
+                "GET",
+                "/spaces/family-space-options",
+                note="no lineage space",
+                passed=False,
+            )
+        )
+    else:
+        started = time.monotonic()
+        resp = client.get(
+            f"{family}/api/spaces/family-space-options",
+            params={"lineage_space_id": lineage_space_id, "target_user_id": family_user_id},
+            headers=fam_headers,
+        )
+        record(
+            suite,
+            "family-family-space-options",
+            "family",
+            "GET",
+            "/spaces/family-space-options",
+            resp,
+            started,
+            200,
+        )
 
     started = time.monotonic()
     resp = client.get(

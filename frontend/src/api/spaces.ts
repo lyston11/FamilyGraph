@@ -1,7 +1,7 @@
 import type {
   EligibleManagerTarget,
   FamilySpace,
-  HouseholdInviteOption,
+  FamilySpaceOptions,
   ManagerApplicationStatus,
   ManagerRequestKind,
   ManagerTransferConsent,
@@ -138,17 +138,36 @@ export async function inviteToSpace(spaceId: number, userId: number): Promise<Sp
 }
 
 /**
- * 个人公示页邀请选择：我的家庭空间 + 目标在各自空间的状态（只读）。
+ * 个人公示页在当前家族空间下的双向选择（只读）。
  *
- * 只返回我 active 成员资格的家庭空间；目标不可见时服务端 404。
+ * 返回「我在该家族空间下的家庭空间（邀请方向）」与「对方在该家族空间下的家庭
+ * 空间（申请方向）」及各自状态；双方不同族时两列表为空（走邀请码途径）。
  */
-export async function fetchHouseholdInviteOptions(
+export async function fetchFamilySpaceOptions(
+  lineageSpaceId: number,
   targetUserId: number,
-): Promise<HouseholdInviteOption[]> {
-  const { data } = await apiClient.get<HouseholdInviteOption[]>(
-    '/spaces/household-invite-options',
-    { params: { target_user_id: targetUserId } },
-  )
+): Promise<FamilySpaceOptions> {
+  const { data } = await apiClient.get<FamilySpaceOptions>('/spaces/family-space-options', {
+    params: { lineage_space_id: lineageSpaceId, target_user_id: targetUserId },
+  })
+  return data
+}
+
+/**
+ * 在当前家族空间范围内邀请对方加入我的家庭空间（只产生 pending）。
+ *
+ * 服务端复核：双方同族 + 该空间是我在该家族空间下的家庭空间。
+ */
+export async function inviteIntoFamilyHousehold(
+  lineageSpaceId: number,
+  spaceId: number,
+  userId: number,
+): Promise<SpaceMemberInfo> {
+  const { data } = await apiClient.post<SpaceMemberInfo>('/spaces/family-invitations', {
+    lineage_space_id: lineageSpaceId,
+    space_id: spaceId,
+    user_id: userId,
+  })
   return data
 }
 
@@ -168,9 +187,23 @@ export async function removeOrWithdrawMembership(memberId: number): Promise<void
   await apiClient.delete(`/space-memberships/${memberId}`)
 }
 
-/** 家族视图摘要卡：申请进入对方家庭空间（m2c；幂等） */
-export async function joinByUser(targetUserId: number): Promise<void> {
-  await apiClient.post('/spaces/join-by-user', { target_user_id: targetUserId })
+/**
+ * 申请加入对方在当前家族空间下的家庭空间（m2c；幂等）。
+ *
+ * 服务端复核：双方同族 + 该空间是对方在该家族空间下的家庭空间；只产生 pending，
+ * 由该家庭空间管理员批准。
+ */
+export async function joinByUser(
+  lineageSpaceId: number,
+  targetUserId: number,
+  spaceId?: number,
+): Promise<SpaceMemberInfo> {
+  const { data } = await apiClient.post<SpaceMemberInfo>('/spaces/join-by-user', {
+    lineage_space_id: lineageSpaceId,
+    target_user_id: targetUserId,
+    ...(spaceId === undefined ? {} : { space_id: spaceId }),
+  })
+  return data
 }
 
 /**

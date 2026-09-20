@@ -6,7 +6,7 @@ import { NAlert, NButton, NSpin } from 'naive-ui'
 import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 import { pathClassLabel } from '@/components/canvas/relationshipDisplay'
 import MaskedField from '@/components/common/MaskedField.vue'
-import InviteToHouseholdDialog from '@/components/member/InviteToHouseholdDialog.vue'
+import FamilySpaceJoinDialog from '@/components/member/FamilySpaceJoinDialog.vue'
 import KinshipTermPanel from '@/components/kinship/KinshipTermPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import { usePersonalFamilyViewPolling } from '@/composables/usePersonalFamilyViewPolling'
@@ -41,8 +41,10 @@ import type {
  *   撤权）与投影端点 403/404 → 统一「对方不可见或不存在」安全状态，不显示
  *   目标 ID、空间名、路径长度或任何隐藏占位/数量信息（防枚举探测）；
  * - 页面只读：不提供修改对方资料/建立关系/查看对方家庭/扩大权限的任何按钮；
- *   09-20 需求修订：新增「邀请 TA 加入我的家庭空间」入口（只产生 pending，需
- *   对方本人接受）；已有相关 ActionCard 时仍只提供「查看待办」跳转（→ /notifications）；
+ *   09-20 需求修订：新增「加入家庭空间」入口，限定在**当前家族空间**内双向——
+ *   邀请对方进入我在此家族下的家庭空间，或申请加入对方在此家族下的家庭空间；
+ *   两个方向都只产生 pending（邀请需对方接受，申请需该空间管理员批准）。
+ *   已有相关 ActionCard 时仍只提供「查看待办」跳转（→ /notifications）；
  *   Bridge pending 只在通知/待办处理，本页不渲染 approve/reject/consent/revoke
  *   等 Bridge 操作控件；
  * - 「返回家族树」只做路由导航（name family-space），保持同一 lineage 空间
@@ -153,8 +155,8 @@ async function ensureProfile(): Promise<void> {
     phase.value = 'unavailable'
     return
   }
-  const lineageSpaceId = spaceId.value
-  if (lineageSpaceId === null) {
+  const contextSpaceId = spaceId.value
+  if (contextSpaceId === null) {
     phase.value = 'unavailable'
     return
   }
@@ -320,22 +322,31 @@ function goNotifications(): void {
   void router.push({ name: 'notifications' })
 }
 
-// ---- 09-20：邀请目标加入我的家庭空间（只产生 pending） ----
+// ---- 09-20：家族空间内双向加入（邀请 / 申请；都只产生 pending） ----
 
-const inviteOpen = ref(false)
+const joinOpen = ref(false)
 
-/** 我的家庭空间（服务端 GET /spaces 真源；家族空间不是邀请目标）。 */
-const myHouseholdSpaces = computed(() =>
-  spaces.spaces.filter((space) => space.kind === 'household'),
+/**
+ * 当前上下文对应的家族空间 id。
+ *
+ * - 家族树上下文：当前空间本身就是该家族空间；
+ * - 家庭卡上下文：用该家庭空间配对的家族空间（`lineageForSpace`，显式配对优先）；
+ * - 解析不出（未配对/多义）→ null，不显示入口（不做本地猜测）。
+ */
+const lineageSpaceId = computed<number | null>(() => {
+  const current = spaces.currentSpace
+  if (current === null) return null
+  if (current.kind === 'lineage') return current.id
+  return spaces.lineageForSpace(current.id)?.id ?? null
+})
+
+/** 只在目标可见、且能确定当前家族空间时提供入口。 */
+const canJoinFamilySpace = computed(
+  () => profileNode.value !== null && lineageSpaceId.value !== null,
 )
 
-/** 只在目标可见、且我至少有一个家庭空间时提供入口。 */
-const canInviteToHousehold = computed(
-  () => profileNode.value !== null && myHouseholdSpaces.value.length > 0,
-)
-
-function openInvite(): void {
-  inviteOpen.value = true
+function openJoin(): void {
+  joinOpen.value = true
 }
 
 /**
@@ -490,14 +501,14 @@ async function retry(): Promise<void> {
         </template>
         <div class="relations-actions">
           <NButton
-            v-if="canInviteToHousehold"
+            v-if="canJoinFamilySpace"
             size="small"
             type="primary"
             secondary
-            data-test="profile-invite-to-household"
-            @click="openInvite"
+            data-test="profile-family-space-join"
+            @click="openJoin"
           >
-            邀请 TA 加入我的家庭空间
+            加入家庭空间
           </NButton>
           <NButton
             v-if="hasRelatedTodos"
@@ -513,10 +524,11 @@ async function retry(): Promise<void> {
     </template>
     </article>
 
-    <!-- 09-20：邀请目标加入我选择的家庭空间（只产生 pending，需对方本人接受） -->
-    <InviteToHouseholdDialog
-      v-if="profileNode !== null"
-      v-model:visible="inviteOpen"
+    <!-- 09-20：家族空间内双向加入（邀请/申请，都只产生 pending） -->
+    <FamilySpaceJoinDialog
+      v-if="profileNode !== null && lineageSpaceId !== null"
+      v-model:visible="joinOpen"
+      :lineage-space-id="lineageSpaceId"
       :target-user-id="profileNode.user_id"
       :target-name="profileNode.display.name"
     />
