@@ -100,6 +100,30 @@ household > 第一个 lineage）、`resolveStartupSpaceId`（先定家族，再�
 
 `spaces.loadMembers(spaceId)` 重校验同一空间时先发请求、成功后整体替换 `members`；在途期间保留旧成员关系，避免管理员入口因瞬时空数组闪断。失败必须保留旧投影并设置 `membersError`，调用方可展示失败态；路由守卫仍以本次请求结果 fail-closed。跨空间切换清空旧授权上下文，守卫刷新目标空间时传 `setCurrentSpace: false`，不得改写 `currentSpaceId`。
 
+### Convention: 待处理邀请跨空间加载（09-20 可达性修复）
+
+**What**：`stores/spaces.ts` 的 `invitations` / `loadInvitations()` / `resolveInvitation()` /
+`withdrawInvitation()` 是**空间无关**的：数据源是 `GET /spaces/invitations`（只含本人的
+pending 行，自带 `space_name`），**不**按 `currentSpaceId` 缓存，也不进 `notifications` store。
+入口是 `AppShell` 账号菜单的「收到的邀请」+ `invitationsAwaitingMe` 角标（该 getter 只算
+`direction='incoming' && stage='awaiting_me'`——等房主批准或我发起的申请都不是我的待办）。
+
+**Why**：pending 受邀人不是该空间 active 成员，读不到该空间的通知（安全 404），而通知中心
+按 `space_id` 单空间加载——把邀请塞进 `notifications` 会让它结构性不可达（这正是缺陷根因）。
+
+**规则**：
+- 壳层用 `watch(auth.isLoggedIn, ..., { immediate: true })` 拉一次邀请（与 `ensureDefaultSpace`
+  同一触发点，未登录零请求）；失败安静降级，不阻断壳层渲染。
+- `loadInvitations()` 必须做世代校验（同 `load()` 模式）：登出或切会话后的迟到响应不得回写。
+- `resolveInvitation()` 成功后重读邀请列表；接受时再 `load()` 让新空间进入「我的空间」。
+- 前端只把 `stage` 映射为按钮可点/禁用，**不作为授权边界**：真正的顺序拒绝（未获房主批准时
+  接受返回 403）仍由服务端 `space_fsm` 判定。
+- `clear()` 必须一并清空 `invitations` 与 `invitationsError`（敏感缓存清理红线）。
+
+**Tests**：`views/__tests__/invitations.spec.ts`（当前空间 ≠ 邀请空间时仍可见可操作、三态文案与
+禁用、接受/拒绝/撤回调用、对方不可见时中性占位、空态与失败分类）、
+`components/shell/__tests__/AppShell.spec.ts`（菜单入口与角标只算待我接受、无待办不显角标）。
+
 
 ## 管家建议投影在通知中心的接线（09-15 suggestion-loop / 09-16 auto-apply）
 

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "空间成员 FSM、审批链与加入准入合同（本任务修改其通知与投影部分）"}
+{"file": ".trellis/spec/architecture/6--6-visibility-py.md", "reason": "可见性层级与 purpose 上限：投影里的 counterpart_name 必须沿用同一口径"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "确认本任务无需迁移；核对 SQLite 约束与事务边界"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "通知中心与 store 的接线、缓存失效与跨空间加载约定"}
