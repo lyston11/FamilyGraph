@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "空间成员 FSM、邀请/审批与 join 准入合同"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "naive-ui 组件、token 与可访问性约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "空间键控 store、缓存清理与上下文合同"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "统一错误结构与防枚举"}

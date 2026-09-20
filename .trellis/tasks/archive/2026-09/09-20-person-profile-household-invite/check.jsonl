@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "核验邀请/退出授权边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与 API 合同 smoke"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "核验空间切换与缓存清理"}
