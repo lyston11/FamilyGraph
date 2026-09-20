@@ -1,0 +1,22 @@
+# 仓库根的 dockerignore：只影响以仓库根为构建上下文的镜像。
+#
+# 目前只有 system-admin-frontend 用它（src/styles/main.css @import 仓库根的
+# shared/brand-tokens.css，上下文无法收窄到子目录，见该目录的 Dockerfile）。
+# 该上下文会扫过整个仓库，必须排除各子项目的构建产物，否则上下文体积会
+# 随本机 node_modules/虚拟环境膨胀到数百 MB。
+
+**/node_modules
+**/dist
+**/coverage
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.git
+.dev-logs
+.agent-notes
+.trellis
+.playwright-mcp
+assets
+docs

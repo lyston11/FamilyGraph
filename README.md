@@ -206,6 +206,22 @@ sqlite3 app.db "PRAGMA integrity_check"   # 应输出 ok
    - 方案 B：certbot + nginx 手动配置证书。
 6. 定期备份建议：crontab 每日执行备份命令，并把 `/data/backups` 同步到对象存储。
 
+### 同一台服务器上再跑一套线上环境（与开发环境隔离）
+
+`deploy/production/` 提供叠加配置与一键安装器，可在已有开发环境（裸机 systemd +
+宿主目录）的同一台服务器上再跑一套容器化线上栈：独立 clone、独立 Docker 卷、
+独立密钥、独立端口（宿主回环 8100/8101），经 Cloudflare 隧道暴露家庭端，
+系统管理员后台只经 SSH 隧道访问。完整拓扑、发布流程、备份与回滚见
+[deploy/production/README.md](deploy/production/README.md)。
+
+```bash
+git clone <repo> /home/ubuntu/fg-prod
+cp /home/ubuntu/fg-prod/deploy/production/familygraph-prod.env.example \
+   ~/.config/familygraph/familygraph-prod.env   # 填入 3 个全新随机密钥
+chmod 600 ~/.config/familygraph/familygraph-prod.env
+bash /home/ubuntu/fg-prod/scripts/install-prod-automation.sh
+```
+
 ---
 
 ## 系统管理员后台（仅运维可见，勿写入面向用户的文档）
