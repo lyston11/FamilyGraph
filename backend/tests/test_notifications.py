@@ -154,12 +154,17 @@ def test_invite_notification_live_domain_status(client, db_session) -> None:
     )
     assert accept.status_code == 200, accept.text
     data = _list(client, _login_header(client, "nt-invitee"), space.id).json()
-    assert data["unread_count"] == 1
-    item = data["items"][0]
+    # 09-20 可达性修复：受邀人同时收到「邀请」与「房主已批准，等待你接受」两条
+    # （后者让 awaiting_owner → awaiting_me 的跃迁不再静默）
+    assert data["unread_count"] == 2
+    assert {item["payload"]["title"] for item in data["items"]} == {
+        "你有新的家庭空间邀请",
+        "邀请已获房主批准，等待你接受",
+    }
+    item = next(i for i in data["items"] if i["payload"]["title"] == "你有新的家庭空间邀请")
     assert item["kind"] == "space_membership"
     assert item["action_card"] is None
     assert item["domain_status"] == "active"
-    assert item["payload"]["title"] == "你有新的家庭空间邀请"
     assert item["payload"]["actor_name"] == "nt-invite"
     assert item["read_at"] is None  # 接受不改变已读状态
 

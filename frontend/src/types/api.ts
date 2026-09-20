@@ -580,6 +580,25 @@ export interface SpaceMemberInfo {
   updated_at: string
 }
 
+export interface PendingInvitation {
+  /** SpaceMember.id（接受/拒绝/撤回的入参） */
+  id: number
+  space_id: number
+  /** 自足投影：不依赖当前空间上下文即可渲染（pending 受邀人读不到该空间通知） */
+  space_name: string
+  space_kind: 'household' | 'lineage'
+  /** incoming=别人邀请我；outgoing=我发起的加入（申请 / 邀请码兑换） */
+  direction: 'incoming' | 'outgoing'
+  /** awaiting_owner=还没获房主批准（我此时不能接受）；awaiting_me=等我接受 */
+  stage: 'awaiting_owner' | 'awaiting_me'
+  counterpart_user_id: number | null
+  /** 仅当对方对我可见时给出名字，否则 null（本投影不承诺字段形状，只承诺不泄露） */
+  counterpart_name: string | null
+  relation_label: string | null
+  owner_approved_at: string | null
+  updated_at: string
+}
+
 export interface SpaceManagementBootstrap {
   space: FamilySpace
   members: SpaceMemberInfo[]

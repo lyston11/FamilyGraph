@@ -47,6 +47,13 @@ const router = createRouter({
       component: () => import('@/views/NotificationsView.vue'),
     },
     {
+      // 邀请与申请：数据来自跨空间自足投影（`GET /spaces/invitations`），
+      // 与当前空间无关——pending 受邀人读不到该空间的通知，必须另有入口。
+      path: '/invitations',
+      name: 'invitations',
+      component: () => import('@/views/InvitationsView.vue'),
+    },
+    {
       // 旧首页路径：显式重定向，不再挂载旧成员混合页（HomeView 已于 Phase 3 删除，流程已抽出复用）
       path: '/home',
       redirect: { name: 'home' },
