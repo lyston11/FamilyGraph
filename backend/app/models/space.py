@@ -29,6 +29,10 @@ from app.models.base import Base
 
 SPACE_MEMBER_STATUSES = ("pending", "active", "rejected", "withdrawn", "removed")
 SPACE_MEMBER_ROLES = ("space_admin", "member")
+# 待处理行的来源（09-20）：决定房主批准与受邀人接受的顺序。
+# invite = 房主批准后还需受邀人接受；join_request/code = 房主批准即生效
+# （提交方即申请方/兑换方，其提交已是同意）。NULL = 旧行，沿用旧语义。
+SPACE_MEMBER_ORIGINS = ("invite", "join_request", "code")
 PENDING_EXPIRY_DAYS = 30
 
 # 空间管理者申请（平台运营者审批制，任务 08-30-space-manager-approval）
@@ -111,6 +115,89 @@ def _normalize_legacy_owner_role(_mapper: object, _connection: object, target: S
     """
     if target.role == "owner":
         target.role = "space_admin"
+
+
+class SpaceMemberApproval(Base):
+    """待处理成员行的房主审批状态（09-20 审批链）。
+
+    独立于 ``space_members``：成员表保持纯成员行语义（历史行不因新列改变形状，
+    旧 schema 造数也无需感知审批链）。存在本行 = 该 pending 行由加入链产生：
+
+    - ``origin='invite'``：房主批准后仍需受邀人本人接受；
+    - ``origin='join_request' | 'code'``：提交方即申请方/兑换方，房主批准即生效；
+    - 无本行 = 历史行，沿用旧语义（受邀人本人接受即可）。
+
+    ``owner_approved_at`` NULL 表示尚未获房主批准。
+    """
+
+    __tablename__ = "space_member_approvals"
+    __table_args__ = (
+        CheckConstraint("origin IN ('invite','join_request','code')", name="ck_sma_origin"),
+        Index("ix_space_member_approvals_space", "space_id"),
+    )
+
+    member_id: Mapped[int] = mapped_column(
+        ForeignKey("space_members.id", ondelete="CASCADE"), primary_key=True
+    )
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<SpaceMemberApproval member={self.member_id} origin={self.origin} "
+            f"approved={self.owner_approved_at is not None}>"
+        )
+
+
+class MemberRelationLabel(Base):
+    """成员间自由关系词标注（09-20）。
+
+    加入空间时填写的「我和对方是什么关系」：自由文本（兄弟/朋友/闺蜜均可），
+    **不是亲属事实**——绝不进入 source_facts / relations / social_relations，
+    不参与关系路径推导、可达性、世代计算或拓扑边；只在家族树与个人页按当前
+    授权节点集合渲染一条标注边。
+
+    一对人一条（端点规范化 user_a_id < user_b_id），两端本人均可改，改完即时
+    生效，无需对方确认、无需房主审批；清空即删除。
+    """
+
+    __tablename__ = "member_relation_labels"
+    __table_args__ = (
+        UniqueConstraint("space_id", "user_a_id", "user_b_id", name="uq_mrl_pair"),
+        CheckConstraint("user_a_id != user_b_id", name="ck_mrl_no_self"),
+        CheckConstraint("length(label) BETWEEN 1 AND 64", name="ck_mrl_label_length"),
+        Index("ix_member_relation_labels_space", "space_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    space_id: Mapped[int] = mapped_column(
+        ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False
+    )
+    user_a_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    user_b_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<MemberRelationLabel space={self.space_id} "
+            f"pair=({self.user_a_id},{self.user_b_id}) label={self.label!r}>"
+        )
 
 
 class SpaceProfileRef(Base):

@@ -21,6 +21,7 @@ from app.services import (
     family_recommendations,
     invite_codes,
     personal_family_view,
+    space_fsm,
     terms,
 )
 from app.services import source_facts as sf
@@ -312,6 +313,17 @@ def test_registration_with_stranger_code_initializes_queued_view(db_session) -> 
     assert row.status == "queued"
 
 
+def _ctx_of(user):
+    """构造该用户的服务端 ActorContext（测试隔离造数用）。"""
+    from app.commands.context import ActorContext
+
+    return ActorContext(
+        user_id=user.id,
+        account_id=user.account.id,
+        account_status=user.account.status,
+    )
+
+
 def test_registration_with_household_code_initializes_queued_view(db_session) -> None:
     creator, space = create_agent_fixture(db_session, name="init-household")
     code = invite_codes.create_code(
@@ -319,8 +331,20 @@ def test_registration_with_household_code_initializes_queued_view(db_session) ->
     )
     db_session.commit()
 
-    result = register_user(db_session, username="init-joiner", pin="123456", invite_code=code.code)
+    # 09-20：持码产生待房主批准的 pending，房主批准后才 active 并初始化视图
+    result = register_user(
+        db_session,
+        username="init-joiner",
+        pin="123456",
+        invite_code=code.code,
+        relation_label="堂兄弟",
+    )
     db_session.commit()
+    member = space_fsm.find_membership(db_session, space.id, result.user.id)
+    assert member is not None and member.status == "pending"
+    # 走真实命令（发领域事件），视图初始化由事件驱动
+    space_commands.approve_membership(db_session, _ctx_of(creator), member.id)
+    assert member.status == "active"
     row = _view(db_session, result.user.account.id, space.id)
     assert row is not None and row.status == "queued"
 
@@ -337,13 +361,17 @@ def test_later_member_add_initializes_queued_view(db_session) -> None:
         account_id=owner.account.id,
         account_status=owner.account.status,
     )
-    member, _created = space_commands.invite_member(db_session, ctx, space.id, user_id=joiner.id)
+    member, _created = space_commands.invite_member(
+        db_session, ctx, space.id, user_id=joiner.id, relation_label="堂兄弟"
+    )
     db_session.commit()
     joiner_ctx = ActorContext(
         user_id=joiner.id,
         account_id=joiner.account.id,
         account_status=joiner.account.status,
     )
+    # 09-20 审批链：房主先批准，受邀人再接受
+    space_commands.approve_membership(db_session, _ctx_of(owner), member.id)
     space_commands.respond_invitation(db_session, joiner_ctx, member.id, accept=True)
     db_session.commit()
 
@@ -360,8 +388,17 @@ def test_first_path_formation_reaches_safe_current_without_browser_get(db_sessio
     parent = create_user_with_pin(db_session, "init-path-parent", "123456", gender="m")
     create_space_member(db_session, space.id, parent.id)
     result = register_user(
-        db_session, username="init-path-joiner", pin="123456", invite_code=code.code
+        db_session,
+        username="init-path-joiner",
+        pin="123456",
+        invite_code=code.code,
+        relation_label="堂兄弟",
     )
+    db_session.commit()
+    # 09-20：持码先产生 pending；房主批准后注册流程初始化的 queued 行才生效
+    member = space_fsm.find_membership(db_session, space.id, result.user.id)
+    assert member is not None and member.status == "pending"
+    space_commands.approve_membership(db_session, _ctx_of(creator), member.id)
     db_session.commit()
     # 注册初始化的 queued 行（无 GET）
     assert _view(db_session, result.user.account.id, space.id).status == "queued"

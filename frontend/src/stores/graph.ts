@@ -96,8 +96,13 @@ export const useGraphStore = defineStore('graph', {
      *
      * 家族空间限定（09-20）：调用方必须提供当前家族空间 id。
      */
-    async requestJoin(lineageSpaceId: number, targetUserId: number, spaceId?: number) {
-      await joinByUser(lineageSpaceId, targetUserId, spaceId)
+    async requestJoin(
+      lineageSpaceId: number,
+      targetUserId: number,
+      relationLabel: string,
+      spaceId?: number,
+    ) {
+      await joinByUser(lineageSpaceId, targetUserId, relationLabel, spaceId)
     },
     clear() {
       this.requestSequence += 1

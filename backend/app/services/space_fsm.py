@@ -19,7 +19,12 @@ from app.errors import (
     raise_api_error,
 )
 from app.models.relation import Relation
-from app.models.space import PENDING_EXPIRY_DAYS, FamilySpace, SpaceMember
+from app.models.space import (
+    PENDING_EXPIRY_DAYS,
+    FamilySpace,
+    SpaceMember,
+    SpaceMemberApproval,
+)
 from app.utils.timeutil import utcnow
 
 
@@ -64,16 +69,8 @@ def transition(
     is_self = member.user_id == actor_id
 
     if action == "accept":
-        # 09-19：审批主体取决于 pending 行的来源（与 notifications 区分通知对象
-        # 的判据同源：added_by == user_id 即本人申请）：
-        # - 本人申请加入（join_request）→ 只有该空间管理员可批准，申请人不得自批；
-        # - 他人邀请（管理员邀请/邀请码）→ 仍需受邀人本人接受。
-        self_requested = member.added_by == member.user_id
-        if self_requested:
-            if not is_manager:
-                raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅该家庭空间管理员可批准加入申请")
-        elif not is_self:
-            raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅受邀人本人可接受")
+        # 09-20 审批链：房主先批准，再由受邀人接受（origin='invite'）。
+        # origin 为 NULL 的历史行保持旧语义（受邀人本人接受即可）。
         if member.status != "pending":
             raise_api_error(
                 409,
@@ -81,6 +78,28 @@ def transition(
                 "当前状态不允许接受",
                 detail={"status": member.status},
             )
+        approval = approval_for(session, member.id)
+        if approval is not None and approval.owner_approved_at is None:
+            # 尚未获房主批准：受邀人不能先行接受（顺序不可颠倒）。
+            raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "等待该空间管理员批准后再接受")
+        if approval is not None and approval.origin == "invite":
+            # 已获房主批准：仍需受邀人本人接受。
+            if not is_self:
+                raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅受邀人本人可接受")
+        elif approval is not None and approval.origin in ("join_request", "code"):
+            # 提交方即申请人/兑换人，其提交已是同意；批准动作内部置 active，
+            # 外部再调 accept 属非法转换。
+            raise_api_error(409, RELATION_INVALID_TRANSITION, "该申请由空间管理员批准后生效")
+        else:
+            # 旧行：维持既有判据（本人申请由房主批准，他人邀请由受邀人接受）。
+            self_requested = member.added_by == member.user_id
+            if self_requested:
+                if not is_manager:
+                    raise_api_error(
+                        403, "SPACE_FORBIDDEN_ACTOR", "仅该家庭空间管理员可批准加入申请"
+                    )
+            elif not is_self:
+                raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅受邀人本人可接受")
         member.status = "active"
     elif action == "reject":
         if not (is_self or is_manager):
@@ -129,6 +148,79 @@ def transition(
     return member
 
 
+def approval_for(session: Session, member_id: int) -> SpaceMemberApproval | None:
+    """取待处理成员行的房主审批状态（无 = 历史行，沿用旧语义）。"""
+    return session.get(SpaceMemberApproval, member_id)
+
+
+def _set_approval(
+    session: Session,
+    *,
+    member: SpaceMember,
+    origin: str | None,
+) -> None:
+    """按加入来源登记/清除审批状态（origin=None → 清除，回到旧语义）。"""
+    row = session.get(SpaceMemberApproval, member.id)
+    if origin is None:
+        if row is not None:
+            session.delete(row)
+            session.flush()
+        return
+    now = _now()
+    if row is None:
+        session.add(
+            SpaceMemberApproval(
+                member_id=member.id,
+                space_id=member.space_id,
+                origin=origin,
+                created_at=now,
+            )
+        )
+    else:
+        row.origin = origin
+        row.owner_approved_at = None
+        row.approved_by = None
+    session.flush()
+
+
+def approve_pending_membership(member: SpaceMember, actor_id: int, session: Session) -> SpaceMember:
+    """房主批准一条待处理加入行（09-20 审批链）。
+
+    - 只有该空间 active ``space_admin`` 可批准；
+    - 不得自批：判据是「被批准的人就是批准人自己」（``member.user_id == actor_id``），
+      而不是「发起人就是批准人」——房主自己建码/发邀请是常见情形，若按发起人判定
+      会让房主无法批准自己的邀请，邀请码路径直接死锁；
+    - origin='invite'：只记批准，仍待受邀人接受；
+    - origin='join_request' / 'code'：提交方已是同意，同事务置 active；
+    - origin IS NULL 的历史行不适用（保持旧语义）。
+    """
+    is_manager = is_space_manager(session, member.space_id, actor_id)
+    if not is_manager:
+        raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "仅该空间管理员可批准加入")
+    if member.user_id == actor_id:
+        raise_api_error(403, "SPACE_FORBIDDEN_ACTOR", "不能批准自己加入")
+    if member.status != "pending":
+        raise_api_error(
+            409,
+            RELATION_INVALID_TRANSITION,
+            "当前状态不允许批准",
+            detail={"status": member.status},
+        )
+    approval = approval_for(session, member.id)
+    if approval is None:
+        raise_api_error(409, RELATION_INVALID_TRANSITION, "该记录无需房主批准")
+    if approval.owner_approved_at is not None:
+        raise_api_error(409, RELATION_INVALID_TRANSITION, "该申请已获批准")
+
+    approval.owner_approved_at = _now()
+    approval.approved_by = actor_id
+    if approval.origin in ("join_request", "code"):
+        member.status = "active"
+    member.updated_at = _now()
+    session.flush()
+    return member
+
+
 def find_membership(session: Session, space_id: int, user_id: int) -> SpaceMember | None:
     return session.scalar(
         select(SpaceMember).where(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id)
@@ -142,7 +234,12 @@ def is_active_member(session: Session, space_id: int, user_id: int) -> bool:
 
 
 def invite(
-    session: Session, *, space: FamilySpace, user_id: int, added_by: int
+    session: Session,
+    *,
+    space: FamilySpace,
+    user_id: int,
+    added_by: int,
+    origin: str | None = None,
 ) -> tuple[SpaceMember, bool]:
     """邀请已有账号进空间：幂等；已 active 幂等返回；重复 pending 返回既有行。
 
@@ -160,6 +257,7 @@ def invite(
         existing.status = "pending"
         existing.added_by = added_by
         existing.updated_at = _now()
+        _set_approval(session, member=existing, origin=origin)
         session.flush()
         _record_membership_notification(session, space=space, member=existing)
         return existing, True
@@ -175,6 +273,7 @@ def invite(
     )
     session.add(member)
     session.flush()
+    _set_approval(session, member=member, origin=origin)
     _record_membership_notification(session, space=space, member=member)
     return member, True
 

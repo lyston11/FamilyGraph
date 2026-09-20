@@ -15,11 +15,13 @@ import {
   fetchSpaceMembers,
   fetchSpaceProfileRefs,
   fetchSpaces,
+  approveMembership,
   inviteIntoFamilyHousehold,
   inviteToSpace as inviteToSpaceRequest,
   joinByUser as joinByUserRequest,
   removeOrWithdrawMembership,
   requestLineageAccess,
+  setMemberRelationLabel,
   resolveMembership,
   respondOwnershipTransfer,
   setSpaceLineageLink,
@@ -227,11 +229,11 @@ export const useSpacesStore = defineStore('spaces', {
       if (index !== -1) this.spaces.splice(index, 1, updated)
       return updated
     },
-    async invite(userId: number) {
+    async invite(userId: number, relationLabel: string) {
       if (!this.canInvite) throw new Error('SPACE_FORBIDDEN_ACTOR')
       const space = this.currentSpace
       if (!space) throw new Error('NO_CURRENT_SPACE')
-      await inviteToSpaceRequest(space.id, userId)
+      await inviteToSpaceRequest(space.id, userId, relationLabel)
       await this.loadMembers(space.id)
     },
     async resolve(memberId: number, action: 'accept' | 'reject') {
@@ -252,29 +254,56 @@ export const useSpacesStore = defineStore('spaces', {
       await this.load()
     },
     /**
+     * 房主批准一条待处理加入（09-20 审批链）。
+     *
+     * 申请人/发起人不得自批；批准后按 origin 决定是仍需受邀人接受还是直接生效。
+     */
+    async approveMember(memberId: number) {
+      const updated = await approveMembership(memberId)
+      const spaceId = this.currentSpace?.id
+      if (spaceId !== undefined) await this.loadMembers(spaceId)
+      return updated
+    },
+    /**
+     * 设置/清除我与某成员之间的关系词（仅两端本人；即时生效）。
+     */
+    async setRelationLabel(spaceId: number, otherUserId: number, label: string) {
+      return setMemberRelationLabel(spaceId, otherUserId, label)
+    },
+    /**
      * 邀请指定成员加入**指定**家庭空间（空间治理面板入口）。
      *
      * 不复用只作用于 currentSpace 的 `invite`：调用方可能显式指定空间；授权仍由
      * 服务端按所选空间复核。只产生 pending。
      */
-    async inviteToSpace(spaceId: number, userId: number) {
-      return inviteToSpaceRequest(spaceId, userId)
+    async inviteToSpace(spaceId: number, userId: number, relationLabel: string) {
+      return inviteToSpaceRequest(spaceId, userId, relationLabel)
     },
     /**
      * 在当前家族空间范围内邀请对方加入我的家庭空间（个人公示页入口）。
      *
      * 服务端复核双方同族与该空间归属；只产生 pending。
      */
-    async inviteIntoFamilyHousehold(lineageSpaceId: number, spaceId: number, userId: number) {
-      return inviteIntoFamilyHousehold(lineageSpaceId, spaceId, userId)
+    async inviteIntoFamilyHousehold(
+      lineageSpaceId: number,
+      spaceId: number,
+      userId: number,
+      relationLabel: string,
+    ) {
+      return inviteIntoFamilyHousehold(lineageSpaceId, spaceId, userId, relationLabel)
     },
     /**
      * 申请加入对方在当前家族空间下的家庭空间（个人公示页入口）。
      *
      * 只产生 pending，由该家庭空间管理员批准。
      */
-    async requestJoinInFamily(lineageSpaceId: number, targetUserId: number, spaceId?: number) {
-      return joinByUserRequest(lineageSpaceId, targetUserId, spaceId)
+    async requestJoinInFamily(
+      lineageSpaceId: number,
+      targetUserId: number,
+      relationLabel: string,
+      spaceId?: number,
+    ) {
+      return joinByUserRequest(lineageSpaceId, targetUserId, relationLabel, spaceId)
     },
     /** 发起 owner 移交（仅 owner；后端校验目标为活跃成员，FSM 同空间至多一个 pending） */
     async initiateTransfer(toUserId: number) {

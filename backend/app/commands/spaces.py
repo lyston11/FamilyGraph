@@ -25,7 +25,7 @@ from app.models import User
 from app.models.node_position import NodePosition
 from app.models.space import FamilySpace, SpaceMember
 from app.schemas.space import PositionItem
-from app.services import audit, space_fsm
+from app.services import audit, member_labels, space_fsm
 from app.services.domain_events import emit
 from app.utils.timeutil import utcnow
 
@@ -215,8 +215,12 @@ def invite_member(
     space_id: int,
     *,
     user_id: int,
+    relation_label: str,
 ) -> tuple[SpaceMember, bool]:
-    """邀请已有账号进空间 → pending（幂等）。"""
+    """邀请已有账号进空间 → pending（幂等），由该空间房主批准（09-20）。
+
+    ``relation_label`` 必填：发起人与受邀人之间的关系词（自由文本）。
+    """
     actor = load_actor(session, ctx)
     with command_transaction(session):
         _require_inviter(session, space_id, actor.id)
@@ -225,8 +229,23 @@ def invite_member(
         if target is None:
             raise_api_error(404, USER_NOT_FOUND, "对方档案不存在")
 
-        member, created = space_fsm.invite(session, space=space, user_id=user_id, added_by=actor.id)
+        label = member_labels.require_label(relation_label)
+        member, created = space_fsm.invite(
+            session,
+            space=space,
+            user_id=user_id,
+            added_by=actor.id,
+            origin="invite",
+        )
         if created:
+            member_labels.upsert_label(
+                session,
+                space_id=space.id,
+                user_a_id=actor.id,
+                user_b_id=user_id,
+                label=label,
+                actor_user_id=actor.id,
+            )
             emit(
                 session,
                 event_type="space.membership.changed",
@@ -342,6 +361,7 @@ def request_join_by_user(
     lineage_space_id: int,
     target_user_id: int,
     space_id: int | None = None,
+    relation_label: str,
 ) -> SpaceMember:
     """在当前家族空间范围内申请加入对方的家庭空间（pending）。
 
@@ -391,10 +411,23 @@ def request_join_by_user(
             raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "该家庭空间不属于当前家族空间")
         space = _space_or_404(session, chosen_id)
 
+        label = member_labels.require_label(relation_label)
         member, created = space_fsm.invite(
-            session, space=space, user_id=actor.id, added_by=actor.id
+            session,
+            space=space,
+            user_id=actor.id,
+            added_by=actor.id,
+            origin="join_request",
         )
         if created:
+            member_labels.upsert_label(
+                session,
+                space_id=space.id,
+                user_a_id=actor.id,
+                user_b_id=target.id,
+                label=label,
+                actor_user_id=actor.id,
+            )
             emit(
                 session,
                 event_type="space.membership.changed",
@@ -413,6 +446,82 @@ def request_join_by_user(
                 detail={"space_id": space.id, "lineage_space_id": lineage.id},
             )
     return member
+
+
+def approve_membership(session: Session, ctx: ActorContext, member_id: int) -> SpaceMember:
+    """房主批准一条待处理加入（09-20 审批链）。申请人/发起人不得自批。"""
+    actor = load_actor(session, ctx)
+    with command_transaction(session):
+        member = session.get(SpaceMember, member_id)
+        if member is None or _space_or_404(session, member.space_id) is None:
+            raise_api_error(404, SPACE_NOT_FOUND, "成员记录不存在")
+        approval = space_fsm.approval_for(session, member.id)
+        space_fsm.approve_pending_membership(member, actor.id, session)
+        emit(
+            session,
+            event_type="space.membership.changed",
+            aggregate_type="space",
+            aggregate_id=member.space_id,
+            payload={
+                "action": "accepted" if member.status == "active" else "owner_approved",
+                "user_id": member.user_id,
+                "by": actor.id,
+            },
+            space_id=member.space_id,
+            actor_account_id=ctx.account_id,
+        )
+        audit.write_audit(
+            session,
+            action="space_membership_approved",
+            actor_id=actor.id,
+            target_id=member.user_id,
+            ip=ctx.ip,
+            detail={
+                "space_id": member.space_id,
+                "origin": (approval.origin if approval is not None else None),
+            },
+        )
+    return member
+
+
+def set_member_relation_label(
+    session: Session,
+    ctx: ActorContext,
+    *,
+    space_id: int,
+    other_user_id: int,
+    label: str | None,
+) -> dict[str, Any] | None:
+    """设置/清除我与某成员之间的关系词（仅两端本人；改完即时生效）。"""
+    actor = load_actor(session, ctx)
+    with command_transaction(session):
+        _require_active_member(session, space_id, actor.id)
+        if other_user_id == actor.id:
+            raise_api_error(422, VALIDATION_ERROR, "不能与自己建立关系词")
+        row = member_labels.upsert_label(
+            session,
+            space_id=space_id,
+            user_a_id=actor.id,
+            user_b_id=other_user_id,
+            label=label,
+            actor_user_id=actor.id,
+        )
+        audit.write_audit(
+            session,
+            action="member_relation_label_set",
+            actor_id=actor.id,
+            target_id=other_user_id,
+            ip=ctx.ip,
+            detail={"space_id": space_id, "cleared": row is None},
+        )
+        if row is None:
+            return None
+        return {
+            "id": f"label-{row.id}",
+            "from_user_id": row.user_a_id,
+            "to_user_id": row.user_b_id,
+            "label": row.label,
+        }
 
 
 def create_shared_household(
@@ -766,6 +875,7 @@ def invite_into_family_household(
     lineage_space_id: int,
     space_id: int,
     user_id: int,
+    relation_label: str,
 ) -> tuple[SpaceMember, bool]:
     """在当前家族空间范围内邀请对方加入我的家庭空间。
 
@@ -794,10 +904,23 @@ def invite_into_family_household(
         ):
             raise_api_error(403, SPACE_FORBIDDEN_ACTOR, "该家庭空间不属于当前家族空间")
 
+        label = member_labels.require_label(relation_label)
         member, created = space_fsm.invite(
-            session, space=space, user_id=target.id, added_by=actor.id
+            session,
+            space=space,
+            user_id=target.id,
+            added_by=actor.id,
+            origin="invite",
         )
         if created:
+            member_labels.upsert_label(
+                session,
+                space_id=space.id,
+                user_a_id=actor.id,
+                user_b_id=target.id,
+                label=label,
+                actor_user_id=actor.id,
+            )
             emit(
                 session,
                 event_type="space.membership.changed",

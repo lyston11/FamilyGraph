@@ -27,6 +27,7 @@ import {
   HANDLE_TARGET_LEFT,
   HANDLE_TARGET_TOP,
   type FamilyCanvasInferredEdgeSpec,
+  type FamilyLabelEdgeSpec,
   type FamilyStructuralEdge,
 } from '@/composables/useFamilyTreeCanvas'
 import { useAuthStore } from '@/stores/auth'
@@ -151,6 +152,7 @@ const canvasModel = computed(() =>
         nodes: [],
         edges: [] as FamilyStructuralEdge[],
         inferredEdges: [] as FamilyCanvasInferredEdgeSpec[],
+        labelEdges: [] as FamilyLabelEdgeSpec[],
         summaryEdges: [],
         topologyAvailable: false,
       },)
@@ -183,7 +185,7 @@ watch([layoutIdentity, viewMode, hasRenderableNodes, emptyProjection, accessDeni
   }
   const outcome = viewMode.value === 'tree'
     ? applyTreeViewLayout(model, viewerId.value)
-    : { nodes: applyFreeCanvasLayout(model), failed: false }
+    : { nodes: applyFreeCanvasLayout(model), failed: false, labelEdges: model.labelEdges }
   if (viewMode.value === 'tree') {
     // 树模式直接使用完整分支区间；逐节点保留旧 x 或向右避让会拆散子树。
     // layoutIdentity 不包含称谓/进度，纯文本更新不会触发布局重算。
@@ -319,6 +321,34 @@ const inferredFlowEdges = computed<FlowEdge[]>(() =>
       type: 'straight',
       label: spec.label === null ? undefined : `推测·${spec.label}`,
       class: 'fg-view-edge fg-view-edge-inferred',
+      labelStyle: { fill: 'var(--fg-canvas-muted)', fontSize: '11px' },
+      labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
+      labelBgPadding: [6, 2] as [number, number],
+      labelBgBorderRadius: 4,
+    }
+  }),
+)
+
+/**
+ * 关系词标注边（09-20）：第三种边样式，**非亲属结构**。
+ *
+ * 与结构边/推测边并列叠层，不参与布局与世代计算；只画在两端点都在节点集合内时
+ * （上游 buildFamilyCanvas 已按节点集合过滤）。左右按实际 x 选侧。
+ */
+const labelFlowEdges = computed<FlowEdge[]>(() =>
+  canvasModel.value.labelEdges.map((spec) => {
+    const sourcePos = positionByUser.value.get(spec.sourceUserId)
+    const targetPos = positionByUser.value.get(spec.targetUserId)
+    const leftIsSource = (sourcePos?.x ?? 0) <= (targetPos?.x ?? 0)
+    return {
+      id: spec.key,
+      source: `n-${leftIsSource ? spec.sourceUserId : spec.targetUserId}`,
+      sourceHandle: HANDLE_SOURCE_RIGHT,
+      target: `n-${leftIsSource ? spec.targetUserId : spec.sourceUserId}`,
+      targetHandle: HANDLE_TARGET_LEFT,
+      type: 'straight',
+      label: spec.label,
+      class: 'fg-view-edge fg-view-edge-label',
       labelStyle: { fill: 'var(--fg-canvas-muted)', fontSize: '11px' },
       labelBgStyle: { fill: 'var(--fg-canvas-surface-raised)' },
       labelBgPadding: [6, 2] as [number, number],
@@ -649,7 +679,7 @@ function resolveName(userId: number): string | null {
             <VueFlow
               :key="spaceId ?? 'none'"
               :nodes="flowNodes"
-              :edges="[...flowEdges, ...inferredFlowEdges]"
+              :edges="[...flowEdges, ...inferredFlowEdges, ...labelFlowEdges]"
               :default-viewport="initialViewport"
               :fit-view-params="{ padding: 0.22 }"
               :min-zoom="0.2"
@@ -752,6 +782,9 @@ function resolveName(userId: number): string | null {
 .canvas-wrap :deep(.fg-view-edge-inferred .vue-flow__edge-path) { stroke: var(--fg-canvas-muted); stroke-width: 1.15; stroke-dasharray: 6 5; opacity: 0.85; transition: stroke-width 0.2s ease, opacity 0.2s ease; }
 .canvas-wrap :deep(.fg-view-edge-inferred:hover .vue-flow__edge-path),
 .canvas-wrap :deep(.fg-view-edge-inferred.selected .vue-flow__edge-path) { stroke: var(--fg-canvas-ink); stroke-width: 2; opacity: 1; }
+/* 关系词标注边：点线 + 常态标签，与结构实线、推测虚线区分 */
+.canvas-wrap :deep(.fg-view-edge-label .vue-flow__edge-path) { stroke: var(--fg-canvas-line); stroke-width: 1.15; stroke-dasharray: 1 4; stroke-linecap: round; opacity: 0.9; }
+.canvas-wrap :deep(.fg-view-edge-label .vue-flow__edge-text) { font-style: italic; }
 .canvas-wrap :deep(.vue-flow__controls) {
   position: absolute; top: auto; bottom: 6px; left: 32px; z-index: 5; display: flex;
   flex-direction: column; background: color-mix(in srgb, var(--fg-canvas-surface-raised) 90%, transparent);

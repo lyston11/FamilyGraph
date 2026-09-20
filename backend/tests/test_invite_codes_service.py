@@ -20,7 +20,7 @@ from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.space import SpaceMember
 from app.models.user import User
-from app.services import invite_codes
+from app.services import invite_codes, space_fsm
 from app.utils import timeutil
 from conftest import create_space_member, create_user_with_pin, seed_space_with_owner
 
@@ -439,8 +439,12 @@ def test_invite_code_join_activates_membership_and_records_attribution(db_sessio
             account_id=joiner.account.id,
             ip=None,
             scene="register",
+            relation_label="堂兄弟",
         )
-    assert member.status == "active"
+    # 09-20：兑换只产生待房主批准的 pending，不再当场 active
+    assert member.status == "pending"
+    assert space_fsm.approval_for(db_session, member.id).origin == "code"
+    assert space_fsm.approval_for(db_session, member.id).owner_approved_at is None
     assert member.added_by == creator.id  # 邀请人归因
     db_session.expire(code, ["used_count"])
     assert code.used_count == 1
@@ -452,6 +456,10 @@ def test_invite_code_join_activates_membership_and_records_attribution(db_sessio
         assert fragment in detail
 
     # 同一加入人已是 active 成员：不重复核销（409，used_count 不变）
+    # 09-20：先由房主批准使其 active（兑换本身只产生 pending）
+    with command_transaction(db_session):
+        space_fsm.approve_pending_membership(member, creator.id, db_session)
+    assert member.status == "active"
     with pytest.raises(HTTPException) as exc:
         with command_transaction(db_session):
             invite_codes.join_space_with_code(
@@ -461,6 +469,7 @@ def test_invite_code_join_activates_membership_and_records_attribution(db_sessio
                 account_id=joiner.account.id,
                 ip=None,
                 scene="redeem",
+                relation_label="堂兄弟",
             )
     assert exc.value.status_code == 409
     db_session.expire(code, ["used_count"])

@@ -148,10 +148,19 @@ describe('InviteMemberDialog', () => {
     expect(document.body.textContent).toContain('母亲')
     expect(document.body.textContent).not.toContain('张三')
 
+    // 09-20：先填关系词（必填），否则不发邀请
+    const relationInput = document.querySelector<HTMLInputElement>(
+      '[data-test="invite-dialog"] [data-test="invite-relation-label"] input',
+    )
+    expect(relationInput).not.toBeNull()
+    relationInput!.value = '堂弟'
+    relationInput!.dispatchEvent(new Event('input'))
+    await flushPromises()
+
     const inviteButton = document.querySelector<HTMLButtonElement>('[data-test="invite-user-2"]')
     expect(inviteButton).not.toBeNull()
     inviteButton!.click()
-    await vi.waitFor(() => expect(mockedInviteToSpace).toHaveBeenCalledWith(7, 2))
+    await vi.waitFor(() => expect(mockedInviteToSpace).toHaveBeenCalledWith(7, 2, '堂弟'))
     await flushPromises()
     const dialog = wrapper.findComponent(InviteMemberDialog)
     expect(dialog.emitted('invited')).toEqual([[expect.objectContaining({ id: 2 })]])

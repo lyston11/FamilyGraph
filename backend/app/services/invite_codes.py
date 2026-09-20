@@ -31,7 +31,7 @@ from app.errors import (
 from app.models.invite_code import INVITE_CODE_KINDS, InviteCode
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
-from app.services import audit, space_fsm
+from app.services import audit, member_labels, space_fsm
 from app.services.domain_events import emit
 from app.utils.timeutil import utcnow
 
@@ -144,11 +144,14 @@ def join_space_with_code(
     account_id: int,
     ip: str | None,
     scene: str,
+    relation_label: str,
 ) -> SpaceMember:
-    """household/lineage 码加入空间：既有 SpaceMember pending→accept 唯一路径。
+    """household/lineage 码加入空间：产生待房主批准的 pending 行（09-20）。
 
     - SpaceMember.added_by 记录码创建者（邀请人归因）；
-    - 接受动作 = 既有 respond 语义（同一 space_fsm.transition 调用、同一审计形状）；
+    - ``origin='code'``：兑换人提交即其同意，但仍需该空间房主批准后才 active
+      （不再兑换即生效——否则任何持码者可绕过房主直接进入空间并读到家族树）；
+    - 关系词标注记在 (兑换人, 码创建者) 之间；
     - 核销码（used_count+1）+ 归因审计，全部在调用方事务内完成。
     """
     space = session.get(FamilySpace, code.space_id)
@@ -159,24 +162,35 @@ def join_space_with_code(
         # 可用码必有创建者；数据异常时按无效码拒绝，不让 NULL 归因进入成员行。
         raise_api_error(400, INVITE_CODE_INVALID, MESSAGE_INVALID)
     member, _created = space_fsm.invite(
-        session, space=space, user_id=user.id, added_by=code.creator_id
+        session,
+        space=space,
+        user_id=user.id,
+        added_by=code.creator_id,
+        origin="code",
     )
     if space_fsm.effective_status(member) == "active":
         # 已是该空间成员：码不核销、无状态变化（幂等拒绝优于静默重复核销）
         raise_api_error(409, VALIDATION_ERROR, "你已经是该空间成员")
-    space_fsm.transition(member, "accept", user.id, session)
+    member_labels.upsert_label(
+        session,
+        space_id=space.id,
+        user_a_id=user.id,
+        user_b_id=code.creator_id,
+        label=relation_label,
+        actor_user_id=user.id,
+    )
     emit(
         session,
         event_type="space.membership.changed",
         aggregate_type="space",
         aggregate_id=space.id,
-        payload={"action": "accepted", "user_id": user.id, "by": user.id},
+        payload={"action": "code_redeemed", "user_id": user.id, "by": user.id},
         space_id=space.id,
         actor_account_id=account_id,
     )
     audit.write_audit(
         session,
-        action="space_invite_accepted",
+        action="space_invite_code_redeemed",
         actor_id=user.id,
         target_id=user.id,
         ip=ip,

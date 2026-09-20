@@ -864,6 +864,17 @@ describe('PersonProfileView 家族空间内双向加入（09-20）', () => {
     )
   }
 
+  /** 填写关系词（naive NInput 内部是原生 input，按既有约定直接设值并派发）。 */
+  async function fillRelationLabel(value: string) {
+    const input = document.querySelector(
+      '[data-test="family-space-join-dialog"] [data-test="join-relation-label"] input',
+    ) as HTMLInputElement | null
+    if (input === null) throw new Error('relation label input not found')
+    input.value = value
+    input.dispatchEvent(new Event('input'))
+    await flushPromises()
+  }
+
   async function openDialog(wrapper: Awaited<ReturnType<typeof mountProfile>>['wrapper']) {
     await wrapper.find('[data-test="profile-family-space-join"]').trigger('click')
     await flushPromises()
@@ -921,10 +932,11 @@ describe('PersonProfileView 家族空间内双向加入（09-20）', () => {
     expect(dialog('[data-test="join-space-7"]')?.className).toContain('disabled')
     expect(dialog('[data-test="join-space-8"]')?.className ?? '').not.toContain('disabled')
 
+    await fillRelationLabel('堂弟')
     ;(dialog('[data-test="join-dialog-submit"]') as HTMLButtonElement).click()
     await flushPromises()
-    // 邀请走 family-invitations：家族空间 id + 所选空间 id + 目标用户
-    expect(mockedFamilyInvite).toHaveBeenCalledWith(9, 8, 2)
+    // 邀请走 family-invitations：家族空间 id + 所选空间 id + 目标用户 + 关系词
+    expect(mockedFamilyInvite).toHaveBeenCalledWith(9, 8, 2, '堂弟')
   })
 
   it('申请方向：切到申请后按对方的家庭空间发加入申请', async () => {
@@ -942,9 +954,10 @@ describe('PersonProfileView 家族空间内双向加入（09-20）', () => {
     // 邀请方向无可选项 → 默认落到申请方向
     ;(dialog('[data-test="join-direction-join"]') as HTMLElement).click()
     await flushPromises()
+    await fillRelationLabel('堂弟')
     ;(dialog('[data-test="join-dialog-submit"]') as HTMLButtonElement).click()
     await flushPromises()
-    expect(mockedJoinByUser).toHaveBeenCalledWith(9, 2, 6)
+    expect(mockedJoinByUser).toHaveBeenCalledWith(9, 2, '堂弟', 6)
   })
 
   it('不同族：两个方向都不显示，只提示走邀请码途径', async () => {

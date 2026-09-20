@@ -26,6 +26,7 @@ from app.models.steward import (
     StewardViewTarget,
 )
 from app.models.user import User
+from app.services import member_labels
 from app.services.steward_pipeline import valid_generation
 from app.utils.timeutil import utcnow
 
@@ -350,6 +351,8 @@ def payload_for(
         "edges": edges,
         "inferred_edges": inferred_edges,
         "topology_edges": list(skeleton.get("topology_edges", [])),
+        # 关系词标注：读取时按本次授权节点集合过滤，不进快照（不参与版本失效链）
+        "label_edges": member_labels.labels_for(session, space_id=space_id, visible_ids=visible),
         "truncated": False,
         "next_cursor": None,
         "stale_reason": reason,

@@ -40,6 +40,8 @@ const ROLE_BADGE_CLASS: Record<SpaceRole, string> = {
 const keyword = ref('')
 const candidates = ref<Member[]>([])
 const invitingId = ref<number | null>(null)
+/** 与受邀人的关系词（自由文本，必填） */
+const relationLabel = ref('')
 const transferTargetId = ref<number | null>(null)
 const transferring = ref(false)
 
@@ -78,6 +80,32 @@ async function respondSelfRequest(member: SpaceMemberInfo, accept: boolean): Pro
   } catch (error) {
     message.error(error instanceof ApiError ? error.message : '操作失败，请稍后重试')
   }
+}
+
+/**
+ * 房主批准一条待处理加入（09-20 审批链）。
+ *
+ * 与 `respondSelfRequest` 的区别：本动作是「房主批准」这一步，`invite` 来源批准后
+ * 仍需受邀人本人接受；申请人/发起人不得自批（服务端判定）。
+ */
+async function approvePending(member: SpaceMemberInfo): Promise<void> {
+  try {
+    const updated = await spaces.approveMember(member.id)
+    message.success(
+      updated.status === 'active' ? '已批准并生效' : '已批准，等待受邀人接受',
+    )
+  } catch (error) {
+    message.error(error instanceof ApiError ? error.message : '操作失败，请稍后重试')
+  }
+}
+
+/** 该 pending 行是否在等房主批准（有审批行且尚未批准）。 */
+function awaitsOwnerApproval(member: SpaceMemberInfo): boolean {
+  return (
+    member.status === 'pending' &&
+    member.origin != null &&
+    member.owner_approved_at == null
+  )
 }
 
 function memberRemovable(member: SpaceMemberInfo): boolean {
@@ -119,7 +147,11 @@ const memberColumns = computed<DataTableColumns<SpaceMemberInfo>>(() => {
                 ? 'fg-badge fg-badge--confirmed'
                 : 'fg-badge fg-badge--proposed',
           },
-          row.status === 'active' ? '已加入' : '待确认',
+          row.status === 'active'
+            ? '已加入'
+            : row.origin != null && row.owner_approved_at == null
+              ? '待房主批准'
+              : '待确认',
         ),
     },
   ]
@@ -131,6 +163,32 @@ const memberColumns = computed<DataTableColumns<SpaceMemberInfo>>(() => {
       render: (row) => {
         if (!memberRemovable(row)) return h('span')
         const isPending = row.status === 'pending'
+        if (awaitsOwnerApproval(row)) {
+          // 09-20：加入链的 pending 行统一由房主批准这一步先过
+          return h('div', { class: 'pending-actions' }, [
+            h(
+              NButton,
+              {
+                size: 'small',
+                type: 'primary',
+                secondary: true,
+                'data-test': `member-owner-approve-${row.id}`,
+                onClick: () => void approvePending(row),
+              },
+              { default: () => '批准' },
+            ),
+            h(
+              NButton,
+              {
+                size: 'small',
+                secondary: true,
+                'data-test': `member-reject-${row.id}`,
+                onClick: () => void respondSelfRequest(row, false),
+              },
+              { default: () => '拒绝' },
+            ),
+          ])
+        }
         if (isPending && isSelfRequested(row)) {
           // 加入申请：管理员批准/拒绝（不能再走 withdraw，那会被后端判为无权）
           return h('div', { class: 'pending-actions' }, [
@@ -197,10 +255,16 @@ async function searchCandidates(): Promise<void> {
 
 async function invite(member: Member): Promise<void> {
   if (!spaces.canInvite) return
+  // 09-20：加入空间必须填写与对方的关系（自由文本，≤64）
+  const label = relationLabel.value.trim()
+  if (!label) {
+    message.warning('请先填写你与对方的关系')
+    return
+  }
   invitingId.value = member.id
   try {
-    await spaces.invite(member.id)
-    message.success('邀请已发送')
+    await spaces.invite(member.id, label)
+    message.success('邀请已发送，等待房主批准')
     candidates.value = candidates.value.filter((m) => m.id !== member.id)
   } catch (error) {
     message.error(error instanceof ApiError ? error.message : '邀请失败，请稍后重试')
@@ -272,6 +336,13 @@ async function respondTransfer(action: 'accept' | 'cancel'): Promise<void> {
 
     <template v-if="spaces.canInvite">
       <h3 class="block-title">邀请新成员</h3>
+      <NInput
+        v-model:value="relationLabel"
+        placeholder="你与对方的关系（如：堂弟、朋友）"
+        :maxlength="64"
+        class="invite-input"
+        data-test="governance-invite-relation-label"
+      />
       <div class="invite-row">
         <NInput
           v-model:value="keyword"

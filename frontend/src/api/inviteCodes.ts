@@ -40,9 +40,10 @@ export async function revokeInviteCode(codeId: number): Promise<InviteCode> {
  * 设置页填码加入空间：与注册填码同一加入语义（决策 8）。
  * 陌生人码在登录态兑换被 400 明确拒绝（INVITE_CODE_STRANGER_REGISTER_ONLY）。
  */
-export async function redeemInviteCode(rawCode: string): Promise<InviteCode> {
+export async function redeemInviteCode(rawCode: string, relationLabel: string): Promise<InviteCode> {
   const { data } = await apiClient.post<InviteCode>('/me/invite-codes/redeem', {
     code: rawCode,
+    relation_label: relationLabel,
   })
   return data
 }

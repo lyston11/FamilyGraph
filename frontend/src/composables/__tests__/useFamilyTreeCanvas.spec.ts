@@ -448,3 +448,22 @@ describe('buildFamilyCanvas 推测层（09-13）× 结构边并存', () => {
     expect(outcome.nodes).toHaveLength(2)
   })
 })
+
+describe('关系词标注边（09-20）', () => {
+  it('只画两端都在节点集合内的标注边，且不进入结构边', () => {
+    const model = buildFamilyCanvas(
+      {
+        ...makeData({ nodes: [makeNode(1), makeNode(2)], edges: [] }),
+        label_edges: [
+          { id: 'label-1', from_user_id: 1, to_user_id: 2, label: '朋友' },
+          { id: 'label-2', from_user_id: 1, to_user_id: 99, label: '不在图里的端点' },
+        ],
+      },
+      1,
+    )
+    expect(model.labelEdges.map((edge) => edge.label)).toEqual(['朋友'])
+    // 标注边绝不进入 confirmed 结构边（家族树连线只来自亲属事实）
+    expect(model.edges).toEqual([])
+    expect(model.inferredEdges).toEqual([])
+  })
+})

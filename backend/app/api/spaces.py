@@ -32,6 +32,7 @@ from app.schemas.space import (
     ManagerApplicationOut,
     ManagerTransferConsentDecision,
     ManagerTransferConsentOut,
+    MemberRelationLabelOut,
     PositionsPayload,
     SpaceCreate,
     SpaceInviteCreate,
@@ -325,6 +326,11 @@ def _member_out_with_name(session: Session, m: SpaceMember) -> SpaceMemberOut:
     out = SpaceMemberOut.model_validate(m)
     u = session.get(User, m.user_id)
     out.user_name = u.name if u else None
+    # 审批链状态来自独立表：治理面板据此区分「待房主批准」与「待受邀人接受」
+    approval = space_fsm.approval_for(session, m.id)
+    if approval is not None:
+        out.origin = approval.origin  # type: ignore[assignment]
+        out.owner_approved_at = approval.owner_approved_at
     return out
 
 
@@ -384,7 +390,9 @@ def invite_to_space(
     """邀请已有账号进空间 → pending（幂等）；managed 直连例外走建档向导组合，不经此端点。"""
     actor, account = identity
     ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
-    member, _created = space_commands.invite_member(session, ctx, space_id, user_id=payload.user_id)
+    member, _created = space_commands.invite_member(
+        session, ctx, space_id, user_id=payload.user_id, relation_label=payload.relation_label
+    )
     session.refresh(member)
     return SpaceMemberOut.model_validate(member)
 
@@ -405,6 +413,7 @@ def join_by_user(
         lineage_space_id=payload.lineage_space_id,
         target_user_id=payload.target_user_id,
         space_id=payload.space_id,
+        relation_label=payload.relation_label,
     )
     session.refresh(member)
     return _member_out_with_name(session, member)
@@ -416,6 +425,8 @@ class JoinByUserPayload(BaseModel):
     lineage_space_id: int = Field(gt=0)
     target_user_id: int = Field(gt=0)
     space_id: int | None = Field(default=None, gt=0)
+    # 与对方的关系词（自由文本，必填，≤64）
+    relation_label: str = Field(min_length=1, max_length=64)
 
 
 @router.get("/spaces/family-space-options", response_model=FamilySpaceOptionsOut)
@@ -441,6 +452,8 @@ class FamilyInvitationPayload(BaseModel):
     lineage_space_id: int = Field(gt=0)
     space_id: int = Field(gt=0)
     user_id: int = Field(gt=0)
+    # 与对方的关系词（自由文本，必填，≤64）
+    relation_label: str = Field(min_length=1, max_length=64)
 
 
 @router.post("/spaces/family-invitations", status_code=201, response_model=SpaceMemberOut)
@@ -459,6 +472,7 @@ def invite_into_family_household(
         lineage_space_id=payload.lineage_space_id,
         space_id=payload.space_id,
         user_id=payload.user_id,
+        relation_label=payload.relation_label,
     )
     session.refresh(member)
     return _member_out_with_name(session, member)
@@ -504,6 +518,51 @@ def accept_membership(
     member = space_commands.respond_invitation(session, ctx, member_id, accept=True)
     session.refresh(member)
     return _member_out_with_name(session, member)
+
+
+@router.post("/space-memberships/{member_id}/approve", response_model=SpaceMemberOut)
+def approve_membership(
+    member_id: int,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> SpaceMemberOut:
+    """房主批准一条待处理加入（09-20 审批链）；申请人/发起人不得自批。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    member = space_commands.approve_membership(session, ctx, member_id)
+    session.refresh(member)
+    return _member_out_with_name(session, member)
+
+
+class MemberRelationLabelPayload(BaseModel):
+    """我与某成员之间的关系词（自由文本；空串 = 清除标注）。"""
+
+    other_user_id: int = Field(gt=0)
+    label: str = Field(max_length=64)
+
+
+@router.put(
+    "/spaces/{space_id}/member-relation-label", response_model=MemberRelationLabelOut | None
+)
+def set_member_relation_label(
+    space_id: int,
+    payload: MemberRelationLabelPayload,
+    request: Request,
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> MemberRelationLabelOut | None:
+    """设置/清除我与某成员之间的关系词（仅两端本人可改，即时生效）。"""
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = space_commands.set_member_relation_label(
+        session,
+        ctx,
+        space_id=space_id,
+        other_user_id=payload.other_user_id,
+        label=payload.label,
+    )
+    return MemberRelationLabelOut(**row) if row is not None else None
 
 
 @router.post("/space-memberships/{member_id}/reject", response_model=SpaceMemberOut)

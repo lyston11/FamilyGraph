@@ -29,6 +29,8 @@ const message = useMessage()
 const keyword = ref('')
 const candidates = ref<Member[]>([])
 const invitingId = ref<number | null>(null)
+/** 与受邀人的关系词（自由文本，必填） */
+const relationLabel = ref('')
 
 const searchInputProps = {
   'data-test': 'invite-search',
@@ -49,10 +51,16 @@ async function search(): Promise<void> {
 
 async function invite(member: Member): Promise<void> {
   if (!spaces.canInvite) return
+  // 09-20：加入空间必须填写与对方的关系（自由文本，≤64）
+  const label = relationLabel.value.trim()
+  if (!label) {
+    message.warning('请先填写你与对方的关系')
+    return
+  }
   invitingId.value = member.id
   try {
-    await spaces.invite(member.id)
-    message.success('邀请已发送')
+    await spaces.invite(member.id, label)
+    message.success('邀请已发送，等待房主批准')
     candidates.value = candidates.value.filter((m) => m.id !== member.id)
     emit('invited', member)
   } catch (error) {
@@ -67,6 +75,7 @@ function close(): void {
   keyword.value = ''
   candidates.value = []
   invitingId.value = null
+  relationLabel.value = ''
 }
 </script>
 
@@ -78,6 +87,12 @@ function close(): void {
     data-test="invite-dialog"
     @update:show="$event ? undefined : close()"
   >
+    <NInput
+      v-model:value="relationLabel"
+      placeholder="你与对方的关系（如：堂弟、朋友）"
+      :maxlength="64"
+      data-test="invite-relation-label"
+    />
     <NInput
       v-model:value="keyword"
       placeholder="输入名字前缀搜索"

@@ -329,6 +329,20 @@ export interface PersonalFamilyViewTopologyEdge {
 }
 
 /**
+ * 成员间关系词标注边（09-20；backend schemas MemberRelationLabelEdgeOut）。
+ *
+ * 加入空间时填写的「我和对方是什么关系」——**显示层标注，不是亲属事实**：
+ * 不参与关系路径推导、可达性、世代计算或拓扑边；只在两端都在本次授权节点
+ * 集合内时返回。`id` 为稳定字符串（label-<行id>），供画布连线寻址。
+ */
+export interface MemberRelationLabelEdge {
+  id: string
+  from_user_id: number
+  to_user_id: number
+  label: string
+}
+
+/**
  * 管家推测边（09-13 推测层；backend schemas InferredEdgeOut）。
  * subject/object + relation_kind = 单跳原子关系建议（虚线渲染依据）；
  * term = 单跳确定性称谓（subject→object 方向）；viewer_term/viewer_path =
@@ -414,6 +428,11 @@ export interface PersonalFamilyViewData {
    * 画布显示安全降级提示），与合法空数组（确实没有已确认直接关系）区分。
    */
   topology_edges: PersonalFamilyViewTopologyEdge[] | null
+  /**
+   * 成员间关系词标注（显示层，非亲属事实；不参与布局与路径推导）。
+   * 旧载荷缺该字段时按空数组处理。
+   */
+  label_edges?: MemberRelationLabelEdge[]
   truncated: boolean
   next_cursor: string | null
   stale_reason: string | null
@@ -552,6 +571,12 @@ export interface SpaceMemberInfo {
   added_by: number | null
   role: SpaceRole
   status: 'pending' | 'active' | 'rejected' | 'withdrawn' | 'removed'
+  /**
+   * 审批链状态（09-20）：pending 行的来源与房主批准时刻。
+   * `origin` 有值 = 由加入链产生；`owner_approved_at` 为空 = 尚未获房主批准。
+   */
+  origin?: 'invite' | 'join_request' | 'code' | null
+  owner_approved_at?: string | null
   updated_at: string
 }
 

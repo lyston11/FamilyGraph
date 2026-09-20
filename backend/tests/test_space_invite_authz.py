@@ -31,7 +31,7 @@ def test_active_member_can_invite(client: TestClient, db_session, role: str) -> 
     response = client.post(
         f"/api/spaces/{space.id}/members",
         headers=_login(client, actor.name, "111111"),
-        json={"user_id": target.id},
+        json={"user_id": target.id, "relation_label": "堂兄弟"},
     )
 
     assert response.status_code == 201, response.text
@@ -52,7 +52,7 @@ def test_platform_operator_cannot_invite_into_family_space(client: TestClient, d
     response = client.post(
         f"/api/spaces/{space.id}/members",
         headers=_login(client, operator.name, "666666"),
-        json={"user_id": target.id},
+        json={"user_id": target.id, "relation_label": "堂兄弟"},
     )
 
     assert response.status_code == 404, response.text

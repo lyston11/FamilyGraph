@@ -77,6 +77,17 @@ class FamilySpaceOptionsOut(BaseModel):
     join: list[FamilySpaceOptionOut]
 
 
+class MemberRelationLabelOut(BaseModel):
+    """成员间关系词标注边（09-20）。``id`` 为稳定字符串，供画布连线寻址。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    from_user_id: int
+    to_user_id: int
+    label: str
+
+
 class SpaceMemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -87,6 +98,10 @@ class SpaceMemberOut(BaseModel):
     added_by: int | None
     role: SpaceRole
     status: Literal["pending", "active", "rejected", "withdrawn", "removed"]
+    # 09-20 审批链：pending 行的来源与房主批准时刻，供治理面板区分
+    # 「待房主批准」与「待受邀人接受」。历史行为 NULL。
+    origin: Literal["invite", "join_request", "code"] | None = None
+    owner_approved_at: datetime | None = None
     updated_at: datetime
 
 
@@ -111,6 +126,8 @@ class SpaceManagementBootstrapOut(BaseModel):
 
 class SpaceInviteCreate(BaseModel):
     user_id: int = Field(gt=0)
+    # 与受邀人的关系词（自由文本，必填，≤64）
+    relation_label: str = Field(min_length=1, max_length=64)
 
 
 # ---- 空间管理者申请（任务 08-30-space-manager-approval）----

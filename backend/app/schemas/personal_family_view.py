@@ -56,6 +56,21 @@ class PersonalFamilyViewTopologyEdgeOut(BaseModel):
     subtype: TopologyEdgeSubtype | None = None
 
 
+class MemberRelationLabelEdgeOut(BaseModel):
+    """成员间关系词标注边（09-20）：显示层标注，**不是亲属事实**。
+
+    不参与关系路径推导、可达性、世代计算或拓扑边；只在两端都在本次授权节点
+    集合内时返回。``id`` 为稳定字符串（label-<行id>），供画布连线寻址。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    from_user_id: int
+    to_user_id: int
+    label: str
+
+
 class InferredEdgeOut(BaseModel):
     """管家推测边（09-13 推测层；显示层投影，永不写 confirmed 事实）。
 
@@ -127,6 +142,8 @@ class PersonalFamilyViewOut(BaseModel):
     inferred_edges: list[InferredEdgeOut] = []
     edges: list[PersonalFamilyViewEdgeOut]
     topology_edges: list[PersonalFamilyViewTopologyEdgeOut] = Field(default_factory=list)
+    # 成员间关系词标注（显示层，非亲属事实；不参与布局与路径推导）
+    label_edges: list[MemberRelationLabelEdgeOut] = Field(default_factory=list)
     truncated: bool = False
     next_cursor: str | None = None
     stale_reason: str | None = None

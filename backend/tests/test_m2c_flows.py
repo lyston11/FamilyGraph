@@ -99,7 +99,7 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
     db_session.commit()
 
     # 甲与乙同属该家族空间 → 可申请（限定在该家族空间范围内）
-    payload = {"lineage_space_id": lineage.id, "target_user_id": b.id}
+    payload = {"lineage_space_id": lineage.id, "target_user_id": b.id, "relation_label": "堂兄弟"}
     r1 = client.post("/api/spaces/join-by-user", json=payload, headers=ha)
     assert r1.status_code == 201, r1.text
     assert r1.json()["status"] == "pending"
@@ -116,14 +116,14 @@ def test_join_by_user_full_flow_and_idempotency(db_session, client: TestClient):
         == 1
     )
 
-    # 09-19：申请人不得自批自己的加入申请
-    self_accept = client.post(f"/api/space-memberships/{r1.json()['id']}/accept", headers=ha)
+    # 09-20：申请人不得自批自己的加入申请
+    self_accept = client.post(f"/api/space-memberships/{r1.json()['id']}/approve", headers=ha)
     assert self_accept.status_code == 403, self_accept.text
     db_session.expire_all()
     assert db_session.get(SpaceMember, r1.json()["id"]).status == "pending"
 
-    # 被申请的 target 本人（乙）批准 → active，甲获得 household 可见性
-    acc = client.post(f"/api/space-memberships/{r1.json()['id']}/accept", headers=hb)
+    # 09-20 审批链：房主（乙）批准 → 直接 active，甲获得 household 可见性
+    acc = client.post(f"/api/space-memberships/{r1.json()['id']}/approve", headers=hb)
     assert acc.status_code == 200, acc.text
     assert acc.json()["status"] == "active"
 
@@ -153,7 +153,11 @@ def test_join_requires_shared_lineage(db_session, client: TestClient) -> None:
     db_session.commit()
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": lineage.id, "target_user_id": owner.id},
+        json={
+            "lineage_space_id": lineage.id,
+            "target_user_id": owner.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login(client, "准入外人", "444444"),
     )
     assert resp.status_code == 403, resp.text
@@ -194,7 +198,11 @@ def test_join_target_space_resolved_from_manager_not_any_membership(
     db_session.commit()
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": lineage.id, "target_user_id": plain.id},
+        json={
+            "lineage_space_id": lineage.id,
+            "target_user_id": plain.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login(client, "解析申请者", "777777"),
     )
     assert resp.status_code == 403, resp.text
@@ -212,7 +220,7 @@ def test_join_invisible_target_404(db_session, client: TestClient):
     ).scalar()
     r = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": 1, "target_user_id": target_id},
+        json={"lineage_space_id": 1, "target_user_id": target_id, "relation_label": "堂兄弟"},
         headers=hs,
     )
     assert r.status_code == 404

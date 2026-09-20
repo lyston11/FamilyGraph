@@ -331,10 +331,12 @@ describe('InviteCodeSection：填码加入', () => {
     const loadSpy = vi.spyOn(spaces, 'load').mockResolvedValue(undefined)
 
     await wrapper.find('[data-test="invite-redeem-input"] input').setValue('ab2d3f5h')
+    await wrapper.find('[data-test="invite-redeem-relation-label"] input').setValue('堂弟')
     await wrapper.find('[data-test="invite-redeem-submit"]').trigger('click')
     await flushPromises()
 
-    expect(mockedRedeem).toHaveBeenCalledWith('AB2D3F5H')
+    // 09-20：兑换必须带关系词；只产生待房主批准的申请
+    expect(mockedRedeem).toHaveBeenCalledWith('AB2D3F5H', '堂弟')
     expect(loadSpy).toHaveBeenCalled()
     const input = wrapper.find('[data-test="invite-redeem-input"] input').element as HTMLInputElement
     expect(input.value).toBe('')
@@ -348,6 +350,7 @@ describe('InviteCodeSection：填码加入', () => {
     const { wrapper } = await mountSection()
 
     await wrapper.find('[data-test="invite-redeem-input"] input').setValue('AB2D3F5H')
+    await wrapper.find('[data-test="invite-redeem-relation-label"] input').setValue('堂弟')
     await wrapper.find('[data-test="invite-redeem-submit"]').trigger('click')
     await flushPromises()
 

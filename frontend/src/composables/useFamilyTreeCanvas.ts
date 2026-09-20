@@ -1,4 +1,5 @@
 import type {
+  MemberRelationLabelEdge,
   PersonalFamilyViewData,
   PersonalFamilyViewDisplay,
   PersonalFamilyViewEdge,
@@ -76,6 +77,20 @@ export interface FamilyStructuralEdge {
   orientation: 'vertical' | 'horizontal'
 }
 
+/**
+ * 关系词标注边画布规格（09-20）：第三种边样式，**不是亲属结构**。
+ *
+ * 只画在两端点都在节点集合内时；不参与布局与世代计算。
+ */
+export interface FamilyLabelEdgeSpec {
+  key: string
+  edge: MemberRelationLabelEdge
+  /** 标注词原文（自由文本，如「朋友」「闺蜜」「族兄」） */
+  label: string
+  sourceUserId: number
+  targetUserId: number
+}
+
 /** 推测边画布规格（09-13 推测层）：虚线渲染 + 一键确认/驳回 */
 export interface FamilyCanvasInferredEdgeSpec {
   key: string
@@ -92,6 +107,8 @@ export interface FamilyCanvasModel {
   edges: FamilyStructuralEdge[]
   /** 管家推测边：独立虚线叠层，不进入 confirmed 布局约束 */
   inferredEdges: FamilyCanvasInferredEdgeSpec[]
+  /** 关系词标注边：第三种边样式，非亲属结构，不进入布局与世代计算 */
+  labelEdges: FamilyLabelEdgeSpec[]
   /** 个人摘要边（viewer→成员称谓路径）：只用于节点名牌称谓与几何估计，绝不画线 */
   summaryEdges: PersonalFamilyViewEdge[]
   /** false = 旧载荷缺 topology_edges 字段：结构数据未提供（区别于合法空数组） */
@@ -155,6 +172,18 @@ export function buildFamilyCanvas(
       targetUserId: edge.object_user_id,
     }))
 
+  const labelEdges: FamilyLabelEdgeSpec[] = (data.label_edges ?? [])
+    .filter(
+      (edge) => nodeUserIds.has(edge.from_user_id) && nodeUserIds.has(edge.to_user_id),
+    )
+    .map((edge) => ({
+      key: edge.id,
+      edge,
+      label: edge.label,
+      sourceUserId: edge.from_user_id,
+      targetUserId: edge.to_user_id,
+    }))
+
   const inferredTermByUser = new Map<number, string | null>()
   for (const edge of data.inferred_edges) {
     if (edge.new_user_id !== null && !inferredTermByUser.has(edge.new_user_id)) {
@@ -176,7 +205,14 @@ export function buildFamilyCanvas(
     y: 0,
   }))
 
-  return { nodes, edges, inferredEdges, summaryEdges: data.edges, topologyAvailable }
+  return {
+    nodes,
+    edges,
+    inferredEdges,
+    labelEdges,
+    summaryEdges: data.edges,
+    topologyAvailable,
+  }
 }
 
 /**

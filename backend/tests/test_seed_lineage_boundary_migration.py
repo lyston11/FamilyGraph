@@ -23,6 +23,9 @@ from sqlalchemy import create_engine, text
 BACKEND = Path(__file__).parents[1]
 HEAD = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini"))).get_current_head()
 PARENT = "0051_run_event_timing"
+# 本文件只验证 0052 的纯数据修正：目标固定为 0052 自己，而不是会随新迁移前进的
+# `head`（0053 新增了表，schema 必然变化，与本迁移「schema 完全不变」的断言无关）。
+SUBJECT = "0052_seed_lineage_membership_boundary"
 
 RUNNER = r"""
 import sys
@@ -146,7 +149,7 @@ def test_upgrade_removes_only_the_wrong_seed_membership(tmp_path):
             )
         )
 
-        _migrate(tmp_path, "upgrade", HEAD)
+        _migrate(tmp_path, "upgrade", SUBJECT)
 
         pairs = _membership_pairs(engine)
         assert (1, 1, "active") not in pairs  # 越权行消失
@@ -171,12 +174,12 @@ def test_upgrade_is_idempotent_and_keeps_other_spaces_untouched(tmp_path):
     engine = _engine(tmp_path)
     try:
         _seed_demo_lineage_memberships(engine)
-        _migrate(tmp_path, "upgrade", HEAD)
+        _migrate(tmp_path, "upgrade", SUBJECT)
         first = _membership_pairs(engine)
 
         # 直接重跑迁移函数：幂等（目标行已不存在）
         _migrate(tmp_path, "downgrade", PARENT)
-        _migrate(tmp_path, "upgrade", HEAD)
+        _migrate(tmp_path, "upgrade", SUBJECT)
         assert _membership_pairs(engine) == first
     finally:
         engine.dispose()
@@ -184,10 +187,10 @@ def test_upgrade_is_idempotent_and_keeps_other_spaces_untouched(tmp_path):
 
 def test_downgrade_does_not_restore_the_wrong_membership(tmp_path):
     """降级不把已删除的越权成员资格恢复为旧种子值。"""
-    _migrate(tmp_path, "upgrade", HEAD)
+    _migrate(tmp_path, "upgrade", SUBJECT)
     engine = _engine(tmp_path)
     try:
-        assert _head(engine) == HEAD
+        assert _head(engine) == SUBJECT
         result = _migrate(tmp_path, "downgrade", PARENT)
         assert result.returncode == 0, result.stderr
         assert _head(engine) == PARENT

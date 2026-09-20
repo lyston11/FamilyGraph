@@ -71,6 +71,8 @@ class RegisterRequest(BaseModel):
     pin: str = Field(pattern=PIN_PATTERN)
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     code: str | None = Field(default=None, min_length=8, max_length=12)
+    # 使用邀请码注册时必填：与码创建者的关系词（自由文本，≤64）
+    relation_label: str | None = Field(default=None, max_length=64)
 
 
 class LogoutRequest(BaseModel):

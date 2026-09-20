@@ -113,6 +113,9 @@ def redeem_code(
     space_name 供前端展示「已加入哪个空间」），不泄露创建者信息。
     """
     code = registration_commands.redeem_invite_code(
-        session, _ctx(request, identity), raw_code=payload.code
+        session,
+        _ctx(request, identity),
+        raw_code=payload.code,
+        relation_label=payload.relation_label,
     )
     return _serialize(session, [code])[0]

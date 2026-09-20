@@ -79,7 +79,11 @@ def test_options_report_both_directions_with_three_states(client: TestClient, db
 
     resp = client.get(
         "/api/spaces/family-space-options",
-        params={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        params={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "双向-me"),
     )
     assert resp.status_code == 200, resp.text
@@ -107,7 +111,11 @@ def test_options_are_empty_when_not_sharing_the_lineage(client: TestClient, db_s
 
     resp = client.get(
         "/api/spaces/family-space-options",
-        params={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        params={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "异族-外人"),
     )
     # 调用者不是该家族空间成员 → 与空间不存在同一 404
@@ -123,7 +131,11 @@ def test_options_empty_lists_when_target_not_in_lineage(client: TestClient, db_s
 
     resp = client.get(
         "/api/spaces/family-space-options",
-        params={"lineage_space_id": scene.lineage.id, "target_user_id": stranger.id},
+        params={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": stranger.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "目标缺族-me"),
     )
     assert resp.status_code == 200, resp.text
@@ -140,7 +152,11 @@ def test_options_404_for_invisible_target(client: TestClient, db_session) -> Non
 
     resp = client.get(
         "/api/spaces/family-space-options",
-        params={"lineage_space_id": scene.lineage.id, "target_user_id": stranger.id},
+        params={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": stranger.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "不可见-me"),
     )
     assert resp.status_code == 404, resp.text
@@ -153,7 +169,11 @@ def test_options_are_read_only(client: TestClient, db_session) -> None:
 
     resp = client.get(
         "/api/spaces/family-space-options",
-        params={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        params={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "只读-me"),
     )
     assert resp.status_code == 200, resp.text
@@ -173,6 +193,7 @@ def test_family_invitation_creates_pending_only(client: TestClient, db_session) 
             "lineage_space_id": scene.lineage.id,
             "space_id": scene.my_home.id,
             "user_id": scene.target.id,
+            "relation_label": "堂兄弟",
         },
         headers=_login_header(client, "邀请-me"),
     )
@@ -203,6 +224,7 @@ def test_family_invitation_rejects_space_outside_the_lineage(
             "lineage_space_id": scene.lineage.id,
             "space_id": stray_home.id,
             "user_id": scene.target.id,
+            "relation_label": "堂兄弟",
         },
         headers=_login_header(client, "越界-me"),
     )
@@ -231,6 +253,7 @@ def test_family_invitation_rejects_target_outside_the_lineage(
             "lineage_space_id": scene.lineage.id,
             "space_id": scene.my_home.id,
             "user_id": outsider.id,
+            "relation_label": "堂兄弟",
         },
         headers=_login_header(client, "邀请异族-me"),
     )
@@ -246,7 +269,11 @@ def test_join_uses_the_targets_household_in_this_lineage(client: TestClient, db_
     scene = _Scene(db_session, name="申请")
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        json={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "申请-me"),
     )
     assert resp.status_code == 201, resp.text
@@ -270,7 +297,11 @@ def test_join_does_not_fall_back_to_another_lineage_household(
 
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        json={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "回退-me"),
     )
     assert resp.status_code == 201, resp.text
@@ -292,6 +323,7 @@ def test_join_rejects_explicit_space_outside_the_lineage(client: TestClient, db_
             "lineage_space_id": scene.lineage.id,
             "target_user_id": scene.target.id,
             "space_id": other_home.id,
+            "relation_label": "堂兄弟",
         },
         headers=_login_header(client, "申请越界-me"),
     )
@@ -314,7 +346,11 @@ def test_join_requires_sharing_the_lineage(client: TestClient, db_session) -> No
 
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": scene.lineage.id, "target_user_id": outsider.id},
+        json={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": outsider.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "申请异族-me"),
     )
     assert resp.status_code == 403, resp.text
@@ -331,7 +367,11 @@ def test_join_409_when_target_has_no_household_in_this_lineage(
 
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        json={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "无空间-me"),
     )
     assert resp.status_code == 409, resp.text
@@ -343,22 +383,28 @@ def test_join_request_cannot_be_self_approved(client: TestClient, db_session) ->
     scene = _Scene(db_session, name="自批")
     created = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": scene.lineage.id, "target_user_id": scene.target.id},
+        json={
+            "lineage_space_id": scene.lineage.id,
+            "target_user_id": scene.target.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "自批-me"),
     )
     assert created.status_code == 201, created.text
     member_id = created.json()["id"]
 
-    self_accept = client.post(
-        f"/api/space-memberships/{member_id}/accept", headers=_login_header(client, "自批-me")
+    # 09-20 审批链：join_request 由该空间房主批准后直接 active。
+    # 申请人自己批准 → 403（不能批准自己加入）。
+    self_approve = client.post(
+        f"/api/space-memberships/{member_id}/approve", headers=_login_header(client, "自批-me")
     )
-    assert self_accept.status_code == 403, self_accept.text
+    assert self_approve.status_code == 403, self_approve.text
     db_session.expire_all()
     assert db_session.get(SpaceMember, member_id).status == "pending"
 
-    # 该空间管理员（目标本人）批准 → active
+    # 房主（目标本人）批准 → 当场 active（申请人提交即其同意）
     approved = client.post(
-        f"/api/space-memberships/{member_id}/accept",
+        f"/api/space-memberships/{member_id}/approve",
         headers=_login_header(client, "自批-target"),
     )
     assert approved.status_code == 200, approved.text

@@ -40,3 +40,5 @@ class RedeemInviteCodeRequest(BaseModel):
     """设置页填码（家庭/家族码；陌生人码在登录态兑换被 400 明确拒绝）。"""
 
     code: str = Field(min_length=8, max_length=12)
+    # 与码创建者的关系词（自由文本，必填，≤64）
+    relation_label: str = Field(min_length=1, max_length=64)

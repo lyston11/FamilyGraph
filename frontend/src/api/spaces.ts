@@ -2,6 +2,7 @@ import type {
   EligibleManagerTarget,
   FamilySpace,
   FamilySpaceOptions,
+  MemberRelationLabelEdge,
   ManagerApplicationStatus,
   ManagerRequestKind,
   ManagerTransferConsent,
@@ -130,9 +131,14 @@ export async function fetchSpaceProfileRefs(spaceId: number): Promise<SpaceProfi
 }
 
 /** 邀请已有账号进空间 → pending（幂等）；managed 新建走建档向导直连 */
-export async function inviteToSpace(spaceId: number, userId: number): Promise<SpaceMemberInfo> {
+export async function inviteToSpace(
+  spaceId: number,
+  userId: number,
+  relationLabel: string,
+): Promise<SpaceMemberInfo> {
   const { data } = await apiClient.post<SpaceMemberInfo>(`/spaces/${spaceId}/members`, {
     user_id: userId,
+    relation_label: relationLabel,
   })
   return data
 }
@@ -162,11 +168,13 @@ export async function inviteIntoFamilyHousehold(
   lineageSpaceId: number,
   spaceId: number,
   userId: number,
+  relationLabel: string,
 ): Promise<SpaceMemberInfo> {
   const { data } = await apiClient.post<SpaceMemberInfo>('/spaces/family-invitations', {
     lineage_space_id: lineageSpaceId,
     space_id: spaceId,
     user_id: userId,
+    relation_label: relationLabel,
   })
   return data
 }
@@ -178,6 +186,36 @@ export async function resolveMembership(
 ): Promise<SpaceMemberInfo> {
   const { data } = await apiClient.post<SpaceMemberInfo>(
     `/space-memberships/${memberId}/${action}`,
+  )
+  return data
+}
+
+/**
+ * 房主批准一条待处理加入（09-20 审批链）。
+ *
+ * 申请人/发起人不得自批；`origin='invite'` 批准后仍需受邀人本人接受，
+ * `join_request`/`code` 批准即生效。
+ */
+export async function approveMembership(memberId: number): Promise<SpaceMemberInfo> {
+  const { data } = await apiClient.post<SpaceMemberInfo>(
+    `/space-memberships/${memberId}/approve`,
+  )
+  return data
+}
+
+/**
+ * 设置/清除我与某成员之间的关系词（自由文本；空串 = 清除标注）。
+ *
+ * 仅该对两端本人可改，改完即时生效，无需对方确认、无需房主审批。
+ */
+export async function setMemberRelationLabel(
+  spaceId: number,
+  otherUserId: number,
+  label: string,
+): Promise<MemberRelationLabelEdge | null> {
+  const { data } = await apiClient.put<MemberRelationLabelEdge | null>(
+    `/spaces/${spaceId}/member-relation-label`,
+    { other_user_id: otherUserId, label },
   )
   return data
 }
@@ -196,11 +234,13 @@ export async function removeOrWithdrawMembership(memberId: number): Promise<void
 export async function joinByUser(
   lineageSpaceId: number,
   targetUserId: number,
+  relationLabel: string,
   spaceId?: number,
 ): Promise<SpaceMemberInfo> {
   const { data } = await apiClient.post<SpaceMemberInfo>('/spaces/join-by-user', {
     lineage_space_id: lineageSpaceId,
     target_user_id: targetUserId,
+    relation_label: relationLabel,
     ...(spaceId === undefined ? {} : { space_id: spaceId }),
   })
   return data

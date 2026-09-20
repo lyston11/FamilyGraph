@@ -16,7 +16,7 @@ from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
-from app.services import rate_limit
+from app.services import rate_limit, space_fsm
 from conftest import create_user_with_pin, seed_space_with_owner
 
 
@@ -42,10 +42,19 @@ def _create_code(
     )
 
 
-def _register(client: TestClient, name: str, *, pin: str = "123456", code: str | None = None):
+def _register(
+    client: TestClient,
+    name: str,
+    *,
+    pin: str = "123456",
+    code: str | None = None,
+    relation_label: str | None = None,
+):
     payload: dict = {"name": name, "pin": pin}
     if code is not None:
         payload["code"] = code
+        # 09-20：使用邀请码注册时必须填写与码创建者的关系词
+        payload["relation_label"] = relation_label or "堂兄弟"
     return client.post("/api/auth/register", json=payload)
 
 
@@ -99,16 +108,18 @@ def test_register_with_household_code_becomes_active_member(db_session, client) 
         .filter(SpaceMember.space_id == space.id, SpaceMember.user_id == registrant_id)
         .one()
     )
-    assert member.status == "active"  # 持码当场接受：pending→active 同一状态机
+    # 09-20：持码只产生待房主批准的 pending，房主批准后才 active
+    assert member.status == "pending"
+    assert space_fsm.approval_for(db_session, member.id).origin == "code"
     assert member.role == "member"
     assert member.added_by == creator.id  # added_by 归因邀请人
 
     db_session.expire(code, ["used_count"])
     assert code.used_count == 1  # 一次性码用后即焚
 
-    # 既有接受路径的审计形状 + 归因审计
+    # 归因审计
     actions = {row.action for row in db_session.query(AuditLog).all()}
-    assert "space_invite_accepted" in actions
+    assert "space_invite_code_redeemed" in actions
     redeemed = db_session.query(AuditLog).filter(AuditLog.action == "invite_code_redeemed").one()
     assert '"code_kind": "household"' in redeemed.detail_json
     assert '"creator_id"' in redeemed.detail_json
@@ -127,7 +138,8 @@ def test_register_with_lineage_code_becomes_active_member(db_session, client) ->
         .filter(SpaceMember.space_id == space.id, SpaceMember.user_id == registrant_id)
         .one()
     )
-    assert member.status == "active"
+    assert member.status == "pending"
+    assert space_fsm.approval_for(db_session, member.id).origin == "code"
     assert member.added_by == creator.id
 
 

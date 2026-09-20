@@ -19,6 +19,7 @@ from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.space import SpaceMember
 from app.models.user import User
+from app.services import space_fsm
 from app.utils import timeutil
 from conftest import (
     auth_header,
@@ -196,7 +197,7 @@ def test_invite_code_space_manager_revokes_another_members_code(db_session, clie
     denied = client.post(
         "/api/me/invite-codes/redeem",
         headers=_headers(client, "撤销管理员"),
-        json={"code": revoked.json()["code"]},
+        json={"code": revoked.json()["code"], "relation_label": "堂兄弟"},
     )
     assert denied.status_code == 400
     assert denied.json()["error"]["message"] == "邀请码已撤销"
@@ -263,7 +264,7 @@ def test_invite_code_expired_and_exhausted_redeem_rejected(db_session, client) -
     expired = client.post(
         "/api/me/invite-codes/redeem",
         headers=_headers(client, "过期码加入人"),
-        json={"code": expired_row.code},
+        json={"code": expired_row.code, "relation_label": "堂兄弟"},
     )
     assert expired.status_code == 400
     assert expired.json()["error"]["message"] == "邀请码已过期"
@@ -277,7 +278,7 @@ def test_invite_code_expired_and_exhausted_redeem_rejected(db_session, client) -
     exhausted = client.post(
         "/api/me/invite-codes/redeem",
         headers=_headers(client, "过期码加入人"),
-        json={"code": exhausted_row.code},
+        json={"code": exhausted_row.code, "relation_label": "堂兄弟"},
     )
     assert exhausted.status_code == 400
     assert exhausted.json()["error"]["message"] == "邀请码使用次数已达上限"
@@ -297,7 +298,7 @@ def test_invite_code_redeem_household_code_activates_membership(db_session, clie
     response = client.post(
         "/api/me/invite-codes/redeem",
         headers=_headers(client, "填码加入人"),
-        json={"code": code.code},
+        json={"code": code.code, "relation_label": "堂兄弟"},
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -310,16 +311,15 @@ def test_invite_code_redeem_household_code_activates_membership(db_session, clie
         .filter(SpaceMember.space_id == space.id, SpaceMember.user_id == joiner.id)
         .one()
     )
-    assert member.status == "active"  # pending→accept 同一状态机，当场 active
-    assert member.added_by == creator.id
+    # 09-20：兑换只产生待房主批准的 pending，房主批准后才 active
+    assert member.status == "pending"
+    assert space_fsm.approval_for(db_session, member.id).origin == "code"
 
     db_session.expire(code, ["used_count"])
     assert code.used_count == 1
 
     redeemed = db_session.query(AuditLog).filter(AuditLog.action == "invite_code_redeemed").one()
     assert '"scene": "redeem"' in redeemed.detail_json
-    accepted = db_session.query(AuditLog).filter(AuditLog.action == "space_invite_accepted").one()
-    assert accepted.target_id == joiner.id
 
 
 def test_invite_code_redeem_allows_provisional_user(db_session, client) -> None:
@@ -337,7 +337,7 @@ def test_invite_code_redeem_allows_provisional_user(db_session, client) -> None:
     response = client.post(
         "/api/me/invite-codes/redeem",
         headers=_headers(client, "未确档兑码人"),
-        json={"code": code.code},
+        json={"code": code.code, "relation_label": "堂兄弟"},
     )
     assert response.status_code == 200, response.text
     assert response.json()["space_id"] == space.id
@@ -347,7 +347,9 @@ def test_invite_code_redeem_allows_provisional_user(db_session, client) -> None:
         .filter(SpaceMember.space_id == space.id, SpaceMember.user_id == provisional.id)
         .one()
     )
-    assert member.status == "active"  # 同一状态机，无身份门槛
+    # 09-20：兑换产生 pending；房主批准后才 active（无身份门槛不变）
+    assert member.status == "pending"
+    assert space_fsm.approval_for(db_session, member.id).origin == "code"
     assert member.added_by == creator.id
     db_session.expire(code, ["used_count"])
     assert code.used_count == 1
@@ -363,7 +365,7 @@ def test_invite_code_redeem_stranger_code_rejected(db_session, client) -> None:
     response = client.post(
         "/api/me/invite-codes/redeem",
         headers=_headers(client, "陌生码填码人"),
-        json={"code": code.code},
+        json={"code": code.code, "relation_label": "堂兄弟"},
     )
     assert response.status_code == 400
     error = response.json()["error"]
@@ -379,7 +381,12 @@ def test_invite_code_redeem_stranger_code_rejected(db_session, client) -> None:
 def test_invite_code_unauthenticated_requests_401(client) -> None:
     assert client.get("/api/invite-codes").status_code == 401
     assert client.post("/api/invite-codes", json={"kind": "stranger"}).status_code == 401
-    assert client.post("/api/me/invite-codes/redeem", json={"code": "ABCDEFGH"}).status_code == 401
+    assert (
+        client.post(
+            "/api/me/invite-codes/redeem", json={"code": "ABCDEFGH", "relation_label": "堂兄弟"}
+        ).status_code
+        == 401
+    )
 
 
 # ---- 删除主体的码处置（09-05 P2-2：creator_id 不再阻断删除）----
@@ -426,5 +433,7 @@ def test_delete_code_creator_via_api_succeeds_and_auto_revokes(db_session, clien
     assert audit.detail["code_ids"] == [code_id]
     # 自动撤销后的码不可再被兑换（创建者已删除，resolve 统一按无效处理）
     with pytest.raises(HTTPException) as exc:
-        registration_commands.redeem_invite_code(db_session, _ctx(joiner), raw_code=row.code)
+        registration_commands.redeem_invite_code(
+            db_session, _ctx(joiner), raw_code=row.code, relation_label="堂兄弟"
+        )
     assert exc.value.detail["__api_error__"]["code"] == INVITE_CODE_INVALID  # type: ignore[index]

@@ -156,6 +156,8 @@ async function submitCreate(): Promise<void> {
 
 // ---- 填码加入 ----
 const redeemCode = ref('')
+/** 与码创建者的关系词（自由文本，必填，≤64） */
+const redeemRelationLabel = ref('')
 const redeeming = ref(false)
 const redeemError = ref('')
 
@@ -165,10 +167,18 @@ async function submitRedeem(): Promise<void> {
     redeemError.value = '请输入邀请码'
     return
   }
+  if (!redeemRelationLabel.value.trim()) {
+    redeemError.value = '请填写你与对方的关系'
+    return
+  }
   redeeming.value = true
   try {
-    const redeemed = await redeemInviteCode(redeemCode.value.trim().toUpperCase())
-    message.success(`已加入空间「${redeemed.space_name ?? ''}」`)
+    const redeemed = await redeemInviteCode(
+      redeemCode.value.trim().toUpperCase(),
+      redeemRelationLabel.value.trim(),
+    )
+    // 09-20：兑换只产生待房主批准的申请，批准后才真正加入
+    message.success(`已提交加入「${redeemed.space_name ?? ''}」，等待房主批准`)
     redeemCode.value = ''
     // 加入新空间后刷新空间缓存（state-management.md：成员资格变更强制刷新）
     void spacesStore.load()
@@ -383,9 +393,18 @@ onMounted(() => {
             data-test="invite-redeem-input"
           />
         </NFormItem>
+        <NFormItem label="你与对方的关系" :label-props="{ for: 'invite-redeem-relation' }">
+          <NInput
+            v-model:value="redeemRelationLabel"
+            :maxlength="64"
+            placeholder="如：堂弟、朋友"
+            :input-props="{ id: 'invite-redeem-relation' }"
+            data-test="invite-redeem-relation-label"
+          />
+        </NFormItem>
         <NFormItem>
           <NButton type="primary" :loading="redeeming" data-test="invite-redeem-submit" @click="submitRedeem">
-            加入
+            申请加入
           </NButton>
         </NFormItem>
       </NForm>

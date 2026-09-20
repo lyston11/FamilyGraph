@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NAlert, NButton, NModal, NRadio, NRadioGroup, NSpin, useMessage } from 'naive-ui'
+import {
+  NAlert,
+  NButton,
+  NInput,
+  NModal,
+  NRadio,
+  NRadioGroup,
+  NSpin,
+  useMessage,
+} from 'naive-ui'
 
 import { ApiError } from '@/api/errors'
 import { fetchFamilySpaceOptions } from '@/api/spaces'
@@ -43,6 +52,8 @@ const selectedJoinId = ref<number | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
 const loadError = ref('')
+/** 与对方的关系词（自由文本，必填，≤64）——加入空间时必须说清是什么关系 */
+const relationLabel = ref('')
 
 const STATUS_LABELS: Record<FamilySpaceOption['status'], string> = {
   active: '已在该家庭空间中',
@@ -116,12 +127,28 @@ async function submit(): Promise<void> {
   if (spaceId === null || submitting.value || options.value === null) return
   submitting.value = true
   try {
+    const label = relationLabel.value.trim()
+    if (!label) {
+      message.warning('请先填写你与对方的关系')
+      submitting.value = false
+      return
+    }
     if (direction.value === 'invite') {
-      await spaces.inviteIntoFamilyHousehold(props.lineageSpaceId, spaceId, props.targetUserId)
-      message.success('邀请已发送，等待对方接受')
+      await spaces.inviteIntoFamilyHousehold(
+        props.lineageSpaceId,
+        spaceId,
+        props.targetUserId,
+        label,
+      )
+      message.success('邀请已发送，等待房主批准与对方接受')
     } else {
-      await spaces.requestJoinInFamily(props.lineageSpaceId, props.targetUserId, spaceId)
-      message.success('加入申请已发送，等待对方批准')
+      await spaces.requestJoinInFamily(
+        props.lineageSpaceId,
+        props.targetUserId,
+        label,
+        spaceId,
+      )
+      message.success('加入申请已发送，等待房主批准')
     }
     emit('done', direction.value)
     emit('update:visible', false)
@@ -199,6 +226,16 @@ function close(): void {
         </NAlert>
 
         <template v-else>
+          <div class="label-field">
+            <label class="label-caption" for="join-relation-label">你与对方的关系</label>
+            <NInput
+              id="join-relation-label"
+              v-model:value="relationLabel"
+              placeholder="如：堂弟、表姐、朋友"
+              :maxlength="64"
+              data-test="join-relation-label"
+            />
+          </div>
           <NAlert
             v-if="!activeList.some(available)"
             type="info"
@@ -285,6 +322,18 @@ function close(): void {
 
 .space-status--blocked {
   color: var(--fg-status-proposed);
+}
+
+.label-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.label-caption {
+  font-size: 13px;
+  color: var(--fg-ink-secondary);
 }
 
 .inline-action {

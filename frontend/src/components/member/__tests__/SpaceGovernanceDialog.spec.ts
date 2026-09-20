@@ -26,6 +26,8 @@ vi.mock('@/api/spaces', () => ({
   createSpace: vi.fn(),
   fetchSpaceMembers: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
+  approveMembership: vi.fn(),
+  setMemberRelationLabel: vi.fn(),
   removeOrWithdrawMembership: vi.fn(),
   resolveMembership: vi.fn(),
   joinByUser: vi.fn(),
@@ -176,9 +178,11 @@ describe('SpaceGovernanceDialog（v2 §0.2/§0.5 空间治理）', () => {
     // 已是空间成员的搜索结果被过滤
     expect(document.querySelector('[data-test="governance-invite-2"]')).toBeNull()
 
+    // 09-20：加入空间必须填关系词，否则不发邀请
+    await setInput('[data-test="governance-invite-relation-label"] input', '堂弟')
     mockedInvite.mockResolvedValue(makeMembership({ id: 20, user_id: 9, status: 'pending' }))
     click('[data-test="governance-invite-9"]')
-    await vi.waitFor(() => expect(mockedInvite).toHaveBeenCalledWith(1, 9))
+    await vi.waitFor(() => expect(mockedInvite).toHaveBeenCalledWith(1, 9, '堂弟'))
     wrapper.unmount()
   })
 

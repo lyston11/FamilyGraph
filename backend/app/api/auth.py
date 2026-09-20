@@ -101,6 +101,7 @@ def register(
         username=payload.name,
         pin=payload.pin,
         invite_code=payload.code,
+        relation_label=payload.relation_label,
         ip=ip,
     )
     return TokenPairResponse(

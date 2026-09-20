@@ -130,7 +130,7 @@ def test_invite_notification_live_domain_status(client, db_session) -> None:
 
     resp = client.post(
         f"/api/spaces/{space.id}/members",
-        json={"user_id": invitee.id},
+        json={"user_id": invitee.id, "relation_label": "堂兄弟"},
         headers=_login_header(client, "nt-invite"),
     )
     assert resp.status_code == 201, resp.text
@@ -141,7 +141,13 @@ def test_invite_notification_live_domain_status(client, db_session) -> None:
     assert pending_view.status_code == 404
     assert pending_view.json()["error"]["code"] == "PERSONAL_FAMILY_VIEW_NOT_FOUND"
 
-    # 接受后成为 active 成员：邀请通知可见，domain_status 实时投影为 active
+    # 09-20 审批链：房主先批准，受邀人再接受，之后才 active
+    approved = client.post(
+        f"/api/space-memberships/{member_id}/approve",
+        headers=_login_header(client, "nt-invite"),
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "pending"  # invite 仍需受邀人本人接受
     accept = client.post(
         f"/api/space-memberships/{member_id}/accept",
         headers=_login_header(client, "nt-invitee"),
@@ -179,7 +185,11 @@ def test_join_request_notification_to_target(client, db_session) -> None:
 
     resp = client.post(
         "/api/spaces/join-by-user",
-        json={"lineage_space_id": lineage.id, "target_user_id": manager.id},
+        json={
+            "lineage_space_id": lineage.id,
+            "target_user_id": manager.id,
+            "relation_label": "堂兄弟",
+        },
         headers=_login_header(client, "nt-joiner"),
     )
     assert resp.status_code == 201, resp.text

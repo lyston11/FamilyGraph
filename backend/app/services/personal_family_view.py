@@ -38,6 +38,7 @@ from app.models.term_registry import TermEntry
 from app.models.user import User
 from app.services import (
     kinship_presentation,
+    member_labels,
     steward_generations,
     steward_inferred,
     visibility,
@@ -1057,6 +1058,10 @@ def _view_payload_for_view(
             for edge, verified_alts in served_edges
         ],
         "topology_edges": topology_edges,
+        # 关系词标注：显示层，非亲属事实；按本次授权节点集合过滤
+        "label_edges": member_labels.labels_for(
+            session, space_id=space_id, visible_ids=visible_ids
+        ),
         "truncated": False,
         "next_cursor": None,
         "stale_reason": None,

@@ -34,7 +34,7 @@ from app.errors import (
 from app.models import User
 from app.models.account import Account
 from app.models.invite_code import InviteCode
-from app.services import audit, invite_codes
+from app.services import audit, invite_codes, member_labels
 from app.services.refresh_session import issue_refresh_session
 from app.utils import security, timeutil
 
@@ -56,6 +56,7 @@ def register_user(
     username: str,
     pin: str,
     invite_code: str | None = None,
+    relation_label: str | None = None,
     ip: str | None = None,
 ) -> RegistrationResult:
     """自助注册（POST /auth/register 命令；开关校验与 IP 限流在 HTTP 层前置）。"""
@@ -131,6 +132,7 @@ def register_user(
                 account_id=user.account.id,
                 ip=ip,
                 scene="register",
+                relation_label=member_labels.require_label(relation_label),
             )
 
         # 5. 直接登录态：refresh 会话与账号同事务落库（access 由 HTTP 层签发）
@@ -193,8 +195,13 @@ def revoke_my_invite_code(session: Session, ctx: ActorContext, code_id: int) -> 
         return invite_codes.revoke_code(session, code_id=code_id, actor=actor, ip=ctx.ip)
 
 
-def redeem_invite_code(session: Session, ctx: ActorContext, *, raw_code: str) -> InviteCode:
-    """设置页填码（已登录）：与注册码分支同一加入语义；stranger 码 400 拒绝。"""
+def redeem_invite_code(
+    session: Session, ctx: ActorContext, *, raw_code: str, relation_label: str
+) -> InviteCode:
+    """设置页填码（已登录）：产生待房主批准的 pending（09-20）；stranger 码 400 拒绝。
+
+    ``relation_label`` 必填：兑换人与码创建者之间的关系词。
+    """
     actor = load_actor(session, ctx)
     with command_transaction(session, immediate=True):
         code = invite_codes.resolve_usable_code(session, raw_code)
@@ -209,5 +216,6 @@ def redeem_invite_code(session: Session, ctx: ActorContext, *, raw_code: str) ->
             account_id=ctx.account_id,
             ip=ctx.ip,
             scene="redeem",
+            relation_label=member_labels.require_label(relation_label),
         )
     return code
