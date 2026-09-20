@@ -81,16 +81,36 @@ read_alembic() {
     printf '%s' "$out"
 }
 
+# 等待四个容器全部 healthy（有界）。
+# 为什么需要等待：install-prod-automation.sh 只等 api healthy；web/admin-web/agent
+# 的 healthcheck 有 start_period=10s、interval=30s，在 api 变 healthy 之后仍会
+# 处于 starting 数十秒。立即断言会稳定误报（首次实现就踩到了）。
+wait_all_healthy() {
+    local timeout="${FG_DEPLOY_HEALTH_TIMEOUT:-180}" waited=0 snapshot=""
+    while [ "$waited" -lt "$timeout" ]; do
+        snapshot="$(compose ps -a --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null || true)"
+        if [ "$(printf '%s\n' "$snapshot" | grep -c '|running|healthy$')" -eq 4 ]; then
+            return 0
+        fi
+        # 任一容器已退出就不必再等（等下去也不会自愈）
+        if printf '%s\n' "$snapshot" | grep -q '|exited|'; then
+            return 1
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    return 1
+}
+
 # 发布后校验：全部通过返回 0；任一失败打印原因并返回 1。
 verify_release() {
     local ok=1
 
-    # 4a 四个容器 running + healthy
-    local bad
-    bad="$(compose ps -a --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null \
-        | grep -v '|running|healthy$' || true)"
-    if [ -n "$bad" ]; then
-        warn "4a 容器未全部 healthy："; printf '%s\n' "$bad" >&2; ok=0
+    # 4a 四个容器 running + healthy（有界等待）
+    if ! wait_all_healthy; then
+        warn "4a 容器未在时限内全部 healthy："
+        compose ps -a --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null >&2 || true
+        ok=0
     else
         log "4a 容器全部 healthy（4 个）"
     fi
