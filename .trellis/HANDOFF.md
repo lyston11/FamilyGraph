@@ -1,10 +1,14 @@
 # FamilyGraph · Trellis 当前交接
 
-> 更新：2026-09-15。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 `cff6f8e` 与 MR-23 `b43602d` 已合入 main 并归档，任务 worktree/分支已清理。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
+> 更新：2026-09-20。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 `cff6f8e` 与 MR-23 `b43602d` 已合入 main 并归档，任务 worktree/分支已清理。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
 > 当前设计与验收要求看对应任务的 `prd.md`、`design.md`、`implement.md` 及最新研究记录；已实现行为看代码、迁移、测试和 Git 集成证据。工作流以 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 为准。本页末尾保留 v1 历史，已标为历史的 `.trellis/spec/` 条款不覆盖现行任务。
 > 架构入口：[系统架构与设计](../docs/ARCHITECTURE.md)；运行与验证入口：[README](../README.md)；数据播种：[DEV-DATA-SEEDING.md](../docs/DEV-DATA-SEEDING.md)。
 
 ## 当前最需要知道的事
+
+- **2026-09-20 线上环境上线：`https://fg.lyston.qzz.io`（与开发环境完全隔离）**。服务器上新增第二套容器化栈（独立 clone `/home/ubuntu/fg-prod`、卷 `familygraph-prod_app_data`、全新 `SECRET_KEY`/`AGENT_SERVICE_SECRET`/`ADMIN_JWT_SECRET`、宿主回环 8100/8101），经现有 Cloudflare 隧道的 `fg.lyston.qzz.io` Public Hostname 直连 `127.0.0.1:8100`（**不经宿主 nginx**，宿主 nginx 与其他站点未改动）。系统管理员后台**不挂任何公网 hostname**，仅 `ssh -L 8101:127.0.0.1:8101 lyston` 进入；线上 api/agent 不发布宿主端口。演示账号（朱元璋等 51 人，PIN 123456）由线上 `DEV_SEED_DEMO_DATA=1` 独立播种，首登不改密。验收全绿：公网 health 200、朱元璋公网登录 200、跨环境 token 双向 401、停线上不影响开发、备份 `integrity_check=ok`、安装器幂等。部署入口 `deploy/production/`，合同见 [spec/architecture/13](spec/architecture/13--13-production-deployment-2026-09-20.md)，逐条证据见 [verification.md](tasks/archive/2026-09/09-20-production-deployment-isolated/verification.md)。
+  - 顺带修掉两个既有缺陷：**admin 镜像在容器模式从未构建成功**（`main.css` 的 `@import shared/brand-tokens.css` 落在 `system-admin-frontend/` 上下文之外，`1bc95ca` 引入后一直未暴露，因开发是裸机）；**基 compose 白名单静默丢弃 5 个 env 键**（`ADMIN_INITIAL_PASSWORD`/`MEMORY_ENABLED`/`RAG_ENABLED`/`STEWARD_ASSIST_TERMINOLOGY`/`STEWARD_ASSIST_TIMEOUT_SECONDS`）。
+  - 运维须知：systemd **user manager** 环境不含 `docker` 组（manager 启动早于加组），涉及 docker 的 user unit 需自处置（现为 `prod-backup.sh` 内 `sg docker` 单次重执行）。
 
 - **2026-09-19 生产发布：`04a3adf` 已部署到 lyston 服务器**。发布前只读盘点发现远端检出虽已是 `04a3adf`，但两个服务进程仍停留在 09-19 17:26（北京，`33d8be6` 那一轮），**七个已合入提交的修复未生效**：`2d1e9bf`（候选冲突抑制/重复家庭卡）、`bdccfe5`（候选 prompt 字节预算与 `prompt_too_large` 终态）、`f60cd05`（亲属路径穿过非成员中间人）、`4e165bf`/`caba68c`（入空间需确认亲属链 + 空间管理员批准，禁止自批）、`d41c0ba`（治理面板自申请批准/拒绝）。发布按「后端先于 sidecar」执行：暂停 `familygraph-code-sync.timer` 防漂移 → `python -m app.backup` 在线备份（`data/backups/familygraph-20260919-130224.*`，`integrity_check=ok`，行数与主库一致）→ 重启 api（PID 1401495 → **1518626**）→ `npm run build` 重建 sidecar dist（哈希不变：`33d8be6..main` 未改 `agent/`）→ 重启 agent（PID 1405903 → **1519323**）。本轮**无迁移**（代码与生产库同为 `0051_run_event_timing`，`33d8be6..main` 未新增迁移文件）。加载验证不只看 HEAD：进程内 `GRAPH_SNAPSHOT_VERSION=authorized-graph-v3`、`path_genders`/`_path_visible_user_ids` 存在、`space_fsm.transition` 含 `self_requested` 管理员批准分支、`steward_assist` 含字节预算与 `prompt_too_large`、`EVENT_TYPES` 含 `run.compacted`。发布后 family/admin health 200、sidecar `healthz`/`readyz` 200、latency 端点 401（非 500）、admin 路由只在 8002（8000 对 `/admin-api/*` 与未知路径均 404）、维护循环每 5s 一跳、DB 计数与迁移版本均未变。**未发起任何真实模型请求。** 发布后 `familygraph-code-sync.timer` 已恢复。前端未重新发布：产品入口是本地 Vite（5173/5174）经 SSH 隧道提供，远端无 `frontend/dist`/`system-admin-frontend/dist` 制品。
 
