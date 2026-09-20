@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/12--12-listener-2026-09-04-0-8-bootstrap.md", "reason": "三 listener 拓扑与 admin 隔离合同：线上 admin 端口绑定与「后台不可公网直达」的验收依据"}
+{"file": ".trellis/spec/architecture/8--8-wal-ad-6.md", "reason": "备份必须用 online backup API、禁止运行期 cp 主库：线上备份定时器的实现依据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite WAL 与事务/备份约束：线上库初始化与迁移执行的依据"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "脱敏红线（PIN/JWT/管理员凭据不入日志）：Provider 密钥迁移脚本与安装脚本的日志纪律依据"}

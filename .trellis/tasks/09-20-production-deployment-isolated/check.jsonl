@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/12--12-listener-2026-09-04-0-8-bootstrap.md", "reason": "核对 admin listener 是否真的不可公网直达、家庭端是否零后台痕迹"}
+{"file": ".trellis/spec/architecture/8--8-wal-ad-6.md", "reason": "核对线上备份产物是否用 online backup API 且 integrity_check 通过"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对密钥迁移与安装过程未泄漏 PIN/JWT/管理员凭据到日志"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对本次改动的检查门禁范围与未运行检查的记录口径"}

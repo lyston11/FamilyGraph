@@ -1,0 +1,48 @@
+# FamilyGraph 线上环境叠加配置（与仓库根 docker-compose.yml 组合使用）
+#
+# 用途：在 lyston 服务器上与开发环境完全隔离地运行第二套栈，经 Cloudflare
+# 隧道以 https://fg.lyston.qzz.io 提供家庭端；系统管理员后台仅经宿主回环 +
+# SSH 隧道访问，不进入任何公网 hostname。
+#
+# 用法（必须在仓库根执行，两个文件一起给）：
+#   docker compose -p familygraph-prod \
+#     -f docker-compose.yml -f deploy/production/docker-compose.prod.yml up -d
+#
+# 或直接用 scripts/install-prod-automation.sh（幂等，推荐）。
+#
+# 隔离要点（与开发环境的差异，逐条对应 prd.md R1–R4）：
+#   - 固定项目名 familygraph-prod：卷/网络/容器名前缀确定，不随目录名漂移；
+#     与开发环境（裸机 systemd + 宿主目录）无任何共享资源。
+#   - api / agent 撤销全部宿主端口发布：线上只有 web 与 admin-web 两个
+#     回环入口，8000/8001/8002 在宿主上仍完全属于开发环境。
+#   - 镜像标签加 -prod 后缀：避免与 docker-compose.yml 的默认标签混用，
+#     也避免 docker builder 缓存把两套产物串起来。
+#
+# 注意：web / admin-web 的端口用 `!override` 显式替换而非追加，否则会与
+# 基文件继承来的端口列表合并（8080/8081 被一并发布）。
+
+name: familygraph-prod
+
+services:
+  api:
+    image: familygraph-prod-api:0.1.0
+    # 线上 api 不对宿主发布任何端口：家庭流量经 web 容器反代，内部协议
+    # 与 admin 协议只在容器网络内可达（绑定见基文件的静态 IP）。
+    ports: !override []
+
+  web:
+    image: familygraph-prod-web:0.1.0
+    # 家庭端唯一入口：宿主回环 8100，由 Cloudflare 隧道的
+    # fg.lyston.qzz.io Public Hostname 直连（不经宿主 nginx）。
+    ports: !override
+      - "127.0.0.1:8100:80"
+
+  admin-web:
+    image: familygraph-prod-admin-web:0.1.0
+    # 系统管理员后台：只发布宿主回环 8101，无公网 hostname、无 DNS 记录、
+    # 无隧道路由；访问方式为 ssh -L 8101:127.0.0.1:8101 <host>。
+    ports: !override
+      - "127.0.0.1:8101:80"
+
+  agent:
+    image: familygraph-prod-agent:0.1.0
