@@ -29,7 +29,7 @@ const mockedUpdate = vi.mocked(updateSpaceModelSetting)
 function cloudEntry(): AgentModelCatalogEntry {
   return {
     provider_id: 3,
-    name: 'liu-dada',
+    name: 'cloud-relay',
     kind: 'openai_compatible',
     api: 'openai-responses',
     models: ['gpt-5.6-sol', 'gpt-5.7'],

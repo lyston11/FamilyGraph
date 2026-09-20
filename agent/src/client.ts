@@ -68,7 +68,7 @@ export type ProviderPolicyResult =
  * sidecar and must never be logged or persisted. */
 export interface RunContextProvider {
   provider_id: string;
-  /** Stable provider name used by Pi (for example, "liu-dada"). */
+  /** Operator-chosen provider name used by Pi as the model provider key. */
   provider_name?: string | null;
   model: string | null;
   kind: "openai_compatible" | "local" | null;

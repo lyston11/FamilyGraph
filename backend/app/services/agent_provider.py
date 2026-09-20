@@ -17,11 +17,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import config
 from app.errors import VALIDATION_ERROR, raise_api_error
 from app.models.agent import AgentRun
 from app.models.agent_provider import (
@@ -43,18 +43,10 @@ AGENT_KIND_ASSISTANT = "assistant"
 AGENT_KIND_STEWARD = "steward"
 AGENT_KINDS: tuple[str, ...] = (AGENT_KIND_ASSISTANT, AGENT_KIND_STEWARD)
 
-# Canonical cloud profile copied from the developer's local Pi
-# ``~/.pi/agent/models.json``. Keep this metadata non-secret; credentials are
-# supplied separately through the admin API and encrypted at rest.
-STANDARD_PROVIDER_NAME = "liu-dada"
-STANDARD_MODEL = "gpt-5.6-sol"
-STANDARD_API = "openai-responses"
-STANDARD_BASE_URL = "https://api.liu-dada.com/v1"
-STANDARD_CONTEXT_WINDOW = 272_000
-STANDARD_MAX_TOKENS = 60_000
-STANDARD_REASONING = True
-STANDARD_INPUT_MODALITIES = ("text", "image")
-STANDARD_THINKING_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Provider 协议白名单：只有这两个 OpenAI 兼容适配器存在（sidecar 与网关同源）。
+# 这里刻意不再包含任何具体供应商名/模型名/端点：平台不绑定单一上游，
+# 官方与第三方只要提供 /responses 或 /chat/completions 即可注册使用。
+SUPPORTED_APIS: tuple[str, ...] = ("openai-completions", "openai-responses")
 
 
 @dataclass(frozen=True)
@@ -109,42 +101,47 @@ class ProviderResolution:
 
 
 def provider_profile_error(provider: AgentProvider, model: str | None = None) -> str | None:
-    """Return a stable reason when a cloud row is not the approved Pi profile.
+    """结构性校验：Provider 行是否具备可安全出站的最小完整信息。
 
-    Local providers remain supported as the optional sensitive-data fallback.
-    The standard-profile switch is checked at registration and resolution so
-    manually-mutated rows fail closed too.
+    这里**刻意不再比对任何具体供应商名、模型名或端点**。早期版本把云 Provider
+    硬钉死在一个受控 profile 上（name/model/base_url/协议/元数据逐字段相等），
+    带来两个实际问题：上游停服或变更协议即无法切换；无法接入自有或私网内的
+    兼容端点。
+
+    那层白名单原本想控制的是「用户数据可以发到哪里」。该职责现在由空间级
+    ``cloud_allowed``（空间所有者显式同意云执行，见 ``resolve_for_space``）
+    承担 —— 这是更合适的归属：数据出不出本机是使用者的决定，不是「是不是
+    某个特定供应商」的属性。
+
+    保留的校验仍然是安全控制，不可放宽：
+    - 云 Provider 必须有可解析的 http/https 绝对 URL（否则不知道该连哪里，
+      相对路径或空值只会变成难以诊断的运行期失败）；
+    - 协议必须是被支持的 OpenAI 适配器之一；
+    - allowlist 非空，且空间选中的 model 必须在其中（防止越权模型名一路
+      走到出站）。
+
+    ``kind=local`` 不做这些要求：本机端点的协议地址由运行环境决定。
     """
-    # Cloud inference is intentionally pinned to the same profile used by the
-    # local Pi installation.  There is no runtime environment escape hatch:
-    # relaxing this check would let a deployment silently route user data to an
-    # unreviewed endpoint/model.  Tests that need synthetic rows may
-    # monkeypatch the module constant explicitly; production config remains
-    # fail-closed.
-    if provider.kind == "local" or not config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY:
+    if provider.kind == "local":
+        # 本机端点：满足 local_required；cloud_allowed 不约束本地模型。
+        # 注意："local" 描述的是端点可达性，**不是**「数据不出网」的承诺 ——
+        # 本机网关完全可能把请求转发给外部厂商。数据出网由 cloud_allowed 控制。
         return None
-    if provider.name != STANDARD_PROVIDER_NAME:
-        return "provider_name_not_allowed"
-    if provider.api != STANDARD_API:
+    if provider.kind != "openai_compatible":
+        return "provider_kind_not_allowed"
+    if provider.api not in SUPPORTED_APIS:
         return "provider_api_not_allowed"
-    if (provider.base_url or "").rstrip("/") != STANDARD_BASE_URL:
-        return "provider_base_url_not_allowed"
-    if model is not None and model != STANDARD_MODEL:
-        return "provider_model_not_allowed"
-    if list(provider.allowed_models_json or []) != [STANDARD_MODEL]:
-        return "provider_model_allowlist_not_allowed"
-    if provider.context_window != STANDARD_CONTEXT_WINDOW:
-        return "provider_context_window_not_allowed"
-    if provider.max_tokens != STANDARD_MAX_TOKENS:
-        return "provider_max_tokens_not_allowed"
-    if bool(provider.reasoning) != STANDARD_REASONING:
-        return "provider_reasoning_not_allowed"
-    if tuple(provider.input_modalities_json or []) != STANDARD_INPUT_MODALITIES:
-        return "provider_input_modalities_not_allowed"
-    if tuple(provider.thinking_levels_json or []) != STANDARD_THINKING_LEVELS:
-        return "provider_thinking_levels_not_allowed"
-    if dict(provider.compat_json or {}):
-        return "provider_compat_not_allowed"
+    base_url = (provider.base_url or "").strip()
+    if not base_url:
+        return "provider_base_url_required"
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return "provider_base_url_invalid"
+    allowed_models = list(provider.allowed_models_json or [])
+    if not allowed_models:
+        return "provider_model_allowlist_empty"
+    if model is not None and model not in allowed_models:
+        return "model_not_allowed"
     return None
 
 
@@ -716,15 +713,17 @@ def resolve_runtime(
     elif provider.kind != "local":
         # Cloud requests without a credential are never sent anonymously.
         return None
+    if resolution.api not in SUPPORTED_APIS:
+        # 不猜协议：缺/非法 adapter 的行在结构校验（provider_profile_error）
+        # 与快照校验层面都已 fail-closed，走到这里说明数据异常。
+        # 早期版本会静默退回某个固定协议，那不是安全的默认值。
+        return None
     return ProviderRuntime(
         provider_id=provider.id,
         provider_name=provider.name,
         kind=provider.kind,
         model=resolution.model,
-        # A missing adapter is not a license to silently downgrade the
-        # Responses profile.  Current rows always carry api; legacy/malformed
-        # rows fail closed at profile resolution before reaching this fallback.
-        api=resolution.api or STANDARD_API,
+        api=resolution.api,
         compat=dict(resolution.compat),
         context_window=resolution.context_window or 272_000,
         max_tokens=resolution.max_tokens or 60_000,

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "核对新门禁语义已同步进规范，且未放宽出站/快照/重试合同"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对定向检查已跑、未运行项如实记录"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对新的 422 文案与审计不含密钥或供应商敏感信息"}
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "核对密钥只写不读、has_secret 语义未回归"}

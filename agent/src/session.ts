@@ -252,7 +252,7 @@ export function resolveProvider(
     modelId: provider.model,
     // Pi's model.provider must equal the key passed to registerProvider. Keep
     // the numeric DB id available in the backend projection for audit, but use
-    // the stable Pi name (liu-dada) when one is supplied.
+    // the operator-chosen Pi provider name when one is supplied.
     providerId: providerName,
     providerName,
   };

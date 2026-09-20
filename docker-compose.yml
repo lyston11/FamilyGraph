@@ -46,9 +46,10 @@ services:
       ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
       # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
-      # 首版云模型固定为与本机 Pi 一致的 liu-dada/gpt-5.6-sol profile；该
-      # 门禁由代码固定启用，不能通过部署环境变量关闭。local Provider
-      # 仍可由平台 operator 作为敏感数据回退注册。
+      # Provider 不绑定任何具体供应商：注册时做结构性校验（base_url 必须是
+      # http/https 绝对 URL、协议必须是受支持的 OpenAI 适配器之一、
+      # allowed_models 非空）。数据能否离开本机由空间级 cloud_allowed 决定。
+      # local Provider 仍可由平台 operator 作为本机端点注册。
       # P1 网络隔离：internal listener 只绑定 backend 网络静态 IP（web/宿主不可路由）
       INTERNAL_AGENT_API_HOST: 172.28.0.10
       # 09-04 网络隔离：admin listener 只绑定 admin 网络静态 IP（web/宿主不可路由）

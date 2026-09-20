@@ -151,42 +151,44 @@ def test_provider_secret_roundtrip_through_db(db_session):
     assert decrypt_secret(stored.secret_ciphertext) == "sk-db-roundtrip"
 
 
-def test_standard_liu_dada_profile_is_enforced_in_strict_mode(db_session, monkeypatch):
-    """生产门禁拒绝任意云 profile，但保留可选 local Provider。"""
-    from app import config
-    from app.services.agent_provider import STANDARD_MODEL, STANDARD_PROVIDER_NAME
+def test_third_party_cloud_provider_allowed_but_still_gated_by_cloud_consent(db_session):
+    """删掉供应商白名单后的语义：任意合规云 Provider 可用，但云同意仍必预。
 
-    monkeypatch.setattr(config, "AGENT_PROVIDER_STANDARD_PROFILE_ONLY", True)
-    _, space = create_agent_fixture(db_session, name="strict-profile")
-    provider = _provider(db_session, name="other-cloud", models=["model-x"])
-    _setting(db_session, space.id, provider.id, cloud=True)
-    denied = resolve_for_space(db_session, space.id)
-    assert denied.policy_result == POLICY_DENIED
-    assert denied.reason == "provider_name_not_allowed"
-
-    _, canonical_space = create_agent_fixture(db_session, name="strict-profile-ok")
-    canonical = AgentProvider(
-        name=STANDARD_PROVIDER_NAME,
-        kind="openai_compatible",
-        api="openai-responses",
-        base_url="https://api.liu-dada.com/v1",
-        compat_json={},
-        context_window=272000,
-        max_tokens=60000,
-        reasoning=True,
-        input_modalities_json=["text", "image"],
-        thinking_levels_json=["low", "medium", "high", "xhigh", "max"],
-        allowed_models_json=[STANDARD_MODEL],
-        enabled=True,
-        created_at=timeutil.utcnow(),
-        updated_at=timeutil.utcnow(),
-    )
-    db_session.add(canonical)
+    原以为「严格模式只接受 liu-dada」的断言已被有意废弃：数据能不能离开本机
+    由空间级 cloud_allowed（所有者显式同意）决定，不由「是不是某个供应商」决定。
+    这里同时验证两件事 —— 第三方可解析为 allowed，且缺云同意时仍被拒。
+    """
+    third_party = _provider(db_session, name="buddy2api", models=["workbuddy/gpt-5.4"])
+    third_party.api = "openai-completions"
+    third_party.base_url = "http://100.71.18.78:8787/v1"
     db_session.flush()
-    _setting(db_session, canonical_space.id, canonical.id, model=STANDARD_MODEL, cloud=True)
-    allowed = resolve_for_space(db_session, canonical_space.id)
+
+    # 已同意云 → allowed
+    _, consenting = create_agent_fixture(db_session, name="third-party-consented")
+    _setting(
+        db_session,
+        consenting.id,
+        third_party.id,
+        model="workbuddy/gpt-5.4",
+        cloud=True,
+    )
+    allowed = resolve_for_space(db_session, consenting.id)
     assert allowed.policy_result == POLICY_ALLOWED
-    assert allowed.provider_name == STANDARD_PROVIDER_NAME
+    assert allowed.provider_name == "buddy2api"
+    assert allowed.api == "openai-completions"
+
+    # 未同意云 → 仍拒绝（证明删门禁没有旁路云同意）
+    _, withholding = create_agent_fixture(db_session, name="third-party-withheld")
+    _setting(
+        db_session,
+        withholding.id,
+        third_party.id,
+        model="workbuddy/gpt-5.4",
+        cloud=False,
+    )
+    denied = resolve_for_space(db_session, withholding.id)
+    assert denied.policy_result == POLICY_DENIED_CLOUD_FORBIDDEN
+    assert denied.reason == "cloud_not_allowed"
 
 
 def test_denied_runtime_snapshot_cannot_be_revived_by_later_setting_change(db_session):

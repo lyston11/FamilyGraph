@@ -67,7 +67,7 @@ class ContextMessageOut(BaseModel):
 
 class ContextProviderOut(BaseModel):
     provider_id: int | None
-    # Stable Pi provider name (for example ``liu-dada``); provider_id remains
+    # Stable Pi provider name (an operator-chosen label); provider_id remains
     # the numeric DB/audit identifier and is retained for backwards compatibility.
     provider_name: str | None = None
     model: str | None

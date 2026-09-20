@@ -30,10 +30,10 @@ os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="familygraph-tests-")
 # 环境变量就绪后才能导入 config（其路径/密钥在导入时读取）
 from app import config  # noqa: E402
 
-# Synthetic provider rows are useful for protocol/authorization matrices, but
-# the production profile gate is not an environment switch.  Relax it only in
-# this test process; dedicated strict-mode tests set it back to True.
-config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
+# Synthetic provider rows are useful for protocol/authorization matrices.
+# The former standard-profile gate is gone: any provider with a valid http(s)
+# base_url and a supported protocol is registrable, so no test-only relaxation
+# of the production gate is needed any more.
 
 config.ensure_ready()
 
@@ -58,19 +58,6 @@ def db_session():
     session = SessionLocal()
     yield session
     session.close()
-
-
-@pytest.fixture(autouse=True)
-def _reset_synthetic_provider_gate():
-    """Keep synthetic matrix providers available without weakening production.
-
-    A few strict-profile tests temporarily monkeypatch the gate to ``True``;
-    resetting before and after every test prevents order-dependent leakage into
-    later protocol tests.
-    """
-    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
-    yield
-    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
 
 
 @pytest.fixture(autouse=True)
