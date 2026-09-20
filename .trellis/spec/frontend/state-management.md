@@ -35,6 +35,30 @@
 
 **Why**：页面（如 PersonProfileView）在会话内到达时重跑默认选择，会把上下文改回「最近 household」，覆盖用户所在的 lineage 上下文 → 目标被误判不可见（走查实测 P1）。会话内到达的页面必须沿用 `spaces.currentSpaceId`；上下文为空才兜底选择，且选择结果与页面语义不符时走安全不可见/空态，不导航回滚。
 
+### Convention: 启动期空间选择单点决策（09-20）
+
+**What**：默认空间与「家族 → household/lineage 落点」的判定集中在
+`composables/spaceSelection.ts`（纯函数，可单测）：
+`selectDefaultSpaceId`（优先级：最近 household > own/managed household > 第一个
+household > 第一个 lineage）、`resolveStartupSpaceId`（先定家族，再按当前路由选
+该家族内的 household 或 lineage）、`lineageForSpace` / `householdForLineage` /
+`buildFamilyGroups`。`ensureDefaultSpace` 是**唯一**的启动决策点，一次算出最终
+空间并只 `switchSpace` 一次。
+
+**Why**：启动期曾有三个写入者竞争 `currentSpaceId`——`spaces.load()` 取列表首项
+（服务端按 `created_at` 排序，最新加入的空间不等于用户想先看到的空间）、
+`ensureDefaultSpace` 按优先级选 household、`AppShell.syncRouteSpace` 监听
+`currentSpaceId` 再把当前家族对齐到路由所需类型。结果是选择器先显示一个空间、
+再跳到另一个（09-20 走查实测：朱元璋先显示「李家」再跳「朱氏皇族」）。
+
+**Prevention**：
+- `stores/spaces.ts` 的 `load()` 只刷新列表投影，**不挑选默认空间**，也保留既有
+  `currentSpaceId`；`currentSpace` getter 严格按 id 解析，不做「列表第一个」兜底。
+- `AppShell.syncRouteSpace` 只在**用户显式导航**（`route.name` 变化）时对齐家族
+  类型；不得把 `currentSpaceId` 或列表长度当触发源——那会二次切换启动决策的产物。
+- 退出空间等需要重新落位的场景显式调用 `selectDefaultSpaceId`，不依赖 `load()` 兜底。
+- 规则的任何一处改动必须同步 `spaceSelection.ts`，不在 store getter 或组件里复制第二份推断。
+
 ## 家庭端单主体会话与独立后台隔离（09-04 取代 09-01 的同 SPA 双主体条款）
 
 ### Convention: 家庭 auth store 只有 family_user 主体

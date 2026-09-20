@@ -12,6 +12,11 @@ import { useSpaceStatsStore } from '@/stores/spaceStats'
 import { useSpacesStore } from '@/stores/spaces'
 import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import { useUiStore } from '@/stores/ui'
+import {
+  defaultTargetForKind,
+  resolveStartupSpaceId,
+  selectDefaultSpaceId,
+} from './spaceSelection'
 import type { FamilySpace } from '@/types/api'
 
 /**
@@ -38,60 +43,18 @@ export type SpaceKind = FamilySpace['kind']
 
 export type SpaceContextKind = SpaceKind | 'none'
 
-export interface SelectDefaultSpaceOptions {
-  /** 当前登录用户 id；未登录时为 null（无 own/managed 判定） */
-  userId: number | null
-  /** 会话内最近使用的 household（ui store 内存偏好） */
-  recentHouseholdId: number | null
-  /**
-   * 目标空间是否持有 active space_admin 成员关系。成员数据按空间懒加载，
-   * 未加载成员关系的空间在此返回 false（不做任何本地猜测）。
-   */
-  isAdminOf?: (spaceId: number) => boolean
-}
-
-/**
- * 默认空间选择（纯函数，可单测）。输入空间列表必须来自服务端
- * `GET /spaces` 投影；同优先级按服务端列表顺序取第一个，保证确定性。
- */
-export function selectDefaultSpaceId(
-  spaces: readonly FamilySpace[],
-  options: SelectDefaultSpaceOptions,
-): number | null {
-  if (spaces.length === 0) return null
-
-  const householdsWith = (predicate: (space: FamilySpace) => boolean): FamilySpace[] =>
-    spaces.filter((space) => space.kind === 'household' && predicate(space))
-
-  // 1. 会话内最近使用的 household（必须仍是服务端列表中的 household）
-  if (options.recentHouseholdId !== null) {
-    const recent = householdsWith((space) => space.id === options.recentHouseholdId)
-    if (recent.length > 0) return recent[0]!.id
-  }
-
-  // 2. 用户 own（owner）或 managed（active space_admin）的 household
-  const ownOrManaged = householdsWith(
-    (space) =>
-      (options.userId !== null && space.owner_id === options.userId) ||
-      (options.isAdminOf?.(space.id) ?? false),
-  )
-  if (ownOrManaged.length > 0) return ownOrManaged[0]!.id
-
-  // 3. 第一个可用 household
-  const firstHousehold = spaces.find((space) => space.kind === 'household')
-  if (firstHousehold) return firstHousehold.id
-
-  // 4. 第一个 lineage
-  const firstLineage = spaces.find((space) => space.kind === 'lineage')
-  if (firstLineage) return firstLineage.id
-
-  return null
-}
-
-/** 空间类型 → 默认页面目标（design.md §1.1：两种页面语义） */
-export function defaultTargetForKind(kind: SpaceKind): { name: 'home' | 'family-space' } {
-  return kind === 'household' ? { name: 'home' } : { name: 'family-space' }
-}
+// 纯逻辑集中在 spaceSelection.ts（启动期单点决策的唯一实现）；此处 re-export
+// 保持既有 import 路径与测试可用，不复制第二份规则。
+export {
+  buildFamilyGroups,
+  defaultTargetForKind,
+  householdForLineage,
+  lineageForSpace,
+  resolveStartupSpaceId,
+  selectDefaultSpaceId,
+  type FamilySpaceGroup,
+  type SelectDefaultSpaceOptions,
+} from './spaceSelection'
 
 /** 模块级切换代际：并发调用 switchSpace 时，旧事务的后续步骤全部丢弃 */
 let switchEpoch = 0
@@ -217,15 +180,22 @@ export function useSpaceContext() {
     if (spaces.spaces.length === 0) {
       await spaces.load().catch(() => undefined)
     }
-    const defaultId = selectDefaultSpaceId(spaces.spaces, {
-      userId: auth.user?.id ?? null,
-      recentHouseholdId: ui.recentHouseholdId,
-      isAdminOf,
-    })
-    if (defaultId === null) return 'none'
+    // 启动期唯一决策点：一次算出最终空间（含按当前路由解析 household/lineage
+    // 落点），只切换一次。此前「先按优先级选 household、再由路由对齐到 lineage」
+    // 会让选择器先显示一个空间再跳到另一个（09-20 走查实测）。
+    const targetId = resolveStartupSpaceId(
+      spaces.spaces,
+      {
+        userId: auth.user?.id ?? null,
+        recentHouseholdId: ui.recentHouseholdId,
+        isAdminOf,
+      },
+      router.currentRoute.value.name,
+    )
+    if (targetId === null) return 'none'
 
-    if (spaces.currentSpaceId !== defaultId) {
-      const applied = await switchSpace(defaultId, { navigate: false })
+    if (spaces.currentSpaceId !== targetId) {
+      const applied = await switchSpace(targetId, { navigate: false })
       if (!applied) return 'none'
     }
 
@@ -261,6 +231,16 @@ export function useSpaceContext() {
       spaces.profileRefs = []
     }
     await spaces.leaveOrRemove(memberId)
+    // 退出的是当前空间 → 上下文已置空；`load()` 不再自行挑空间，这里显式落位到
+    // 剩余可用空间（仍按同一套优先级；无剩余则保持空，调用方走既有空态）。
+    if (spaces.currentSpaceId === null && spaces.spaces.length > 0) {
+      const nextId = selectDefaultSpaceId(spaces.spaces, {
+        userId: auth.user?.id ?? null,
+        recentHouseholdId: ui.recentHouseholdId,
+        isAdminOf,
+      })
+      if (nextId !== null) await switchSpace(nextId, { navigate: false })
+    }
   }
 
   return {

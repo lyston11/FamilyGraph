@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 
+import { householdForLineage, lineageForSpace } from '@/composables/spaceSelection'
+
 import { useAuthStore } from '@/stores/auth'
 import type {
   FamilySpace,
@@ -48,8 +50,16 @@ export const useSpacesStore = defineStore('spaces', {
     loading: false,
   }),
   getters: {
+    /**
+     * 当前空间：严格按 currentSpaceId 解析。
+     *
+     * 不做「列表第一个」兜底：服务端按 created_at 排序，用列表首项当默认空间
+     * 正是启动期显示错误空间的原因（09-20 走查实测）。无上下文时返回 null，
+     * 由启动决策（useSpaceContext.ensureDefaultSpace）决定落点。
+     */
     currentSpace(state): FamilySpace | null {
-      return state.spaces.find((s) => s.id === state.currentSpaceId) ?? state.spaces[0] ?? null
+      if (state.currentSpaceId === null) return null
+      return state.spaces.find((s) => s.id === state.currentSpaceId) ?? null
     },
     /** 当前 active membership；不读取 custody/profile 字段，避免跨域混用。 */
     currentMembership(state): SpaceMemberInfo | null {
@@ -92,54 +102,21 @@ export const useSpacesStore = defineStore('spaces', {
       return state.spaces.filter((space) => space.kind === 'lineage')
     },
     /**
-     * household → 所属 lineage：显式 lineage_space_id 优先；旧数据回退
-     * 「owner 唯一对应一个 lineage」的确定性推断，多候选不猜（返回 null）。
+     * household → 所属 lineage：判定规则在 spaceSelection（与启动决策共用同一份，
+     * 不在此复制第二份规则）。
      */
     lineageForSpace(state) {
-      return (spaceId: number): FamilySpace | null => {
-        const space = state.spaces.find((s) => s.id === spaceId && s.kind === 'household')
-        if (!space) return null
-        const linkedId = space.lineage_space_id ?? null
-        if (linkedId !== null) {
-          const linked = state.spaces.find((s) => s.id === linkedId && s.kind === 'lineage')
-          // 显式链接存在但目标不在当前授权投影时，不回退 owner 猜测，避免
-          // 把当前家庭错误显示到另一家族空间。
-          return linked ?? null
-        }
-        const owned = state.spaces.filter(
-          (s) => s.kind === 'lineage' && s.owner_id === space.owner_id,
-        )
-        return owned.length === 1 ? owned[0]! : null
-      }
+      return (spaceId: number): FamilySpace | null => lineageForSpace(state.spaces, spaceId)
     },
     /**
-     * lineage → 落点 household（家庭卡页的家族切换目标）：显式配对优先；
-     * 无显式配对时回退「owner 相等且未挂到其他家族」的确定性推断。
-     * 多候选时依次取：当前家庭卡（已在该家族内）→ 本人 own 的 → 服务端列表
-     * 第一个，保证切换总能确定性落位。
+     * lineage → 落点 household（家庭卡页的家族切换目标）：规则同上，共用纯函数。
      */
     householdForLineage(state) {
-      return (lineageId: number): FamilySpace | null => {
-        const lineage = state.spaces.find((s) => s.id === lineageId && s.kind === 'lineage')
-        if (!lineage) return null
-        let candidates = state.spaces.filter(
-          (s) => s.kind === 'household' && (s.lineage_space_id ?? null) === lineageId,
-        )
-        if (candidates.length === 0) {
-          candidates = state.spaces.filter(
-            (s) =>
-              s.kind === 'household' &&
-              (s.lineage_space_id ?? null) === null &&
-              s.owner_id === lineage.owner_id,
-          )
-        }
-        if (candidates.length === 0) return null
-        const current = candidates.find((s) => s.id === state.currentSpaceId)
-        if (current) return current
-        const userId = useAuthStore().user?.id
-        const own = userId === undefined ? [] : candidates.filter((s) => s.owner_id === userId)
-        return (own.length > 0 ? own : candidates)[0]!
-      }
+      return (lineageId: number): FamilySpace | null =>
+        householdForLineage(state.spaces, lineageId, {
+          currentSpaceId: state.currentSpaceId,
+          userId: useAuthStore().user?.id ?? null,
+        })
     },
     activeMembers(state): SpaceMemberInfo[] {
       return state.members.filter((m) => m.status === 'active')
@@ -160,9 +137,10 @@ export const useSpacesStore = defineStore('spaces', {
         const spaces = await fetchSpaces()
         if (generation !== this.generation) return
         this.spaces = spaces
-        if (this.currentSpaceId === null && this.spaces.length > 0) {
-          this.currentSpaceId = this.spaces[0].id
-        }
+        // 本 action 只刷新列表投影，**不挑选默认空间**：服务端按 created_at 排序，
+        // 「最新加入的空间」不等于用户想先看到的空间。默认空间由
+        // useSpaceContext.ensureDefaultSpace（启动期唯一决策点，含按路由落点）
+        // 决定；这里保留既有 currentSpaceId，避免启动期出现第二个写入者。
         if (this.currentSpaceId !== null) await this.loadMembers(this.currentSpaceId)
         else this.members = []
       } finally {

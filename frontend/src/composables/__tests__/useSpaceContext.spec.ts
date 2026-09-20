@@ -219,7 +219,9 @@ describe('useSpaceContext（空间切换事务）', () => {
     const { wrapper, ctx, router } = await mountHarness()
     const spaces = useSpacesStore()
     await spaces.load()
-    expect(spaces.currentSpaceId).toBe(7)
+    // 09-20：load() 只刷新列表，不再挑选默认空间（决策权在 ensureDefaultSpace）；
+    // 本用例验证 switchSpace 事务，故显式建立起始上下文。
+    spaces.currentSpaceId = 7
 
     const household = useHouseholdCardStore()
     const pfv = usePersonalFamilyViewStore()
@@ -276,6 +278,7 @@ describe('useSpaceContext（空间切换事务）', () => {
     const { ctx, router } = await mountHarness()
     const spaces = useSpacesStore()
     await spaces.load()
+    spaces.currentSpaceId = 7
 
     const applied = await ctx.switchSpace(999)
     expect(applied).toBe(false)
@@ -291,6 +294,7 @@ describe('useSpaceContext（空间切换事务）', () => {
     const { ctx } = await mountHarness()
     const spaces = useSpacesStore()
     await spaces.load()
+    spaces.currentSpaceId = 7
 
     const household = useHouseholdCardStore()
     let resolveStale!: (value: HouseholdCardSnapshot | null) => void
@@ -500,7 +504,7 @@ describe('useSpaceContext（退出空间）', () => {
     await flushPromises()
     const spaceCtx = ctx as ReturnType<typeof useSpaceContext> | null
     if (spaceCtx === null) throw new Error('harness did not initialize')
-    return { wrapper, ctx: spaceCtx }
+    return { wrapper, ctx: spaceCtx, router }
   }
 
   beforeEach(() => {
@@ -522,6 +526,54 @@ describe('useSpaceContext（退出空间）', () => {
       claim_status: 'claimed',
       profile_status: 'identity_confirmed',
     }
+  })
+
+  it('启动落点按路由一次到位：家族树页直接落 lineage，不经过 household 中间态', async () => {
+    // 09-20 跳变回归：朱元璋式数据（最新的 household 是别人拥有的「李家」）。
+    // 启动时若先按优先级选 household 再由路由对齐到 lineage，选择器会先显示
+    // 一个空间再跳到另一个；现在 ensureDefaultSpace 一次算出最终空间。
+    fetchSpacesMock.mockResolvedValue([
+      makeSpace({ id: 19, name: '李家', owner_id: 48, lineage_space_id: 20 }),
+      makeSpace({ id: 1, name: '明皇室', owner_id: 1, lineage_space_id: 2 }),
+      makeSpace({ id: 2, name: '朱氏皇族', owner_id: 1, kind: 'lineage' }),
+      makeSpace({ id: 20, name: '李氏家族', owner_id: 48, kind: 'lineage' }),
+    ])
+    const { ctx, router } = await mountHarness()
+    await router.push({ name: 'family-space' })
+    await flushPromises()
+
+    const kind = await ctx.ensureDefaultSpace()
+    const spaces = useSpacesStore()
+
+    expect(kind).toBe('lineage')
+    expect(spaces.currentSpaceId).toBe(2) // 直接是 lineage
+    // 未经过 household：否则会为 household 拉家庭卡投影
+    expect(fetchHouseholdCardMock).not.toHaveBeenCalled()
+    expect(fetchPersonalFamilyViewMock).toHaveBeenCalledWith(
+      2,
+      null,
+      expect.objectContaining({ progressive: true, signal: expect.any(AbortSignal) }),
+    )
+    // 成员投影只按最终空间拉一次
+    expect(fetchSpaceMembersMock.mock.calls.filter(([id]) => id === 1)).toEqual([])
+  })
+
+  it('启动落点按路由一次到位：家庭卡页直接落 household', async () => {
+    fetchSpacesMock.mockResolvedValue([
+      makeSpace({ id: 19, name: '李家', owner_id: 48, lineage_space_id: 20 }),
+      makeSpace({ id: 1, name: '明皇室', owner_id: 1, lineage_space_id: 2 }),
+      makeSpace({ id: 2, name: '朱氏皇族', owner_id: 1, kind: 'lineage' }),
+      makeSpace({ id: 20, name: '李氏家族', owner_id: 48, kind: 'lineage' }),
+    ])
+    const { ctx } = await mountHarness()
+    const spaces = useSpacesStore()
+
+    const kind = await ctx.ensureDefaultSpace()
+
+    expect(kind).toBe('household')
+    expect(spaces.currentSpaceId).toBe(1)
+    expect(fetchHouseholdCardMock).toHaveBeenCalledWith(1, null)
+    expect(fetchPersonalFamilyViewMock).not.toHaveBeenCalled()
   })
 
   it('退出当前空间：清理该空间缓存并把上下文落到剩余空间', async () => {

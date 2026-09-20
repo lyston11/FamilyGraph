@@ -405,8 +405,28 @@ describe('AppShell navigation（统一家庭壳）', () => {
     wrapper.unmount()
   })
 
-  it('进入家族树时，已恢复的家庭卡上下文自动切到显式配对 lineage', async () => {
+  it('启动落点不由壳二次切换：上下文变化不再触发家族对齐（09-20 跳变回归）', async () => {
+    // 回归背景：壳曾监听 currentSpaceId 并把当前家族对齐到路由所需类型，于是启动
+    // 决策（按优先级选 household）的产物立刻又触发一次切到 lineage，选择器先显示
+    // 一个空间再跳到另一个。现在路由落点由 ensureDefaultSpace 一次决定，壳只在
+    // **用户显式导航**（route.name 变化）时对齐。
     const { wrapper, pinia } = await mountShell({ path: '/family-tree' })
+    const spaces = useSpacesStore(pinia)
+    spaces.spaces = [
+      makeSpace({ id: 7, name: '明皇室', kind: 'household', lineage_space_id: 12 }),
+      makeSpace({ id: 12, name: '朱氏皇族', kind: 'lineage', owner_id: 1 }),
+    ]
+    spaces.members = [makeMember({ space_id: 7 })]
+    // 模拟启动决策把上下文落在配对 household（路由已是家族树，无 route.name 变化）
+    spaces.currentSpaceId = 7
+    await flushPromises()
+
+    expect(switchSpaceMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('用户显式导航到家族树时仍对齐到该家族的 lineage（route.name 触发）', async () => {
+    const { wrapper, pinia, router } = await mountShell({ path: '/' })
     const spaces = useSpacesStore(pinia)
     spaces.spaces = [
       makeSpace({ id: 7, name: '明皇室', kind: 'household', lineage_space_id: 12 }),
@@ -414,6 +434,9 @@ describe('AppShell navigation（统一家庭壳）', () => {
     ]
     spaces.currentSpaceId = 7
     spaces.members = [makeMember({ space_id: 7 })]
+    await flushPromises()
+
+    await router.push({ name: 'family-space' })
     await flushPromises()
 
     expect(switchSpaceMock).toHaveBeenCalledWith(12, undefined)

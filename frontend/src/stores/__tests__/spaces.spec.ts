@@ -144,14 +144,28 @@ describe('spaces store（AD-3）', () => {
     vi.clearAllMocks()
   })
 
-  it('加载后默认选中第一个空间并拉取成员', async () => {
+  it('加载只刷新列表：不自行挑选默认空间（决策权在 ensureDefaultSpace）', async () => {
     mockedFetch.mockResolvedValue([makeSpace(), makeSpace({ id: 2, name: '婚后小家' })])
     mockedMembers.mockResolvedValue([])
     const store = useSpacesStore()
     await store.load()
-    expect(store.currentSpaceId).toBe(1)
-    expect(store.currentSpace?.name).toBe('我家')
-    expect(mockedMembers).toHaveBeenCalledWith(1)
+    // 服务端按 created_at 排序，列表首项不代表用户想先看到它；启动决策由
+    // useSpaceContext.ensureDefaultSpace（含按路由落点）单点完成。
+    expect(store.spaces).toHaveLength(2)
+    expect(store.currentSpaceId).toBeNull()
+    expect(store.currentSpace).toBeNull()
+    expect(mockedMembers).not.toHaveBeenCalled()
+  })
+
+  it('加载保留既有当前空间并刷新其成员（不因列表顺序改写上下文）', async () => {
+    mockedFetch.mockResolvedValue([makeSpace(), makeSpace({ id: 2, name: '婚后小家' })])
+    mockedMembers.mockResolvedValue([])
+    const store = useSpacesStore()
+    store.currentSpaceId = 2
+    await store.load()
+    expect(store.currentSpaceId).toBe(2)
+    expect(store.currentSpace?.name).toBe('婚后小家')
+    expect(mockedMembers).toHaveBeenCalledWith(2)
   })
 
   it('无任何空间 → 空列表（首页展示创建空间入口）', async () => {
@@ -189,6 +203,8 @@ describe('spaces store（AD-3）', () => {
       { profile_id: 42, name: '先祖', added_at: '2026-08-26T00:00:00' },
     ])
     const store = useSpacesStore()
+    // 09-20：load 不再自行选择空间，上下文由调用方建立后 load 才拉取该空间投影
+    store.currentSpaceId = 3
     await store.load()
 
     expect(mockedProfileRefs).toHaveBeenCalledWith(3)
@@ -256,6 +272,7 @@ describe('spaces store（AD-3）', () => {
       { profile_id: 42, name: '先祖', added_at: '2026-08-26T00:00:00' },
     ])
     const store = useSpacesStore()
+    store.currentSpaceId = 1
     await store.load()
     expect(store.profileRefs).toHaveLength(1)
 

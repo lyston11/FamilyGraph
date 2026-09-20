@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useSpacesStore } from '@/stores/spaces'
 import { useUiStore } from '@/stores/ui'
+import { buildFamilyGroups } from '@/composables/spaceSelection'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import CosmicBackdrop from '@/components/canvas/CosmicBackdrop.vue'
 
@@ -45,7 +46,6 @@ const cosmicView = computed(() => route.name === 'home' || route.name === 'famil
 // 家族空间是唯一的切换维度。它在所有页面保持不变；当前页面决定选择后
 // 打开对应的家庭卡还是家族树，不再把 household/lineage 暴露成两套选择。
 const pickerCaption = '当前家族空间'
-const lineageSpaces = computed(() => spaces.lineageSpaces)
 type FamilySpaceOption = {
   value: number
   label: string
@@ -60,27 +60,16 @@ type FamilySpaceOption = {
  * 回退）落到家族项。解析不到所属 lineage 的孤立 household 保留为自己的
  * 家族项，保证独立家庭不会从切换器消失。
  */
-const familySpaceOptions = computed<FamilySpaceOption[]>(() => {
-  const lineageOptions = lineageSpaces.value.map((lineage) => ({
-    value: lineage.id,
-    label: lineage.name,
-    lineageId: lineage.id,
-    householdId: spaces.householdForLineage(lineage.id)?.id ?? null,
-    householdIds: spaces.spaces
-      .filter((space) => space.kind === 'household' && spaces.lineageForSpace(space.id)?.id === lineage.id)
-      .map((space) => space.id),
-  }))
-  const orphanHouseholds = spaces.spaces
-    .filter((space) => space.kind === 'household' && spaces.lineageForSpace(space.id) === null)
-    .map((space) => ({
-      value: space.id,
-      label: space.name,
-      lineageId: null,
-      householdId: space.id,
-      householdIds: [space.id],
-    }))
-  return [...lineageOptions, ...orphanHouseholds]
-})
+const familySpaceOptions = computed<FamilySpaceOption[]>(() =>
+  // 家族分组规则与启动决策共用同一份纯函数（不在此复制第二份推断）
+  buildFamilyGroups(spaces.spaces).map((group) => ({
+    value: group.value,
+    label: group.label,
+    lineageId: group.lineageId,
+    householdId: group.householdId,
+    householdIds: group.householdIds,
+  })),
+)
 
 const selectedFamilySpaceId = computed(() => {
   const currentId = spaces.currentSpaceId
@@ -190,7 +179,14 @@ function onThemeSwitch(value: boolean): void {
   ui.setTheme(value ? 'modern' : 'paper')
 }
 
-/** 一级页面导航只切换当前家族的视图，不重新选择或跳到其他家族。 */
+/**
+ * 一级页面导航只切换当前家族的视图，不重新选择或跳到其他家族。
+ *
+ * 只在**用户显式导航**时对齐当前家族的类型（家庭卡 ↔ 家族树）。启动期的落点
+ * 由 useSpaceContext.ensureDefaultSpace 一次决定（它已按当前路由解析
+ * household/lineage），这里不再响应 `currentSpaceId` 变化——否则启动决策的产物
+ * 会再次触发切换，表现为「先显示一个空间再跳到另一个」（09-20 走查实测）。
+ */
 async function syncRouteSpace(routeName: string | symbol | null | undefined): Promise<void> {
   const targetKind = routeName === 'family-space' ? 'lineage' : routeName === 'home' ? 'household' : null
   if (targetKind === null) return
@@ -202,11 +198,10 @@ async function syncRouteSpace(routeName: string | symbol | null | undefined): Pr
 }
 
 watch(
-  // 路由或空间列表/当前空间完成恢复后，把当前家族对齐到家庭卡/家族树。
-  // currentSpaceId 必须参与触发：硬刷新时默认空间恢复可能晚于路由解析，
-  // 只监听 route.name 会把 household 上下文留在 family-space 页面。
-  [() => route.name, () => spaces.spaces.length, () => spaces.currentSpaceId],
-  ([routeName]) => { void syncRouteSpace(routeName) },
+  // 仅路由变化触发；空间列表就绪由 familySpaceOptions/selectedFamilySpaceId 自身
+  // 的响应式在本次调用内解析，不需要把列表长度或 currentSpaceId 当触发源。
+  () => route.name,
+  (routeName) => { void syncRouteSpace(routeName) },
   { immediate: true },
 )
 
