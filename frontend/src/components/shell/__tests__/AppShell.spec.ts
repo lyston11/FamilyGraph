@@ -333,6 +333,79 @@ describe('AppShell navigation（统一家庭壳）', () => {
     wrapper.unmount()
   })
 
+  it('账号菜单提供「收到的邀请」入口，角标只算待我接受且与当前空间无关', async () => {
+    const { wrapper, pinia } = await mountShell()
+    const spaces = useSpacesStore(pinia)
+    // 当前空间是 7；邀请属于空间 3（我尚未加入）——缺陷场景：通知中心照不到它
+    spaces.spaces = [makeSpace({})]
+    spaces.currentSpaceId = 7
+    spaces.invitations = [
+      {
+        id: 95,
+        space_id: 3,
+        space_name: '马府',
+        space_kind: 'household',
+        direction: 'incoming',
+        stage: 'awaiting_me',
+        counterpart_user_id: 1,
+        counterpart_name: '朱元璋',
+        relation_label: '女婿',
+        owner_approved_at: '2026-09-20T14:09:19',
+        updated_at: '2026-09-20T14:09:19',
+      },
+      // 等房主批准：不是我的待办，不计入角标
+      {
+        id: 96,
+        space_id: 5,
+        space_name: '徐达家',
+        space_kind: 'household',
+        direction: 'incoming',
+        stage: 'awaiting_owner',
+        counterpart_user_id: 2,
+        counterpart_name: '徐达',
+        relation_label: null,
+        owner_approved_at: null,
+        updated_at: '',
+      },
+      // 我发起的申请：也不是我的待办
+      {
+        id: 97,
+        space_id: 6,
+        space_name: '常府',
+        space_kind: 'household',
+        direction: 'outgoing',
+        stage: 'awaiting_owner',
+        counterpart_user_id: 3,
+        counterpart_name: '常遇春',
+        relation_label: null,
+        owner_approved_at: null,
+        updated_at: '',
+      },
+    ]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="invitations-unread"]').text()).toBe('1')
+
+    await wrapper.find('[data-test="account-menu-trigger"]').trigger('click')
+    await flushPromises()
+    const entry = document.querySelector('[data-test="account-menu-invitations"]')
+    expect(entry).not.toBeNull()
+    expect(entry!.textContent).toContain('收到的邀请')
+    wrapper.unmount()
+  })
+
+  it('无待我接受的邀请时不显示角标', async () => {
+    const { wrapper, pinia } = await mountShell()
+    const spaces = useSpacesStore(pinia)
+    spaces.spaces = [makeSpace({})]
+    spaces.currentSpaceId = 7
+    spaces.invitations = []
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="invitations-unread"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('空间选择器只展示家族空间，并在家庭页切到对应家庭卡', async () => {
     const { wrapper, pinia } = await mountShell()
     const spaces = useSpacesStore(pinia)

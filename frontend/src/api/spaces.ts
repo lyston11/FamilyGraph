@@ -7,6 +7,7 @@ import type {
   ManagerRequestKind,
   ManagerTransferConsent,
   OwnershipTransfer,
+  PendingInvitation,
   SpaceManagerApplication,
   SpaceManagementBootstrap,
   SpaceMemberInfo,
@@ -121,6 +122,18 @@ export async function fetchSpaceManagementBootstrap(
 }
 export async function fetchSpaceMembers(spaceId: number): Promise<SpaceMemberInfo[]> {
   const { data } = await apiClient.get<SpaceMemberInfo[]>(`/spaces/${spaceId}/members`)
+  return data
+}
+
+/**
+ * 发给我的 / 我发起的 pending 空间邀请（跨全部空间）。
+ *
+ * 自足投影：自带 `space_name`，**不依赖当前空间上下文**——pending 受邀人还不是该空间
+ * active 成员，读不到该空间的通知（安全 404），通知中心又只按当前空间加载，
+ * 于是邀请此前在任何界面都不可达。本端点就是那条缺失的入口。
+ */
+export async function fetchMyInvitations(): Promise<PendingInvitation[]> {
+  const { data } = await apiClient.get<PendingInvitation[]>('/spaces/invitations')
   return data
 }
 

@@ -53,6 +53,7 @@ SUGGESTION_KIND_TITLES: dict[str, str] = {
 
 _INVITE_TITLE = "你有新的家庭空间邀请"
 _JOIN_REQUEST_TITLE = "有新的空间加入申请"
+_INVITE_APPROVED_TITLE = "邀请已获房主批准，等待你接受"
 
 
 # ---- 生成（由领域命令同事务调用）----
@@ -129,23 +130,75 @@ def record_suggestion_notification(
 def record_membership_request_notification(
     session: Session, *, space: FamilySpace, member: SpaceMember
 ) -> None:
-    """空间成员 pending 行创建时的自然映射：
-    - 邀请（user != added_by）→ 通知受邀人；
-    - 本人申请加入（user == added_by）→ 通知空间当前 active 管理员。
+    """空间成员 pending 行创建时的自然映射：受邀人一条 + 待批准房主一条。
+
+    两条判定互相独立（一条 pending 行可能同时需要两者，例如他人邀请）：
+
+    - **受邀人**：``added_by != user_id`` 且来源不是邀请码兑换。兑换人不是「被邀请人」
+      （其提交已是同意），给他发「你有新的家庭空间邀请」是错发的通知；
+    - **审批人**：仍需房主批准（无审批行的历史自申请行，或尚未批准的加入链行）时，
+      通知该空间当前 active ``space_admin``，让「待批准」进入通知而不是只躺在管理页计数里。
+      房主本人发起时**仍**通知：该行确实卡在他这一步，不提醒就会静默停在 pending。
+      只有「被批准的人就是房主自己」不发（他永远不能自批）。
+
+    邀请码兑换此前会误把「邀请」通知发给兑换人且完全不通知房主，两处都在此修正。
     """
     from app.services import space_fsm
 
-    if member.user_id != member.added_by:
+    approval = space_fsm.approval_for(session, member.id)
+    approved = approval is not None and approval.owner_approved_at is not None
+    origin = approval.origin if approval is not None else None
+
+    # ---- 受邀人通知 ----
+    invitee_is_invited = member.user_id != member.added_by and origin != "code"
+    if invitee_is_invited:
         recipient_account_id = _account_id_of(session, member.user_id)
-        actor_user_id = member.added_by
-        title = _INVITE_TITLE
-    else:
-        manager = space_fsm.active_space_manager(session, space.id)
-        if manager is None:
-            return
-        recipient_account_id = _account_id_of(session, manager.user_id)
-        actor_user_id = member.user_id
-        title = _JOIN_REQUEST_TITLE
+        if recipient_account_id is not None:
+            _add_notification(
+                session,
+                kind="space_membership",
+                space_id=space.id,
+                recipient_account_id=recipient_account_id,
+                space_member_id=member.id,
+                actor_user_id=member.added_by,
+                title=_INVITE_TITLE,
+            )
+
+    # ---- 待批准房主通知 ----
+    # 历史行（无审批行）只有「本人申请」需要房主批准；加入链行则看是否已批准。
+    needs_owner = (not approved) and (approval is not None or member.added_by == member.user_id)
+    if not needs_owner:
+        return
+    manager = space_fsm.active_space_manager(session, space.id)
+    # 被批准的人自己不需要这条通知（且他永远不能自批）；房主本人发起时仍要通知：
+    # 该行确实卡在他这一步，不提醒就会静默停在 pending。
+    if manager is None or manager.user_id == member.user_id:
+        return
+    manager_account_id = _account_id_of(session, manager.user_id)
+    if manager_account_id is None:
+        return
+    _add_notification(
+        session,
+        kind="space_membership",
+        space_id=space.id,
+        recipient_account_id=manager_account_id,
+        space_member_id=member.id,
+        actor_user_id=member.user_id,
+        title=_JOIN_REQUEST_TITLE,
+    )
+
+
+def record_invite_owner_approved_notification(
+    session: Session, *, space: FamilySpace, member: SpaceMember
+) -> None:
+    """房主批准 ``origin='invite'`` 的邀请后，通知受邀人球已在他这边。
+
+    没有这条通知时 ``awaiting_owner → awaiting_me`` 的跃迁完全静默：受邀人即使看到了
+    邀请，也不知道自己现在可以接受了。
+    """
+    if member.status != "pending":
+        return
+    recipient_account_id = _account_id_of(session, member.user_id)
     if recipient_account_id is None:
         return
     _add_notification(
@@ -154,8 +207,8 @@ def record_membership_request_notification(
         space_id=space.id,
         recipient_account_id=recipient_account_id,
         space_member_id=member.id,
-        actor_user_id=actor_user_id,
-        title=title,
+        actor_user_id=member.added_by,
+        title=_INVITE_APPROVED_TITLE,
     )
 
 
@@ -345,6 +398,7 @@ __all__ = [
     "mark_all_notifications_read",
     "mark_notification_read",
     "record_action_card_notification",
-    "record_suggestion_notification",
+    "record_invite_owner_approved_notification",
     "record_membership_request_notification",
+    "record_suggestion_notification",
 ]

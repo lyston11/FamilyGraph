@@ -26,6 +26,7 @@ from app.models.node_position import NodePosition
 from app.models.space import FamilySpace, SpaceMember
 from app.schemas.space import PositionItem
 from app.services import audit, member_labels, space_fsm
+from app.services import notifications as notifications_service
 from app.services.domain_events import emit
 from app.utils.timeutil import utcnow
 
@@ -453,10 +454,16 @@ def approve_membership(session: Session, ctx: ActorContext, member_id: int) -> S
     actor = load_actor(session, ctx)
     with command_transaction(session):
         member = session.get(SpaceMember, member_id)
-        if member is None or _space_or_404(session, member.space_id) is None:
+        if member is None:
             raise_api_error(404, SPACE_NOT_FOUND, "成员记录不存在")
+        space = _space_or_404(session, member.space_id)
         approval = space_fsm.approval_for(session, member.id)
         space_fsm.approve_pending_membership(member, actor.id, session)
+        # origin='invite' 批准后仍待受邀人接受：不通知他，"可以接受了"这一步就静默了
+        if approval is not None and approval.origin == "invite":
+            notifications_service.record_invite_owner_approved_notification(
+                session, space=space, member=member
+            )
         emit(
             session,
             event_type="space.membership.changed",

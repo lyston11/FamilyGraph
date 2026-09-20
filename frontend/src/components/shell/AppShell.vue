@@ -10,7 +10,7 @@
 // 旧全局搜索与授权边界冲突，后续按空间内检索另行设计（记录见任务 notes.md）。
 import { NPopover, NSelect, NSwitch, type SelectOption } from 'naive-ui'
 import { computed, h, ref, watch, type VNodeChild } from 'vue'
-import { Bell, BookOpen, ChartNoAxesColumn, ChevronRight, House, Network, Settings, ShieldCheck, UserRound } from 'lucide-vue-next'
+import { Bell, BookOpen, ChartNoAxesColumn, ChevronRight, House, Mail, Network, Settings, ShieldCheck, UserRound } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
@@ -148,6 +148,25 @@ const unreadCount = computed(() => {
   return spaceId === null ? 0 : notifications.unreadCountOf(spaceId)
 })
 
+/**
+ * 待我接受的邀请条数（账号菜单角标）。
+ *
+ * 与 unreadCount 不同，它**不依赖当前空间**：发给我的邀请往往属于我还没加入的
+ * 空间，那里的通知我根本读不到（安全 404）——这正是邀请此前不可达的根因。
+ */
+const invitationsAwaitingMe = computed(() => spaces.invitationsAwaitingMe)
+
+watch(
+  () => auth.isLoggedIn,
+  (loggedIn) => {
+    if (!loggedIn) return
+    // 邀请投影与当前空间无关，登录后即拉一次，使角标在任何页面都成立；
+    // 失败安静降级（不阻断壳层渲染）。
+    void spaces.loadInvitations().catch(() => undefined)
+  },
+  { immediate: true },
+)
+
 watch(
   () => spaces.currentSpaceId,
   (spaceId) => {
@@ -211,6 +230,11 @@ function isNavActive(name: string): boolean {
 
 async function goSettings(): Promise<void> {
   await router.push({ name: 'settings' })
+}
+
+/** 邀请入口与当前空间无关：直接进跨空间邀请页，不切换当前空间。 */
+async function goInvitations(): Promise<void> {
+  await router.push({ name: 'invitations' })
 }
 
 async function goSpaceManagement(): Promise<void> {
@@ -309,10 +333,18 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
               <button class="topbar-button account-trigger" type="button" aria-label="账号菜单"
                 title="账号菜单" data-test="account-menu-trigger">
                 <UserRound :size="19" aria-hidden="true" />
+                <span v-if="invitationsAwaitingMe > 0" class="unread-badge" data-test="invitations-unread">
+                  {{ invitationsAwaitingMe > 99 ? '99+' : invitationsAwaitingMe }}
+                </span>
               </button>
             </template>
             <div class="account-menu" role="menu" aria-label="账号菜单">
               <p class="account-name" data-test="account-menu-name">{{ auth.user?.name ?? '已登录' }}</p>
+              <button class="account-item" type="button" role="menuitem"
+                data-test="account-menu-invitations" @click="goInvitations">
+                <Mail :size="15" aria-hidden="true" />
+                收到的邀请<span v-if="invitationsAwaitingMe > 0" class="account-count">{{ invitationsAwaitingMe }}</span>
+              </button>
               <button class="account-item" type="button" role="menuitem"
                 data-test="account-menu-settings" @click="goSettings">设置</button>
               <button v-if="canManageCurrentSpace" class="account-item" type="button" role="menuitem"
@@ -400,8 +432,9 @@ defineExpose({ spacePickerOptions, onSpaceSelect })
 .theme-switch { flex-shrink: 0; margin-right: 6px; }
 .account-menu { display: flex; flex-direction: column; min-width: 160px; }
 .account-name { margin: 0; padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--fg-ink); border-bottom: 1px solid var(--fg-line); }
-.account-item { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; border: none; background: none; color: var(--fg-ink-secondary); font: inherit; text-align: left; cursor: pointer; }
+.account-item { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: none; background: none; color: var(--fg-ink-secondary); font: inherit; text-align: left; cursor: pointer; }
 .account-item:hover { color: var(--fg-ink); background: var(--fg-surface-sunken); }
+.account-count { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--fg-accent); color: var(--fg-surface); font-size: 11px; text-align: center; }
 .account-item--danger { color: var(--fg-status-disputed); }
 .shell-main { position: relative; min-width: 0; flex: 1; background: transparent; }
 .shell-main--cosmic { isolation: isolate; }

@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import type {
   FamilySpace,
   OwnershipTransfer,
+  PendingInvitation,
   SpaceMemberInfo,
   SpaceProfileRefInfo,
 } from '@/types/api'
@@ -13,6 +14,7 @@ import type {
 import {
   createOwnershipTransfer,
   createSpace,
+  fetchMyInvitations,
   fetchOwnershipTransfers,
   fetchSpaceMembers,
   fetchSpaceProfileRefs,
@@ -46,6 +48,14 @@ export const useSpacesStore = defineStore('spaces', {
     profileRefs: [] as SpaceProfileRefInfo[],
     /** 当前空间的 owner 移交记录（含历史；AC-F5） */
     transfers: [] as OwnershipTransfer[],
+    /**
+     * 发给我的 / 我发起的 pending 空间邀请（跨全部空间，自足投影）。
+     *
+     * 与 `members` 分离：members 只描述**当前**空间，而邀请必须在我当前空间不是
+     * 邀请空间时依然可达（这正是邀请此前不可见的根因）。
+     */
+    invitations: [] as PendingInvitation[],
+    invitationsError: null as string | null,
     membersError: null as string | null,
     loading: false,
   }),
@@ -123,6 +133,24 @@ export const useSpacesStore = defineStore('spaces', {
     },
     pendingForMe(state): SpaceMemberInfo[] {
       return state.members.filter((m) => m.status === 'pending')
+    },
+    /**
+     * 等我接受、且当前真的可以接受的邀请条数（账号菜单角标）。
+     *
+     * 只算 `direction='incoming'` + `stage='awaiting_me'`：等我批准的那类不是我的待办，
+     * 而等房主批准的 incoming 我此时也不能接受（服务端 403）。
+     */
+    invitationsAwaitingMe(state): number {
+      return state.invitations.filter(
+        (item) => item.direction === 'incoming' && item.stage === 'awaiting_me',
+      ).length
+    },
+    /** 待我接受（可操作）与我发起的申请（只读进度）两段，与视图分区一一对应 */
+    incomingInvitations(state): PendingInvitation[] {
+      return state.invitations.filter((item) => item.direction === 'incoming')
+    },
+    outgoingInvitations(state): PendingInvitation[] {
+      return state.invitations.filter((item) => item.direction === 'outgoing')
     },
     /** 当前空间的 pending 移交（含发起人与受让人视角） */
     pendingTransfers(state): OwnershipTransfer[] {
@@ -299,6 +327,43 @@ export const useSpacesStore = defineStore('spaces', {
         await this.loadMembers(space.id)
       }
     },
+    /**
+     * 读取发给我的 / 我发起的 pending 邀请（跨全部空间）。
+     *
+     * 世代校验同 `load`：登出或切会话后的迟到响应不得回写新状态。
+     */
+    async loadInvitations(): Promise<PendingInvitation[]> {
+      const generation = this.generation
+      this.invitationsError = null
+      try {
+        const rows = await fetchMyInvitations()
+        if (generation !== this.generation) return []
+        this.invitations = rows
+        return rows
+      } catch (error) {
+        if (generation === this.generation) {
+          this.invitationsError = error instanceof Error ? error.message : '邀请加载失败'
+        }
+        throw error
+      }
+    },
+    /**
+     * 接受 / 拒绝一条发给我的邀请（复用既有成员决议端点）。
+     *
+     * 授权与顺序仍由服务端判定（未获房主批准时接受返回 403）；成功后重读邀请列表，
+     * 接受时再 `load()` 让新空间进入「我的空间」。
+     */
+    async resolveInvitation(memberId: number, action: 'accept' | 'reject') {
+      const updated = await resolveMembership(memberId, action)
+      await this.loadInvitations()
+      if (action === 'accept') await this.load()
+      return updated
+    },
+    /** 撤回我发起的 pending（既有 D8 断连轨：pending 时发起方可撤回）。 */
+    async withdrawInvitation(memberId: number) {
+      await removeOrWithdrawMembership(memberId)
+      await this.loadInvitations()
+    },
     clear() {
       this.generation += 1
       this.loading = false
@@ -306,6 +371,8 @@ export const useSpacesStore = defineStore('spaces', {
       this.members = []
       this.profileRefs = []
       this.transfers = []
+      this.invitations = []
+      this.invitationsError = null
       this.membersError = null
       this.currentSpaceId = null
     },

@@ -105,6 +105,40 @@ class SpaceMemberOut(BaseModel):
     updated_at: datetime
 
 
+class PendingInvitationOut(BaseModel):
+    """发给我的 / 我发起的 pending 空间邀请（跨空间自足投影）。
+
+    与 ``SpaceMemberOut`` 的区别：本投影自带 ``space_name``，因此**不需要**当前空间
+    上下文即可渲染——pending 受邀人尚未是该空间 active 成员，读不到该空间的通知，
+    这正是邀请此前不可达的根因。
+
+    ``direction`` / ``stage`` 是 ``space_fsm`` 审批进度的只读映射，不在前端二次推导：
+
+    - ``direction='incoming'``：别人邀请我（origin='invite'，或历史行 added_by != 我）；
+    - ``direction='outgoing'``：我发起的加入（origin ∈ {join_request, code}，
+      或历史行 added_by == 我）；
+    - ``stage='awaiting_owner'``：还没获房主批准，我此时不能接受；
+    - ``stage='awaiting_me'``：等我接受。
+
+    ``counterpart_name`` 按调用方对该人的实际可见性给出；不可见为 ``null``
+    （不用 masked 哨兵：本投影不承诺字段形状，只承诺不泄露）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    space_id: int
+    space_name: str
+    space_kind: Literal["household", "lineage"]
+    direction: Literal["incoming", "outgoing"]
+    stage: Literal["awaiting_owner", "awaiting_me"]
+    counterpart_user_id: int | None = None
+    counterpart_name: str | None = None
+    relation_label: str | None = None
+    owner_approved_at: datetime | None = None
+    updated_at: datetime
+
+
 class SpaceProfileRefOut(BaseModel):
     """待确档最小节点引用（AC-F2 可观测性）：仅名字，无日期/简介/头像等字段。"""
 

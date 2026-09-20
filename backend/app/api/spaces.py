@@ -33,6 +33,7 @@ from app.schemas.space import (
     ManagerTransferConsentDecision,
     ManagerTransferConsentOut,
     MemberRelationLabelOut,
+    PendingInvitationOut,
     PositionsPayload,
     SpaceCreate,
     SpaceInviteCreate,
@@ -44,7 +45,7 @@ from app.schemas.space import (
     SpaceUpdate,
 )
 from app.schemas.v2_foundation import TransferOut
-from app.services import space_fsm
+from app.services import member_labels, space_fsm
 
 router = APIRouter(tags=["spaces"])
 
@@ -363,20 +364,116 @@ def list_space_profile_refs(
     ]
 
 
-@router.get("/spaces/invitations", response_model=list[SpaceMemberOut])
+@router.get("/spaces/invitations", response_model=list[PendingInvitationOut])
 def list_my_invitations(
     session: Session = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
-) -> list[SpaceMemberOut]:
-    """发给我的 pending 空间邀请（跨全部空间）。"""
+) -> list[PendingInvitationOut]:
+    """发给我的 / 我发起的 pending 空间邀请（跨全部空间，自足投影）。
+
+    为什么需要这个专用端点：pending 受邀人**不是**该空间 active 成员，读不到该空间
+    的通知（``authorized_space_or_404`` 安全 404），而前端通知中心只按当前空间加载——
+    于是邀请在任何界面都不可达。本投影自带 ``space_name``，不依赖当前空间上下文。
+
+    授权：只返回 ``user_id == 当前账号`` 的行，不含任何其他成员行。
+    """
     actor, _account = identity
     rows = (
         session.query(SpaceMember)
-        .filter(SpaceMember.user_id == actor.id, SpaceMember.status == "pending")
+        .filter(SpaceMember.user_id == actor.id)
         .order_by(SpaceMember.updated_at.desc())
         .all()
     )
-    return [_member_out_with_name(session, m) for m in rows]
+    return [
+        out
+        for out in (
+            _pending_invitation_out(session, actor, member)
+            for member in rows
+            if space_fsm.effective_status(member) == "pending"
+        )
+        if out is not None
+    ]
+
+
+def _pending_invitation_out(
+    session: Session, actor: User, member: SpaceMember
+) -> PendingInvitationOut | None:
+    """单条 pending 行的跨空间投影（空间被删除等异常行返回 None）。"""
+    space = session.get(FamilySpace, member.space_id)
+    if space is None:  # pragma: no cover - FK 保证存在
+        return None
+    approval = space_fsm.approval_for(session, member.id)
+    direction: Literal["incoming", "outgoing"]
+    stage: Literal["awaiting_owner", "awaiting_me"]
+    if approval is not None:
+        # 加入链行：来源决定方向，房主批准时刻决定阶段
+        direction = "incoming" if approval.origin == "invite" else "outgoing"
+        approved = approval.owner_approved_at is not None
+        stage = "awaiting_me" if (approval.origin == "invite" and approved) else "awaiting_owner"
+    else:
+        # 历史行（无审批行）：沿用旧语义——本人申请由房主批准，他人邀请由本人接受
+        self_requested = member.added_by == member.user_id
+        direction = "outgoing" if self_requested else "incoming"
+        stage = "awaiting_owner" if self_requested else "awaiting_me"
+
+    counterpart_id = _invitation_counterpart(session, actor.id, member, direction)
+    counterpart_name: str | None = None
+    if counterpart_id is not None:
+        counterpart = session.get(User, counterpart_id)
+        if counterpart is not None:
+            from app.services import visibility
+
+            decision = visibility.evaluate(
+                session,
+                actor,
+                counterpart,
+                space_context=space.id,
+                purpose=visibility.PURPOSE_PROFILE,
+            )
+            if decision.visible:
+                counterpart_name = counterpart.name
+    label = (
+        member_labels.pair_for(
+            session, space_id=space.id, user_a_id=actor.id, user_b_id=counterpart_id
+        )
+        if counterpart_id is not None
+        else None
+    )
+    return PendingInvitationOut(
+        id=member.id,
+        space_id=space.id,
+        space_name=space.name,
+        space_kind="lineage" if space.kind == "lineage" else "household",
+        direction=direction,
+        stage=stage,
+        counterpart_user_id=counterpart_id,
+        counterpart_name=counterpart_name,
+        relation_label=label.label if label is not None else None,
+        owner_approved_at=approval.owner_approved_at if approval is not None else None,
+        updated_at=member.updated_at,
+    )
+
+
+def _invitation_counterpart(
+    session: Session, actor_id: int, member: SpaceMember, direction: str
+) -> int | None:
+    """邀请的另一端：邀请人（incoming）或我申请的落点（outgoing）。
+
+    incoming 由 ``added_by`` 直接给出；outgoing 的落点不落在成员行上，只能从加入时
+    写入的关系词标注反解——标注行的一端必然是我。存在多行时无法唯一确定，返回 None
+    （宁可缺字段也不猜一对标注）。
+    """
+    if direction == "incoming":
+        return member.added_by if member.added_by != actor_id else None
+    rows = member_labels.labels_for(session, space_id=member.space_id)
+    others = {
+        row["to_user_id"] if row["from_user_id"] == actor_id else row["from_user_id"]
+        for row in rows
+        if actor_id in (row["from_user_id"], row["to_user_id"])
+    }
+    if len(others) != 1:
+        return None
+    return int(next(iter(others)))
 
 
 @router.post("/spaces/{space_id}/members", status_code=201, response_model=SpaceMemberOut)
