@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "核验审批链与标注边不越权"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "核验标注边不进入亲属图"}

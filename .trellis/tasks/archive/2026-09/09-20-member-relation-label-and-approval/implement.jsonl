@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "空间成员 FSM、审批与加入准入合同"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "SourceFact 与亲属事实分层边界"}
+{"file": ".trellis/spec/frontend/family-tree-layout.md", "reason": "家族树连线与布局合同"}
