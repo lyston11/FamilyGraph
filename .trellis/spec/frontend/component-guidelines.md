@@ -15,6 +15,22 @@
 - 组件按需 import（`NButton`/`NModal` 等），不用全局注册、不用 unplugin resolver。
 - 消息/确认/通知一律 `useMessage()` / `useDialog()` / `useNotification()`（App 层 providers 已在 main.ts 备好）；禁止任何全局函数式弹窗。注意只能在 setup 上下文调用，非 setup 场景经 store 转发。
 - `v-loading` → `<n-spin>` 包裹；`el-dialog` → `NModal preset="card"`；`el-drawer` → `NDrawer`；`el-table` → `NDataTable`（列定义 `DataTableColumns<T>` + h() render）。
+- **卡片弹窗必须声明宽度**（`preset="card"`）：naive 没有给 card preset 宽度上限（`dialog` preset 自带 `width:446px` + `max-width:calc(100vw - 32px)`，`card` 走 `.n-card { width:100% }` 且无 max-width），外层滚动容器也不限宽，所以不声明就会铺满视口。约定写在组件自己的**非 scoped** `<style>` 块里，用 `data-test` 锚定 teleport 到 body 的根节点：
+
+  ```vue
+  <style>
+  /* n-modal 卡片根节点 teleport 到 body：用 data-test 锚定宽度（非 scoped 必需） */
+  [data-test='one-time-pin-dialog'] {
+    width: min(420px, calc(100vw - 48px));
+  }
+  </style>
+  ```
+
+  - 必须**非 scoped**：弹窗 teleport 到 `body`，scoped 属性对不上会静默失效。
+  - 取值从既有尺度取（360/380/400/420/460/520/700），按内容量选；窄屏一律 `calc(100vw - 48px)`。
+  - 一条规则可用逗号共享多个 `data-test`（同一组件的多个弹窗）。
+  - **不要**改用全局 `.n-modal.n-card { width: … }`：它的特异度 (0,2,0) 高于 `[data-test='…']` (0,1,0)，会把各弹窗挑选的取值一次性覆盖成同一个值（实测：既有 360px 被覆盖为 560px）。
+  - 契约测试 `components/member/__tests__/modal-widths.spec.ts` 穷举全部 card 弹窗断言宽度声明存在——**新增弹窗漏写宽度会直接失败**（09-20 的缺口正是 5 个弹窗漏了这条）。
 - NSelect 的选项禁用/置灰走 options 数据的 `disabled` 字段（computed 注入），不是模板级属性——迁移 el-option `:disabled` 时最容易丢。
 - NBadge 无 `type="primary"`，用 `type="info"`（naive-themes 已把 info 对齐主题色板）。
 - 日期选择空值必须 `'' ⇄ null` 映射（NDatePicker 传空串崩溃）。

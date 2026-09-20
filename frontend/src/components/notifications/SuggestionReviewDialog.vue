@@ -180,7 +180,6 @@ async function onDismiss(): Promise<void> {
     v-model:show="opened"
     preset="card"
     class="suggestion-dialog"
-    :style="{ maxWidth: '520px' }"
     title="建议详情"
     data-test="suggestion-dialog"
   >
@@ -292,5 +291,15 @@ async function onDismiss(): Promise<void> {
   .sug-actions :deep(.n-button--small-type) {
     min-height: 44px;
   }
+}
+</style>
+<style>
+/* n-modal 卡片根节点 teleport 到 body：用 data-test 锚定宽度（非 scoped 必需）。
+ * naive 的 preset="card" 没有内置宽度上限（card 的 width:100% 会取到视口宽），
+ * 所以每个卡片弹窗都要在这里给出宽度；width: min(Npx, calc(100vw - 48px))
+ * 在窄屏保留 24px 双侧留白。见 spec/frontend/component-guidelines.md。
+ * 此处保持原来的 520px（原为内联 maxWidth，收敛为同形约定）。 */
+[data-test='suggestion-dialog'] {
+  width: min(520px, calc(100vw - 48px));
 }
 </style>
