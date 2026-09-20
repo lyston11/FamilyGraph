@@ -1,0 +1,40 @@
+- generic [ref=e4]:
+  - complementary [ref=e5]:
+    - link "FamilyGraph 我的家庭" [ref=e6] [cursor=pointer]:
+      - /url: /
+      - generic [ref=e12]: FamilyGraph
+    - generic [ref=e13]:
+      - generic [ref=e14]: 当前家族空间
+      - generic "切换当前空间" [ref=e15]:
+        - generic [ref=e17] [cursor=pointer]:
+          - generic: 选择空间
+          - img "loading" [ref=e18]
+    - navigation "主导航" [ref=e25]:
+      - link "我的家庭" [ref=e26] [cursor=pointer]:
+        - /url: /
+      - link "家族树" [ref=e31] [cursor=pointer]:
+        - /url: /family-tree
+      - link "统计" [ref=e38] [cursor=pointer]:
+        - /url: /stats
+    - navigation "次级导航" [ref=e41]:
+      - link "记忆与知识" [ref=e42] [cursor=pointer]:
+        - /url: /memory
+      - link "设置" [ref=e46] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e55]:
+      - generic [ref=e56]: 当前账户
+      - strong [ref=e57]: 已登录
+  - generic [ref=e58]:
+    - banner [ref=e59]:
+      - generic [ref=e60]:
+        - generic [ref=e61]: 家庭空间
+        - strong [ref=e64]: 我的空间
+      - generic [ref=e65]:
+        - switch "切换配色主题（暮色 / 雾青）" [ref=e66]:
+          - generic [ref=e68] [cursor=pointer]:
+            - generic [ref=e69]: 雾青
+            - generic [ref=e70]: 暮色
+        - link "通知" [ref=e71] [cursor=pointer]:
+          - /url: /notifications
+        - button "账号菜单" [ref=e75] [cursor=pointer]
+    - main [ref=e79]
