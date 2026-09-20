@@ -6,6 +6,18 @@
 
 ## 当前最需要知道的事
 
+- **2026-09-20 本机 Buddy2api 已接入两侧后端（tailnet 私网）**：Mac 上 Buddy2api
+  （`127.0.0.1:8787`，OpenAI 兼容）经 `tailscale serve --bg --http 8443` 暴露到 tailnet，
+  服务器侧（开发后端与线上 api 容器，两者都已实测可达）以
+  `base_url=http://lystonmacbook-air.tail79d583.ts.net:8443/v1`、
+  `api=openai-responses`、`model=workbuddy/gpt-5.6-sol` 注册为 Provider `buddy2api`。
+  两侧平台默认与既有空间设置（space 1 assistant、space 2 assistant/steward）已切到它，
+  **端到端真实调用验证通过**（两侧 egress 审计均为 `provider_id=2 / upstream_status=200`）。
+  注意：Buddy2api 会把请求转发给消费级 AI 厂商，因此它注册为 `openai_compatible`（云），
+  需要空间 `cloud_allowed=1`；不要改成 `local`（那会旁路云同意）。**Buddy2api 进程由用户
+  在自己的终端手工管理，不接 launchd / 不做开机自启**（曾因 launchd 与手工实例争用同一
+  数据库而 crash-loop，已移除）。Provider 密钥经 `/tmp/b2a-new-key`（600）交付，未入库。
+
 - **2026-09-20 Provider 不再绑定单一供应商**：删除了把云 Provider 硬钉死在
   `liu-dada/gpt-5.6-sol` 的代码门禁（含 `config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY`
   与 9 个 `STANDARD_*` 常量）。现在**官方或任意第三方，只要提供 OpenAI 兼容的
