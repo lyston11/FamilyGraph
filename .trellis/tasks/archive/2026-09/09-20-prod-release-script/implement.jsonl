@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/13--13-production-deployment-2026-09-20.md", "reason": "线上栈隔离不变量、端口/域名矩阵与发布顺序约束：本脚本必须维持的合同"}
+{"file": ".trellis/spec/architecture/8--8-wal-ad-6.md", "reason": "备份必须走 online backup API、禁止运行期 cp 主库：发布前备份的实现依据"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "脱敏红线：脚本输出不得含密钥值"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查门禁范围与未运行检查的记录口径"}
