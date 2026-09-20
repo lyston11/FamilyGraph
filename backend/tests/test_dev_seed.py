@@ -397,9 +397,9 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         by_name["朱祁镇"].id,
         by_name["钱皇后"].id,
     }
-    assert _member_ids(li_household) == {by_name["李贞"].id, by_name["朱元璋"].id}
-    # 朱元璋只在李家 household：家庭空间成员资格不等于家族空间成员资格，
-    # 家族树必须先经目标本人批准独立 lineage 申请才能读取。
+    assert _member_ids(li_household) == {by_name["李贞"].id, by_name["朱佛女"].id}
+    # 朱元璋既不在李家 household、也不在李氏家族 lineage：家庭空间成员资格不等于
+    # 家族空间成员资格，家族树必须先经目标本人批准独立 lineage 申请才能读取。
     assert _member_ids(li_lineage) == {
         by_name["李贞"].id,
         by_name["朱佛女"].id,
@@ -407,6 +407,7 @@ def test_seed_creates_demo_family_on_empty_db(db_session, monkeypatch) -> None:
         by_name["李景隆"].id,
     }
     assert by_name["朱元璋"].id not in _member_ids(li_lineage)
+    assert by_name["朱元璋"].id not in _member_ids(li_household)
 
     relations = db_session.query(Relation).all()
     assert len(relations) == 74

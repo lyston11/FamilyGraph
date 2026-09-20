@@ -16,6 +16,9 @@ class HouseholdCardMemberOut(BaseModel):
     user_id: int
     display: dict[str, Any]
     household_label: str
+    # viewer 视角的关系称谓，取自同一份已授权 PFV 投影；无授权路径时为 None
+    # （不生成占位，不泄露「是否存在关系」）。
+    relation_term: str | None = None
     visibility_level: VisibilityLevel
 
 

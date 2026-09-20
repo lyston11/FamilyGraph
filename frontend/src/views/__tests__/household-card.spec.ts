@@ -446,3 +446,60 @@ describe('HouseholdCardView 375px 响应式（Phase 7）', () => {
     wrapper.unmount()
   })
 })
+
+describe('家庭卡成员关系称谓（09-20）', () => {
+  it('渲染服务端下发的 relation_term，前端不自推', async () => {
+    mockedFetchHouseholdCard.mockResolvedValue(
+      makeCardSnapshot({
+        members: [
+          {
+            user_id: 2,
+            display: makeDisplay(2, '朱佛女'),
+            household_label: '成员',
+            relation_term: '妻子',
+            visibility_level: 'household_detail',
+          },
+        ],
+      }),
+    )
+    const { wrapper } = await mountCard()
+
+    const terms = wrapper.findAll('[data-test="household-relation-term"]')
+    expect(terms).toHaveLength(1)
+    expect(terms[0]!.text()).toBe('妻子')
+  })
+
+  it('relation_term 为 null 时不渲染、不留占位（不泄露是否存在关系）', async () => {
+    mockedFetchHouseholdCard.mockResolvedValue(
+      makeCardSnapshot({
+        members: [
+          {
+            user_id: 2,
+            display: makeDisplay(2, '无关系成员'),
+            household_label: '成员',
+            relation_term: null,
+            visibility_level: 'household_detail',
+          },
+        ],
+      }),
+    )
+    const { wrapper } = await mountCard()
+
+    expect(wrapper.findAll('[data-test="household-relation-term"]')).toHaveLength(0)
+  })
+
+  it('旧响应缺 relation_term 字段时不报错、不渲染', async () => {
+    mockedFetchHouseholdCard.mockResolvedValue(
+      makeCardSnapshot({
+        members: [
+          // 故意不带 relation_term：模拟旧后端响应
+          { user_id: 2, display: makeDisplay(2, '旧响应成员'), household_label: '成员', visibility_level: 'household_detail' },
+        ],
+      }),
+    )
+    const { wrapper } = await mountCard()
+
+    expect(wrapper.findAll('[data-test="household-relation-term"]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-test^="member-card-"]')).toHaveLength(1)
+  })
+})

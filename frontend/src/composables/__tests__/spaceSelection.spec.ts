@@ -31,7 +31,10 @@ function makeSpace(overrides: Partial<FamilySpace>): FamilySpace {
   }
 }
 
-/** 朱元璋式数据：最新的 household 是别人拥有的「李家」，自己的是「明皇室」。 */
+/**
+ * 合成场景（非种子实况）：我在别人拥有的 household「李家」里，自己的是「明皇室」，
+ * 且服务端按 created_at 排序时「李家」在前。用来验证默认空间不取列表首项。
+ */
 function zhuScene(): FamilySpace[] {
   return [
     makeSpace({ id: 19, name: '李家', owner_id: 48, kind: 'household', lineage_space_id: 20 }),

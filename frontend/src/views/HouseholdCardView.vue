@@ -214,7 +214,7 @@ function genderText(value: HouseholdCardMember['display']['gender']): string | n
                 :data-test="'member-card-' + member.user_id" @click="openMember(member)">
                 <span class="member-identity">
                   <span class="avatar avatar--small" aria-hidden="true">{{ member.display.name.slice(0, 1) }}</span>
-                  <span class="member-heading"><span class="member-name">{{ member.display.name }}</span><span class="member-label" data-test="household-label">{{ member.household_label }}</span></span>
+                  <span class="member-heading"><span class="member-name">{{ member.display.name }}</span><span class="member-label" data-test="household-label">{{ member.household_label }}</span><span v-if="member.relation_term" class="member-relation" data-test="household-relation-term">{{ member.relation_term }}</span></span>
                   <span v-if="member.user_id === auth.user?.id" class="self-mark">我</span>
                 </span>
                 <span class="member-meta">
@@ -231,7 +231,7 @@ function genderText(value: HouseholdCardMember['display']['gender']): string | n
                 :data-test="'member-row-' + member.user_id" role="button" tabindex="0"
                 @click="openMember(member)" @keyup.enter="openMember(member)" @keydown.space.prevent="openMember(member)">
                 <span class="avatar avatar--small" aria-hidden="true">{{ member.display.name.slice(0, 1) }}</span>
-                <span class="member-heading"><span class="member-name">{{ member.display.name }}</span><span class="member-label" data-test="household-label">{{ member.household_label }}</span></span>
+                <span class="member-heading"><span class="member-name">{{ member.display.name }}</span><span class="member-label" data-test="household-label">{{ member.household_label }}</span><span v-if="member.relation_term" class="member-relation" data-test="household-relation-term">{{ member.relation_term }}</span></span>
                 <span v-if="member.user_id === auth.user?.id" class="self-mark">我</span>
                 <span class="member-meta">
                   <template v-if="genderText(member.display.gender)">{{ genderText(member.display.gender) }}</template>
@@ -302,6 +302,8 @@ function genderText(value: HouseholdCardMember['display']['gender']): string | n
 .member-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .member-name { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
 .member-label { font-size: 11px; color: var(--fg-ink-secondary); overflow-wrap: anywhere; }
+/* 关系称谓：服务端下发的 viewer 视角词（如「妻子」）。无称谓时不渲染该节点。 */
+.member-relation { font-size: 11px; color: var(--fg-ink-faint); overflow-wrap: anywhere; }
 .self-mark { margin-left: auto; font-size: 11px; color: var(--fg-accent); flex-shrink: 0; }
 .member-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; color: var(--fg-ink-secondary); font-size: 11px; }
 .member-visibility { color: var(--fg-ink-faint); font-size: 10px; }

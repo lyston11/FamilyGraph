@@ -529,9 +529,9 @@ describe('useSpaceContext（退出空间）', () => {
   })
 
   it('启动落点按路由一次到位：家族树页直接落 lineage，不经过 household 中间态', async () => {
-    // 09-20 跳变回归：朱元璋式数据（最新的 household 是别人拥有的「李家」）。
-    // 启动时若先按优先级选 household 再由路由对齐到 lineage，选择器会先显示
-    // 一个空间再跳到另一个；现在 ensureDefaultSpace 一次算出最终空间。
+    // 09-20 跳变回归（合成场景）：最新的 household 是别人拥有的「李家」，自己的
+    // 是「明皇室」。启动时若先按优先级选 household 再由路由对齐到 lineage，选择器
+    // 会先显示一个空间再跳到另一个；现在 ensureDefaultSpace 一次算出最终空间。
     fetchSpacesMock.mockResolvedValue([
       makeSpace({ id: 19, name: '李家', owner_id: 48, lineage_space_id: 20 }),
       makeSpace({ id: 1, name: '明皇室', owner_id: 1, lineage_space_id: 2 }),

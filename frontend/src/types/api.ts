@@ -790,6 +790,13 @@ export interface HouseholdCardMember {
   display: PersonalFamilyViewDisplay
   /** 服务端授权的家庭内标签（如「管理员」「成员」）；前端不自行推导 */
   household_label: string
+  /**
+   * viewer 视角的关系称谓（如「丈夫」「妻子」「姐夫」），由服务端在同一份已授权
+   * PFV 投影里解析后下发；前端只消费、不自推。
+   * 无授权路径时为 `null`（或旧响应缺该字段）——此时不渲染，**不留占位文案**
+   * （不泄露「是否存在关系」）。
+   */
+  relation_term?: string | null
   /** 该成员的字段级可见性层级说明 */
   visibility_level: Exclude<VisibilityLevel, 'none'>
 }

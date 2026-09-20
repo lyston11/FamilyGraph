@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
 from app import config
 from app.models.space import SpaceMember
@@ -69,8 +70,17 @@ def test_household_card_happy_path_fields(client, db_session) -> None:
     member_ids = {m["user_id"] for m in payload["members"]}
     assert member_ids == {member.id}
     row = payload["members"][0]
-    assert set(row.keys()) == {"user_id", "display", "household_label", "visibility_level"}
+    assert set(row.keys()) == {
+        "user_id",
+        "display",
+        "household_label",
+        "relation_term",
+        "visibility_level",
+    }
     assert row["household_label"] == "成员"
+    # 该夹具的两个用户之间没有任何 confirmed 结构事实 → 无授权路径 → null，
+    # 不生成占位（不泄露「是否存在关系」）。
+    assert row["relation_term"] is None
     assert row["visibility_level"] == "household_detail"
     assert row["display"]["id"] == member.id
     assert row["display"]["name"] == member.name
@@ -263,3 +273,89 @@ def test_household_card_disabled_flag_503(client, db_session, monkeypatch) -> No
     )
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "PERSONAL_FAMILY_VIEW_DISABLED"
+
+
+def test_household_card_member_carries_authorized_relation_term(client, db_session) -> None:
+    """有授权路径的成员带出 viewer 视角称谓（取自同一份已授权 PFV 投影）。"""
+    from app.models.account import Account
+    from app.services import source_facts as sf
+    from app.services import terms as term_service
+    from app.services.personal_family_view import (
+        initialize_account_views,
+        rebuild_space_views,
+    )
+
+    # 清表夹具会连带清掉迁移种子里的内置称谓包（locale/system 层级），而本用例
+    # 断言的是「概念码 → 词典词」这一步，故按 tests/test_terms.py 的既有做法幂等
+    # 重灌内置包；否则只会拿到结构描述兜底（「你的妻子」）。
+    term_service.seed_builtin_packs(db_session)
+    db_session.commit()
+
+    admin, space = create_agent_fixture(db_session, name="hc-rel")
+    # 显式给两端性别：fixture 默认 'unknown' 会让词典退到未定向措辞（「你的配偶」类），
+    # 掩盖「概念码 → 词典词」这一步的真实结果。
+    admin.gender = "m"
+    spouse = create_user_with_pin(db_session, "hc-rel-spouse", "123456", gender="f")
+    db_session.flush()
+    create_space_member(db_session, space.id, spouse.id)
+    fact = sf.create_source_fact(
+        db_session,
+        fact_type="spouse",
+        subject_user_id=admin.id,
+        object_user_id=spouse.id,
+        provenance="manual_entry",
+        space_id=space.id,
+    )
+    sf.transition_source_fact(db_session, fact, "confirm")
+    db_session.commit()
+    # 夹具直接造数，不经注册/成员事件，故显式建投影行再重建（与生产事件路径同源：
+    # initialize_account_views 建 queued 行，rebuild 填充内容）。
+    account = db_session.scalar(select(Account).where(Account.user_id == admin.id))
+    assert account is not None
+    initialize_account_views(db_session, account_id=account.id, user_id=admin.id)
+    db_session.commit()
+    rebuild_space_views(db_session, space_id=space.id)
+    db_session.commit()
+
+    resp = client.get(
+        "/api/household-card",
+        params={"space_id": space.id},
+        headers=_login_header(client, "hc-rel"),
+    )
+    assert resp.status_code == 200, resp.text
+    row = resp.json()["members"][0]
+    assert row["user_id"] == spouse.id
+    # 称谓由后端解析（concept_code → TermRegistry），前端只消费；词形按两端性别
+    # 选定（种子数据里同一概念码给出「丈夫」/「妻子」）。
+    assert row["relation_term"] == "妻子"
+
+
+def test_household_card_relation_term_is_null_without_a_path(client, db_session) -> None:
+    """无授权路径的成员为 null，且不得出现占位文案。"""
+    from app.models.account import Account
+    from app.services.personal_family_view import (
+        initialize_account_views,
+        rebuild_space_views,
+    )
+
+    admin, space = create_agent_fixture(db_session, name="hc-nopath")
+    stranger = create_user_with_pin(db_session, "hc-nopath-member", "123456")
+    create_space_member(db_session, space.id, stranger.id)
+    db_session.commit()
+    account = db_session.scalar(select(Account).where(Account.user_id == admin.id))
+    assert account is not None
+    initialize_account_views(db_session, account_id=account.id, user_id=admin.id)
+    db_session.commit()
+    rebuild_space_views(db_session, space_id=space.id)
+    db_session.commit()
+
+    resp = client.get(
+        "/api/household-card",
+        params={"space_id": space.id},
+        headers=_login_header(client, "hc-nopath"),
+    )
+    assert resp.status_code == 200, resp.text
+    row = resp.json()["members"][0]
+    assert row["relation_term"] is None
+    # 该成员仍以 space_member 孤立节点保留（授权成员不因无路径而消失）
+    assert row["visibility_level"] == "household_detail"
