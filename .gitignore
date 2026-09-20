@@ -33,14 +33,12 @@ board.html
 # 评测/验收产物
 .steward-eval-report.json
 .steward-*-evidence.json
-<<<<<<< HEAD
 
 # 任务 worktree 中链接主检出依赖的符号链接
-=======
->>>>>>> origin/main
 backend/.venv
 frontend/node_modules
-
 agent/node_modules
-backend/.venv
 backend/.ruff_cache
+
+# Playwright MCP 会话产物（日志/截图，本地调试证据，不入库）
+.playwright-mcp/
