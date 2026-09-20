@@ -41,6 +41,9 @@ services:
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET 必须在 .env 中提供强随机值}
       ADMIN_JWT_ISSUER: ${ADMIN_JWT_ISSUER:?ADMIN_JWT_ISSUER 必须在 .env 中提供}
       ADMIN_JWT_AUDIENCE: ${ADMIN_JWT_AUDIENCE:?ADMIN_JWT_AUDIENCE 必须在 .env 中提供}
+      # 部署指定的初始/恢复密码；留空则随机生成并写入 0600 凭据文件。
+      # 首登强制改密；正常重启不重置既有账号。
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
       # V2.1 Agent Runtime：feature flag 与内部协议共享密钥（与 agent 服务一致）
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       # 首版云模型固定为与本机 Pi 一致的 liu-dada/gpt-5.6-sol profile；该
@@ -71,9 +74,15 @@ services:
       STEWARD_ASSIST_CANDIDATE: ${STEWARD_ASSIST_CANDIDATE:-0}
       STEWARD_ASSIST_RANKING: ${STEWARD_ASSIST_RANKING:-0}
       STEWARD_ASSIST_EXPLANATION: ${STEWARD_ASSIST_EXPLANATION:-0}
+      # 09-06 Steward 称谓辅助开关与批次租约总墙钟截止（与裸机部署同名同义）
+      STEWARD_ASSIST_TERMINOLOGY: ${STEWARD_ASSIST_TERMINOLOGY:-0}
+      STEWARD_ASSIST_TIMEOUT_SECONDS: ${STEWARD_ASSIST_TIMEOUT_SECONDS:-30}
       DEV_SEED_DEMO_DATA: ${DEV_SEED_DEMO_DATA:-0}
       # 09-01 个人家族视图（家庭卡/家族树投影端点）功能开关
       PERSONAL_FAMILY_VIEW_ENABLED: ${PERSONAL_FAMILY_VIEW_ENABLED:-0}
+      # 09-13 Memory/RAG：默认关闭；关闭时无候选/检索，工具路径保留
+      MEMORY_ENABLED: ${MEMORY_ENABLED:-0}
+      RAG_ENABLED: ${RAG_ENABLED:-0}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷；
       # /data/bootstrap/admin-credentials（0600 初始凭据）也在此卷
