@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture/13--13-production-deployment-2026-09-20.md", "reason": "核对发布后隔离不变量（admin 不外泄、端口矩阵）是否被破坏"}
+{"file": ".trellis/spec/architecture/8--8-wal-ad-6.md", "reason": "核对发布前备份确实用 online backup API 且校验通过"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对全流程输出未泄漏 PIN/密钥/令牌"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对未运行的高成本检查是否如实记录"}
