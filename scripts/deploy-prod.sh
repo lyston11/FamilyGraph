@@ -228,13 +228,29 @@ fi
 # ---- 2. 切换代码 ----
 # 默认目标（origin/main）走分支快进，让线上 checkout 始终停在 main 上，
 # 避免每次发布都留一个无基线的 detached HEAD。显式指定 sha 时才 detached。
-if [ "$TARGET" = "origin/main" ]; then
-    log "切换代码到 origin/main（分支快进）…"
-    git checkout -q main
-    git merge -q --ff-only origin/main
-else
-    log "切换代码到 $TARGET_SHA（detached，用于回滚或定版）…"
-    git checkout -q "$TARGET_FULL"
+# 切换失败必须给出可操作的诊断：ff-only 失败通常意味着线上检出与 origin/main
+# 分岔（例如被人为改写过远端历史），盲目继续会发布出来源不明的代码。
+switch_code() {
+    if [ "$TARGET" = "origin/main" ]; then
+        log "切换代码到 origin/main（分支快进）…"
+        git checkout -q main || return 1
+        if ! git merge --ff-only origin/main 2>/dev/null; then
+            warn "无法快进到 origin/main：本地 main 与远端分岔"
+            warn "本地: $(git rev-parse --short HEAD)  远端: $(git rev-parse --short origin/main)"
+            warn "处理：确认本地无未推送改动后用 git reset --hard origin/main 对齐"
+            return 1
+        fi
+    else
+        log "切换代码到 $TARGET_SHA（detached，用于回滚或定版）…"
+        git checkout -q "$TARGET_FULL" || return 1
+    fi
+    return 0
+}
+
+if ! switch_code; then
+    warn "代码切换失败，未做任何部署动作（容器未改动）"
+    report "失败（代码切换失败）"
+    exit 1
 fi
 
 # ---- 3. 重建并启动（委托给既有安装器；捕获退出码而不让它直接终结脚本）----
