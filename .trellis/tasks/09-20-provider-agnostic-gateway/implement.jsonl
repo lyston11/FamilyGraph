@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Provider profile 门禁与出站收口合同：本任务改写的正是第 219 行那条约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与未运行检查的记录口径"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "密钥/PII 不入日志：Provider 密钥与审计文案的红线"}
+{"file": ".trellis/spec/architecture/6--6-visibility-py.md", "reason": "可见性与授权边界：确认删门禁不越权改变数据可见性"}
+{"file": ".trellis/spec/architecture/4--4-ad-4.md", "reason": "Provider/密钥静态加密合同（密钥只写不读、响应不含明文）"}

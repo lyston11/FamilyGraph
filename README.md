@@ -143,19 +143,23 @@ SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件
 - `SECRET_KEY` 与 `AGENT_SERVICE_SECRET` 必须经环境变量提供强随机值；Compose 不提供默认密钥，缺失时启动失败。
 - nginx 不直接托管 uploads 目录；附件下载一律走后端授权端点（architecture.md §6/§9）。
 - Agent sidecar 不读取 Provider API key，也不直连上游；所有模型请求经 API 容器 ProviderGateway 出网。
-- 云 Provider 门禁在代码中固定启用，只允许使用下方 `liu-dada/gpt-5.6-sol` 的 Pi
-  profile；不存在可由部署环境关闭的绕过开关。本地 Provider 仍可单独注册。
+- Provider 不绑定任何具体供应商：官方或第三方，只要提供 OpenAI 兼容的
+  `/responses` 或 `/chat/completions` 端点即可注册（含 tailnet 私网地址）。
+  注册时做结构性校验（`base_url` 必须是 http/https 绝对 URL、协议必须是受支持的
+  适配器之一、`allowed_models` 非空）；**数据是否可离开本机由空间级
+  `cloud_allowed` 决定**，不由供应商身份决定。
 
-### Pi Provider 配置（首版）
+### Provider 注册
 
-首版运行时对齐本机 Pi 的 `liu-dada / gpt-5.6-sol` profile：
+在系统管理员后台的 `POST /admin-api/v1/agent/providers` 提交连接信息，
+在 `secret` 字段注入 API key。以下是一个**示例**（并非唯一可用配置）：
 
 ```json
 {
-  "name": "liu-dada",
+  "name": "my-provider",
   "kind": "openai_compatible",
   "api": "openai-responses",
-  "base_url": "https://api.liu-dada.com/v1",
+  "base_url": "https://api.example.com/v1",
   "allowed_models": ["gpt-5.6-sol"],
   "context_window": 272000,
   "max_tokens": 60000,
@@ -165,7 +169,16 @@ SQLite 运行于 WAL 模式。**禁止在服务运行期直接 `cp` 主库文件
 }
 ```
 
-系统管理员通过独立后台的 `POST /admin-api/v1/agent/providers` 提交上述非敏感字段，并在创建请求的 `secret` 字段注入 API key。密钥以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、任务文件或 Agent 容器环境。双 Agent 平台默认通过 `/admin-api/v1/agent/platform-defaults` 管理。
+- `api`：`openai-responses`（→ `POST {base_url}/responses`）或
+  `openai-completions`（→ `POST {base_url}/chat/completions`）。
+- `base_url`：上游 OpenAI 兼容根地址。私网/隧道地址（如 `http://127.0.0.1:8787/v1`
+  或 tailnet 的 `http://100.x.y.z:8787/v1`）同样可用。
+- `context_window` / `max_tokens` / `reasoning` / `input_modalities` /
+  `thinking_levels`：按上游实际能力填写，出站仍受网关字节与 token 上限约束。
+- `compat`：适配器行为开关（如 `maxTokensField`、`thinkingFormat`）。
+  该字段只影响请求构造，**不能**改出口主机或注入任意请求头。
+
+密钥以 secretbox 密文存入后端，响应只返回 `has_secret`；不要把 key 写入仓库、日志、任务文件或 Agent 容器环境。双 Agent 平台默认通过 `/admin-api/v1/agent/platform-defaults` 管理。
 
 空间管理员通过家庭侧 `PUT /api/spaces/{space_id}/model-settings` 分别配置 `assistant` / `steward` 的 `provider_id + model` 及云同意。后台 `/admin-api/v1/agent/spaces/{space_id}/provider-settings` 仅用于只读排查，不能替空间开启 `cloud_allowed`；旧 `/api/admin/agent/*` 路径已移除。
 

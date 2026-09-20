@@ -216,7 +216,11 @@
 - **压缩与重试分开**：context overflow 走自动压缩，不进任一层重试；空最终回答仍按 `PROVIDER_EMPTY_ANSWER` 结算 failed；取消/失租优先级不变（服务端权威）。
 - `AGENT_PROVIDER_UPSTREAM_REJECTED` 注册在 `app/errors.py`（后端自己会发出的码）；sidecar 仍以 `PROVIDER_STREAM_ERROR` 结算，前端文案不变。
 - 管理员延迟指标的 `provider_retry` 只计 `retryable != false` 的失败：`upstream_rejected`/`run_cancelled`/`stream_interrupted` 不是重试，计入会造出虚假重试段；历史审计行无该字段时沿用旧的 `failed` 口径，不回填。
-- Provider profile 首版固定为 `liu-dada/gpt-5.6-sol`（`openai-responses`、272000/60000、reasoning、text+image、low/medium/high/xhigh/max）；代码门禁拒绝其他云 profile，且不提供可由 Compose 环境变量关闭的绕过开关；local Provider 仍可作为本地敏感数据回退。
+- Provider 不绑定任何具体供应商：官方或第三方，只要提供 OpenAI 兼容的 `/responses`
+  或 `/chat/completions` 端点即可注册（含私网 / tailnet 地址）。注册做结构性校验：
+  `base_url` 必须是 http/https 绝对 URL、`api` 必须是受支持的适配器、`allowed_models` 非空、
+  空间选中的 `model` 必须在 allowlist 内。**数据能否离开本机由空间级 `cloud_allowed` 决定**，
+  不由供应商身份决定；因此 `kind=local` 描述的是端点可达性，**不是**「数据不出网」的承诺。
 
 ## 6. Wrong vs Correct：双侧独立实现合同
 

@@ -194,7 +194,7 @@ async def _post_json_async(
     超出 STEWARD_ASSIST_MAX_RESPONSE_BYTES 立即中止读取并抛错（调用方记
     failed/response_too_large），绝不把无上界的响应整体读入内存。必须用
     aiter_bytes（自动按 Content-Encoding 解压）：原始字节会直接导致 gzip 响应
-    的 JSON 解析失败（真实 liu-dada 端点默认 gzip，2026-09-12 E2E 发现）；
+    的 JSON 解析失败（部分上游默认 gzip 响应，2026-09-12 E2E 发现）；
     字节上界按解压后体积计。
 
     超时一律抛 ``httpx.ReadTimeout``（调用方按 unknown 保守计费）。刻意不为

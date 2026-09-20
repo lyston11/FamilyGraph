@@ -11,18 +11,21 @@ SourceFact + 领域事件）→ 自动 tick → job/PFV/卡片/通知 → 模型
 （fake provider HTTP 服务：成功/畸形/超时）→ 建议审阅/提交/确认 → 撤权 →
 失败注入 → 进程中断恢复（过期 lease/batch）→ 关闭/重开 → 最终重算。
 
-真实 provider 模式（STEWARD_E2E_REAL_PROVIDER=1）：成功路径改用与本机 Pi
-一致的生产标准 profile（liu-dada / gpt-5.6-sol / openai-responses），标准
-profile 门禁全程保持开启（注册/解析按生产合同验证）；失败注入仍走 fake
+真实 provider 模式（STEWARD_E2E_REAL_PROVIDER=1）：成功路径改用部署环境配置的
+真实上游（name/base_url/协议/模型均由环境变量给出，平台不再绑死单一供应商）；
+注册/解析按生产结构校验合同验证。失败注入仍走 fake
 provider（协议合同需要受控服务），另对真实端点注入确定性传输超时取得真实
-降级记录。密钥只经 LIU_DADA_API_KEY 环境变量注入，绝不写入代码、证据或日志。
-推理模型延迟远高于 fake：单次调用超时与批次 lease 按真实模式放大（受启动
-校验上界约束）。
+降级记录。密钥只经 STEWARD_E2E_PROVIDER_API_KEY 环境变量注入，绝不写入代码、
+证据或日志。推理模型延迟远高于 fake：单次调用超时与批次 lease 按真实模式放大
+（受启动校验上界约束）。
 
 证据：仅记录 ID/状态/计数（绝无个人内容）到 backend/.steward-e2e-evidence.json。
 
 用法：cd backend && .venv/bin/python scripts/steward_e2e.py
-      STEWARD_E2E_REAL_PROVIDER=1 LIU_DADA_API_KEY=... .venv/bin/python scripts/steward_e2e.py
+      STEWARD_E2E_REAL_PROVIDER=1 STEWARD_E2E_PROVIDER_API_KEY=... \
+        STEWARD_E2E_PROVIDER_BASE_URL=https://.../v1 \
+        STEWARD_E2E_PROVIDER_NAME=<供应商> STEWARD_E2E_PROVIDER_MODEL=<模型> \
+        .venv/bin/python scripts/steward_e2e.py
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse as _urlparse
 
 # ---- 环境必须在导入 app 之前就绪（与 tests/conftest.py 同一合同）----
 _TMP = tempfile.mkdtemp(prefix="familygraph-steward-e2e-")
@@ -59,15 +63,20 @@ os.environ["STEWARD_ASSIST_RANKING"] = "1"
 os.environ["STEWARD_ASSIST_EXPLANATION"] = "1"
 
 # 真实 provider 模式必须在导入 app 之前放大模型时延相关参数（config 于导入时
-# 固化）。推理模型（gpt-5.6-sol）单次调用常见数十秒：单次超时 90s、批次 lease
+# 固化）。推理模型单次调用常见数十秒：单次超时 90s、批次 lease
 # 600s，均在上游启动校验区间内（timeout [0.1,300]、lease [5,3600]）。
 _REAL_PROVIDER_MODE = os.environ.get("STEWARD_E2E_REAL_PROVIDER", "").lower() in ("1", "true")
 if _REAL_PROVIDER_MODE:
-    if not os.environ.get("LIU_DADA_API_KEY"):
-        raise SystemExit(
-            "STEWARD_E2E_REAL_PROVIDER=1 需要 LIU_DADA_API_KEY 环境变量"
-            "（密钥只经环境变量注入，勿写入任何文件）"
-        )
+    for _required in (
+        "STEWARD_E2E_PROVIDER_API_KEY",
+        "STEWARD_E2E_PROVIDER_BASE_URL",
+        "STEWARD_E2E_PROVIDER_MODEL",
+    ):
+        if not os.environ.get(_required):
+            raise SystemExit(
+                f"STEWARD_E2E_REAL_PROVIDER=1 需要 {_required} 环境变量"
+                "（密钥只经环境变量注入，勿写入任何文件）"
+            )
     os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"] = "90"
     os.environ["STEWARD_ASSIST_BATCH_LEASE_SECONDS"] = "600"
 else:
@@ -167,7 +176,7 @@ def main() -> int:
     import platform as _plat
 
     real_mode = _REAL_PROVIDER_MODE
-    EVIDENCE["provider_mode"] = "real-liu-dada/gpt-5.6-sol" if real_mode else "fake-stub"
+    EVIDENCE["provider_mode"] = "real-external-provider" if real_mode else "fake-stub"
     EVIDENCE["hardware"] = {
         "machine": _plat.machine(),
         "processor": _plat.processor(),
@@ -203,10 +212,8 @@ def main() -> int:
     from app.services import maintenance
     from app.utils.secretbox import encrypt_secret
 
-    # stub 模式：合成 fake 行需要关闭标准 profile 门禁（与单测同一手法）。
-    # 真实模式：门禁保持生产态开启，真实 profile 必须通过注册/解析门禁；
-    # 仅失败注入阶段临时关闭（fake 行按单测合同解析），注入后立即恢复。
-    config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = real_mode
+    # stub 模式：合成 fake 行与真实行已不再受供应商白名单限制，无需开关切换；
+    # 真实模式同样走结构性校验。
     client = TestClient(app)
     admin = TestClient(admin_app)
 
@@ -394,20 +401,20 @@ def main() -> int:
         alerts=r.json()["alerts"],
     )
 
-    # ---- 7. 模型辅助批次（真实模式：liu-dada/gpt-5.6-sol 生产 profile；stub：fake）----
+    # ---- 7. 模型辅助批次（真实模式：使用部署环境配置的真实上游；stub：fake）----
     fakesrv = None
     db = SessionLocal()
     if real_mode:
-        # 生产标准 profile：字段与 agent_provider.STANDARD_* 常量逐一对齐
-        # （compat 必须为空 dict）。密钥密文经 secretbox（SECRET_KEY 派生）落本地
-        # 临时库；明文只存在于本进程环境变量，绝不写入证据/日志。
+        # 真实上游：name/base_url/协议/模型来自环境变量，不再钉死某个供应商。
+        # 密钥密文经 secretbox（SECRET_KEY 派生）落本地临时库；明文只存在于本进程
+        # 环境变量，绝不写入证据/日志。
         provider = AgentProvider(
-            name="liu-dada",
+            name=os.environ.get("STEWARD_E2E_PROVIDER_NAME", "e2e-real-provider"),
             kind="openai_compatible",
-            api="openai-responses",
-            base_url="https://api.liu-dada.com/v1",
-            secret_ciphertext=encrypt_secret(os.environ["LIU_DADA_API_KEY"]),
-            allowed_models_json=["gpt-5.6-sol"],
+            api=os.environ.get("STEWARD_E2E_PROVIDER_API", "openai-responses"),
+            base_url=os.environ["STEWARD_E2E_PROVIDER_BASE_URL"],
+            secret_ciphertext=encrypt_secret(os.environ["STEWARD_E2E_PROVIDER_API_KEY"]),
+            allowed_models_json=[os.environ["STEWARD_E2E_PROVIDER_MODEL"]],
             context_window=272_000,
             max_tokens=60_000,
             reasoning=True,
@@ -418,7 +425,7 @@ def main() -> int:
             created_at=tu.utcnow(),
             updated_at=tu.utcnow(),
         )
-        assist_model = "gpt-5.6-sol"
+        assist_model = os.environ["STEWARD_E2E_PROVIDER_MODEL"]
     else:
         fake_base_url, fakesrv = _start_fake_provider()
         provider = AgentProvider(
@@ -466,8 +473,8 @@ def main() -> int:
         provider_mode=EVIDENCE["provider_mode"],
         provider_name=provider.name,
         model=assist_model,
-        standard_profile_gate="enforced" if real_mode else "disabled-for-fake-row",
-        base_url_host="api.liu-dada.com" if real_mode else "127.0.0.1(fake)",
+        structural_check="enforced",
+        base_url_host=_urlparse(provider.base_url or "").hostname or "unknown",
     )
 
     # 新事件（成员改名）触发新 job → 注册批次
@@ -608,11 +615,10 @@ def main() -> int:
     # 注意：注入必须在撤权之前——撤权后空间无 confirmed 事实，候选 roster 为空，
     # 根本不会注册辅助批次，注入将无从观察。
     # 真实模式：协议注入需要受控服务，临时切换到 fake provider 行（合成行按
-    # 单测合同在门禁关闭期间解析），并把单次超时临时压回 stub 值以复现同一
-    # 注入语义（1.5s < fake 5s 慢响应 → unknown/timeout 分类）；注入后立即
-    # 切回真实 provider 并恢复生产门禁与真实超时。
+    # 结构校验解析）；并把单次超时临时压回 stub 值以复现同一注入语义
+    # （1.5s < fake 5s 慢响应 → unknown/timeout 分类）；注入后立即切回真实
+    # provider 并恢复真实超时。
     if real_mode:
-        config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = False
         config.STEWARD_ASSIST_TIMEOUT_SECONDS = 1.5
         fake_base_url, fakesrv = _start_fake_provider()
         db = SessionLocal()
@@ -686,7 +692,6 @@ def main() -> int:
         if fakesrv is not None:
             fakesrv.shutdown()
             fakesrv = None
-        config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY = True
         config.STEWARD_ASSIST_TIMEOUT_SECONDS = float(os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"])
 
         # ---- 9.5 真实端点降级（真实模式专属）：把单次超时压到 2s（低于真实

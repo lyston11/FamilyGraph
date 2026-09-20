@@ -84,17 +84,22 @@ onMounted(load)
 
 const MODELS_SEPARATOR = ','
 
-/** LearnGraph 风格的快捷接入：只预填连接信息，密钥和模型仍由管理员确认。 */
+/** 快捷接入：只预填连接信息，密钥和模型仍由管理员确认。
+ *
+ * 这里只放**通用协议形态**的预设，不点名具体供应商：平台支持任意 OpenAI 兼容
+ * 端点（官方或第三方），把某个供应商写死为快捷项会暗示它才是受支持的那个。
+ * 真正需要预置自有供应商时，建议改用可配置的预设列表而不是代码常量。
+ */
 const QUICK_PROVIDER_PRESETS = [
   {
-    id: 'liu-dada',
-    label: 'liu-dada',
-    description: '平台受控云模型',
-    name: 'liu-dada',
-    baseUrl: 'https://api.liu-dada.com/v1',
+    id: 'openai-compatible',
+    label: 'OpenAI 兼容',
+    description: '支持 /responses 或 /chat/completions',
+    name: '',
+    baseUrl: '',
     api: 'openai-responses' as const,
     kind: 'openai_compatible' as const,
-    models: 'gpt-5.6-sol',
+    models: '',
   },
   {
     id: 'ollama',
@@ -527,10 +532,10 @@ async function lookupSpace(): Promise<void> {
                 id="provider-models"
                 v-model="form.models"
                 type="text"
-                placeholder="gpt-5.6-sol, gpt-5.6-mini"
+                placeholder="gpt-5, claude-sonnet-4, deepseek-chat"
                 data-testid="provider-models"
               />
-              <small class="field-hint">填模型 ID，例如 gpt-5.6-sol；多个模型用逗号分隔。</small>
+              <small class="field-hint">填上游实际提供的模型 ID；多个模型用逗号分隔。</small>
             </div>
             <div class="form-field">
               <label for="provider-secret">

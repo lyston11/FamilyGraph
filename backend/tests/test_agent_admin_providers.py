@@ -156,39 +156,58 @@ def test_openai_compatible_requires_base_url(admin_client: TestClient, db_sessio
     assert response.status_code == 422
 
 
-def test_strict_mode_accepts_only_canonical_liu_dada_profile(
+def test_any_third_party_provider_is_registrable_and_structural_errors_rejected(
     admin_client: TestClient, db_session, monkeypatch
 ) -> None:
-    from app import config
+    """删掉供应商白名单后：任意合规第三方可注册，结构非法被拒。
 
-    monkeypatch.setattr(config, "AGENT_PROVIDER_STANDARD_PROFILE_ONLY", True)
+    原以为「只能注册受控 profile」的断言已被有意废弃 —— 平台不再绑定单一
+    上游（上游停服即无法切换，且无法接入自有/私网兼容端点）。这里断言的是
+    替代它的结构性校验。
+    """
     headers = _admin_headers(admin_client, db_session)
-    rejected = admin_client.post(
-        f"{V1_AGENT}/providers",
-        json={
-            "name": "other-cloud",
-            "kind": "openai_compatible",
-            "base_url": "https://api.example.com/v1",
-            "allowed_models": ["model-x"],
-            "secret": SECRET,
-        },
-        headers=headers,
-    )
-    assert rejected.status_code == 422
-    assert rejected.json()["error"]["detail"]["reason"] == "provider_name_not_allowed"
+
+    # 与任何特定供应商无关的第三方：不同 name/model/协议/端点
     accepted = admin_client.post(
         f"{V1_AGENT}/providers",
         json={
-            "name": "liu-dada",
+            "name": "buddy2api",
             "kind": "openai_compatible",
-            "api": "openai-responses",
-            "base_url": "https://api.liu-dada.com/v1",
-            "allowed_models": ["gpt-5.6-sol"],
+            "api": "openai-completions",
+            "base_url": "http://100.71.18.78:8787/v1",
+            "allowed_models": ["workbuddy/gpt-5.4"],
             "secret": SECRET,
         },
         headers=headers,
     )
-    assert accepted.status_code == 201
+    assert accepted.status_code == 201, accepted.text
+
+    # 结构非法：缺 base_url
+    missing = admin_client.post(
+        f"{V1_AGENT}/providers",
+        json={
+            "name": "no-base-url",
+            "kind": "openai_compatible",
+            "allowed_models": ["model-x"],
+        },
+        headers=headers,
+    )
+    assert missing.status_code == 422
+    assert missing.json()["error"]["detail"]["reason"] == "provider_base_url_required"
+
+    # 结构非法：非绝对 URL
+    relative = admin_client.post(
+        f"{V1_AGENT}/providers",
+        json={
+            "name": "relative-url",
+            "kind": "openai_compatible",
+            "base_url": "api.example.com/v1",
+            "allowed_models": ["model-x"],
+        },
+        headers=headers,
+    )
+    assert relative.status_code == 422
+    assert relative.json()["error"]["detail"]["reason"] == "provider_base_url_invalid"
 
 
 def test_admin_agent_endpoints_disabled_when_flag_off(

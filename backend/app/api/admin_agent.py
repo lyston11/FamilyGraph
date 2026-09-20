@@ -118,10 +118,8 @@ def register_provider(
     db: Session = Depends(get_db),
     identity: AdminPrincipal = Depends(require_admin_ready),
 ) -> AgentProviderOut:
-    """注册 Provider；openai_compatible 必填 base_url；strict 门禁在生产生效。"""
+    """注册 Provider；云 Provider 的完整性由 provider_profile_error 统一把关。"""
     admin, _account = identity
-    if body.kind == "openai_compatible" and not (body.base_url or "").strip():
-        raise_api_error(422, VALIDATION_ERROR, "openai_compatible Provider 必须提供 base_url")
     now = timeutil.utcnow()
     row = AgentProvider(
         name=body.name,
@@ -145,7 +143,7 @@ def register_provider(
         raise_api_error(
             422,
             VALIDATION_ERROR,
-            "云 Provider 必须使用受控的 liu-dada/gpt-5.6-sol Pi profile",
+            "云 Provider 需要可用的 base_url（http/https 绝对地址）" "与至少一个受支持协议下的模型",
             {"reason": profile_error},
         )
     db.add(row)
@@ -227,7 +225,7 @@ def update_provider(
         raise_api_error(
             422,
             VALIDATION_ERROR,
-            "云 Provider 必须使用受控的 liu-dada/gpt-5.6-sol Pi profile",
+            "云 Provider 需要可用的 base_url（http/https 绝对地址）" "与至少一个受支持协议下的模型",
             {"reason": profile_error},
         )
     row.updated_at = timeutil.utcnow()

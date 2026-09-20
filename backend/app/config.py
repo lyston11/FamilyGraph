@@ -91,10 +91,8 @@ RELATIONSHIP_INTELLIGENCE_ENABLED: bool = os.environ.get(
 # ---- V2.1 Agent Runtime（RT-6：feature flag 总开关，默认整体关闭）----
 # 关闭时 /internal/agent/* 一律 503；开启仍要求 AGENT_SERVICE_SECRET 配置，否则 fail-closed
 AGENT_RUNTIME_ENABLED: bool = os.environ.get("AGENT_RUNTIME_ENABLED", "").lower() in ("1", "true")
-# 首版云模型 profile 门禁：生产只允许与本机 Pi 配置一致的 liu-dada/gpt-5.6-sol。
-# 该门禁不可由运行环境关闭；测试夹具如需合成 Provider，必须在进程内显式
-# monkeypatch 该常量，避免把一个部署环境变量误当成安全开关。
-AGENT_PROVIDER_STANDARD_PROFILE_ONLY: bool = True
+# 首版曾把云模型 profile 硬钉死在单一供应商；现改为结构性校验 + 空间云同意，
+# 见 services/agent_provider.py 的 provider_profile_error。
 # sidecar 与 FastAPI 共享的 HMAC 签名密钥（service/run token）；未配置时内部协议全部拒绝
 AGENT_SERVICE_SECRET: str = os.environ.get("AGENT_SERVICE_SECRET", "")
 # service token 仅用于 lease（notes.md 两级认证）；run token 绑定 run/scope，exp 上限 600s

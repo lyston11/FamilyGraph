@@ -49,7 +49,7 @@ export type DomainToolName = keyof typeof TOOL_VERSIONS;
 /**
  * Provider-facing function names must satisfy the OpenAI-compatible function
  * name grammar. FamilyGraph keeps dotted names as its canonical contract,
- * but some relays (including liu-dada's gateway) reject `.` with a 5xx. The
+ * but some relays reject `.` with a 5xx (observed 2026-09 on a real gateway). The
  * mapping is owned here so executor, policy and event layers can translate
  * back to the canonical name without duplicating string rules.
  */

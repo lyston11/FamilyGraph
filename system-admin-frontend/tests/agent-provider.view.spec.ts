@@ -85,23 +85,34 @@ describe('AgentProviderAdminView（三区块治理页）', () => {
     await wrapper.find('[data-testid="provider-empty-cta"]').trigger('click')
     expect(wrapper.find('[data-testid="provider-form"]').exists()).toBe(true)
     expect(wrapper.find('[aria-labelledby="provider-registry-title"]').classes()).toContain('provider-registry-card')
-    expect(wrapper.find('[data-testid="quick-provider-liu-dada"]').exists()).toBe(true)
+    // 预设只表达通用协议形态，不点名具体供应商
+    expect(wrapper.find('[data-testid="quick-provider-openai-compatible"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="quick-provider-ollama"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pd-open-provider"]').exists()).toBe(true)
     await wrapper.find('[data-testid="provider-form-cancel"]').trigger('click')
     expect(wrapper.find('[aria-labelledby="provider-registry-title"]').classes()).not.toContain('provider-modal-open')
   })
 
-  it('快捷接入预填服务商连接信息与模型', async () => {
+  it('快捷接入：通用预设只设协议与类型，Ollama 预填本机连接信息', async () => {
     const wrapper = await mountView()
     await wrapper.find('[data-testid="provider-open-create"]').trigger('click')
-    await wrapper.find('[data-testid="quick-provider-liu-dada"]').trigger('click')
 
-    expect((wrapper.find('[data-testid="provider-name"]').element as HTMLInputElement).value).toBe('liu-dada')
-    expect((wrapper.find('[data-testid="provider-base-url"]').element as HTMLInputElement).value).toBe(
-      'https://api.liu-dada.com/v1',
+    // 通用 OpenAI 兼容预设：不替用户选供应商或模型，只定协议/类型
+    await wrapper.find('[data-testid="quick-provider-openai-compatible"]').trigger('click')
+    expect((wrapper.find('[data-testid="provider-api"]').element as HTMLSelectElement).value).toBe(
+      'openai-responses',
     )
-    expect((wrapper.find('[data-testid="provider-models"]').element as HTMLInputElement).value).toContain(
-      'gpt-5.6-sol',
+    expect((wrapper.find('[data-testid="provider-name"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('[data-testid="provider-base-url"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('[data-testid="provider-models"]').element as HTMLInputElement).value).toBe('')
+
+    // Ollama 预设：预填本机地址与 completions 协议
+    await wrapper.find('[data-testid="quick-provider-ollama"]').trigger('click')
+    expect((wrapper.find('[data-testid="provider-base-url"]').element as HTMLInputElement).value).toBe(
+      'http://127.0.0.1:11434/v1',
+    )
+    expect((wrapper.find('[data-testid="provider-api"]').element as HTMLSelectElement).value).toBe(
+      'openai-completions',
     )
   })
 
