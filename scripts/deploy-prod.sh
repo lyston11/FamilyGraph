@@ -68,6 +68,19 @@ done
 
 compose() { docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" "$@"; }
 
+# 在 api 运行时环境里执行 python 代码。
+# 关键：容器 crash-loop 时 compose exec 会失败（"is restarting, wait until the
+# container is running"），而此时恰恰最需要读库/备份。所以退化到一次性容器
+# 直接挂数据卷，与 read_alembic 的兜底同理。实测触发点：AC5-C 注入启动失败后
+# 重跑发布，备份步骤因 api 在 crash-loop 而中止，脚本无法自我恢复。
+run_in_api() {
+    if compose exec -T api "$@" 2>/dev/null; then
+        return 0
+    fi
+    docker run --rm -e DATA_DIR=/data -w /app \
+        -v "${PROJECT_NAME}_app_data:/data" "$API_IMAGE" "$@"
+}
+
 # 读取线上库的 alembic 版本。两级兜底：优先问正在运行的 api 容器；容器起不来时
 # 用一次性容器直接挂数据卷读文件（不依赖任何服务 running，也不依赖宿主有 sqlite3）。
 read_alembic() {
@@ -116,12 +129,16 @@ verify_release() {
     fi
 
     # 4b 线上库迁移版本 == 镜像内 head
-    # 必须在**运行中的**容器里查（read_alembic 的兜底路径用一次性容器，
-    # 那里的工作目录不对，alembic 命令会找错 alembic.ini）
+    # 优先用运行中的容器（工作目录正确）；容器起不来时用一次性容器在 /app 里跑
+    # alembic（镜像内含 alembic.ini 与 migrations/，实测可用）。
     local db_ver head_ver
     db_ver="$(read_alembic || true)"
     head_ver="$(compose exec -T api alembic heads 2>/dev/null \
         | awk '/\(head\)/{print $1; exit}' || true)"
+    if [ -z "$head_ver" ]; then
+        head_ver="$(docker run --rm -w /app "$API_IMAGE" alembic heads 2>/dev/null \
+            | awk '/\(head\)/{print $1; exit}' || true)"
+    fi
     if [ -z "$db_ver" ] || [ -z "$head_ver" ]; then
         warn "4b 无法读取迁移版本（db='$db_ver' head='$head_ver'）"; ok=0
     elif [ "$db_ver" != "$head_ver" ]; then
@@ -217,10 +234,10 @@ if [ "$SKIP_BACKUP" = 1 ]; then
     warn "--skip-backup：跳过发布前备份（出问题时无数据锚点）"
 else
     log "发布前备份（online backup API）…"
-    if ! compose exec -T api python -m app.backup >> "$LOG_FILE" 2>&1; then
+    if ! run_in_api python -m app.backup >> "$LOG_FILE" 2>&1; then
         fail "发布前备份失败，中止发布（不做无备份的发布）；日志 $LOG_FILE"
     fi
-    BACKUP_FILE="$(compose exec -T api sh -c \
+    BACKUP_FILE="$(run_in_api sh -c \
         'ls -1t /data/backups/familygraph-*.db 2>/dev/null | head -1' | tr -d '\r')"
     log "备份完成：${BACKUP_FILE:-（未找到快照文件，请检查日志）}"
 fi
