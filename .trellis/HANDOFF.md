@@ -1,10 +1,23 @@
 # FamilyGraph · Trellis 当前交接
 
-> 更新：2026-09-20。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 `cff6f8e` 与 MR-23 `b43602d` 已合入 main 并归档，任务 worktree/分支已清理。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
+> 更新：2026-09-20（含 Provider 门禁去除）。Memory/RAG 累计验收后，管家渐进重算已在 `dee91a1` 合入 main、由 `27fe936` 归档；MR-26 `cff6f8e` 与 MR-23 `b43602d` 已合入 main 并归档，任务 worktree/分支已清理。本文是交接快照，最终集成与归档证据见各任务执行记录，代码通过不等于已部署。
 > 当前设计与验收要求看对应任务的 `prd.md`、`design.md`、`implement.md` 及最新研究记录；已实现行为看代码、迁移、测试和 Git 集成证据。工作流以 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 为准。本页末尾保留 v1 历史，已标为历史的 `.trellis/spec/` 条款不覆盖现行任务。
 > 架构入口：[系统架构与设计](../docs/ARCHITECTURE.md)；运行与验证入口：[README](../README.md)；数据播种：[DEV-DATA-SEEDING.md](../docs/DEV-DATA-SEEDING.md)。
 
 ## 当前最需要知道的事
+
+- **2026-09-20 Provider 不再绑定单一供应商**：删除了把云 Provider 硬钉死在
+  `liu-dada/gpt-5.6-sol` 的代码门禁（含 `config.AGENT_PROVIDER_STANDARD_PROFILE_ONLY`
+  与 9 个 `STANDARD_*` 常量）。现在**官方或任意第三方，只要提供 OpenAI 兼容的
+  `/responses` 或 `/chat/completions` 端点即可注册**（含 tailnet 私网地址，如本机
+  Buddy2api 的 `http://100.71.18.78:8787/v1`）。替代机制是**结构性校验**：云 Provider
+  必须有可解析的 http/https 绝对 `base_url`、受支持的 `api`、非空且包含所选 model 的
+  allowlist。**数据能否离开本机仍由空间级 `cloud_allowed` 决定**（已实测
+  `cloud_allowed=False` → `denied_cloud_forbidden`，删门禁未旁路云同意）。
+  注意 `kind=local` 描述的是**端点可达性**，**不是**「数据不出网」的承诺（本机网关可能
+  转发上游），它按既有设计不检查 `cloud_allowed`。证据见
+  [verification.md](tasks/archive/2026-09/09-20-provider-agnostic-gateway/verification.md)，
+  合同见 [spec/backend/agent-runtime.md](spec/backend/agent-runtime.md)。
 
 - **2026-09-20 线上环境上线：`https://fg.lyston.qzz.io`（与开发环境完全隔离）**。服务器上新增第二套容器化栈（独立 clone `/home/ubuntu/fg-prod`、卷 `familygraph-prod_app_data`、全新 `SECRET_KEY`/`AGENT_SERVICE_SECRET`/`ADMIN_JWT_SECRET`、宿主回环 8100/8101），经现有 Cloudflare 隧道的 `fg.lyston.qzz.io` Public Hostname 直连 `127.0.0.1:8100`（**不经宿主 nginx**，宿主 nginx 与其他站点未改动）。系统管理员后台**不挂任何公网 hostname**，仅 `ssh -L 8101:127.0.0.1:8101 lyston` 进入；线上 api/agent 不发布宿主端口。演示账号（朱元璋等 51 人，PIN 123456）由线上 `DEV_SEED_DEMO_DATA=1` 独立播种，首登不改密。验收全绿：公网 health 200、朱元璋公网登录 200、跨环境 token 双向 401、停线上不影响开发、备份 `integrity_check=ok`、安装器幂等。部署入口 `deploy/production/`，合同见 [spec/architecture/13](spec/architecture/13--13-production-deployment-2026-09-20.md)，逐条证据见 [verification.md](tasks/archive/2026-09/09-20-production-deployment-isolated/verification.md)。
   - 顺带修掉两个既有缺陷：**admin 镜像在容器模式从未构建成功**（`main.css` 的 `@import shared/brand-tokens.css` 落在 `system-admin-frontend/` 上下文之外，`1bc95ca` 引入后一直未暴露，因开发是裸机）；**基 compose 白名单静默丢弃 5 个 env 键**（`ADMIN_INITIAL_PASSWORD`/`MEMORY_ENABLED`/`RAG_ENABLED`/`STEWARD_ASSIST_TERMINOLOGY`/`STEWARD_ASSIST_TIMEOUT_SECONDS`）。
