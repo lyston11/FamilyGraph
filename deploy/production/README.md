@@ -114,18 +114,58 @@ docker compose -p familygraph-prod exec api cat /data/bootstrap/admin-credential
 
 ## 发布流程
 
-线上**不启用**自动代码同步，发布是显式动作：
+线上**不启用**自动代码同步，发布是显式动作。
+
+### 推荐：单条命令（`scripts/deploy-prod.sh`）
 
 ```bash
 cd /home/ubuntu/fg-prod
-git fetch origin main
-git checkout <目标 commit sha>       # 或 git merge --ff-only origin/main
+bash scripts/deploy-prod.sh              # 发布 origin/main 最新
+bash scripts/deploy-prod.sh <sha>        # 定版或回滚到指定版本
+```
+
+脚本按顺序做：
+
+1. **前置校验**（fail-fast，任一不过都不产生副作用）：必须在 `/home/ubuntu/fg-prod`
+   内执行、env 文件必须 0600、工作区必须干净、目标必须是 `origin/main` 的祖先
+   （禁止发布未推送的提交）、记录回滚锚（当前 sha + 库迁移版本）。
+2. **发布前备份**：`compose exec api python -m app.backup`，失败即中止发布。
+3. **切换代码**：默认目标走分支快进（线上 checkout 始终停在 `main`，不留
+   detached HEAD）；显式指定 sha 时才 detached。
+4. **重建并启动**：委托既有 `scripts/install-prod-automation.sh`。
+5. **发布后校验**：四个容器 healthy、库 `alembic_version` == 镜像内
+   `alembic heads`、公网 `/api/health` 200、家庭端 `/admin-api/health` 404。
+6. **失败处理**（见下「迁移安全闸门」）。
+
+参数：`--no-rollback`（失败只报告不回滚）、`--skip-backup`（不推荐）、
+`--force-dir`（换目录执行）、`--help`。
+
+### 迁移安全闸门（这是脚本存在的主要理由）
+
+发布失败时脚本**先判断库迁移是否已前进**：
+
+- **未前进** → 自动 `git checkout` 回发布前版本并重跑安装器，服务恢复。
+- **已前进** → **拒绝自动回滚代码**，停下并要求人工决策。旧代码配新 schema
+  比「新版本起不来」更难诊断，且可能损坏数据。脚本会打印三个选项（修
+  问题后发布到更新 commit / 用发布前快照恢复库再回滚 / 人工评估后手工 downgrade）。
+- **读不到库版本**（容器彻底起不来）→ 用一次性容器挂数据卷直接读文件；
+  仍读不到则保守地不自动回滚。
+
+脚本**从不自动执行 `alembic downgrade`**。
+
+### 手工流程（脚本不可用时的等价步骤）
+
+```bash
+cd /home/ubuntu/fg-prod
+git fetch origin main && git merge --ff-only origin/main
 bash scripts/install-prod-automation.sh   # 重建镜像 + 滚动更新 + 校验
 ```
 
 镜像内容变了才会重新构建；`docker compose build` 有层缓存，通常很快。
 若本次发布含 Alembic 迁移，`api` 容器的启动命令会先跑
-`alembic upgrade head` 再服务，无需单独执行迁移。
+`alembic upgrade head` 再服务，无需单独执行迁移。**但仍必须核对库的
+`alembic_version`**：只同步 Git 不会改库（曾出过「代码已到含新迁移的提交、
+库还停在旧版本」导致接口 500 的事故）。
 
 **部署顺序硬约束**（见记忆中的增量事件契约）：若发布涉及
 `assistant.text_delta` / `assistant.text_reset` 这类新增事件类型，

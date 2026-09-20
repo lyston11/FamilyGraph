@@ -3,8 +3,8 @@
 ### 1. Scope / Trigger
 
 在同一台服务器上新增、修改或排查第二套（线上）FamilyGraph 栈时适用。也适用于
-任何改动 `deploy/production/*`、`scripts/install-prod-automation.sh`、
-`scripts/prod-backup.sh` 或线上 env 的任务。
+任何改动 `deploy/production/*`、`scripts/deploy-prod.sh`、
+`scripts/install-prod-automation.sh`、`scripts/prod-backup.sh` 或线上 env 的任务。
 
 不适用于开发环境本身的运维（那是 systemd 用户单元 + 宿主目录，见 README）。
 
@@ -12,7 +12,8 @@
 
 - 部署目录：`deploy/production/`，由 `docker-compose.prod.yml`（叠加配置）、
   `familygraph-prod.env.example`（模板）、`README.md`（运维手册）组成。
-- 安装入口：`scripts/install-prod-automation.sh`（幂等）。
+- 安装入口：`scripts/install-prod-automation.sh`（幂等，负责构建与启动）。
+- 发布入口：`scripts/deploy-prod.sh`（在安装器前后加校验、备份与回滚）。
 - 备份入口：`scripts/prod-backup.sh`（由 `familygraph-prod-backup.timer` 调用）。
 - 线上 env：`~/.config/familygraph/familygraph-prod.env`（0600；与开发的
   `familygraph.env` 并列，互不覆盖）。
@@ -74,6 +75,27 @@ note）。TLS 由 Cloudflare 边缘终止，回源为明文。
 - systemd **user manager** 可能不含 `docker` 组（manager 启动早于用户加组）。
   涉及 docker 的用户单元必须能自行处置该情形（现为 `sg docker` 单次重执行）。
 
+**发布入口：`scripts/deploy-prod.sh`**
+
+线上发布用一条命令（`bash scripts/deploy-prod.sh`），它在既有
+`install-prod-automation.sh` 前后加四件事：位置/目标校验、发布前备份、
+四项发布后校验、失败回滚。两条合同不得放松：
+
+1. **迁移安全闸门**：发布失败时先判断库迁移是否已前进。未前进 → 自动回滚代码；
+   **已前进 → 拒绝自动回滚**并停下要求人工决策（旧代码配新 schema 比
+   「新版本起不来」更难诊断且可能损坏数据）。读不到库版本时保守地不回滚。
+2. **从不自动执行 `alembic downgrade`**。
+
+其他约束：
+
+- 目标必须是 `origin/main` 的祖先（禁止发布未推送提交）；默认目标在 `main`
+  上快进，避免线上检出留下无基线的 detached HEAD。
+- 只允许在线上工作目录（默认 `/home/ubuntu/fg-prod`）执行。
+- 四个容器的健康检查必须在**有界等待**后再断言：安装器只等 api healthy，
+  其余服务的 `start_period=10s`/`interval=30s` 会让立即断言稳定误报。
+- api 处于 crash-loop 时 `compose exec` 会失败，而此时正是最需要读库/备份的时刻；
+  涉及 api 的操作必须有一次性容器挂同一数据卷的兜底。
+
 ### 4. Required validation
 
 ```bash
@@ -91,7 +113,11 @@ docker port familygraph-prod-api-1 familygraph-prod-agent-1                  # �
 
 # 幂等
 bash scripts/install-prod-automation.sh   # 重复执行必须成功且不改变数据
+
+# 发布（含安全闸门；重复执行必须成功且无副作用）
+cd /home/ubuntu/fg-prod && bash scripts/deploy-prod.sh
 ```
 
 完整逐条验收证据见
-`.trellis/tasks/archive/2026-09/09-20-production-deployment-isolated/verification.md`。
+`.trellis/tasks/archive/2026-09/09-20-production-deployment-isolated/verification.md`
+与 `.trellis/tasks/archive/2026-09/09-20-prod-release-script/verification.md`。
