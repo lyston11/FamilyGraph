@@ -57,10 +57,18 @@ for key in SECRET_KEY AGENT_SERVICE_SECRET ADMIN_JWT_SECRET; do
     fi
 done
 
-# 宿主端口不得被占用（否则 compose up 失败；提前给出清晰原因）
+# 宿主端口不得被**别的**东西占用（否则 compose up 失败；提前给出清晰原因）。
+# 被本 compose 项目自己的容器占用是正常的：重跑安装器时栈已经在跑，
+# 只要不是我们自己的容器在监听就必须报错，否则会静默地把线上一半换掉。
 for port in "$PROD_WEB_PORT" "$PROD_ADMIN_PORT"; do
-    if ss -tlnH "sport = :$port" 2>/dev/null | grep -q .; then
-        fail "宿主端口 $port 已被占用（线上需要它做回环入口）"
+    holders="$(docker ps --filter "publish=$port" --format '{{.Names}}' 2>/dev/null || true)"
+    if [ -z "$holders" ]; then
+        if ss -tlnH "sport = :$port" 2>/dev/null | grep -q .; then
+            fail "宿主端口 $port 已被非本项目的进程占用（线上需要它做回环入口）"
+        fi
+    else
+        foreign="$(printf '%s\n' "$holders" | grep -v "^${PROJECT_NAME}-" || true)"
+        [ -z "$foreign" ] || fail "宿主端口 $port 被非本项目的容器占用：$foreign"
     fi
 done
 
