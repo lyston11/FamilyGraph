@@ -44,6 +44,22 @@ class SpaceOut(BaseModel):
     member_count: int = 0
     # 当前认证账号在该空间的能力投影；不作为后端授权依据。
     current_role: SpaceRole | None = None
+    # 当前认证账号在该空间的成员行 id（退出入口复用 DELETE /space-memberships/{id}）；
+    # 只在「我的空间」列表投影里填充，其他构造点保持 None。
+    my_member_id: int | None = None
+
+
+class HouseholdInviteOptionOut(BaseModel):
+    """个人公示页邀请选择项：我的一个家庭空间 + 目标在该空间的状态。
+
+    ``target_status`` 只区分三态：``active`` 已是成员、``pending`` 已有待处理
+    邀请、其余（含 rejected/withdrawn/removed）一律 ``none``——终态行可以再次
+    邀请，与 space_fsm.invite 的复活语义一致。
+    """
+
+    space_id: int
+    space_name: str
+    target_status: Literal["active", "pending", "none"]
 
 
 class SpaceMemberOut(BaseModel):

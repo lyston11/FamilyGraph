@@ -1,6 +1,7 @@
 import type {
   EligibleManagerTarget,
   FamilySpace,
+  HouseholdInviteOption,
   ManagerApplicationStatus,
   ManagerRequestKind,
   ManagerTransferConsent,
@@ -133,6 +134,21 @@ export async function inviteToSpace(spaceId: number, userId: number): Promise<Sp
   const { data } = await apiClient.post<SpaceMemberInfo>(`/spaces/${spaceId}/members`, {
     user_id: userId,
   })
+  return data
+}
+
+/**
+ * 个人公示页邀请选择：我的家庭空间 + 目标在各自空间的状态（只读）。
+ *
+ * 只返回我 active 成员资格的家庭空间；目标不可见时服务端 404。
+ */
+export async function fetchHouseholdInviteOptions(
+  targetUserId: number,
+): Promise<HouseholdInviteOption[]> {
+  const { data } = await apiClient.get<HouseholdInviteOption[]>(
+    '/spaces/household-invite-options',
+    { params: { target_user_id: targetUserId } },
+  )
   return data
 }
 

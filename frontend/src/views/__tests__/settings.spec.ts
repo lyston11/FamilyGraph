@@ -3,13 +3,15 @@ import { createPinia, type Pinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { NMessageProvider } from 'naive-ui'
+import { NDialogProvider, NMessageProvider } from 'naive-ui'
 
+import { ApiError } from '@/api/errors'
 import * as governanceApi from '@/api/governance'
+import * as spacesApi from '@/api/spaces'
 import * as membersApi from '@/api/members'
 import SettingsView from '@/views/SettingsView.vue'
 import { useAuthStore } from '@/stores/auth'
-import type { DataRightRequest, DisclosureCategory, Member } from '@/types/api'
+import type { DataRightRequest, DisclosureCategory, FamilySpace, Member } from '@/types/api'
 
 vi.mock('@/api/auth', () => ({
   login: vi.fn(),
@@ -73,6 +75,7 @@ vi.mock('@/api/spaces', () => ({
   removeOrWithdrawMembership: vi.fn(),
   resolveMembership: vi.fn(),
   joinByUser: vi.fn(),
+  fetchHouseholdInviteOptions: vi.fn().mockResolvedValue([]),
   getSpacePositions: vi.fn(),
   putSpacePositions: vi.fn(),
   createOwnershipTransfer: vi.fn(),
@@ -87,6 +90,7 @@ const mockedRequestExport = vi.mocked(governanceApi.requestExport)
 const mockedFetchRights = vi.mocked(governanceApi.fetchDataRights)
 const mockedRequestDeletion = vi.mocked(governanceApi.requestDeletion)
 const mockedExecuteDelete = vi.mocked(governanceApi.executeDelete)
+const mockedRemoveOrWithdraw = vi.mocked(spacesApi.removeOrWithdrawMembership)
 
 function makeSelfMember(overrides: Partial<Member> = {}): Member {
   return {
@@ -159,11 +163,13 @@ function makeMatrix(overrides?: {
   }
 }
 
-// SettingsView 全量迁 naive-ui（P5）：useMessage 需 NMessageProvider 祖先；
+// SettingsView 全量迁 naive-ui（P5）：useMessage/useDialog 需对应 provider 祖先；
 // div 根保证查询稳定
 const MessageProvidedSettings = defineComponent({
   render() {
-    return h('div', [h(NMessageProvider, () => h(SettingsView))])
+    return h('div', [
+      h(NDialogProvider, () => h(NMessageProvider, () => h(SettingsView))),
+    ])
   },
 })
 
@@ -217,11 +223,12 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     wrapper.unmount()
   })
 
-  it('四分区渲染：个人资料 / 隐私与公示 / 账号与安全 / 显示与无障碍（含主题切换）', async () => {
+  it('分区渲染：个人资料 / 隐私与公示 / 我的空间 / 账号与安全 / 显示与无障碍（含主题切换）', async () => {
     const { wrapper } = await mountSettings(pinia)
 
     expect(wrapper.find('[data-test="settings-section-profile"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="settings-section-privacy"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-section-spaces"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="settings-section-account"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="settings-section-display"]').exists()).toBe(true)
 
@@ -422,6 +429,110 @@ describe('SettingsView（v2：披露偏好 + 我的数据）', () => {
     await vi.waitFor(() => expect(mockedExecuteDelete).toHaveBeenCalledWith(10, '张三'))
     // 本地会话清空（敏感缓存清理红线）
     await vi.waitFor(() => expect(useAuthStore(pinia).isLoggedIn).toBe(false))
+    wrapper.unmount()
+  })
+})
+
+describe('SettingsView 我的空间：退出需二次确认（09-20）', () => {
+  let pinia: Pinia
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    document.body.innerHTML = ''
+    localStorage.clear()
+    pinia = createPinia()
+    mockedFetchMembers.mockResolvedValue([makeSelfMember()])
+    mockedFetchRights.mockResolvedValue([])
+    mockedFetchMatrix.mockResolvedValue(makeMatrix())
+  })
+
+  function makeSpace(overrides: Partial<FamilySpace> = {}): FamilySpace {
+    return {
+      id: 7,
+      name: '我的家庭',
+      owner_id: 9,
+      kind: 'household',
+      created_at: '2026-08-25T00:00:00',
+      pending_count: 0,
+      member_count: 2,
+      current_role: 'member',
+      my_member_id: 21,
+      ...overrides,
+    }
+  }
+
+  it('列出我 active 的空间（名称/类型/角色）', async () => {
+    vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([
+      makeSpace(),
+      makeSpace({ id: 8, name: '李家族谱', kind: 'lineage', my_member_id: 22, current_role: 'space_admin' }),
+    ])
+    const { wrapper } = await mountSettings(pinia)
+    await vi.waitFor(() => expect(document.querySelector('[data-test="my-space-7"]')).not.toBeNull())
+
+    expect(document.querySelector('[data-test="my-space-7"]')?.textContent).toContain('我的家庭')
+    expect(document.querySelector('[data-test="my-space-7"]')?.textContent).toContain('家庭空间')
+    expect(document.querySelector('[data-test="my-space-7"]')?.textContent).toContain('成员')
+    expect(document.querySelector('[data-test="my-space-8"]')?.textContent).toContain('族谱空间')
+    expect(document.querySelector('[data-test="my-space-8"]')?.textContent).toContain('管理员')
+    wrapper.unmount()
+  })
+
+  it('退出先弹二次确认；取消不产生任何写入', async () => {
+    vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([makeSpace()])
+    const { wrapper } = await mountSettings(pinia)
+    await vi.waitFor(() => expect(document.querySelector('[data-test="leave-space-7"]')).not.toBeNull())
+
+    ;(document.querySelector('[data-test="leave-space-7"]') as HTMLButtonElement).click()
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-test="leave-space-7"]')).not.toBeNull(),
+    )
+    // 确认弹层出现（naive dialog），此时尚未调用退出命令
+    expect(mockedRemoveOrWithdraw).not.toHaveBeenCalled()
+
+    // 取消：零写入
+    const cancel = document.querySelector<HTMLButtonElement>('.n-dialog__action .n-button')
+    cancel?.click()
+    await new Promise((resolve) => setTimeout(resolve))
+    expect(mockedRemoveOrWithdraw).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('确认退出后调用既有退出命令，并重载服务端空间列表', async () => {
+    vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([makeSpace()])
+    const { wrapper } = await mountSettings(pinia)
+    await vi.waitFor(() => expect(document.querySelector('[data-test="leave-space-7"]')).not.toBeNull())
+    const callsBefore = vi.mocked(spacesApi.fetchSpaces).mock.calls.length
+
+    ;(document.querySelector('[data-test="leave-space-7"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.querySelector('.n-dialog__action')).not.toBeNull())
+
+    // naive dialog 的确认按钮（最后一个 action）
+    const actions = document.querySelectorAll<HTMLButtonElement>('.n-dialog__action .n-button')
+    actions[actions.length - 1]?.click()
+    await vi.waitFor(() => expect(mockedRemoveOrWithdraw).toHaveBeenCalledWith(21))
+    // 退出后以服务端列表重载（真源），不做乐观本地删除
+    await vi.waitFor(() =>
+      expect(vi.mocked(spacesApi.fetchSpaces).mock.calls.length).toBeGreaterThan(callsBefore),
+    )
+    wrapper.unmount()
+  })
+
+  it('space_admin 退出被服务端拒绝：提示先完成管理员交接，不绕过', async () => {
+    vi.mocked(spacesApi.fetchSpaces).mockResolvedValue([makeSpace({ current_role: 'space_admin' })])
+    mockedRemoveOrWithdraw.mockRejectedValue(
+      new ApiError(409, 'SPACE_MANAGER_TRANSFER_REQUIRED', '请先完成空间管理员交接'),
+    )
+    const { wrapper } = await mountSettings(pinia)
+    await vi.waitFor(() => expect(document.querySelector('[data-test="leave-space-7"]')).not.toBeNull())
+
+    ;(document.querySelector('[data-test="leave-space-7"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.querySelector('.n-dialog__action')).not.toBeNull())
+    const actions = document.querySelectorAll<HTMLButtonElement>('.n-dialog__action .n-button')
+    actions[actions.length - 1]?.click()
+
+    await vi.waitFor(() => expect(mockedRemoveOrWithdraw).toHaveBeenCalledWith(21))
+    // 空间仍留在列表里（服务端拒绝 → 未退出）
+    await vi.waitFor(() => expect(document.querySelector('[data-test="my-space-7"]')).not.toBeNull())
     wrapper.unmount()
   })
 })

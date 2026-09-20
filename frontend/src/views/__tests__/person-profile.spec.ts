@@ -12,6 +12,7 @@ import * as actionCardsApi from '@/api/actionCards'
 import * as kinshipApi from '@/api/kinship'
 import * as suggestionsApi from '@/api/stewardSuggestions'
 import * as personalFamilyViewApi from '@/api/personalFamilyView'
+import * as spacesApi from '@/api/spaces'
 import { ApiError } from '@/api/errors'
 import PersonProfileView from '@/views/PersonProfileView.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -88,6 +89,7 @@ vi.mock('@/api/spaces', () => ({
   fetchSpaceProfileRefs: vi.fn().mockResolvedValue([]),
   fetchOwnershipTransfers: vi.fn().mockResolvedValue([]),
   inviteToSpace: vi.fn(),
+  fetchHouseholdInviteOptions: vi.fn().mockResolvedValue([]),
   removeOrWithdrawMembership: vi.fn(),
   resolveMembership: vi.fn(),
   joinByUser: vi.fn(),
@@ -104,6 +106,8 @@ vi.mock('@/api/spaces', () => ({
 
 const mockedFetchView = vi.mocked(personalFamilyViewApi.fetchPersonalFamilyView)
 const mockedFetchCards = vi.mocked(actionCardsApi.fetchActionCards)
+const mockedInviteOptions = vi.mocked(spacesApi.fetchHouseholdInviteOptions)
+const mockedInviteToSpace = vi.mocked(spacesApi.inviteToSpace)
 
 const SOLAR_DATE: StructuredDate = { cal_type: 'solar', date: '1948-03-12' }
 
@@ -605,7 +609,7 @@ describe('PersonProfileView 只读与 Bridge 边界', () => {
     document.body.innerHTML = ''
   })
 
-  it('页面只读：不提供修改对方资料/建立关系/加入空间/扩大权限的任何按钮', async () => {
+  it('页面不提供修改对方资料/建立关系/查看对方家庭/扩大权限的按钮（09-20 仅新增邀请入口）', async () => {
     const { wrapper } = await mountProfile({
       data: makeData({
         nodes: [makeNode(1, 'self_private'), makeNode(2)],
@@ -614,9 +618,12 @@ describe('PersonProfileView 只读与 Bridge 边界', () => {
       }),
     })
 
-    for (const phrase of ['建立关系', '邀请', '加入空间', '修改资料', '扩大权限', '查看对方家庭']) {
+    // 09-20 需求修订：允许「邀请加入我的家庭空间」（本用例当前空间无 household，
+    // 故入口不可见）；其余扩权入口仍不得出现。
+    for (const phrase of ['建立关系', '加入空间', '修改资料', '扩大权限', '查看对方家庭']) {
       expect(wrapper.text()).not.toContain(phrase)
     }
+    expect(wrapper.find('[data-test="profile-invite-to-household"]').exists()).toBe(false)
     // 无任何按 userId 的宽泛用户详情请求：只有 PFV 端点被调用
     expect(mockedFetchView).toHaveBeenCalledTimes(1)
   })
@@ -805,5 +812,112 @@ describe('PersonProfileView 渐进关系说明', () => {
     expect(wrapper.find('[data-test="profile-identity"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="profile-unavailable"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('家人2')
+  })
+})
+
+describe('PersonProfileView 邀请加入我的家庭空间（09-20）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('scrollTo', vi.fn())
+    document.body.innerHTML = ''
+  })
+
+  /** NModal 内容 teleport 到 document.body：按既有约定用 document 查询。 */
+  function dialog(selector: string): Element | null {
+    return document.querySelector(`[data-test="invite-to-household-dialog"] ${selector}`)
+  }
+
+  function mountWithHousehold() {
+    return mountProfile(
+      {
+        data: makeData({
+          nodes: [makeNode(1, 'self_private'), makeNode(2)],
+          inferred_edges: [],
+          edges: [makeEdge(1, 2, '母女')],
+        }),
+      },
+      { userId: '2', currentSpaceId: 9, spaces: [makeLineageSpace(), makeHouseholdSpace()] },
+    )
+  }
+
+  async function openInvite(wrapper: Awaited<ReturnType<typeof mountProfile>>['wrapper']) {
+    await wrapper.find('[data-test="profile-invite-to-household"]').trigger('click')
+    await flushPromises()
+  }
+
+  it('有家庭空间且目标可见时显示邀请入口；无家庭空间时不显示', async () => {
+    const withHousehold = await mountWithHousehold()
+    expect(withHousehold.wrapper.find('[data-test="profile-invite-to-household"]').exists()).toBe(true)
+    withHousehold.wrapper.unmount()
+
+    const lineageOnly = await mountProfile(
+      { data: makeData({ nodes: [makeNode(1, 'self_private'), makeNode(2)], edges: [] }) },
+      { userId: '2', currentSpaceId: 9, spaces: [makeLineageSpace()] },
+    )
+    expect(lineageOnly.wrapper.find('[data-test="profile-invite-to-household"]').exists()).toBe(false)
+    lineageOnly.wrapper.unmount()
+  })
+
+  it('弹窗展示三态并禁用不可选空间，确认后按所选空间发出邀请', async () => {
+    mockedInviteOptions.mockResolvedValue([
+      { space_id: 5, space_name: '我的家庭', target_status: 'active' },
+      { space_id: 6, space_name: '第二个家庭', target_status: 'pending' },
+      { space_id: 7, space_name: '可邀请家庭', target_status: 'none' },
+    ])
+    const { wrapper } = await mountWithHousehold()
+    await openInvite(wrapper)
+
+    expect(dialog('[data-test="invite-space-status-5"]')?.textContent).toContain('已在同一家庭空间中')
+    expect(dialog('[data-test="invite-space-status-6"]')?.textContent).toContain('已发出邀请')
+    expect(dialog('[data-test="invite-space-status-7"]')?.textContent).toContain('可以邀请')
+    // 不可选空间被禁用（naive n-radio 禁用态落在根元素 class）
+    expect(dialog('[data-test="invite-space-5"]')?.className).toContain('disabled')
+    expect(dialog('[data-test="invite-space-6"]')?.className).toContain('disabled')
+    expect(dialog('[data-test="invite-space-7"]')?.className ?? '').not.toContain('disabled')
+
+    // 默认选中唯一可选空间；确认后按该空间 id 发邀请（不是当前 lineage 上下文 id）
+    ;(dialog('[data-test="invite-dialog-submit"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(mockedInviteToSpace).toHaveBeenCalledWith(7, 2)
+  })
+
+  it('全部空间都已是成员/已邀请：显示已在你全部家庭空间中且不可提交', async () => {
+    mockedInviteOptions.mockResolvedValue([
+      { space_id: 5, space_name: '我的家庭', target_status: 'active' },
+    ])
+    const { wrapper } = await mountWithHousehold()
+    await openInvite(wrapper)
+
+    expect(dialog('[data-test="invite-dialog-all-members"]')).not.toBeNull()
+    expect(dialog('[data-test="invite-space-group"]')).toBeNull()
+    expect(
+      (dialog('[data-test="invite-dialog-submit"]') as HTMLButtonElement).disabled,
+    ).toBe(true)
+    expect(mockedInviteToSpace).not.toHaveBeenCalled()
+  })
+
+  it('选项加载失败：显示可读错误且不发送邀请', async () => {
+    mockedInviteOptions.mockRejectedValue(
+      new ApiError(404, 'USER_NOT_FOUND', '对方不存在或不可见'),
+    )
+    const { wrapper } = await mountWithHousehold()
+    await openInvite(wrapper)
+
+    expect(dialog('[data-test="invite-dialog-error"]')?.textContent).toContain('对方不存在或不可见')
+    expect(mockedInviteToSpace).not.toHaveBeenCalled()
+  })
+
+  it('邀请失败：显示服务端文案且弹窗保持打开', async () => {
+    mockedInviteOptions.mockResolvedValue([
+      { space_id: 7, space_name: '可邀请家庭', target_status: 'none' },
+    ])
+    mockedInviteToSpace.mockRejectedValue(new ApiError(403, 'SPACE_FORBIDDEN_ACTOR', '仅空间 active 成员可执行该操作'))
+    const { wrapper } = await mountWithHousehold()
+    await openInvite(wrapper)
+
+    ;(dialog('[data-test="invite-dialog-submit"]') as HTMLButtonElement).click()
+    await flushPromises()
+    // 失败保持弹窗打开供重试（不静默关闭）
+    expect(document.querySelector('[data-test="invite-to-household-dialog"]')).not.toBeNull()
   })
 })

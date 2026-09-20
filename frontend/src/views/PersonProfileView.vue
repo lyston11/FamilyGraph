@@ -6,6 +6,7 @@ import { NAlert, NButton, NSpin } from 'naive-ui'
 import RelationshipDetailPanel from '@/components/canvas/RelationshipDetailPanel.vue'
 import { pathClassLabel } from '@/components/canvas/relationshipDisplay'
 import MaskedField from '@/components/common/MaskedField.vue'
+import InviteToHouseholdDialog from '@/components/member/InviteToHouseholdDialog.vue'
 import KinshipTermPanel from '@/components/kinship/KinshipTermPanel.vue'
 import { useSpaceContext } from '@/composables/useSpaceContext'
 import { usePersonalFamilyViewPolling } from '@/composables/usePersonalFamilyViewPolling'
@@ -39,8 +40,9 @@ import type {
  * - 快照加载失败（网络等）→ 安全失败状态；目标不在快照中（不存在/不可见/被
  *   撤权）与投影端点 403/404 → 统一「对方不可见或不存在」安全状态，不显示
  *   目标 ID、空间名、路径长度或任何隐藏占位/数量信息（防枚举探测）；
- * - 页面只读：不提供修改对方资料/建立关系/加入空间/查看对方家庭/扩大权限的
- *   任何按钮；已有相关 ActionCard 时只提供「查看待办」跳转（→ /notifications）；
+ * - 页面只读：不提供修改对方资料/建立关系/查看对方家庭/扩大权限的任何按钮；
+ *   09-20 需求修订：新增「邀请 TA 加入我的家庭空间」入口（只产生 pending，需
+ *   对方本人接受）；已有相关 ActionCard 时仍只提供「查看待办」跳转（→ /notifications）；
  *   Bridge pending 只在通知/待办处理，本页不渲染 approve/reject/consent/revoke
  *   等 Bridge 操作控件；
  * - 「返回家族树」只做路由导航（name family-space），保持同一 lineage 空间
@@ -318,6 +320,24 @@ function goNotifications(): void {
   void router.push({ name: 'notifications' })
 }
 
+// ---- 09-20：邀请目标加入我的家庭空间（只产生 pending） ----
+
+const inviteOpen = ref(false)
+
+/** 我的家庭空间（服务端 GET /spaces 真源；家族空间不是邀请目标）。 */
+const myHouseholdSpaces = computed(() =>
+  spaces.spaces.filter((space) => space.kind === 'household'),
+)
+
+/** 只在目标可见、且我至少有一个家庭空间时提供入口。 */
+const canInviteToHousehold = computed(
+  () => profileNode.value !== null && myHouseholdSpaces.value.length > 0,
+)
+
+function openInvite(): void {
+  inviteOpen.value = true
+}
+
 /**
  * 上下文感知返回（09-05 PRD R1）：进入方经 router state 携 `fgBackTo`
  * （家庭卡='home' / 家族树='family-space'）；state 缺失（直达/刷新）兜底家庭卡。
@@ -470,6 +490,16 @@ async function retry(): Promise<void> {
         </template>
         <div class="relations-actions">
           <NButton
+            v-if="canInviteToHousehold"
+            size="small"
+            type="primary"
+            secondary
+            data-test="profile-invite-to-household"
+            @click="openInvite"
+          >
+            邀请 TA 加入我的家庭空间
+          </NButton>
+          <NButton
             v-if="hasRelatedTodos"
             size="small"
             secondary
@@ -482,6 +512,14 @@ async function retry(): Promise<void> {
       </section>
     </template>
     </article>
+
+    <!-- 09-20：邀请目标加入我选择的家庭空间（只产生 pending，需对方本人接受） -->
+    <InviteToHouseholdDialog
+      v-if="profileNode !== null"
+      v-model:visible="inviteOpen"
+      :target-user-id="profileNode.user_id"
+      :target-name="profileNode.display.name"
+    />
 
     <!-- 只读关系说明面板（与家族树共用组件）：覆盖层，无任何写操作 -->
     <RelationshipDetailPanel

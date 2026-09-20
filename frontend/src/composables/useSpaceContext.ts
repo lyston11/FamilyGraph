@@ -240,9 +240,33 @@ export function useSpaceContext() {
     return spaces.currentSpace?.kind ?? 'none'
   }
 
+  /**
+   * 退出我在某空间的成员资格（设置页入口；调用前必须已经二次确认）。
+   *
+   * 顺序固定：先清该空间的敏感缓存并置空上下文，再让 store 的退出命令
+   * 重载服务端列表（currentSpaceId 已为空 → 落位到仍有效的第一个空间；
+   * 无剩余则保持空，调用方走既有空态）。
+   *
+   * - 只退出**我本人**的成员行（`memberId` 来自服务端 `GET /spaces` 的
+   *   `my_member_id`）；
+   * - 服务端仍是授权边界：`space_admin` 会被拒（需先交接），错误原样上抛给调用方。
+   */
+  async function leaveSpace(spaceId: number, memberId: number): Promise<void> {
+    const spaces = useSpacesStore()
+    if (spaces.currentSpaceId === spaceId) {
+      clearSpaceCaches(spaceId)
+      spaces.currentSpaceId = null
+      spaces.members = []
+      spaces.transfers = []
+      spaces.profileRefs = []
+    }
+    await spaces.leaveOrRemove(memberId)
+  }
+
   return {
     defaultTarget,
     ensureDefaultSpace,
+    leaveSpace,
     switchSpace,
   }
 }

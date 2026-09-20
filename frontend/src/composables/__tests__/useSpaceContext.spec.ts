@@ -19,6 +19,7 @@ import { useMemoryStore } from '@/stores/memory'
 import { useNotificationsStore } from '@/stores/notifications'
 import { usePersonalFamilyViewStore } from '@/stores/personalFamilyView'
 import { useSpaceStatsStore } from '@/stores/spaceStats'
+import { ApiError } from '@/api/errors'
 import { useSpacesStore } from '@/stores/spaces'
 import { useStewardSuggestionsStore } from '@/stores/stewardSuggestions'
 import { useUiStore } from '@/stores/ui'
@@ -33,6 +34,7 @@ vi.mock('@/api/spaces', () => ({
   inviteToSpace: vi.fn(),
   removeOrWithdrawMembership: vi.fn(),
   resolveMembership: vi.fn(),
+  fetchHouseholdInviteOptions: vi.fn().mockResolvedValue([]),
   joinByUser: vi.fn(),
   getSpacePositions: vi.fn(),
   putSpacePositions: vi.fn(),
@@ -471,6 +473,131 @@ describe('useSpaceContext（默认空间选择）', () => {
 
     await ctx.ensureDefaultSpace()
     expect(useSpacesStore().currentSpaceId).toBe(7)
+  })
+})
+
+describe('useSpaceContext（退出空间）', () => {
+  let pinia: Pinia
+
+  async function mountHarness() {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/family-tree', name: 'family-space', component: { template: '<div />' } },
+        { path: '/settings', name: 'settings', component: { template: '<div />' } },
+      ],
+    })
+    let ctx: ReturnType<typeof useSpaceContext> | null = null
+    const Harness = defineComponent({
+      setup() {
+        ctx = useSpaceContext()
+        return () => null
+      },
+    })
+    const wrapper = mount(Harness, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+    const spaceCtx = ctx as ReturnType<typeof useSpaceContext> | null
+    if (spaceCtx === null) throw new Error('harness did not initialize')
+    return { wrapper, ctx: spaceCtx }
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    pinia = createPinia()
+    setActivePinia(pinia)
+    vi.clearAllMocks()
+    fetchSpacesMock.mockResolvedValue([])
+    fetchSpaceMembersMock.mockResolvedValue([])
+    vi.mocked(spacesApi.fetchOwnershipTransfers).mockResolvedValue([])
+    vi.mocked(spacesApi.fetchSpaceProfileRefs).mockResolvedValue([])
+    fetchHouseholdCardMock.mockResolvedValue(null)
+    fetchPersonalFamilyViewMock.mockResolvedValue(null)
+    fetchNotificationsMock.mockResolvedValue(null)
+    useAuthStore().user = {
+      id: 1,
+      name: '张三',
+      pin_must_change: false,
+      claim_status: 'claimed',
+      profile_status: 'identity_confirmed',
+    }
+  })
+
+  it('退出当前空间：清理该空间缓存并把上下文落到剩余空间', async () => {
+    fetchSpacesMock
+      .mockResolvedValueOnce([
+        makeSpace({ id: 7, kind: 'household' }),
+        makeSpace({ id: 12, name: '张氏家族', owner_id: 9, kind: 'lineage' }),
+      ])
+      .mockResolvedValue([makeSpace({ id: 12, name: '张氏家族', owner_id: 9, kind: 'lineage' })])
+    vi.mocked(spacesApi.removeOrWithdrawMembership).mockResolvedValue(undefined)
+
+    const { ctx } = await mountHarness()
+    const spaces = useSpacesStore()
+    await spaces.load()
+    spaces.currentSpaceId = 7
+    spaces.members = [makeMember({ space_id: 7 })]
+
+    await ctx.leaveSpace(7, 21)
+
+    expect(spacesApi.removeOrWithdrawMembership).toHaveBeenCalledWith(21)
+    // 退出的是当前空间 → 上下文不再指向它，并落到服务端列表里的剩余空间
+    expect(spaces.currentSpaceId).toBe(12)
+    expect(spaces.spaces.some((space) => space.id === 7)).toBe(false)
+  })
+
+  it('退出非当前空间：不改动当前上下文', async () => {
+    fetchSpacesMock
+      .mockResolvedValueOnce([
+        makeSpace({ id: 7, kind: 'household' }),
+        makeSpace({ id: 12, name: '张氏家族', owner_id: 9, kind: 'lineage' }),
+      ])
+      .mockResolvedValue([makeSpace({ id: 12, name: '张氏家族', owner_id: 9, kind: 'lineage' })])
+    vi.mocked(spacesApi.removeOrWithdrawMembership).mockResolvedValue(undefined)
+
+    const { ctx } = await mountHarness()
+    const spaces = useSpacesStore()
+    await spaces.load()
+    spaces.currentSpaceId = 12
+
+    await ctx.leaveSpace(7, 21)
+
+    expect(spaces.currentSpaceId).toBe(12)
+    expect(spaces.spaces.some((space) => space.id === 7)).toBe(false)
+  })
+
+  it('退出最后一个空间：上下文置空走既有空态，不静默创建空间', async () => {
+    fetchSpacesMock.mockResolvedValueOnce([makeSpace({ id: 7, kind: 'household' })])
+    fetchSpacesMock.mockResolvedValue([])
+    vi.mocked(spacesApi.removeOrWithdrawMembership).mockResolvedValue(undefined)
+
+    const { ctx } = await mountHarness()
+    const spaces = useSpacesStore()
+    await spaces.load()
+    spaces.currentSpaceId = 7
+
+    await ctx.leaveSpace(7, 21)
+
+    expect(spaces.currentSpaceId).toBeNull()
+    expect(spaces.spaces).toEqual([])
+    expect(createSpaceMock).not.toHaveBeenCalled()
+  })
+
+  it('服务端拒绝退出（需先交接）：错误上抛且不清理上下文', async () => {
+    fetchSpacesMock.mockResolvedValue([makeSpace({ id: 7, kind: 'household' })])
+    vi.mocked(spacesApi.removeOrWithdrawMembership).mockRejectedValue(
+      new ApiError(409, 'SPACE_MANAGER_TRANSFER_REQUIRED', '请先完成空间管理员交接'),
+    )
+
+    const { ctx } = await mountHarness()
+    const spaces = useSpacesStore()
+    await spaces.load()
+    spaces.currentSpaceId = 7
+
+    await expect(ctx.leaveSpace(7, 21)).rejects.toMatchObject({
+      code: 'SPACE_MANAGER_TRANSFER_REQUIRED',
+    })
+    expect(spaces.spaces.some((space) => space.id === 7)).toBe(true)
   })
 })
 

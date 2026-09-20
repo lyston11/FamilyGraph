@@ -699,6 +699,63 @@ def request_lineage_access(
     return member, event.id
 
 
+def household_invite_options(
+    session: Session, ctx: ActorContext, *, target_user_id: int
+) -> list[dict[str, Any]]:
+    """个人公示页邀请选择：我的家庭空间 + 目标在各自空间的状态（只读）。
+
+    - 只返回调用者为 active 成员、且 ``kind='household'`` 的空间；按空间 id 稳定排序；
+    - 目标必须对调用者可见（否则 404，与 join-by-user / lineage-access-requests
+      同形状，不把本端点变成存在性探针）；
+    - 只读：不写库、不产生通知、不创建 pending 行。
+    """
+    from app.services import visibility
+
+    actor = load_actor(session, ctx)
+    target = session.get(User, target_user_id)
+    if target is None or not visibility.evaluate(session, actor, target).visible:
+        raise_api_error(404, USER_NOT_FOUND, "对方不存在或不可见")
+
+    space_ids = list(
+        session.scalars(
+            select(SpaceMember.space_id)
+            .join(FamilySpace, FamilySpace.id == SpaceMember.space_id)
+            .where(
+                SpaceMember.user_id == actor.id,
+                SpaceMember.status == "active",
+                FamilySpace.kind == "household",
+            )
+            .order_by(SpaceMember.space_id)
+        )
+    )
+    if not space_ids:
+        return []
+
+    names: dict[int, str] = {
+        space_id: name
+        for space_id, name in session.execute(
+            select(FamilySpace.id, FamilySpace.name).where(FamilySpace.id.in_(space_ids))
+        ).all()
+    }
+    target_rows = session.execute(
+        select(SpaceMember.space_id, SpaceMember.status).where(
+            SpaceMember.user_id == target.id, SpaceMember.space_id.in_(space_ids)
+        )
+    ).all()
+    target_status: dict[int, str] = {space_id: status for space_id, status in target_rows}
+    options: list[dict[str, Any]] = []
+    for space_id in space_ids:
+        status = target_status.get(space_id)
+        options.append(
+            {
+                "space_id": space_id,
+                "space_name": names.get(space_id, ""),
+                "target_status": status if status in ("active", "pending") else "none",
+            }
+        )
+    return options
+
+
 def save_positions(
     session: Session,
     ctx: ActorContext,

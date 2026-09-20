@@ -509,6 +509,23 @@ export interface FamilySpace {
   member_count: number
   /** 当前认证账号在该空间的能力投影；服务端数据源，不能替代后端授权。 */
   current_role?: SpaceRole | null
+  /**
+   * 当前认证账号在该空间的成员行 id（`GET /spaces` 投影）；退出空间入口用它
+   * 调既有 `DELETE /space-memberships/{id}`。其他投影不填。
+   */
+  my_member_id?: number | null
+}
+
+/**
+ * 个人公示页邀请选择项（`GET /spaces/household-invite-options`）。
+ *
+ * `target_status` 三态：active 已是成员 / pending 已有待处理邀请 / none 可邀请
+ * （终态 rejected|withdrawn|removed 归入 none，可再次邀请）。
+ */
+export interface HouseholdInviteOption {
+  space_id: number
+  space_name: string
+  target_status: 'active' | 'pending' | 'none'
 }
 
 export interface SpaceMemberInfo {

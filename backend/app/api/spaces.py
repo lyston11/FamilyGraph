@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,7 @@ from app.schemas.space import (
     DuplicatePeopleMergeOut,
     DuplicatePeopleMergeRequest,
     EligibleManagerTarget,
+    HouseholdInviteOptionOut,
     ManagerApplicationCreate,
     ManagerApplicationOut,
     ManagerTransferConsentDecision,
@@ -219,6 +220,7 @@ def list_my_spaces(
         out.pending_count = sum(1 for m in all_members if m.status == "pending")
         member = memberships_by_space[space.id]
         out.current_role = "space_admin" if member.role in {"owner", "space_admin"} else "member"
+        out.my_member_id = member.id
         outs.append(out)
     return outs
 
@@ -406,6 +408,22 @@ def join_by_user(
 
 class JoinByUserPayload(BaseModel):
     target_user_id: int = Field(gt=0)
+
+
+@router.get("/spaces/household-invite-options", response_model=list[HouseholdInviteOptionOut])
+def household_invite_options(
+    target_user_id: int = Query(gt=0),
+    session: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[HouseholdInviteOptionOut]:
+    """个人公示页邀请选择：我的家庭空间 + 目标在各自空间的状态（只读）。
+
+    只返回我 active 成员资格的家庭空间；目标不可见时与不可见用户同一 404。
+    """
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account)
+    options = space_commands.household_invite_options(session, ctx, target_user_id=target_user_id)
+    return [HouseholdInviteOptionOut(**option) for option in options]
 
 
 class LineageAccessRequestPayload(BaseModel):

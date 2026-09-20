@@ -543,6 +543,7 @@ def run_cases(suite: Suite, family: str, admin: str, data_dir: Path) -> None:
     started = time.monotonic()
     resp = client.get(f"{family}/api/me", headers=fam_headers)
     record(suite, "family-me", "family", "GET", "/me", resp, started, 200)
+    family_user_id = resp.json().get("id") if resp.status_code == 200 else None
 
     # ---- 空间 ----
     started = time.monotonic()
@@ -569,6 +570,42 @@ def run_cases(suite: Suite, family: str, admin: str, data_dir: Path) -> None:
             )
         )
         return
+
+    # 我的空间列表暴露 my_member_id（退出入口用它调 DELETE /space-memberships/{id}）
+    my_member_ids = [
+        s.get("my_member_id") for s in spaces if isinstance(s, dict) and s.get("id") == space_id
+    ]
+    suite.add(
+        Result(
+            "family-spaces-my-member-id",
+            "family",
+            "GET",
+            "/spaces",
+            status=200,
+            note=""
+            if my_member_ids and isinstance(my_member_ids[0], int)
+            else "household space row lacks my_member_id",
+            passed=bool(my_member_ids) and isinstance(my_member_ids[0], int),
+        )
+    )
+
+    # 公示页邀请选择：只读聚合，返回我的家庭空间 + 目标状态（此处以本人为可见目标）
+    started = time.monotonic()
+    resp = client.get(
+        f"{family}/api/spaces/household-invite-options",
+        params={"target_user_id": family_user_id},
+        headers=fam_headers,
+    )
+    record(
+        suite,
+        "family-household-invite-options",
+        "family",
+        "GET",
+        "/spaces/household-invite-options",
+        resp,
+        started,
+        200,
+    )
 
     started = time.monotonic()
     resp = client.get(

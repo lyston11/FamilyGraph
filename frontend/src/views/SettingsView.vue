@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// 设置页五分区（09-01 Phase 5 四分区 + 09-05 新增邀请码分区）：
+// 设置页六分区（09-01 Phase 5 四分区 + 09-05 邀请码 + 09-20 我的空间）：
 // 1) 个人资料（auth store 本人信息 + 改名）；2) 隐私与公示（DisclosureMatrix）；
 // 3) 邀请码（InviteCodeSection：我的码/创建三类/撤销/复制链接/填码加入/绑定确认）；
-// 4) 账号与安全（ChangePinForm + 我的数据 DataRightsPanel + 登出）；
-// 5) 显示与无障碍（paper/modern 双主题切换，消费 stores/ui.setTheme）。
+// 4) 我的空间（列出我 active 空间 + 退出；退出必须二次确认，服务端是授权边界）；
+// 5) 账号与安全（ChangePinForm + 我的数据 DataRightsPanel + 登出）；
+// 6) 显示与无障碍（paper/modern 双主题切换，消费 stores/ui.setTheme）。
 // 复用现有 ChangePinForm / DisclosureMatrix / DataRightsPanel；空间管理不放进
-// 全局设置（由 AppShell 当前空间管理入口承担）；无新增授权行为。
+// 全局设置（由 AppShell 当前空间管理入口承担）。
 // ProfileDrawer 依赖旧 /users members 合同，不进入全局设置（差异记录见 notes.md）。
 import {
   NButton,
@@ -15,6 +16,7 @@ import {
   NInput,
   NRadio,
   NRadioGroup,
+  useDialog,
   useMessage,
 } from 'naive-ui'
 import { onMounted, reactive, ref } from 'vue'
@@ -27,20 +29,28 @@ import ChangePinForm from '@/components/common/ChangePinForm.vue'
 import DataRightsPanel from '@/components/member/DataRightsPanel.vue'
 import DisclosureMatrix from '@/components/member/DisclosureMatrix.vue'
 import InviteCodeSection from '@/components/member/InviteCodeSection.vue'
+import { useSpaceContext } from '@/composables/useSpaceContext'
 import { useAuthStore } from '@/stores/auth'
+import { useSpacesStore } from '@/stores/spaces'
 import { useUiStore } from '@/stores/ui'
 import { themeTokens, type ThemeName, type ThemeTokens } from '@/styles/tokens'
-import type { GenderType, StructuredDate } from '@/types/api'
+import type { FamilySpace, GenderType, StructuredDate } from '@/types/api'
 
 const auth = useAuthStore()
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 const ui = useUiStore()
-const activeSection = ref<'profile' | 'privacy' | 'invite' | 'account' | 'display'>('profile')
+const spaces = useSpacesStore()
+const spaceContext = useSpaceContext()
+const activeSection = ref<
+  'profile' | 'privacy' | 'invite' | 'spaces' | 'account' | 'display'
+>('profile')
 const settingsSections = [
   { key: 'profile', label: '个人资料' },
   { key: 'privacy', label: '隐私与公示' },
   { key: 'invite', label: '邀请码' },
+  { key: 'spaces', label: '我的空间' },
   { key: 'account', label: '账号与安全' },
   { key: 'display', label: '显示与无障碍' },
 ] as const
@@ -136,6 +146,67 @@ async function doLogout(): Promise<void> {
   await auth.logout()
   message.success('已退出登录')
   void router.replace({ name: 'login' })
+}
+
+// ---- 我的空间：列出我 active 的空间 + 退出（二次确认，服务端是授权边界） ----
+
+const mySpaces = ref<FamilySpace[]>(spaces.spaces)
+const leavingSpaceId = ref<number | null>(null)
+
+async function loadMySpaces(): Promise<void> {
+  try {
+    await spaces.load()
+    mySpaces.value = spaces.spaces
+  } catch {
+    // 列表加载失败不阻断设置页；保留已有投影
+  }
+}
+
+onMounted(() => {
+  void loadMySpaces()
+})
+
+function spaceKindLabel(space: FamilySpace): string {
+  return space.kind === 'lineage' ? '族谱空间' : '家庭空间'
+}
+
+function spaceRoleLabel(space: FamilySpace): string {
+  return space.current_role === 'space_admin' ? '管理员' : '成员'
+}
+
+/**
+ * 退出空间：必须二次确认；取消不产生任何写入（命令只在 onPositiveClick 内调用）。
+ *
+ * 授权边界在服务端：`space_admin` 会被拒（需先完成交接），此处不做前端绕过，
+ * 只把服务端错误码映射成可读提示。
+ */
+function confirmLeaveSpace(space: FamilySpace): void {
+  const memberId = space.my_member_id ?? null
+  if (memberId === null) return
+  dialog.warning({
+    title: '退出空间确认',
+    content: `确认退出「${space.name}」？退出后你将失去该空间的数据访问，需要重新申请才能再加入。`,
+    positiveText: '确认退出',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void (async () => {
+        leavingSpaceId.value = space.id
+        try {
+          await spaceContext.leaveSpace(space.id, memberId)
+          mySpaces.value = spaces.spaces
+          message.success(`已退出「${space.name}」`)
+        } catch (error) {
+          if (error instanceof ApiError && error.code === 'SPACE_MANAGER_TRANSFER_REQUIRED') {
+            message.warning('你是该空间管理员，请先完成管理员交接后再退出')
+          } else {
+            message.error(error instanceof ApiError ? error.message : '退出失败，请稍后重试')
+          }
+        } finally {
+          leavingSpaceId.value = null
+        }
+      })()
+    },
+  })
 }
 
 // ---- 显示与无障碍：主题选择（双主题预览小卡，预览色取自 tokens.ts L2 token） ----
@@ -266,7 +337,30 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
         <InviteCodeSection />
       </section>
 
-      <!-- 分区 4：账号与安全 -->
+      <!-- 分区 4：我的空间（列出我 active 空间 + 退出；二次确认，服务端是授权边界） -->
+      <section v-show="activeSection === 'spaces'" class="section" data-test="settings-section-spaces">
+        <h2 class="section-title">我的空间</h2>
+        <p class="meta">你当前加入的全部空间。退出后需要重新申请才能再加入；管理员需先完成交接。</p>
+        <p v-if="mySpaces.length === 0" class="meta" data-test="my-spaces-empty">你还没有加入任何空间。</p>
+        <ul v-else class="space-list" data-test="my-spaces-list">
+          <li v-for="space in mySpaces" :key="space.id" class="space-row" :data-test="`my-space-${space.id}`">
+            <span class="space-name">{{ space.name }}</span>
+            <span class="fg-badge fg-badge--neutral">{{ spaceKindLabel(space) }}</span>
+            <span class="space-role">{{ spaceRoleLabel(space) }}</span>
+            <NButton
+              size="small"
+              secondary
+              type="warning"
+              :loading="leavingSpaceId === space.id"
+              :disabled="space.my_member_id == null"
+              :data-test="`leave-space-${space.id}`"
+              @click="confirmLeaveSpace(space)"
+            >退出</NButton>
+          </li>
+        </ul>
+      </section>
+
+      <!-- 分区 5：账号与安全 -->
       <section v-show="activeSection === 'account'" class="section" data-test="settings-section-account">
         <h2 class="section-title">账号与安全</h2>
         <p class="meta">定期更换 PIN 码；导出、更正与删除申请都在这里提交。</p>
@@ -277,7 +371,7 @@ function previewStyle(tokens: ThemeTokens): Record<string, string> {
         <NButton text type="error" data-test="logout-btn" @click="doLogout">退出登录</NButton>
       </section>
 
-      <!-- 分区 5：显示与无障碍 -->
+      <!-- 分区 6：显示与无障碍 -->
       <section v-show="activeSection === 'display'" class="section" data-test="settings-section-display">
         <h2 class="section-title">显示与无障碍</h2>
         <p class="meta">选择配色主题（即时生效并记住偏好）；双主题均遵循系统减弱动态设置。</p>
@@ -381,6 +475,37 @@ h1 {
   margin: 0 0 12px;
   font-size: 17px;
   color: var(--fg-ink);
+}
+
+/* 我的空间：行式列表，窄屏纵向堆叠 */
+.space-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.space-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--fg-glass-border);
+  border-radius: var(--fg-radius-card);
+}
+
+.space-row .space-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg-ink);
+}
+
+.space-row .space-role {
+  font-size: 12px;
+  color: var(--fg-ink-secondary);
 }
 
 .meta {
@@ -510,6 +635,11 @@ h1 {
 /* 移动端（≤600px）：inline 表单降级为纵向堆叠（375px 单列，无横向滚动）；
    表格类内容（披露矩阵/数据权利表）由组件内 scroll-x 承担横向滚动 */
 @media (max-width: 600px) {
+  .space-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .settings-view :deep(.n-form--inline .n-form-item) {
     width: 100%;
     margin-right: 0;

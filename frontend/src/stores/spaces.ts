@@ -15,7 +15,7 @@ import {
   fetchSpaceMembers,
   fetchSpaceProfileRefs,
   fetchSpaces,
-  inviteToSpace,
+  inviteToSpace as inviteToSpaceRequest,
   removeOrWithdrawMembership,
   requestLineageAccess,
   resolveMembership,
@@ -229,7 +229,7 @@ export const useSpacesStore = defineStore('spaces', {
       if (!this.canInvite) throw new Error('SPACE_FORBIDDEN_ACTOR')
       const space = this.currentSpace
       if (!space) throw new Error('NO_CURRENT_SPACE')
-      await inviteToSpace(space.id, userId)
+      await inviteToSpaceRequest(space.id, userId)
       await this.loadMembers(space.id)
     },
     async resolve(memberId: number, action: 'accept' | 'reject') {
@@ -248,6 +248,15 @@ export const useSpacesStore = defineStore('spaces', {
     async leaveOrRemove(memberId: number) {
       await removeOrWithdrawMembership(memberId)
       await this.load()
+    },
+    /**
+     * 邀请指定成员加入**指定**家庭空间（个人公示页入口）。
+     *
+     * 不复用只作用于 currentSpace 的 `invite`：公示页选中的空间不一定是当前
+     * 上下文空间；授权仍由服务端按所选空间复核。只产生 pending。
+     */
+    async inviteToSpace(spaceId: number, userId: number) {
+      return inviteToSpaceRequest(spaceId, userId)
     },
     /** 发起 owner 移交（仅 owner；后端校验目标为活跃成员，FSM 同空间至多一个 pending） */
     async initiateTransfer(toUserId: number) {
