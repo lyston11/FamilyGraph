@@ -133,7 +133,12 @@ services:
   # 09-04 系统管理员后台前端：独立镜像（system-admin-frontend/），只代理
   # /admin-api 到 api:8002；仅绑定宿主回环 8081，由 VPN/内网反代进入。
   admin-web:
-    build: ./system-admin-frontend
+    build:
+      # 上下文必须是仓库根：system-admin-frontend/src/styles/main.css 用相对路径
+      # @import 仓库根的 shared/brand-tokens.css（R4 设计系统单一定义源）。
+      # 用 system-admin-frontend/ 作上下文时该文件在上下文之外，镜像构建必失败。
+      context: .
+      dockerfile: system-admin-frontend/Dockerfile
     image: familygraph-admin-web:0.1.0
     restart: unless-stopped
     ports:
