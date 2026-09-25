@@ -1,4 +1,4 @@
-"""0055_steward_child_run: refusal guards, schema shape, and lossless round trip.
+"""0055_steward_assist_execution_unit: guards, schema shape, and lossless round trip.
 
 Three things are asserted separately, because they fail for different reasons:
 
@@ -7,11 +7,13 @@ Three things are asserted separately, because they fail for different reasons:
    forbid them), so the predicates are exercised directly against a crafted
    minimal schema — and the guard-before-DDL ordering is asserted separately by
    counting DDL statements in a real refused run.
-2. **Schema shape** after upgrade: dual-kind ``agent_runs``, the new
-   ``steward_runs`` table, ``steward_model_calls.run_id``, and the *unchanged*
-   assistant-only CHECKs on ``agent_sessions`` / ``agent_jobs``.
-3. **Round trip** is lossless: downgrade restores the exact pre-0055 schema
-   (including dropping the scope-binding constraint), and re-upgrade works.
+2. **Schema shape** after upgrade: dual-kind ``agent_runs``, the batch table
+   narrowed to an immutable plan snapshot, the lease columns on the attempt, and
+   the *unchanged* assistant-only CHECKs on ``agent_sessions`` / ``agent_jobs``.
+3. **Round trip** is lossless: downgrade restores the exact pre-0055 schema,
+   including re-deriving the batch rows from the attempt ledger. This is the
+   assertion that catches an unfaithful inverse — the downgrade has to recreate a
+   table whose columns it cannot simply re-add.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ BACKEND = Path(__file__).parents[1]
 PARENT = "0054_seed_household_roster_fix"
 HEAD = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini"))).get_current_head()
 
-_MIGRATION_PATH = BACKEND / "migrations/versions/0055_steward_child_run.py"
+_MIGRATION_PATH = BACKEND / "migrations/versions/0055_steward_assist_execution_unit.py"
 
 
 def _load_migration():
@@ -187,10 +189,11 @@ CREATE TABLE agent_sessions (id INTEGER PRIMARY KEY, agent_kind TEXT);
 CREATE TABLE agent_jobs (id INTEGER PRIMARY KEY, kind TEXT);
 CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, session_id INTEGER, job_id INTEGER, kind TEXT);
 CREATE TABLE context_builds (id INTEGER PRIMARY KEY, agent_kind TEXT);
+CREATE TABLE steward_model_calls (id INTEGER PRIMARY KEY, assist_kind TEXT, status TEXT);
 """
 
 
-def _guard_engine(runs=(), jobs=(), sessions=()):
+def _guard_engine(runs=(), jobs=(), sessions=(), calls=()):
     engine = sa.create_engine("sqlite://")
     with engine.begin() as conn:
         for stmt in _GUARD_SCHEMA.strip().split(";"):
@@ -208,6 +211,11 @@ def _guard_engine(runs=(), jobs=(), sessions=()):
         for row in sessions:
             conn.execute(
                 sa.text("INSERT INTO agent_sessions VALUES (:a,:b)"), {"a": row[0], "b": row[1]}
+            )
+        for row in calls:
+            conn.execute(
+                sa.text("INSERT INTO steward_model_calls VALUES (:a,:b,:c)"),
+                {"a": row[0], "b": row[1], "c": row[2]},
             )
     return engine
 
@@ -254,6 +262,11 @@ def _refusal(engine, validator) -> str | None:
             {"runs": [(1, None, 1, "steward")]},
             "must carry a session",
         ),
+        (
+            "attempt still in flight when the lease moves",
+            {"calls": [(1, "candidate", "in_flight")]},
+            "cannot survive the lease move",
+        ),
     ],
 )
 def test_upgrade_guards_refuse_unsupported_rows(label, kwargs, expected):
@@ -269,6 +282,8 @@ def test_upgrade_guards_accept_a_supported_database():
         runs=[(1, 1, None, "assistant")],
         jobs=[(1, "assistant")],
         sessions=[(1, "assistant")],
+        # Terminal attempts are fine: only a live lease would have nowhere to go.
+        calls=[(1, "candidate", "succeeded"), (2, "terminology", "unknown")],
     )
     assert _refusal(engine, MIG._validate_before_upgrade) is None
 
@@ -391,18 +406,53 @@ def test_assistant_only_tables_keep_their_check(upgraded):
     assert "uq_agent_jobs_space_active" not in schema
 
 
-def test_steward_runs_table_shape(upgraded):
-    schema = schema_of(migration_engine(upgraded))
-    steward_runs = schema["steward_runs"]
-    assert "run_id INTEGER NOT NULL" in steward_runs
-    assert "steward_job_id INTEGER NOT NULL" in steward_runs
-    assert "assist_kind IN ('candidate', 'ranking', 'explanation', 'terminology')" in steward_runs
-    # viewer is meaningful for terminology only.
-    assert "(assist_kind = 'terminology') = (viewer_account_id IS NOT NULL)" in steward_runs
-    assert "uq_steward_runs_run_id" in steward_runs
-    assert "ix_steward_runs_job" in schema
-    assert "ix_steward_runs_batch" in schema
-    assert "ix_steward_runs_viewer" in schema
+def test_batch_table_becomes_an_immutable_plan(upgraded):
+    """The plan keeps the snapshot and drops every execution field."""
+    engine = migration_engine(upgraded)
+    with engine.connect() as conn:
+        names = {
+            row[0]
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+        }
+        # The batch table is gone; its rows live on as plans.
+        assert "steward_assist_batches" not in names
+        assert "steward_assist_plans" in names
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(steward_assist_plans)"))}
+        # The snapshot survives...
+        assert {"id", "space_id", "job_id", "evidence_hash", "policy_version"} <= columns
+        assert "fence_json" in columns
+        # ...and every execution field moved to the attempt.
+        for moved in ("status", "attempt", "next_attempt_at", "lease_owner", "lease_until"):
+            assert moved not in columns, f"{moved} should have moved to the attempt"
+        # job_id uniqueness (one plan per job) is preserved under its new name.
+        indexes = {
+            row[0]
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
+        }
+        assert "ix_steward_assist_batches_due" not in indexes
+
+
+def test_attempt_owns_the_lease_and_the_carrier(upgraded):
+    """The execution unit is the attempt: lease, carrier and fence digest."""
+    engine = migration_engine(upgraded)
+    with engine.connect() as conn:
+        columns = {
+            row[1]: row for row in conn.execute(text("PRAGMA table_info(steward_model_calls)"))
+        }
+        for added in ("lease_owner", "lease_until", "next_attempt_at", "carrier", "evidence_hash"):
+            assert added in columns, f"{added} must live on the attempt"
+        assert "plan_id" in columns
+        assert "batch_id" not in columns
+        # The carrier is constrained, so a typo cannot silently select a
+        # different executor than the scheduler intended.
+        assert "carrier IN ('inproc','pi')" in schema_of(engine)["steward_model_calls"]
+        # Lease selection needs its own index: without it the per-space count is
+        # a full scan on every poll.
+        indexes = {
+            row[0]
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
+        }
+        assert "ix_smc_due" in indexes
 
 
 def test_model_call_ledger_gets_run_id(upgraded):
@@ -515,4 +565,5 @@ def test_round_trip_is_repeatable(tmp_path):
 
     schema = schema_of(migration_engine(data_dir))
     assert "ck_agent_runs_scope_binding" in schema["agent_runs"]
-    assert "steward_runs" in schema
+    assert "steward_assist_plans" in schema
+    assert "steward_assist_batches" not in schema
