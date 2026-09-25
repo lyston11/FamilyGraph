@@ -32,7 +32,7 @@ from app.errors import (
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent, AgentSession
 from app.schemas.agent import ContextReferenceIn, EventTimingIn
 from app.services import agent_citations
-from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
+from app.services.agent_execution import Execution, acquire_run_writer, fence_execution
 from app.utils import timeutil
 
 # notes.md 事件类型注册表（V2.2）
@@ -241,7 +241,7 @@ def append_events(
     run: AgentRun,
     entries: list[EventEntry],
     *,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
 ) -> tuple[list[AgentRunEvent], list[int]]:
     """幂等批量追加。
 

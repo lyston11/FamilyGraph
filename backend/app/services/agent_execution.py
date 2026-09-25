@@ -208,8 +208,9 @@ def fence_steward_execution(
     space-scoped and has no single account. The layered judgment (accepted
     2026-09-25, see design §5.2.1) is:
 
-    1. the parent job is still active — this is the grant, and it in turn
-       requires the space to have Steward enabled with an active member;
+    1. the parent job is the job this batch was registered against and it
+       completed (``succeeded``) — this is the grant, and registration in turn
+       required the space to have Steward enabled with an active member;
     2. the space still exists;
     3. when ``viewer_account_id`` is set (terminology only), that account's user
        must still be an active member — the same judgment as assistant.
@@ -282,8 +283,17 @@ def fence_steward_execution(
     if db.get(FamilySpace, identity.space_id) is None:
         raise_api_error(403, AGENT_TOKEN_SCOPE_MISMATCH, "执行身份或成员资格已变化")
 
-    # Layer 1 (continued): the parent job must be actively leased/running.
-    if job.status not in ("leased", "running"):
+    # Layer 1 (continued): the parent job must still be the completed job this
+    # batch was registered against.
+    #
+    # ``succeeded`` — not ``leased``/``running`` — because an assist batch is only
+    # registered *after* the deterministic core completes (see
+    # ``steward_delivery``'s assist intent → ``register_batch_for_job``), and
+    # ``_fence_check`` already gates lease time on the same condition. Requiring an
+    # active job here would reject every child run at its own fence. (The design's
+    # §5.2.1 wording said "status IN ('leased','running')"; that is inconsistent
+    # with the registration flow and was corrected in implementation.)
+    if job.status != "succeeded":
         raise_api_error(409, AGENT_RUN_NOT_RUNNING, "父 Steward 作业不在可执行状态")
 
     if run.status not in allowed_statuses:

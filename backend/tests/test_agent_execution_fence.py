@@ -83,11 +83,14 @@ def _steward_world(db: Session, *, with_batch: bool = True, assist_kind: str = "
     user, space = create_agent_fixture(db, name="fence-steward")
     now = utcnow()
 
+    # succeeded, not running: assist batches are registered only after the
+    # deterministic core completes, so that is the state a child run is admitted
+    # against.
     job = StewardJob(
         space_id=space.id,
         cause="integrity_scan",
         trigger_cursor=1,
-        status="running",
+        status="succeeded",
         attempt=1,
         max_attempts=3,
         checkpoint_json={},
@@ -236,10 +239,15 @@ def test_steward_fence_rejects_revoked_viewer(db_session):
     assert _error(exc)["code"] == AGENT_TOKEN_SCOPE_MISMATCH
 
 
-def test_steward_fence_rejects_parent_job_not_active(db_session):
-    """Layer 1: the parent job is the authorization root and must be active."""
+def test_steward_fence_rejects_parent_job_not_settled(db_session):
+    """Layer 1: the parent job is the authorization root and must have completed.
+
+    A batch is only registered after the deterministic core succeeds, so the
+    executable parent state is ``succeeded`` — not ``leased``/``running``. A job
+    still in flight (or failed) must not authorize a child run.
+    """
     user, space, job, batch, run, _ = _steward_world(db_session)
-    job.status = "succeeded"
+    job.status = "running"
     db_session.commit()
 
     identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)

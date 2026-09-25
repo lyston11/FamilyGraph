@@ -214,9 +214,7 @@ def _assist_stats(db: Session, cutoff: datetime) -> dict[str, AssistKindLatency]
     return stats
 
 
-def _run_stats(
-    db: Session, cutoff: datetime, kind: str
-) -> tuple[RunTotalLatency, dict[str, int]]:
+def _run_stats(db: Session, cutoff: datetime, kind: str) -> tuple[RunTotalLatency, dict[str, int]]:
     rows = db.execute(
         select(AgentRun.status, AgentRun.created_at, AgentRun.settled_at).where(
             AgentRun.created_at >= cutoff, AgentRun.kind == kind

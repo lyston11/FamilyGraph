@@ -432,9 +432,7 @@ def _settle(
     """终态写入 + 对应终态事件追加（同一立即事务；终态不可复活）。"""
     with _immediate_tx(db):
         if execution is not None:
-            run, _session, _job = fence_execution(
-                db, execution, allow_cancel_requested=True
-            )
+            run, _session, _job = fence_execution(db, execution, allow_cancel_requested=True)
         else:
             db.refresh(run)
         if run.status in RUN_TERMINAL_STATUSES:

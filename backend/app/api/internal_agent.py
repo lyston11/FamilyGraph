@@ -703,9 +703,20 @@ def append_events_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> EventAppendOut:
-    run, _agent_session, _claims = _authorize_run(db, request, run_id)
-    execution = ExecutionIdentity.from_claims(_claims)
-    _require_active_run(db, request, run)
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        run, _steward_claims = _authorize_steward_run(db, request, run_id)
+        # The steward fence is the same one every other run-scoped endpoint uses,
+        # so lease/cancel/batch state cannot diverge between append and settle.
+        fence_steward_execution(
+            db, StewardExecution.from_claims(claims), allow_cancel_requested=True
+        )
+        execution: ExecutionIdentity | StewardExecution = StewardExecution.from_claims(claims)
+    else:
+        run, _agent_session, _claims = _authorize_run(db, request, run_id)
+        execution = ExecutionIdentity.from_claims(_claims)
+        _require_active_run(db, request, run)
     # 类型先于事务校验：未知类型不落公开流，直接审计拒绝
     for entry in body.events:
         if entry.type not in agent_events.EVENT_TYPES:

@@ -1581,9 +1581,7 @@ def heartbeat_child_run(
 
     ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_BATCH_LEASE_SECONDS
     with _immediate_tx(db):
-        run, steward_run, _job = fence_steward_execution(
-            db, identity, allow_cancel_requested=True
-        )
+        run, steward_run, _job = fence_steward_execution(db, identity, allow_cancel_requested=True)
         now = timeutil.utcnow()
         expires = now + timedelta(seconds=ttl)
         run.lease_expires_at = expires
