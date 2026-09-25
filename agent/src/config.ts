@@ -14,6 +14,10 @@
 
 export type ProviderKind = "openai_compatible" | "local";
 
+/** Which runtime kind this sidecar instance serves. */
+export type AgentRole = "assistant" | "steward" | "both";
+export type AgentKind = "assistant" | "steward";
+
 export interface ProviderEnvConfig {
   kind: ProviderKind;
   baseUrl: string | undefined;
@@ -37,6 +41,17 @@ export interface AgentConfig {
   providerStreamMaxRetryDelayMs: number;
   /** Idle poll interval when the durable queue returns no job. */
   leasePollIntervalMs: number;
+  /** Which runtime kinds this instance leases (FG_AGENT_ROLE). */
+  role: AgentRole;
+  /** Concurrent assistant slots. Backend caps an account at 2, so a smaller
+   * local value would only manufacture queueing. */
+  maxConcurrentRuns: number;
+  /** Concurrent steward slots. Shares its name and default with the backend's
+   * STEWARD_ASSIST_MAX_CONCURRENT_BATCHES, which decides how many batches may
+   * hold a lease; a smaller local value would leave a leased batch with no
+   * executor until server-side recovery reclaimed it. The lease response also
+   * broadcasts the server's value as a correction mechanism. */
+  stewardMaxConcurrentBatches: number;
   /** Lease lifetime advertised by FastAPI; heartbeat fires at lease/3. */
   defaultLeaseMs: number;
   /** Event batch flush thresholds. */
@@ -85,6 +100,30 @@ function readProvider(
 
 export class ConfigError extends Error {}
 
+/** Concurrent-slot bounds; must match the backend's validation range. */
+const MIN_CONCURRENCY = 1;
+const MAX_CONCURRENCY = 8;
+
+function readRole(env: NodeJS.ProcessEnv): AgentRole {
+  const raw = readString(env, "FG_AGENT_ROLE");
+  if (raw === undefined) return "assistant";
+  if (raw === "assistant" || raw === "steward" || raw === "both") return raw;
+  // Fail fast rather than silently defaulting: an unrecognised role would make
+  // the sidecar serve the wrong queue, and the only symptom would be jobs that
+  // nobody ever leases.
+  throw new ConfigError(`FG_AGENT_ROLE must be assistant|steward|both, got ${raw}`);
+}
+
+function readConcurrency(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+  const raw = readString(env, key);
+  if (raw === undefined) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < MIN_CONCURRENCY || parsed > MAX_CONCURRENCY) {
+    throw new ConfigError(`${key} must be an integer in ${MIN_CONCURRENCY}..${MAX_CONCURRENCY}`);
+  }
+  return parsed;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
   const serviceSecret = readString(env, "AGENT_SERVICE_SECRET");
   if (!serviceSecret) {
@@ -109,6 +148,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // extra polls (an empty lease is one BEGIN IMMEDIATE + SELECT): 0.418ms per
     // call, i.e. 1.7ms/s of write-lock work at 250ms vs 0.2ms/s at 2000ms.
     leasePollIntervalMs: readInt(env, "AGENT_LEASE_POLL_MS", 250),
+    role: readRole(env),
+    maxConcurrentRuns: readConcurrency(env, "AGENT_MAX_CONCURRENT_RUNS", 2),
+    stewardMaxConcurrentBatches: readConcurrency(
+      env,
+      "STEWARD_ASSIST_MAX_CONCURRENT_BATCHES",
+      1,
+    ),
     providerStreamMaxRetries: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRIES", 5),
     providerStreamMaxRetryDelayMs: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS", 20000),
     defaultLeaseMs: readInt(env, "AGENT_DEFAULT_LEASE_MS", 60_000),

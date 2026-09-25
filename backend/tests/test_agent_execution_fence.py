@@ -797,3 +797,16 @@ def test_account_model_is_unused_by_the_steward_fence(db_session):
     assert run.session_id is None
     assert run.job_id is None
     assert db_session.query(Account).count() >= 1
+
+
+def test_steward_prompt_version_is_the_asserted_literal():
+    """Cross-side literal, asserted verbatim.
+
+    The prompt text moved into the sidecar image, so this constant — not a hash
+    of server-side text — is what anchors evaluation reports and what the sidecar
+    compares against. Renaming it on one side only must fail a test rather than
+    reject every steward run at runtime.
+    """
+    from app.services.steward_assist import STEWARD_PROMPT_VERSION
+
+    assert STEWARD_PROMPT_VERSION == "steward-v1"

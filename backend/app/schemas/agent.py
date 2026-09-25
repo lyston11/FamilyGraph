@@ -145,6 +145,11 @@ class ContextOut(BaseModel):
     next_event_seq: int = Field(default=1, ge=0)
     # additive：浏览器已请求取消（同 heartbeat）
     cancel_requested: bool = False
+    # Steward only: the prompt version the server expects the sidecar to have
+    # loaded. The prompt text lives in the sidecar, so this constant (not a hash
+    # of server-side text) is the evaluation anchor; a mismatch must fail closed
+    # rather than silently run stale prompt text against a newer backend.
+    steward_prompt_version: str | None = None
 
 
 # ---- events ----

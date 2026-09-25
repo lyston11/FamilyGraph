@@ -561,6 +561,14 @@ def _visible_context(db: Session, space_id: int) -> ProjectionContext:
     return ProjectionContext(visible, minor_ids=minor_ids)
 
 
+# Steward system prompt 的**跨层字面量**：文本现在住在 sidecar
+# （agent/src/prompts/steward.ts 的 STEWARD_PROMPT_VERSION），服务端不再持有文本，
+# 因此 prompt_version() 的哈希不再能锚定评测报告。这个常量就是锚点：sidecar 在
+# context 投影里上报它实际加载的版本，不匹配时 fail-closed。这同时防止「镜像过期、
+# 跑着旧 prompt 对上新后端」的静默漂移（与 memory #244 的 typ 漂移同一类教训）。
+STEWARD_PROMPT_VERSION = "steward-v1"
+
+
 def prompt_version() -> str:
     """全部辅助 system prompt 的规范化哈希（09-19 R4）。
 
