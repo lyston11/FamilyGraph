@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "internal 协议、token 合同、执行模型不变式与 egress 审计的权威规范"}
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "Steward 确定性内核与模型辅助层的保留资产（状态机、写回栅栏、预算）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 refusal guard 前置、SQLite CHECK 重建、隔离 DATA_DIR 验证"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁与最小充分检查范围"}

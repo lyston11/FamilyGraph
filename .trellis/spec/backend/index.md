@@ -10,6 +10,7 @@
 - 数据库、迁移、事务、备份或约束：读取 [database-guidelines.md](database-guidelines.md)。
 - 错误、日志、质量门禁：按需读取对应叶文件。
 - Agent、Memory/RAG、Steward、Controlled Web 或关系智能：只读取对应领域叶文件。
+- Steward 模型辅助改走 Pi child run（`steward_runs`、`/internal/agent/steward/*`、sidecar 槽位）：读 [steward-child-run.md](steward-child-run.md)。
 - 涉及全局身份、授权、空间状态或数据权利：从 [全局架构规范路由](../architecture/index.md) 选择具体叶文件。
 
 ## 合同叶文件
@@ -20,6 +21,7 @@
 - [quality-guidelines.md](quality-guidelines.md)
 - [logging-guidelines.md](logging-guidelines.md)
 - [agent-runtime.md](agent-runtime.md)
+- [steward-child-run.md](steward-child-run.md) — Steward 走受限 Pi child run 时的队列红线、身份拆分、槽位模型与 prompt 版本
 - [memory-contract.md](memory-contract.md)
 - [memory-rag-execution-contract.md](memory-rag-execution-contract.md)
 - [rag-index-lifecycle-contract.md](rag-index-lifecycle-contract.md)

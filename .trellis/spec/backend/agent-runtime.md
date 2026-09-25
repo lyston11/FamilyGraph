@@ -12,7 +12,7 @@
 
 | 端点 | 认证 | 请求 | 响应 |
 |---|---|---|---|
-| POST /internal/agent/jobs/lease | service token | `{kind="assistant", leased_by, lease_ttl_seconds?}`；HTTP 端点只服务 Assistant sidecar；Steward 由 API maintenance canonical worker 直接调用确定性服务，不走该端点 | 200 平铺 `{job_id,run_id,agent_kind,attempt,tool_allowlist,policy_version,run_token}`；无可租 **204 空 body** |
+| POST /internal/agent/jobs/lease | service token | `{kind="assistant", leased_by, lease_ttl_seconds?}`；HTTP 端点只服务 Assistant sidecar；Steward child run 走**独立端点** `/internal/agent/steward/jobs/lease`（见 [steward-child-run.md](steward-child-run.md)），不放开本端点的 kind | 200 平铺 `{job_id,run_id,agent_kind,attempt,tool_allowlist,policy_version,run_token}`；无可租 **204 空 body** |
 | POST /internal/agent/jobs/{job_id}/heartbeat | run token | `{}` | `{ok:true, lease_expires_at, cancel_requested}` |
 | GET /internal/agent/runs/{id}/context | run token | — | ContextOut（messages 为 `{id,role,content_json,created_at}`；provider.policy_result ∈ allowed/denied/denied_no_local/denied_cloud_forbidden；allowed 时 `base_url` 为**站内代理路径** `/internal/agent/runs/{id}/provider`，`api_key` 恒为 null——真实凭据/base_url 不出服务端） |
 | POST /internal/agent/runs/{id}/provider/chat/completions 或 `/responses` | run token | 对应 Pi OpenAI adapter 的 JSON object body；空/非法/非 object 422 | ProviderGateway 代理（**唯一 egress**）：服务端 `resolve_runtime` 解密转发至已注册 Provider，成功流式透传 + `agent_provider_egress` 字节审计；上游错误一律 502 脱敏通用体，Run 非活跃或 `cancel_requested` 409，解析/解密失败 503 `AGENT_PROVIDER_PROXY_UNAVAILABLE`（fail-closed，绝不回退 sidecar env） |
@@ -25,12 +25,12 @@
 ## 3. Token 合同
 
 - HS256 JWT，共享密钥 `AGENT_SERVICE_SECRET`；**typ 必须逐字一致**：service=`"agent_service"`、run=`"agent_run"`（两端各自实现过一次 typ 漂移导致 401，教训见 §6）。
-- run token claims 绑定 run_id/job_id/agent_kind/account_id/space_id/tool_allowlist，exp ≤600s；校验失败 fail-closed + audit `agent_internal_authz_denied`。
+- run token claims **按 kind 逐项校验**（assistant 含 account_id，steward 不含；见 [steward-child-run.md](steward-child-run.md) §5），exp ≤600s；校验失败 fail-closed + audit `agent_internal_authz_denied`。
 - 错误码常量一律引用 `app/errors.py`，禁止字符串字面量绕过（check 发现项）。
 
 ## 4. 执行模型不变式
 
-- run+job 同事务入队；本 runtime 只承载 assistant：每 session 一个 active run、每账户 ≤2 assistant 并发。Steward 是独立的确定性引擎，使用 `StewardJob`/maintenance 的每空间 active job 约束，不进入 agent runtime。
+- run+job 同事务入队；**队列**（agent_jobs）只承载 assistant：每 session 一个 active run、每账户 ≤2 assistant 并发。Steward 的确定性内核走 `StewardJob`/maintenance 的每空间 active job 约束，**不进通用队列**；其可选模型辅助可由受限 Pi child run 执行（复用 agent_runs/agent_run_events，无 session 无 job），见 [steward-child-run.md](steward-child-run.md)。
 - 终态不可复活；lease 过期 reaper 收敛（回队重试→attempt 耗尽 expired；cancel_requested 直接 cancelled）。
 - 事件先持久化再广播；(run_id, seq) 单调幂等；未知 type 拒绝不落公开流。新事件类型必须先在 `agent_events.EVENT_TYPES` 注册，sidecar 映射同步。
 - **正文为空的 assistant 消息一律不产事件**（09-15 assistant-latency-optimizations 收紧判据，09-16 assistant-empty-final-answer 兑现延期项）：sidecar `mapSessionEvent` 对 `extractText(content)` 为空的 `message_end` 返回空，不产 `message.assistant_added`。理由是该消息没有可展示的正文：工具 turn 的调用本身由 `tool.execution.started/completed` 如实上报，而空最终回答没有任何内容。若照旧产出 `text=""` 事件，后端会持久化一条空 assistant 消息行（并在后续 run 作为空历史重放），前端「进行中」指示（`runActive && !messages.some(m => m.role === 'assistant' && m.text.length > 0)`）也会在工具 turn 阶段提前熄灭，最终还会渲染一个可见空气泡。过滤不占 seq 号（`RunEventBuffer.nextSeq` 按产出条目递增），后端不要求 sidecar seq 连续。
