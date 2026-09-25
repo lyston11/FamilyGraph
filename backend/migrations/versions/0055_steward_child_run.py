@@ -100,6 +100,84 @@ def _validate_before_downgrade(conn: sa.Connection) -> None:
         detail="narrowing agent_runs.kind would drop steward child run evidence; "
         "archive or purge those rows deliberately, then retry",
     )
+    _refuse(
+        conn,
+        reason="steward child run downgrade refused",
+        query="SELECT id FROM context_builds WHERE agent_kind <> 'assistant' ORDER BY id LIMIT 21",
+        detail="narrowing context_builds.account_id would break steward context builds; "
+        "archive or purge those rows deliberately, then retry",
+    )
+
+
+def _relax_context_builds_account(conn: sa.Connection) -> None:
+    """Make context_builds.account_id nullable for space-scoped steward runs.
+
+    The design assumed no context_builds change was needed ("steward run 也是
+    agent_runs 行"). That is true for the FK, but ``account_id`` is NOT NULL, and
+    a steward child run has no account — only an optional viewer. Without this
+    the steward context build cannot be recorded at all.
+
+    Assistant builds keep a non-null account: the invariant is re-expressed as a
+    CHECK keyed on the run's kind, so relaxing the column cannot let an
+    assistant build lose its account.
+    """
+    previous_fk = bool(conn.execute(sa.text("PRAGMA foreign_keys")).scalar())
+    conn.execute(sa.text("PRAGMA foreign_keys=OFF"))
+    try:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE context_builds_new ("
+                "id INTEGER NOT NULL,"
+                "run_id INTEGER NOT NULL,"
+                "account_id INTEGER,"
+                "space_id INTEGER NOT NULL,"
+                "agent_kind VARCHAR(16) NOT NULL,"
+                "query_hash VARCHAR(64) NOT NULL,"
+                "policy_version VARCHAR(64) NOT NULL,"
+                "token_budget INTEGER NOT NULL,"
+                "created_at DATETIME NOT NULL,"
+                "attempt INTEGER,"
+                "blocks_json JSON,"
+                "policy_json JSON,"
+                "invalidated_at DATETIME,"
+                "invalidation_reason VARCHAR(64),"
+                "CONSTRAINT pk_context_builds PRIMARY KEY (id),"
+                "CONSTRAINT ck_context_builds_account_binding CHECK ("
+                "(agent_kind = 'assistant' AND account_id IS NOT NULL) OR "
+                "(agent_kind = 'steward' AND account_id IS NULL)),"
+                "CONSTRAINT fk_context_builds_run_id_agent_runs "
+                "FOREIGN KEY(run_id) REFERENCES agent_runs (id) ON DELETE CASCADE,"
+                "CONSTRAINT fk_context_builds_account_id_accounts "
+                "FOREIGN KEY(account_id) REFERENCES accounts (id) ON DELETE CASCADE,"
+                "CONSTRAINT fk_context_builds_space_id_family_spaces "
+                "FOREIGN KEY(space_id) REFERENCES family_spaces (id) ON DELETE CASCADE"
+                ")"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO context_builds_new ("
+                "id, run_id, account_id, space_id, agent_kind, query_hash, "
+                "policy_version, token_budget, created_at, attempt, blocks_json, "
+                "policy_json, invalidated_at, invalidation_reason) "
+                "SELECT id, run_id, account_id, space_id, agent_kind, query_hash, "
+                "policy_version, token_budget, created_at, attempt, blocks_json, "
+                "policy_json, invalidated_at, invalidation_reason FROM context_builds"
+            )
+        )
+        conn.execute(sa.text("DROP TABLE context_builds"))
+        conn.execute(sa.text("ALTER TABLE context_builds_new RENAME TO context_builds"))
+        conn.execute(
+            sa.text("CREATE INDEX ix_context_builds_run ON context_builds (run_id, created_at)")
+        )
+        conn.execute(
+            sa.text(
+                "CREATE UNIQUE INDEX ix_context_builds_run_attempt "
+                "ON context_builds (run_id, attempt)"
+            )
+        )
+    finally:
+        conn.execute(sa.text(f"PRAGMA foreign_keys={'ON' if previous_fk else 'OFF'}"))
 
 
 def _rebuild_agent_runs(conn: sa.Connection, *, allowed: tuple[str, ...]) -> None:
@@ -200,6 +278,7 @@ def upgrade() -> None:
     conn = op.get_bind()
     _validate_before_upgrade(conn)
     _rebuild_agent_runs(conn, allowed=("assistant", "steward"))
+    _relax_context_builds_account(conn)
 
     conn.execute(
         sa.text(
@@ -317,7 +396,66 @@ def downgrade() -> None:
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_steward_runs_batch"))
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_steward_runs_job"))
     conn.execute(sa.text("DROP TABLE IF EXISTS steward_runs"))
+    _rebuild_context_builds_strict(conn)
     _rebuild_agent_runs(conn, allowed=("assistant",))
+
+
+def _rebuild_context_builds_strict(conn: sa.Connection) -> None:
+    """Restore context_builds.account_id NOT NULL (pre-0055 shape)."""
+    previous_fk = bool(conn.execute(sa.text("PRAGMA foreign_keys")).scalar())
+    conn.execute(sa.text("PRAGMA foreign_keys=OFF"))
+    try:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE context_builds_new ("
+                "id INTEGER NOT NULL,"
+                "run_id INTEGER NOT NULL,"
+                "account_id INTEGER NOT NULL,"
+                "space_id INTEGER NOT NULL,"
+                "agent_kind VARCHAR(16) NOT NULL,"
+                "query_hash VARCHAR(64) NOT NULL,"
+                "policy_version VARCHAR(64) NOT NULL,"
+                "token_budget INTEGER NOT NULL,"
+                "created_at DATETIME NOT NULL,"
+                "attempt INTEGER,"
+                "blocks_json JSON,"
+                "policy_json JSON,"
+                "invalidated_at DATETIME,"
+                "invalidation_reason VARCHAR(64),"
+                "CONSTRAINT pk_context_builds PRIMARY KEY (id),"
+                "CONSTRAINT fk_context_builds_run_id_agent_runs "
+                "FOREIGN KEY(run_id) REFERENCES agent_runs (id) ON DELETE CASCADE,"
+                "CONSTRAINT fk_context_builds_account_id_accounts "
+                "FOREIGN KEY(account_id) REFERENCES accounts (id) ON DELETE CASCADE,"
+                "CONSTRAINT fk_context_builds_space_id_family_spaces "
+                "FOREIGN KEY(space_id) REFERENCES family_spaces (id) ON DELETE CASCADE"
+                ")"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO context_builds_new ("
+                "id, run_id, account_id, space_id, agent_kind, query_hash, "
+                "policy_version, token_budget, created_at, attempt, blocks_json, "
+                "policy_json, invalidated_at, invalidation_reason) "
+                "SELECT id, run_id, account_id, space_id, agent_kind, query_hash, "
+                "policy_version, token_budget, created_at, attempt, blocks_json, "
+                "policy_json, invalidated_at, invalidation_reason FROM context_builds"
+            )
+        )
+        conn.execute(sa.text("DROP TABLE context_builds"))
+        conn.execute(sa.text("ALTER TABLE context_builds_new RENAME TO context_builds"))
+        conn.execute(
+            sa.text("CREATE INDEX ix_context_builds_run ON context_builds (run_id, created_at)")
+        )
+        conn.execute(
+            sa.text(
+                "CREATE UNIQUE INDEX ix_context_builds_run_attempt "
+                "ON context_builds (run_id, attempt)"
+            )
+        )
+    finally:
+        conn.execute(sa.text(f"PRAGMA foreign_keys={'ON' if previous_fk else 'OFF'}"))
 
 
 def _drop_model_calls_run_id(conn: sa.Connection) -> None:

@@ -186,6 +186,7 @@ _GUARD_SCHEMA = """
 CREATE TABLE agent_sessions (id INTEGER PRIMARY KEY, agent_kind TEXT);
 CREATE TABLE agent_jobs (id INTEGER PRIMARY KEY, kind TEXT);
 CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, session_id INTEGER, job_id INTEGER, kind TEXT);
+CREATE TABLE context_builds (id INTEGER PRIMARY KEY, agent_kind TEXT);
 """
 
 

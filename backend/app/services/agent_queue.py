@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -52,7 +52,12 @@ from app.models.agent import (
 )
 from app.models.space import SpaceMember
 from app.services import agent_events, agent_provider, audit
-from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
+from app.services.agent_execution import (
+    Execution,
+    ExecutionIdentity,
+    fence_assistant_execution,
+    fence_execution,
+)
 from app.utils import timeutil
 
 _logger = logging.getLogger(__name__)
@@ -377,13 +382,18 @@ def settle_run(
     status: str,
     error_code: str | None = None,
     error: dict[str, object] | None = None,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
+    on_settled: Callable[[Session, AgentRun], None] | None = None,
 ) -> AgentRun:
     """终态落库（sidecar 结算路径）：succeeded|failed 仅可从 leased/running 进入。
 
     cancel_requested 改判（RT-6 恢复语义）：sidecar 结算 succeeded 但浏览器已
     请求取消 → 本应 succeeded 的终态改判为 cancelled（结果丢弃，审计注明）；
     failed 原样保留。改判判定在锁内复核，避免读后竞态。
+
+    ``on_settled`` 在同一立即事务内、终态写入之后调用。这是 Steward child run
+    的「单一领域服务结算」实现点：run 终态与 attempt 结算必须原子可见，否则
+    进程在两者之间退出就会留下「run succeeded / attempt 仍 in_flight」。
     """
     if status not in ("succeeded", "failed"):
         raise_api_error(422, AGENT_EVENT_INVALID, "非法的终态", detail={"status": status})
@@ -397,7 +407,13 @@ def settle_run(
             detail={"status": run.status},
         )
     settled = _settle(
-        db, run, status=status, error_code=error_code, error=error, execution=execution
+        db,
+        run,
+        status=status,
+        error_code=error_code,
+        error=error,
+        execution=execution,
+        on_settled=on_settled,
     )
     agent_events.notifier.publish(run.id)
     return settled
@@ -410,12 +426,13 @@ def _settle(
     status: str,
     error_code: str | None,
     error: dict[str, object] | None,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
+    on_settled: Callable[[Session, AgentRun], None] | None = None,
 ) -> AgentRun:
     """终态写入 + 对应终态事件追加（同一立即事务；终态不可复活）。"""
     with _immediate_tx(db):
         if execution is not None:
-            run, _session, _job = fence_assistant_execution(
+            run, _session, _job = fence_execution(
                 db, execution, allow_cancel_requested=True
             )
         else:
@@ -469,6 +486,10 @@ def _settle(
                     exc_info=True,
                 )
         db.flush()
+        if on_settled is not None:
+            # Runs inside the same immediate transaction as the terminal state,
+            # so the two are never separately observable.
+            on_settled(db, run)
         return run
 
 

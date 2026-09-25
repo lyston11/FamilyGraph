@@ -279,6 +279,12 @@ class SettleRequest(_Strict):
     status: Literal["succeeded", "failed"]
     error_code: str | None = Field(default=None, max_length=64)
     error: dict[str, Any] | None = None
+    # Steward child run 的产物回传（additive、可选）：
+    # 设计 §10.3 禁止 steward 发消息类事件，因此模型输出不能经事件流回传，
+    # 只能随 settle 一次性提交。assistant 侧不发送这些字段（保持原形状）。
+    output_text: str | None = None
+    usage: dict[str, int] | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
 
 
 class SettleOut(BaseModel):
