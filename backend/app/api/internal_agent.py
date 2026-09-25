@@ -69,7 +69,7 @@ from app.services import (
     policy_guard,
 )
 from app.services.agent_events import EventEntry
-from app.services.agent_execution import ExecutionIdentity, fence_execution
+from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
 from app.services.provider_proxy import provider_proxy_base_url as agent_provider_proxy_base_url
 from app.utils import security, timeutil
 
@@ -440,7 +440,7 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
     """
     run, agent_session, _claims = _authorize_run(db, request, run_id)
     execution = ExecutionIdentity.from_claims(_claims)
-    run, agent_session, _job = fence_execution(db, execution, allow_cancel_requested=True)
+    run, agent_session, _job = fence_assistant_execution(db, execution, allow_cancel_requested=True)
     # A Pi session is stateful across turns.  Project the complete durable
     # transcript in stable id order; truncating to a recent-N window silently
     # drops earlier user/assistant turns and can make the model contradict its

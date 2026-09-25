@@ -20,7 +20,11 @@ from app.models.context import ContextBuild, ContextBuildItem
 from app.models.platform_features import PlatformFeatureConfig
 from app.models.user import User
 from app.services import memory_sources, platform_features
-from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
+from app.services.agent_execution import (
+    ExecutionIdentity,
+    acquire_run_writer,
+    fence_assistant_execution,
+)
 from app.services.memory_rag import RAGHit, query_hash, search_rag
 from app.services.policy_consumer import is_policy_consumer_kind
 from app.services.rag_budget import ESTIMATOR_VERSION, MAX_INCLUDED_SOURCES, estimate_context
@@ -176,7 +180,7 @@ class ContextBuilder:
             if execution is not None:
                 if run_id != execution.run_id or attempt != execution.expected_attempt:
                     raise_api_error(422, POLICY_CONTEXT_INVALID, "执行身份不匹配")
-                fence_execution(self.db, execution, allow_cancel_requested=True)
+                fence_assistant_execution(self.db, execution, allow_cancel_requested=True)
             else:
                 # Trusted in-process callers retain unbound audit builds. The
                 # internal API always supplies a signed immutable identity.

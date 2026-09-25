@@ -249,8 +249,43 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
-    _validate_before_downgrade(conn)
+    connection = op.get_bind()
+    # 拒绝合同必须先于本迁移的任何 DDL：SQLite 的 DROP TABLE 不保证事务回滚，
+    # 先降本迁移再由祖先拒绝会留下半降级 schema（与 0049..0054 同一约定）。
+    #
+    # 本迁移既是结构迁移（重建 agent_runs / 删 steward_runs）又要跨过祖先的
+    # 拒绝合同，所以顺序是：① 自己的 kind 守卫（能否表达降级结果）② 走位歧义
+    # 与祖先守卫 ③ 才动 DDL。
+    _validate_before_downgrade(connection)
+    context = op.get_context()
+    destination = context.opts.get("destination_rev")
+    if context.script is not None and destination is not None:
+        assert down_revision is not None
+        # 走位从**父 revision** 开始：深层相对目标（如 -7）在祖先上歧义，Alembic
+        # 会在那里抛 "Ambiguous walk"；若先降本迁移再由祖先报错，就留下半降级
+        # schema。`iterate_revisions` 是惰性生成器，必须消费才真正走位。
+        planned = {
+            item.revision
+            for item in context.script.iterate_revisions(
+                down_revision, destination, select_for_downgrade=True
+            )
+        }
+        for revision in planned:
+            list(context.script.iterate_revisions(revision, destination, select_for_downgrade=True))
+        if destination != down_revision:
+            timing_guard = context.script.get_revision("0052_seed_lineage_membership_boundary")
+            assert timing_guard is not None
+            timing_guard.module._refuse_if_timing_evidence(connection)
+        if "0049_steward_candidate_evidence" in planned:
+            evidence_guard = context.script.get_revision("0050_term_alias_spouse_fix")
+            assert evidence_guard is not None
+            evidence_guard.module._refuse_if_candidate_evidence(connection)
+        if "0048_steward_terminology_publication" in planned:
+            merge_guard = context.script.get_revision("0048_steward_terminology_publication")
+            assert merge_guard is not None
+            merge_guard.module._preflight_parent_downgrade(planned=planned)
+
+    conn = connection
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_smc_run"))
     # SQLite cannot drop a column in place on older engines; rebuild the table
     # to restore the exact pre-0055 shape.

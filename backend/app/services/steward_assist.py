@@ -50,6 +50,7 @@ from app.models.account import Account
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.space import FamilySpace
 from app.models.steward import (
+    STEWARD_ASSIST_KINDS,
     ActionCard,
     StewardAssistBatch,
     StewardGeneration,
@@ -72,7 +73,7 @@ from app.utils import timeutil
 
 logger = logging.getLogger(__name__)
 
-ASSIST_KINDS: tuple[str, ...] = ("candidate", "ranking", "explanation", "terminology")
+ASSIST_KINDS: tuple[str, ...] = STEWARD_ASSIST_KINDS
 
 # 各辅助点的输出 token cap（预留时再与剩余预算取 min）
 _KIND_OUTPUT_CAPS: dict[str, int] = {

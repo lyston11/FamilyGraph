@@ -327,7 +327,9 @@ class AgentMessageCreatedOut(BaseModel):
 
 class AgentRunOut(BaseModel):
     id: int
-    session_id: int
+    # Nullable because Steward child runs are space-scoped and carry no session;
+    # the browser endpoints only ever return assistant runs (see api/agent.py).
+    session_id: int | None
     kind: AgentKind
     status: str
     attempt: int

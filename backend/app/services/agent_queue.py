@@ -41,9 +41,10 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import (
+    QUEUE_AGENT_KINDS,
     RUN_ACTIVE_STATUSES,
     RUN_TERMINAL_STATUSES,
-    RUNTIME_AGENT_KINDS,
+    SESSION_AGENT_KINDS,
     AgentJob,
     AgentMessage,
     AgentRun,
@@ -51,7 +52,7 @@ from app.models.agent import (
 )
 from app.models.space import SpaceMember
 from app.services import agent_events, agent_provider, audit
-from app.services.agent_execution import ExecutionIdentity, fence_execution
+from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
 from app.utils import timeutil
 
 _logger = logging.getLogger(__name__)
@@ -269,19 +270,25 @@ def _check_concurrency(db: Session, *, agent_session: AgentSession, kind: str) -
 def _validate_kind(
     kind: str | None, *, session_kind: str | None = None, allow_none: bool = False
 ) -> None:
-    """Reject unsupported runtime kinds before any queue read or write."""
+    """Reject unsupported kinds before any queue read or write.
+
+    Uses ``QUEUE_AGENT_KINDS``, **not** ``RUNTIME_AGENT_KINDS``: the latter now
+    includes steward (child runs are execution records), but this module owns the
+    generic durable queue, which stays assistant-only. Using the wider tuple here
+    would silently reopen the second steward queue that 09-01 removed.
+    """
     if (
         (kind is None and not allow_none)
-        or (kind is not None and kind not in RUNTIME_AGENT_KINDS)
+        or (kind is not None and kind not in QUEUE_AGENT_KINDS)
         or (
             session_kind is not None
-            and (session_kind not in RUNTIME_AGENT_KINDS or kind is None or session_kind != kind)
+            and (session_kind not in SESSION_AGENT_KINDS or kind is None or session_kind != kind)
         )
     ):
         raise_api_error(
             422,
             AGENT_KIND_UNSUPPORTED,
-            "Agent Runtime 只支持 Assistant",
+            "通用 Agent 队列只支持 Assistant",
             detail={"kind": kind, "session_kind": session_kind},
         )
 
@@ -336,7 +343,9 @@ def heartbeat(
     ttl = ttl_seconds if ttl_seconds is not None else config.AGENT_LEASE_TTL_SECONDS
     with _immediate_tx(db):
         if execution is not None:
-            _run, _session, job = fence_execution(db, execution, allow_cancel_requested=True)
+            _run, _session, job = fence_assistant_execution(
+                db, execution, allow_cancel_requested=True
+            )
         else:
             db.refresh(job)
         if job.status not in ("leased", "running"):
@@ -406,7 +415,9 @@ def _settle(
     """终态写入 + 对应终态事件追加（同一立即事务；终态不可复活）。"""
     with _immediate_tx(db):
         if execution is not None:
-            run, _session, _job = fence_execution(db, execution, allow_cancel_requested=True)
+            run, _session, _job = fence_assistant_execution(
+                db, execution, allow_cancel_requested=True
+            )
         else:
             db.refresh(run)
         if run.status in RUN_TERMINAL_STATUSES:
