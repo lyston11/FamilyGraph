@@ -250,9 +250,7 @@ def upgrade() -> None:
     # bound to two attempts, which would make settlement ambiguous about which
     # ledger row the run's outcome belongs to. NULLs do not collide in SQLite,
     # so the in-process era rows are unaffected.
-    conn.execute(
-        sa.text("CREATE UNIQUE INDEX uq_smc_run_id ON steward_model_calls (run_id)")
-    )
+    conn.execute(sa.text("CREATE UNIQUE INDEX uq_smc_run_id ON steward_model_calls (run_id)"))
 
 
 def downgrade() -> None:

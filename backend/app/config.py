@@ -145,8 +145,9 @@ STEWARD_WORKER_ENABLED: bool = os.environ.get("STEWARD_WORKER_ENABLED", "").lowe
 # sidecar 租赁受限 child run 执行，而不是进程内裸 httpx。与 STEWARD_ENABLED 双开关
 # （steward lease 端点要求两者皆真），因为「引擎开启」与「执行载体切换」是两个独立
 # 的发布决策，必须能各自回退。
-STEWARD_PI_RUNTIME_ENABLED: bool = (
-    os.environ.get("STEWARD_PI_RUNTIME_ENABLED", "").lower() in ("1", "true")
+STEWARD_PI_RUNTIME_ENABLED: bool = os.environ.get("STEWARD_PI_RUNTIME_ENABLED", "").lower() in (
+    "1",
+    "true",
 )
 # 09-13 短事务执行器：派生缓存重算的分块提交对数（每块一个短写事务，
 # 写锁上界≈块内 upsert 耗时；路径解析全部在写锁外进行）
