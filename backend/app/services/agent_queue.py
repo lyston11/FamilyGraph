@@ -711,10 +711,16 @@ def _execution_identity_revoked(db: Session, job: AgentJob) -> bool:
 
 
 def prune_finished(db: Session, *, older_than: datetime) -> int:
-    """后台清理入口：删除 settled_at 早于阈值的终态 run（events/job 由 CASCADE 清除）。"""
+    """后台清理入口：删除 settled_at 早于阈值的终态 run（events/job 由 CASCADE 清除）。
+
+    只删 assistant：Steward child run 的保留策略归 steward 侧 GC
+    （``steward_gc``）决定，被 assistant 的 settled_at 阈值顺手删掉会让
+    ``steward_model_calls`` 的证据行失去 run 追溯（run_id 置 NULL）。
+    """
     with _immediate_tx(db):
         result = db.execute(
             sa.delete(AgentRun).where(
+                AgentRun.kind == "assistant",
                 AgentRun.status.in_(RUN_TERMINAL_STATUSES),
                 AgentRun.settled_at.is_not(None),
                 AgentRun.settled_at < older_than,
