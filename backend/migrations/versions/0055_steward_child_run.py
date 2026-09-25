@@ -259,6 +259,8 @@ def downgrade() -> None:
     _validate_before_downgrade(connection)
     context = op.get_context()
     destination = context.opts.get("destination_rev")
+    # 走位结果在 if 外也要可见：其后的祖先守卫按它判定。
+    planned: set[str] = set()
     if context.script is not None and destination is not None:
         assert down_revision is not None
         # 走位从**父 revision** 开始：深层相对目标（如 -7）在祖先上歧义，Alembic
@@ -270,6 +272,7 @@ def downgrade() -> None:
                 down_revision, destination, select_for_downgrade=True
             )
         }
+        # 走位必须逐个消费：生成器惰性，不消费则守卫形同虚设。
         for revision in planned:
             list(context.script.iterate_revisions(revision, destination, select_for_downgrade=True))
         if destination != down_revision:
@@ -285,10 +288,25 @@ def downgrade() -> None:
             assert merge_guard is not None
             merge_guard.module._preflight_parent_downgrade(planned=planned)
 
+        # 直接祖先的自身拒绝合同也要在此提前履行。0051/0053 的守卫在本迁移**之后**
+        # 才执行，但本迁移已经动了 DDL（重建 agent_runs / 删 steward_runs），若由
+        # 它们报错就留下半降级 schema。0051 的判定条件由 0052 的 mirror 函数唯一
+        # 表达（同 0050 mirror 0049 的约定），复用而不在此重写一份。
+        if "0051_run_event_timing" in planned:
+            timing_guard = context.script.get_revision("0052_seed_lineage_membership_boundary")
+            assert timing_guard is not None
+            timing_guard.module._refuse_if_timing_evidence(connection)
+        if "0053_member_approval_and_labels" in planned:
+            if connection.scalar(
+                sa.text("SELECT 1 FROM space_member_approvals LIMIT 1")
+            ) or connection.scalar(sa.text("SELECT 1 FROM member_relation_labels LIMIT 1")):
+                raise RuntimeError(
+                    "owner-approval or relation-label evidence exists; "
+                    "retain data and roll forward"
+                )
+
     conn = connection
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_smc_run"))
-    # SQLite cannot drop a column in place on older engines; rebuild the table
-    # to restore the exact pre-0055 shape.
     _drop_model_calls_run_id(conn)
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_steward_runs_viewer"))
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_steward_runs_batch"))
@@ -298,86 +316,14 @@ def downgrade() -> None:
 
 
 def _drop_model_calls_run_id(conn: sa.Connection) -> None:
-    """Rebuild steward_model_calls without run_id, preserving every other column."""
-    previous_fk = bool(conn.execute(sa.text("PRAGMA foreign_keys")).scalar())
-    conn.execute(sa.text("PRAGMA foreign_keys=OFF"))
-    try:
-        conn.execute(
-            sa.text(
-                "CREATE TABLE steward_model_calls_new ("
-                "id INTEGER NOT NULL,"
-                "space_id INTEGER NOT NULL,"
-                "job_id INTEGER NOT NULL,"
-                "policy_version VARCHAR(32) NOT NULL,"
-                "assist_kind VARCHAR(16) NOT NULL,"
-                "provider_id INTEGER,"
-                "model VARCHAR(120),"
-                "prompt_digest VARCHAR(64) NOT NULL,"
-                "prompt_chars INTEGER NOT NULL,"
-                "completion_chars INTEGER DEFAULT '0' NOT NULL,"
-                "prompt_tokens INTEGER,"
-                "completion_tokens INTEGER,"
-                "total_tokens INTEGER,"
-                "status VARCHAR(16) DEFAULT 'succeeded' NOT NULL,"
-                "error_code VARCHAR(64),"
-                "latency_ms INTEGER,"
-                "seq INTEGER DEFAULT '1' NOT NULL,"
-                "created_at DATETIME NOT NULL,"
-                "batch_id INTEGER,"
-                "subject_key VARCHAR(200),"
-                "input_hash VARCHAR(64),"
-                "attempt_no INTEGER DEFAULT '1' NOT NULL,"
-                "reserved_input_tokens INTEGER,"
-                "reserved_output_tokens INTEGER,"
-                "billed_tokens INTEGER,"
-                "response_bytes INTEGER,"
-                "output_json JSON,"
-                "viewer_account_id INTEGER,"
-                "CONSTRAINT pk_steward_model_calls PRIMARY KEY (id),"
-                "CONSTRAINT uq_smc_job_kind_seq UNIQUE (job_id, assist_kind, seq),"
-                "CONSTRAINT ck_steward_model_calls_ck_smc_status CHECK "
-                "(status IN ('succeeded','failed','degraded','skipped','reserved',"
-                "'in_flight','unknown')),"
-                "CONSTRAINT ck_steward_model_calls_ck_smc_assist_kind CHECK "
-                f"(assist_kind IN ({_ASSIST_KIND_CHECK})),"
-                "CONSTRAINT fk_steward_model_calls_provider_id_agent_providers "
-                "FOREIGN KEY(provider_id) REFERENCES agent_providers (id) ON DELETE SET NULL,"
-                "CONSTRAINT fk_steward_model_calls_job_id_steward_jobs "
-                "FOREIGN KEY(job_id) REFERENCES steward_jobs (id) ON DELETE CASCADE,"
-                "CONSTRAINT fk_steward_model_calls_space_id_family_spaces "
-                "FOREIGN KEY(space_id) REFERENCES family_spaces (id) ON DELETE CASCADE,"
-                "CONSTRAINT fk_smc_batch FOREIGN KEY(batch_id) "
-                "REFERENCES steward_assist_batches (id) ON DELETE CASCADE,"
-                "CONSTRAINT fk_steward_model_calls_viewer_account_id_accounts "
-                "FOREIGN KEY(viewer_account_id) REFERENCES accounts (id) ON DELETE CASCADE"
-                ")"
-            )
-        )
-        conn.execute(
-            sa.text(
-                "INSERT INTO steward_model_calls_new ("
-                "id, space_id, job_id, policy_version, assist_kind, provider_id, model, "
-                "prompt_digest, prompt_chars, completion_chars, prompt_tokens, "
-                "completion_tokens, total_tokens, status, error_code, latency_ms, seq, "
-                "created_at, batch_id, subject_key, input_hash, attempt_no, "
-                "reserved_input_tokens, reserved_output_tokens, billed_tokens, "
-                "response_bytes, output_json, viewer_account_id) "
-                "SELECT id, space_id, job_id, policy_version, assist_kind, provider_id, model, "
-                "prompt_digest, prompt_chars, completion_chars, prompt_tokens, "
-                "completion_tokens, total_tokens, status, error_code, latency_ms, seq, "
-                "created_at, batch_id, subject_key, input_hash, attempt_no, "
-                "reserved_input_tokens, reserved_output_tokens, billed_tokens, "
-                "response_bytes, output_json, viewer_account_id "
-                "FROM steward_model_calls"
-            )
-        )
-        conn.execute(sa.text("DROP TABLE steward_model_calls"))
-        conn.execute(sa.text("ALTER TABLE steward_model_calls_new RENAME TO steward_model_calls"))
-        conn.execute(
-            sa.text(
-                "CREATE UNIQUE INDEX uq_smc_attempt_key ON steward_model_calls "
-                "(job_id, assist_kind, subject_key, input_hash, attempt_no)"
-            )
-        )
-    finally:
-        conn.execute(sa.text(f"PRAGMA foreign_keys={'ON' if previous_fk else 'OFF'}"))
+    """Drop steward_model_calls.run_id in place.
+
+    Deliberately *not* a table rebuild: SQLAlchemy's batch reflection re-derives
+    constraint names from the live schema, and a rebuild here changes what later
+    migrations (0044 drops ``ck_smc_assist_kind``) reflect, breaking their
+    downgrade. A native ``DROP COLUMN`` (SQLite >= 3.35) leaves every other
+    column, constraint and its naming byte-identical, which is both safer and a
+    truer inverse. ``ix_smc_run`` is dropped by the caller first, since SQLite
+    refuses to drop an indexed column.
+    """
+    conn.execute(sa.text("ALTER TABLE steward_model_calls DROP COLUMN run_id"))
