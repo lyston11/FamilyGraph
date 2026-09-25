@@ -40,6 +40,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 # ---- 枚举常量（服务层与迁移共用；CHECK 约束兜底）----
+# Steward 模型辅助的四类（models 是低层，服务层从这里取，避免两处字面量漂移）
+STEWARD_ASSIST_KINDS: tuple[str, ...] = (
+    "candidate",
+    "ranking",
+    "explanation",
+    "terminology",
+)
 # ST-2 触发原因 taxonomy
 STEWARD_JOB_CAUSES = (
     "source_fact",
@@ -343,6 +350,10 @@ class StewardModelCall(Base):
     唯一性：(job_id, assist_kind, seq)（同事务重入幂等）与
     (job_id, assist_kind, subject_key, input_hash, attempt_no)（subject 维度
     attempt 键；subject_key = "facts" | "ranking:<ids>" | "card:<id>"）。
+
+    执行载体（09-25 起）：``run_id`` 指向 kind='steward' 的 ``agent_runs`` 行
+    （受限 Pi child run）。本表仍是**记账账本**（预算/计费/attempt 状态），
+    child run 是**执行**；两者在同一事务结算，不得出现双终态。
     """
 
     __tablename__ = "steward_model_calls"
@@ -362,6 +373,9 @@ class StewardModelCall(Base):
             "attempt_no",
             unique=True,
         ),
+        # UNIQUE: one child run maps to exactly one attempt row (design §11.2);
+        # a shared run across two attempts would make settlement ambiguous.
+        sa.Index("uq_smc_run_id", "run_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -407,12 +421,73 @@ class StewardModelCall(Base):
     response_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 解析并验证通过的可写回产物（非原始 payload）：候选列表/排列/解释文本
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # ---- 09-25 Pi child run（迁移 0055）----
+    # 执行载体：该 attempt 对应的 agent_runs 行（kind='steward'）。
+    # ON DELETE SET NULL：**账本必须比执行记录活得久**——child run 被清理后，
+    # prompt digest / token 用量 / 状态 / error_code 仍可追溯。历史行为 NULL
+    # （in-process 时代），读取方按既有路径处理，不回填。
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<StewardModelCall job={self.job_id} {self.assist_kind}/{self.status}"
             f" tokens={self.total_tokens}>"
         )
+
+
+class StewardRun(Base):
+    """Steward child run 的 scope 载体（迁移 0055）：与 agent_runs 1:1。
+
+    为什么另立窄表而不是复用 ``agent_sessions``：session 的语义是
+    ``(account, space)`` 且 ``account_id`` 为 NOT NULL，而 Steward 是**空间级**
+    执行、没有单一账号（candidate/ranking/explanation 是空间级或按收件人分组，
+    只有 terminology 绑定单个 viewer）。把 account 语义塞进 session 就是数据
+    污染，因此 Steward **不建 session**（``agent_runs.session_id`` 恒为 NULL）。
+
+    ``viewer_account_id`` 只在 terminology 有意义（其目标组绑定单个查看者）；
+    其余三类不得伪造 viewer——CHECK 强制这个双向蕴含。
+
+    ``fence_json`` 是注册时的证据快照（与 ``StewardAssistBatch.fence_json``
+    同源），供 child run 侧独立复核。
+    """
+
+    __tablename__ = "steward_runs"
+    __table_args__ = (
+        CheckConstraint(
+            f"assist_kind IN ({', '.join(repr(k) for k in STEWARD_ASSIST_KINDS)})",
+            name="ck_steward_runs_assist_kind",
+        ),
+        CheckConstraint(
+            "(assist_kind = 'terminology') = (viewer_account_id IS NOT NULL)",
+            name="ck_steward_runs_viewer",
+        ),
+        sa.UniqueConstraint("run_id", name="uq_steward_runs_run_id"),
+        Index("ix_steward_runs_job", "steward_job_id"),
+        Index("ix_steward_runs_batch", "assist_batch_id"),
+        Index("ix_steward_runs_viewer", "viewer_account_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    steward_job_id: Mapped[int] = mapped_column(
+        ForeignKey("steward_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    assist_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_assist_batches.id", ondelete="SET NULL"), nullable=True
+    )
+    assist_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    viewer_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True
+    )
+    fence_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<StewardRun run={self.run_id} job={self.steward_job_id}" f" {self.assist_kind}>"
 
 
 class StewardLlmCandidate(Base):

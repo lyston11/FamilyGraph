@@ -249,10 +249,13 @@ class AdminAgentRunOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: int
-    session_id: int
+    # Nullable for steward child runs: they are space-scoped, so they carry no
+    # session and no account. The admin view stays read-only and must not expose
+    # steward's viewer_account_id or any prompt content.
+    session_id: int | None = None
     job_id: int | None = None
     space_id: int
-    account_id: int
+    account_id: int | None = None
     kind: str
     status: str
     attempt: int

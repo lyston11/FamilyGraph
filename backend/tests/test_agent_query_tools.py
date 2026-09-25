@@ -611,13 +611,27 @@ def test_zero_write_business_tables(db_session):
 
 
 def test_registry_required_kind_gating(db_session):
-    """所有通用 runtime 工具属于 assistant；其他 kind 不生成 allowlist。"""
+    """工具集按 kind 隔离：assistant 拿到六个查询工具，steward 一个也不拿。
+
+    本用例原先断言 ``default_allowlist("steward")`` 抛 AGENT_KIND_UNSUPPORTED。
+    09-25 起 steward 是合法的 runtime kind（受限 Pi child run），因此那一条不再
+    成立；但**保护意图不变且更强**——steward 绝不能拿到 assistant 的工具。
+    改为断言两个集合不相交（S1 阶段 steward 侧为空集，S3 会加入只读工具）。
+    """
     _world(db_session)
     assistant_default = agent_tools.default_allowlist("assistant")
     for name in ALL_SIX_TOOLS:
         assert name in assistant_default
+
+    steward_default = agent_tools.default_allowlist("steward")
+    assert set(steward_default).isdisjoint(assistant_default), (
+        "assistant and steward tool sets must not overlap; "
+        f"shared: {sorted(set(steward_default) & set(assistant_default))}"
+    )
+
+    # 未知 kind 仍然 fail-closed（本用例原本保护的"不受支持即拒绝"语义）。
     with pytest.raises(agent_tools.ToolProtocolError) as exc_info:
-        agent_tools.default_allowlist("steward")
+        agent_tools.default_allowlist("bogus")
     assert exc_info.value.code == "AGENT_KIND_UNSUPPORTED"
 
     # assistant 白名单未含新工具时拒绝（not_in_allowlist 路径）

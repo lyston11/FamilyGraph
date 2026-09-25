@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -41,9 +41,10 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import (
+    QUEUE_AGENT_KINDS,
     RUN_ACTIVE_STATUSES,
     RUN_TERMINAL_STATUSES,
-    RUNTIME_AGENT_KINDS,
+    SESSION_AGENT_KINDS,
     AgentJob,
     AgentMessage,
     AgentRun,
@@ -51,7 +52,12 @@ from app.models.agent import (
 )
 from app.models.space import SpaceMember
 from app.services import agent_events, agent_provider, audit
-from app.services.agent_execution import ExecutionIdentity, fence_execution
+from app.services.agent_execution import (
+    Execution,
+    ExecutionIdentity,
+    fence_assistant_execution,
+    fence_execution,
+)
 from app.utils import timeutil
 
 _logger = logging.getLogger(__name__)
@@ -269,19 +275,25 @@ def _check_concurrency(db: Session, *, agent_session: AgentSession, kind: str) -
 def _validate_kind(
     kind: str | None, *, session_kind: str | None = None, allow_none: bool = False
 ) -> None:
-    """Reject unsupported runtime kinds before any queue read or write."""
+    """Reject unsupported kinds before any queue read or write.
+
+    Uses ``QUEUE_AGENT_KINDS``, **not** ``RUNTIME_AGENT_KINDS``: the latter now
+    includes steward (child runs are execution records), but this module owns the
+    generic durable queue, which stays assistant-only. Using the wider tuple here
+    would silently reopen the second steward queue that 09-01 removed.
+    """
     if (
         (kind is None and not allow_none)
-        or (kind is not None and kind not in RUNTIME_AGENT_KINDS)
+        or (kind is not None and kind not in QUEUE_AGENT_KINDS)
         or (
             session_kind is not None
-            and (session_kind not in RUNTIME_AGENT_KINDS or kind is None or session_kind != kind)
+            and (session_kind not in SESSION_AGENT_KINDS or kind is None or session_kind != kind)
         )
     ):
         raise_api_error(
             422,
             AGENT_KIND_UNSUPPORTED,
-            "Agent Runtime 只支持 Assistant",
+            "通用 Agent 队列只支持 Assistant",
             detail={"kind": kind, "session_kind": session_kind},
         )
 
@@ -336,7 +348,9 @@ def heartbeat(
     ttl = ttl_seconds if ttl_seconds is not None else config.AGENT_LEASE_TTL_SECONDS
     with _immediate_tx(db):
         if execution is not None:
-            _run, _session, job = fence_execution(db, execution, allow_cancel_requested=True)
+            _run, _session, job = fence_assistant_execution(
+                db, execution, allow_cancel_requested=True
+            )
         else:
             db.refresh(job)
         if job.status not in ("leased", "running"):
@@ -368,13 +382,18 @@ def settle_run(
     status: str,
     error_code: str | None = None,
     error: dict[str, object] | None = None,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
+    on_settled: Callable[[Session, AgentRun], None] | None = None,
 ) -> AgentRun:
     """终态落库（sidecar 结算路径）：succeeded|failed 仅可从 leased/running 进入。
 
     cancel_requested 改判（RT-6 恢复语义）：sidecar 结算 succeeded 但浏览器已
     请求取消 → 本应 succeeded 的终态改判为 cancelled（结果丢弃，审计注明）；
     failed 原样保留。改判判定在锁内复核，避免读后竞态。
+
+    ``on_settled`` 在同一立即事务内、终态写入之后调用。这是 Steward child run
+    的「单一领域服务结算」实现点：run 终态与 attempt 结算必须原子可见，否则
+    进程在两者之间退出就会留下「run succeeded / attempt 仍 in_flight」。
     """
     if status not in ("succeeded", "failed"):
         raise_api_error(422, AGENT_EVENT_INVALID, "非法的终态", detail={"status": status})
@@ -388,7 +407,13 @@ def settle_run(
             detail={"status": run.status},
         )
     settled = _settle(
-        db, run, status=status, error_code=error_code, error=error, execution=execution
+        db,
+        run,
+        status=status,
+        error_code=error_code,
+        error=error,
+        execution=execution,
+        on_settled=on_settled,
     )
     agent_events.notifier.publish(run.id)
     return settled
@@ -401,7 +426,8 @@ def _settle(
     status: str,
     error_code: str | None,
     error: dict[str, object] | None,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
+    on_settled: Callable[[Session, AgentRun], None] | None = None,
 ) -> AgentRun:
     """终态写入 + 对应终态事件追加（同一立即事务；终态不可复活）。"""
     with _immediate_tx(db):
@@ -458,6 +484,10 @@ def _settle(
                     exc_info=True,
                 )
         db.flush()
+        if on_settled is not None:
+            # Runs inside the same immediate transaction as the terminal state,
+            # so the two are never separately observable.
+            on_settled(db, run)
         return run
 
 
@@ -679,10 +709,16 @@ def _execution_identity_revoked(db: Session, job: AgentJob) -> bool:
 
 
 def prune_finished(db: Session, *, older_than: datetime) -> int:
-    """后台清理入口：删除 settled_at 早于阈值的终态 run（events/job 由 CASCADE 清除）。"""
+    """后台清理入口：删除 settled_at 早于阈值的终态 run（events/job 由 CASCADE 清除）。
+
+    只删 assistant：Steward child run 的保留策略归 steward 侧 GC
+    （``steward_gc``）决定，被 assistant 的 settled_at 阈值顺手删掉会让
+    ``steward_model_calls`` 的证据行失去 run 追溯（run_id 置 NULL）。
+    """
     with _immediate_tx(db):
         result = db.execute(
             sa.delete(AgentRun).where(
+                AgentRun.kind == "assistant",
                 AgentRun.status.in_(RUN_TERMINAL_STATUSES),
                 AgentRun.settled_at.is_not(None),
                 AgentRun.settled_at < older_than,

@@ -22,8 +22,11 @@ class ContextBuild(Base):
     run_id: Mapped[int] = mapped_column(
         ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
     )
-    account_id: Mapped[int] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    # Nullable for space-scoped steward child runs (which have no account, only an
+    # optional viewer); ck_context_builds_account_binding keeps assistant builds
+    # non-null, so relaxing the column cannot lose the assistant invariant.
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True
     )
     space_id: Mapped[int] = mapped_column(
         ForeignKey("family_spaces.id", ondelete="CASCADE"), nullable=False

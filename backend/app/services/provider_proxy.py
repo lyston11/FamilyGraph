@@ -35,7 +35,7 @@ from app.errors import (
 )
 from app.models.agent import AgentRun
 from app.services import agent_provider, audit, policy_guard
-from app.services.agent_execution import ExecutionIdentity, fence_execution
+from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +250,7 @@ def _admit_upstream_request(
     db.rollback()
     if execution is not None:
         try:
-            run, _session, _job = fence_execution(db, execution)
+            run, _session, _job = fence_assistant_execution(db, execution)
         except HTTPException as exc:
             db.rollback()
             from app.errors import extract_api_error

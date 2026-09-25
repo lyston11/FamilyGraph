@@ -111,15 +111,28 @@ router = APIRouter(
 
 def _own_session_or_404(db: Session, account_id: int, session_id: int) -> AgentSession:
     agent_session = db.get(AgentSession, session_id)
-    if agent_session is None or agent_session.account_id != account_id:
+    # Sessions are assistant-only by DB CHECK; assert it here too so the browser
+    # surface states its own invariant instead of inheriting it from a constraint.
+    if (
+        agent_session is None
+        or agent_session.agent_kind != "assistant"
+        or agent_session.account_id != account_id
+    ):
         raise_api_error(404, AGENT_SESSION_NOT_FOUND, "会话不存在")
     return agent_session
 
 
 def _own_run_or_404(db: Session, account_id: int, run_id: int) -> tuple[AgentRun, AgentSession]:
-    """非本人/不存在的 Run 统一 404（防枚举，none→404 语义）。"""
+    """非本人/不存在的 Run 统一 404（防枚举，none→404 语义）。
+
+    ``kind`` 是**显式**条件，不是靠 ``run.session_id`` 为 NULL 的巧合：Steward
+    child run 没有 session，``db.get(AgentSession, None)`` 恰好也返回 None，看起
+    来"顺便"被挡住了。但那条路径依赖 SQLAlchemy 对 None 主键的处理，一旦有人把
+    session_id 改成可空以外的写法就会漏；而且浏览器的 session 归属复核对 steward
+    没有意义（它没有浏览器归属者），显式判据才是真正的门禁。
+    """
     run = db.get(AgentRun, run_id)
-    if run is None:
+    if run is None or run.kind != "assistant":
         raise_api_error(404, AGENT_RUN_NOT_FOUND, "Run 不存在")
     agent_session = db.get(AgentSession, run.session_id)
     if agent_session is None or agent_session.account_id != account_id:

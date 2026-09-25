@@ -26,6 +26,7 @@
  */
 
 import { Type, type Static } from "typebox";
+import type { AgentKind } from "./config.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export const TOOL_VERSIONS = {
@@ -78,6 +79,26 @@ export function providerWireName(name: DomainToolName): string {
 export function canonicalToolName(value: string): DomainToolName | undefined {
   if (isDomainToolName(value)) return value;
   return CANONICAL_BY_PROVIDER_WIRE_NAME.get(value);
+}
+
+/**
+ * Tool names a slot of this kind may register.
+ *
+ * Every tool in TOOL_VERSIONS is an assistant-domain tool (read-only family
+ * graph queries whose scope comes from the run token claims), and the server
+ * only ever advertises them in an assistant allowlist. Steward therefore gets
+ * an empty set in S1: its output is a closed structured product, and giving it
+ * tools would turn a single projection into repeated model-chosen queries —
+ * a different authorization shape that S3 designs separately.
+ *
+ * This is deliberately an explicit empty list rather than "assistant tools
+ * minus a denylist": a new assistant tool must not become a steward tool by
+ * default. The backend asserts the same disjointness
+ * (`test_registry_required_kind_gating`), and the intersection is checked here
+ * so neither side can drift alone.
+ */
+export function toolNamesFor(kind: AgentKind): string[] {
+  return kind === "steward" ? [] : Object.keys(TOOL_VERSIONS);
 }
 
 /** Names of the tools this sidecar may register, derived from the registry. */

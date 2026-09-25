@@ -35,7 +35,7 @@ from app.errors import (
 from app.models.account import Account
 from app.models.agent import RUNTIME_AGENT_KINDS, AgentRun, AgentSession, AgentToolCall
 from app.services import agent_query, audit, controlled_web, intake_extractor, terms
-from app.services.agent_execution import ExecutionIdentity, fence_execution
+from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
 from app.utils import timeutil
 
 # JSON schema 子集校验支持的标量类型
@@ -148,6 +148,9 @@ REGISTRY: dict[str, ToolSpec] = {
                 "additionalProperties": False,
             },
             output_schema={"type": "object", "properties": {"text": {"type": "string"}}},
+            # 显式 assistant：None 会让它落入**所有** kind 的 allowlist，
+            # 包括 steward（S1 合同要求 steward 侧为空集，见 design §9）。
+            required_kind="assistant",
         ),
         ToolSpec(
             name=TOOL_PROBE_SCOPE,
@@ -160,6 +163,7 @@ REGISTRY: dict[str, ToolSpec] = {
                 "additionalProperties": False,
             },
             output_schema={"type": "object", "properties": {}},
+            required_kind="assistant",
         ),
         ToolSpec(
             name=TOOL_RESOLVE_FREE_TEXT_RELATION,
@@ -283,7 +287,7 @@ def default_allowlist(
         raise ToolProtocolError(
             422,
             AGENT_KIND_UNSUPPORTED,
-            "Agent Runtime 只支持 Assistant",
+            "Agent Runtime 只支持 Assistant 与 Steward",
             {"kind": kind},
         )
     # Web tools are opt-in by policy; exclude them from the static traversal so a
@@ -452,7 +456,9 @@ def execute(
     claim_id: int | None = None
     try:
         if execution is not None:
-            run, agent_session, _job = fence_execution(db, execution, allowed_statuses=("running",))
+            run, agent_session, _job = fence_assistant_execution(
+                db, execution, allowed_statuses=("running",)
+            )
         if run.status != "running":
             raise ToolProtocolError(
                 409,

@@ -269,9 +269,11 @@ def test_ambiguous_relative_deep_downgrade_preserves_entire_schema(tmp_path, for
     engine = migration_engine(tmp_path)
     try:
         before = _snapshot(engine, schema=True)
-        # `-4` 从当前头跨过 0049 边界并撞上 0044 的合并分叉（相对偏移必须随代头调整，
-        # 否则会落到另一组 revision 而不再歧义）。
-        result = migrate(tmp_path, "downgrade", "-4", foreign_keys=foreign_keys)
+        # The relative offset must be re-derived whenever a migration is added on
+        # top of this head, or it lands on a different revision and stops being
+        # ambiguous. `-7` walks past 0049 and hits the 0044 merge fork
+        # (0055→0054→0053→0052→0051→0050→0049→0048).
+        result = migrate(tmp_path, "downgrade", "-7", foreign_keys=foreign_keys)
         assert result.returncode != 0 and "ambiguous" in result.stderr.lower()
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
         assert _snapshot(engine, schema=True) == before
