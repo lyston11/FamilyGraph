@@ -54,6 +54,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+from app import config
+
 revision: str = "0055_steward_assist_execution_unit"
 down_revision: str | None = "0054_seed_household_roster_fix"
 branch_labels: str | Sequence[str] | None = None
@@ -461,6 +463,7 @@ def _narrow_plan_table(conn: sa.Connection) -> None:
                 "evidence_hash VARCHAR(64) NOT NULL,"
                 "policy_version VARCHAR(32) NOT NULL,"
                 "fence_json JSON NOT NULL,"
+                "deadline_at DATETIME NOT NULL,"
                 "created_at DATETIME NOT NULL,"
                 "CONSTRAINT pk_steward_assist_plans PRIMARY KEY (id),"
                 "CONSTRAINT uq_sap_job UNIQUE (job_id),"
@@ -471,12 +474,20 @@ def _narrow_plan_table(conn: sa.Connection) -> None:
                 ")"
             )
         )
+        # The old batch lease was the plan's whole wall-clock bound, so deriving
+        # deadline_at from created_at preserves the semantics existing rows were
+        # built under instead of inventing a new one. The TTL is interpolated as a
+        # validated integer (config bounds it to 5..3600) because SQLite cannot
+        # bind a parameter inside a datetime() modifier.
+        ttl = int(config.STEWARD_ASSIST_BATCH_LEASE_SECONDS)
         conn.execute(
             sa.text(
                 "INSERT INTO steward_assist_plans_new "
-                "(id, space_id, job_id, evidence_hash, policy_version, fence_json, created_at) "
+                "(id, space_id, job_id, evidence_hash, policy_version, fence_json, "
+                "deadline_at, created_at) "
                 "SELECT id, space_id, job_id, evidence_hash, policy_version, fence_json, "
-                "created_at FROM steward_assist_plans"
+                f"datetime(created_at, '+{ttl} seconds'), created_at "
+                "FROM steward_assist_plans"
             )
         )
         conn.execute(sa.text("DROP TABLE steward_assist_plans"))
@@ -511,6 +522,10 @@ def _create_execution_unit_columns(conn: sa.Connection) -> None:
     # also needs stay on the plan, which is immutable — copying them per attempt
     # would duplicate the same bytes for every call in a job.
     conn.execute(sa.text("ALTER TABLE steward_model_calls ADD COLUMN evidence_hash VARCHAR(64)"))
+    # Crash point ④ needs a marker for "product persisted, write-back not done".
+    # status records the *call* result, not the *application* result, so without
+    # this column a crash between the two loses the product permanently.
+    conn.execute(sa.text("ALTER TABLE steward_model_calls ADD COLUMN applied_at DATETIME"))
     # Ledger column: ON DELETE SET NULL, not CASCADE — the attempt ledger must
     # outlive the execution record (prompt digest / tokens / status / error code
     # stay traceable after the child run is pruned). Historical rows keep NULL
@@ -709,6 +724,7 @@ def downgrade() -> None:
     _restore_batch_table(conn)
     for column in (
         "run_id",
+        "applied_at",
         "evidence_hash",
         "carrier",
         "next_attempt_at",

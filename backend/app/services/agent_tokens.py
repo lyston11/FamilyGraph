@@ -26,11 +26,13 @@ _ALGORITHM = "HS256"
 # run token 必含 claims，按 kind 分开（**per-kind 表，不用一个宽元组**）：
 # 两者共享 run_id / attempt / agent_kind / space_id / tool_allowlist；
 # - assistant 绑定 (job_id=AgentJob.id, account_id)，因为会话式运行有账号；
-# - steward 绑定 (job_id=StewardJob.id, steward_batch_id?) 且**无** account_id
+# - steward 绑定 (job_id=StewardJob.id, steward_attempt_id?) 且**无** account_id。
+#   ``steward_attempt_id`` 是 ``StewardModelCall.id``：执行单元就是 attempt，
+#   旧名 ``steward_batch_id`` 对应的是已被移除的批次。
 #   （空间级执行）；terminology 另有 viewer_account_id。
 #
 # 用一个宽元组会让「steward token 缺 account_id」与「assistant token 缺
-# steward_batch_id」都被误判为合法，因此必须逐 kind 校验。
+# steward_attempt_id」都被误判为合法，因此必须逐 kind 校验。
 _RUN_REQUIRED_CLAIMS_BY_KIND: dict[str, tuple[str, ...]] = {
     "assistant": (
         "run_id",
@@ -58,7 +60,7 @@ _SCOPE_INT_CLAIMS_BY_KIND: dict[str, tuple[str, ...]] = {
 }
 
 # steward 可选的额外 claims（可缺失或为 null，不可为其他类型）
-_STEWARD_OPTIONAL_INT_CLAIMS = ("steward_batch_id", "viewer_account_id")
+_STEWARD_OPTIONAL_INT_CLAIMS = ("steward_attempt_id", "viewer_account_id")
 
 
 class AgentTokenError(Exception):
@@ -99,7 +101,7 @@ def issue_run_token(
     account_id: int | None = None,
     space_id: int,
     tool_allowlist: list[str],
-    steward_batch_id: int | None = None,
+    steward_attempt_id: int | None = None,
     viewer_account_id: int | None = None,
     ttl_seconds: int | None = None,
 ) -> str:
@@ -117,7 +119,7 @@ def issue_run_token(
     if agent_kind == "assistant":
         if account_id is None or type(account_id) is not int or account_id < 1:
             raise AgentTokenError("assistant run token requires account_id")
-        if steward_batch_id is not None or viewer_account_id is not None:
+        if steward_attempt_id is not None or viewer_account_id is not None:
             raise AgentTokenError("assistant run token must not carry steward claims")
         payload: dict[str, Any] = {"account_id": account_id}
     else:
@@ -126,7 +128,7 @@ def issue_run_token(
             raise AgentTokenError("steward run token must not carry account_id")
         payload = {}
         for key, value in (
-            ("steward_batch_id", steward_batch_id),
+            ("steward_attempt_id", steward_attempt_id),
             ("viewer_account_id", viewer_account_id),
         ):
             if value is not None:

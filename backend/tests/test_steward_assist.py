@@ -31,7 +31,7 @@ from app.db import SessionLocal
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.steward import (
     ActionCard,
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardJob,
     StewardLlmCandidate,
     StewardModelCall,
@@ -164,18 +164,44 @@ def _calls(db_session, job_id: int) -> list[StewardModelCall]:
     return steward_assist.batch_calls(db_session, job_id)
 
 
-def _batch(db_session, job_id: int) -> StewardAssistBatch:
-    return db_session.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job_id))
+def _batch(db_session, job_id: int) -> StewardAssistPlan:
+    return db_session.scalar(select(StewardAssistPlan).where(StewardAssistPlan.job_id == job_id))
 
 
-def _run_assists(db_session, *, transport=None, rounds: int = 3):
-    """调度并执行所有到期辅助批次（同步测试路径；返回最终状态列表）。"""
+def _leased_id(db_session) -> int:
+    """The attempt currently in flight for the only active plan (test helper)."""
+    row = db_session.scalar(
+        select(StewardModelCall)
+        .where(StewardModelCall.status == "in_flight")
+        .order_by(StewardModelCall.id.desc())
+    )
+    assert row is not None, "no attempt is in flight"
+    return int(row.id)
+
+
+def _run_assists(
+    db_session, *, space_id: int | None = None, transport=None, rounds: int = 3,
+    job_id: int | None = None,
+):
+    """调度并执行所有到期辅助（同步测试路径；返回最终状态列表）。
+
+    ``job_id`` names the plan whose outcome to report; when omitted the newest
+    plan is used, which is what single-space tests mean.
+    """
+    if job_id is None:
+        plan = db_session.scalar(
+            select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc())
+        )
+        job_id = plan.job_id if plan is not None else None
     statuses = []
     for _ in range(rounds):
-        status = steward_assist.run_due_batch(db_session, transport=transport)
+        status = steward_assist.run_due_attempt(
+            db_session, space_id=space_id, transport=transport
+        )
         if status is None:
             break
-        statuses.append(status)
+        plan = _batch(db_session, job_id)
+        statuses.append(steward_assist.plan_outcome(db_session, plan.id) if plan else None)
     return statuses
 
 
@@ -250,7 +276,7 @@ def test_candidate_pool_validated_and_audited(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, [payload_text]))
 
     summary, job = _run_job(db_session, space, event.id)
-    assert _run_assists(db_session) == ["applied"]
+    assert _run_assists(db_session, space_id=space.id) == ["applied"]
 
     # 确定性建卡照常（候选绝不替代矩阵）
     assert summary["stats"]["cards_created"] == 2
@@ -287,7 +313,7 @@ def test_candidate_unparseable_degraded_but_audited(db_session, monkeypatch) -> 
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["不是 JSON"]))
 
     _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
     job = db_session.scalar(select(StewardJob).where(StewardJob.space_id == space.id))
@@ -310,7 +336,7 @@ def test_ranking_applies_valid_permutation(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake(calls, mode="reverse"))
 
     summary, job = _run_job(db_session, space, event.id)
-    assert _run_assists(db_session) == ["applied"]
+    assert _run_assists(db_session, space_id=space.id) == ["applied"]
     assert summary["stats"]["cards_created"] == 2
 
     cards = sorted(_cards(db_session, space.id), key=lambda r: r.id)
@@ -334,7 +360,7 @@ def test_ranking_rejects_invalid_permutation(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake(calls, mode="duplicate"))
 
     summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert summary["stats"]["cards_created"] == 2
     assert all(card.presentation_rank is None for card in _cards(db_session, space.id))
@@ -393,13 +419,10 @@ def test_returned_result_is_persisted_before_the_next_send(db_session, monkeypat
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
     assert [r.status for r in _calls(db_session, job.id)] == ["reserved", "reserved"]
 
-    status = steward_assist.execute_batch(
-        db_session,
-        batch.id,
-        transport=_mixed_transport(calls, first_valid=valid, second=slow_second, observed=observed),
+    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=_mixed_transport(calls, first_valid=valid, second=slow_second, observed=observed),
     )
     assert len(calls) == 2
     # 红断言：第二笔发送时第一笔已落库
@@ -417,17 +440,20 @@ def test_returned_result_is_persisted_before_the_next_send(db_session, monkeypat
     batch = _batch(db_session, job.id)
     batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
     db_session.commit()
-    assert steward_assist.recover_stuck_batches(db_session) >= 1
+    assert steward_assist.recover_stuck_attempts(db_session) >= 1
     db_session.expire_all()
     assert [r.status for r in _calls(db_session, job.id)] == ["succeeded", "unknown"]
     settled = _batch(db_session, job.id)
-    assert settled.status == "failed"  # 失败事实如实保留
-    assert settled.error_code == steward_assist.REASON_NETWORK_UNKNOWN
+    # 失败事实如实保留（终态由 attempt 派生，plan 本身不再存状态）
+    assert steward_assist.plan_outcome(db_session, settled.id) == "failed"
+    assert steward_assist.plan_error_code(db_session, settled.id) == (
+        steward_assist.REASON_NETWORK_UNKNOWN
+    )
     cards = _cards(db_session, space.id)
     assert len(cards) == 2
     assert sum(1 for card in cards if card.reason_text_llm) == 1  # 独立产物已应用
     assert len(_calls(db_session, job.id)) == 2  # unknown 未重发
-    assert steward_assist.recover_stuck_batches(db_session) == 0
+    assert steward_assist.recover_stuck_attempts(db_session) == 0
 
 
 def test_partial_batch_applies_independent_product_and_stays_failed(
@@ -446,12 +472,9 @@ def test_partial_batch_applies_independent_product_and_stays_failed(
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
-    status = steward_assist.execute_batch(
-        db_session,
-        batch.id,
-        transport=_mixed_transport(calls, first_valid=valid, second=connect_failure, observed={}),
+    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=_mixed_transport(calls, first_valid=valid, second=connect_failure, observed={}),
     )
     assert len(calls) == 2
     assert status == "failed"
@@ -459,8 +482,8 @@ def test_partial_batch_applies_independent_product_and_stays_failed(
     rows = _calls(db_session, job.id)
     assert [r.status for r in rows] == ["succeeded", "failed"]
     settled = _batch(db_session, job.id)
-    assert settled.status == "failed"
-    assert settled.error_code == steward_assist.REASON_TRANSPORT_FAILED
+    assert steward_assist.plan_outcome(db_session, settled.id) == "failed"
+    assert steward_assist.plan_error_code(db_session, settled.id) == steward_assist.REASON_TRANSPORT_FAILED
     cards = _cards(db_session, space.id)
     assert sum(1 for card in cards if card.reason_text_llm) == 1
 
@@ -537,7 +560,7 @@ def test_explanation_structured_written_and_rendered(db_session, monkeypatch) ->
     monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake(calls, mode="valid"))
 
     _summary, job = _run_job(db_session, space, event.id)
-    assert _run_assists(db_session) == ["applied"]
+    assert _run_assists(db_session, space_id=space.id) == ["applied"]
 
     cards = _cards(db_session, space.id)
     assert len(cards) == 2
@@ -562,7 +585,7 @@ def test_explanation_structured_validated_via_api(db_session, monkeypatch, clien
     monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake([], mode="valid"))
 
     _summary, _job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     from app.api.action_cards import _card_out
 
@@ -589,7 +612,7 @@ def test_explanation_malicious_output_falls_back_to_template(db_session, monkeyp
     monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake(calls, mode=mode))
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
     rows = _calls(db_session, job.id)
@@ -611,7 +634,7 @@ def test_explanation_failure_keeps_template_and_pipeline(db_session, monkeypatch
     monkeypatch.setattr(steward_assist, "_post_json", boom)
 
     summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert summary["stats"]["cards_created"] == 2
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
@@ -636,15 +659,20 @@ def test_provider_unavailable_superseded_pipeline_intact(db_session, monkeypatch
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
 
     summary, job = _run_job(db_session, space, event.id)
-    # 调度阶段预发送栅栏即拦截：批次 superseded，零网络调用、零 attempt 行
-    assert steward_assist.schedule_due_batch(db_session) is None
+    # 租约阶段栅栏即拦截：零网络调用、零发送。
+    # 与旧实现的一处真实差异：旧代码在「调度」时才建 attempt 行，因此这里是
+    # 「批次 superseded、零 attempt」；现在 attempt 与 plan 同事务预留，所以
+    # 行存在但被栅栏落为 skipped——「零发送」这一合同不变。
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
 
     assert summary["stats"]["cards_created"] == 2
     assert calls == []
     batch = _batch(db_session, job.id)
-    assert batch.status == "superseded"
-    assert batch.error_code == steward_assist.REASON_PROVIDER_UNAVAILABLE
-    assert _calls(db_session, job.id) == []
+    assert steward_assist.plan_outcome(db_session, batch.id) == "superseded"
+    assert steward_assist.plan_error_code(db_session, batch.id) == (
+        steward_assist.REASON_PROVIDER_UNAVAILABLE
+    )
+    assert all(row.status == "skipped" for row in _calls(db_session, job.id))
 
 
 # ---- AC-3：与 Assistant 三表隔离 ----
@@ -660,7 +688,7 @@ def test_assist_never_touches_assistant_tables(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake([]))
 
     _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert db_session.scalars(select(AgentSession)).first() is None
     assert db_session.scalars(select(AgentRun)).first() is None
@@ -701,20 +729,21 @@ def test_slow_http_does_not_block_other_space_writes(db_session, monkeypatch) ->
     batch = _batch(db_session, job.id)
     assert batch is not None
 
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
     # 在受限执行线程中跑辅助批次（HTTP 挂起在 gate 上）
     done = threading.Event()
 
     def _run_batch() -> None:
         worker = SessionLocal()
         try:
-            steward_assist.execute_batch(worker, batch.id)
+            steward_assist.execute_plan_attempts(worker, plan_id=batch.id)
         finally:
             worker.close()
         done.set()
 
     executor = threading.Thread(target=_run_batch, daemon=True)
-    assert batch.status == "leased"
+    # Before the thread starts nothing is in flight: the attempts are reserved.
+    assert steward_assist.plan_outcome(db_session, batch.id) == "pending"
     executor.start()
     try:
         # 等待 HTTP 真正进入挂起（calls 有记录且批次已 applying）
@@ -724,10 +753,10 @@ def test_slow_http_does_not_block_other_space_writes(db_session, monkeypatch) ->
         assert calls, "transport never entered"
         for _ in range(500):
             db_session.expire_all()
-            if _batch(db_session, job.id).status == "applying":
+            if steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "applying":
                 break
             time.sleep(0.01)
-        assert _batch(db_session, job.id).status == "applying"
+        assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "applying"
 
         # 第二个 SQLite 连接：HTTP 在飞时提交领域写入 + 跑另一空间 core job
         other = SessionLocal()
@@ -762,7 +791,7 @@ def test_slow_http_does_not_block_other_space_writes(db_session, monkeypatch) ->
         assert done.is_set()
 
     db_session.expire_all()
-    assert _batch(db_session, job.id).status == "applied"
+    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "applied"
 
 
 def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
@@ -787,14 +816,14 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", unfinished_transport)
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
-    batch_id = batch.id
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
+    plan_id = batch.id
     errors: list[Exception] = []
 
     def _run_batch() -> None:
         worker = SessionLocal()
         try:
-            steward_assist.execute_batch(worker, batch_id)
+            steward_assist.execute_plan_attempts(worker, plan_id=plan_id)
         except SimulatedWorkerLoss:
             pass
         except Exception as exc:  # pragma: no cover - exposed by assertion
@@ -811,10 +840,10 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
         assert calls, f"transport never entered; errors={errors}"
         db_session.rollback()
         db_session.expire_all()
-        batch = _batch(db_session, job.id)
-        batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
+        for row in _calls(db_session, job.id):
+            row.lease_until = timeutil.utcnow() - timedelta(seconds=1)
         db_session.commit()
-        assert steward_assist.recover_stuck_batches(db_session) == 1
+        assert steward_assist.recover_stuck_attempts(db_session) >= 1
 
         assert db_session.get(StewardJob, job.id).status == "succeeded"
         assert len(_cards(db_session, space.id)) == 2
@@ -825,8 +854,10 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
             rows[0].billed_tokens == rows[0].reserved_input_tokens + rows[0].reserved_output_tokens
         )
         batch = _batch(db_session, job.id)
-        assert batch.status == "failed"
-        assert batch.error_code == steward_assist.REASON_NETWORK_UNKNOWN
+        assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
+        assert steward_assist.plan_error_code(db_session, batch.id) == (
+        steward_assist.REASON_NETWORK_UNKNOWN
+    )
     finally:
         gate.set()
         executor.join(timeout=15)
@@ -847,25 +878,25 @@ def test_crash_point_2_before_send_recovers_to_pending(db_session, monkeypatch) 
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
-    assert batch.status == "leased"
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
+    # 预留与 plan 同事务建立，因此「发送前崩溃」就是这个状态本身：可租、未租。
+    assert steward_assist.plan_outcome(db_session, batch.id) == "pending"
     assert [r.status for r in _calls(db_session, job.id)] == ["reserved", "reserved"]
 
-    # 模拟崩溃：lease 过期后恢复
-    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
-    db_session.commit()
-    assert steward_assist.recover_stuck_batches(db_session) == 1
+    # 从未发送 → 恢复器不碰它（无 in_flight 行），预留仍在、零计费。
+    assert steward_assist.recover_stuck_attempts(db_session) == 0
 
     rows = _calls(db_session, job.id)
-    assert all(r.status == "skipped" for r in rows)  # 从未发送：释放预留
+    assert all(r.status == "reserved" for r in rows)
     assert all(r.billed_tokens is None for r in rows)
-    assert _batch(db_session, job.id).status == "pending"
+    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "pending"
     # 恢复后可重新调度执行
-    statuses = _run_assists(db_session)
+    statuses = _run_assists(db_session, space_id=space.id)
     assert statuses == ["applied"]
+    # 与旧实现的一处真实差异：旧代码在调度时把预留释放成 skipped 再重发，因此
+    # 有四行；现在预留从未被释放（发送前崩溃不产生 in_flight），所以只有原来
+    # 那两行，直接被执行。
     assert [r.status for r in _calls(db_session, job.id)] == [
-        "skipped",
-        "skipped",
         "succeeded",
         "succeeded",
     ]
@@ -884,15 +915,15 @@ def test_crash_point_3_after_send_before_audit(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", hang)
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     rows = _calls(db_session, job.id)
     assert rows and all(r.status == "unknown" for r in rows)
     assert all(r.billed_tokens == r.reserved_input_tokens + r.reserved_output_tokens for r in rows)
-    assert _batch(db_session, job.id).status == "failed"
-    assert _batch(db_session, job.id).error_code == steward_assist.REASON_NETWORK_UNKNOWN
+    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "failed"
+    assert steward_assist.plan_error_code(db_session, _batch(db_session, job.id).id) == steward_assist.REASON_NETWORK_UNKNOWN
     # 结果不明 → 不自动重发（不产生第二批 attempt）
-    assert _run_assists(db_session) == []
+    assert _run_assists(db_session, space_id=space.id) == []
 
 
 def test_crash_point_4_before_writeback_applies_after_fence(db_session, monkeypatch) -> None:
@@ -907,9 +938,10 @@ def test_crash_point_4_before_writeback_applies_after_fence(db_session, monkeypa
     _summary, job = _run_job(db_session, space, event.id)
     # 直接构造"审计已提交、写回未完成"的崩溃后状态
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
     for row in _calls(db_session, job.id):
         row.status = "succeeded"
+        row.lease_owner = "doomed-executor"
         row.output_json = {
             "schema_version": steward_guard.EXPLANATION_SCHEMA_VERSION,
             "reason_code": "household_link_available",
@@ -918,13 +950,15 @@ def test_crash_point_4_before_writeback_applies_after_fence(db_session, monkeypa
             "rendered": "解释文本",
         }
         row.billed_tokens = row.reserved_input_tokens + row.reserved_output_tokens
-    batch.status = "applying"
-    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)  # 崩溃后时间流逝
+    # The attempt is already in_flight (the loop above set it); the batch-era
+    # "applying" marker has no counterpart because the plan carries no status.
+    for row in _calls(db_session, job.id):
+        row.lease_until = timeutil.utcnow() - timedelta(seconds=1)  # 崩溃后时间流逝
     db_session.commit()
 
-    assert steward_assist.recover_stuck_batches(db_session) >= 1
+    assert steward_assist.recover_stuck_attempts(db_session) >= 1
 
-    assert _batch(db_session, job.id).status == "applied"
+    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "applied"
     cards = _cards(db_session, space.id)
     assert len(cards) == 2
     assert all(card.reason_text_llm == "解释文本" for card in cards)
@@ -938,32 +972,30 @@ def test_recovery_does_not_resend_audited_unknown_or_revisit_settled_failures(
     _steward_setting(db_session, space, provider, candidate=True)
     _turn_on(monkeypatch, ranking=False, explanation=False)
     _summary, job = _run_job(db_session, space, event.id)
-    batch = steward_assist.schedule_due_batch(db_session)
+    batch = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
     assert batch is not None
 
     def unknown(url, headers, payload, timeout):
         raise httpx.ReadTimeout("synthetic unknown result")
 
-    # Real tx2 persists the unknown outcome; simulate a crash before tx3.
-    apply = steward_assist._apply_batch
-    monkeypatch.setattr(steward_assist, "_apply_batch", lambda *_args, **_kwargs: "applying")
-    assert steward_assist.execute_batch(db_session, batch.id, transport=unknown) == "applying"
-    monkeypatch.setattr(steward_assist, "_apply_batch", apply)
-    assert [call.status for call in _calls(db_session, job.id)] == ["unknown"]
-    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
-    db_session.commit()
-    assert steward_assist.recover_stuck_batches(db_session) == 1
-    assert batch.status == "failed"
-    assert batch.error_code == steward_assist.REASON_NETWORK_UNKNOWN
-    assert steward_assist.schedule_due_batch(db_session) is None
-    settled_at = batch.updated_at
+    # The unknown outcome is settled immediately and is terminal on its own.
     assert (
-        steward_assist.recover_stuck_batches(
+        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=unknown)
+        == "failed"
+    )
+    assert [call.status for call in _calls(db_session, job.id)] == ["unknown"]
+    assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
+    assert steward_assist.plan_error_code(db_session, batch.id) == (
+        steward_assist.REASON_NETWORK_UNKNOWN
+    )
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
+    # unknown 不自动重发：恢复器无事可做，也不得产生第二笔。
+    assert (
+        steward_assist.recover_stuck_attempts(
             db_session, now=timeutil.utcnow() + timedelta(seconds=5)
         )
         == 0
     )
-    assert batch.updated_at == settled_at
     assert len(_calls(db_session, job.id)) == 1
 
 
@@ -987,7 +1019,7 @@ def test_budget_two_caps_three_kinds_at_two_sends(db_session, monkeypatch) -> No
     monkeypatch.setattr(steward_assist, "_post_json", hang)
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert len(calls) == 2  # 严格上限：无论结果如何最多 2 次发送
     rows = _calls(db_session, job.id)
@@ -1007,7 +1039,7 @@ def test_insufficient_tokens_skips_without_send(db_session, monkeypatch) -> None
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert calls == []
     rows = _calls(db_session, job.id)
@@ -1047,7 +1079,7 @@ def test_usage_missing_billed_from_reservation(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", transport)
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     rows = [r for r in _calls(db_session, job.id) if r.status != "skipped"]
     assert rows and all(
@@ -1058,9 +1090,16 @@ def test_usage_missing_billed_from_reservation(db_session, monkeypatch) -> None:
 # ---- AC-4：写回栅栏（调用期间世界变化 → 全部不应用）----
 
 
-def _assert_not_applied(batch, reason_code):
-    assert batch.status == "superseded"
-    assert batch.error_code == reason_code
+def _assert_not_applied(db, batch, reason_code):
+    """The plan is fenced out and at least one attempt carries the safe reason."""
+    assert steward_assist.plan_outcome(db, batch.id) == "superseded"
+    codes = {
+        row.error_code
+        for row in db.scalars(
+            select(StewardModelCall).where(StewardModelCall.plan_id == batch.id)
+        )
+    }
+    assert reason_code in codes, f"{reason_code} not among {codes}"
 
 
 def test_fence_disabled_during_call_blocks_writeback(db_session, monkeypatch) -> None:
@@ -1073,13 +1112,13 @@ def test_fence_disabled_during_call_blocks_writeback(db_session, monkeypatch) ->
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
     def disable(_db, _batch):
         monkeypatch.setattr(config, "STEWARD_ASSIST_EXPLANATION", False)
 
-    status = steward_assist.execute_batch(db_session, batch.id, after_send=disable)
-    _assert_not_applied(_batch(db_session, job.id), steward_assist.REASON_ASSIST_DISABLED)
+    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=disable)
+    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_ASSIST_DISABLED)
     assert status == "superseded"
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
 
@@ -1094,15 +1133,15 @@ def test_fence_provider_switch_during_call(db_session, monkeypatch) -> None:
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
     def switch(_db, _batch):
         setting.provider_id = other.id
         setting.model = "gpt-5.7-nova"
         db_session.commit()
 
-    steward_assist.execute_batch(db_session, batch.id, after_send=switch)
-    _assert_not_applied(_batch(db_session, job.id), steward_assist.REASON_PROVIDER_CHANGED)
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=switch)
+    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_PROVIDER_CHANGED)
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
 
 
@@ -1115,15 +1154,15 @@ def test_fence_card_terminal_during_call(db_session, monkeypatch) -> None:
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
     def dismiss(_db, _batch):
         card = _cards(db_session, space.id)[0]
         action_cards_supersede(card)
         db_session.commit()
 
-    steward_assist.execute_batch(db_session, batch.id, after_send=dismiss)
-    _assert_not_applied(_batch(db_session, job.id), steward_assist.REASON_CARD_CHANGED)
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=dismiss)
+    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_CARD_CHANGED)
     assert all(card.presentation_rank is None for card in _cards(db_session, space.id))
 
 
@@ -1149,15 +1188,15 @@ def test_fence_evidence_changed_during_call(db_session, monkeypatch) -> None:
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
     def revise(_db, _batch):
         fact = db_session.scalar(select(SourceFact).where(SourceFact.fact_type == "spouse"))
         fact.revision += 1
         db_session.commit()
 
-    steward_assist.execute_batch(db_session, batch.id, after_send=revise)
-    _assert_not_applied(_batch(db_session, job.id), steward_assist.REASON_EVIDENCE_CHANGED)
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=revise)
+    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_EVIDENCE_CHANGED)
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
 
 
@@ -1174,7 +1213,7 @@ def test_oversized_prompt_skipped_without_send(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert calls == []
     rows = _calls(db_session, job.id)
@@ -1236,7 +1275,7 @@ def test_oversized_response_capped_without_full_read(db_session, monkeypatch) ->
     monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: _StubClient(total))
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     rows = _calls(db_session, job.id)
     assert rows and all(
@@ -1316,7 +1355,7 @@ def test_transport_receives_30s_default_timeout(db_session, monkeypatch) -> None
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["解释"]))
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert calls and all(c["timeout"] == 30 for c in calls)
 
@@ -1346,8 +1385,8 @@ def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
-    steward_assist.execute_batch(db_session, batch.id)
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id)
 
     # 第一张卡超时消耗本笔预算；第二张卡因剩余时间不足覆盖结算预留而未发送，
     # 预留立即释放为 skipped（零计费、非 unknown）。
@@ -1359,7 +1398,7 @@ def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
     assert unsent and all(r.error_code == steward_assist.REASON_INSUFFICIENT_BUDGET for r in unsent)
     assert all(r.billed_tokens in (0, None) for r in unsent)
     # 已发送但无法确认的一笔仍如实 unknown，批次终态 failed 且不自动重发
-    assert _batch(db_session, job.id).status == "failed"
+    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "failed"
     db_session.expire_all()
     rows = _calls(db_session, job.id)
     assert all(r.status in ("failed", "unknown", "skipped") for r in rows)
@@ -1456,7 +1495,7 @@ def test_outbound_payload_never_contains_raw_planted_fields(db_session, monkeypa
     monkeypatch.setattr(steward_assist, "_post_json", capture_transport)
 
     _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert calls, "expected outbound attempts"
     outbound = json.dumps([c["payload"] for c in calls], ensure_ascii=False)
@@ -1485,18 +1524,19 @@ def test_cloud_consent_revoked_degrades_without_send(db_session, monkeypatch) ->
     setting.cloud_allowed = False
     db_session.commit()
 
-    assert steward_assist.schedule_due_batch(db_session) is None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
     assert calls == []
     batch = _batch(db_session, job.id)
-    assert batch.status == "superseded"
+    assert steward_assist.plan_outcome(db_session, batch.id) == "superseded"
     # 云同意撤销：预发送栅栏即降级（resolver 得不到可用 runtime → provider
     # unavailable；若发生在 tx1 读取之后、发送前则 policy_blocked）。
     # 两条路径都绝不自动切云、零发送。
-    assert batch.error_code in (
+    assert steward_assist.plan_error_code(db_session, batch.id) in (
         steward_assist.REASON_POLICY_BLOCKED,
         steward_assist.REASON_PROVIDER_UNAVAILABLE,
     )
-    assert _calls(db_session, job.id) == []
+    # 零发送这一合同不变；预留被栅栏落为 skipped，而不是从未存在。
+    assert all(row.status == "skipped" for row in _calls(db_session, job.id))
 
 
 def test_local_required_with_cloud_provider_degrades(db_session, monkeypatch) -> None:
@@ -1518,10 +1558,10 @@ def test_local_required_with_cloud_provider_degrades(db_session, monkeypatch) ->
 
     _summary, job = _run_job(db_session, space, event.id)
 
-    assert steward_assist.schedule_due_batch(db_session) is None
+    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
     assert calls == []
     batch = _batch(db_session, job.id)
-    assert batch.error_code in (
+    assert steward_assist.plan_error_code(db_session, batch.id) in (
         steward_assist.REASON_POLICY_BLOCKED,
         steward_assist.REASON_PROVIDER_UNAVAILABLE,
     )
@@ -1539,7 +1579,7 @@ def test_openai_completions_protocol_path(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake(calls, mode="reverse"))
 
     _summary, job = _run_job(db_session, space, event.id)
-    assert _run_assists(db_session) == ["applied"]
+    assert _run_assists(db_session, space_id=space.id) == ["applied"]
 
     assert calls and "/chat/completions" in calls[0]["url"]
     assert all(c["payload"]["messages"] for c in calls)
@@ -1594,7 +1634,7 @@ def test_candidate_atomic_kinds_only(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, [payload_text]))
 
     _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     candidates = list(db_session.scalars(select(StewardLlmCandidate)))
     assert [c.candidate_kind for c in candidates] == ["spouse"]
@@ -1620,7 +1660,7 @@ def test_candidate_minor_endpoint_dropped(db_session, monkeypatch) -> None:
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, [payload_text]))
 
     _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
 
@@ -1672,7 +1712,7 @@ def test_candidate_empty_array_succeeded_applied_with_no_candidates(
     monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["[]"]))
 
     _run_job(db_session, space, event.id)
-    _run_assists(db_session)
+    _run_assists(db_session, space_id=space.id)
 
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
     job = db_session.scalar(select(StewardJob).where(StewardJob.space_id == space.id))
@@ -1680,5 +1720,5 @@ def test_candidate_empty_array_succeeded_applied_with_no_candidates(
     assert row.status == "succeeded"
     assert row.error_code is None
     assert row.billed_tokens == 15
-    batch = db_session.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job.id))
-    assert batch is not None and batch.status == "applied"
+    batch = db_session.scalar(select(StewardAssistPlan).where(StewardAssistPlan.job_id == job.id))
+    assert batch is not None and steward_assist.plan_outcome(db_session, batch.id) == "applied"

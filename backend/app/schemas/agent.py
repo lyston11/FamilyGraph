@@ -52,6 +52,9 @@ class StewardLeaseRequest(_Strict):
     """
 
     kind: Literal["steward"]
+    # 租约按空间取，因此请求必须指名空间：这正是「per-space 并发」的入口——
+    # 不带 space_id 就只能全库选一个，回到旧的全局 1 行为。
+    space_id: int = Field(gt=0)
     leased_by: str = Field(min_length=1, max_length=120)
     lease_ttl_seconds: int | None = Field(default=None, ge=30, le=3600)
 
@@ -60,13 +63,15 @@ class StewardLeaseOut(BaseModel):
     """Steward child run 的租赁结果。
 
     ``steward_job_id`` 是**授权根**（不是 ``job_id``：child run 不经过通用队列，
-    ``agent_runs.job_id`` 恒为 NULL）。``max_concurrent`` 把服务端的批次并发上限
-    广播给 sidecar，两侧取较大值，避免本地配置静默压低服务端上限。
+    ``agent_runs.job_id`` 恒为 NULL）。``assist_attempt_id`` 是执行单元
+    （``StewardModelCall.id``）——旧的 ``assist_batch_id`` 对应已被移除的批次。
+    ``max_concurrent`` 把服务端的每空间并发上限广播给 sidecar，两侧取较大值，
+    避免本地配置静默压低服务端上限。
     """
 
     run_id: int
     steward_job_id: int
-    assist_batch_id: int | None
+    assist_attempt_id: int
     assist_kind: str
     agent_kind: AgentKind
     attempt: int

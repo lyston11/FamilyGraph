@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.relationship_facts import SourceFact
 from app.models.space import FamilySpace, SpaceMember, SpaceProfileRef
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardCandidateEvidenceVersion,
     StewardJob,
     StewardLlmCandidate,
@@ -180,7 +180,7 @@ def record_for_candidate(
     db: Session,
     candidate: StewardLlmCandidate,
     *,
-    batch: StewardAssistBatch,
+    plan: StewardAssistPlan,
     model_call: StewardModelCall,
     now: datetime,
 ) -> StewardCandidateEvidenceVersion | None:
@@ -190,10 +190,10 @@ def record_for_candidate(
     conflict handling never overwrites the first source or an old attestation.
     """
     if (
-        batch.space_id != candidate.space_id
-        or model_call.space_id != batch.space_id
-        or model_call.job_id != batch.job_id
-        or model_call.batch_id != batch.id
+        plan.space_id != candidate.space_id
+        or model_call.space_id != plan.space_id
+        or model_call.job_id != plan.job_id
+        or model_call.plan_id != plan.id
         or model_call.assist_kind != "candidate"
         or model_call.status != "succeeded"
     ):
@@ -216,8 +216,8 @@ def record_for_candidate(
             validation_contract_version=VALIDATION_CONTRACT_VERSION,
             evidence_digest=digest,
             support_facts_json=support,
-            source_job_id=batch.job_id,
-            source_batch_id=batch.id,
+            source_job_id=plan.job_id,
+            source_plan_id=plan.id,
             source_model_call_id=model_call.id,
             status="pending",
             created_at=now,

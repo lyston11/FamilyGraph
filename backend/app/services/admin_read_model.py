@@ -32,7 +32,7 @@ from app.models.space import (
     SpaceMember,
     SpaceProfileRef,
 )
-from app.models.steward import StewardJob, StewardRun
+from app.models.steward import StewardModelCall
 from app.models.user import User
 from app.schemas.admin_read import (
     AdminAgentErrorOut,
@@ -705,17 +705,19 @@ def agent_runs(
     from_dt: datetime | None,
     to_dt: datetime | None,
 ) -> dict[str, Any]:
-    # OUTER join: a steward child run has no session, so an inner join would drop
-    # every child run from the admin view entirely. Its space then comes from the
-    # parent StewardJob instead of the session.
+    # OUTER joins: a steward child run has no session, so an inner join would drop
+    # every child run from the admin view entirely. Its space comes from the
+    # attempt, which carries it directly — no hop through the parent job, and no
+    # second join that would multiply rows.
     stmt = (
-        select(AgentRun, AgentSession, StewardJob)
+        select(AgentRun, AgentSession, StewardModelCall)
         .join(AgentSession, AgentSession.id == AgentRun.session_id, isouter=True)
-        .join(StewardRun, StewardRun.run_id == AgentRun.id, isouter=True)
-        .join(StewardJob, StewardJob.id == StewardRun.steward_job_id, isouter=True)
+        .join(StewardModelCall, StewardModelCall.run_id == AgentRun.id, isouter=True)
     )
     if space_id is not None:
-        stmt = stmt.where(func.coalesce(AgentSession.space_id, StewardJob.space_id) == space_id)
+        stmt = stmt.where(
+            func.coalesce(AgentSession.space_id, StewardModelCall.space_id) == space_id
+        )
     if status is not None:
         stmt = stmt.where(AgentRun.status == status)
     if from_dt is not None:
@@ -732,7 +734,9 @@ def agent_runs(
             job_id=run.job_id,
             # Steward runs carry their space on the parent job; exposing the
             # viewer or any prompt text here is deliberately out of scope.
-            space_id=agent_session.space_id if agent_session is not None else steward_job.space_id,
+            space_id=(
+                agent_session.space_id if agent_session is not None else steward_attempt.space_id
+            ),
             account_id=agent_session.account_id if agent_session is not None else None,
             kind=run.kind,
             status=run.status,
@@ -747,7 +751,7 @@ def agent_runs(
             updated_at=run.updated_at,
             settled_at=run.settled_at,
         )
-        for run, agent_session, steward_job in rows
+        for run, agent_session, steward_attempt in rows
     ]
     return page_envelope(items, int(total), page, page_size)
 

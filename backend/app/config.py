@@ -227,8 +227,27 @@ STEWARD_TERMINOLOGY_MAX_VIEWER_GROUPS_PER_JOB: int = int(
 STEWARD_TERMINOLOGY_MAX_TARGETS_PER_GROUP: int = int(
     os.environ.get("STEWARD_TERMINOLOGY_MAX_TARGETS_PER_GROUP", "8")
 )
-STEWARD_ASSIST_MAX_CONCURRENT_BATCHES: int = int(
-    os.environ.get("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", "1")
+# 09-25 E1：并发作用域从「全库批次」改为「每空间 attempt」。
+# 旧值是全库 1，选批 SQL 无 space 过滤 → 20 个空间同一时刻只有一个在跑，空间之间
+# 互相阻塞。按空间计让每个空间独立推进。
+STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: int = int(
+    os.environ.get("STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", "2")
+)
+# 单次 attempt 的租约（sidecar 心跳续期）。它**不是**整个 plan 的墙钟上界：
+# 上界由 STEWARD_ASSIST_BATCH_LEASE_SECONDS 表达（见 plan.deadline_at），否则
+# 每个 attempt 都会拿到一个全新窗口，一个 plan 可能跑 (attempts × ttl)。
+STEWARD_ASSIST_CALL_LEASE_SECONDS: int = int(
+    os.environ.get("STEWARD_ASSIST_CALL_LEASE_SECONDS", "120")
+)
+# 逐 kind 的执行载体。未知值 fail-closed（carrier_for 抛错），因为拼错会静默
+# 换一个执行器。
+STEWARD_ASSIST_CANDIDATE_CARRIER: str = os.environ.get("STEWARD_ASSIST_CANDIDATE_CARRIER", "inproc")
+STEWARD_ASSIST_RANKING_CARRIER: str = os.environ.get("STEWARD_ASSIST_RANKING_CARRIER", "inproc")
+STEWARD_ASSIST_EXPLANATION_CARRIER: str = os.environ.get(
+    "STEWARD_ASSIST_EXPLANATION_CARRIER", "inproc"
+)
+STEWARD_ASSIST_TERMINOLOGY_CARRIER: str = os.environ.get(
+    "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "inproc"
 )
 
 # ---- 09-13 Steward 推测层（inferred tree；fail-closed 默认关）----
@@ -356,7 +375,13 @@ def _validate_steward_scheduling() -> None:
         ("STEWARD_ASSIST_MAX_PROMPT_BYTES", STEWARD_ASSIST_MAX_PROMPT_BYTES, 1024, 1 << 20),
         ("STEWARD_ASSIST_MAX_RESPONSE_BYTES", STEWARD_ASSIST_MAX_RESPONSE_BYTES, 1024, 1 << 22),
         ("STEWARD_ASSIST_BATCH_LEASE_SECONDS", STEWARD_ASSIST_BATCH_LEASE_SECONDS, 5, 3600),
-        ("STEWARD_ASSIST_MAX_CONCURRENT_BATCHES", STEWARD_ASSIST_MAX_CONCURRENT_BATCHES, 1, 8),
+        ("STEWARD_ASSIST_CALL_LEASE_SECONDS", STEWARD_ASSIST_CALL_LEASE_SECONDS, 5, 3600),
+        (
+            "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE",
+            STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE,
+            1,
+            8,
+        ),
         ("STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB, 1, 64),
         ("STEWARD_ASSIST_MAX_TOKENS_PER_JOB", STEWARD_ASSIST_MAX_TOKENS_PER_JOB, 100, 1_000_000),
         ("STEWARD_ASSIST_MAX_CARDS_PER_JOB", STEWARD_ASSIST_MAX_CARDS_PER_JOB, 1, 100),

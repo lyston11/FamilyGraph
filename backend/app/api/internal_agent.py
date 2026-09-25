@@ -388,18 +388,22 @@ def lease_job(
     )
 
 
-@router.post("/steward/jobs/lease", response_model=StewardLeaseOut | None)
-def lease_steward_job(
+@router.post("/steward/attempts/lease", response_model=StewardLeaseOut | None)
+def lease_steward_attempt(
     body: StewardLeaseRequest,
     request: Request,
     db: Session = Depends(get_db),
 ) -> StewardLeaseOut | Response:
-    """Steward sidecar 租赁一个受限 child run；无可租返回 204。
+    """Steward sidecar 租一个 attempt 及其 child run；无可租返回 204。
 
     独立于 ``/jobs/lease`` 而不是放开后者的 kind：两个端点服务两个不同的队列，
     独立路由让「哪个容器能租哪类作业」成为**路由级**约束而不是 payload 校验——
     否则任何持有 service token 的调用者（含被入侵的 assistant 容器）都能消费
     Steward 队列。
+
+    路径从 ``/steward/jobs/lease`` 改为 ``/steward/attempts/lease``：执行单元是
+    attempt，不是 job；名字必须与实际租的东西一致，否则调用方会以为自己在租一个
+    作业级单位。
     """
     _reject_user_jwt(db, request)
     _decode_or_deny(db, request, typ=agent_tokens.SERVICE_TOKEN_TYPE)
@@ -407,31 +411,36 @@ def lease_steward_job(
     # （STEWARD_PI_RUNTIME_ENABLED）是两个独立的发布决策，必须能各自回退。
     if not (config.STEWARD_ENABLED and config.STEWARD_PI_RUNTIME_ENABLED):
         raise_api_error(503, STEWARD_DISABLED, "Steward Pi runtime 未开启")
-    grant = steward_assist.lease_child_run(
-        db, leased_by=body.leased_by, ttl_seconds=body.lease_ttl_seconds
+    grant = steward_assist.lease_attempt(
+        db, space_id=body.space_id, worker_id=body.leased_by, ttl_seconds=body.lease_ttl_seconds
     )
     if grant is None:
         return Response(status_code=204)
+    run = steward_assist.open_child_run(
+        db, attempt_id=grant["attempt_id"], lease_owner=body.leased_by
+    )
+    if run is None:
+        return Response(status_code=204)
     run_token = agent_tokens.issue_run_token(
-        run_id=grant["run_id"],
+        run_id=run.id,
         job_id=grant["steward_job_id"],
-        attempt=grant["attempt"],
+        attempt=run.attempt,
         agent_kind="steward",
         space_id=grant["space_id"],
-        tool_allowlist=list(grant["tool_allowlist"]),
-        steward_batch_id=grant["assist_batch_id"],
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        steward_attempt_id=grant["attempt_id"],
         viewer_account_id=grant["viewer_account_id"],
     )
     return StewardLeaseOut(
-        run_id=grant["run_id"],
+        run_id=run.id,
         steward_job_id=grant["steward_job_id"],
-        assist_batch_id=grant["assist_batch_id"],
+        assist_attempt_id=grant["attempt_id"],
         assist_kind=grant["assist_kind"],
         agent_kind="steward",
-        attempt=grant["attempt"],
-        tool_allowlist=list(grant["tool_allowlist"]),
+        attempt=run.attempt,
+        tool_allowlist=list(run.tool_allowlist_json or []),
         policy_version=grant["policy_version"],
-        max_concurrent=config.STEWARD_ASSIST_MAX_CONCURRENT_BATCHES,
+        max_concurrent=config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE,
         run_token=run_token,
     )
 
@@ -456,8 +465,8 @@ def heartbeat_job(
         )
     if claims["agent_kind"] == "steward":
         # Steward child run 无 AgentJob（token 的 job_id 是 StewardJob.id）。
-        # 续租必须**同时**续 run 与 batch：batch lease 是 Steward 的主租约
-        # （写回栅栏看它），只续一个会让另一个先过期。
+        # 续租必须**同时**续 run 与 attempt：attempt lease 是写回栅栏看的租约，
+        # 只续一个会让另一个先过期。
         ttl = body.lease_ttl_seconds if body is not None else None
         steward_identity = StewardExecution.from_claims(claims)
         expires, cancel_requested = steward_assist.heartbeat_child_run(
@@ -973,6 +982,19 @@ def _steward_projection_blocks(db: Session, attempt: StewardModelCall) -> list[d
     ]
 
 
+def _lease_owner_for(db: Session, attempt_id: int) -> str:
+    """The attempt's current lease owner, used as the settlement capability.
+
+    Read from the row rather than trusted from the request: the sidecar proves
+    identity with its run token, and the row is the authority on who holds the
+    lease.
+    """
+    from app.models.steward import StewardModelCall
+
+    attempt = db.get(StewardModelCall, attempt_id)
+    return (attempt.lease_owner or "") if attempt is not None else ""
+
+
 def _settle_steward_run(
     db: Session, request: Request, run_id: int, body: SettleRequest, claims: dict[str, Any]
 ) -> SettleOut:
@@ -992,10 +1014,17 @@ def _settle_steward_run(
     outcome: dict[str, str | None] = {}
 
     def _hook(session: Session, settled_run: AgentRun) -> None:
-        outcome["status"] = steward_assist.settle_child_run(
+        # The attempt is named by the token, so settlement targets it directly
+        # rather than re-deriving it from the run.
+        attempt_id = claims.get("steward_attempt_id")
+        if attempt_id is None:
+            outcome["status"] = None
+            return
+        outcome["status"] = steward_assist.settle_attempt(
             session,
-            settled_run,
+            attempt_id=int(attempt_id),
             status=body.status,
+            lease_owner=_lease_owner_for(session, int(attempt_id)),
             error_code=body.error_code,
             text=body.output_text,
             usage=body.usage,

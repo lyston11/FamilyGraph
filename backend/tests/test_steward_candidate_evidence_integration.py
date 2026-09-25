@@ -21,7 +21,7 @@ from app import config
 from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardDeliveryIntent,
     StewardGeneration,
     StewardJob,
@@ -109,16 +109,16 @@ def _transport(session, world, calls, *, reverse=False):
 
 def _assist(session, world, calls, *, reverse=False):
     transport = _transport(session, world, calls, reverse=reverse)
-    batch = steward_assist.schedule_due_batch(session)
+    batch = steward_assist.schedule_due_attempt(session)
     assert batch is not None and batch.space_id == world.space.id
-    batch_id = batch.id
+    plan_id = batch.id
     previous_calls = len(calls)
     assert steward_assist.execute_batch(session, batch_id, transport=transport) == "applied"
     session.expire_all()
-    batch = session.get(StewardAssistBatch, batch_id)
+    batch = session.get(StewardAssistPlan, batch_id)
     call = session.scalar(
         select(StewardModelCall).where(
-            StewardModelCall.batch_id == batch_id, StewardModelCall.assist_kind == "candidate"
+            StewardModelCall.plan_id == batch_id, StewardModelCall.assist_kind == "candidate"
         )
     )
     assert call.status == "succeeded" and len(calls) == previous_calls + 1
@@ -202,7 +202,7 @@ def test_existing_private_and_shared_dismissals_survive_real_evidence_adoption(d
     batch, call = _assist(db_session, world, calls)
     version = versions(db_session)[0]
     assert version.status == "pending"
-    assert (version.source_job_id, version.source_batch_id, version.source_model_call_id) == (
+    assert (version.source_job_id, version.source_plan_id, version.source_model_call_id) == (
         batch.job_id,
         batch.id,
         call.id,
@@ -265,8 +265,7 @@ def test_real_jobs_version_only_related_support_and_never_create_public_work(db_
     assert len(versions(db_session)) == 2 and first.support_facts_json == first_snapshot
     before_calls = len(calls)
     assert (
-        steward_assist.execute_batch(
-            db_session, last_batch.id, transport=_transport(db_session, world, calls)
+        steward_assist.execute_plan_attempts(db_session, plan_id=last_batch.id, transport=_transport(db_session, world, calls)
         )
         == "applied"
     )
@@ -559,7 +558,7 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
 ):
     world = _world(db_session)
     _core(db_session, world)
-    batch = steward_assist.schedule_due_batch(db_session)
+    batch = steward_assist.schedule_due_attempt(db_session)
     assert batch is not None
     calls = []
     original = _transport(db_session, world, calls)
@@ -582,13 +581,13 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
                     independent, independent.get(SourceFact, fact_id), "revoke"
                 )
             else:
-                independent.get(StewardAssistBatch, batch_id).lease_until = utcnow() - timedelta(
+                independent.get(StewardAssistPlan, batch_id).lease_until = utcnow() - timedelta(
                     seconds=1
                 )
             independent.commit()
         return response
 
-    status = steward_assist.execute_batch(db_session, batch.id, transport=transport)
+    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
     assert status == ("applying" if change == "lease" else "superseded")
     assert len(calls) == 1
     assert versions(db_session) == []
@@ -599,7 +598,7 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
 def _prepared_writeback(session, monkeypatch):
     world = _world(session)
     _core(session, world)
-    batch = steward_assist.schedule_due_batch(session)
+    batch = steward_assist.schedule_due_attempt(session)
     assert batch is not None
     calls = []
     with monkeypatch.context() as patch:
@@ -611,7 +610,7 @@ def _prepared_writeback(session, monkeypatch):
             == "applying"
         )
     session.expire_all()
-    call = session.scalar(select(StewardModelCall).where(StewardModelCall.batch_id == batch.id))
+    call = session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == batch.id))
     assert call.status == "succeeded" and call.output_json["items"]
     assert len(calls) == 1 and versions(session) == []
     return world, batch
@@ -627,7 +626,7 @@ def test_two_actual_writeback_workers_apply_one_version_without_resending(db_ses
     def worker():
         barrier.wait(timeout=5)
         with Session(bind) as independent:
-            return steward_assist._apply_batch(
+            return steward_assist.settle_attempt(
                 independent, batch_id, now=utcnow(), lease_owner=owner, lease_attempt=attempt
             )
 
@@ -636,7 +635,7 @@ def test_two_actual_writeback_workers_apply_one_version_without_resending(db_ses
         assert [future.result(timeout=10) for future in pending] == ["applied", "applied"]
     db_session.expire_all()
     assert len(versions(db_session)) == 1
-    assert versions(db_session)[0].source_batch_id == batch_id
+    assert versions(db_session)[0].source_plan_id == batch_id
     _core(db_session, world)
     assert versions(db_session)[0].status == "projected"
 
@@ -664,7 +663,7 @@ def test_lease_expiring_while_actual_writeback_waits_for_sqlite_writer_is_not_ad
 
     def worker():
         with Session(bind) as independent:
-            return steward_assist._apply_batch(
+            return steward_assist.settle_attempt(
                 independent, batch_id, now=sampled, lease_owner=owner, lease_attempt=attempt
             )
 

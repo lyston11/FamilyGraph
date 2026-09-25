@@ -28,7 +28,7 @@ from app.errors import (
 from app.models.account import Account
 from app.models.agent import AgentRun, AgentSession
 from app.models.space import SpaceMember
-from app.models.steward import StewardAssistBatch, StewardJob, StewardRun
+from app.models.steward import StewardAssistPlan, StewardJob, StewardModelCall
 from app.services.agent_execution import (
     ExecutionIdentity,
     StewardExecution,
@@ -78,14 +78,19 @@ def _assert_scope_mismatch(db, identity):
     assert _error(exc)["code"] == AGENT_TOKEN_SCOPE_MISMATCH
 
 
-def _steward_world(db: Session, *, with_batch: bool = True, assist_kind: str = "terminology"):
-    """Build the minimal valid steward execution world and return its ids."""
+def _steward_world(db: Session, *, with_attempt: bool = True, assist_kind: str = "terminology"):
+    """Build the minimal valid steward execution world and return its ids.
+
+    The execution unit is the attempt, so the world is: job (the authorization
+    root) → plan (the immutable snapshot) → attempt (the thing being fenced) →
+    child run (its carrier). ``with_attempt=False`` omits the attempt, which is
+    the "run exists but nothing backs it" shape the fence must reject.
+    """
     user, space = create_agent_fixture(db, name="fence-steward")
     now = utcnow()
 
-    # succeeded, not running: assist batches are registered only after the
-    # deterministic core completes, so that is the state a child run is admitted
-    # against.
+    # succeeded, not running: an attempt is only reserved after the deterministic
+    # core completes, so that is the state a child run is admitted against.
     job = StewardJob(
         space_id=space.id,
         cause="integrity_scan",
@@ -103,23 +108,17 @@ def _steward_world(db: Session, *, with_batch: bool = True, assist_kind: str = "
     db.add(job)
     db.flush()
 
-    batch = None
-    if with_batch:
-        batch = StewardAssistBatch(
-            space_id=space.id,
-            job_id=job.id,
-            evidence_hash="e" * 64,
-            policy_version="p1",
-            status="leased",
-            attempt=1,
-            lease_owner="test-worker",
-            lease_until=now + timedelta(seconds=300),
-            fence_json={},
-            created_at=now,
-            updated_at=now,
+    plan = StewardAssistPlan(
+        space_id=space.id,
+        job_id=job.id,
+        evidence_hash="e" * 64,
+        policy_version="p1",
+        fence_json={},
+        created_at=now,
+            deadline_at=utcnow(),
         )
-        db.add(batch)
-        db.flush()
+    db.add(plan)
+    db.flush()
 
     # A steward run: no session, no queue job (DB-enforced by scope binding).
     run = AgentRun(
@@ -141,28 +140,43 @@ def _steward_world(db: Session, *, with_batch: bool = True, assist_kind: str = "
     db.add(run)
     db.flush()
 
-    steward_run = StewardRun(
-        run_id=run.id,
-        steward_job_id=job.id,
-        assist_batch_id=batch.id if batch is not None else None,
-        assist_kind=assist_kind,
-        # terminology binds a viewer (DB CHECK enforces the biconditional).
-        viewer_account_id=user.account.id if assist_kind == "terminology" else None,
-        fence_json={},
-        created_at=now,
-    )
-    db.add(steward_run)
+    attempt = None
+    if with_attempt:
+        attempt = StewardModelCall(
+            space_id=space.id,
+            job_id=job.id,
+            policy_version="p1",
+            assist_kind=assist_kind,
+            prompt_digest="d" * 64,
+            prompt_chars=100,
+            status="in_flight",
+            seq=1,
+            created_at=now,
+            plan_id=plan.id,
+            subject_key="facts",
+            input_hash="h" * 64,
+            attempt_no=1,
+            carrier="pi",
+            # The lease lives on the attempt now; the fence requires it to be live
+            # and the row to be in_flight.
+            lease_owner="test-worker",
+            lease_until=now + timedelta(seconds=300),
+            run_id=run.id,
+            # terminology binds a viewer (the same biconditional the plan's
+            # snapshot used to enforce).
+            viewer_account_id=user.account.id if assist_kind == "terminology" else None,
+        )
+        db.add(attempt)
     db.commit()
-    return user, space, job, batch, run, steward_run
+    return user, space, job, plan, run, attempt
 
 
-def _identity(run, job, batch, *, space_id, assist_kind="terminology", viewer_account_id=None):
+def _identity(run, job, attempt, *, space_id, assist_kind="terminology", viewer_account_id=None):
     return StewardExecution(
         run_id=run.id,
         steward_job_id=job.id,
         expected_attempt=1,
         space_id=space_id,
-        steward_batch_id=batch.id if batch is not None else None,
         viewer_account_id=viewer_account_id,
         agent_kind="steward",
         tool_allowlist=(),
@@ -175,30 +189,37 @@ def _identity(run, job, batch, *, space_id, assist_kind="terminology", viewer_ac
 
 
 def test_steward_fence_admits_a_fully_bound_run(db_session):
-    user, space, job, batch, run, steward_run = _steward_world(db_session)
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
 
-    admitted_run, admitted_steward, admitted_job = fence_steward_execution(db_session, identity)
+    admitted_run, admitted_attempt, admitted_job = fence_steward_execution(db_session, identity)
 
     assert admitted_run.id == run.id
-    assert admitted_steward.steward_job_id == job.id
+    assert admitted_attempt.job_id == job.id
     assert admitted_job.id == job.id
 
 
-def test_steward_fence_works_without_a_batch(db_session):
-    """The batch is optional (it may be superseded); the job is the scope source."""
-    _, space, job, _batch, run, _ = _steward_world(
-        db_session, with_batch=False, assist_kind="candidate"
+def test_steward_fence_rejects_a_run_without_an_attempt(db_session):
+    """A run with no attempt behind it has no scope to check, so it is refused.
+
+    This is the inverse of the old "batch is optional" case: the attempt is what
+    carries the job, kind and viewer, so without it there is nothing to authorize
+    against and admitting the run would authorize on an unstated basis.
+    """
+    _, space, job, _plan, run, _attempt = _steward_world(
+        db_session, with_attempt=False, assist_kind="candidate"
     )
     identity = _identity(run, job, None, space_id=space.id, viewer_account_id=None)
 
-    admitted_run, _, _ = fence_steward_execution(db_session, identity)
-    assert admitted_run.id == run.id
+    with pytest.raises(Exception) as exc:
+        fence_steward_execution(db_session, identity)
+    assert exc.value.status_code == 403
+    assert _error(exc)["code"] == AGENT_TOKEN_SCOPE_MISMATCH
 
 
 def test_steward_fence_accepts_a_non_terminology_kind_without_viewer(db_session):
-    _, space, job, batch, run, _ = _steward_world(db_session, assist_kind="candidate")
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=None)
+    _, space, job, plan, run, attempt = _steward_world(db_session, assist_kind="candidate")
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=None)
 
     assert fence_steward_execution(db_session, identity)[0].id == run.id
 
@@ -216,9 +237,9 @@ def test_steward_fence_rejects_wrong_space(db_session):
     viewer-membership query fails on the wrong space too; and the forged space
     must **exist**, otherwise the space-existence check fires instead.
     """
-    _, space, job, batch, run, _ = _steward_world(db_session, assist_kind="candidate")
+    _, space, job, plan, run, attempt = _steward_world(db_session, assist_kind="candidate")
     _, other_space = create_agent_fixture(db_session, name="fence-other-space")
-    identity = _identity(run, job, batch, space_id=other_space.id, viewer_account_id=None)
+    identity = _identity(run, job, attempt, space_id=other_space.id, viewer_account_id=None)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 403
@@ -227,12 +248,12 @@ def test_steward_fence_rejects_wrong_space(db_session):
 
 def test_steward_fence_rejects_revoked_viewer(db_session):
     """Layer 3: a bound viewer must still be an active member."""
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     member = db_session.query(SpaceMember).filter_by(space_id=space.id, user_id=user.id).one()
     member.status = "removed"
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 403
@@ -242,26 +263,26 @@ def test_steward_fence_rejects_revoked_viewer(db_session):
 def test_steward_fence_rejects_parent_job_not_settled(db_session):
     """Layer 1: the parent job is the authorization root and must have completed.
 
-    A batch is only registered after the deterministic core succeeds, so the
+    An attempt is only reserved after the deterministic core succeeds, so the
     executable parent state is ``succeeded`` — not ``leased``/``running``. A job
     still in flight (or failed) must not authorize a child run.
     """
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     job.status = "running"
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 409
 
 
 def test_steward_fence_rejects_attempt_mismatch(db_session):
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     run.attempt = 2
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 403
@@ -269,11 +290,11 @@ def test_steward_fence_rejects_attempt_mismatch(db_session):
 
 
 def test_steward_fence_rejects_allowlist_drift(db_session):
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     run.tool_allowlist_json = ["familygraph.echo"]
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 403
@@ -288,7 +309,7 @@ def test_steward_fence_rejects_viewer_mismatch(db_session):
     Otherwise this case would pass with that check deleted (verified by
     mutation), and would be proving the wrong thing.
     """
-    _, space, job, batch, run, steward_run = _steward_world(db_session)
+    _, space, job, plan, run, attempt = _steward_world(db_session)
     other_user, _ = create_agent_fixture(db_session, name="fence-other-viewer")
     now = utcnow()
     db_session.add(
@@ -303,10 +324,10 @@ def test_steward_fence_rejects_viewer_mismatch(db_session):
         )
     )
     db_session.commit()
-    assert steward_run.viewer_account_id != other_user.account.id
+    assert attempt.viewer_account_id != other_user.account.id
 
     identity = _identity(
-        run, job, batch, space_id=space.id, viewer_account_id=other_user.account.id
+        run, job, attempt, space_id=space.id, viewer_account_id=other_user.account.id
     )
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
@@ -316,13 +337,12 @@ def test_steward_fence_rejects_viewer_mismatch(db_session):
 
 def test_steward_fence_rejects_forged_job_id(db_session):
     """A token naming a StewardJob that does not exist must not be admitted."""
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     forged = StewardExecution(
         run_id=run.id,
         steward_job_id=job.id + 9999,
         expected_attempt=1,
         space_id=space.id,
-        steward_batch_id=batch.id,
         viewer_account_id=user.account.id,
         agent_kind="steward",
         tool_allowlist=(),
@@ -333,14 +353,33 @@ def test_steward_fence_rejects_forged_job_id(db_session):
     assert _error(exc)["code"] == AGENT_TOKEN_SCOPE_MISMATCH
 
 
-def test_steward_fence_rejects_batch_mismatch(db_session):
-    user, space, job, batch, run, _ = _steward_world(db_session)
+def test_steward_fence_rejects_an_attempt_bound_to_another_job(db_session):
+    """The attempt found by run_id must belong to the job the token names.
+
+    A second, valid job in the same space keeps every other check satisfiable, so
+    only the attempt-vs-token job comparison can reject this.
+    """
+    user, space, job, plan, run, attempt = _steward_world(db_session)
+    other_job = StewardJob(
+        space_id=space.id,
+        cause="integrity_scan",
+        trigger_cursor=2,
+        status="succeeded",
+        attempt=1,
+        max_attempts=3,
+        checkpoint_json={},
+        policy_version="p1",
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    db_session.add(other_job)
+    db_session.commit()
+
     identity = StewardExecution(
         run_id=run.id,
-        steward_job_id=job.id,
+        steward_job_id=other_job.id,
         expected_attempt=1,
         space_id=space.id,
-        steward_batch_id=batch.id + 999,
         viewer_account_id=user.account.id,
         agent_kind="steward",
         tool_allowlist=(),
@@ -352,11 +391,11 @@ def test_steward_fence_rejects_batch_mismatch(db_session):
 
 
 def test_steward_fence_rejects_cancelled_run(db_session):
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     run.cancel_requested = True
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 409
@@ -366,11 +405,11 @@ def test_steward_fence_rejects_cancelled_run(db_session):
 
 def test_steward_fence_rejects_run_not_in_an_allowed_status(db_session):
     """The child run itself must be in an executable status."""
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     run.status = "queued"
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 409
@@ -378,11 +417,11 @@ def test_steward_fence_rejects_run_not_in_an_allowed_status(db_session):
 
 
 def test_steward_fence_rejects_expired_run_lease(db_session):
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     run.lease_expires_at = utcnow() - timedelta(seconds=1)
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 409
@@ -391,22 +430,23 @@ def test_steward_fence_rejects_expired_run_lease(db_session):
 
 def test_steward_fence_rejects_expired_batch_lease(db_session):
     """The batch lease is a second, independent expiry gate."""
-    user, space, job, batch, run, _ = _steward_world(db_session)
-    batch.lease_until = utcnow() - timedelta(seconds=1)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
+    attempt.lease_until = utcnow() - timedelta(seconds=1)
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 409
 
 
-def test_steward_fence_rejects_superseded_batch(db_session):
-    user, space, job, batch, run, _ = _steward_world(db_session)
-    batch.status = "superseded"
+def test_steward_fence_rejects_an_unknown_attempt(db_session):
+    """An unknown attempt is terminal (conservatively billed, never replayed)."""
+    user, space, job, plan, run, attempt = _steward_world(db_session)
+    attempt.status = "unknown"
     db_session.commit()
 
-    identity = _identity(run, job, batch, space_id=space.id, viewer_account_id=user.account.id)
+    identity = _identity(run, job, attempt, space_id=space.id, viewer_account_id=user.account.id)
     with pytest.raises(Exception) as exc:
         fence_steward_execution(db_session, identity)
     assert exc.value.status_code == 409
@@ -514,7 +554,6 @@ def test_steward_identity_cannot_admit_an_assistant_run(db_session):
         steward_job_id=1,
         expected_attempt=1,
         space_id=space.id,
-        steward_batch_id=None,
         viewer_account_id=None,
         agent_kind="steward",
         tool_allowlist=(),
@@ -527,12 +566,12 @@ def test_steward_identity_cannot_admit_an_assistant_run(db_session):
 
 def test_dispatcher_routes_by_type_not_by_field(db_session):
     """fence_execution must dispatch on the dataclass type."""
-    user, space, job, batch, run, _ = _steward_world(db_session)
+    user, space, job, plan, run, attempt = _steward_world(db_session)
     steward_identity = _identity(
-        run, job, batch, space_id=space.id, viewer_account_id=user.account.id
+        run, job, attempt, space_id=space.id, viewer_account_id=user.account.id
     )
     admitted = fence_execution(db_session, steward_identity)
-    assert isinstance(admitted[1], StewardRun)
+    assert isinstance(admitted[1], StewardModelCall)
 
     # An unknown object must be refused, not defaulted to assistant.
     with pytest.raises(Exception) as exc:
@@ -752,7 +791,7 @@ def test_assistant_fence_still_enforces_membership(db_session):
 
 def test_steward_scope_binding_is_enforced_by_the_database(db_session):
     """The DB, not just the service, forbids a session on a steward run."""
-    _, space, job, batch, _, _ = _steward_world(db_session)
+    _, space, job, plan, _, _ = _steward_world(db_session)
     user, _ = create_agent_fixture(db_session, name="fence-session-forger")
     session_row = AgentSession(
         account_id=user.account.id,

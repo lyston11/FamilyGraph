@@ -18,7 +18,7 @@ from app.errors import (
 )
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.platform_features import PlatformFeatureConfig
-from app.models.steward import StewardJob, StewardRun
+from app.models.steward import StewardModelCall
 from app.models.user import User
 from app.services import memory_sources, platform_features
 from app.services.agent_execution import (
@@ -188,20 +188,21 @@ class ContextBuilder:
         if agent_kind == "steward" and run_id is not None:
             # 正向校验（09-25 S1）：Steward consumer 仍然**不得**伪装 generic
             # AgentRun；但 steward child run 也是 agent_runs 行，所以判据是
-            # 「run_id 必须解析到 steward_runs，且该行属于同一空间」，而不是
+            # 「run_id 必须解析到一个 steward attempt，且其空间一致」，而不是
             # 「不得有 run_id」。删掉这个守卫会让 steward 拿 assistant 的 run
             # 做投影；只检查 kind 会放过跨空间引用。
             if db is None:
                 raise_api_error(422, POLICY_CONTEXT_INVALID, "Steward consumer 需要数据库会话")
-            steward_run = db.scalar(select(StewardRun).where(StewardRun.run_id == run_id))
-            if steward_run is None:
+            # The attempt IS the scope, so space_id is a direct column comparison
+            # rather than a hop through a second table.
+            steward_attempt = db.scalar(
+                select(StewardModelCall).where(StewardModelCall.run_id == run_id)
+            )
+            if steward_attempt is None:
                 raise_api_error(
                     422, POLICY_CONTEXT_INVALID, "Steward consumer 不得伪造 generic AgentRun"
                 )
-            owner_space = db.scalar(
-                select(StewardJob.space_id).where(StewardJob.id == steward_run.steward_job_id)
-            )
-            if owner_space != space_id:
+            if steward_attempt.space_id != space_id:
                 raise_api_error(422, POLICY_CONTEXT_INVALID, "Steward run 与投影空间不一致")
         if db is not None and run_id is not None:
             if execution is not None:

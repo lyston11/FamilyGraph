@@ -23,7 +23,7 @@ from app import config
 from app.models.account import Account
 from app.models.notification import Notification
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardModelCall,
     StewardTermProjection,
     StewardTermSuppression,
@@ -274,13 +274,13 @@ def test_model_term_applied_via_real_job_chain(db_session, monkeypatch) -> None:
     account_id = _account_id(db_session, gc)
 
     batch_row = db_session.scalar(
-        select(StewardAssistBatch).where(StewardAssistBatch.space_id == space.id)
+        select(StewardAssistPlan).where(StewardAssistPlan.space_id == space.id)
     )
     assert batch_row is not None
     kinds = (batch_row.fence_json or {}).get("kinds", [])
     assert kinds == ["terminology"]
 
-    status = steward_assist.run_due_batch(
+    status = steward_assist.run_due_attempt(
         db_session,
         transport=_completions_fake(
             _terminology_payload(
@@ -307,7 +307,7 @@ def test_model_term_applied_via_real_job_chain(db_session, monkeypatch) -> None:
 
     attempt = db_session.scalar(
         select(StewardModelCall).where(
-            StewardModelCall.batch_id == batch_row.id,
+            StewardModelCall.plan_id == batch_row.id,
             StewardModelCall.assist_kind == "terminology",
         )
     )
@@ -354,7 +354,7 @@ def test_invalid_model_terms_rejected_and_marked_checked(db_session) -> None:
             "reason_code": "synonym",
         }
     )
-    status = steward_assist.run_due_batch(db_session, transport=_completions_fake(bad))
+    status = steward_assist.run_due_attempt(db_session, transport=_completions_fake(bad))
     assert status == "applied"  # 批次终态，但产物零应用
 
     projection = db_session.scalar(

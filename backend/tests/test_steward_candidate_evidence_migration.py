@@ -212,7 +212,7 @@ def test_in_place_upgrade_preserves_legacy_identity_and_all_confirmation_dismiss
             "candidate_id": "CASCADE",
             "space_id": "CASCADE",
             "source_job_id": "SET NULL",
-            "source_batch_id": "SET NULL",
+            "source_plan_id": "SET NULL",
             "source_model_call_id": "SET NULL",
             "projection_job_id": "SET NULL",
         }

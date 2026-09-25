@@ -517,7 +517,7 @@ def test_browser_api_hides_steward_child_runs(client, db_session, monkeypatch):
         StewardRun(
             run_id=run.id,
             steward_job_id=job.id,
-            assist_batch_id=None,
+            assist_plan_id=None,
             assist_kind="candidate",
             viewer_account_id=None,
             fence_json={},
@@ -596,7 +596,7 @@ def test_latency_endpoint_defaults_to_assistant(db_session):
         StewardRun(
             run_id=steward_run.id,
             steward_job_id=job.id,
-            assist_batch_id=None,
+            assist_plan_id=None,
             assist_kind="candidate",
             viewer_account_id=None,
             fence_json={},

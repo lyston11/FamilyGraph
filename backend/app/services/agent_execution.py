@@ -39,7 +39,7 @@ from app.errors import (
 from app.models.account import Account
 from app.models.agent import AgentJob, AgentRun, AgentSession
 from app.models.space import SpaceMember
-from app.models.steward import StewardAssistBatch, StewardJob, StewardRun
+from app.models.steward import StewardJob, StewardModelCall
 from app.utils.timeutil import utcnow
 
 
@@ -76,7 +76,6 @@ class StewardExecution:
     steward_job_id: int
     expected_attempt: int
     space_id: int
-    steward_batch_id: int | None
     viewer_account_id: int | None
     agent_kind: str
     tool_allowlist: tuple[str, ...]
@@ -88,7 +87,6 @@ class StewardExecution:
             steward_job_id=claims["job_id"],
             expected_attempt=claims["attempt"],
             space_id=claims["space_id"],
-            steward_batch_id=claims.get("steward_batch_id"),
             viewer_account_id=claims.get("viewer_account_id"),
             agent_kind=claims["agent_kind"],
             tool_allowlist=tuple(sorted(claims["tool_allowlist"])),
@@ -201,16 +199,16 @@ def fence_steward_execution(
     *,
     allowed_statuses: tuple[str, ...] = ("leased", "running"),
     allow_cancel_requested: bool = False,
-) -> tuple[AgentRun, StewardRun, StewardJob]:
+) -> tuple[AgentRun, StewardModelCall, StewardJob]:
     """Admit a Steward child run.
 
     Authorization root is the **parent StewardJob**, not an account: the run is
     space-scoped and has no single account. The layered judgment (accepted
     2026-09-25, see design §5.2.1) is:
 
-    1. the parent job is the job this batch was registered against and it
-       completed (``succeeded``) — this is the grant, and registration in turn
-       required the space to have Steward enabled with an active member;
+    1. the parent job is the job this attempt was reserved for and it completed
+       (``succeeded``) — this is the grant, and reservation in turn required the
+       space to have Steward enabled with an active member;
     2. the space still exists;
     3. when ``viewer_account_id`` is set (terminology only), that account's user
        must still be an active member — the same judgment as assistant.
@@ -223,10 +221,13 @@ def fence_steward_execution(
     """
     acquire_run_writer(db, identity.run_id)
     run = db.get(AgentRun, identity.run_id, populate_existing=True)
-    steward_run = (
+    # The attempt IS the scope: job, kind and viewer are its own columns, and its
+    # run_id is UNIQUE, so this single indexed read replaces the old steward_runs
+    # lookup without losing any invariant.
+    attempt = (
         db.scalar(
-            select(StewardRun)
-            .where(StewardRun.run_id == identity.run_id)
+            select(StewardModelCall)
+            .where(StewardModelCall.run_id == identity.run_id)
             .execution_options(populate_existing=True)
         )
         if run is not None
@@ -235,29 +236,30 @@ def fence_steward_execution(
     job = db.get(StewardJob, identity.steward_job_id, populate_existing=True)
 
     # Structural linkage. A steward run must be space-scoped: no session and no
-    # queue job (its job_id column stays NULL; the parent is named by
-    # steward_runs.steward_job_id).
+    # queue job (``agent_runs.job_id`` stays NULL; the parent is the attempt's
+    # ``job_id``).
+    #
+    # ``attempt.job_id != job.id`` covers the token's ``steward_job_id`` too:
+    # ``job`` was fetched *by* that claim, so comparing the attempt against both
+    # would be the same comparison written twice (verified by mutation — removing
+    # either one alone leaves the other rejecting the forged-job case).
     if (
         run is None
-        or steward_run is None
+        or attempt is None
         or job is None
         or run.session_id is not None
         or run.job_id is not None
         or run.kind != identity.agent_kind
-        or steward_run.steward_job_id != identity.steward_job_id
-        or steward_run.steward_job_id != job.id
+        or attempt.job_id != job.id
         or run.attempt != identity.expected_attempt
         or tuple(sorted(run.tool_allowlist_json or [])) != identity.tool_allowlist
         or job.space_id != identity.space_id
-        # The run's space is the job's space: it is not a column on steward_runs.
-        or steward_run.viewer_account_id != identity.viewer_account_id
-    ):
-        raise_api_error(403, AGENT_TOKEN_SCOPE_MISMATCH, "执行身份或成员资格已变化")
-
-    # Batch binding: when the identity names a batch it must be this run's batch.
-    if (
-        identity.steward_batch_id is not None
-        and steward_run.assist_batch_id != identity.steward_batch_id
+        # The attempt denormalises the space (it is created from the plan, which
+        # belongs to the job), so this is defence in depth against that invariant
+        # breaking rather than an independent gate — a forged space_id trips the
+        # job comparison above first (verified by mutation).
+        or attempt.space_id != identity.space_id
+        or attempt.viewer_account_id != identity.viewer_account_id
     ):
         raise_api_error(403, AGENT_TOKEN_SCOPE_MISMATCH, "执行身份或成员资格已变化")
 
@@ -278,6 +280,12 @@ def fence_steward_execution(
             raise_api_error(403, AGENT_TOKEN_SCOPE_MISMATCH, "执行身份或成员资格已变化")
 
     # Layer 2: the space still exists.
+    #
+    # Not independently isolatable through a forged token: forging ``space_id``
+    # trips the equality comparisons above first, and deleting the space cascades
+    # the attempt away (so there is no attempt left to fence). It is kept because
+    # it covers the window between "attempt reserved" and "space deleted" for a
+    # *valid* token, which no forged-token case can reach.
     from app.models.space import FamilySpace
 
     if db.get(FamilySpace, identity.space_id) is None:
@@ -301,16 +309,15 @@ def fence_steward_execution(
     if not allow_cancel_requested:
         _reject_cancel_requested(run, job_cancel=False)
 
-    # Lease: the run lease and, when bound, the batch lease must both be live.
-    expiries: list[Any] = []
-    if steward_run.assist_batch_id is not None:
-        batch = db.get(StewardAssistBatch, steward_run.assist_batch_id, populate_existing=True)
-        if batch is None or batch.status not in ("leased", "applying"):
-            raise_api_error(409, AGENT_RUN_NOT_RUNNING, "辅助批次不在可执行状态")
-        expiries.append(batch.lease_until)
+    # Lease: the run lease and the attempt lease must both be live. They are
+    # renewed together by heartbeat_child_run, so a mismatch here means one side
+    # was lost and the attempt must not continue.
+    expiries: list[Any] = [attempt.lease_until]
+    if attempt.status != "in_flight":
+        raise_api_error(409, AGENT_RUN_NOT_RUNNING, "辅助 attempt 不在执行状态")
     if _lease_expired(run, *expiries):
         raise_api_error(409, AGENT_LEASE_EXPIRED, "执行租约已过期")
-    return run, steward_run, job
+    return run, attempt, job
 
 
 def fence_execution(
@@ -319,7 +326,7 @@ def fence_execution(
     *,
     allowed_statuses: tuple[str, ...] = ("leased", "running"),
     allow_cancel_requested: bool = False,
-) -> tuple[AgentRun, AgentSession | StewardRun, AgentJob | StewardJob]:
+) -> tuple[AgentRun, AgentSession | StewardModelCall, AgentJob | StewardJob]:
     """Dispatch to the fence matching the identity's type.
 
     Dispatch is on the *type*, never on a string field: a caller holding an

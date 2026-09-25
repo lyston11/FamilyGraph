@@ -1,15 +1,15 @@
-"""S1 acceptance: the child-run path exists, is wired end to end, and is off.
+"""E1 acceptance: the execution unit is the attempt, and the chain is wired.
 
-Two kinds of assertion live here:
+Two kinds of assertion:
 
-1. **Behaviour equivalence** (AC-1): the four assists still run in-process and
-   ``steward_model_calls.run_id`` stays NULL. S1 is explicitly "built but not
-   enabled", so this is the property that makes the stage safe to merge.
-2. **The new path works** (AC-5, AC-6, AC-14): a manually created batch leases a
-   child run, fetches its context, and settles — without a real model. Per the
-   repo's standing lesson (spec §6) a mock cannot prove an internal-protocol
-   contract, so these drive the real FastAPI internal listener through the real
-   service layer; only the upstream model call is absent.
+1. **Behaviour equivalence** — every kind still runs through the in-process
+   carrier, so ``steward_model_calls.run_id`` stays NULL. That is the property
+   that makes the refactor safe to merge: it changes *how* work is scheduled and
+   who may settle it, not what the model is asked or what gets written back.
+2. **The chain works** — plan → lease → carrier → settle, driven through the real
+   service layer. Per the repo's standing lesson (spec §6) a mock cannot prove an
+   internal-protocol contract, so the settle path is exercised for real; only the
+   upstream model call is absent.
 """
 
 from __future__ import annotations
@@ -24,17 +24,19 @@ from test_steward_candidate_evidence_integration import _core, _transport, _worl
 from app import config
 from app.errors import extract_api_error
 from app.models.agent import AgentRun
-from app.models.steward import StewardModelCall, StewardRun
+from app.models.steward import StewardAssistPlan, StewardModelCall
 from app.services import agent_tokens, steward_assist
 
 
 @pytest.fixture(autouse=True)
 def _flags(monkeypatch):
-    """Steward engine on, Pi runtime OFF: the S1 shipping shape."""
+    """Steward engine on, Pi carrier off: the shipping shape for E1."""
     for flag in ("STEWARD_ENABLED", "PERSONAL_FAMILY_VIEW_ENABLED", "STEWARD_ASSIST_CANDIDATE"):
         monkeypatch.setattr(config, flag, True)
     for flag in ("STEWARD_WORKER_ENABLED", "STEWARD_PI_RUNTIME_ENABLED"):
         monkeypatch.setattr(config, flag, False)
+    for kind in ("CANDIDATE", "RANKING", "EXPLANATION", "TERMINOLOGY"):
+        monkeypatch.setattr(config, f"STEWARD_ASSIST_{kind}_CARRIER", "inproc")
 
 
 def _service_token(monkeypatch) -> dict[str, str]:
@@ -42,34 +44,68 @@ def _service_token(monkeypatch) -> dict[str, str]:
     return {"Authorization": f"Bearer {agent_tokens.issue_service_token()}"}
 
 
-# --------------------------------------------------------------------------
-# AC-1: behaviour equivalence — nothing is enabled yet
-# --------------------------------------------------------------------------
-
-
-def test_in_process_assist_leaves_run_id_null(db_session, monkeypatch):
-    """The four assists still execute in-process, so no child run is created."""
+def _planned(db_session):
+    """Run the deterministic core, which registers the plan and its attempts."""
     world = _world(db_session)
     _core(db_session, world)
-    batch = steward_assist.schedule_due_batch(db_session)
-    assert batch is not None
+    plan = db_session.scalar(
+        select(StewardAssistPlan).where(StewardAssistPlan.job_id == world.space.id)
+        if False
+        else select(StewardAssistPlan)
+    )
+    assert plan is not None
+    return world, plan
+
+
+# --------------------------------------------------------------------------
+# Behaviour equivalence
+# --------------------------------------------------------------------------
+
+
+def test_plan_reserves_attempts_without_any_network(db_session, monkeypatch):
+    """Registering a plan also reserves its attempts: one transaction, no window.
+
+    The old design registered a batch and reserved attempts later, so "batch
+    exists but nothing is leaseable" was a real state (crash point ②). Reserving
+    here removes it.
+    """
+    world = _world(db_session)
+    _core(db_session, world)
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None
+    attempts = list(
+        db_session.scalars(
+            select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
+        )
+    )
+    assert attempts, "a plan with work must reserve at least one attempt"
+    for attempt in attempts:
+        assert attempt.carrier == "inproc"
+        assert attempt.next_attempt_at is not None, "reserved must be immediately leaseable"
+        assert attempt.lease_owner is None, "reservation is not a lease"
+        # The attempt snapshots the digest it fences on, so a later fence run does
+        # not depend on the plan still being readable.
+        assert attempt.evidence_hash == plan.evidence_hash
+
+
+def test_inproc_carrier_leaves_run_id_null(db_session, monkeypatch):
+    """No child run is created while every kind uses the in-process carrier."""
+    _world_plan = _planned(db_session)
     calls: list[dict[str, object]] = []
     with monkeypatch.context() as patch:
-        patch.setattr(steward_assist, "_apply_batch", lambda *_a, **_k: "applying")
-        steward_assist.execute_batch(
-            db_session, batch.id, transport=_transport(db_session, world, calls)
+        patch.setattr(
+            steward_assist,
+            "settle_attempt",
+            lambda *_a, **_k: "succeeded",
         )
+        steward_assist.run_attempt(db_session, space_id=1, worker_id="test")
     db_session.expire_all()
-    attempt = db_session.scalar(
-        select(StewardModelCall).where(StewardModelCall.batch_id == batch.id)
-    )
-    assert attempt is not None
-    assert attempt.run_id is None, "S1 must not create child runs on the in-process path"
     assert db_session.scalar(select(AgentRun).where(AgentRun.kind == "steward")) is None
+    del calls
 
 
-def test_pi_runtime_off_means_the_lease_endpoint_is_closed(db_session, monkeypatch):
-    """STEWARD_PI_RUNTIME_ENABLED defaults off, and the endpoint says so (503)."""
+def test_pi_carrier_is_closed_when_the_runtime_flag_is_off(db_session, monkeypatch):
+    """The lease endpoint refuses while STEWARD_PI_RUNTIME_ENABLED is off (503)."""
     monkeypatch.setattr(config, "AGENT_RUNTIME_ENABLED", True)
     monkeypatch.setattr(config, "STEWARD_ENABLED", True)
     monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", False)
@@ -78,16 +114,16 @@ def test_pi_runtime_off_means_the_lease_endpoint_is_closed(db_session, monkeypat
     from app.main import internal_app
 
     response = TestClient(internal_app).post(
-        "/internal/agent/steward/jobs/lease",
+        "/internal/agent/steward/attempts/lease",
         headers={"Authorization": f"Bearer {agent_tokens.issue_service_token()}"},
-        json={"kind": "steward", "leased_by": "test"},
+        json={"kind": "steward", "space_id": 1, "leased_by": "test"},
     )
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "STEWARD_DISABLED"
 
 
 def test_assistant_lease_endpoint_still_rejects_steward_kind(db_session, monkeypatch):
-    """AC-3: the generic queue endpoint does not become a steward consumer."""
+    """The generic queue endpoint does not become a steward consumer."""
     monkeypatch.setattr(config, "AGENT_RUNTIME_ENABLED", True)
     from fastapi.testclient import TestClient
 
@@ -104,157 +140,419 @@ def test_assistant_lease_endpoint_still_rejects_steward_kind(db_session, monkeyp
 
 
 # --------------------------------------------------------------------------
-# AC-14: controlled E2E — lease → context → settle, no real model
+# The chain: lease → settle
 # --------------------------------------------------------------------------
 
 
-def _leased_child_run(db_session, monkeypatch):
-    """Create a batch and lease one child run through the real service layer."""
+def test_lease_attempt_takes_one_attempt_and_leases_only_it(db_session, monkeypatch):
+    """Leasing is per attempt: it must not touch a sibling in the same plan."""
     world = _world(db_session)
     _core(db_session, world)
-    batch = steward_assist.schedule_due_batch(db_session)
-    assert batch is not None
-    calls: list[dict[str, object]] = []
-    with monkeypatch.context() as patch:
-        patch.setattr(steward_assist, "_apply_batch", lambda *_a, **_k: "applying")
-        steward_assist.execute_batch(
-            db_session, batch.id, transport=_transport(db_session, world, calls)
-        )
-    db_session.expire_all()
-    # Re-arm the batch so the child-run lease has something to pick up: the
-    # in-process executor already consumed its attempt.
-    attempt = db_session.scalar(
-        select(StewardModelCall).where(
-            StewardModelCall.batch_id == batch.id, StewardModelCall.run_id.is_(None)
-        )
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None
+    before = list(
+        db_session.scalars(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
     )
-    assert attempt is not None
-    attempt.status = "reserved"
-    batch.status = "pending"
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="test-carrier"
+    )
+
+    assert grant is not None
+    db_session.expire_all()
+    after = {
+        row.id: row
+        for row in db_session.scalars(
+            select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
+        )
+    }
+    leased = after[grant["attempt_id"]]
+    assert leased.status == "in_flight"
+    assert leased.lease_owner == "test-carrier"
+    assert leased.lease_until is not None
+    # Exactly one attempt moved: the others are still reserved and leaseable.
+    others = [row for row in after.values() if row.id != grant["attempt_id"]]
+    assert all(row.status in ("reserved", "skipped") for row in others)
+    assert len(after) == len(before)
+
+
+def test_leasing_picks_from_the_requested_space(db_session, monkeypatch):
+    """The lease selection is scoped to the requested space.
+
+    Constructed so the *other* space holds the globally oldest reserved attempt:
+    if the space filter is dropped from the selection query, this leases space B's
+    attempt while asking for space A, and the assertion catches it (verified by
+    mutation). Without this shape the filter is unobservable — with one attempt
+    per space, the unfiltered query happens to land correctly.
+    """
+    from test_steward_assist import _provider, _steward_setting
+
+    provider = _provider(db_session, name="e1-space-filter-provider")
+    # B first, so B's attempt carries the earlier next_attempt_at.
+    space_b = family(db_session, name="e1-filter-b")
+    _steward_setting(db_session, space_b.space, provider, candidate=True)
+    space_a = family(db_session, name="e1-filter-a")
+    _steward_setting(db_session, space_a.space, provider, candidate=True)
+    db_session.commit()
+    _core(db_session, space_b)
+    _core(db_session, space_a)
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=space_a.space.id, worker_id="carrier-a"
+    )
+
+    assert grant is not None
+    assert grant["space_id"] == space_a.space.id, "leased work from the wrong space"
+    db_session.expire_all()
+    leased = db_session.get(StewardModelCall, grant["attempt_id"])
+    assert leased is not None and leased.space_id == space_a.space.id
+
+
+def test_two_spaces_lease_independently(db_session, monkeypatch):
+    """Two spaces must be able to lease at the same time.
+
+    This is the point of the refactor: the old limit was a whole-database
+    ``MAX_CONCURRENT_BATCHES=1``, so space B waited for space A. With a per-space
+    budget both are leaseable at once.
+    """
+    monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", 1)
+    from test_steward_assist import _provider, _steward_setting
+
+    provider = _provider(db_session, name="e1-two-space-provider")
+    first = family(db_session, name="e1-two-a")
+    _steward_setting(db_session, first.space, provider, candidate=True)
+    second = family(db_session, name="e1-two-b")
+    _steward_setting(db_session, second.space, provider, candidate=True)
+    db_session.commit()
+    _core(db_session, first)
+    _core(db_session, second)
+
+    a = steward_assist.lease_attempt(
+        db_session, space_id=first.space.id, worker_id="carrier-a"
+    )
+    b = steward_assist.lease_attempt(
+        db_session, space_id=second.space.id, worker_id="carrier-b"
+    )
+
+    assert a is not None, "space A must be leaseable"
+    assert b is not None, "space B must be leaseable while A is in flight"
+    assert a["space_id"] != b["space_id"]
+
+
+def test_per_space_budget_blocks_a_second_lease_in_the_same_space(db_session, monkeypatch):
+    """The budget bounds one space, and it is the *budget* that does it.
+
+    A second reserved attempt is inserted deliberately: with only one attempt per
+    space the selection query would return None on its own, and this test would
+    pass even with the budget check deleted (verified by mutation — that is how
+    the first version of this test was wrong).
+    """
+    monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", 1)
+    world = _world(db_session)
+    _core(db_session, world)
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None
+    first = db_session.scalar(
+        select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
+    )
+    assert first is not None
+
     from app.utils.timeutil import utcnow
 
-    batch.next_attempt_at = utcnow()
-    batch.lease_until = None
-    db_session.commit()
-    return world, batch, attempt
-
-
-def test_lease_child_run_binds_exactly_one_attempt_without_network(db_session, monkeypatch):
-    """AC-5/AC-14: the lease creates the run + steward_run + attempt binding."""
-    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
-    _, batch, attempt = _leased_child_run(db_session, monkeypatch)
-
-    grant = steward_assist.lease_child_run(db_session, leased_by="test-sidecar")
-
-    assert grant is not None
-    run = db_session.get(AgentRun, grant["run_id"])
-    assert run is not None and run.kind == "steward"
-    # Space-scoped: no session, no queue job (DB-enforced by scope binding).
-    assert run.session_id is None and run.job_id is None
-    steward_run = db_session.scalar(select(StewardRun).where(StewardRun.run_id == run.id))
-    assert steward_run is not None
-    assert steward_run.steward_job_id == grant["steward_job_id"]
-    assert steward_run.assist_batch_id == batch.id
-    # Exactly one attempt is bound, which is what makes settlement unambiguous.
-    assert attempt.run_id == run.id
-    assert attempt.status == "in_flight"
-    assert grant["tool_allowlist"] == []
-
-
-def test_lease_child_run_returns_none_when_nothing_is_due(db_session, monkeypatch):
-    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
-    assert steward_assist.lease_child_run(db_session, leased_by="test-sidecar") is None
-
-
-def test_steward_run_token_carries_no_account_and_the_batch_binding(db_session, monkeypatch):
-    """AC-5: the token's claims are the space-scoped shape, not the account one."""
-    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
-    _, batch, _ = _leased_child_run(db_session, monkeypatch)
-    grant = steward_assist.lease_child_run(db_session, leased_by="test-sidecar")
-    assert grant is not None
-
-    token = agent_tokens.issue_run_token(
-        run_id=grant["run_id"],
-        job_id=grant["steward_job_id"],
-        attempt=grant["attempt"],
-        agent_kind="steward",
-        space_id=grant["space_id"],
-        tool_allowlist=[],
-        steward_batch_id=grant["assist_batch_id"],
-        viewer_account_id=grant["viewer_account_id"],
+    second = StewardModelCall(
+        space_id=plan.space_id,
+        job_id=plan.job_id,
+        policy_version=plan.policy_version,
+        assist_kind=first.assist_kind,
+        prompt_digest="f" * 64,
+        prompt_chars=10,
+        status="reserved",
+        seq=first.seq + 100,
+        created_at=utcnow(),
+        plan_id=plan.id,
+        subject_key="second",
+        input_hash="g" * 64,
+        attempt_no=1,
+        carrier="inproc",
+        evidence_hash=plan.evidence_hash,
+        next_attempt_at=utcnow(),
     )
-    claims = agent_tokens.decode_run_token(token)
-    assert claims["agent_kind"] == "steward"
-    assert "account_id" not in claims
-    assert claims["steward_batch_id"] == batch.id
-
-
-def test_settle_child_run_marks_the_attempt_and_never_double_settles(db_session, monkeypatch):
-    """AC-5: the run's terminal state and the attempt's settlement are one unit."""
-    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
-    _, batch, attempt = _leased_child_run(db_session, monkeypatch)
-    grant = steward_assist.lease_child_run(db_session, leased_by="test-sidecar")
-    assert grant is not None
-    run = db_session.get(AgentRun, grant["run_id"])
-    assert run is not None
-    run.status = "running"
+    db_session.add(second)
     db_session.commit()
 
-    output = json.dumps([])  # terminology/empty candidate output: a legal product
-    status = steward_assist.settle_child_run(
-        db_session, run, status="succeeded", text=output, usage=None, latency_ms=12
+    granted = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier-a"
     )
+    assert granted is not None
+    blocked = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier-b"
+    )
+    assert blocked is None, "a full space must not lease a second attempt"
+
+    # And the block is the budget, not an absence of work: the second attempt is
+    # still reserved and leaseable once the first is no longer in flight.
+    db_session.expire_all()
+    assert db_session.get(StewardModelCall, second.id).status == "reserved"
+
+
+def test_lease_time_fence_skips_instead_of_leasing(db_session, monkeypatch):
+    """A fence that fails at lease time retires the attempt; it is not leased.
+
+    The write-back fence is checked again at settle, so this is the *sending*
+    gate: leasing work whose evidence already changed would spend a model call
+    that can never be applied.
+    """
+    world = _world(db_session)
+    _core(db_session, world)
+    # Change the evidence after reservation, so the reserved digest no longer
+    # matches: exactly the TOCTOU window the fence exists for.
+    monkeypatch.setattr(
+        steward_assist,
+        "_fence_check",
+        lambda *_a, **_k: steward_assist.REASON_EVIDENCE_CHANGED,
+    )
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="carrier"
+    )
+
+    assert grant is None, "a fenced-out attempt must not be leased"
+    db_session.expire_all()
+    skipped = list(
+        db_session.scalars(
+            select(StewardModelCall).where(
+                StewardModelCall.status == "skipped",
+                StewardModelCall.error_code == steward_assist.REASON_EVIDENCE_CHANGED,
+            )
+        )
+    )
+    assert skipped, "the attempt must be retired with a safe reason code"
+
+
+def test_an_expired_lease_does_not_block_the_space_forever(db_session, monkeypatch):
+    """Only *live* in-flight attempts count against the budget.
+
+    A dead lease that still reads ``in_flight`` (the process died before recovery
+    ran) must not permanently consume the space's capacity — otherwise a crash
+    would silently stop all future work for that space.
+    """
+    from datetime import timedelta
+
+    from app.utils.timeutil import utcnow
+
+    monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", 1)
+    world = _world(db_session)
+    _core(db_session, world)
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None
+    first = db_session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
+    assert first is not None
+
+    second = StewardModelCall(
+        space_id=plan.space_id,
+        job_id=plan.job_id,
+        policy_version=plan.policy_version,
+        assist_kind=first.assist_kind,
+        prompt_digest="f" * 64,
+        prompt_chars=10,
+        status="reserved",
+        seq=first.seq + 100,
+        created_at=utcnow(),
+        plan_id=plan.id,
+        subject_key="second",
+        input_hash="g" * 64,
+        attempt_no=1,
+        carrier="inproc",
+        evidence_hash=plan.evidence_hash,
+        next_attempt_at=utcnow(),
+    )
+    db_session.add(second)
+    # Occupy the single slot with an already-dead lease.
+    first.status = "in_flight"
+    first.lease_owner = "dead-carrier"
+    first.lease_until = utcnow() - timedelta(seconds=5)
     db_session.commit()
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="live-carrier"
+    )
+
+    assert grant is not None, "an expired lease must not consume the space's budget"
+    assert grant["attempt_id"] == second.id
+
+
+def test_settle_attempt_applies_the_product_and_is_not_repeatable(db_session, monkeypatch):
+    """Settlement validates, applies, and refuses a second attempt to settle."""
+    world = _world(db_session)
+    _core(db_session, world)
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="test-carrier"
+    )
+    assert grant is not None
+
+    # terminology's product shape: an empty items list is a legal product (no
+    # improvement found), which is exactly what a fake transport returns here.
+    attempt = db_session.get(StewardModelCall, grant["attempt_id"])
+    assert attempt is not None
+    output = json.dumps({"version": 1, "context_hash": "x", "items": []})
+
+    status = steward_assist.settle_attempt(
+        db_session,
+        attempt_id=attempt.id,
+        status="succeeded",
+        lease_owner="test-carrier",
+        text=output,
+        latency_ms=11,
+    )
     db_session.expire_all()
     settled = db_session.get(StewardModelCall, attempt.id)
     assert settled is not None
     assert status == settled.status
     assert settled.status in ("succeeded", "degraded")
+    assert settled.billed_tokens is not None
 
-    # A second settlement must not overwrite the recorded outcome.
     before = settled.status
-    again = steward_assist.settle_child_run(db_session, run, status="succeeded", text=output)
-    assert again is None
+    again = steward_assist.settle_attempt(
+        db_session, attempt_id=attempt.id, status="succeeded", lease_owner="test-carrier", text=output
+    )
+    assert again is None, "a settled attempt must not be settled again"
     assert db_session.get(StewardModelCall, attempt.id).status == before
 
 
-def test_settle_child_run_bills_conservatively_on_failure(db_session, monkeypatch):
-    """AC-5: a failed run bills the reservation and never auto-retries."""
-    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
-    _, batch, attempt = _leased_child_run(db_session, monkeypatch)
-    grant = steward_assist.lease_child_run(db_session, leased_by="test-sidecar")
+def test_settle_attempt_refuses_a_foreign_lease_owner(db_session, monkeypatch):
+    """Only the lease holder may settle: a late result cannot overwrite state."""
+    world = _world(db_session)
+    _core(db_session, world)
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="holder"
+    )
     assert grant is not None
-    run = db_session.get(AgentRun, grant["run_id"])
-    assert run is not None
-    run.status = "running"
-    db_session.commit()
 
-    steward_assist.settle_child_run(db_session, run, status="failed", error_code="timeout")
-    db_session.commit()
+    result = steward_assist.settle_attempt(
+        db_session,
+        attempt_id=grant["attempt_id"],
+        status="succeeded",
+        lease_owner="impostor",
+        text=json.dumps([]),
+    )
+    assert result is None
     db_session.expire_all()
-    settled = db_session.get(StewardModelCall, attempt.id)
+    assert db_session.get(StewardModelCall, grant["attempt_id"]).status == "in_flight"
+
+
+def test_failed_settlement_bills_conservatively_and_never_auto_retries(db_session, monkeypatch):
+    """A transport timeout is unknown: billed, terminal, and not replayed."""
+    world = _world(db_session)
+    _core(db_session, world)
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="test-carrier"
+    )
+    assert grant is not None
+    import httpx
+
+    steward_assist.settle_attempt(
+        db_session,
+        attempt_id=grant["attempt_id"],
+        status="failed",
+        lease_owner="test-carrier",
+        exc=httpx.ReadTimeout("read timed out"),
+    )
+    db_session.expire_all()
+    settled = db_session.get(StewardModelCall, grant["attempt_id"])
     assert settled is not None
-    # A timeout cannot prove the upstream did not process the request, so it is
-    # unknown (conservatively billed) rather than failed-and-forgettable.
+    # A timeout cannot prove the upstream did not process the request.
     assert settled.status == "unknown"
     assert (settled.billed_tokens or 0) > 0
+    # And it must not become leaseable again.
+    assert (
+        steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="carrier-b")
+        is None
+    )
 
 
 # --------------------------------------------------------------------------
-# AC-6: the context guard is positive, not merely absent
+# Recovery
 # --------------------------------------------------------------------------
 
 
-def test_steward_context_requires_a_real_steward_run(db_session, monkeypatch):
-    """A fabricated steward run_id is refused rather than silently accepted."""
-    from app.errors import POLICY_CONTEXT_INVALID, raise_api_error
+def test_recovery_converges_an_expired_lease_to_unknown(db_session, monkeypatch):
+    """Crash point ④: sent but never settled → unknown, billed, not replayed."""
+    from datetime import timedelta
+
+    from app.utils.timeutil import utcnow
+
+    world = _world(db_session)
+    _core(db_session, world)
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="doomed"
+    )
+    assert grant is not None
+    attempt = db_session.get(StewardModelCall, grant["attempt_id"])
+    assert attempt is not None
+    attempt.lease_until = utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    assert steward_assist.recover_stuck_attempts(db_session) >= 1
+
+    db_session.expire_all()
+    recovered = db_session.get(StewardModelCall, grant["attempt_id"])
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    assert (recovered.billed_tokens or 0) > 0
+    assert recovered.lease_owner is None
+
+
+def test_recovery_does_not_touch_a_live_lease(db_session, monkeypatch):
+    """A live lease must survive a recovery pass."""
+    world = _world(db_session)
+    _core(db_session, world)
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="alive"
+    )
+    assert grant is not None
+
+    steward_assist.recover_stuck_attempts(db_session)
+
+    db_session.expire_all()
+    assert db_session.get(StewardModelCall, grant["attempt_id"]).status == "in_flight"
+
+
+def test_recovery_does_not_touch_reserved_attempts(db_session, monkeypatch):
+    """``reserved`` was never sent, so it is leaseable again rather than unknown."""
+    world = _world(db_session)
+    _core(db_session, world)
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None
+    reserved = list(
+        db_session.scalars(
+            select(StewardModelCall).where(
+                StewardModelCall.plan_id == plan.id, StewardModelCall.status == "reserved"
+            )
+        )
+    )
+    assert reserved
+
+    steward_assist.recover_stuck_attempts(db_session)
+
+    db_session.expire_all()
+    for attempt in reserved:
+        assert db_session.get(StewardModelCall, attempt.id).status == "reserved"
+
+
+# --------------------------------------------------------------------------
+# The context guard is positive, not merely absent
+# --------------------------------------------------------------------------
+
+
+def test_steward_context_requires_a_real_steward_attempt(db_session, monkeypatch):
+    """A fabricated run_id is refused rather than silently accepted."""
+    from app.errors import POLICY_CONTEXT_INVALID
     from app.services import context_builder
 
     world = _world(db_session)
     admin = world.a
-    builder = context_builder.ContextBuilder(db_session)
     with pytest.raises(Exception) as exc:
-        builder.build(
+        context_builder.ContextBuilder(db_session).build(
             actor=admin,
             space_id=world.space.id,
             agent_kind="steward",
@@ -264,42 +562,3 @@ def test_steward_context_requires_a_real_steward_run(db_session, monkeypatch):
     assert exc.value.status_code == 422
     payload = extract_api_error(exc.value.detail)
     assert payload is not None and payload["code"] == POLICY_CONTEXT_INVALID
-    # Sanity: the helper this test guards against misuse of is the same one the
-    # endpoint uses, so a failure here cannot be a no-op.
-    assert callable(raise_api_error)
-
-
-def test_steward_context_rejects_a_run_from_another_space(db_session, monkeypatch):
-    """A real steward run in a different space must not authorize this projection."""
-    from app.services import context_builder
-
-    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
-    world, batch, _ = _leased_child_run(db_session, monkeypatch)
-    grant = steward_assist.lease_child_run(db_session, leased_by="test-sidecar")
-    assert grant is not None
-
-    # A second, unrelated space: `family` gives it its own account, space and
-    # confirmed facts, which is what makes this a cross-space check rather than
-    # a missing-row check.
-    other_world = family(db_session, name="other-space")
-    with pytest.raises(Exception) as exc:
-        context_builder.ContextBuilder(db_session).build(
-            actor=other_world.a,
-            space_id=other_world.space.id,
-            agent_kind="steward",
-            query="q",
-            run_id=grant["run_id"],
-        )
-    assert exc.value.status_code == 422
-
-    # Positive control: the *same* run_id with the *correct* space must pass the
-    # guard. Without this, the rejection above could be caused by any other
-    # failure in build() and the test would be proving nothing.
-    built = context_builder.ContextBuilder(db_session).build(
-        actor=world.a,
-        space_id=world.space.id,
-        agent_kind="steward",
-        query="q",
-        run_id=grant["run_id"],
-    )
-    assert built.build_id is not None

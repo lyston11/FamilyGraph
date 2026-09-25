@@ -311,6 +311,11 @@ class StewardAssistPlan(Base):
     evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
     fence_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Wall-clock bound for the whole plan's work. The lease used to live on the
+    # batch and double as this bound; now that each attempt has its own lease, the
+    # bound has to be stated separately or one plan could run for
+    # (attempts x timeout) instead of one lease window.
+    deadline_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -404,6 +409,10 @@ class StewardModelCall(Base):
     )
     # 本 attempt fence 用的证据摘要（卡片/terminology 切片在 plan 上，共用一份）。
     evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 产物是否已写回（崩溃恢复点④的判据）。``status`` 只表示**调用**结果，
+    # 不表示**应用**结果：succeeded + output_json + applied_at IS NULL 就是
+    # 「结果已持久化、写回未完成」，恢复器必须补做写回，否则产物永久丢失。
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     subject_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
     input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt_no: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -513,8 +522,8 @@ class StewardCandidateEvidenceVersion(Base):
     source_job_id: Mapped[int | None] = mapped_column(
         ForeignKey("steward_jobs.id", ondelete="SET NULL"), nullable=True
     )
-    source_batch_id: Mapped[int | None] = mapped_column(
-        ForeignKey("steward_assist_batches.id", ondelete="SET NULL"), nullable=True
+    source_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_assist_plans.id", ondelete="SET NULL"), nullable=True
     )
     source_model_call_id: Mapped[int | None] = mapped_column(
         ForeignKey("steward_model_calls.id", ondelete="SET NULL"), nullable=True
