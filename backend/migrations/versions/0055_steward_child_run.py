@@ -245,7 +245,14 @@ def upgrade() -> None:
             "REFERENCES agent_runs (id) ON DELETE SET NULL"
         )
     )
-    conn.execute(sa.text("CREATE INDEX ix_smc_run ON steward_model_calls (run_id)"))
+    # UNIQUE, not a plain index: the mapping is exactly one child run per
+    # attempt row (design §11.2). Without uniqueness a single child run could be
+    # bound to two attempts, which would make settlement ambiguous about which
+    # ledger row the run's outcome belongs to. NULLs do not collide in SQLite,
+    # so the in-process era rows are unaffected.
+    conn.execute(
+        sa.text("CREATE UNIQUE INDEX uq_smc_run_id ON steward_model_calls (run_id)")
+    )
 
 
 def downgrade() -> None:
@@ -306,7 +313,7 @@ def downgrade() -> None:
                 )
 
     conn = connection
-    conn.execute(sa.text("DROP INDEX IF EXISTS ix_smc_run"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS uq_smc_run_id"))
     _drop_model_calls_run_id(conn)
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_steward_runs_viewer"))
     conn.execute(sa.text("DROP INDEX IF EXISTS ix_steward_runs_batch"))
@@ -323,7 +330,7 @@ def _drop_model_calls_run_id(conn: sa.Connection) -> None:
     migrations (0044 drops ``ck_smc_assist_kind``) reflect, breaking their
     downgrade. A native ``DROP COLUMN`` (SQLite >= 3.35) leaves every other
     column, constraint and its naming byte-identical, which is both safer and a
-    truer inverse. ``ix_smc_run`` is dropped by the caller first, since SQLite
+    truer inverse. ``uq_smc_run_id`` is dropped by the caller first, since SQLite
     refuses to drop an indexed column.
     """
     conn.execute(sa.text("ALTER TABLE steward_model_calls DROP COLUMN run_id"))

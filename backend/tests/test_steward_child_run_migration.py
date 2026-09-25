@@ -419,7 +419,13 @@ def test_model_call_ledger_gets_run_id(upgraded):
             row[0]
             for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
         }
-        assert "ix_smc_run" in index_names
+        assert "uq_smc_run_id" in index_names
+        # UNIQUE: one child run binds to exactly one attempt row (design §11.2).
+        unique_flags = {
+            row[1]: bool(row[2])
+            for row in conn.execute(text("PRAGMA index_list(steward_model_calls)"))
+        }
+        assert unique_flags["uq_smc_run_id"] is True
         # Pre-existing attempt-key uniqueness survives.
         assert "uq_smc_attempt_key" in index_names
 

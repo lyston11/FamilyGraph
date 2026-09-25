@@ -41,6 +41,41 @@ class LeaseOut(BaseModel):
     run_token: str
 
 
+# ---- steward child run lease（09-25 S1）----
+
+
+class StewardLeaseRequest(_Strict):
+    """Steward child run 的租赁请求。
+
+    独立于 ``LeaseRequest``（后者硬绑 ``kind="assistant"``）：两个端点服务两个
+    不同的队列，合并成一个模型会让任一侧的 kind 约束变成可选字段。
+    """
+
+    kind: Literal["steward"]
+    leased_by: str = Field(min_length=1, max_length=120)
+    lease_ttl_seconds: int | None = Field(default=None, ge=30, le=3600)
+
+
+class StewardLeaseOut(BaseModel):
+    """Steward child run 的租赁结果。
+
+    ``steward_job_id`` 是**授权根**（不是 ``job_id``：child run 不经过通用队列，
+    ``agent_runs.job_id`` 恒为 NULL）。``max_concurrent`` 把服务端的批次并发上限
+    广播给 sidecar，两侧取较大值，避免本地配置静默压低服务端上限。
+    """
+
+    run_id: int
+    steward_job_id: int
+    assist_batch_id: int | None
+    assist_kind: str
+    agent_kind: AgentKind
+    attempt: int
+    tool_allowlist: list[str]
+    policy_version: str
+    max_concurrent: int = Field(ge=1, le=8)
+    run_token: str
+
+
 # ---- heartbeat ----
 
 
@@ -88,9 +123,12 @@ class ContextProviderOut(BaseModel):
 
 class ContextOut(BaseModel):
     run_id: int
-    session_id: int
+    # Nullable: steward child runs are space-scoped and carry no session. The
+    # sidecar's strict decoder branches on agent_kind, so this cannot silently
+    # become an absent field for assistant runs (which always have both).
+    session_id: int | None
     agent_kind: AgentKind
-    account_id: int
+    account_id: int | None
     space_id: int
     status: str
     attempt: int

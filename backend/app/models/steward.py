@@ -373,7 +373,9 @@ class StewardModelCall(Base):
             "attempt_no",
             unique=True,
         ),
-        sa.Index("ix_smc_run", "run_id"),
+        # UNIQUE: one child run maps to exactly one attempt row (design §11.2);
+        # a shared run across two attempts would make settlement ambiguous.
+        sa.Index("uq_smc_run_id", "run_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
