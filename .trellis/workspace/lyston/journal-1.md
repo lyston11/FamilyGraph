@@ -1177,3 +1177,56 @@ Steward 模型辅助层交付：迁移 0034（assist_* 三列 + steward_model_ca
 ### Status
 
 [OK] **Completed**
+
+## Session 34: S1 Steward child run 骨架（迁移/身份/协议/多槽 sidecar）
+<!-- trellis-session: v=2 fp=s1-steward-child-run -->
+
+**Date**: 2026-09-25
+**Task**: 09-25-steward-child-run-skeleton
+**Branch**: `feat/09-25-steward-child-run-skeleton`（worktree `../fg-09-25-steward-child-run-skeleton`）
+
+### Summary
+
+把「Steward 走 Pi 受限 child run」这条路建成但不启用：迁移 0055、运行时身份按类型拆成两个独立 fence、
+per-kind run token、独立 steward lease 端点、sidecar 单槽→多槽、steward prompt 与工具集隔离、
+浏览器/admin 面隔离、compose env。14 个提交。
+
+全量检查：backend 1908 passed/3 skipped（连续 3 次一致）+ ruff/format/mypy 全绿；
+agent 181、frontend 827、system-admin 127 各自 type-check/lint/test/build 通过；
+迁移往返与 `docker compose config --quiet` 通过。
+
+真实 HTTP E2E（隔离端口 uvicorn + 真实 token）走通 lease → context → run.started → settle，
+并实测单次 settle **原子**写入 run/attempt/batch 三个终态、重复 settle 409、消息类事件 422、
+开关关闭时 503。该 E2E 抓出两个 in-process 测试看不见的真实缺陷并已修：父 job 状态判据与
+登记流程不一致（每个 child run 都会被自己的 fence 拒），以及 `append_events` 仍走 assistant-only
+授权器导致 steward 在消息守卫前被 403。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `be1d085` | feat(steward): add 0055 migration for Pi child run |
+| `565c81a` | feat(steward): dual-kind runtime types, identity and token contracts |
+| `08b6285` | test(steward): independent security matrix for both execution fences |
+| `14d6158` | fix(steward): make 0055 downgrade a faithful inverse |
+| `8d6f312` | feat(steward): add the Pi-runtime flag, lease schemas and unique attempt binding |
+| `77cd343` | style(steward): apply ruff format to config and migration 0055 |
+| `f5104fb` | feat(steward): internal protocol for Pi child runs |
+| `05af24a` | feat(agent): multi-slot sidecar, steward prompt and tool isolation |
+| `7abe4ee` | feat(steward): isolate the browser/admin surfaces and add the deploy env |
+| `7d5927c` | test(steward): S1 acceptance — equivalence plus a controlled child-run E2E |
+| `a99f0c1` | test(steward): prove the browser surface hides child runs and latency stays split |
+| `bfe311e` | fix(steward): correct two fence bugs the real-HTTP E2E exposed |
+| `0b3f704` | docs(task): record S1 acceptance evidence and the deviations from design |
+
+### Lessons
+
+- **变异测试是必要的，不是加分项**：逐条删 fence 检查后，第一轮有 3 个用例因错误原因通过
+  （viewer membership 查询在错误空间上也会失败 → 空间比较从未被执行）。
+- **in-process 测试证明不了跨层协议**：两个真实缺陷只有真实 HTTP 才暴露。
+- **设计文档也会与代码事实冲突**：父 design §5.2.1 的父 job 状态判据与批次登记流程矛盾，
+  照抄会让整条链路自锁。以代码事实为准并记录偏差。
+
+### Status
+
+[OK] **Completed**（未合并回 main；集成由人执行）
