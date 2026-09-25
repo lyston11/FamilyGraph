@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "双 Agent 执行边界、internal 协议、token 合同、Provider 网关与 egress 审计的权威规范；本设计扩展其 kind 与身份边界"}
+{"file": ".trellis/spec/backend/steward-action-card.md", "reason": "Steward 确定性内核、安全链（投影→出站检查→封闭 schema→写回栅栏）与快照/发布合同；本设计必须逐条保留"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移的 refusal guard 前置、downgrade 语义、隔离 DATA_DIR 验证要求"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁与最小充分检查范围"}
