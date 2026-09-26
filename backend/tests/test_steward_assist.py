@@ -180,7 +180,11 @@ def _leased_id(db_session) -> int:
 
 
 def _run_assists(
-    db_session, *, space_id: int | None = None, transport=None, rounds: int = 3,
+    db_session,
+    *,
+    space_id: int | None = None,
+    transport=None,
+    rounds: int = 3,
     job_id: int | None = None,
 ):
     """调度并执行所有到期辅助（同步测试路径；返回最终状态列表）。
@@ -189,15 +193,11 @@ def _run_assists(
     plan is used, which is what single-space tests mean.
     """
     if job_id is None:
-        plan = db_session.scalar(
-            select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc())
-        )
+        plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
         job_id = plan.job_id if plan is not None else None
     statuses = []
     for _ in range(rounds):
-        status = steward_assist.run_due_attempt(
-            db_session, space_id=space_id, transport=transport
-        )
+        status = steward_assist.run_due_attempt(db_session, space_id=space_id, transport=transport)
         if status is None:
             break
         plan = _batch(db_session, job_id)
@@ -422,7 +422,10 @@ def test_returned_result_is_persisted_before_the_next_send(db_session, monkeypat
     assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
     assert [r.status for r in _calls(db_session, job.id)] == ["reserved", "reserved"]
 
-    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=_mixed_transport(calls, first_valid=valid, second=slow_second, observed=observed),
+    status = steward_assist.execute_plan_attempts(
+        db_session,
+        plan_id=batch.id,
+        transport=_mixed_transport(calls, first_valid=valid, second=slow_second, observed=observed),
     )
     assert len(calls) == 2
     # 红断言：第二笔发送时第一笔已落库
@@ -474,7 +477,10 @@ def test_partial_batch_applies_independent_product_and_stays_failed(
     batch = _batch(db_session, job.id)
     assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
-    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=_mixed_transport(calls, first_valid=valid, second=connect_failure, observed={}),
+    status = steward_assist.execute_plan_attempts(
+        db_session,
+        plan_id=batch.id,
+        transport=_mixed_transport(calls, first_valid=valid, second=connect_failure, observed={}),
     )
     assert len(calls) == 2
     assert status == "failed"
@@ -483,7 +489,10 @@ def test_partial_batch_applies_independent_product_and_stays_failed(
     assert [r.status for r in rows] == ["succeeded", "failed"]
     settled = _batch(db_session, job.id)
     assert steward_assist.plan_outcome(db_session, settled.id) == "failed"
-    assert steward_assist.plan_error_code(db_session, settled.id) == steward_assist.REASON_TRANSPORT_FAILED
+    assert (
+        steward_assist.plan_error_code(db_session, settled.id)
+        == steward_assist.REASON_TRANSPORT_FAILED
+    )
     cards = _cards(db_session, space.id)
     assert sum(1 for card in cards if card.reason_text_llm) == 1
 
@@ -663,7 +672,7 @@ def test_provider_unavailable_superseded_pipeline_intact(db_session, monkeypatch
     # 与旧实现的一处真实差异：旧代码在「调度」时才建 attempt 行，因此这里是
     # 「批次 superseded、零 attempt」；现在 attempt 与 plan 同事务预留，所以
     # 行存在但被栅栏落为 skipped——「零发送」这一合同不变。
-    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
+    assert steward_assist.lease_attempt(db_session, space_id=space.id, worker_id="gate") is None
 
     assert summary["stats"]["cards_created"] == 2
     assert calls == []
@@ -856,8 +865,8 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
         batch = _batch(db_session, job.id)
         assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
         assert steward_assist.plan_error_code(db_session, batch.id) == (
-        steward_assist.REASON_NETWORK_UNKNOWN
-    )
+            steward_assist.REASON_NETWORK_UNKNOWN
+        )
     finally:
         gate.set()
         executor.join(timeout=15)
@@ -921,7 +930,10 @@ def test_crash_point_3_after_send_before_audit(db_session, monkeypatch) -> None:
     assert rows and all(r.status == "unknown" for r in rows)
     assert all(r.billed_tokens == r.reserved_input_tokens + r.reserved_output_tokens for r in rows)
     assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "failed"
-    assert steward_assist.plan_error_code(db_session, _batch(db_session, job.id).id) == steward_assist.REASON_NETWORK_UNKNOWN
+    assert (
+        steward_assist.plan_error_code(db_session, _batch(db_session, job.id).id)
+        == steward_assist.REASON_NETWORK_UNKNOWN
+    )
     # 结果不明 → 不自动重发（不产生第二批 attempt）
     assert _run_assists(db_session, space_id=space.id) == []
 
@@ -937,7 +949,6 @@ def test_crash_point_4_before_writeback_applies_after_fence(db_session, monkeypa
 
     _summary, job = _run_job(db_session, space, event.id)
     # 直接构造"审计已提交、写回未完成"的崩溃后状态
-    batch = _batch(db_session, job.id)
     assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
     for row in _calls(db_session, job.id):
         row.status = "succeeded"
@@ -1095,9 +1106,7 @@ def _assert_not_applied(db, batch, reason_code):
     assert steward_assist.plan_outcome(db, batch.id) == "superseded"
     codes = {
         row.error_code
-        for row in db.scalars(
-            select(StewardModelCall).where(StewardModelCall.plan_id == batch.id)
-        )
+        for row in db.scalars(select(StewardModelCall).where(StewardModelCall.plan_id == batch.id))
     }
     assert reason_code in codes, f"{reason_code} not among {codes}"
 
@@ -1118,7 +1127,9 @@ def test_fence_disabled_during_call_blocks_writeback(db_session, monkeypatch) ->
         monkeypatch.setattr(config, "STEWARD_ASSIST_EXPLANATION", False)
 
     status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=disable)
-    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_ASSIST_DISABLED)
+    _assert_not_applied(
+        db_session, _batch(db_session, job.id), steward_assist.REASON_ASSIST_DISABLED
+    )
     assert status == "superseded"
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
 
@@ -1141,7 +1152,9 @@ def test_fence_provider_switch_during_call(db_session, monkeypatch) -> None:
         db_session.commit()
 
     steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=switch)
-    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_PROVIDER_CHANGED)
+    _assert_not_applied(
+        db_session, _batch(db_session, job.id), steward_assist.REASON_PROVIDER_CHANGED
+    )
     assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
 
 
@@ -1196,7 +1209,9 @@ def test_fence_evidence_changed_during_call(db_session, monkeypatch) -> None:
         db_session.commit()
 
     steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=revise)
-    _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_EVIDENCE_CHANGED)
+    _assert_not_applied(
+        db_session, _batch(db_session, job.id), steward_assist.REASON_EVIDENCE_CHANGED
+    )
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
 
 
@@ -1524,7 +1539,7 @@ def test_cloud_consent_revoked_degrades_without_send(db_session, monkeypatch) ->
     setting.cloud_allowed = False
     db_session.commit()
 
-    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
+    assert steward_assist.lease_attempt(db_session, space_id=space.id, worker_id="gate") is None
     assert calls == []
     batch = _batch(db_session, job.id)
     assert steward_assist.plan_outcome(db_session, batch.id) == "superseded"
@@ -1558,7 +1573,7 @@ def test_local_required_with_cloud_provider_degrades(db_session, monkeypatch) ->
 
     _summary, job = _run_job(db_session, space, event.id)
 
-    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is None
+    assert steward_assist.lease_attempt(db_session, space_id=space.id, worker_id="gate") is None
     assert calls == []
     batch = _batch(db_session, job.id)
     assert steward_assist.plan_error_code(db_session, batch.id) in (

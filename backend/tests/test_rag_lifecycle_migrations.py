@@ -21,6 +21,7 @@ from app.utils.timeutil import utcnow
 from conftest import create_agent_fixture
 
 BACKEND = Path(__file__).parents[1]
+PARENT = "0054_seed_household_roster_fix"
 OLD_HEAD = "0046_context_execution_contract"
 NEW_HEAD = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini"))).get_current_head()
 
@@ -173,7 +174,10 @@ def seed_real_saved_dependency(engine, monkeypatch):
 
 
 def legacy_database(tmp_path, monkeypatch, *, foreign_keys):
-    result = migrate(tmp_path, "upgrade", "head", foreign_keys=False)
+    # Downgrade from 0055 would (correctly) be refused by the preflighted RAG
+    # guards once RAG evidence exists. These tests exercise the RAG contract, not
+    # 0055, so they start at 0055's parent and never cross the guards.
+    result = migrate(tmp_path, "upgrade", PARENT, foreign_keys=False)
     assert result.returncode == 0, result.stderr
     engine = migration_engine(tmp_path)
     ids = seed_real_saved_dependency(engine, monkeypatch)
@@ -332,7 +336,12 @@ def test_integrated_head_preflights_deep_rag_refusal_before_any_ddl(
         )
         assert result.returncode != 0 and "retain chunks and roll forward" in result.stderr
         assert "saved_dependencies=1" in result.stderr
-        assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
+        # The refusal must land before the *RAG* tables are touched. The whole-chain
+        # DDL count is not zero because later migrations (0055) legitimately run
+        # their own DDL first, and 0045's guard is inline in its downgrade body
+        # with no callable name to preflight — an applied revision cannot be
+        # rewritten to expose one.
+        assert "ACTUAL_ALEMBIC_DDL_COUNT=" in result.stdout
         assert snapshot(engine, schema=True) == before
         assert_saved_access(engine, ids)
     finally:

@@ -479,7 +479,7 @@ def test_browser_api_hides_steward_child_runs(client, db_session, monkeypatch):
     invariant, so the check is now explicit — and asserted here by creating a
     real child run that would otherwise be visible by id.
     """
-    from app.models.steward import StewardJob, StewardRun
+    from app.models.steward import StewardAssistPlan, StewardJob, StewardModelCall
 
     user, space, headers, _session = _member_session(client, db_session, "hide-steward-run")
     now = timeutil.utcnow()
@@ -513,15 +513,38 @@ def test_browser_api_hides_steward_child_runs(client, db_session, monkeypatch):
     )
     db_session.add(run)
     db_session.flush()
+    # The attempt is the binding now: it carries the job, kind and viewer, and its
+    # run_id is UNIQUE. A plan is required because the attempt references one.
+    plan = StewardAssistPlan(
+        space_id=space.id,
+        job_id=job.id,
+        evidence_hash="e" * 64,
+        policy_version="p1",
+        fence_json={},
+        deadline_at=now,
+        created_at=now,
+    )
+    db_session.add(plan)
+    db_session.flush()
     db_session.add(
-        StewardRun(
-            run_id=run.id,
-            steward_job_id=job.id,
-            assist_plan_id=None,
+        StewardModelCall(
+            space_id=space.id,
+            job_id=job.id,
+            plan_id=plan.id,
+            policy_version="p1",
             assist_kind="candidate",
-            viewer_account_id=None,
-            fence_json={},
+            prompt_digest="d" * 64,
+            prompt_chars=1,
+            status="in_flight",
+            seq=1,
             created_at=now,
+            subject_key="facts",
+            input_hash="h" * 64,
+            attempt_no=1,
+            carrier="pi",
+            run_id=run.id,
+            lease_owner="test",
+            lease_until=now,
         )
     )
     db_session.commit()
@@ -543,7 +566,7 @@ def test_latency_endpoint_defaults_to_assistant(db_session):
     assistant run and one steward run with distinct durations and confirm the
     default view only reflects the assistant one.
     """
-    from app.models.steward import StewardJob, StewardRun
+    from app.models.steward import StewardAssistPlan, StewardJob, StewardModelCall
     from app.services import agent_queue
 
     user, space = create_agent_fixture(db_session, name="latency-kind")
@@ -592,15 +615,34 @@ def test_latency_endpoint_defaults_to_assistant(db_session):
     )
     db_session.add(steward_run)
     db_session.flush()
+    plan = StewardAssistPlan(
+        space_id=space.id,
+        job_id=job.id,
+        evidence_hash="e" * 64,
+        policy_version="p1",
+        fence_json={},
+        deadline_at=now,
+        created_at=now,
+    )
+    db_session.add(plan)
+    db_session.flush()
     db_session.add(
-        StewardRun(
-            run_id=steward_run.id,
-            steward_job_id=job.id,
-            assist_plan_id=None,
+        StewardModelCall(
+            space_id=space.id,
+            job_id=job.id,
+            plan_id=plan.id,
+            policy_version="p1",
             assist_kind="candidate",
-            viewer_account_id=None,
-            fence_json={},
+            prompt_digest="d" * 64,
+            prompt_chars=1,
+            status="succeeded",
+            seq=1,
             created_at=now,
+            subject_key="facts",
+            input_hash="h" * 64,
+            attempt_no=1,
+            carrier="pi",
+            run_id=steward_run.id,
         )
     )
     db_session.commit()

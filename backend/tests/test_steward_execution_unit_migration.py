@@ -415,7 +415,7 @@ def test_batch_table_becomes_an_immutable_plan(upgraded):
             for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         }
         # The batch table is gone; its rows live on as plans.
-        assert "steward_assist_plans" not in names
+        assert "steward_assist_batches" not in names
         assert "steward_assist_plans" in names
         columns = {row[1] for row in conn.execute(text("PRAGMA table_info(steward_assist_plans)"))}
         # The snapshot survives...
@@ -566,4 +566,4 @@ def test_round_trip_is_repeatable(tmp_path):
     schema = schema_of(migration_engine(data_dir))
     assert "ck_agent_runs_scope_binding" in schema["agent_runs"]
     assert "steward_assist_plans" in schema
-    assert "steward_assist_plans" not in schema
+    assert "steward_assist_batches" not in schema

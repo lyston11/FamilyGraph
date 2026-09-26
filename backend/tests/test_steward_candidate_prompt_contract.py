@@ -157,8 +157,11 @@ def test_prompt_too_large_settles_batch_as_failed_with_reason(db_session, monkey
     assert not any(r.status == "unknown" for r in rows)
     batch = _batch(db_session, job.id)
     assert batch is not None
-    assert batch.status == "failed", batch.status
-    assert batch.error_code == steward_assist.REASON_PROMPT_TOO_LARGE
+    assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
+    assert (
+        steward_assist.plan_error_code(db_session, batch.id)
+        == steward_assist.REASON_PROMPT_TOO_LARGE
+    )
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
     assert len(facts) == 3
 
@@ -268,7 +271,7 @@ def test_oversized_fact_set_is_bounded_and_deterministic(db_session, monkeypatch
     assert calls, "有界子集下候选辅助必须真正发送"
     rows = _calls(db_session, job.id)
     assert all(r.status != "skipped" for r in rows), [(r.status, r.error_code) for r in rows]
-    assert _batch(db_session, job.id).status == "applied"
+    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "applied"
     # 输出仍走既有封闭校验（端点仍在授权花名册内）
     _ = anchor
 
@@ -347,7 +350,11 @@ def test_empty_subset_is_never_sent_as_a_fake_success(db_session, monkeypatch) -
     ), [(r.status, r.error_code) for r in rows]
     batch = _batch(db_session, job.id)
     assert batch is not None
-    assert batch.status == "failed" and batch.error_code == steward_assist.REASON_PROMPT_TOO_LARGE
+    assert (
+        steward_assist.plan_outcome(db_session, batch.id) == "failed"
+        and steward_assist.plan_error_code(db_session, batch.id)
+        == steward_assist.REASON_PROMPT_TOO_LARGE
+    )
 
 
 def test_budget_skipped_stays_benign_not_prompt_too_large(db_session, monkeypatch) -> None:
@@ -372,8 +379,8 @@ def test_budget_skipped_stays_benign_not_prompt_too_large(db_session, monkeypatc
     assert codes == {steward_assist.REASON_INSUFFICIENT_BUDGET}, codes
     batch = _batch(db_session, job.id)
     assert batch is not None
-    assert batch.status == "applied", (batch.status, batch.error_code)
-    assert batch.error_code is None
+    assert steward_assist.plan_outcome(db_session, batch.id) == "applied"
+    assert steward_assist.plan_error_code(db_session, batch.id) is None
 
 
 def test_upstream_unknown_outranks_prompt_too_large(db_session, monkeypatch) -> None:
@@ -401,8 +408,11 @@ def test_upstream_unknown_outranks_prompt_too_large(db_session, monkeypatch) -> 
     assert steward_assist.REASON_PROMPT_TOO_LARGE in {r.error_code for r in rows}
     batch = _batch(db_session, job.id)
     assert batch is not None
-    assert batch.status == "failed"
-    assert batch.error_code == steward_assist.REASON_NETWORK_UNKNOWN, batch.error_code
+    assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
+    assert (
+        steward_assist.plan_error_code(db_session, batch.id)
+        == steward_assist.REASON_NETWORK_UNKNOWN
+    )
     _ = anchor
 
 

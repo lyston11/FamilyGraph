@@ -115,8 +115,8 @@ def _steward_world(db: Session, *, with_attempt: bool = True, assist_kind: str =
         policy_version="p1",
         fence_json={},
         created_at=now,
-            deadline_at=utcnow(),
-        )
+        deadline_at=utcnow(),
+    )
     db.add(plan)
     db.flush()
 

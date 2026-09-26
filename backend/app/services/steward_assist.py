@@ -255,33 +255,6 @@ def _post_json(
     return asyncio.run(_post_json_async(url, headers, payload, timeout))
 
 
-def _release_remaining_unsent(db: Session, *, plan_id: int, reason: str) -> int:
-    """把本批仍未发送的预留一次性释放为 skipped（C-R2）。
-
-    只在执行身份仍持租约时生效（身份不符则留给恢复器）；skipped 不进入
-    ``_BUDGETED_STATUSES``，因此不消耗调用/ token 预算，也不产生 unknown 计费。
-    """
-    from app.services.steward import _immediate_tx
-
-    released = 0
-    with _immediate_tx(db):
-        db.expire_all()
-        # 旧语义「本批未发送的预留一次性释放」现在按 plan 表达：同一个 plan 下
-        # 仍是 reserved 的 attempt 从未发出，可安全释放（skipped 不消耗预算）。
-        for row in db.scalars(
-            select(StewardModelCall).where(
-                StewardModelCall.plan_id == plan_id,
-                StewardModelCall.status == "reserved",
-            )
-        ):
-            row.status = "skipped"
-            row.error_code = reason
-            released += 1
-        if released:
-            db.flush()
-    return released
-
-
 def _send_budget(lease_until: Any) -> float:
     """出事务前/后的单笔请求总预算（C-R2）。
 
@@ -1157,9 +1130,27 @@ def _advance_kind_cursor(db: Session, space_id: int, kind: str, now: Any) -> Non
     Called once per plan registration, not per attempt: the rotation is a property
     of the space's scheduling, and advancing it per attempt would let a plan with
     many candidate subjects push the cursor arbitrarily far.
+
+    The row is created here if absent. It is normally created by the periodic scan,
+    but work can also be enqueued directly (an integrity scan, an event), and the
+    rotation must not silently stop working in that case — with no row the cursor
+    reads 0 forever, so a space whose budget allows one call per job would retry
+    ``candidate`` indefinitely and never reach the other kinds.
     """
+    if kind not in ASSIST_KINDS:
+        return
     schedule = db.get(StewardSpaceSchedule, space_id)
-    if schedule is None or kind not in ASSIST_KINDS:
+    if schedule is None:
+        db.add(
+            StewardSpaceSchedule(
+                space_id=space_id,
+                next_scan_at=now,
+                last_scheduled_cursor=0,
+                policy_version=config.POLICY_VERSION,
+                assist_kind_cursor=(ASSIST_KINDS.index(kind) + 1) % len(ASSIST_KINDS),
+                updated_at=now,
+            )
+        )
         return
     schedule.assist_kind_cursor = (ASSIST_KINDS.index(kind) + 1) % len(ASSIST_KINDS)
     schedule.updated_at = now
@@ -1379,10 +1370,12 @@ def lease_attempt(
     （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
     ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
 
-    fence 在租约时重验一次（发送前的 TOCTOU 关口）：栅栏不过的 attempt 落
-    ``superseded``，不占用租约。
+    fence 在租约时重验一次（发送前的 TOCTOU 关口），并且是**唯一的**发送门：栅栏不过的
+    attempt 在这里落 ``skipped``（带安全原因码），循环继续看下一个候选，因此一个被栅栏
+    拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
+    一直看起来有活干。
 
-    返回 None 表示本空间无可租 attempt。grant 供 internal 端点签发 run token。
+    返回 None 表示本空间没有可租 attempt（或全部被栅栏拦下）。grant 供 internal 端点签发 run token。
     """
     from app.services.steward import _immediate_tx
 
@@ -1401,7 +1394,7 @@ def lease_attempt(
         )
         if int(in_flight or 0) >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:
             return None
-        attempt = db.scalar(
+        candidates = db.scalars(
             select(StewardModelCall)
             .where(
                 StewardModelCall.space_id == space_id,
@@ -1410,24 +1403,30 @@ def lease_attempt(
                 StewardModelCall.next_attempt_at <= now,
             )
             .order_by(StewardModelCall.next_attempt_at.asc(), StewardModelCall.id.asc())
-            .limit(1)
         )
-        if attempt is None:
-            return None
-        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-        if plan is None:
-            # A reserved attempt always belongs to a plan; a missing one is a
-            # corrupt row rather than a normal state. Retire it instead of
-            # leasing work whose evidence cannot be fenced.
-            attempt.status = "skipped"
-            attempt.error_code = REASON_EVIDENCE_CHANGED
-            db.flush()
-            return None
-        reason = _fence_check(db, plan, attempt, attempt.assist_kind)
-        if reason is not None:
-            attempt.status = "skipped"
-            attempt.error_code = reason
-            db.flush()
+        for attempt in candidates:
+            plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+            if plan is None:
+                # A reserved attempt always belongs to a plan; a missing one is a
+                # corrupt row rather than a normal state. Retire it instead of
+                # leasing work whose evidence cannot be fenced.
+                attempt.status = "skipped"
+                attempt.error_code = REASON_EVIDENCE_CHANGED
+                db.flush()
+                continue
+            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+            if reason is not None:
+                # The sending gate. Retiring it here (rather than returning) is why
+                # a fenced attempt cannot block its space: nothing else would ever
+                # lease it, so it would sit reserved forever and keep the space
+                # looking busy. The reason code is also the explanation callers
+                # report through ``plan_error_code``.
+                attempt.status = "skipped"
+                attempt.error_code = reason
+                db.flush()
+                continue
+            break
+        else:
             return None
         # The per-attempt lease is also capped by the plan's remaining wall clock:
         # otherwise each attempt would get a fresh full window and one plan could
@@ -1437,6 +1436,12 @@ def lease_attempt(
         attempt.lease_owner = worker_id
         attempt.lease_until = min(now + timedelta(seconds=ttl), plan_deadline)
         db.flush()
+        # Everything the carrier needs to send is captured here, so the send path
+        # never has to read the database (and therefore never holds a transaction
+        # across the HTTP call).
+        runtime = agent_provider.resolve_runtime(
+            db, plan.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+        )
         return {
             "attempt_id": attempt.id,
             "space_id": plan.space_id,
@@ -1447,6 +1452,14 @@ def lease_attempt(
             "viewer_account_id": attempt.viewer_account_id,
             "input_hash": attempt.input_hash,
             "prompt_digest": attempt.prompt_digest,
+            "lease_until": attempt.lease_until,
+            "api": runtime.api if runtime is not None else "openai-responses",
+            "runtime": runtime,
+            # The projection and the output cap are read here (inside the lease
+            # transaction) so the send path needs no database access at all.
+            "user_content": _user_content_for(db, attempt),
+            "reserved_output_tokens": attempt.reserved_output_tokens,
+            "model": attempt.model,
         }
 
 
@@ -1674,15 +1687,18 @@ def settle_attempt(
     response_bytes: int = 0,
     now: Any = None,
 ) -> str | None:
-    """结算一个 attempt：计费 + 状态 + 封闭校验 + 写回栅栏 + CAS 应用。
+    """Settle one attempt: record the result, then apply it. Returns its status.
 
-    **这是唯一的写回路径**（in-process 与 Pi carrier 都走它）。旧实现有两条：
-    ``execute_batch`` 的 tx2/tx3 与 ``settle_child_run``，各自维护同一套语义。
+    **Two transactions, deliberately.** The first persists the outcome (status,
+    usage, validated product); the second applies it. Collapsing them would mean a
+    write-back failure rolls the result back too, and a paid-for model answer
+    would be lost — that is crash point ④, and it is why the old design had
+    separate tx2/tx3. ``recover_stuck_attempts`` finishes anything left
+    unapplied.
 
-    ``lease_owner`` 是必填的：租约身份决定「谁有权结算」。失租或被接管的旧执行
-    者必须零结算（行留给恢复器），否则迟到结果会覆盖新状态。
-
-    返回 attempt 终态，或 None（不再持有租约 / 已被结算）。
+    **This is the only write-back path** (the in-process and Pi carriers both end
+    here). ``lease_owner`` is required: the lease decides who may settle, so a
+    late result from a superseded executor cannot overwrite current state.
     """
     from app.services.steward import _immediate_tx
 
@@ -1694,10 +1710,15 @@ def settle_attempt(
             return None
         if attempt.lease_owner != lease_owner:
             return None
+        # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time. Keep a
+        # simulated future clock, but refuse a lease that expired during the real
+        # writer wait — otherwise a write-back that waited behind another writer
+        # is adopted after its lease is already gone.
+        now = max(now, timeutil.utcnow())
         # An expired lease means the result arrived after the executor lost its
         # right to write: leave the row for the recovery owner rather than
-        # settling it. Without this, a slow response could still write back —
-        # exactly the late-write the lease exists to prevent.
+        # settling it. Without this a slow response could still write back — the
+        # late write the lease exists to prevent.
         if attempt.lease_until is None or attempt.lease_until <= now:
             return None
         plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
@@ -1720,30 +1741,55 @@ def settle_attempt(
         )
         if settled is None:
             return None
-        if plan is not None:
-            if settled in ("succeeded", "degraded"):
-                # Write-back fence: the world is re-checked before anything is
-                # applied, so a product computed against a changed space is
-                # dropped rather than written.
-                reason = _fence_check(db, plan, attempt, attempt.assist_kind)
-                if reason is not None:
-                    attempt.status = "skipped"
-                    attempt.error_code = reason
-                    db.flush()
-                    return attempt.status
-            if settled == "succeeded":
-                _apply_product(db, plan=plan, attempt=attempt, now=now)
-                attempt.applied_at = now
-            elif attempt.assist_kind == "terminology":
+        if plan is None:
+            db.flush()
+            return settled
+        # Write-back fence: the world is re-checked before anything is applied, so
+        # a product computed against a changed space is dropped rather than
+        # written.
+        if settled in ("succeeded", "degraded"):
+            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+            if reason is not None:
+                attempt.status = "skipped"
+                attempt.error_code = reason
+                db.flush()
+                return attempt.status
+        db.flush()
+
+    # ---- second transaction: apply the persisted product ----
+    if settled != "succeeded":
+        if settled == "degraded":
+            with _immediate_tx(db):
+                db.expire_all()
+                attempt = db.get(StewardModelCall, attempt_id)
+                if attempt is None or attempt.applied_at is not None:
+                    return settled
                 # Invalid output: still record the group as checked, so the same
                 # request hash is not retried forever.
-                group = _term_group_for(db, attempt)
-                if group is not None:
-                    _mark_terminology_checked(
-                        db, plan=plan, group=group, now=now, preserve_applied=False
-                    )
-        db.flush()
+                plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+                if plan is not None and attempt.assist_kind == "terminology":
+                    group = _term_group_for(db, attempt)
+                    if group is not None:
+                        _mark_terminology_checked(
+                            db, plan=plan, group=group, now=now, preserve_applied=False
+                        )
+                attempt.applied_at = now
+                db.flush()
         return settled
+
+    with _immediate_tx(db):
+        db.expire_all()
+        attempt = db.get(StewardModelCall, attempt_id)
+        if attempt is None or attempt.applied_at is not None:
+            # Already applied (a recovery pass won the race): do not apply twice.
+            return settled
+        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+        if plan is None:
+            return settled
+        _apply_product(db, plan=plan, attempt=attempt, now=now)
+        attempt.applied_at = now
+        db.flush()
+    return settled
 
 
 def _settle_attempt(
@@ -2203,18 +2249,15 @@ def run_attempt(
         # A pi attempt is executed by the sidecar and settled through the internal
         # endpoint; running it here would double-execute the same model call.
         return None
-    attempt = db.get(StewardModelCall, grant["attempt_id"])
-    if attempt is None:
-        return None
-    runtime = agent_provider.resolve_runtime(
-        db, space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
-    )
-    api = runtime.api if runtime is not None else "openai-responses"
+    # Read everything the send needs, then end the transaction: the carrier's HTTP
+    # must never run with one open (the transport asserts this, and a held SQLite
+    # read transaction during a multi-second model call blocks writers).
+    timeout = _send_budget(grant["lease_until"])
     outcome = _inproc().execute(
         db,
-        attempt,
-        timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, _send_budget(attempt.lease_until)),
-        api=api,
+        grant,
+        timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, timeout),
+        api=grant["api"],
         transport=transport,
     )
     return settle_attempt(
@@ -2303,17 +2346,36 @@ def execute_plan_attempts(
         runtime = agent_provider.resolve_runtime(
             db, attempt.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
         )
-        api = runtime.api if runtime is not None else "openai-responses"
+        # Everything the carrier needs, read while the lease transaction is still
+        # open. It is then closed so the HTTP call never runs inside a write
+        # transaction (the transport asserts this).
+        send = {
+            **grant,
+            "runtime": runtime,
+            "api": runtime.api if runtime is not None else "openai-responses",
+            "user_content": _user_content_for(db, attempt),
+            "reserved_output_tokens": attempt.reserved_output_tokens,
+            "model": attempt.model,
+        }
+        db.rollback()
         # The timeout is the budget already computed above: reading it a second
         # time would let the two disagree (and would make the send/abort decision
         # depend on which read happened first).
         outcome = _inproc().execute(
             db,
-            attempt,
+            send,
             timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, budget),
-            api=api,
+            api=send["api"],
             transport=transport,
         )
+        attempt = db.get(StewardModelCall, grant["attempt_id"])
+        if attempt is None:
+            break
+        # ``after_send`` is a test seam that mutates the world between the carrier
+        # call and settlement — the only window in which the write-back fence can be
+        # observed. It must run *after* the send (a mutation made before it would
+        # change the request itself, not just the fence) and before settle, so the
+        # fence sees the changed world.
         if after_send is not None:
             after_send(db, attempt)
         settle_attempt(
@@ -2363,19 +2425,15 @@ def run_due_attempt(
 
 
 def schedule_due_attempt(db: Session, *, space_id: int | None = None) -> StewardAssistPlan | None:
-    """Retire fenced-out attempts, then report the plan that has leaseable work.
+    """Report the plan that has leaseable work, or None.
 
-    **It reserves nothing**, and that is the design change: ``plan_for_job``
-    already reserved every attempt in the same transaction that registered the
-    plan, so there is no "registered but nothing executable" window left to close.
-
-    It *does* apply the send-time fence, for two reasons. First, an attempt whose
-    evidence already changed must not sit reserved forever: nothing would ever
-    lease it, and the space would keep looking busy. Second, the fence's reason
-    code is the explanation callers report (``plan_error_code``), and it only
-    exists once the fence has run.
-
-    Returns the plan with leaseable work, or None.
+    **It neither reserves nor fences**, and both are the design change.
+    ``plan_for_job`` already reserved every attempt in the same transaction that
+    registered the plan, so there is no "registered but nothing executable"
+    window left to close; and the send-time fence lives in ``lease_attempt``,
+    which is the single gate every carrier passes through before sending. Doing
+    it here as well would make the fence a third call site and let the two
+    disagree about which attempt was retired.
     """
     now = timeutil.utcnow()
     stmt = (
@@ -2394,11 +2452,6 @@ def schedule_due_attempt(db: Session, *, space_id: int | None = None) -> Steward
         if plan is None:
             attempt.status = "skipped"
             attempt.error_code = REASON_EVIDENCE_CHANGED
-            continue
-        reason = _fence_check(db, plan, attempt, attempt.assist_kind)
-        if reason is not None:
-            attempt.status = "skipped"
-            attempt.error_code = reason
             continue
         db.flush()
         return plan

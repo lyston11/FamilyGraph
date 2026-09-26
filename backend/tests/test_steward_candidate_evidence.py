@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -104,8 +103,8 @@ def provenance(session, space_id):
         evidence_hash="0" * 64,
         policy_version=config.POLICY_VERSION,
         created_at=utcnow(),
-            deadline_at=utcnow(),
-        )
+        deadline_at=utcnow(),
+    )
     session.add(plan)
     session.flush()
     call = StewardModelCall(
@@ -127,9 +126,7 @@ def provenance(session, space_id):
 
 def record(session, row):
     plan, call = provenance(session, row.space_id)
-    version = evidence.record_for_candidate(
-        session, row, plan=plan, model_call=call, now=utcnow()
-    )
+    version = evidence.record_for_candidate(session, row, plan=plan, model_call=call, now=utcnow())
     session.commit()
     return version
 

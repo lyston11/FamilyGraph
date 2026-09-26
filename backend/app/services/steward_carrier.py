@@ -36,8 +36,6 @@ from app.services.steward_assist import (
     REASON_PROVIDER_UNAVAILABLE,
     _build_payload,
     _fill_model,
-    _post_json,
-    _user_content_for,
 )
 
 # 载体名与配置值共用同一组字面量：两侧漂移会让调度层选到不存在的载体。
@@ -68,7 +66,9 @@ class AssistCarrier(Protocol):
 
     carrier: str
 
-    def execute(self, db: Any, attempt: Any, *, timeout: float, api: str) -> CarrierOutcome: ...
+    def execute(
+        self, db: Any, attempt: Any, *, timeout: float, api: str, transport: Any = None
+    ) -> CarrierOutcome: ...
 
 
 class InprocCarrier:
@@ -93,27 +93,26 @@ class InprocCarrier:
         """
         import time
 
-        from app.services import agent_provider
-
         started = time.monotonic()
-        runtime = agent_provider.resolve_runtime(
-            db, attempt.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
-        )
+        # `attempt` is the lease grant (a plain dict), so this method performs no
+        # database read: the caller must be able to close its transaction before
+        # calling, which is what keeps HTTP out of a write transaction.
+        runtime = attempt.get("runtime")
         if runtime is None:
             return CarrierOutcome(
                 status="failed",
                 error_code=REASON_PROVIDER_UNAVAILABLE,
                 exc=RuntimeError("provider unresolved"),
             )
-        user_content = _user_content_for(db, attempt)
+        user_content = attempt["user_content"]
         payload = _fill_model(
             _build_payload(
                 api,
-                _PROMPTS[attempt.assist_kind],
+                _PROMPTS[attempt["assist_kind"]],
                 user_content,
-                attempt.reserved_output_tokens or 1,
+                attempt.get("reserved_output_tokens") or 1,
             ),
-            attempt.model or "",
+            attempt.get("model") or "",
         )
         # Resolve the sender through the module, not a bound name: tests patch
         # ``steward_assist._post_json`` to inject a fake upstream, and an
@@ -158,7 +157,9 @@ class PiCarrier:
 
     carrier = CARRIER_PI
 
-    def execute(self, db: Any, attempt: Any, *, timeout: float, api: str) -> CarrierOutcome:
+    def execute(
+        self, db: Any, attempt: Any, *, timeout: float, api: str, transport: Any = None
+    ) -> CarrierOutcome:
         raise NotImplementedError(
             "the pi carrier is executed by the sidecar, not in-process; "
             "settlement arrives through /internal/agent/runs/{id}/settle"

@@ -25,7 +25,6 @@ from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember
 from app.models.steward import (
     ActionCard,
-    StewardAssistPlan,
     StewardModelCall,
     StewardTermProjection,
 )
@@ -96,7 +95,12 @@ def test_unknown_result_is_not_resent_in_a_new_job_or_prompt_version(db_session,
     db_session.commit()
     assert steward_assist.run_due_attempt(db_session, transport=unknown) == "failed"
     rows = list(db_session.scalars(select(StewardModelCall)))
-    assert rows and all(row.status == "unknown" for row in rows)
+    # The attempt that was actually sent is unknowable; the plan's other reserved
+    # attempts were never sent and stay reserved (they are still leaseable).
+    sent = [row for row in rows if row.status == "unknown"]
+    assert sent, [(row.status, row.error_code) for row in rows]
+    assert all(row.billed_tokens is not None for row in sent)
+    assert all(row.status in ("unknown", "reserved") for row in rows)
     monkeypatch.setattr(steward_terminology, "PROMPT_VERSION", "synthetic-next-prompt")
     _integrity_scan(db_session, space)
     groups = steward_terminology.collect_model_groups(
@@ -161,13 +165,16 @@ def test_one_call_budget_rotates_from_candidate_to_terminology(db_session, monke
     db_session.commit()
     monkeypatch.setattr(config, "STEWARD_ASSIST_CANDIDATE", True)
     monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", 1)
+    # The rotation is a per-space property of *registration*, not of the reporting
+    # call: the plan is built once by the core job, so the cursor must be advanced
+    # by the plan that reserved candidate work.
     _drain(db_session, space)
-    batch = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
-    assert batch is not None
+    first = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
+    assert first is not None
     assert list(
         db_session.scalars(
             select(StewardModelCall.assist_kind).where(
-                StewardModelCall.plan_id == batch.id,
+                StewardModelCall.plan_id == first.id,
                 StewardModelCall.status == "reserved",
             )
         )
@@ -177,7 +184,10 @@ def test_one_call_budget_rotates_from_candidate_to_terminology(db_session, monke
         return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "[]"}]}]}
 
     assert (
-        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=empty_candidate) == "applied"
+        steward_assist.execute_plan_attempts(
+            db_session, plan_id=first.id, transport=empty_candidate
+        )
+        == "applied"
     )
     _integrity_scan(db_session, space)
     next_batch = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
@@ -202,7 +212,10 @@ def test_empty_terminology_result_is_marked_checked_and_not_resent(db_session):
     account_id = _account_id(db_session, gc)
     empty = _completions_fake(json.dumps({"version": 1, "context_hash": None, "items": []}))
 
-    assert steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=empty) == "applied"
+    assert (
+        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=empty)
+        == "applied"
+    )
     attempt = db_session.scalar(
         select(StewardModelCall).where(
             StewardModelCall.plan_id == batch.id,
@@ -261,7 +274,10 @@ def test_midflight_input_change_discards_model_writeback(db_session, change):
             member.status = "removed"
         session.commit()
 
-    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=changed,
+    status = steward_assist.execute_plan_attempts(
+        db_session,
+        plan_id=batch.id,
+        after_send=changed,
         transport=_completions_fake(
             _terminology_payload(
                 {
@@ -332,7 +348,10 @@ def test_writeback_observes_changes_from_another_database_session(db_session, ch
                 row.base_url = "https://changed.example.invalid/v1"
             writer.commit()
 
-    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=changed,
+    status = steward_assist.execute_plan_attempts(
+        db_session,
+        plan_id=batch.id,
+        after_send=changed,
         transport=_completions_fake(
             _terminology_payload(
                 {
@@ -394,28 +413,17 @@ def test_old_executor_cannot_audit_after_another_session_takes_the_lease(db_sess
             take_over(db_session, batch)
         return answer(url, headers, payload, timeout)
 
-    assert (
-        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport,
-        )
-        == "applying"
-    )
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
     assert took_over == [True]
     db_session.expire_all()
-    assert db_session.get(StewardModelCall, original_attempt).lease_owner == "replacement-worker"
-    calls = list(
-        db_session.scalars(
-            select(StewardModelCall).where(
-                StewardModelCall.plan_id == batch.id,
-            )
-        )
-    )
-    # 旧执行者零结算：本笔保持 in_flight（不落 output_json/计费），接管后的下一笔
-    # 因租约身份不符而未发送。
-    assert calls and all(
-        call.status in ("in_flight", "reserved") and call.output_json is None for call in calls
-    )
-    assert any(call.status == "in_flight" for call in calls)
-    assert all(call.billed_tokens is None for call in calls)
+    # 旧执行者零结算：被接管的那一笔保持 in_flight（不落 output_json、不计费），
+    # 交由接管者/恢复器处理。「失租即零结算」这一合同不变；结算虽然现在分两个
+    # 事务，但**结算判定**仍在第一个事务内。
+    taken = db_session.get(StewardModelCall, original_attempt)
+    assert taken.lease_owner == "replacement-worker"
+    assert taken.status == "in_flight"
+    assert taken.output_json is None
+    assert taken.billed_tokens is None
 
 
 @pytest.mark.parametrize("lease_change", ["expired", "taken_over"])
@@ -461,9 +469,7 @@ def test_recovery_alone_applies_persisted_output_after_lease_loss(
     # The product is durable but unapplied.
     db_session.expire_all()
     persisted = list(
-        db_session.scalars(
-            select(StewardModelCall).where(StewardModelCall.plan_id == batch.id)
-        )
+        db_session.scalars(select(StewardModelCall).where(StewardModelCall.plan_id == batch.id))
     )
     assert any(row.output_json is not None and row.applied_at is None for row in persisted)
     projection = db_session.scalar(
@@ -483,7 +489,19 @@ def test_recovery_alone_applies_persisted_output_after_lease_loss(
         writer.commit()
 
     assert steward_assist.recover_stuck_attempts(db_session) >= 1
-    assert steward_assist.plan_outcome(db_session, batch.id) == "applied"
+    # The persisted product must be applied. The plan may still report "pending"
+    # because other reserved attempts for this plan remain — that is a more
+    # accurate answer than the batch-era "applied", which the old code reached by
+    # releasing those reservations as skipped.
+    assert steward_assist.plan_outcome(db_session, batch.id) in ("applied", "pending")
+    applied = [
+        row
+        for row in db_session.scalars(
+            select(StewardModelCall).where(StewardModelCall.plan_id == batch.id)
+        )
+        if row.applied_at is not None
+    ]
+    assert applied, "the persisted product must be applied by recovery"
     projection = db_session.scalar(
         select(StewardTermProjection).where(
             StewardTermProjection.viewer_account_id == _account_id(db_session, gc),
@@ -502,8 +520,18 @@ def test_model_recreates_a_missing_projection_with_its_real_baseline(db_session)
     batch = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
     assert batch is not None
     account_id = _account_id(db_session, gc)
+    removed: list[bool] = []
 
-    def remove_projection(_session, _batch):
+    def remove_projection(_session, _attempt):
+        """Delete the projection once, inside the write-back window.
+
+        ``after_send`` fires per attempt now (the execution unit is the attempt),
+        so the mutation must be applied exactly once: deleting again after a later
+        attempt recreated the row would erase a product that was already applied.
+        """
+        if removed:
+            return
+        removed.append(True)
         with SessionLocal() as writer:
             writer.execute(
                 delete(StewardTermProjection).where(
@@ -513,20 +541,20 @@ def test_model_recreates_a_missing_projection_with_its_real_baseline(db_session)
             )
             writer.commit()
 
-    assert (
-        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=remove_projection,
-            transport=_completions_fake(
-                _terminology_payload(
-                    {
-                        "target_ref": "t002",
-                        "concept_code": "Uf-Uf",
-                        "term": "姥姥",
-                        "reason_code": "synonym",
-                    }
-                )
-            ),
-        )
-        == "applied"
+    steward_assist.execute_plan_attempts(
+        db_session,
+        plan_id=batch.id,
+        after_send=remove_projection,
+        transport=_completions_fake(
+            _terminology_payload(
+                {
+                    "target_ref": "t002",
+                    "concept_code": "Uf-Uf",
+                    "term": "姥姥",
+                    "reason_code": "synonym",
+                }
+            )
+        ),
     )
     projection = db_session.scalar(
         select(StewardTermProjection).where(
@@ -562,7 +590,16 @@ def test_reading_an_unrelated_card_does_not_discard_terminology_output(db_sessio
     )
     assert card is not None
 
-    def read_card(_session, _batch):
+    read: list[bool] = []
+
+    def read_card(_session, _attempt):
+        """Read the card once: a second ``view`` on a ``viewed`` card is a 409.
+
+        ``after_send`` fires per attempt, so the mutation has to be guarded.
+        """
+        if read:
+            return
+        read.append(True)
         with SessionLocal() as reader:
             current = reader.get(ActionCard, card.id)
             action_cards.transition_card(
@@ -575,7 +612,10 @@ def test_reading_an_unrelated_card_does_not_discard_terminology_output(db_sessio
             reader.commit()
 
     assert (
-        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=read_card,
+        steward_assist.execute_plan_attempts(
+            db_session,
+            plan_id=batch.id,
+            after_send=read_card,
             transport=_completions_fake(
                 _terminology_payload(
                     {

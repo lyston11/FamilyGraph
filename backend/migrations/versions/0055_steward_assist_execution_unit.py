@@ -370,6 +370,83 @@ def _validate_before_upgrade(conn: sa.Connection) -> None:
     )
 
 
+def _refuse_if_memory_provenance(conn: sa.Connection) -> None:
+    """Mirror 0042's own refusal contract for preflight.
+
+    Inline in 0042's downgrade body, so there is no callable to import; the
+    identical condition is restated here (same pattern as 0050 mirroring 0049).
+    Without it a deep downgrade would run this migration's DDL and *then* be
+    refused by 0042, leaving a half-downgraded schema.
+    """
+    count = int(
+        conn.scalar(
+            sa.text(
+                "SELECT (SELECT count(*) FROM memories) + "
+                "(SELECT count(*) FROM memory_candidates)"
+            )
+        )
+        or 0
+    )
+    if count:
+        raise RuntimeError(
+            "Memory source downgrade would discard provenance/history; "
+            "keep the data and forward-fix, or make an explicit data decision"
+        )
+
+
+def _refuse_if_rag_evidence(conn: sa.Connection) -> None:
+    """Mirror 0045's and 0047's own refusal contracts for preflight.
+
+    Both are **inline in their downgrade bodies**, so there is no callable to
+    import (and rewriting an applied revision is not allowed). The identical
+    conditions are restated here — the same pattern 0050 uses for 0049, and for
+    the same reason: this migration runs DDL, so without preflighting them a deep
+    downgrade would modify the schema and *then* be refused by 0045/0047, leaving
+    a half-downgraded database. The three must stay in sync.
+    """
+    # 0047: RAG integrity evidence or a non-default maintenance target.
+    if conn.scalar(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM rag_documents WHERE content_sha256 IS NOT NULL) "
+            "OR EXISTS (SELECT 1 FROM rag_index_maintenance_state "
+            "WHERE target_index_version != 'fts5-trigram-v2' "
+            "OR policy_version NOT IN ('rag-index-maint-v1', 'rag-index-maint-v2'))"
+        )
+    ):
+        raise RuntimeError(
+            "Cannot discard RAG integrity evidence/target policy; retain data and roll forward"
+        )
+    # 0045: historical chunks, key collisions, distinct reasons, saved dependencies.
+    incompatible = conn.scalar(
+        sa.text(
+            "SELECT COUNT(*) FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id "
+            "WHERE c.index_version != d.index_version"
+        )
+    )
+    collisions = conn.scalar(
+        sa.text(
+            "SELECT COUNT(*) FROM (SELECT document_id, chunk_index FROM rag_chunks "
+            "GROUP BY document_id, chunk_index HAVING COUNT(*) > 1)"
+        )
+    )
+    reasons = conn.scalar(
+        sa.text(
+            "SELECT COUNT(*) FROM rag_documents WHERE invalidation_reason IS NOT NULL "
+            "AND invalidation_reason != 'source_invalidated'"
+        )
+    )
+    if incompatible or collisions or reasons:
+        dependencies = conn.scalar(
+            sa.text("SELECT COUNT(*) FROM memories WHERE source_kind = 'rag_chunk'")
+        )
+        raise RuntimeError(
+            "Cannot losslessly downgrade RAG lifecycle: "
+            f"historical_chunks={incompatible}, key_collisions={collisions}, "
+            f"distinct_reasons={reasons}, saved_dependencies={dependencies}; "
+            "retain chunks and roll forward"
+        )
+
+
 def _validate_before_downgrade(conn: sa.Connection) -> None:
     """Refuse to lose child-run evidence by narrowing kind back to assistant-only."""
     _refuse(
@@ -687,16 +764,32 @@ def downgrade() -> None:
         for revision in planned:
             list(context.script.iterate_revisions(revision, destination, select_for_downgrade=True))
         # 直接祖先的自身拒绝合同也要在此提前履行（0051/0053 的守卫在本迁移之后
-        # 才执行，而本迁移已经动了 DDL）。0051 的判定由 0052 的 mirror 函数唯一
-        # 表达（同 0050 mirror 0049 的约定），复用而不在此重写一份。
-        if destination != down_revision:
+        # 才执行，而本迁移已经动了 DDL）。每个守卫由**其后继**唯一镜像表达，沿用
+        # 该约定而不在此重写判定：
+        #   - 0049 的候选证据守卫 → 0050 mirror；
+        #   - 0051 的源计时守卫 → 0052 mirror。
+        # 之前这里两个分支都指向 0052，于是「候选证据存在」的拒绝从未被前置，
+        # 本迁移先删列、再由 0050 拒绝，留下半降级 schema（测试用 DDL_COUNT 抓住）。
+        if "0049_candidate_evidence_versions" in planned or destination != down_revision:
+            candidate_guard = context.script.get_revision("0050_term_alias_spouse_fix")
+            assert candidate_guard is not None
+            candidate_guard.module._refuse_if_candidate_evidence(connection)
+        if "0051_run_event_timing" in planned or destination != down_revision:
             timing_guard = context.script.get_revision("0052_seed_lineage_membership_boundary")
             assert timing_guard is not None
             timing_guard.module._refuse_if_timing_evidence(connection)
-        if "0051_run_event_timing" in planned:
-            timing_guard = context.script.get_revision("0052_seed_lineage_membership_boundary")
-            assert timing_guard is not None
-            timing_guard.module._refuse_if_timing_evidence(connection)
+        # Ancestor refusals that cannot be imported (they are inline in 0045/0047's
+        # downgrade bodies) must still precede this migration's DDL, or a deep
+        # downgrade leaves a half-modified schema before the ancestor rejects it.
+        # Gated on ``planned``: running them unconditionally would refuse every
+        # downgrade, including ones that never touch RAG.
+        if {
+            "0045_rag_index_lifecycle",
+            "0047_rag_lifecycle_integrity",
+        } & planned:
+            _refuse_if_rag_evidence(connection)
+        if "0042_memory_source_contract" in planned:
+            _refuse_if_memory_provenance(connection)
         if "0053_member_approval_and_labels" in planned:
             if connection.scalar(
                 sa.text("SELECT 1 FROM space_member_approvals LIMIT 1")

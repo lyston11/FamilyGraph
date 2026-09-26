@@ -188,8 +188,8 @@ def test_admin_delivery_retry_is_bounded_idempotent_and_does_not_reset_unknown(
         evidence_hash="0" * 64,
         fence_json={},
         created_at=utcnow(),
-            deadline_at=utcnow(),
-        )
+        deadline_at=utcnow(),
+    )
     db_session.add(batch)
     db_session.flush()
     unknown = StewardModelCall(

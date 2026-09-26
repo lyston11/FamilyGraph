@@ -19,7 +19,7 @@ import json
 import pytest
 from sqlalchemy import select
 from test_steward_candidate_evidence import family
-from test_steward_candidate_evidence_integration import _core, _transport, _world
+from test_steward_candidate_evidence_integration import _core, _world
 
 from app import config
 from app.errors import extract_api_error
@@ -74,9 +74,7 @@ def test_plan_reserves_attempts_without_any_network(db_session, monkeypatch):
     plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
     assert plan is not None
     attempts = list(
-        db_session.scalars(
-            select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
-        )
+        db_session.scalars(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
     )
     assert attempts, "a plan with work must reserve at least one attempt"
     for attempt in attempts:
@@ -86,6 +84,77 @@ def test_plan_reserves_attempts_without_any_network(db_session, monkeypatch):
         # The attempt snapshots the digest it fences on, so a later fence run does
         # not depend on the plan still being readable.
         assert attempt.evidence_hash == plan.evidence_hash
+
+
+def test_a_fenced_attempt_does_not_block_its_space(db_session, monkeypatch):
+    """The fence retires what it refuses, and the space keeps moving.
+
+    This is a regression guard for a real defect: the send-time fence used to live
+    in ``schedule_due_attempt``, so removing it there left ``lease_attempt``
+    returning a fenced attempt's plan while nothing was retired. A space whose
+    evidence changed would then sit reserved forever — reported as having work,
+    never leaseable, and never explained by a reason code.
+
+    Constructed so the *second* candidate is fenced and the first is not: with a
+    single candidate, "skip the fenced row" and "return None" are
+    indistinguishable, and this test would pass with the sweep deleted.
+    """
+    world = _world(db_session)
+    _core(db_session, world)
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None
+    leasable = db_session.scalar(
+        select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
+    )
+    assert leasable is not None
+
+    # An extra attempt that sorts first, so the fenced row is the one the selection
+    # query reaches before the leaseable sibling.
+    from datetime import timedelta
+
+    from app.utils.timeutil import utcnow
+
+    now = utcnow()
+    fenced = StewardModelCall(
+        space_id=plan.space_id,
+        job_id=plan.job_id,
+        policy_version=plan.policy_version,
+        assist_kind=leasable.assist_kind,
+        prompt_digest="f" * 64,
+        prompt_chars=10,
+        status="reserved",
+        seq=leasable.seq + 100,
+        created_at=now,
+        plan_id=plan.id,
+        subject_key="fenced-first",
+        input_hash="g" * 64,
+        attempt_no=1,
+        carrier="inproc",
+        evidence_hash=plan.evidence_hash,
+        next_attempt_at=now - timedelta(seconds=1),
+    )
+    db_session.add(fenced)
+    db_session.commit()
+
+    real_fence = steward_assist._fence_check
+
+    def fence(db, check_plan, attempt, kind):
+        # Only the extra attempt is refused; the sibling must be leased in the same
+        # call, which is what proves the sweep continues instead of giving up.
+        if attempt is not None and attempt.id == fenced.id:
+            return steward_assist.REASON_EVIDENCE_CHANGED
+        return real_fence(db, check_plan, attempt, kind)
+
+    monkeypatch.setattr(steward_assist, "_fence_check", fence)
+
+    grant = steward_assist.lease_attempt(db_session, space_id=plan.space_id, worker_id="carrier")
+
+    assert grant is not None, "the space must still have leaseable work"
+    assert grant["attempt_id"] == leasable.id, "the unfenced sibling must be leased"
+    db_session.expire_all()
+    retired = db_session.get(StewardModelCall, fenced.id)
+    assert retired is not None and retired.status == "skipped"
+    assert retired.error_code == steward_assist.REASON_EVIDENCE_CHANGED
 
 
 def test_inproc_carrier_leaves_run_id_null(db_session, monkeypatch):
@@ -227,12 +296,8 @@ def test_two_spaces_lease_independently(db_session, monkeypatch):
     _core(db_session, first)
     _core(db_session, second)
 
-    a = steward_assist.lease_attempt(
-        db_session, space_id=first.space.id, worker_id="carrier-a"
-    )
-    b = steward_assist.lease_attempt(
-        db_session, space_id=second.space.id, worker_id="carrier-b"
-    )
+    a = steward_assist.lease_attempt(db_session, space_id=first.space.id, worker_id="carrier-a")
+    b = steward_assist.lease_attempt(db_session, space_id=second.space.id, worker_id="carrier-b")
 
     assert a is not None, "space A must be leaseable"
     assert b is not None, "space B must be leaseable while A is in flight"
@@ -252,9 +317,7 @@ def test_per_space_budget_blocks_a_second_lease_in_the_same_space(db_session, mo
     _core(db_session, world)
     plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
     assert plan is not None
-    first = db_session.scalar(
-        select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
-    )
+    first = db_session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
     assert first is not None
 
     from app.utils.timeutil import utcnow
@@ -312,9 +375,7 @@ def test_lease_time_fence_skips_instead_of_leasing(db_session, monkeypatch):
         lambda *_a, **_k: steward_assist.REASON_EVIDENCE_CHANGED,
     )
 
-    grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="carrier"
-    )
+    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="carrier")
 
     assert grant is None, "a fenced-out attempt must not be leased"
     db_session.expire_all()
@@ -413,7 +474,11 @@ def test_settle_attempt_applies_the_product_and_is_not_repeatable(db_session, mo
 
     before = settled.status
     again = steward_assist.settle_attempt(
-        db_session, attempt_id=attempt.id, status="succeeded", lease_owner="test-carrier", text=output
+        db_session,
+        attempt_id=attempt.id,
+        status="succeeded",
+        lease_owner="test-carrier",
+        text=output,
     )
     assert again is None, "a settled attempt must not be settled again"
     assert db_session.get(StewardModelCall, attempt.id).status == before
@@ -423,9 +488,7 @@ def test_settle_attempt_refuses_a_foreign_lease_owner(db_session, monkeypatch):
     """Only the lease holder may settle: a late result cannot overwrite state."""
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="holder"
-    )
+    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="holder")
     assert grant is not None
 
     result = steward_assist.settle_attempt(
@@ -483,9 +546,7 @@ def test_recovery_converges_an_expired_lease_to_unknown(db_session, monkeypatch)
 
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="doomed"
-    )
+    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="doomed")
     assert grant is not None
     attempt = db_session.get(StewardModelCall, grant["attempt_id"])
     assert attempt is not None
@@ -506,9 +567,7 @@ def test_recovery_does_not_touch_a_live_lease(db_session, monkeypatch):
     """A live lease must survive a recovery pass."""
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="alive"
-    )
+    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="alive")
     assert grant is not None
 
     steward_assist.recover_stuck_attempts(db_session)
@@ -562,3 +621,42 @@ def test_steward_context_requires_a_real_steward_attempt(db_session, monkeypatch
     assert exc.value.status_code == 422
     payload = extract_api_error(exc.value.detail)
     assert payload is not None and payload["code"] == POLICY_CONTEXT_INVALID
+
+
+# --------------------------------------------------------------------------
+# The fence has exactly the two call sites the design names
+# --------------------------------------------------------------------------
+
+
+def test_the_write_back_fence_has_exactly_two_call_sites():
+    """``_fence_check`` is called from the lease gate and the settle path only.
+
+    The old design called it from nine places, and that is what let the two
+    execution paths drift: a change to one call site did not reach the others.
+    The count is asserted rather than described because "only two" is the
+    property, and a third call site is exactly how the drift comes back.
+
+    This is a structural check on the source, not a behavioural one, so it is
+    deliberately blunt: it names the three permitted callers and fails on any
+    fourth. The permitted three are ``lease_attempt`` (the sending gate),
+    ``settle_attempt`` (the write-back gate) and ``recover_stuck_attempts``
+    (which finishes a product whose write-back was interrupted — it re-checks the
+    world before applying, and skipping that check would apply stale work).
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(steward_assist.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    callers = sorted(
+        {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "_fence_check"
+        }
+    )
+    assert callers == ["lease_attempt", "recover_stuck_attempts", "settle_attempt"]
