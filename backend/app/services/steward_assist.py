@@ -1361,19 +1361,24 @@ def _reserve_plan_attempts(
         _advance_kind_cursor(db, plan.space_id, reserved_kinds[0], now)
 
 
-def _spaces_holding_due_work(db: Session, *, now: Any) -> list[int]:
-    """Spaces holding a due reserved attempt, earliest deadline first.
+def _spaces_holding_due_work(db: Session, *, now: Any, carrier: str) -> list[int]:
+    """Spaces holding a due reserved attempt for this carrier, earliest first.
 
     Used when the caller cannot name a space. The sidecar has no view of the
     space topology and must not grow one: it asks for work and the server
     decides whose work to hand out, exactly as ``/jobs/lease`` does for the
     assistant queue. Ordering by the earliest due attempt keeps a space that has
     been waiting longest from being starved by a busier one.
+
+    Scoped to one carrier because an attempt belongs to the executor it names:
+    offering a ``pi`` attempt to the in-process pump would strand it (see
+    ``lease_attempt``).
     """
     rows = db.execute(
         select(StewardModelCall.space_id, func.min(StewardModelCall.next_attempt_at))
         .where(
             StewardModelCall.status == "reserved",
+            StewardModelCall.carrier == carrier,
             StewardModelCall.next_attempt_at.is_not(None),
             StewardModelCall.next_attempt_at <= now,
         )
@@ -1405,9 +1410,19 @@ def _in_flight_for_space(db: Session, *, space_id: int, now: Any) -> int:
 
 
 def lease_attempt(
-    db: Session, *, space_id: int | None = None, worker_id: str, ttl_seconds: int | None = None
+    db: Session,
+    *,
+    space_id: int | None = None,
+    worker_id: str,
+    carrier: str,
+    ttl_seconds: int | None = None,
 ) -> dict[str, Any] | None:
     """租一个到期 attempt 给一个执行载体（**无网络调用**）。
+
+    ``carrier`` 是必填的，而且选行必须带它：载体是 attempt 的字段，一个 attempt
+    只能由它声明的载体执行。不过滤的后果是具体而严重的——进程内调度泵会租到一个
+    ``pi`` attempt（sidecar 永远看不到它），把行置为 ``in_flight`` 后直接返回，
+    该 attempt 于是被卡到租约过期、以 ``unknown`` 保守计费结束，白花一次调用额度。
 
     与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
     （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
@@ -1422,7 +1437,8 @@ def lease_attempt(
     拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
     一直看起来有活干。
 
-    返回 None 表示没有可租 attempt（或全部被栅栏拦下）。grant 供 internal 端点签发 run token。
+    返回 None 表示没有本载体可租的 attempt（或全部被栅栏拦下）。grant 供 internal 端点
+    签发 run token。
     """
     from app.services.steward import _immediate_tx
 
@@ -1434,7 +1450,7 @@ def lease_attempt(
             space_id = next(
                 (
                     candidate
-                    for candidate in _spaces_holding_due_work(db, now=now)
+                    for candidate in _spaces_holding_due_work(db, now=now, carrier=carrier)
                     if _in_flight_for_space(db, space_id=candidate, now=now)
                     < config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
                 ),
@@ -1451,6 +1467,7 @@ def lease_attempt(
             select(StewardModelCall)
             .where(
                 StewardModelCall.space_id == space_id,
+                StewardModelCall.carrier == carrier,
                 StewardModelCall.status == "reserved",
                 StewardModelCall.next_attempt_at.is_not(None),
                 StewardModelCall.next_attempt_at <= now,
@@ -2289,18 +2306,17 @@ def run_attempt(
 ) -> str | None:
     """租一个 attempt 并用它的载体执行，然后结算。返回 attempt 终态或 None。
 
-    这是**唯一**的执行入口（测试与单机同步路径都用它）。生产路径由
+    这是**进程内路径**的唯一执行入口（测试与单机同步路径都用它）。生产路径由
     ``maintenance`` 的调度泵调用 ``launch_due``，后者把本函数放进有界线程池——
     HTTP 绝不发生在调用方的事务里。
+
+    ``carrier`` 恒为 ``inproc``：本函数就是那个载体。``pi`` attempt 由 sidecar 租走，
+    在租约层就被过滤掉，所以这里不需要再判一次载体。
     """
-    grant = lease_attempt(db, space_id=space_id, worker_id=worker_id)
-    if grant is None:
-        return None
     from app.services.steward_carrier import CARRIER_INPROC
 
-    if grant["carrier"] != CARRIER_INPROC:
-        # A pi attempt is executed by the sidecar and settled through the internal
-        # endpoint; running it here would double-execute the same model call.
+    grant = lease_attempt(db, space_id=space_id, worker_id=worker_id, carrier=CARRIER_INPROC)
+    if grant is None:
         return None
     # Read everything the send needs, then end the transaction: the carrier's HTTP
     # must never run with one open (the transport asserts this, and a held SQLite
@@ -2336,7 +2352,7 @@ def execute_plan_attempts(
     transport: Any = None,
     after_send: Callable[[Session, StewardModelCall], None] | None = None,
 ) -> str | None:
-    """Drain every leaseable attempt of one plan; return the plan's final outcome.
+    """Drain every leaseable in-process attempt of one plan; return its outcome.
 
     This is the synchronous analogue of ``launch_due``: it leases and executes one
     attempt at a time until the plan has nothing left to run. Callers get the same
@@ -2346,9 +2362,10 @@ def execute_plan_attempts(
     the only window in which the write-back fence can be observed: a test changes
     the world there and asserts the fence refuses to apply.
 
-    An attempt is executed only while its carrier is in-process — a ``pi`` attempt
-    is run by the sidecar and settles through the internal endpoint, so executing
-    it here would double-run the same model call.
+    Only in-process attempts are leased — a ``pi`` attempt is run by the sidecar and
+    settles through the internal endpoint, so executing it here would double-run the
+    same model call. That is enforced by the lease itself (``carrier`` is part of the
+    selection), not by a check here.
     """
     from app.services.steward_carrier import CARRIER_INPROC
 
@@ -2356,17 +2373,10 @@ def execute_plan_attempts(
     if plan is None:
         return None
     for _ in range(config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB + 1):
-        grant = lease_attempt(db, space_id=plan.space_id, worker_id=lease_owner)
+        grant = lease_attempt(
+            db, space_id=plan.space_id, worker_id=lease_owner, carrier=CARRIER_INPROC
+        )
         if grant is None:
-            break
-        if grant["carrier"] != CARRIER_INPROC:
-            # Release it: leaving it in_flight would strand a sidecar attempt.
-            _release_unsent(
-                db,
-                attempt_id=grant["attempt_id"],
-                lease_owner=lease_owner,
-                reason=REASON_CARRIER_NOT_INPROC,
-            )
             break
         attempt = db.get(StewardModelCall, grant["attempt_id"])
         if attempt is None:

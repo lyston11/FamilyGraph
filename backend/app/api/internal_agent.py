@@ -411,8 +411,14 @@ def lease_steward_attempt(
     # （STEWARD_PI_RUNTIME_ENABLED）是两个独立的发布决策，必须能各自回退。
     if not (config.STEWARD_ENABLED and config.STEWARD_PI_RUNTIME_ENABLED):
         raise_api_error(503, STEWARD_DISABLED, "Steward Pi runtime 未开启")
+    from app.services.steward_carrier import CARRIER_PI
+
     grant = steward_assist.lease_attempt(
-        db, space_id=body.space_id, worker_id=body.leased_by, ttl_seconds=body.lease_ttl_seconds
+        db,
+        space_id=body.space_id,
+        worker_id=body.leased_by,
+        carrier=CARRIER_PI,
+        ttl_seconds=body.lease_ttl_seconds,
     )
     if grant is None:
         return Response(status_code=204)

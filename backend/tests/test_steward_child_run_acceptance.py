@@ -147,7 +147,9 @@ def test_a_fenced_attempt_does_not_block_its_space(db_session, monkeypatch):
 
     monkeypatch.setattr(steward_assist, "_fence_check", fence)
 
-    grant = steward_assist.lease_attempt(db_session, space_id=plan.space_id, worker_id="carrier")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier", carrier="inproc"
+    )
 
     assert grant is not None, "the space must still have leaseable work"
     assert grant["attempt_id"] == leasable.id, "the unfenced sibling must be leased"
@@ -224,7 +226,10 @@ def test_lease_attempt_takes_one_attempt_and_leases_only_it(db_session, monkeypa
     )
 
     grant = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="test-carrier"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="test-carrier",
+        carrier="inproc",
     )
 
     assert grant is not None
@@ -267,7 +272,10 @@ def test_leasing_picks_from_the_requested_space(db_session, monkeypatch):
     _core(db_session, space_a)
 
     grant = steward_assist.lease_attempt(
-        db_session, space_id=space_a.space.id, worker_id="carrier-a"
+        db_session,
+        space_id=space_a.space.id,
+        worker_id="carrier-a",
+        carrier="inproc",
     )
 
     assert grant is not None
@@ -296,8 +304,12 @@ def test_two_spaces_lease_independently(db_session, monkeypatch):
     _core(db_session, first)
     _core(db_session, second)
 
-    a = steward_assist.lease_attempt(db_session, space_id=first.space.id, worker_id="carrier-a")
-    b = steward_assist.lease_attempt(db_session, space_id=second.space.id, worker_id="carrier-b")
+    a = steward_assist.lease_attempt(
+        db_session, space_id=first.space.id, worker_id="carrier-a", carrier="inproc"
+    )
+    b = steward_assist.lease_attempt(
+        db_session, space_id=second.space.id, worker_id="carrier-b", carrier="inproc"
+    )
 
     assert a is not None, "space A must be leaseable"
     assert b is not None, "space B must be leaseable while A is in flight"
@@ -316,7 +328,7 @@ def test_a_lease_without_a_space_picks_one_with_work(db_session, monkeypatch):
     world = _world(db_session)
     _core(db_session, world)
 
-    grant = steward_assist.lease_attempt(db_session, worker_id="carrier-no-space")
+    grant = steward_assist.lease_attempt(db_session, worker_id="carrier-no-space", carrier="inproc")
 
     assert grant is not None, "a space with due work must be found without naming it"
     assert grant["space_id"] == world.space.id
@@ -343,7 +355,9 @@ def test_a_lease_without_a_space_skips_a_full_one(db_session, monkeypatch):
     _core(db_session, first)
     _core(db_session, second)
 
-    held = steward_assist.lease_attempt(db_session, space_id=first.space.id, worker_id="carrier-a")
+    held = steward_assist.lease_attempt(
+        db_session, space_id=first.space.id, worker_id="carrier-a", carrier="inproc"
+    )
     assert held is not None
 
     # Give space A a *second*, earlier-due attempt: without it A holds no
@@ -381,7 +395,7 @@ def test_a_lease_without_a_space_skips_a_full_one(db_session, monkeypatch):
     )
     db_session.commit()
 
-    other = steward_assist.lease_attempt(db_session, worker_id="carrier-anon")
+    other = steward_assist.lease_attempt(db_session, worker_id="carrier-anon", carrier="inproc")
 
     assert other is not None, "space B must still be leaseable while A is full"
     assert (
@@ -429,11 +443,17 @@ def test_per_space_budget_blocks_a_second_lease_in_the_same_space(db_session, mo
     db_session.commit()
 
     granted = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="carrier-a"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="carrier-a",
+        carrier="inproc",
     )
     assert granted is not None
     blocked = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="carrier-b"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="carrier-b",
+        carrier="inproc",
     )
     assert blocked is None, "a full space must not lease a second attempt"
 
@@ -460,7 +480,9 @@ def test_lease_time_fence_skips_instead_of_leasing(db_session, monkeypatch):
         lambda *_a, **_k: steward_assist.REASON_EVIDENCE_CHANGED,
     )
 
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="carrier")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="carrier", carrier="inproc"
+    )
 
     assert grant is None, "a fenced-out attempt must not be leased"
     db_session.expire_all()
@@ -520,7 +542,10 @@ def test_an_expired_lease_does_not_block_the_space_forever(db_session, monkeypat
     db_session.commit()
 
     grant = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="live-carrier"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="live-carrier",
+        carrier="inproc",
     )
 
     assert grant is not None, "an expired lease must not consume the space's budget"
@@ -532,7 +557,10 @@ def test_settle_attempt_applies_the_product_and_is_not_repeatable(db_session, mo
     world = _world(db_session)
     _core(db_session, world)
     grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="test-carrier"
+        db_session,
+        space_id=world.space.id,
+        worker_id="test-carrier",
+        carrier="inproc",
     )
     assert grant is not None
 
@@ -573,7 +601,9 @@ def test_settle_attempt_refuses_a_foreign_lease_owner(db_session, monkeypatch):
     """Only the lease holder may settle: a late result cannot overwrite state."""
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="holder")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="holder", carrier="inproc"
+    )
     assert grant is not None
 
     result = steward_assist.settle_attempt(
@@ -593,7 +623,10 @@ def test_failed_settlement_bills_conservatively_and_never_auto_retries(db_sessio
     world = _world(db_session)
     _core(db_session, world)
     grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="test-carrier"
+        db_session,
+        space_id=world.space.id,
+        worker_id="test-carrier",
+        carrier="inproc",
     )
     assert grant is not None
     import httpx
@@ -613,7 +646,9 @@ def test_failed_settlement_bills_conservatively_and_never_auto_retries(db_sessio
     assert (settled.billed_tokens or 0) > 0
     # And it must not become leaseable again.
     assert (
-        steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="carrier-b")
+        steward_assist.lease_attempt(
+            db_session, space_id=world.space.id, worker_id="carrier-b", carrier="inproc"
+        )
         is None
     )
 
@@ -631,7 +666,9 @@ def test_recovery_converges_an_expired_lease_to_unknown(db_session, monkeypatch)
 
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="doomed")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="doomed", carrier="inproc"
+    )
     assert grant is not None
     attempt = db_session.get(StewardModelCall, grant["attempt_id"])
     assert attempt is not None
@@ -652,7 +689,9 @@ def test_recovery_does_not_touch_a_live_lease(db_session, monkeypatch):
     """A live lease must survive a recovery pass."""
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="alive")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="alive", carrier="inproc"
+    )
     assert grant is not None
 
     steward_assist.recover_stuck_attempts(db_session)

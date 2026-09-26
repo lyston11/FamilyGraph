@@ -672,7 +672,12 @@ def test_provider_unavailable_superseded_pipeline_intact(db_session, monkeypatch
     # 与旧实现的一处真实差异：旧代码在「调度」时才建 attempt 行，因此这里是
     # 「批次 superseded、零 attempt」；现在 attempt 与 plan 同事务预留，所以
     # 行存在但被栅栏落为 skipped——「零发送」这一合同不变。
-    assert steward_assist.lease_attempt(db_session, space_id=space.id, worker_id="gate") is None
+    assert (
+        steward_assist.lease_attempt(
+            db_session, space_id=space.id, worker_id="gate", carrier="inproc"
+        )
+        is None
+    )
 
     assert summary["stats"]["cards_created"] == 2
     assert calls == []
@@ -1539,7 +1544,12 @@ def test_cloud_consent_revoked_degrades_without_send(db_session, monkeypatch) ->
     setting.cloud_allowed = False
     db_session.commit()
 
-    assert steward_assist.lease_attempt(db_session, space_id=space.id, worker_id="gate") is None
+    assert (
+        steward_assist.lease_attempt(
+            db_session, space_id=space.id, worker_id="gate", carrier="inproc"
+        )
+        is None
+    )
     assert calls == []
     batch = _batch(db_session, job.id)
     assert steward_assist.plan_outcome(db_session, batch.id) == "superseded"
@@ -1573,7 +1583,12 @@ def test_local_required_with_cloud_provider_degrades(db_session, monkeypatch) ->
 
     _summary, job = _run_job(db_session, space, event.id)
 
-    assert steward_assist.lease_attempt(db_session, space_id=space.id, worker_id="gate") is None
+    assert (
+        steward_assist.lease_attempt(
+            db_session, space_id=space.id, worker_id="gate", carrier="inproc"
+        )
+        is None
+    )
     assert calls == []
     batch = _batch(db_session, job.id)
     assert steward_assist.plan_error_code(db_session, batch.id) in (
