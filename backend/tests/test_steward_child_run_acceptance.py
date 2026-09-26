@@ -783,4 +783,67 @@ def test_the_write_back_fence_has_exactly_two_call_sites():
             and child.func.id == "_fence_check"
         }
     )
-    assert callers == ["lease_attempt", "recover_stuck_attempts", "settle_attempt"]
+    assert callers == ["lease_attempt", "record_attempt_outcome", "recover_stuck_attempts"]
+
+
+def test_both_carriers_send_the_same_prompt_text(db_session, monkeypatch):
+    """A child run must send what the in-process carrier sends.
+
+    The in-process carrier sends ``_PROMPTS[kind]`` as the system message and the
+    projection as the user message, and ``prompt_digest`` is computed over those
+    two. If the Pi path sent only a generic system prompt, the two carriers would
+    ask the model different questions while the recorded digest claimed otherwise
+    — and for the candidate kind the difference is load-bearing, because the
+    direction semantics and conflict rules live in that text.
+
+    So the projection must carry the instructions verbatim, and the digest must be
+    reproducible from what the projection hands over.
+    """
+    import hashlib
+
+    from app.main import internal_app
+    from app.services.steward_assist import _PROMPTS
+
+    world, plan = _planned(db_session)
+    attempt = db_session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
+    assert attempt is not None
+    db_session.commit()
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier", carrier="inproc"
+    )
+    assert grant is not None
+    run = steward_assist.open_child_run(
+        db_session, attempt_id=grant["attempt_id"], lease_owner="carrier"
+    )
+    assert run is not None
+    run_token = agent_tokens.issue_run_token(
+        run_id=run.id,
+        job_id=grant["steward_job_id"],
+        attempt=run.attempt,
+        agent_kind="steward",
+        space_id=grant["space_id"],
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        steward_attempt_id=grant["attempt_id"],
+        viewer_account_id=grant["viewer_account_id"],
+    )
+    db_session.commit()
+
+    from fastapi.testclient import TestClient
+
+    response = TestClient(internal_app).get(
+        f"/internal/agent/runs/{run.id}/context",
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    instructions = body["steward_instructions"]
+    assert (
+        instructions == _PROMPTS[attempt.assist_kind]
+    ), "the projection must carry the same instruction text the in-process carrier sends"
+    # And the digest is reproducible from it, which is what makes "the two
+    # carriers send the same thing" checkable rather than a claim.
+    block = body["context_blocks"][0]["content"]
+    rebuilt = hashlib.sha256(f"{instructions}\n{block}".encode()).hexdigest()
+    assert rebuilt == attempt.prompt_digest

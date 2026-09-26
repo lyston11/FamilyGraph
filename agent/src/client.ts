@@ -133,6 +133,10 @@ export interface RunContextProjection {
   /** Steward only: the prompt version the server expects this sidecar to have
    * loaded. Verified against STEWARD_PROMPT_VERSION before any model call. */
   steward_prompt_version?: string;
+  /** Steward only: the per-kind instruction block the server owns. The
+   * in-process carrier sends this as the system message, so a child run must send
+   * the same text (the candidate kind's direction semantics live here). */
+  steward_instructions?: string;
 }
 
 export interface ToolExecutionResult {
@@ -319,6 +323,9 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
     cancel_requested: cancelRequested,
     ...(typeof raw["steward_prompt_version"] === "string"
       ? { steward_prompt_version: raw["steward_prompt_version"] }
+      : {}),
+    ...(typeof raw["steward_instructions"] === "string"
+      ? { steward_instructions: raw["steward_instructions"] }
       : {}),
   };
 }

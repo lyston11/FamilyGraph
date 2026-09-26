@@ -54,14 +54,50 @@ describe("adapterFor", () => {
   });
 
   it("gives each kind its own system prompt", () => {
-    const assistant = adapterFor("assistant").systemPrompt;
-    const steward = adapterFor("steward").systemPrompt;
+    const assistant = adapterFor("assistant").systemPrompt(projection());
+    const steward = adapterFor("steward").systemPrompt(
+      projection({ agent_kind: "steward", steward_instructions: "per-kind rules" }),
+    );
     // Sharing one prompt is the specific failure: the assistant prompt asks for
     // prose and tool calls, the steward's output is a closed structured product
-    // the server validates.
+    // the server validates. For the steward the text is server-owned, because the
+    // in-process carrier sends the same text and prompt_digest covers it.
     expect(assistant).not.toBe(steward);
     expect(assistant.length).toBeGreaterThan(0);
-    expect(steward.length).toBeGreaterThan(0);
+    expect(steward).toBe("per-kind rules");
+  });
+
+  it("fails closed when the server omits the steward instructions", () => {
+    // Falling back to a local prompt would run a model call whose recorded digest
+    // describes different text.
+    expect(() =>
+      adapterFor("steward").systemPrompt(projection({ agent_kind: "steward" })),
+    ).toThrow(/steward_instructions/);
+  });
+
+  it("appends retrieved context only for the assistant", () => {
+    const blocks = [
+      {
+        source_id: "s",
+        source_type: "rag",
+        scope: "space",
+        sensitivity: "normal",
+        revision: 1,
+        citation: "rag:1:r1:c1",
+        content: "retrieved fact",
+      },
+    ];
+    const assistant = adapterFor("assistant").modelPrompt(projection({ context_blocks: blocks }), "hi");
+    const steward = adapterFor("steward").modelPrompt(
+      projection({ agent_kind: "steward", context_blocks: blocks }),
+      "",
+    );
+    expect(assistant).toContain("hi");
+    expect(assistant).toContain("retrieved fact");
+    expect(assistant).toContain("rag:1:r1:c1");
+    // The steward's projection IS its whole input: wrapping it in the assistant's
+    // citation appendix would add instructions the in-process carrier never sent.
+    expect(steward).toBe("retrieved fact");
   });
 
   it("only rejects an empty tool allowlist for the assistant", () => {

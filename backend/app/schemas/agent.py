@@ -156,6 +156,14 @@ class ContextOut(BaseModel):
     # of server-side text) is the evaluation anchor; a mismatch must fail closed
     # rather than silently run stale prompt text against a newer backend.
     steward_prompt_version: str | None = None
+    # Steward only: the per-kind instruction block the server owns. The in-process
+    # carrier sends it as the system message, so a Pi child run must send the same
+    # text or the two carriers ask the model different questions — and
+    # ``prompt_digest``, which is computed over this text plus the projection,
+    # would describe a prompt nobody sent. It is the load-bearing part of the
+    # contract: the candidate kind's direction semantics and conflict rules live
+    # here, and the output validator is a second line rather than a substitute.
+    steward_instructions: str | None = None
 
 
 # ---- events ----

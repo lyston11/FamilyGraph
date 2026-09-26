@@ -379,12 +379,11 @@ export async function buildRunSession(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    // System prompt is a sidecar-local constant; it never travels through the
-    // FastAPI context projection. The steward must NOT reuse the assistant
-    // prompt: its output is a closed structured product the server validates,
-    // whereas the assistant prompt instructs prose answers plus read-only tool
-    // calls. The adapter owns which one applies.
-    systemPrompt: adapter.systemPrompt,
+    // The adapter owns the system prompt. For the assistant it is a sidecar-local
+    // constant that never travels through the projection; for the steward the
+    // server supplies the per-kind instructions, because the in-process carrier
+    // sends the same text and ``prompt_digest`` is computed over it.
+    systemPrompt: adapter.systemPrompt(projection),
   });
   await loader.reload();
 

@@ -960,6 +960,13 @@ def _steward_run_context(
         next_event_seq=agent_events.next_seq(db, run.id),
         cancel_requested=bool(run.cancel_requested),
         steward_prompt_version=steward_assist.STEWARD_PROMPT_VERSION,
+        # The in-process carrier sends this as the system message, so the child run
+        # must send the same text: it carries the per-kind rules (candidate
+        # direction semantics, ranking's strict permutation, terminology's
+        # non-invention clause), and ``prompt_digest`` is computed over it.
+        steward_instructions=steward_assist.instructions_for(attempt)
+        if attempt is not None
+        else None,
     )
     db.commit()
     return response
@@ -1026,7 +1033,7 @@ def _settle_steward_run(
         if attempt_id is None:
             outcome["status"] = None
             return
-        outcome["status"] = steward_assist.settle_attempt(
+        outcome["status"] = steward_assist.record_attempt_outcome(
             session,
             attempt_id=int(attempt_id),
             status=body.status,
@@ -1059,6 +1066,13 @@ def _settle_steward_run(
         )
         db.commit()
         raise
+    # Phase 2, outside the run's transaction: apply the product that phase 1 just
+    # made durable. A failure here leaves the product persisted and unapplied,
+    # which is crash point ④ and is what recover_stuck_attempts finishes — losing
+    # it would discard a paid-for model answer.
+    attempt_id = claims.get("steward_attempt_id")
+    if attempt_id is not None:
+        steward_assist.apply_settled_attempt(db, attempt_id=int(attempt_id))
     return SettleOut(
         ok=True,
         run_id=settled.id,

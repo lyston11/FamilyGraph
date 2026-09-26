@@ -47,6 +47,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app import config
+from app.errors import AGENT_LEASE_EXPIRED
 from app.models.account import Account
 from app.models.agent import AgentRun
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
@@ -534,6 +535,22 @@ def _visible_context(db: Session, space_id: int) -> ProjectionContext:
 # context 投影里上报它实际加载的版本，不匹配时 fail-closed。这同时防止「镜像过期、
 # 跑着旧 prompt 对上新后端」的静默漂移（与 memory #244 的 typ 漂移同一类教训）。
 STEWARD_PROMPT_VERSION = "steward-v1"
+
+
+def instructions_for(attempt: StewardModelCall) -> str:
+    """The per-kind instruction block for one attempt.
+
+    The in-process carrier sends this as the system message. A Pi child run must
+    send the same text, because it is not decoration: the candidate kind's
+    direction semantics and conflict rules live here, and ``prompt_digest`` is
+    computed over ``f"{instructions}\\n{user_content}"``. A carrier that sent only
+    the sidecar's generic system prompt would ask the model a different question
+    while the recorded digest claimed otherwise.
+
+    Empty string rather than None for an unknown kind: the projection field stays
+    a string, and the caller can tell "no instructions" from "no attempt" (None).
+    """
+    return _PROMPTS.get(attempt.assist_kind, "")
 
 
 def prompt_version() -> str:
@@ -1769,6 +1786,127 @@ def settle_attempt(
     **This is the only write-back path** (the in-process and Pi carriers both end
     here). ``lease_owner`` is required: the lease decides who may settle, so a
     late result from a superseded executor cannot overwrite current state.
+
+    A caller that already holds a transaction must not use this function: see
+    ``record_attempt_outcome``, which is the phase-1 half without the transaction
+    management.
+    """
+    from app.services.steward import _immediate_tx
+
+    now = now or timeutil.utcnow()
+    with _immediate_tx(db):
+        # Drop the identity map before reading: another session may have changed the
+        # world between the send and now, and the write-back fence must see that
+        # change rather than a cached instance. Re-checking the fence against stale
+        # objects is the same as not checking it.
+        db.expire_all()
+        settled = record_attempt_outcome(
+            db,
+            attempt_id=attempt_id,
+            status=status,
+            lease_owner=lease_owner,
+            text=text,
+            usage=usage,
+            error_code=error_code,
+            exc=exc,
+            latency_ms=latency_ms,
+            response_bytes=response_bytes,
+            now=now,
+        )
+    if settled is None:
+        return None
+    return apply_settled_attempt(db, attempt_id=attempt_id, now=now)
+
+
+def record_attempt_outcome(
+    db: Session,
+    *,
+    attempt_id: int,
+    status: str,
+    lease_owner: str,
+    text: str | None = None,
+    usage: dict[str, int] | None = None,
+    error_code: str | None = None,
+    exc: Exception | None = None,
+    latency_ms: int = 0,
+    response_bytes: int = 0,
+    now: Any = None,
+) -> str | None:
+    """Phase 1: validate and persist the attempt's outcome. **Caller holds the lock.**
+
+    Split out from ``settle_attempt`` because the Pi path settles inside
+    ``agent_queue.settle_run``'s transaction: the run's terminal state and the
+    attempt's outcome must be atomically visible (otherwise a crash between them
+    leaves "run succeeded / attempt still in_flight", the double terminal state
+    the contract forbids). ``_immediate_tx`` refuses to nest, so the hook cannot
+    call the transaction-managing wrapper.
+
+    Returns the attempt's status, or None when this caller no longer holds the
+    lease.
+    """
+    now = now or timeutil.utcnow()
+    attempt = db.get(StewardModelCall, attempt_id)
+    if attempt is None or attempt.status != "in_flight":
+        return None
+    if attempt.lease_owner != lease_owner:
+        return None
+    # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time. Keep a
+    # simulated future clock, but refuse a lease that expired during the real
+    # writer wait — otherwise a write-back that waited behind another writer
+    # is adopted after its lease is already gone.
+    now = max(now, timeutil.utcnow())
+    # An expired lease means the result arrived after the executor lost its
+    # right to write: leave the row for the recovery owner rather than
+    # settling it. Without this a slow response could still write back — the
+    # late write the lease exists to prevent.
+    if attempt.lease_until is None or attempt.lease_until <= now:
+        return None
+    plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+
+    if status != "succeeded" or exc is not None:
+        _settle_attempt_failure(db, attempt, exc=exc, error_code=error_code, latency_ms=latency_ms)
+        db.flush()
+        return attempt.status
+
+    settled = _settle_attempt(
+        db,
+        plan=plan,
+        attempt_id=attempt_id,
+        text=text,
+        usage=usage,
+        latency_ms=latency_ms,
+        response_bytes=response_bytes,
+    )
+    if settled is None:
+        return None
+    if plan is None:
+        db.flush()
+        return settled
+    # Write-back fence: the world is re-checked before anything is applied, so
+    # a product computed against a changed space is dropped rather than
+    # written.
+    if settled in ("succeeded", "degraded"):
+        reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+        if reason is not None:
+            attempt.status = "skipped"
+            attempt.error_code = reason
+            db.flush()
+            return attempt.status
+    db.flush()
+    return settled
+
+
+def apply_settled_attempt(db: Session, *, attempt_id: int, now: Any = None) -> str | None:
+    """Phase 2: apply a persisted product. Idempotent; **own transaction**.
+
+    Safe to call twice (``applied_at`` is the guard) because a recovery pass may
+    have won the race, and safe to call long after phase 1 because that is exactly
+    crash point ④: the model's answer is durable, only the write-back is missing.
+
+    Every read happens inside the transaction: ``Session.get`` autobegins, and
+    ``_immediate_tx`` refuses a session that already has a transaction open — so
+    reading first and locking second would make this function unusable from any
+    caller that just committed.
     """
     from app.services.steward import _immediate_tx
 
@@ -1776,90 +1914,32 @@ def settle_attempt(
     with _immediate_tx(db):
         db.expire_all()
         attempt = db.get(StewardModelCall, attempt_id)
-        if attempt is None or attempt.status != "in_flight":
+        if attempt is None:
             return None
-        if attempt.lease_owner != lease_owner:
-            return None
-        # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time. Keep a
-        # simulated future clock, but refuse a lease that expired during the real
-        # writer wait — otherwise a write-back that waited behind another writer
-        # is adopted after its lease is already gone.
-        now = max(now, timeutil.utcnow())
-        # An expired lease means the result arrived after the executor lost its
-        # right to write: leave the row for the recovery owner rather than
-        # settling it. Without this a slow response could still write back — the
-        # late write the lease exists to prevent.
-        if attempt.lease_until is None or attempt.lease_until <= now:
-            return None
-        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-
-        if status != "succeeded" or exc is not None:
-            _settle_attempt_failure(
-                db, attempt, exc=exc, error_code=error_code, latency_ms=latency_ms
-            )
-            db.flush()
-            return attempt.status
-
-        settled = _settle_attempt(
-            db,
-            plan=plan,
-            attempt_id=attempt_id,
-            text=text,
-            usage=usage,
-            latency_ms=latency_ms,
-            response_bytes=response_bytes,
-        )
-        if settled is None:
-            return None
-        if plan is None:
-            db.flush()
-            return settled
-        # Write-back fence: the world is re-checked before anything is applied, so
-        # a product computed against a changed space is dropped rather than
-        # written.
-        if settled in ("succeeded", "degraded"):
-            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
-            if reason is not None:
-                attempt.status = "skipped"
-                attempt.error_code = reason
-                db.flush()
-                return attempt.status
-        db.flush()
-
-    # ---- second transaction: apply the persisted product ----
-    if settled != "succeeded":
-        if settled == "degraded":
-            with _immediate_tx(db):
-                db.expire_all()
-                attempt = db.get(StewardModelCall, attempt_id)
-                if attempt is None or attempt.applied_at is not None:
-                    return settled
-                # Invalid output: still record the group as checked, so the same
-                # request hash is not retried forever.
-                plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-                if plan is not None and attempt.assist_kind == "terminology":
-                    group = _term_group_for(db, attempt)
-                    if group is not None:
-                        _mark_terminology_checked(
-                            db, plan=plan, group=group, now=now, preserve_applied=False
-                        )
-                attempt.applied_at = now
-                db.flush()
-        return settled
-
-    with _immediate_tx(db):
-        db.expire_all()
-        attempt = db.get(StewardModelCall, attempt_id)
-        if attempt is None or attempt.applied_at is not None:
+        settled = attempt.status
+        if attempt.applied_at is not None:
             # Already applied (a recovery pass won the race): do not apply twice.
             return settled
         plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-        if plan is None:
+        if settled == "succeeded":
+            if plan is None:
+                return settled
+            _apply_product(db, plan=plan, attempt=attempt, now=now)
+            attempt.applied_at = now
+            db.flush()
             return settled
-        _apply_product(db, plan=plan, attempt=attempt, now=now)
-        attempt.applied_at = now
-        db.flush()
-    return settled
+        if settled == "degraded":
+            # Invalid output: still record the group as checked, so the same
+            # request hash is not retried forever.
+            if plan is not None and attempt.assist_kind == "terminology":
+                group = _term_group_for(db, attempt)
+                if group is not None:
+                    _mark_terminology_checked(
+                        db, plan=plan, group=group, now=now, preserve_applied=False
+                    )
+            attempt.applied_at = now
+            db.flush()
+        return settled
 
 
 def _settle_attempt(
@@ -2259,9 +2339,17 @@ def recover_stuck_child_runs(db: Session, *, now: Any = None) -> int:
     """收敛已建但未结算的 child run（崩溃点⑤：sidecar 被杀）。
 
     不依赖 ``agent_queue.reaper_pass``：它选 ``AgentJob``，而 steward run 的
-    ``job_id`` 恒为 NULL，因此天然不被覆盖——这既意味着不会被误改，也意味着必须
-    在这里收敛，否则 run 会一直停在 ``leased``。
+    ``job_id`` 恒为 NULL，因此天然不被覆盖。这条注释以前接着写「终态由
+    ``agent_queue`` 的收敛路径统一裁决」，但那个路径永远看不到这些行——
+    没有任何一方会写终态，run 会一直停在 ``leased``。所以终态在本函数内写。
+
+    与 assistant 侧的 ``reaper_pass`` 同口径（相同的事件类型、相同的审计动作），
+    但不共用代码：那边的判据是 job 的 attempt 预算与成员资格，steward run 两者
+    都没有。run 的终态是 ``expired``（租约超时）而非 ``cancelled``：没有任何人
+    请求过取消，把它记成取消会污染取消语义。attempt 侧由
+    ``recover_stuck_attempts`` 收敛为 ``unknown``（保守计费、不重发）。
     """
+    from app.services import agent_events, audit
     from app.services.steward import _immediate_tx
 
     now = now or timeutil.utcnow()
@@ -2282,10 +2370,28 @@ def recover_stuck_child_runs(db: Session, *, now: Any = None) -> int:
             )
         )
         for run in stale:
-            # 置取消位而非直接改终态：终态由 agent_queue 的收敛路径统一裁决，与
-            # assistant 侧同一套语义（取消是服务端权威状态）。
             run.cancel_requested = True
+            run.status = "expired"
+            run.settled_at = now
+            run.lease_expires_at = None
+            run.heartbeat_at = None
             run.updated_at = now
+            run.error_code = AGENT_LEASE_EXPIRED
+            agent_events.insert_event(
+                db,
+                run,
+                seq=agent_events.next_seq(db, run.id),
+                event_type=agent_events.TERMINAL_EVENT_FOR["expired"],
+                public_payload={"status": "expired", "error_code": AGENT_LEASE_EXPIRED},
+                created_at=now,
+            )
+            audit.write_audit(
+                db,
+                action="agent_lease_expired",
+                actor_id=None,
+                target_id=run.id,
+                detail={"outcome": "expired", "reason": "steward_child_run_lease_expired"},
+            )
             handled += 1
         db.flush()
     return handled
@@ -2633,9 +2739,14 @@ __all__ = [
     "run_attempt",
     "run_due_attempt",
     "schedule_due_attempt",
+    "apply_settled_attempt",
+    "record_attempt_outcome",
+    "apply_settled_attempt",
+    "record_attempt_outcome",
     "settle_attempt",
     "shutdown_assist_executor",
     "terminology_target_retryable",
     "trusted_explanations",
     "STEWARD_PROMPT_VERSION",
+    "instructions_for",
 ]

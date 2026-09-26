@@ -21,7 +21,6 @@ import { RunEventBuffer, extractText, type FgEvent } from "./events.js";
 import type { Logger } from "./logger.js";
 import { buildRunSession } from "./session.js";
 import { peekRunTokenClaims } from "./tokens.js";
-import { renderContextAppendix } from "./context.js";
 import { adapterFor } from "./adapters/kind.js";
 
 export interface WorkerDeps {
@@ -452,7 +451,10 @@ export class SidecarWorker {
         typeof userMessage?.content_json["text"] === "string"
           ? userMessage.content_json["text"]
           : "";
-      const modelPrompt = promptText + renderContextAppendix(projection.context_blocks ?? []);
+      // The prompt body is the adapter's business: an assistant run appends its
+      // retrieved context with citation handles, a steward run's projection IS the
+      // whole input and must not gain an appendix the in-process carrier never sent.
+      const modelPrompt = adapter.modelPrompt(projection, promptText);
       // message.user_added is backend-owned (written once at enqueue, seq 0) and
       // already present in projection.messages; the sidecar only consumes it.
 

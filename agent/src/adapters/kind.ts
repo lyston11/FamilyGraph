@@ -21,9 +21,10 @@
 
 import type { LeasedJob, RunContextProjection } from "../client.js";
 import { InternalApiError } from "../errors.js";
+import { renderContextAppendix } from "../context.js";
 import type { AgentConfig, AgentKind } from "../config.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "../prompt.js";
-import { STEWARD_PROMPT_VERSION, STEWARD_SYSTEM_PROMPT } from "../prompts/steward.js";
+import { STEWARD_PROMPT_VERSION } from "../prompts/steward.js";
 import { toolNamesFor } from "../tools.js";
 
 /** The request that asks the backend for one lease of this kind. */
@@ -35,9 +36,23 @@ export interface LeaseRequestSpec {
 export interface KindAdapter {
   readonly kind: AgentKind;
 
-  /** System prompt for this kind. Never reused across kinds: the assistant
-   *  answers a person in prose, the steward emits a closed structured product. */
-  readonly systemPrompt: string;
+  /** System prompt for this kind, given the projection.
+   *
+   * A function rather than a constant because the steward's per-kind instructions
+   * are server-owned: the in-process carrier sends them as the system message, and
+   * ``prompt_digest`` is computed over them. A child run that sent a different
+   * system message would ask the model a different question than the digest
+   * claims — and for the candidate kind the difference is load-bearing (the
+   * direction semantics and conflict rules live in that text). */
+  systemPrompt(projection: RunContextProjection): string;
+
+  /** The prompt body handed to the model, from the projection.
+   *
+   * Differs by kind because the projection means different things: an assistant
+   * run carries conversation plus retrieved context (which is appended with
+   * citation handles), while a steward run carries one structured projection that
+   * IS the whole input. */
+  modelPrompt(projection: RunContextProjection, userText: string): string;
 
   /** Whether an empty tool allowlist is a protocol error for this kind.
    *  The assistant always carries read-only query tools; the steward's set is
@@ -89,7 +104,9 @@ export interface KindAdapter {
 
 const assistantAdapter: KindAdapter = Object.freeze<KindAdapter>({
   kind: "assistant",
-  systemPrompt: ASSISTANT_SYSTEM_PROMPT,
+  systemPrompt: () => ASSISTANT_SYSTEM_PROMPT,
+  modelPrompt: (projection, userText) =>
+    userText + renderContextAppendix(projection.context_blocks ?? []),
   emptyToolAllowlistIsInvalid: true,
   toolNames: () => toolNamesFor("assistant"),
   slotBudget: (config) => config.maxConcurrentRuns,
@@ -114,7 +131,22 @@ const assistantAdapter: KindAdapter = Object.freeze<KindAdapter>({
 
 const stewardAdapter: KindAdapter = Object.freeze<KindAdapter>({
   kind: "steward",
-  systemPrompt: STEWARD_SYSTEM_PROMPT,
+  systemPrompt: (projection) => {
+    // Server-owned and required: see the interface comment. Failing closed here is
+    // deliberate — silently falling back to a local prompt would run a model call
+    // whose recorded digest describes different text.
+    const instructions = projection.steward_instructions;
+    if (instructions === undefined || instructions.length === 0) {
+      throw new Error("steward context is missing steward_instructions");
+    }
+    return instructions;
+  },
+  modelPrompt: (projection) =>
+    // The projection is the whole input: a steward run has no conversation and no
+    // retrieved context to append. Wrapping it in the assistant's citation
+    // appendix would add instructions the in-process carrier never sent, so the
+    // two carriers would no longer be asking the same question.
+    (projection.context_blocks ?? []).map((block) => block.content).join("\n"),
   // The steward's tool set is empty by design, so "must be non-empty" cannot
   // apply; the membership half still rejects any tool it does not own.
   emptyToolAllowlistIsInvalid: false,
@@ -161,6 +193,9 @@ const stewardAdapter: KindAdapter = Object.freeze<KindAdapter>({
         `steward prompt version mismatch: server expects ${expected}, ` +
           `this sidecar has ${STEWARD_PROMPT_VERSION}`,
       );
+    }
+    if (projection.steward_instructions === undefined) {
+      throw new Error("steward context is missing steward_instructions");
     }
   },
   adoptsServerConcurrency: true,
