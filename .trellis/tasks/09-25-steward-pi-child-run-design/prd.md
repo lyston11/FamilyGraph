@@ -7,6 +7,20 @@
 
 把 Steward 的模型辅助从「进程内裸 httpx 直连 Provider」改回 `08-26-v2-agent-system` 的原始设计——**Assistant 与 Steward 都跑 Pi 运行时**——为此定义 StewardJob ↔ Pi child run 的父子作业、凭据、上下文、工具与审计合同，并给出可分批落地、可回退、不破坏现有确定性内核与安全红线的迁移路径。
 
+> **2026-09-25 第二轮裁定（覆盖第一轮设计）**：第一轮在旧架构上做「两条执行路径共存」的折中方案，
+> 用户裁定否决——「不要为了保留当前的架构而搞得越来越复杂，我们需要使用清晰的链路和结构，
+> 需要重构旧深度重构，无论是 sidecar 还是 steward」。第二轮改为：
+>
+> - **执行单元 = 一次模型调用（attempt）**，不再是「批次」；
+> - **lease 从 `StewardAssistBatch` 下移到 `StewardModelCall`**；
+> - **并发按空间**（`STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE`），不再是全库 1；
+> - **单一链路 + 可换载体（carrier）**，逐 kind 迁移 = 换该 kind 的 carrier；
+> - **sidecar 拆出 `KindAdapter`**，`executeJob` 零 `if kind`；
+> - 未发布的迁移 0055 **直接重写**，不做收敛迁移。
+>
+> 第一轮的三处结构问题（执行单元选错、两条路径各维护 4 张表、并发压成全库 1）与完整目标结构
+> 见 `design.md` §2/§3。
+
 ## 背景：当前背离了什么
 
 用户原始意图记录在 `.trellis/tasks/archive/2026-08/08-26-v2-agent-system/`：
