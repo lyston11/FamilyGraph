@@ -54,7 +54,7 @@ function makeWorker(options: HarnessOptions = {}) {
     ...makeAgentConfig(0),
     role: "both",
     maxConcurrentRuns: 2,
-    stewardMaxConcurrentBatches: 1,
+    stewardMaxConcurrentCallsPerSpace: 1,
     ...options.overrides,
   };
   const leaseCalls: AgentKind[] = [];
@@ -143,7 +143,7 @@ describe("sidecar slot isolation", () => {
     };
     let assistantSeq = 0;
     const { worker, startedRuns, release } = makeWorker({
-      overrides: { maxConcurrentRuns: 2, stewardMaxConcurrentBatches: 1 },
+      overrides: { maxConcurrentRuns: 2, stewardMaxConcurrentCallsPerSpace: 1 },
       jobs: jobs as never,
     });
     // Fill the single steward slot and keep it occupied.
@@ -313,7 +313,7 @@ describe("sidecar slot isolation", () => {
       // Steward slots only exist when this instance serves steward jobs, so the
       // role must be set or leaseIntoSlot refuses before reaching the broadcast.
       role: "both",
-      stewardMaxConcurrentBatches: 1,
+      stewardMaxConcurrentCallsPerSpace: 1,
     };
     const client = {
       leaseJob: async () => ({
@@ -328,7 +328,7 @@ describe("sidecar slot isolation", () => {
     ).mockImplementation(() => new Promise<void>(() => {}));
 
     await worker.leaseIntoSlot("steward");
-    expect(config.stewardMaxConcurrentBatches).toBe(3);
+    expect(config.stewardMaxConcurrentCallsPerSpace).toBe(3);
 
     // A later, lower broadcast must not shrink it back.
     (client as { leaseJob: unknown }).leaseJob = async () => ({
@@ -336,7 +336,7 @@ describe("sidecar slot isolation", () => {
       max_concurrent: 1,
     });
     await worker.leaseIntoSlot("steward");
-    expect(config.stewardMaxConcurrentBatches).toBe(3);
+    expect(config.stewardMaxConcurrentCallsPerSpace).toBe(3);
   });
 });
 

@@ -101,7 +101,7 @@ export class SidecarWorker {
   private slotsFor(kind: AgentKind): number {
     return kind === "assistant"
       ? this.config.maxConcurrentRuns
-      : this.config.stewardMaxConcurrentBatches;
+      : this.config.stewardMaxConcurrentCallsPerSpace;
   }
 
   private enabledKinds(): AgentKind[] {
@@ -245,24 +245,25 @@ export class SidecarWorker {
   /**
    * Raise the steward slot budget to whatever the server says it will admit.
    *
-   * The server decides how many batches may hold a lease; if the local value is
-   * smaller, a leased batch sits with no executor until recovery reclaims it.
+   * The server decides how many attempts of one space may hold a lease; if the
+   * local value is smaller, a leased attempt sits with no executor until recovery
+   * reclaims it.
    * Only ever raised, never lowered, so the value cannot oscillate between
    * polls. This corrects a misconfiguration; it does not replace configuring
-   * STEWARD_ASSIST_MAX_CONCURRENT_BATCHES on both sides.
+   * STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE on both sides.
    */
   private adoptServerConcurrency(broadcast: number | undefined): void {
     if (broadcast === undefined) return;
-    if (broadcast === this.config.stewardMaxConcurrentBatches) return;
-    if (broadcast > this.config.stewardMaxConcurrentBatches) {
+    if (broadcast === this.config.stewardMaxConcurrentCallsPerSpace) return;
+    if (broadcast > this.config.stewardMaxConcurrentCallsPerSpace) {
       this.logger.warn("steward concurrency raised to the server's limit", {
-        local: this.config.stewardMaxConcurrentBatches,
+        local: this.config.stewardMaxConcurrentCallsPerSpace,
         server: broadcast,
       });
-      this.config.stewardMaxConcurrentBatches = broadcast;
+      this.config.stewardMaxConcurrentCallsPerSpace = broadcast;
     } else {
       this.logger.warn("steward concurrency below the server's limit", {
-        local: this.config.stewardMaxConcurrentBatches,
+        local: this.config.stewardMaxConcurrentCallsPerSpace,
         server: broadcast,
       });
     }

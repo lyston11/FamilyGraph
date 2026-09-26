@@ -47,11 +47,11 @@ export interface AgentConfig {
    * local value would only manufacture queueing. */
   maxConcurrentRuns: number;
   /** Concurrent steward slots. Shares its name and default with the backend's
-   * STEWARD_ASSIST_MAX_CONCURRENT_BATCHES, which decides how many batches may
-   * hold a lease; a smaller local value would leave a leased batch with no
-   * executor until server-side recovery reclaimed it. The lease response also
-   * broadcasts the server's value as a correction mechanism. */
-  stewardMaxConcurrentBatches: number;
+   * STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE, which decides how many attempts
+   * of one space may hold a lease; a smaller local value would leave a leased
+   * attempt with no executor until server-side recovery reclaimed it. The lease
+   * response also broadcasts the server's value as a correction mechanism. */
+  stewardMaxConcurrentCallsPerSpace: number;
   /** Lease lifetime advertised by FastAPI; heartbeat fires at lease/3. */
   defaultLeaseMs: number;
   /** Event batch flush thresholds. */
@@ -150,10 +150,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     leasePollIntervalMs: readInt(env, "AGENT_LEASE_POLL_MS", 250),
     role: readRole(env),
     maxConcurrentRuns: readConcurrency(env, "AGENT_MAX_CONCURRENT_RUNS", 2),
-    stewardMaxConcurrentBatches: readConcurrency(
+    stewardMaxConcurrentCallsPerSpace: readConcurrency(
       env,
-      "STEWARD_ASSIST_MAX_CONCURRENT_BATCHES",
-      1,
+      "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE",
+      2,
     ),
     providerStreamMaxRetries: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRIES", 5),
     providerStreamMaxRetryDelayMs: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS", 20000),

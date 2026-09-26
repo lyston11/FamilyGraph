@@ -15,7 +15,7 @@ export function makeAgentConfig(apiPort: number): AgentConfig {
     // (written for the serial worker) keep their meaning.
     role: "assistant",
     maxConcurrentRuns: 1,
-    stewardMaxConcurrentBatches: 1,
+    stewardMaxConcurrentCallsPerSpace: 1,
     defaultLeaseMs: 60_000,
     eventFlushIntervalMs: 20,
     eventFlushBatchSize: 8,

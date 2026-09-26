@@ -149,7 +149,7 @@ function makeConfig(port: number): AgentConfig {
     healthPort: 0,
     role: "assistant",
     maxConcurrentRuns: 1,
-    stewardMaxConcurrentBatches: 1,
+    stewardMaxConcurrentCallsPerSpace: 1,
     leasePollIntervalMs: 5,
     defaultLeaseMs: 60_000,
     eventFlushIntervalMs: 15,

@@ -87,7 +87,7 @@ services:
       # 能跑几个。两侧不一致会让 batch「已预留 attempt 但无人执行」，直到
       # recover_stuck_batches 收口。sidecar 也会从 lease 响应读取服务端当前值
       # 作为纠错（只上调不下调），但广播是纠错机制，不替代两侧配置。
-      STEWARD_ASSIST_MAX_CONCURRENT_BATCHES: ${STEWARD_ASSIST_MAX_CONCURRENT_BATCHES:-1}
+      STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-1}
       DEV_SEED_DEMO_DATA: ${DEV_SEED_DEMO_DATA:-0}
       # 09-01 个人家族视图（家庭卡/家族树投影端点）功能开关
       PERSONAL_FAMILY_VIEW_ENABLED: ${PERSONAL_FAMILY_VIEW_ENABLED:-0}
@@ -192,7 +192,7 @@ services:
       # 只会人为造排队（不改变后端授权，仅影响本地并发）。
       AGENT_MAX_CONCURRENT_RUNS: ${AGENT_MAX_CONCURRENT_RUNS:-2}
       # steward 槽位数：必须与 api 服务的同名变量同值（见该处注释）。
-      STEWARD_ASSIST_MAX_CONCURRENT_BATCHES: ${STEWARD_ASSIST_MAX_CONCURRENT_BATCHES:-1}
+      STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-1}
     networks:
       - backend
     # 优雅停机：SIGTERM → worker.stop + health.close；在途 Run 由 FastAPI reaper 回收

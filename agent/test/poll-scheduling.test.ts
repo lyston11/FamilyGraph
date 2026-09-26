@@ -50,7 +50,7 @@ function harness(
     // Single slot per kind unless a test asks otherwise: with one slot the
     // "does it sleep after work" question is unambiguous.
     maxConcurrentRuns: 1,
-    stewardMaxConcurrentBatches: 1,
+    stewardMaxConcurrentCallsPerSpace: 1,
     ...overrides,
   };
   const calls: Call[] = [];
@@ -183,7 +183,7 @@ describe("sidecar poll loop scheduling", () => {
     // steward once.
     const { worker, calls } = harness(
       { assistant: [true, true], steward: [true] },
-      { role: "both", maxConcurrentRuns: 2, stewardMaxConcurrentBatches: 1 },
+      { role: "both", maxConcurrentRuns: 2, stewardMaxConcurrentCallsPerSpace: 1 },
     );
     worker.start();
     await runUntil(calls, 3);
