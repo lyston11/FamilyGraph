@@ -188,16 +188,27 @@ def test_claimed_web_tool_releases_writer_before_real_gateway_network_boundary(
         # This is the actual controlled_web search I/O seam, after its policy,
         # quota and DNS checks. A different SQLite connection must be writable.
         with SessionLocal() as contender:
+            # The short timeout is the point: this proves the contender does not
+            # need to wait out a lock. It must be restored before the connection
+            # goes back to the pool, because ``PRAGMA busy_timeout`` is a property
+            # of the connection, not of the session, and the connect hook only sets
+            # it when a connection is created. Leaving 100ms behind hands it to
+            # whichever later test reuses this connection, which then fails with
+            # "database is locked" on work the 5000ms default would have waited out.
+            original_timeout = contender.execute(text("PRAGMA busy_timeout")).scalar_one()
             contender.execute(text("PRAGMA busy_timeout = 100"))
-            claim = contender.scalar(
-                select(AgentToolCall).where(AgentToolCall.run_id == world["run_id"])
-            )
-            assert claim is not None and claim.result_json == {}
-            contender.execute(
-                text("UPDATE agent_runs SET updated_at = updated_at WHERE id = :run_id"),
-                {"run_id": world["run_id"]},
-            )
-            contender.commit()
+            try:
+                claim = contender.scalar(
+                    select(AgentToolCall).where(AgentToolCall.run_id == world["run_id"])
+                )
+                assert claim is not None and claim.result_json == {}
+                contender.execute(
+                    text("UPDATE agent_runs SET updated_at = updated_at WHERE id = :run_id"),
+                    {"run_id": world["run_id"]},
+                )
+                contender.commit()
+            finally:
+                contender.execute(text(f"PRAGMA busy_timeout = {int(original_timeout)}"))
         if refuse:
             raise controlled_web.WebGatewayError(
                 503, "WEB_PROVIDER_UNAVAILABLE", "synthetic unavailable"
