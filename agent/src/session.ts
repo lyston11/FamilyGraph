@@ -37,11 +37,9 @@ import type {
 import type { AgentConfig } from "./config.js";
 import { RunEventBuffer } from "./events.js";
 import { createPolicyGuard, type PolicyGuard } from "./policy.js";
-import { ASSISTANT_SYSTEM_PROMPT } from "./prompt.js";
-import { STEWARD_SYSTEM_PROMPT } from "./prompts/steward.js";
+import { adapterFor } from "./adapters/kind.js";
 import {
   createDomainTools,
-  toolNamesFor,
   providerWireName,
   type DomainToolName,
 } from "./tools.js";
@@ -274,15 +272,10 @@ export async function buildRunSession(
   // only the global registry would let the server advertise an assistant tool to
   // a steward slot; checking per kind makes "a job only runs tools its kind
   // owns" a property of the session builder rather than of server correctness.
-  const allowedForKind = toolNamesFor(projection.agent_kind);
-  // Assistant runs always carry the read-only query tools, so an empty
-  // allowlist there is a protocol error worth rejecting loudly. Steward's set is
-  // empty in S1 by design (its output is a closed structured product), so the
-  // "must be non-empty" half applies to assistant only; the membership half
-  // already rejects any tool a kind does not own.
-  const emptyIsInvalid = projection.agent_kind === "assistant";
+  const adapter = adapterFor(projection.agent_kind);
+  const allowedForKind = adapter.toolNames();
   if (
-    (emptyIsInvalid && projection.tool_allowlist.length === 0) ||
+    (adapter.emptyToolAllowlistIsInvalid && projection.tool_allowlist.length === 0) ||
     !projection.tool_allowlist.every((name) => allowedForKind.includes(name))
   ) {
     throw new Error(
@@ -387,11 +380,11 @@ export async function buildRunSession(
     noThemes: true,
     noContextFiles: true,
     // System prompt is a sidecar-local constant; it never travels through the
-    // FastAPI context projection. Steward must NOT reuse the assistant prompt:
-    // its output is a closed structured product the server validates, whereas
-    // the assistant prompt instructs prose answers plus read-only tool calls.
-    systemPrompt:
-      projection.agent_kind === "steward" ? STEWARD_SYSTEM_PROMPT : ASSISTANT_SYSTEM_PROMPT,
+    // FastAPI context projection. The steward must NOT reuse the assistant
+    // prompt: its output is a closed structured product the server validates,
+    // whereas the assistant prompt instructs prose answers plus read-only tool
+    // calls. The adapter owns which one applies.
+    systemPrompt: adapter.systemPrompt,
   });
   await loader.reload();
 
@@ -419,16 +412,9 @@ export async function buildRunSession(
   // provider account, and two deployments sharing one upstream must not
   // partition each other's sessions. Only the cache key depends on it
   // (compaction reads the entries), so this changes no other session behaviour.
-  // The cache key must stay stable across runs (that is the whole point) and be
-  // derived per kind: steward runs have no account/session, so the assistant
-  // formula would yield `fg-null-null` for every steward run and let unrelated
-  // spaces share one upstream cache prefix. The space is the natural steward
-  // scope and the only stable identifier the projection carries; the shared
-  // prefix it recovers is the system prompt, which is space-independent.
-  const cacheKey =
-    projection.agent_kind === "steward"
-      ? `fg-steward-${projection.space_id}`
-      : `fg-${projection.account_id}-${projection.session_id}`;
+  // The cache key must stay stable across runs (that is the whole point), and the
+  // formula is per kind — the adapter owns it.
+  const cacheKey = adapter.cacheKey(projection);
   const sessionManager = SessionManager.inMemory(agentDir, { id: cacheKey });
   const latestUserId = [...projection.messages]
     .reverse()

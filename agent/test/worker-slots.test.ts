@@ -34,7 +34,7 @@ function leasedJob(kind: AgentKind, runId: string) {
     policy_version: "pv",
     run_token: `tok-${runId}`,
     ...(kind === "steward"
-      ? { steward_job_id: "1", steward_batch_id: "2", assist_kind: "terminology", max_concurrent: 1 }
+      ? { steward_job_id: "1", steward_attempt_id: "2", assist_kind: "terminology", max_concurrent: 1 }
       : {}),
   };
 }

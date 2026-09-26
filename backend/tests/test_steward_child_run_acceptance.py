@@ -304,6 +304,91 @@ def test_two_spaces_lease_independently(db_session, monkeypatch):
     assert a["space_id"] != b["space_id"]
 
 
+def test_a_lease_without_a_space_picks_one_with_work(db_session, monkeypatch):
+    """The sidecar asks for work without naming a space, and still gets work.
+
+    The sidecar has no view of the space topology and must not grow one: it asks
+    for work and the server decides whose work to hand out, exactly as
+    ``/jobs/lease`` does for the assistant queue. Without this the Pi carrier
+    cannot lease at all — the endpoint requires ``space_id``, and the sidecar has
+    no way to produce one.
+    """
+    world = _world(db_session)
+    _core(db_session, world)
+
+    grant = steward_assist.lease_attempt(db_session, worker_id="carrier-no-space")
+
+    assert grant is not None, "a space with due work must be found without naming it"
+    assert grant["space_id"] == world.space.id
+
+
+def test_a_lease_without_a_space_skips_a_full_one(db_session, monkeypatch):
+    """Not naming a space must not collapse the budget back to whole-database 1.
+
+    This is the property the omitted-``space_id`` path could quietly break: if the
+    server picked the first space with work regardless of its in-flight count,
+    space B would wait for space A again — exactly the global-1 behaviour E1
+    removed. Constructed with A holding a live lease at a budget of 1, so B is the
+    only admissible answer.
+    """
+    monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", 1)
+    from test_steward_assist import _provider, _steward_setting
+
+    provider = _provider(db_session, name="e2-space-skip-provider")
+    first = family(db_session, name="e2-skip-a")
+    _steward_setting(db_session, first.space, provider, candidate=True)
+    second = family(db_session, name="e2-skip-b")
+    _steward_setting(db_session, second.space, provider, candidate=True)
+    db_session.commit()
+    _core(db_session, first)
+    _core(db_session, second)
+
+    held = steward_assist.lease_attempt(db_session, space_id=first.space.id, worker_id="carrier-a")
+    assert held is not None
+
+    # Give space A a *second*, earlier-due attempt: without it A holds no
+    # reserved work, so it would never be a candidate and the budget check would
+    # be unobservable (verified by mutation — that is how the first version of
+    # this test was wrong). With it, A is the first candidate by deadline and the
+    # budget is the only thing that can move the answer to B.
+    from datetime import timedelta
+
+    from app.utils.timeutil import utcnow
+
+    source = db_session.scalar(
+        select(StewardModelCall).where(StewardModelCall.space_id == first.space.id)
+    )
+    assert source is not None
+    db_session.add(
+        StewardModelCall(
+            space_id=source.space_id,
+            job_id=source.job_id,
+            policy_version=source.policy_version,
+            assist_kind=source.assist_kind,
+            prompt_digest="f" * 64,
+            prompt_chars=10,
+            status="reserved",
+            seq=source.seq + 100,
+            created_at=utcnow(),
+            plan_id=source.plan_id,
+            subject_key="a-second",
+            input_hash="g" * 64,
+            attempt_no=1,
+            carrier="inproc",
+            evidence_hash=source.evidence_hash,
+            next_attempt_at=utcnow() - timedelta(seconds=5),
+        )
+    )
+    db_session.commit()
+
+    other = steward_assist.lease_attempt(db_session, worker_id="carrier-anon")
+
+    assert other is not None, "space B must still be leaseable while A is full"
+    assert (
+        other["space_id"] == second.space.id
+    ), "the full space A had the earliest work; the budget must skip it"
+
+
 def test_per_space_budget_blocks_a_second_lease_in_the_same_space(db_session, monkeypatch):
     """The budget bounds one space, and it is the *budget* that does it.
 

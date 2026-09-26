@@ -1361,29 +1361,37 @@ def _reserve_plan_attempts(
         _advance_kind_cursor(db, plan.space_id, reserved_kinds[0], now)
 
 
-def lease_attempt(
-    db: Session, *, space_id: int, worker_id: str, ttl_seconds: int | None = None
-) -> dict[str, Any] | None:
-    """租一个到期 attempt 给一个执行载体（**无网络调用**）。
+def _spaces_holding_due_work(db: Session, *, now: Any) -> list[int]:
+    """Spaces holding a due reserved attempt, earliest deadline first.
 
-    与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
-    （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
-    ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
-
-    fence 在租约时重验一次（发送前的 TOCTOU 关口），并且是**唯一的**发送门：栅栏不过的
-    attempt 在这里落 ``skipped``（带安全原因码），循环继续看下一个候选，因此一个被栅栏
-    拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
-    一直看起来有活干。
-
-    返回 None 表示本空间没有可租 attempt（或全部被栅栏拦下）。grant 供 internal 端点签发 run token。
+    Used when the caller cannot name a space. The sidecar has no view of the
+    space topology and must not grow one: it asks for work and the server
+    decides whose work to hand out, exactly as ``/jobs/lease`` does for the
+    assistant queue. Ordering by the earliest due attempt keeps a space that has
+    been waiting longest from being starved by a busier one.
     """
-    from app.services.steward import _immediate_tx
+    rows = db.execute(
+        select(StewardModelCall.space_id, func.min(StewardModelCall.next_attempt_at))
+        .where(
+            StewardModelCall.status == "reserved",
+            StewardModelCall.next_attempt_at.is_not(None),
+            StewardModelCall.next_attempt_at <= now,
+        )
+        .group_by(StewardModelCall.space_id)
+        .order_by(func.min(StewardModelCall.next_attempt_at).asc(), StewardModelCall.space_id.asc())
+    ).all()
+    return [int(row[0]) for row in rows]
 
-    now = timeutil.utcnow()
-    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
-    with _immediate_tx(db):
-        db.expire_all()
-        in_flight = db.scalar(
+
+def _in_flight_for_space(db: Session, *, space_id: int, now: Any) -> int:
+    """Live (unexpired) in-flight attempts of one space.
+
+    Expired leases deliberately do not count: a crashed executor leaves the row
+    reading ``in_flight`` until recovery reclaims it, and counting that row would
+    let one crash permanently consume the space's capacity.
+    """
+    return int(
+        db.scalar(
             select(func.count())
             .select_from(StewardModelCall)
             .where(
@@ -1392,7 +1400,52 @@ def lease_attempt(
                 StewardModelCall.lease_until > now,
             )
         )
-        if int(in_flight or 0) >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:
+        or 0
+    )
+
+
+def lease_attempt(
+    db: Session, *, space_id: int | None = None, worker_id: str, ttl_seconds: int | None = None
+) -> dict[str, Any] | None:
+    """租一个到期 attempt 给一个执行载体（**无网络调用**）。
+
+    与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
+    （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
+    ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
+
+    ``space_id`` 省略时由服务端选一个有容量且有到期工作的空间（sidecar 不知道空间拓扑，
+    也不该知道）。**这不回退到全库 1**：预算是 per-space 的，且选择会跳过已满的空间，
+    两个空间仍可同时推进。
+
+    fence 在租约时重验一次（发送前的 TOCTOU 关口），并且是**唯一的**发送门：栅栏不过的
+    attempt 在这里落 ``skipped``（带安全原因码），循环继续看下一个候选，因此一个被栅栏
+    拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
+    一直看起来有活干。
+
+    返回 None 表示没有可租 attempt（或全部被栅栏拦下）。grant 供 internal 端点签发 run token。
+    """
+    from app.services.steward import _immediate_tx
+
+    now = timeutil.utcnow()
+    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
+    with _immediate_tx(db):
+        db.expire_all()
+        if space_id is None:
+            space_id = next(
+                (
+                    candidate
+                    for candidate in _spaces_holding_due_work(db, now=now)
+                    if _in_flight_for_space(db, space_id=candidate, now=now)
+                    < config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+                ),
+                None,
+            )
+            if space_id is None:
+                return None
+        if (
+            _in_flight_for_space(db, space_id=space_id, now=now)
+            >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+        ):
             return None
         candidates = db.scalars(
             select(StewardModelCall)

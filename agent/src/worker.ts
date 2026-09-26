@@ -22,7 +22,7 @@ import type { Logger } from "./logger.js";
 import { buildRunSession } from "./session.js";
 import { peekRunTokenClaims } from "./tokens.js";
 import { renderContextAppendix } from "./context.js";
-import { STEWARD_PROMPT_VERSION } from "./prompts/steward.js";
+import { adapterFor } from "./adapters/kind.js";
 
 export interface WorkerDeps {
   client: InternalClient;
@@ -97,11 +97,10 @@ export class SidecarWorker {
   }
 
   /** Concurrent slots for one kind. Budgets are independent: a long steward
-   * call must not consume an assistant slot. */
+   * call must not consume an assistant slot. Which config value applies is the
+   * adapter's business, so this function has no kind branch. */
   private slotsFor(kind: AgentKind): number {
-    return kind === "assistant"
-      ? this.config.maxConcurrentRuns
-      : this.config.stewardMaxConcurrentCallsPerSpace;
+    return adapterFor(kind).slotBudget(this.config);
   }
 
   private enabledKinds(): AgentKind[] {
@@ -192,7 +191,7 @@ export class SidecarWorker {
       this.slots.delete(reservationKey);
       return null;
     }
-    if (kind === "steward") {
+    if (adapterFor(kind).adoptsServerConcurrency) {
       this.adoptServerConcurrency(job.max_concurrent);
     }
 
@@ -328,6 +327,7 @@ export class SidecarWorker {
 
   private async executeJob(job: LeasedJob, active: ActiveRun): Promise<void> {
     const log = this.logger.child({ run_id: job.run_id });
+    const adapter = adapterFor(active.kind);
     try {
       // Stage origin for the sidecar's preparation phase: everything from
       // receiving the lease to SDK agent_start (context fetch + session
@@ -340,23 +340,7 @@ export class SidecarWorker {
           `sidecar received a ${job.agent_kind} job on a ${active.kind} slot`,
         );
       }
-      if (projection.agent_kind === "steward") {
-        // The steward prompt lives in this image, so the server can no longer
-        // hash it. Verify the version instead of trusting that the deployed
-        // image matches the backend: running stale prompt text against a newer
-        // server would silently change what the model is asked to do, and the
-        // evaluation anchor would point at a prompt nobody is using.
-        const expected = projection.steward_prompt_version;
-        if (expected === undefined) {
-          throw new Error("steward context is missing steward_prompt_version");
-        }
-        if (expected !== STEWARD_PROMPT_VERSION) {
-          throw new Error(
-            `steward prompt version mismatch: server expects ${expected}, ` +
-              `this sidecar has ${STEWARD_PROMPT_VERSION}`,
-          );
-        }
-      }
+      adapter.verifyProjection(projection);
       if (projection.run_id !== job.run_id || projection.attempt !== job.attempt) {
         throw new Error("context belongs to a different run attempt");
       }
@@ -525,21 +509,34 @@ export class SidecarWorker {
       }
       // No usable answer: the model completed its turn without producing any
       // prose. Settling succeeded would leave the user with neither an answer
-      // nor an explanation.
-      if (lastAssistantText.current === null || lastAssistantText.current.length === 0) {
-        const message = "model completed the run without returning any answer text";
+      // nor an explanation. This applies to both kinds: an empty product is
+      // equally unusable, and for the steward the server would otherwise assert
+      // on a missing text and fail the run for a reason the sidecar caused.
+      const product = adapter.extractProduct(lastAssistantText.current);
+      if (product === null || product.length === 0) {
+        const message = adapter.reportsProductOnSettle
+          ? "model completed the run without returning a product"
+          : "model completed the run without returning any answer text";
         await this.flushEvents(job.run_id, job.run_token, events.drain(), active.abort.signal);
         await this.client.settleRun(job.run_id, job.run_token, "failed", {
           code: "PROVIDER_EMPTY_ANSWER",
           message,
         });
-        log.warn("run settled failed: empty final answer", { message });
+        log.warn("run settled failed: empty model output", { message });
         return;
       }
       // Terminal event (run.settled) is written by the backend /settle handler;
-      // the sidecar must not emit a duplicate.
+      // the sidecar must not emit a duplicate. The product travels with the
+      // settlement for kinds whose output cannot go through message events
+      // (child runs refuse them), so it must be attached here or it is lost.
       await this.flushEvents(job.run_id, job.run_token, events.drain(), active.abort.signal);
-      await this.client.settleRun(job.run_id, job.run_token, "succeeded");
+      await this.client.settleRun(
+        job.run_id,
+        job.run_token,
+        "succeeded",
+        undefined,
+        adapter.reportsProductOnSettle && product !== null ? { output_text: product } : undefined,
+      );
       log.info("run settled succeeded");
     } catch (error) {
       // Cancellation/lease loss is adjudicated by FastAPI.  The abort signal
