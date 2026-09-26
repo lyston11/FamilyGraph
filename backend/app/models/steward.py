@@ -40,6 +40,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 # ---- 枚举常量（服务层与迁移共用；CHECK 约束兜底）----
+# Steward 模型辅助的四类（models 是低层，服务层从这里取，避免两处字面量漂移）
+STEWARD_ASSIST_KINDS: tuple[str, ...] = (
+    "candidate",
+    "ranking",
+    "explanation",
+    "terminology",
+)
 # ST-2 触发原因 taxonomy
 STEWARD_JOB_CAUSES = (
     "source_fact",
@@ -274,30 +281,25 @@ class StewardSpaceSchedule(Base):
         )
 
 
-class StewardAssistBatch(Base):
-    """模型辅助批次（09-11 R2；迁移 0037）：canonical job 的受限辅助子阶段。
+class StewardAssistPlan(Base):
+    """模型辅助工作快照（09-25 E1；原 StewardAssistBatch）。
 
-    每 job 至多一行（job_id UNIQUE）：core 短事务提交确定性结果时在同一事务
-    登记本行（R1：HTTP 绝不发生在业务写事务内）。独立状态 + 独立 lease
-    （lease_owner/lease_until），不能被 sidecar lease；fence_json 是注册时
-    的证据快照（启用 kind、卡片 id+revision、facts 摘要、policy_version），
-    发送前与写回前各重验一次（R4 写回栅栏；任何变化 → skip/supersede）。
+    回答「这次作业有哪些**可做的工作**」：启用 kind、证据摘要、卡片 id+revision、
+    terminology 组与摘要、provider 身份快照。每 job 至多一行（job_id UNIQUE），
+    core 短事务提交确定性结果时在同一事务登记（R1：HTTP 绝不发生在业务写事务内）。
 
-    status: pending（待调度）→ leased（已预留 attempt 行，执行者持有 lease）
-    → applying（审计已落库，写回 CAS 进行中）→ applied | failed | superseded。
-    崩溃恢复：lease 过期按 attempt 状态收敛（in_flight → unknown 保守计费，
-    不自动重发；succeeded+output_json → 重跑 fence 后 CAS 写回）。
+    **注册后不可变**：没有 status / attempt / lease —— 那些是执行状态，属于
+    ``StewardModelCall``。证据或授权变化由 fence 检出并放弃该 attempt，而不是
+    改写本行（改写会让「同一快照」的语义失效，fence 也就无从比对）。
+
+    为什么保留这张表而不是把快照拆到各 attempt：``fence_json`` 的卡片与
+    terminology 切片是**同一 job 内所有同类 attempt 共用**的输入（一份 ranking
+    组可能对应多次调用），逐 attempt 复制会重复同一批字节，并让「哪些是本次
+    授权范围」失去单一真源。
     """
 
-    __tablename__ = "steward_assist_batches"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('pending','leased','applying','applied','failed','superseded')",
-            name="ck_sab_status",
-        ),
-        sa.UniqueConstraint("job_id", name="uq_sab_job"),
-        Index("ix_steward_assist_batches_due", "status", "next_attempt_at"),
-    )
+    __tablename__ = "steward_assist_plans"
+    __table_args__ = (sa.UniqueConstraint("job_id", name="uq_sap_job"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     space_id: Mapped[int] = mapped_column(
@@ -308,21 +310,16 @@ class StewardAssistBatch(Base):
     )
     evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
-    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     fence_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Wall-clock bound for the whole plan's work. The lease used to live on the
+    # batch and double as this bound; now that each attempt has its own lease, the
+    # bound has to be stated separately or one plan could run for
+    # (attempts x timeout) instead of one lease window.
+    deadline_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
-        return (
-            f"<StewardAssistBatch job={self.job_id} {self.status}"
-            f" attempt={self.attempt} evidence={self.evidence_hash[:8]}>"
-        )
+        return f"<StewardAssistPlan job={self.job_id} evidence={self.evidence_hash[:8]}>"
 
 
 class StewardModelCall(Base):
@@ -343,6 +340,10 @@ class StewardModelCall(Base):
     唯一性：(job_id, assist_kind, seq)（同事务重入幂等）与
     (job_id, assist_kind, subject_key, input_hash, attempt_no)（subject 维度
     attempt 键；subject_key = "facts" | "ranking:<ids>" | "card:<id>"）。
+
+    执行载体（09-25 起）：``run_id`` 指向 kind='steward' 的 ``agent_runs`` 行
+    （受限 Pi child run）。本表仍是**记账账本**（预算/计费/attempt 状态），
+    child run 是**执行**；两者在同一事务结算，不得出现双终态。
     """
 
     __tablename__ = "steward_model_calls"
@@ -352,6 +353,7 @@ class StewardModelCall(Base):
             name="ck_smc_assist_kind",
         ),
         CheckConstraint(_SMC_STATUS_CHECK_SQL, name="ck_smc_status"),
+        CheckConstraint("carrier IN ('inproc','pi')", name="ck_smc_carrier"),
         sa.UniqueConstraint("job_id", "assist_kind", "seq", name="uq_smc_job_kind_seq"),
         sa.Index(
             "uq_smc_attempt_key",
@@ -362,6 +364,11 @@ class StewardModelCall(Base):
             "attempt_no",
             unique=True,
         ),
+        # UNIQUE: one child run maps to exactly one attempt row (design §11.2);
+        # a shared run across two attempts would make settlement ambiguous.
+        sa.Index("uq_smc_run_id", "run_id", unique=True),
+        # Lease selection: the oldest due reserved attempt of one space.
+        Index("ix_smc_due", "space_id", "status", "next_attempt_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -388,10 +395,24 @@ class StewardModelCall(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     seq: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    # ---- 09-11 批次/attempt 结构（迁移 0037）----
-    batch_id: Mapped[int | None] = mapped_column(
-        ForeignKey("steward_assist_batches.id", ondelete="CASCADE"), nullable=True
+    # ---- 09-25 E1：本表是执行单元（lease 与载体都在这里）----
+    plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_assist_plans.id", ondelete="CASCADE"), nullable=True
     )
+    # 租约从批次下移到 attempt：并发因此按空间而不是全库 1。
+    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 执行载体：数据而非分支。调度层读它来选执行器，不写 `if kind == ...`。
+    carrier: Mapped[str] = mapped_column(
+        String(16), default="inproc", server_default="inproc", nullable=False
+    )
+    # 本 attempt fence 用的证据摘要（卡片/terminology 切片在 plan 上，共用一份）。
+    evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 产物是否已写回（崩溃恢复点④的判据）。``status`` 只表示**调用**结果，
+    # 不表示**应用**结果：succeeded + output_json + applied_at IS NULL 就是
+    # 「结果已持久化、写回未完成」，恢复器必须补做写回，否则产物永久丢失。
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     subject_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
     input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt_no: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -407,6 +428,14 @@ class StewardModelCall(Base):
     response_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 解析并验证通过的可写回产物（非原始 payload）：候选列表/排列/解释文本
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # ---- 09-25 Pi child run（迁移 0055）----
+    # 执行载体：该 attempt 对应的 agent_runs 行（kind='steward'）。
+    # ON DELETE SET NULL：**账本必须比执行记录活得久**——child run 被清理后，
+    # prompt digest / token 用量 / 状态 / error_code 仍可追溯。历史行为 NULL
+    # （in-process 时代），读取方按既有路径处理，不回填。
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -493,8 +522,8 @@ class StewardCandidateEvidenceVersion(Base):
     source_job_id: Mapped[int | None] = mapped_column(
         ForeignKey("steward_jobs.id", ondelete="SET NULL"), nullable=True
     )
-    source_batch_id: Mapped[int | None] = mapped_column(
-        ForeignKey("steward_assist_batches.id", ondelete="SET NULL"), nullable=True
+    source_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steward_assist_plans.id", ondelete="SET NULL"), nullable=True
     )
     source_model_call_id: Mapped[int | None] = mapped_column(
         ForeignKey("steward_model_calls.id", ondelete="SET NULL"), nullable=True

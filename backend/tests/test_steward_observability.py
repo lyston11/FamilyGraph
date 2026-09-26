@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from test_steward import _space
 
 from app import config
-from app.models.steward import StewardAssistBatch, StewardJob, StewardModelCall
+from app.models.steward import StewardAssistPlan, StewardJob, StewardModelCall
 from app.services import steward
 from app.utils import timeutil
 from conftest import admin_session_headers, create_system_admin
@@ -177,4 +177,4 @@ def test_assist_batch_unknown_counts(admin_client, db_session, _admin_headers, m
     db_session.commit()
     body = _status(admin_client, _admin_headers)
     assert body["metrics"]["assist_unknown"] == 1
-    _ = StewardAssistBatch  # 保留模型导入引用
+    _ = StewardAssistPlan  # 保留模型导入引用

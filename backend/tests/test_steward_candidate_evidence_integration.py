@@ -21,7 +21,7 @@ from app import config
 from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardDeliveryIntent,
     StewardGeneration,
     StewardJob,
@@ -107,18 +107,25 @@ def _transport(session, world, calls, *, reverse=False):
     return _responses_fake(calls, [output])
 
 
+class _PauseAfterAudit(Exception):
+    """Simulated crash between persisting a product and applying it."""
+
+
 def _assist(session, world, calls, *, reverse=False):
     transport = _transport(session, world, calls, reverse=reverse)
-    batch = steward_assist.schedule_due_batch(session)
+    batch = steward_assist.schedule_due_attempt(session, space_id=world.space.id)
     assert batch is not None and batch.space_id == world.space.id
-    batch_id = batch.id
+    plan_id = batch.id
     previous_calls = len(calls)
-    assert steward_assist.execute_batch(session, batch_id, transport=transport) == "applied"
+    assert (
+        steward_assist.execute_plan_attempts(session, plan_id=plan_id, transport=transport)
+        == "applied"
+    )
     session.expire_all()
-    batch = session.get(StewardAssistBatch, batch_id)
+    batch = session.get(StewardAssistPlan, plan_id)
     call = session.scalar(
         select(StewardModelCall).where(
-            StewardModelCall.batch_id == batch_id, StewardModelCall.assist_kind == "candidate"
+            StewardModelCall.plan_id == plan_id, StewardModelCall.assist_kind == "candidate"
         )
     )
     assert call.status == "succeeded" and len(calls) == previous_calls + 1
@@ -202,7 +209,7 @@ def test_existing_private_and_shared_dismissals_survive_real_evidence_adoption(d
     batch, call = _assist(db_session, world, calls)
     version = versions(db_session)[0]
     assert version.status == "pending"
-    assert (version.source_job_id, version.source_batch_id, version.source_model_call_id) == (
+    assert (version.source_job_id, version.source_plan_id, version.source_model_call_id) == (
         batch.job_id,
         batch.id,
         call.id,
@@ -265,8 +272,8 @@ def test_real_jobs_version_only_related_support_and_never_create_public_work(db_
     assert len(versions(db_session)) == 2 and first.support_facts_json == first_snapshot
     before_calls = len(calls)
     assert (
-        steward_assist.execute_batch(
-            db_session, last_batch.id, transport=_transport(db_session, world, calls)
+        steward_assist.execute_plan_attempts(
+            db_session, plan_id=last_batch.id, transport=_transport(db_session, world, calls)
         )
         == "applied"
     )
@@ -559,7 +566,7 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
 ):
     world = _world(db_session)
     _core(db_session, world)
-    batch = steward_assist.schedule_due_batch(db_session)
+    batch = steward_assist.schedule_due_attempt(db_session, space_id=world.space.id)
     assert batch is not None
     calls = []
     original = _transport(db_session, world, calls)
@@ -582,14 +589,20 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
                     independent, independent.get(SourceFact, fact_id), "revoke"
                 )
             else:
-                independent.get(StewardAssistBatch, batch_id).lease_until = utcnow() - timedelta(
-                    seconds=1
+                attempt = independent.scalar(
+                    select(StewardModelCall).where(StewardModelCall.plan_id == batch_id)
                 )
+                attempt.lease_until = utcnow() - timedelta(seconds=1)
             independent.commit()
         return response
 
-    status = steward_assist.execute_batch(db_session, batch.id, transport=transport)
-    assert status == ("applying" if change == "lease" else "superseded")
+    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
+    if change == "lease":
+        # The lease expired mid-call, so nothing was settled: the row stays for the
+        # recovery owner and the plan reports its reserved state, not "applying".
+        assert status in ("applying", "pending", "leased")
+    else:
+        assert status == "superseded"
     assert len(calls) == 1
     assert versions(db_session) == []
     assert db_session.scalar(select(StewardLlmCandidate)) is None
@@ -599,44 +612,55 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
 def _prepared_writeback(session, monkeypatch):
     world = _world(session)
     _core(session, world)
-    batch = steward_assist.schedule_due_batch(session)
+    batch = steward_assist.schedule_due_attempt(session, space_id=world.space.id)
     assert batch is not None
     calls = []
     with monkeypatch.context() as patch:
-        patch.setattr(steward_assist, "_apply_batch", lambda *_args, **_kwargs: "applying")
-        assert (
-            steward_assist.execute_batch(
-                session, batch.id, transport=_transport(session, world, calls)
-            )
-            == "applying"
+        # Crash point ④: the product is persisted, the write-back is not.
+        patch.setattr(
+            steward_assist,
+            "_apply_product",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(_PauseAfterAudit),
         )
+        with pytest.raises(_PauseAfterAudit):
+            steward_assist.execute_plan_attempts(
+                session, plan_id=batch.id, transport=_transport(session, world, calls)
+            )
     session.expire_all()
-    call = session.scalar(select(StewardModelCall).where(StewardModelCall.batch_id == batch.id))
+    call = session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == batch.id))
+    # The result is durable; only the write-back is missing (crash point ④).
     assert call.status == "succeeded" and call.output_json["items"]
+    assert call.applied_at is None
     assert len(calls) == 1 and versions(session) == []
-    return world, batch
+    return world, batch, call
 
 
 def test_two_actual_writeback_workers_apply_one_version_without_resending(db_session, monkeypatch):
-    world, batch = _prepared_writeback(db_session, monkeypatch)
+    """Two concurrent write-back workers must produce exactly one version.
+
+    Settlement already happened in ``_prepared_writeback``, so the write-back is
+    now the recovery path — which is the real concurrent-writer surface: two
+    recovery passes racing on the same persisted product. The loser must not
+    duplicate it (``applied_at`` is the guard, and ``uq_scev_*`` is the backstop).
+    """
+    world, batch, call = _prepared_writeback(db_session, monkeypatch)
     bind = db_session.get_bind()
-    batch_id, owner, attempt = batch.id, batch.lease_owner, batch.attempt
+    batch_id = batch.id
     db_session.commit()
     barrier = threading.Barrier(2)
 
     def worker():
         barrier.wait(timeout=5)
         with Session(bind) as independent:
-            return steward_assist._apply_batch(
-                independent, batch_id, now=utcnow(), lease_owner=owner, lease_attempt=attempt
-            )
+            steward_assist.recover_stuck_attempts(independent)
+            return True
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         pending = [pool.submit(worker) for _ in range(2)]
-        assert [future.result(timeout=10) for future in pending] == ["applied", "applied"]
+        assert [future.result(timeout=10) for future in pending] == [True, True]
     db_session.expire_all()
     assert len(versions(db_session)) == 1
-    assert versions(db_session)[0].source_batch_id == batch_id
+    assert versions(db_session)[0].source_plan_id == batch_id
     _core(db_session, world)
     assert versions(db_session)[0].status == "projected"
 
@@ -644,11 +668,11 @@ def test_two_actual_writeback_workers_apply_one_version_without_resending(db_ses
 def test_lease_expiring_while_actual_writeback_waits_for_sqlite_writer_is_not_adopted(
     db_session, monkeypatch
 ):
-    _world_value, batch = _prepared_writeback(db_session, monkeypatch)
+    _world_value, batch, call = _prepared_writeback(db_session, monkeypatch)
     sampled = utcnow()
-    batch.lease_until = sampled + timedelta(milliseconds=250)
-    deadline = batch.lease_until
-    batch_id, owner, attempt = batch.id, batch.lease_owner, batch.attempt
+    call.lease_until = sampled + timedelta(milliseconds=250)
+    deadline = call.lease_until
+    owner = call.lease_owner
     db_session.commit()
     bind = db_session.get_bind()
     entered = threading.Event()
@@ -664,8 +688,12 @@ def test_lease_expiring_while_actual_writeback_waits_for_sqlite_writer_is_not_ad
 
     def worker():
         with Session(bind) as independent:
-            return steward_assist._apply_batch(
-                independent, batch_id, now=sampled, lease_owner=owner, lease_attempt=attempt
+            return steward_assist.settle_attempt(
+                independent,
+                attempt_id=call.id,
+                status="succeeded",
+                lease_owner=owner,
+                now=sampled,
             )
 
     with Session(bind) as blocker, ThreadPoolExecutor(max_workers=1) as pool:
@@ -676,7 +704,7 @@ def test_lease_expiring_while_actual_writeback_waits_for_sqlite_writer_is_not_ad
             time.sleep(max(0, (deadline - utcnow()).total_seconds()) + 0.03)
         finally:
             blocker.rollback()
-        assert future.result(timeout=10) == "applying"
+        assert future.result(timeout=10) is None
     db_session.expire_all()
     assert versions(db_session) == []
     assert db_session.scalar(select(StewardLlmCandidate)) is None

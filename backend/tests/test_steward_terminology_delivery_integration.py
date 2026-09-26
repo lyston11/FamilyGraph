@@ -14,7 +14,7 @@ from app.models.account import Account
 from app.models.notification import Notification
 from app.models.space import SpaceMember
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardDeliveryIntent,
     StewardGeneration,
     StewardJob,
@@ -133,11 +133,11 @@ def test_core_publishes_before_detached_terminology_and_assist(db_session, monke
     assert db_session.get(StewardPublication, space.id).generation_id == generation_id
     assert db_session.get(StewardGeneration, generation_id).status == "published"
     assert db_session.scalar(select(func.count(StewardTermProjection.id))) == 0
-    assert db_session.scalar(select(func.count(StewardAssistBatch.id))) == 0
+    assert db_session.scalar(select(func.count(StewardAssistPlan.id))) == 0
 
     prepare = steward_terminology.prepare_delivery_item
     collect = steward_terminology.collect_model_groups
-    register = steward_assist.register_batch_for_job
+    register = steward_assist.plan_for_job
     prepared_targets = []
     prepared_groups = []
     registered = []
@@ -174,7 +174,7 @@ def test_core_publishes_before_detached_terminology_and_assist(db_session, monke
     monkeypatch.setattr(steward_terminology, "prepare_delivery_item", outside_writer)
     monkeypatch.setattr(steward_terminology, "collect_model_groups", collect_outside_writer)
     monkeypatch.setattr(steward_terminology, "run_deterministic_scan", old_scan)
-    monkeypatch.setattr(steward_assist, "register_batch_for_job", after_terminology)
+    monkeypatch.setattr(steward_assist, "plan_for_job", after_terminology)
     delivery = _drain(db_session, generation_id)
     assert delivery["delivery_failed"] == 0
     assert delivery["terminology_projections"] > 0
@@ -189,7 +189,7 @@ def test_core_publishes_before_detached_terminology_and_assist(db_session, monke
         )
     )
     assert projection.baseline_source == "derived" and projection.term is None
-    batch = db_session.scalar(select(StewardAssistBatch))
+    batch = db_session.scalar(select(StewardAssistPlan))
     assert batch is not None and batch.fence_json["kinds"] == ["terminology"]
 
 

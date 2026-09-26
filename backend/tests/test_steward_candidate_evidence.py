@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import config
 from app.models.space import SpaceMember, SpaceProfileRef
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardCandidateEvidenceVersion,
     StewardJob,
     StewardLlmCandidate,
@@ -98,24 +97,20 @@ def candidate(session, world, *, reverse=False, kind="direct_sibling", status="p
 
 def provenance(session, space_id):
     origin = job(session, space_id)
-    batch = StewardAssistBatch(
+    plan = StewardAssistPlan(
         space_id=space_id,
         job_id=origin.id,
         evidence_hash="0" * 64,
         policy_version=config.POLICY_VERSION,
-        status="applying",
-        attempt=1,
-        lease_owner="evidence-test",
-        lease_until=utcnow() + timedelta(minutes=5),
         created_at=utcnow(),
-        updated_at=utcnow(),
+        deadline_at=utcnow(),
     )
-    session.add(batch)
+    session.add(plan)
     session.flush()
     call = StewardModelCall(
         space_id=space_id,
         job_id=origin.id,
-        batch_id=batch.id,
+        plan_id=plan.id,
         policy_version=config.POLICY_VERSION,
         assist_kind="candidate",
         prompt_digest="0" * 64,
@@ -126,14 +121,12 @@ def provenance(session, space_id):
     )
     session.add(call)
     session.flush()
-    return batch, call
+    return plan, call
 
 
 def record(session, row):
-    batch, call = provenance(session, row.space_id)
-    version = evidence.record_for_candidate(
-        session, row, batch=batch, model_call=call, now=utcnow()
-    )
+    plan, call = provenance(session, row.space_id)
+    version = evidence.record_for_candidate(session, row, plan=plan, model_call=call, now=utcnow())
     session.commit()
     return version
 
@@ -365,7 +358,7 @@ def test_database_prevents_snapshot_and_terminal_rewrite_but_allows_nullable_fk_
     db_session.expire_all()
     retained = versions(db_session)[0]
     assert retained.support_facts_json == original and retained.status == "projected"
-    assert retained.source_job_id is None and retained.source_batch_id is None
+    assert retained.source_job_id is None and retained.source_plan_id is None
     assert retained.source_model_call_id is None and retained.projection_job_id is None
     assert retained.projection_checked_at is not None
     # Preserve the existing original candidate -> first job CASCADE contract.
@@ -390,15 +383,15 @@ def test_two_writers_keep_one_version_and_its_first_provenance(db_session):
     def writer(index):
         barrier.wait(timeout=5)
         with Session(bind) as session, steward._immediate_tx(session):
-            batch_id, call_id = source_ids[index]
+            plan_id, call_id = source_ids[index]
             version = evidence.record_for_candidate(
                 session,
                 session.get(StewardLlmCandidate, candidate_id),
-                batch=session.get(StewardAssistBatch, batch_id),
+                plan=session.get(StewardAssistPlan, plan_id),
                 model_call=session.get(StewardModelCall, call_id),
                 now=utcnow(),
             )
-            return version.id, version.source_batch_id
+            return version.id, version.source_plan_id
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(writer, index) for index in range(2)]
@@ -406,4 +399,4 @@ def test_two_writers_keep_one_version_and_its_first_provenance(db_session):
     assert results[0] == results[1]
     db_session.expire_all()
     assert db_session.scalar(select(func.count()).select_from(StewardCandidateEvidenceVersion)) == 1
-    assert versions(db_session)[0].source_batch_id in {item[0] for item in source_ids}
+    assert versions(db_session)[0].source_plan_id in {item[0] for item in source_ids}

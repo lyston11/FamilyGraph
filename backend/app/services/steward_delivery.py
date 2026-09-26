@@ -539,7 +539,7 @@ def _apply(
                 .limit(config.STEWARD_ASSIST_MAX_CARDS_PER_JOB)
             )
         )
-        steward_assist.register_batch_for_job(
+        steward_assist.plan_for_job(
             session,
             job=job,
             facts_brief=steward._confirmed_facts_brief(session, space, visible),

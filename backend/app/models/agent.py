@@ -34,10 +34,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-# 本 runtime 只承载 LLM 驱动的 assistant。Steward 是确定性引擎，走 StewardJob
-# 自己的表与 lease（services/steward.py），从不进入这里的 run/job 队列。
-RuntimeAgentKind = Literal["assistant"]
-RUNTIME_AGENT_KINDS: tuple[RuntimeAgentKind, ...] = ("assistant",)
+# 两种 runtime kind：assistant 走会话式 Pi Runtime；steward 走受限 child run
+# （StewardJob 的模型辅助，见 services/steward_assist.py）。
+#
+# 注意：本元组是「执行记录可表达的 kind」全集，**不是队列白名单**。
+# agent_jobs / agent_sessions 仍是 assistant-only（见 QUEUE_AGENT_KINDS 与各自的
+# CHECK）；用本元组做队列校验会静默放开 steward。
+RuntimeAgentKind = Literal["assistant", "steward"]
+RUNTIME_AGENT_KINDS: tuple[RuntimeAgentKind, ...] = ("assistant", "steward")
+# 通用 durable 队列（agent_jobs）只承载 assistant：禁止在队列层重建
+# kind='steward' 第二队列（09-01 记录的红线）。Steward child run 的租约来自
+# StewardAssistBatch，其 agent_runs.job_id 恒为 NULL。
+QUEUE_AGENT_KINDS: tuple[str, ...] = ("assistant",)
+# 会话（agent_sessions）只承载 assistant：Steward 无单一账号，伪造 session 行
+# 就是数据污染。
+SESSION_AGENT_KINDS: tuple[str, ...] = ("assistant",)
 RUN_ACTIVE_STATUSES = ("queued", "leased", "running")
 RUN_TERMINAL_STATUSES = ("succeeded", "failed", "cancelled", "expired")
 RUN_STATUS_CHECK_SQL = (
@@ -111,12 +122,26 @@ class AgentMessage(Base):
 
 
 class AgentRun(Base):
-    """唯一执行记录（assistant only；Steward 不使用本表，见 models/steward.py）。"""
+    """唯一执行记录，承载两种 kind。
+
+    - ``assistant``：会话式运行，必须挂 session（``ck_agent_runs_scope_binding``）。
+    - ``steward``：``StewardJob`` 的受限 child run；**无 session、无 job**，scope
+      由 ``steward_runs`` 承载（Steward 没有单一账号，见 models/steward.py）。
+
+    ``uq_agent_runs_session_active`` 是 partial unique index：SQLite 唯一索引不
+    比较 NULL，因此 steward 行（session_id 为 NULL）天然不受「每会话一个活跃
+    run」约束——其并发由 batch lease 表达。
+    """
 
     __tablename__ = "agent_runs"
     __table_args__ = (
-        CheckConstraint("kind = 'assistant'", name="ck_agent_runs_kind"),
+        CheckConstraint("kind IN ('assistant','steward')", name="ck_agent_runs_kind"),
         CheckConstraint(RUN_STATUS_CHECK_SQL, name="ck_agent_runs_status"),
+        CheckConstraint(
+            "(kind = 'assistant' AND session_id IS NOT NULL) OR "
+            "(kind = 'steward' AND session_id IS NULL AND job_id IS NULL)",
+            name="ck_agent_runs_scope_binding",
+        ),
         Index(
             "uq_agent_runs_session_active",
             "session_id",
@@ -127,8 +152,8 @@ class AgentRun(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    session_id: Mapped[int] = mapped_column(
-        ForeignKey("agent_sessions.id", ondelete="CASCADE"), nullable=False
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_sessions.id", ondelete="CASCADE"), nullable=True
     )
     message_id: Mapped[int | None] = mapped_column(
         ForeignKey("agent_messages.id", ondelete="SET NULL"), nullable=True
@@ -208,7 +233,11 @@ class AgentRunEvent(Base):
 
 
 class AgentJob(Base):
-    """durable queue 条目：lease 只扫 jobs，返回配对 run_id；heartbeat 打在 job 同步 run。"""
+    """durable queue 条目：lease 只扫 jobs，返回配对 run_id；heartbeat 打在 job 同步 run。
+
+    只承载 assistant（``QUEUE_AGENT_KINDS``）。Steward child run 不经过本表：
+    它的租约来自 ``StewardAssistBatch``，故其 ``agent_runs.job_id`` 为 NULL。
+    """
 
     __tablename__ = "agent_jobs"
     __table_args__ = (

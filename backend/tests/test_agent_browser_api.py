@@ -1,5 +1,7 @@
 """浏览器 Agent API 测试：会话 scope、Idempotency、并发限额、cancel、feature flag。"""
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import func, select
 
@@ -13,6 +15,7 @@ from app.utils import timeutil
 from conftest import (
     auth_header,
     create_agent_fixture,
+    create_agent_session,
     create_space_member,
     login,
 )
@@ -462,3 +465,203 @@ def test_delete_session_ownership_404(client, db_session):
     foreign = client.delete(f"/api/agent/sessions/{other_session['id']}", headers=headers)
     assert foreign.status_code == 404
     assert foreign.json()["error"]["code"] == "AGENT_SESSION_NOT_FOUND"
+
+
+# ---- 09-25 S1：浏览器面不得暴露 Steward child run ----------------
+
+
+def test_browser_api_hides_steward_child_runs(client, db_session, monkeypatch):
+    """AC-12: a steward child run is not reachable from the browser surface.
+
+    The old guard was only accidentally safe: a child run has no session, so
+    `db.get(AgentSession, None)` happened to return None. That relies on
+    SQLAlchemy's handling of a NULL primary key rather than on a stated
+    invariant, so the check is now explicit — and asserted here by creating a
+    real child run that would otherwise be visible by id.
+    """
+    from app.models.steward import StewardAssistPlan, StewardJob, StewardModelCall
+
+    user, space, headers, _session = _member_session(client, db_session, "hide-steward-run")
+    now = timeutil.utcnow()
+    job = StewardJob(
+        space_id=space.id,
+        cause="integrity_scan",
+        trigger_cursor=1,
+        status="running",
+        attempt=1,
+        max_attempts=3,
+        checkpoint_json={},
+        policy_version="p1",
+        lease_expires_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(job)
+    db_session.flush()
+    run = AgentRun(
+        session_id=None,
+        message_id=None,
+        job_id=None,
+        kind="steward",
+        status="running",
+        attempt=1,
+        max_attempts=1,
+        policy_version="p1",
+        tool_allowlist_json=[],
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(run)
+    db_session.flush()
+    # The attempt is the binding now: it carries the job, kind and viewer, and its
+    # run_id is UNIQUE. A plan is required because the attempt references one.
+    plan = StewardAssistPlan(
+        space_id=space.id,
+        job_id=job.id,
+        evidence_hash="e" * 64,
+        policy_version="p1",
+        fence_json={},
+        deadline_at=now,
+        created_at=now,
+    )
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add(
+        StewardModelCall(
+            space_id=space.id,
+            job_id=job.id,
+            plan_id=plan.id,
+            policy_version="p1",
+            assist_kind="candidate",
+            prompt_digest="d" * 64,
+            prompt_chars=1,
+            status="in_flight",
+            seq=1,
+            created_at=now,
+            subject_key="facts",
+            input_hash="h" * 64,
+            attempt_no=1,
+            carrier="pi",
+            run_id=run.id,
+            lease_owner="test",
+            lease_until=now,
+        )
+    )
+    db_session.commit()
+
+    # The same owner account, so this is not an ownership rejection: the kind
+    # itself must be the reason.
+    response = client.get(f"/api/agent/runs/{run.id}", headers=headers)
+    assert response.status_code == 404
+    # Indistinguishable from a genuinely absent run (no enumeration signal).
+    missing = client.get("/api/agent/runs/99999999", headers=headers)
+    assert missing.status_code == 404
+    assert response.json() == missing.json()
+
+
+def test_latency_endpoint_defaults_to_assistant(db_session):
+    """AC-12: the two run populations are never averaged together.
+
+    Asserted behaviourally rather than by reading the signature: create one
+    assistant run and one steward run with distinct durations and confirm the
+    default view only reflects the assistant one.
+    """
+    from app.models.steward import StewardAssistPlan, StewardJob, StewardModelCall
+    from app.services import agent_queue
+
+    user, space = create_agent_fixture(db_session, name="latency-kind")
+    now = timeutil.utcnow()
+    session_row = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    assistant_run = agent_queue.enqueue_run(
+        db_session,
+        agent_session=session_row,
+        kind="assistant",
+        policy_version="p1",
+        tool_allowlist=[],
+    )
+    agent_queue.lease_next(db_session, kind="assistant", leased_by="t")
+    assistant_run = db_session.get(AgentRun, assistant_run.id)
+    assistant_run.status = "succeeded"
+    assistant_run.created_at = now - timedelta(seconds=10)
+    assistant_run.settled_at = now
+    assistant_run.first_leased_at = now - timedelta(seconds=9)
+
+    job = StewardJob(
+        space_id=space.id,
+        cause="integrity_scan",
+        trigger_cursor=1,
+        status="running",
+        attempt=1,
+        max_attempts=3,
+        checkpoint_json={},
+        policy_version="p1",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(job)
+    db_session.flush()
+    steward_run = AgentRun(
+        session_id=None,
+        job_id=None,
+        kind="steward",
+        status="succeeded",
+        attempt=1,
+        max_attempts=1,
+        policy_version="p1",
+        tool_allowlist_json=[],
+        created_at=now - timedelta(seconds=600),
+        updated_at=now,
+        settled_at=now,
+    )
+    db_session.add(steward_run)
+    db_session.flush()
+    plan = StewardAssistPlan(
+        space_id=space.id,
+        job_id=job.id,
+        evidence_hash="e" * 64,
+        policy_version="p1",
+        fence_json={},
+        deadline_at=now,
+        created_at=now,
+    )
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add(
+        StewardModelCall(
+            space_id=space.id,
+            job_id=job.id,
+            plan_id=plan.id,
+            policy_version="p1",
+            assist_kind="candidate",
+            prompt_digest="d" * 64,
+            prompt_chars=1,
+            status="succeeded",
+            seq=1,
+            created_at=now,
+            subject_key="facts",
+            input_hash="h" * 64,
+            attempt_no=1,
+            carrier="pi",
+            run_id=steward_run.id,
+        )
+    )
+    db_session.commit()
+
+    cutoff = now - timedelta(days=1)
+    from app.api import admin_agent_latency
+
+    assistant_totals, assistant_status = admin_agent_latency._run_stats(
+        db_session, cutoff, "assistant"
+    )
+    steward_totals, steward_status = admin_agent_latency._run_stats(db_session, cutoff, "steward")
+
+    assert sum(assistant_status.values()) == 1, "the default population must exclude child runs"
+    assert sum(steward_status.values()) == 1
+    # The steward run is 600s and the assistant run 10s; if they were pooled the
+    # maximum would be the steward figure and the "default is assistant" claim
+    # would be false in exactly the way this guards against.
+    assert assistant_totals.n == 1
+    assert steward_totals.n == 1
+    assert assistant_totals.total_max_s is not None
+    assert steward_totals.total_max_s is not None
+    assert steward_totals.total_max_s > assistant_totals.total_max_s

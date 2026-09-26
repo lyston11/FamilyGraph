@@ -214,10 +214,10 @@ def _assist_stats(db: Session, cutoff: datetime) -> dict[str, AssistKindLatency]
     return stats
 
 
-def _run_stats(db: Session, cutoff: datetime) -> tuple[RunTotalLatency, dict[str, int]]:
+def _run_stats(db: Session, cutoff: datetime, kind: str) -> tuple[RunTotalLatency, dict[str, int]]:
     rows = db.execute(
         select(AgentRun.status, AgentRun.created_at, AgentRun.settled_at).where(
-            AgentRun.created_at >= cutoff
+            AgentRun.created_at >= cutoff, AgentRun.kind == kind
         )
     ).all()
     by_status = Counter(status for status, _created, _settled in rows)
@@ -399,7 +399,7 @@ def _provider_retry_windows(
     return windows, stats
 
 
-def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
+def _phase_breakdown(db: Session, cutoff: datetime, kind: str) -> RunPhaseBreakdown:
     """按 run 分解 assistant 耗时；分母来自 run 表，不从事件集合反推。
 
     每个阶段优先用 producer 源计时（精确）；历史行无源计时时回退到持久事件
@@ -412,7 +412,7 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
             AgentRun.created_at,
             AgentRun.settled_at,
             AgentRun.first_leased_at,
-        ).where(AgentRun.created_at >= cutoff)
+        ).where(AgentRun.created_at >= cutoff, AgentRun.kind == kind)
     ).all()
     created_at = {run_id: created for run_id, created, _, _ in runs}
     settled_at = {run_id: settled for run_id, _, settled, _ in runs}
@@ -427,7 +427,7 @@ def _phase_breakdown(db: Session, cutoff: datetime) -> RunPhaseBreakdown:
             AgentRunEvent.timing_json,
         )
         .join(AgentRun, AgentRun.id == AgentRunEvent.run_id)
-        .where(AgentRun.created_at >= cutoff)
+        .where(AgentRun.created_at >= cutoff, AgentRun.kind == kind)
         .order_by(AgentRunEvent.run_id, AgentRunEvent.seq)
     ).all()
 
@@ -615,24 +615,31 @@ def _ip(request: Request) -> str | None:
 def agent_latency(
     request: Request,
     days: int = Query(default=7, ge=1, le=365),
+    # Defaults to assistant so an existing caller's numbers do not silently
+    # change meaning once a second kind exists. Steward child runs are a
+    # different population (space-scoped, no user waiting) and must never be
+    # folded into the assistant distribution.
+    kind: str = Query(default="assistant", pattern="^(assistant|steward)$"),
     db: Session = Depends(get_db),
     identity: AdminPrincipal = Depends(require_admin_ready),
 ) -> AgentLatencyOut:
-    """Agent 链路延迟观测：steward 辅助分 kind 分位数 + assistant run 总时长。
+    """Agent 链路延迟观测：按 kind 分列 run 时长与阶段分位数。
 
     只读聚合元数据；不返回 prompt、候选、checkpoint 等业务内容（与 admin
-    steward/agent 域同一字段白名单纪律）。
+    steward/agent 域同一字段白名单纪律）。``kind`` 默认 assistant：两套种群
+    （会话式 assistant 与空间级 steward）的耗时分布不可混合统计，混算会同时
+    污染两者的中位数。
     """
     admin, _account = identity
     cutoff = utcnow() - timedelta(days=days)
     steward_assist = _assist_stats(db, cutoff)
-    run_totals, runs_by_status = _run_stats(db, cutoff)
+    run_totals, runs_by_status = _run_stats(db, cutoff, kind)
     result = AgentLatencyOut(
         generated_at=utcnow(),
         window_days=days,
         steward_assist=steward_assist,
         assistant_runs=run_totals,
-        assistant_phases=_phase_breakdown(db, cutoff),
+        assistant_phases=_phase_breakdown(db, cutoff, kind),
         runs_by_status=runs_by_status,
         notes=list(_OBSERVATION_NOTES),
     )

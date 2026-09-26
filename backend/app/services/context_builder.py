@@ -18,9 +18,16 @@ from app.errors import (
 )
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.platform_features import PlatformFeatureConfig
+from app.models.steward import StewardModelCall
 from app.models.user import User
 from app.services import memory_sources, platform_features
-from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
+from app.services.agent_execution import (
+    Execution,
+    StewardExecution,
+    acquire_run_writer,
+    fence_assistant_execution,
+    fence_steward_execution,
+)
 from app.services.memory_rag import RAGHit, query_hash, search_rag
 from app.services.policy_consumer import is_policy_consumer_kind
 from app.services.rag_budget import ESTIMATOR_VERSION, MAX_INCLUDED_SOURCES, estimate_context
@@ -99,7 +106,7 @@ def invalidate_build(db: Session, build: ContextBuild, reason: str) -> None:
         db.flush()
 
 
-def rollback_preserving_invalidation(db: Session, execution: ExecutionIdentity) -> None:
+def rollback_preserving_invalidation(db: Session, execution: Execution) -> None:
     """Roll back rejected events, retaining only server-observed invalidation.
 
     Read the unique build of the authenticated execution, never a submitted
@@ -108,10 +115,19 @@ def rollback_preserving_invalidation(db: Session, execution: ExecutionIdentity) 
     A concurrent invalidation wins; a deleted/replaced build is not recreated.
     The caller commits the rejection audit and this safety state together.
     """
+    # The account binding is only meaningful for the account-anchored kind.
+    # Steward builds are space-scoped and store NULL, so matching on
+    # ``== execution.account_id`` would raise for them (and comparing NULL with
+    # ``=`` never matches anyway).
+    account_scope: Any = (
+        ContextBuild.account_id.is_(None)
+        if isinstance(execution, StewardExecution)
+        else ContextBuild.account_id == execution.account_id
+    )
     scope = (
         ContextBuild.run_id == execution.run_id,
         ContextBuild.attempt == execution.expected_attempt,
-        ContextBuild.account_id == execution.account_id,
+        account_scope,
         ContextBuild.space_id == execution.space_id,
         ContextBuild.agent_kind == execution.agent_kind,
     )
@@ -160,7 +176,7 @@ class ContextBuilder:
         provider_kind: str | None = None,
         policy_version: str = config.POLICY_VERSION,
         attempt: int | None = None,
-        execution: ExecutionIdentity | None = None,
+        execution: Execution | None = None,
         provider_decision: dict[str, Any] | None = None,
         recent_messages: Sequence[str] = (),
     ) -> BuiltContext:
@@ -168,19 +184,38 @@ class ContextBuilder:
             raise_api_error(422, POLICY_CONTEXT_INVALID, "token_budget 超出范围")
         if not is_policy_consumer_kind(agent_kind):
             raise_api_error(422, POLICY_CONTEXT_INVALID, "policy consumer 不受支持")
+        db = self.db
         if agent_kind == "steward" and run_id is not None:
-            raise_api_error(
-                422, POLICY_CONTEXT_INVALID, "Steward consumer 不得伪造 generic AgentRun"
+            # 正向校验（09-25 S1）：Steward consumer 仍然**不得**伪装 generic
+            # AgentRun；但 steward child run 也是 agent_runs 行，所以判据是
+            # 「run_id 必须解析到一个 steward attempt，且其空间一致」，而不是
+            # 「不得有 run_id」。删掉这个守卫会让 steward 拿 assistant 的 run
+            # 做投影；只检查 kind 会放过跨空间引用。
+            if db is None:
+                raise_api_error(422, POLICY_CONTEXT_INVALID, "Steward consumer 需要数据库会话")
+            # The attempt IS the scope, so space_id is a direct column comparison
+            # rather than a hop through a second table.
+            steward_attempt = db.scalar(
+                select(StewardModelCall).where(StewardModelCall.run_id == run_id)
             )
-        if self.db is not None and run_id is not None:
+            if steward_attempt is None:
+                raise_api_error(
+                    422, POLICY_CONTEXT_INVALID, "Steward consumer 不得伪造 generic AgentRun"
+                )
+            if steward_attempt.space_id != space_id:
+                raise_api_error(422, POLICY_CONTEXT_INVALID, "Steward run 与投影空间不一致")
+        if db is not None and run_id is not None:
             if execution is not None:
                 if run_id != execution.run_id or attempt != execution.expected_attempt:
                     raise_api_error(422, POLICY_CONTEXT_INVALID, "执行身份不匹配")
-                fence_execution(self.db, execution, allow_cancel_requested=True)
+                if isinstance(execution, StewardExecution):
+                    fence_steward_execution(db, execution, allow_cancel_requested=True)
+                else:
+                    fence_assistant_execution(db, execution, allow_cancel_requested=True)
             else:
                 # Trusted in-process callers retain unbound audit builds. The
                 # internal API always supplies a signed immutable identity.
-                acquire_run_writer(self.db, run_id)
+                acquire_run_writer(db, run_id)
         identity = {"actor_user_id": actor.id, "space_id": space_id, "agent_kind": agent_kind}
         if self.db is not None:
             # Do not reuse a feature flag from a pre-auth identity-map read.
@@ -275,7 +310,9 @@ class ContextBuilder:
             build = ContextBuild(
                 run_id=run_id,
                 attempt=attempt,
-                account_id=actor.account.id,
+                # Steward builds are space-scoped: they must store NULL, which is
+                # what ck_context_builds_account_binding enforces.
+                account_id=None if agent_kind == "steward" else actor.account.id,
                 space_id=space_id,
                 agent_kind=agent_kind,
                 query_hash=query_digest,

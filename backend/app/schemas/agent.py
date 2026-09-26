@@ -41,6 +41,46 @@ class LeaseOut(BaseModel):
     run_token: str
 
 
+# ---- steward child run lease（09-25 S1）----
+
+
+class StewardLeaseRequest(_Strict):
+    """Steward child run 的租赁请求。
+
+    独立于 ``LeaseRequest``（后者硬绑 ``kind="assistant"``）：两个端点服务两个
+    不同的队列，合并成一个模型会让任一侧的 kind 约束变成可选字段。
+    """
+
+    kind: Literal["steward"]
+    # 租约按空间取，因此请求必须指名空间：这正是「per-space 并发」的入口——
+    # 不带 space_id 就只能全库选一个，回到旧的全局 1 行为。
+    space_id: int = Field(gt=0)
+    leased_by: str = Field(min_length=1, max_length=120)
+    lease_ttl_seconds: int | None = Field(default=None, ge=30, le=3600)
+
+
+class StewardLeaseOut(BaseModel):
+    """Steward child run 的租赁结果。
+
+    ``steward_job_id`` 是**授权根**（不是 ``job_id``：child run 不经过通用队列，
+    ``agent_runs.job_id`` 恒为 NULL）。``assist_attempt_id`` 是执行单元
+    （``StewardModelCall.id``）——旧的 ``assist_batch_id`` 对应已被移除的批次。
+    ``max_concurrent`` 把服务端的每空间并发上限广播给 sidecar，两侧取较大值，
+    避免本地配置静默压低服务端上限。
+    """
+
+    run_id: int
+    steward_job_id: int
+    assist_attempt_id: int
+    assist_kind: str
+    agent_kind: AgentKind
+    attempt: int
+    tool_allowlist: list[str]
+    policy_version: str
+    max_concurrent: int = Field(ge=1, le=8)
+    run_token: str
+
+
 # ---- heartbeat ----
 
 
@@ -88,9 +128,12 @@ class ContextProviderOut(BaseModel):
 
 class ContextOut(BaseModel):
     run_id: int
-    session_id: int
+    # Nullable: steward child runs are space-scoped and carry no session. The
+    # sidecar's strict decoder branches on agent_kind, so this cannot silently
+    # become an absent field for assistant runs (which always have both).
+    session_id: int | None
     agent_kind: AgentKind
-    account_id: int
+    account_id: int | None
     space_id: int
     status: str
     attempt: int
@@ -107,6 +150,11 @@ class ContextOut(BaseModel):
     next_event_seq: int = Field(default=1, ge=0)
     # additive：浏览器已请求取消（同 heartbeat）
     cancel_requested: bool = False
+    # Steward only: the prompt version the server expects the sidecar to have
+    # loaded. The prompt text lives in the sidecar, so this constant (not a hash
+    # of server-side text) is the evaluation anchor; a mismatch must fail closed
+    # rather than silently run stale prompt text against a newer backend.
+    steward_prompt_version: str | None = None
 
 
 # ---- events ----
@@ -241,6 +289,12 @@ class SettleRequest(_Strict):
     status: Literal["succeeded", "failed"]
     error_code: str | None = Field(default=None, max_length=64)
     error: dict[str, Any] | None = None
+    # Steward child run 的产物回传（additive、可选）：
+    # 设计 §10.3 禁止 steward 发消息类事件，因此模型输出不能经事件流回传，
+    # 只能随 settle 一次性提交。assistant 侧不发送这些字段（保持原形状）。
+    output_text: str | None = None
+    usage: dict[str, int] | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
 
 
 class SettleOut(BaseModel):
@@ -327,7 +381,9 @@ class AgentMessageCreatedOut(BaseModel):
 
 class AgentRunOut(BaseModel):
     id: int
-    session_id: int
+    # Nullable because Steward child runs are space-scoped and carry no session;
+    # the browser endpoints only ever return assistant runs (see api/agent.py).
+    session_id: int | None
     kind: AgentKind
     status: str
     attempt: int

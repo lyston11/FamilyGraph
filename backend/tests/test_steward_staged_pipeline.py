@@ -428,13 +428,13 @@ def test_assist_orphan_recovery_cannot_bypass_staged_intent(db_session, monkeypa
     registrations = []
     monkeypatch.setattr(
         steward_assist,
-        "register_batch_for_job",
+        "plan_for_job",
         lambda session, **kwargs: registrations.append(kwargs["job"].id),
     )
-    assert steward_assist.recover_stuck_batches(db_session) == 0
+    assert steward_assist.recover_stuck_attempts(db_session) == 0
     people[0].name = "assist-invalidated"
     db_session.commit()
-    assert steward_assist.recover_stuck_batches(db_session) == 0
+    assert steward_assist.recover_stuck_attempts(db_session) == 0
     assert registrations == []
     generation = db_session.get(StewardGeneration, result["generation_id"])
     assert generation.status == "published"
@@ -634,10 +634,10 @@ def test_gc_keeps_current_and_shared_result_sources(db_session, monkeypatch):
     registrations = []
     monkeypatch.setattr(
         steward_assist,
-        "register_batch_for_job",
+        "plan_for_job",
         lambda session, **kwargs: registrations.append(kwargs["job"].id),
     )
-    assert steward_assist.recover_stuck_batches(db_session) == 0
+    assert steward_assist.recover_stuck_attempts(db_session) == 0
     assert registrations == []
 
 

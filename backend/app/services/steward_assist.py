@@ -34,6 +34,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -47,12 +48,13 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models.account import Account
+from app.models.agent import AgentRun
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.space import FamilySpace
 from app.models.steward import (
+    STEWARD_ASSIST_KINDS,
     ActionCard,
-    StewardAssistBatch,
-    StewardGeneration,
+    StewardAssistPlan,
     StewardJob,
     StewardLlmCandidate,
     StewardModelCall,
@@ -61,7 +63,6 @@ from app.models.steward import (
 )
 from app.models.user import User
 from app.services import (
-    action_cards,
     agent_provider,
     platform_features,
     steward_candidate_evidence,
@@ -72,7 +73,7 @@ from app.utils import timeutil
 
 logger = logging.getLogger(__name__)
 
-ASSIST_KINDS: tuple[str, ...] = ("candidate", "ranking", "explanation", "terminology")
+ASSIST_KINDS: tuple[str, ...] = STEWARD_ASSIST_KINDS
 
 # 各辅助点的输出 token cap（预留时再与剩余预算取 min）
 _KIND_OUTPUT_CAPS: dict[str, int] = {
@@ -105,6 +106,9 @@ REASON_LEASE_LOST = "lease_lost"
 REASON_BUDGET_EXHAUSTED = "budget_exhausted"
 REASON_INSUFFICIENT_BUDGET = "insufficient_budget"
 REASON_PROMPT_TOO_LARGE = "prompt_too_large"
+# A plan whose carrier is not in-process has nothing for this process to run; the
+# attempt is released rather than left in_flight, which would strand it.
+REASON_CARRIER_NOT_INPROC = "carrier_not_inproc"
 REASON_RESPONSE_TOO_LARGE = "response_too_large"
 REASON_TIMEOUT = "timeout"
 REASON_NETWORK_UNKNOWN = "network_unknown"
@@ -251,36 +255,6 @@ def _post_json(
     return asyncio.run(_post_json_async(url, headers, payload, timeout))
 
 
-def _release_remaining_unsent(
-    db: Session, *, batch_id: int, lease_identity: tuple[str | None, int], reason: str
-) -> int:
-    """把本批仍未发送的预留一次性释放为 skipped（C-R2）。
-
-    只在执行身份仍持租约时生效（身份不符则留给恢复器）；skipped 不进入
-    ``_BUDGETED_STATUSES``，因此不消耗调用/ token 预算，也不产生 unknown 计费。
-    """
-    from app.services.steward import _immediate_tx
-
-    released = 0
-    with _immediate_tx(db):
-        db.expire_all()
-        batch = db.get(StewardAssistBatch, batch_id)
-        if batch is None or (batch.lease_owner, batch.attempt) != lease_identity:
-            return 0
-        for row in db.scalars(
-            select(StewardModelCall).where(
-                StewardModelCall.batch_id == batch_id,
-                StewardModelCall.status == "reserved",
-            )
-        ):
-            row.status = "skipped"
-            row.error_code = reason
-            released += 1
-        if released:
-            db.flush()
-    return released
-
-
 def _send_budget(lease_until: Any) -> float:
     """出事务前/后的单笔请求总预算（C-R2）。
 
@@ -298,9 +272,8 @@ def _send_budget(lease_until: Any) -> float:
 def _release_unsent(
     db: Session,
     *,
-    batch_id: int,
-    lease_identity: tuple[str | None, int],
     attempt_id: int,
+    lease_owner: str,
     reason: str,
 ) -> None:
     """释放一笔从未发出的预留（C-R2）：不记 unknown、不计费。
@@ -312,11 +285,8 @@ def _release_unsent(
 
     with _immediate_tx(db):
         db.expire_all()
-        batch = db.get(StewardAssistBatch, batch_id)
-        if batch is None or (batch.lease_owner, batch.attempt) != lease_identity:
-            return
         row = db.get(StewardModelCall, attempt_id)
-        if row is not None and row.status == "in_flight":
+        if row is not None and row.status == "in_flight" and row.lease_owner == lease_owner:
             row.status = "skipped"
             row.error_code = reason
             db.flush()
@@ -436,16 +406,16 @@ def terminology_target_retryable(
     now = now or timeutil.utcnow()
     reservations: list[Any] = []
     rows = db.execute(
-        select(StewardModelCall, StewardAssistBatch)
-        .join(StewardAssistBatch, StewardAssistBatch.id == StewardModelCall.batch_id)
+        select(StewardModelCall, StewardAssistPlan)
+        .join(StewardAssistPlan, StewardAssistPlan.id == StewardModelCall.plan_id)
         .where(
             StewardModelCall.space_id == space_id,
             StewardModelCall.viewer_account_id == viewer_account_id,
             StewardModelCall.assist_kind == "terminology",
         )
     ).all()
-    for call, batch in rows:
-        for group in (batch.fence_json or {}).get("terminology_groups", []):
+    for call, plan in rows:
+        for group in (plan.fence_json or {}).get("terminology_groups", []):
             if (
                 group.get("viewer_account_id") != viewer_account_id
                 or group.get("root_user_id") != root_user_id
@@ -556,6 +526,14 @@ def _visible_context(db: Session, space_id: int) -> ProjectionContext:
     users = [db.get(User, uid) for uid in visible]
     minor_ids = {u.id for u in users if u is not None and is_minor(u)}
     return ProjectionContext(visible, minor_ids=minor_ids)
+
+
+# Steward system prompt 的**跨层字面量**：文本现在住在 sidecar
+# （agent/src/prompts/steward.ts 的 STEWARD_PROMPT_VERSION），服务端不再持有文本，
+# 因此 prompt_version() 的哈希不再能锚定评测报告。这个常量就是锚点：sidecar 在
+# context 投影里上报它实际加载的版本，不匹配时 fail-closed。这同时防止「镜像过期、
+# 跑着旧 prompt 对上新后端」的静默漂移（与 memory #244 的 typ 漂移同一类教训）。
+STEWARD_PROMPT_VERSION = "steward-v1"
 
 
 def prompt_version() -> str:
@@ -742,7 +720,7 @@ def prepare_registration(bind: Engine | Connection, *, space_id: int) -> dict[st
         }
 
 
-def register_batch_for_job(
+def plan_for_job(
     db: Session,
     *,
     job: StewardJob,
@@ -751,8 +729,12 @@ def register_batch_for_job(
     cards: list[ActionCard],
     now: Any = None,
     prepared: dict[str, Any] | None = None,
-) -> StewardAssistBatch | None:
-    """确定性称谓交付完成后，在短事务里登记辅助批次（有可用工作才登记）。
+) -> StewardAssistPlan | None:
+    """确定性交付完成后，在同一短事务登记工作快照并预留全部 attempt。
+
+    取代旧的「注册批次 → 调度时再预留」两段式：那时租约在批次上，必须先有一行
+    批次才能预留；现在租约在 attempt 上，一次事务就能把「该做什么」和「可租什么」
+    一起落下，中间不存在「批次已存在但没有任何 attempt」的窗口。
 
     无开关开启/无工作 → None（行为与确定性基线等价）；绝不在此发生网络调用。
     """
@@ -771,6 +753,12 @@ def register_batch_for_job(
     if not kinds:
         return None
     now = now or timeutil.utcnow()
+    existing = db.scalar(select(StewardAssistPlan).where(StewardAssistPlan.job_id == job.id))
+    if existing is not None:
+        # Idempotent: the plan is immutable, so a re-run of the deterministic core
+        # must not rewrite the snapshot the live attempts fence against.
+        return existing
+
     active = [c for c in cards if c.state in ("pending", "viewed")]
     has_candidate = "candidate" in kinds and bool(facts_brief)
     active_ids = [int(c.id) for c in active][: config.STEWARD_ASSIST_MAX_CARDS_PER_JOB]
@@ -839,30 +827,59 @@ def register_batch_for_job(
         "explain_ids": explain_ids if has_explanation else [],
         "terminology_groups": terminology_groups if has_terminology else [],
     }
-    existing = db.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job.id))
-    if existing is not None:
-        return existing
-    batch = StewardAssistBatch(
+    evidence_hash = _canonical_hash(_facts_evidence(db, job.space_id))
+    plan = StewardAssistPlan(
         space_id=job.space_id,
         job_id=job.id,
-        evidence_hash=_canonical_hash(_facts_evidence(db, job.space_id)),
+        evidence_hash=evidence_hash,
         policy_version=job.policy_version,
-        status="pending",
-        attempt=0,
-        next_attempt_at=now,
         fence_json=fence,
+        deadline_at=now + timedelta(seconds=config.STEWARD_ASSIST_BATCH_LEASE_SECONDS),
         created_at=now,
-        updated_at=now,
     )
-    db.add(batch)
+    db.add(plan)
     db.flush()
-    return batch
+
+    # Resolve the runtime opportunistically: an unresolved or policy-blocked
+    # provider must NOT prevent the plan from being registered. The old code left
+    # this to the lease-time fence, and doing it here would turn a
+    # "provider unavailable" (a fenced skip with a safe reason code) into a
+    # crashed delivery. Failures are recorded in the fence and re-checked at lease
+    # time, which is where they belong.
+    try:
+        runtime = agent_provider.resolve_runtime(
+            db, job.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+        )
+    except Exception:  # noqa: BLE001 — any resolution failure is a fence concern
+        runtime = None
+    fence = {**fence, "runtime_identity": _runtime_identity(db, runtime)}
+    plan.fence_json = fence
+    budget = {"calls": 0, "tokens": 0}
+    calls_used, tokens_used = _budget_state(db, job.id)
+    budget["calls"] = calls_used
+    budget["tokens"] = tokens_used
+    _reserve_plan_attempts(
+        db,
+        plan=plan,
+        job=job,
+        kinds=_ordered_kinds(db, plan.space_id, fence),
+        fence=fence,
+        runtime=runtime,
+        budget=budget,
+        now=now,
+    )
+    db.flush()
+    return plan
 
 
 # ---- 写回栅栏（R4：发送前与写回前各验一次；TOCTOU 关口）----
 
 
 def _runtime_identity(db: Session, runtime: Any) -> str:
+    # ``runtime`` may be None: an unresolvable provider is recorded as an identity
+    # the fence can compare against, not as an exception. See ``plan_for_job``.
+    if runtime is None:
+        return _canonical_hash([None, "unresolved"])
     provider = db.get(AgentProvider, runtime.provider_id) if runtime.provider_id else None
     return _canonical_hash(
         [
@@ -876,64 +893,77 @@ def _runtime_identity(db: Session, runtime: Any) -> str:
     )
 
 
-def _fence_check(db: Session, batch: StewardAssistBatch, kinds: list[str]) -> str | None:
-    """重验证据与授权快照。返回 None=通过，否则安全原因码。"""
+def _fence_check(
+    db: Session, plan: StewardAssistPlan, attempt: StewardModelCall | None, kind: str
+) -> str | None:
+    """重验证据与授权快照。返回 None=通过，否则安全原因码。
+
+    调用点只有两处：``lease_attempt``（发送前）与 ``settle_attempt``（写回前）——
+    这是 TOCTOU 关口。旧实现在 9 处调用、且按「批次 + kind 列表」判定；现在每次
+    只判定**一个** attempt 的 kind，因为执行单元就是 attempt。
+
+    ``attempt`` 为 None 时只做与具体 attempt 无关的检查（开关、作业、provider、
+    证据）；租约时用得上，因为那时 attempt 已经在手。
+    """
     if not config.STEWARD_ENABLED:
         return REASON_ASSIST_DISABLED
-    for kind in kinds:
-        if not assist_enabled(db, batch.space_id, kind):
-            return REASON_ASSIST_DISABLED
-    job = db.get(StewardJob, batch.job_id)
+    if not assist_enabled(db, plan.space_id, kind):
+        return REASON_ASSIST_DISABLED
+    job = db.get(StewardJob, plan.job_id)
     if job is None or job.status != "succeeded":
         return REASON_JOB_NOT_SETTLED
-    if job.policy_version != batch.policy_version or batch.policy_version != config.POLICY_VERSION:
+    if job.policy_version != plan.policy_version or plan.policy_version != config.POLICY_VERSION:
         return REASON_POLICY_CHANGED
     runtime = agent_provider.resolve_runtime(
-        db, batch.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+        db, plan.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
     )
     if runtime is None or not (runtime.base_url or "").rstrip("/"):
         return REASON_PROVIDER_UNAVAILABLE
     if _API_PATHS.get(runtime.api) is None:
         return REASON_PROVIDER_API_UNSUPPORTED
-    runtime_identity = (batch.fence_json or {}).get("runtime_identity")
+    fence = plan.fence_json or {}
+    runtime_identity = fence.get("runtime_identity")
     if runtime_identity is not None and runtime_identity != _runtime_identity(db, runtime):
         return REASON_PROVIDER_CHANGED
     # R1：云同意撤销 / 要求本地但选中云 → 降级（policy_blocked），绝不自动切云
     if runtime.kind != "local":
         setting = db.scalar(
             select(AgentSpaceProviderSetting).where(
-                AgentSpaceProviderSetting.space_id == batch.space_id,
+                AgentSpaceProviderSetting.space_id == plan.space_id,
                 AgentSpaceProviderSetting.agent_kind == agent_provider.AGENT_KIND_STEWARD,
             )
         )
         if setting is None or setting.local_required or not setting.cloud_allowed:
             return REASON_POLICY_BLOCKED
-    reserved = db.scalar(
-        select(StewardModelCall)
-        .where(
-            StewardModelCall.batch_id == batch.id,
-            StewardModelCall.provider_id.is_not(None),
-        )
-        .order_by(StewardModelCall.id)
-        .limit(1)
-    )
-    if reserved is not None:
-        if reserved.provider_id != runtime.provider_id or reserved.model != runtime.model:
+    if attempt is not None and attempt.provider_id is not None:
+        if attempt.provider_id != runtime.provider_id or attempt.model != runtime.model:
             return REASON_PROVIDER_CHANGED
-    if "candidate" in kinds:
-        if _canonical_hash(_facts_evidence(db, batch.space_id)) != batch.evidence_hash:
+    # The attempt snapshots the digest it was reserved against, so a fence run
+    # without an attempt (nothing reserved yet) compares against the plan.
+    expected_evidence = (
+        attempt.evidence_hash
+        if attempt is not None and attempt.evidence_hash
+        else plan.evidence_hash
+    )
+    if kind == "candidate":
+        if _canonical_hash(_facts_evidence(db, plan.space_id)) != expected_evidence:
             return REASON_EVIDENCE_CHANGED
-    fence = batch.fence_json or {}
-    if "terminology" in kinds:
+    if kind == "terminology":
         from app.services import steward_terminology
 
+        viewer = attempt.viewer_account_id if attempt is not None else None
         for group in fence.get("terminology_groups", []):
+            # Only this attempt's viewer group is in scope: another viewer's group
+            # is a different attempt's input, and failing this one for its change
+            # would let one viewer's edit block another's already-issued call.
+            if viewer is not None and int(group["viewer_account_id"]) != int(viewer):
+                continue
             for target in group.get("targets", []):
                 current = steward_terminology.current_target_context(
                     db,
                     viewer_account_id=int(group["viewer_account_id"]),
                     root_user_id=int(group["root_user_id"]),
-                    space_id=batch.space_id,
+                    space_id=plan.space_id,
                     target_user_id=int(target["target_user_id"]),
                     path=target.get("path"),
                 )
@@ -941,13 +971,19 @@ def _fence_check(db: Session, batch: StewardAssistBatch, kinds: list[str]) -> st
                     return REASON_EVIDENCE_CHANGED
                 if current["request_hash"] != target.get("request_hash"):
                     return REASON_EVIDENCE_CHANGED
-    guarded_card_ids = set(fence.get("explain_ids", []) if "explanation" in kinds else [])
-    if "ranking" in kinds:
-        guarded_card_ids.update(
-            card_id for group in fence.get("ranking_groups", []) for card_id in group["card_ids"]
-        )
+    guarded_card_ids: set[int] = set()
+    if kind == "explanation":
+        guarded_card_ids.update(int(i) for i in fence.get("explain_ids", []))
+    if kind == "ranking":
+        # Deliberately conservative: every ranking group's cards guard the attempt,
+        # not only this attempt's own group. Being more precise here would weaken
+        # the write-back fence for a change I have not measured, and a fence that
+        # fails safe costs one skipped call while one that fails open writes a
+        # ranking against a card that moved.
+        for group in fence.get("ranking_groups", []):
+            guarded_card_ids.update(int(i) for i in group.get("card_ids", []))
     for entry in fence.get("cards", []):
-        if entry["id"] not in guarded_card_ids:
+        if int(entry["id"]) not in guarded_card_ids:
             continue
         card = db.get(ActionCard, int(entry["id"]))
         if (
@@ -959,7 +995,105 @@ def _fence_check(db: Session, batch: StewardAssistBatch, kinds: list[str]) -> st
     return None
 
 
-# ---- 调度/预留（独立短事务；HTTP 不在本事务）----
+# ---- 调度：plan → attempt 预留 → 租约（独立短事务；HTTP 不在本事务）----
+
+
+def _inproc() -> Any:
+    """The in-process carrier instance.
+
+    Imported lazily because ``steward_carrier`` imports this module for the shared
+    prompt and payload helpers; a module-level import would be circular.
+    """
+    from app.services.steward_carrier import InprocCarrier
+
+    return InprocCarrier()
+
+
+# Fence reason codes: an attempt retired by one of these was *superseded*, not
+# failed — the world moved, the work is no longer applicable.
+_FENCE_REASON_CODES = frozenset(
+    {
+        REASON_ASSIST_DISABLED,
+        REASON_POLICY_CHANGED,
+        REASON_PROVIDER_CHANGED,
+        REASON_CARD_CHANGED,
+        REASON_EVIDENCE_CHANGED,
+        REASON_JOB_NOT_SETTLED,
+        REASON_PROVIDER_UNAVAILABLE,
+        REASON_PROVIDER_API_UNSUPPORTED,
+        REASON_POLICY_BLOCKED,
+    }
+)
+
+
+def plan_error_code(db: Session, plan_id: int) -> str | None:
+    """The safe reason code behind a plan's outcome, or None when it is clean."""
+    return _plan_verdict(db, plan_id)[1]
+
+
+def plan_outcome(db: Session, plan_id: int) -> str | None:
+    """Derive a plan's outcome from its attempts.
+
+    The plan itself carries no status: execution state belongs to the attempt
+    (that is the point of the refactor). Callers that used to read
+    ``batch.status`` — admin views, observability, tests — need the same question
+    answered ("did this work land, fail, or get fenced out?"), so the derivation
+    lives here once instead of at each call site.
+
+    The mapping reproduces the old ``_apply_batch`` terminal-code rules exactly,
+    because those rules are contracts other layers read:
+
+    - ``unknown`` attempt → ``failed``/``network_unknown`` (result unknowable, not
+      replayed);
+    - else a ``failed`` attempt → ``failed``/``transport_failed``;
+    - else ``prompt_too_large`` → ``failed`` with that code (a deterministic input
+      problem, not upstream uncertainty — deliberately *not* ``unknown``);
+    - a fence refusal → ``superseded`` with the fence's own reason code, and it
+      outranks the above because the work was dropped for a safety reason;
+    - otherwise, once nothing is in flight or reserved, ``applied``.
+
+    ``skipped`` is deliberately benign: a legal empty product and a budget-skipped
+    attempt both mean "nothing to do", which is a successful outcome. A partial
+    success still reports the failure — a plan is never disguised as clean because
+    some of its products landed.
+    """
+    return _plan_verdict(db, plan_id)[0]
+
+
+def _plan_verdict(db: Session, plan_id: int) -> tuple[str | None, str | None]:
+    rows = list(db.scalars(select(StewardModelCall).where(StewardModelCall.plan_id == plan_id)))
+    if not rows:
+        return None, None
+    if any(row.status == "in_flight" for row in rows):
+        return "applying", None
+    statuses = {row.status for row in rows}
+    codes = {row.error_code for row in rows if row.error_code}
+    fenced = codes & _FENCE_REASON_CODES
+    if fenced:
+        return "superseded", sorted(fenced)[0]
+    if "unknown" in statuses:
+        return "failed", REASON_NETWORK_UNKNOWN
+    if "failed" in statuses:
+        return "failed", REASON_TRANSPORT_FAILED
+    if REASON_PROMPT_TOO_LARGE in codes:
+        return "failed", REASON_PROMPT_TOO_LARGE
+    if "reserved" in statuses:
+        # Reserved but unleased: work is available and nothing is executing. This
+        # is the old "pending" — with the difference that it is already leaseable,
+        # because reservation now happens in the same transaction as registration.
+        return "pending", None
+    return "applied", None
+
+
+def _carrier_for(db: Session, space_id: int, kind: str) -> str:
+    """Resolve the carrier name for one kind (see services/steward_carrier).
+
+    Imported lazily: ``steward_carrier`` imports this module for the shared prompt
+    and payload helpers, so a module-level import would be circular.
+    """
+    from app.services.steward_carrier import carrier_for
+
+    return carrier_for(db, space_id, kind).carrier
 
 
 def _next_seq(db: Session, job_id: int, kind: str, seq_counters: dict[str, int]) -> int:
@@ -975,28 +1109,80 @@ def _next_seq(db: Session, job_id: int, kind: str, seq_counters: dict[str, int])
     return seq_counters[kind]
 
 
+def _ordered_kinds(db: Session, space_id: int, fence: dict[str, Any]) -> list[str]:
+    """Fair scheduling (B design §6): rotate the kind queue per space.
+
+    The cursor is what stops one kind from starving the others when a plan has
+    work in several: without it every pass starts at ``candidate`` and the later
+    kinds wait indefinitely. Kinds with no work are skipped.
+    """
+    kinds = [k for k in fence.get("kinds", []) if k in ASSIST_KINDS]
+    schedule = db.get(StewardSpaceSchedule, space_id)
+    cursor = int(schedule.assist_kind_cursor) if schedule is not None else 0
+    offset = cursor % len(ASSIST_KINDS) if ASSIST_KINDS else 0
+    ordered = ASSIST_KINDS[offset:] + ASSIST_KINDS[:offset]
+    return [k for k in ordered if k in kinds]
+
+
+def _advance_kind_cursor(db: Session, space_id: int, kind: str, now: Any) -> None:
+    """Advance the per-space rotation past the kind just reserved.
+
+    Called once per plan registration, not per attempt: the rotation is a property
+    of the space's scheduling, and advancing it per attempt would let a plan with
+    many candidate subjects push the cursor arbitrarily far.
+
+    The row is created here if absent. It is normally created by the periodic scan,
+    but work can also be enqueued directly (an integrity scan, an event), and the
+    rotation must not silently stop working in that case — with no row the cursor
+    reads 0 forever, so a space whose budget allows one call per job would retry
+    ``candidate`` indefinitely and never reach the other kinds.
+    """
+    if kind not in ASSIST_KINDS:
+        return
+    schedule = db.get(StewardSpaceSchedule, space_id)
+    if schedule is None:
+        db.add(
+            StewardSpaceSchedule(
+                space_id=space_id,
+                next_scan_at=now,
+                last_scheduled_cursor=0,
+                policy_version=config.POLICY_VERSION,
+                assist_kind_cursor=(ASSIST_KINDS.index(kind) + 1) % len(ASSIST_KINDS),
+                updated_at=now,
+            )
+        )
+        return
+    schedule.assist_kind_cursor = (ASSIST_KINDS.index(kind) + 1) % len(ASSIST_KINDS)
+    schedule.updated_at = now
+
+
 def _reserve_attempt(
     db: Session,
     *,
-    batch: StewardAssistBatch,
+    plan: StewardAssistPlan,
     job: StewardJob,
     kind: str,
     subject_key: str,
     user_content: str,
     runtime: Any,
     budget: dict[str, int],
-    lease_no: int,
+    now: Any,
     seq_counters: dict[str, int],
     viewer_account_id: int | None = None,
 ) -> None:
-    """为一个发送主题预留 attempt（或落 skipped 审计行）。budget 就地扣减。"""
+    """为一个发送主题预留 attempt（或落 skipped 审计行）。budget 就地扣减。
+
+    ``next_attempt_at = now``：预留即可租。旧实现把「预留」推迟到调度时，于是
+    「批次已登记但没有任何可执行 attempt」是一个真实中间态（崩溃点②）；现在预留
+    与可租同时成立，该状态不存在。
+    """
     system = _PROMPTS[kind]
     prompt = f"{system}\n{user_content}"
     prompt_bytes = len(prompt.encode("utf-8"))
     row_common: dict[str, Any] = {
-        "space_id": batch.space_id,
+        "space_id": plan.space_id,
         "job_id": job.id,
-        "policy_version": batch.policy_version,
+        "policy_version": plan.policy_version,
         "assist_kind": kind,
         "provider_id": runtime.provider_id if runtime else None,
         "model": runtime.model if runtime else None,
@@ -1005,10 +1191,12 @@ def _reserve_attempt(
         "seq": _next_seq(db, job.id, kind, seq_counters),
         "subject_key": subject_key,
         "input_hash": _canonical_hash(user_content),
-        "attempt_no": lease_no,
-        "batch_id": batch.id,
+        "plan_id": plan.id,
         "viewer_account_id": viewer_account_id,
-        "created_at": timeutil.utcnow(),
+        "evidence_hash": plan.evidence_hash,
+        "carrier": _carrier_for(db, plan.space_id, kind),
+        "next_attempt_at": now,
+        "created_at": now,
     }
     max_out = _KIND_OUTPUT_CAPS[kind]
     if budget["calls"] >= config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB:
@@ -1037,228 +1225,242 @@ def _reserve_attempt(
     budget["tokens"] += est_in + reserved_out
 
 
-def schedule_due_batch(
-    db: Session, *, worker_id: str = "inproc-assist-worker", now: Any = None
-) -> StewardAssistBatch | None:
-    """选中至多一个到期批次：预留 attempt 行并置 leased（独立短事务）。
+def _reserve_plan_attempts(
+    db: Session,
+    *,
+    plan: StewardAssistPlan,
+    job: StewardJob,
+    kinds: list[str],
+    fence: dict[str, Any],
+    runtime: Any,
+    budget: dict[str, int],
+    now: Any,
+) -> None:
+    """Register the attempt rows a plan may run (no network call).
 
-    全局并发 = 至多 STEWARD_ASSIST_MAX_CONCURRENT_BATCHES 个未过期 lease。
-    返回 None 表示无可执行批次。此函数内无网络调用。
+    The projection for each kind is built here and only here, so both carriers
+    send byte-identical input: duplicating it would let them drift in what the
+    model sees, which is the failure this refactor exists to remove.
+    """
+    seq_counters: dict[str, int] = {}
+    reserved_kinds: list[str] = []
+    for kind in kinds:
+        before = budget["calls"]
+        if kind == "candidate":
+            ctx = _visible_context(db, plan.space_id)
+            _reserve_attempt(
+                db,
+                plan=plan,
+                job=job,
+                kind="candidate",
+                subject_key="facts",
+                user_content=candidate_user_content(db, plan.space_id, ctx),
+                runtime=runtime,
+                budget=budget,
+                now=now,
+                seq_counters=seq_counters,
+            )
+        if kind == "ranking":
+            for group in fence.get("ranking_groups", []):
+                targets = _ranking_targets(db, [int(i) for i in group.get("card_ids", [])])
+                if len(targets) < 2:
+                    continue
+                _reserve_attempt(
+                    db,
+                    plan=plan,
+                    job=job,
+                    kind="ranking",
+                    subject_key=(
+                        f"ranking:{int(group.get('recipient_account_id', 0))}:"
+                        + ",".join(str(int(c.id)) for c in targets)
+                    ),
+                    user_content=steward_guard.project_ranking_input(
+                        [{"card_id": int(c.id), "kind": c.kind} for c in targets]
+                    ),
+                    runtime=runtime,
+                    budget=budget,
+                    now=now,
+                    seq_counters=seq_counters,
+                )
+        if kind == "explanation":
+            ctx = _visible_context(db, plan.space_id)
+            for card in _explanation_targets(db, [int(i) for i in fence.get("explain_ids", [])]):
+                _reserve_attempt(
+                    db,
+                    plan=plan,
+                    job=job,
+                    kind="explanation",
+                    subject_key=f"card:{int(card.id)}",
+                    user_content=_explanation_user_content(card, ctx),
+                    runtime=runtime,
+                    budget=budget,
+                    now=now,
+                    seq_counters=seq_counters,
+                )
+        if kind == "terminology":
+            from app.services import steward_terminology
+
+            for group in fence.get("terminology_groups", []):
+                term_targets = list(group.get("targets", []))
+                if not term_targets:
+                    continue
+                if not all(
+                    terminology_target_retryable(
+                        db,
+                        space_id=plan.space_id,
+                        viewer_account_id=int(group["viewer_account_id"]),
+                        root_user_id=int(group["root_user_id"]),
+                        target_user_id=int(target["target_user_id"]),
+                        semantic_hash=target["semantic_hash"],
+                        request_hash=target["request_hash"],
+                        now=now,
+                    )
+                    for target in term_targets
+                ):
+                    continue
+                user_content = steward_terminology.project_terminology_input(
+                    db, {**group, "space_id": plan.space_id}
+                )
+                account_row = db.get(Account, int(group["viewer_account_id"]))
+                if account_row is None:
+                    continue
+                calls_before = budget["calls"]
+                _reserve_attempt(
+                    db,
+                    plan=plan,
+                    job=job,
+                    kind="terminology",
+                    subject_key=(
+                        f"terminology:{int(group['viewer_account_id'])}:"
+                        f"{int(group['root_user_id'])}:{group['digest']}"
+                    ),
+                    user_content=user_content,
+                    runtime=runtime,
+                    budget=budget,
+                    now=now,
+                    seq_counters=seq_counters,
+                    viewer_account_id=int(group["viewer_account_id"]),
+                )
+                if budget["calls"] > calls_before:
+                    from app.models.steward import StewardTermProjection
+
+                    for target in term_targets:
+                        projection = (
+                            db.get(StewardTermProjection, target.get("projection_id"))
+                            if target.get("projection_id")
+                            else None
+                        )
+                        if projection is not None:
+                            projection.last_attempt_at = now
+                            projection.last_attempt_status = "reserved"
+        if budget["calls"] > before:
+            reserved_kinds.append(kind)
+    # Rotate the space's kind cursor past the first kind that actually got work, so
+    # the next plan starts from a different kind instead of always at candidate.
+    if reserved_kinds:
+        _advance_kind_cursor(db, plan.space_id, reserved_kinds[0], now)
+
+
+def lease_attempt(
+    db: Session, *, space_id: int, worker_id: str, ttl_seconds: int | None = None
+) -> dict[str, Any] | None:
+    """租一个到期 attempt 给一个执行载体（**无网络调用**）。
+
+    与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
+    （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
+    ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
+
+    fence 在租约时重验一次（发送前的 TOCTOU 关口），并且是**唯一的**发送门：栅栏不过的
+    attempt 在这里落 ``skipped``（带安全原因码），循环继续看下一个候选，因此一个被栅栏
+    拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
+    一直看起来有活干。
+
+    返回 None 表示本空间没有可租 attempt（或全部被栅栏拦下）。grant 供 internal 端点签发 run token。
     """
     from app.services.steward import _immediate_tx
 
-    now = now or timeutil.utcnow()
+    now = timeutil.utcnow()
+    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
     with _immediate_tx(db):
         db.expire_all()
-        in_flight = len(
-            list(
-                db.scalars(
-                    select(StewardAssistBatch.id).where(
-                        StewardAssistBatch.status.in_(("leased", "applying")),
-                        StewardAssistBatch.lease_until > now,
-                    )
-                )
-            )
-        )
-        if in_flight >= config.STEWARD_ASSIST_MAX_CONCURRENT_BATCHES:
-            return None
-        batch = db.scalar(
-            select(StewardAssistBatch)
+        in_flight = db.scalar(
+            select(func.count())
+            .select_from(StewardModelCall)
             .where(
-                StewardAssistBatch.status == "pending",
-                StewardAssistBatch.next_attempt_at.is_not(None),
-                StewardAssistBatch.next_attempt_at <= now,
+                StewardModelCall.space_id == space_id,
+                StewardModelCall.status == "in_flight",
+                StewardModelCall.lease_until > now,
             )
-            .order_by(StewardAssistBatch.next_attempt_at.asc(), StewardAssistBatch.id.asc())
-            .limit(1)
         )
-        if batch is None:
+        if int(in_flight or 0) >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:
             return None
-        job = db.get(StewardJob, batch.job_id)
-        fence = batch.fence_json or {}
-        kinds = [k for k in fence.get("kinds", []) if k in ASSIST_KINDS]
-        # 公平调度（B design §6）：每空间 cursor 轮转 kind 队列，跳过无工作 kind
-        schedule = db.get(StewardSpaceSchedule, batch.space_id)
-        cursor = int(schedule.assist_kind_cursor) if schedule is not None else 0
-        offset = cursor % len(ASSIST_KINDS) if ASSIST_KINDS else 0
-        ordered = ASSIST_KINDS[offset:] + ASSIST_KINDS[:offset]
-        kinds = [k for k in ordered if k in kinds]
-        if job is None or job.status != "succeeded":
-            batch.status = "superseded"
-            batch.error_code = REASON_JOB_NOT_SETTLED
-            batch.updated_at = now
+        candidates = db.scalars(
+            select(StewardModelCall)
+            .where(
+                StewardModelCall.space_id == space_id,
+                StewardModelCall.status == "reserved",
+                StewardModelCall.next_attempt_at.is_not(None),
+                StewardModelCall.next_attempt_at <= now,
+            )
+            .order_by(StewardModelCall.next_attempt_at.asc(), StewardModelCall.id.asc())
+        )
+        for attempt in candidates:
+            plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+            if plan is None:
+                # A reserved attempt always belongs to a plan; a missing one is a
+                # corrupt row rather than a normal state. Retire it instead of
+                # leasing work whose evidence cannot be fenced.
+                attempt.status = "skipped"
+                attempt.error_code = REASON_EVIDENCE_CHANGED
+                db.flush()
+                continue
+            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+            if reason is not None:
+                # The sending gate. Retiring it here (rather than returning) is why
+                # a fenced attempt cannot block its space: nothing else would ever
+                # lease it, so it would sit reserved forever and keep the space
+                # looking busy. The reason code is also the explanation callers
+                # report through ``plan_error_code``.
+                attempt.status = "skipped"
+                attempt.error_code = reason
+                db.flush()
+                continue
+            break
+        else:
             return None
-        if not kinds:
-            batch.status = "superseded"
-            batch.error_code = REASON_ASSIST_DISABLED
-            batch.updated_at = now
-            return None
-        # 写回栅栏第一道：注册后世界可能已变化（开关/policy/provider/facts/卡片）
-        reason = _fence_check(db, batch, kinds)
-        if reason is not None:
-            batch.status = "superseded"
-            batch.error_code = reason
-            batch.updated_at = now
-            db.flush()
-            return None
+        # The per-attempt lease is also capped by the plan's remaining wall clock:
+        # otherwise each attempt would get a fresh full window and one plan could
+        # run for (attempts x ttl) instead of one lease window.
+        plan_deadline = plan.deadline_at
+        attempt.status = "in_flight"
+        attempt.lease_owner = worker_id
+        attempt.lease_until = min(now + timedelta(seconds=ttl), plan_deadline)
+        db.flush()
+        # Everything the carrier needs to send is captured here, so the send path
+        # never has to read the database (and therefore never holds a transaction
+        # across the HTTP call).
         runtime = agent_provider.resolve_runtime(
-            db, batch.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
+            db, plan.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
         )
-        assert runtime is not None
-        fence = {**fence, "runtime_identity": _runtime_identity(db, runtime)}
-        batch.fence_json = fence
-        lease_no = batch.attempt + 1
-        budget = {"calls": 0, "tokens": 0}
-        seq_counters: dict[str, int] = {}
-        calls_used, tokens_used = _budget_state(db, job.id)
-        budget["calls"] = calls_used
-        budget["tokens"] = tokens_used
-        for kind in kinds:
-            if kind == "candidate":
-                ctx = _visible_context(db, batch.space_id)
-                _reserve_attempt(
-                    db,
-                    batch=batch,
-                    job=job,
-                    kind="candidate",
-                    subject_key="facts",
-                    user_content=candidate_user_content(db, batch.space_id, ctx),
-                    runtime=runtime,
-                    budget=budget,
-                    lease_no=lease_no,
-                    seq_counters=seq_counters,
-                )
-            if kind == "ranking":
-                for group in fence.get("ranking_groups", []):
-                    targets = _ranking_targets(db, [int(i) for i in group.get("card_ids", [])])
-                    if len(targets) < 2:
-                        continue
-                    _reserve_attempt(
-                        db,
-                        batch=batch,
-                        job=job,
-                        kind="ranking",
-                        subject_key=(
-                            f"ranking:{int(group.get('recipient_account_id', 0))}:"
-                            + ",".join(str(int(c.id)) for c in targets)
-                        ),
-                        user_content=steward_guard.project_ranking_input(
-                            [{"card_id": int(c.id), "kind": c.kind} for c in targets]
-                        ),
-                        runtime=runtime,
-                        budget=budget,
-                        lease_no=lease_no,
-                        seq_counters=seq_counters,
-                    )
-            if kind == "explanation":
-                ctx = _visible_context(db, batch.space_id)
-                for card in _explanation_targets(
-                    db, [int(i) for i in fence.get("explain_ids", [])]
-                ):
-                    _reserve_attempt(
-                        db,
-                        batch=batch,
-                        job=job,
-                        kind="explanation",
-                        subject_key=f"card:{int(card.id)}",
-                        user_content=_explanation_user_content(card, ctx),
-                        runtime=runtime,
-                        budget=budget,
-                        lease_no=lease_no,
-                        seq_counters=seq_counters,
-                    )
-            if kind == "terminology":
-                from app.services import steward_terminology
-
-                for group in fence.get("terminology_groups", []):
-                    term_targets = list(group.get("targets", []))
-                    if not term_targets:
-                        continue
-                    if not all(
-                        terminology_target_retryable(
-                            db,
-                            space_id=batch.space_id,
-                            viewer_account_id=int(group["viewer_account_id"]),
-                            root_user_id=int(group["root_user_id"]),
-                            target_user_id=int(target["target_user_id"]),
-                            semantic_hash=target["semantic_hash"],
-                            request_hash=target["request_hash"],
-                            now=now,
-                        )
-                        for target in term_targets
-                    ):
-                        continue
-                    # 发送前栅栏已在 _fence_check 验证语义摘要；此处重建投影输入
-                    user_content = steward_terminology.project_terminology_input(
-                        db, {**group, "space_id": batch.space_id}
-                    )
-                    account_row = db.get(Account, int(group["viewer_account_id"]))
-                    if account_row is None:
-                        continue
-                    calls_before = budget["calls"]
-                    _reserve_attempt(
-                        db,
-                        batch=batch,
-                        job=job,
-                        kind="terminology",
-                        subject_key=(
-                            f"terminology:{int(group['viewer_account_id'])}:"
-                            f"{int(group['root_user_id'])}:{group.get('digest', '')}"
-                        ),
-                        user_content=user_content,
-                        runtime=runtime,
-                        budget=budget,
-                        lease_no=lease_no,
-                        seq_counters=seq_counters,
-                        viewer_account_id=int(group["viewer_account_id"]),
-                    )
-                    if budget["calls"] > calls_before:
-                        from app.models.steward import StewardTermProjection
-
-                        for target in term_targets:
-                            projection = (
-                                db.get(StewardTermProjection, target.get("projection_id"))
-                                if target.get("projection_id")
-                                else None
-                            )
-                            if projection is not None:
-                                projection.last_attempt_at = now
-                                projection.last_attempt_status = "reserved"
-        # Session disables autoflush: persist reservations before measuring progress.
-        db.flush()
-        # 记录本轮实际预留到的 kind，推进每空间 cursor（只记调度进度）
-        reserved_kinds = {
-            row.assist_kind
-            for row in db.scalars(
-                select(StewardModelCall).where(
-                    StewardModelCall.batch_id == batch.id,
-                    StewardModelCall.status == "reserved",
-                )
-            )
+        return {
+            "attempt_id": attempt.id,
+            "space_id": plan.space_id,
+            "steward_job_id": plan.job_id,
+            "assist_kind": attempt.assist_kind,
+            "carrier": attempt.carrier,
+            "policy_version": plan.policy_version,
+            "viewer_account_id": attempt.viewer_account_id,
+            "input_hash": attempt.input_hash,
+            "prompt_digest": attempt.prompt_digest,
+            "lease_until": attempt.lease_until,
+            "api": runtime.api if runtime is not None else "openai-responses",
+            "runtime": runtime,
+            # The projection and the output cap are read here (inside the lease
+            # transaction) so the send path needs no database access at all.
+            "user_content": _user_content_for(db, attempt),
+            "reserved_output_tokens": attempt.reserved_output_tokens,
+            "model": attempt.model,
         }
-        if schedule is None:
-            schedule = StewardSpaceSchedule(
-                space_id=batch.space_id,
-                next_scan_at=now,
-                last_scheduled_cursor=0,
-                policy_version=job.policy_version,
-                updated_at=now,
-            )
-            db.add(schedule)
-        if reserved_kinds:
-            last_reserved = max((ordered.index(k) for k in reserved_kinds), default=-1)
-            schedule.assist_kind_cursor = (offset + last_reserved + 1) % len(ASSIST_KINDS)
-        schedule.updated_at = now
-        batch.attempt = lease_no
-        batch.status = "leased"
-        batch.lease_owner = worker_id
-        batch.lease_until = now + timedelta(seconds=config.STEWARD_ASSIST_BATCH_LEASE_SECONDS)
-        batch.updated_at = now
-        db.flush()
-        return batch
-
-
-# ---- 执行（受限线程内、自有 Session；HTTP 无任何打开事务）----
 
 
 def _classify_transport_error(exc: Exception) -> tuple[str, str]:
@@ -1369,316 +1571,14 @@ def _validate_output(
     return {"order": order} if order is not None else None
 
 
-def _settle_attempt(
-    db: Session,
-    *,
-    batch: StewardAssistBatch,
-    attempt_id: int,
-    text: str | None,
-    usage: dict[str, int] | None,
-    exc: Exception | None,
-    latency_ms: int,
-    response_bytes: int,
-) -> str | None:
-    """Settle one returned attempt inside the caller's write transaction.
-
-    B-R1: the returned result must reach durable storage while the executing
-    identity is still valid, before the next request is sent. Returns the
-    settled status, or ``None`` when the row was no longer ``in_flight``
-    (another executor settled it, or the lease was already lost).
-    """
-    fresh = db.get(StewardModelCall, attempt_id)
-    if fresh is None or fresh.status != "in_flight":
-        return None
-    fresh.latency_ms = latency_ms
-    if exc is not None:
-        status, code = _classify_transport_error(exc)
-        fresh.status = status
-        fresh.error_code = code
-        _pt, _ct, billed = _bill_usage(
-            None, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
-        )
-    else:
-        assert text is not None
-        fresh.completion_chars = len(text)
-        fresh.response_bytes = response_bytes
-        pt, ct, billed = _bill_usage(
-            usage, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
-        )
-        fresh.prompt_tokens = pt
-        fresh.completion_tokens = ct
-        fresh.total_tokens = billed
-        fresh.status = "succeeded"
-        fresh.error_code = None
-        ctx = _visible_context(db, batch.space_id)
-        card_ids: list[int] = []
-        expl_card: ActionCard | None = None
-        if fresh.assist_kind == "ranking" and fresh.subject_key:
-            parts = fresh.subject_key.split(":")
-            if len(parts) == 3:
-                card_ids = [int(x) for x in parts[2].split(",") if x]
-        elif fresh.assist_kind == "explanation" and fresh.subject_key:
-            try:
-                expl_card = db.get(ActionCard, int(fresh.subject_key.split(":", 1)[1]))
-            except (IndexError, ValueError):
-                expl_card = None
-        term_group: dict[str, Any] | None = None
-        if fresh.assist_kind == "terminology":
-            term_group = _term_group_for(db, fresh)
-            if term_group is None:
-                # 组上下文已失效：直接落 degraded（跳过常规校验）
-                fresh.status = "degraded"
-                fresh.error_code = REASON_INVALID_OUTPUT
-                fresh.billed_tokens = billed
-                db.flush()
-                return fresh.status
-        product = _validate_output(
-            fresh.assist_kind,
-            text,
-            ctx=ctx,
-            card_ids=card_ids,
-            card=expl_card,
-            db=db,
-            term_group=term_group,
-        )
-        if product is None:
-            fresh.status = "degraded"
-            fresh.error_code = REASON_INVALID_OUTPUT
-        else:
-            fresh.output_json = product
-    fresh.billed_tokens = billed
-    db.flush()
-    return fresh.status
-
-
-def execute_batch(
-    db: Session,
-    batch_id: int,
-    *,
-    transport: Transport | None = None,
-    after_send: Callable[[Session, StewardAssistBatch], None] | None = None,
-) -> str:
-    # Note: 辅助 HTTP 唯一合法路径 —
-    # 见 .agent-notes/implemented/architecture/2026-09-11-steward-assist-batch-executor.md
-    """执行一个 leased 批次：发送（无事务）→ 审计/计费短事务 → 栅栏 + 写回短事务。
-
-    阶段：
-    tx1  预发送栅栏 + attempt reserved→in_flight + 批次 applying，提交；
-    HTTP 全部在事务外（受 lease 墙钟 deadline 与单次 timeout 双重上界）；
-    tx2  保守计费/状态结算 + 已验证产物 output_json，提交（崩溃恢复点③④）；
-    tx3  写回栅栏重验 → CAS 应用产物 → 批次 applied/superseded。
-    返回批次最终状态字符串。
-    """
-    from app.services.steward import _immediate_tx
-
-    batch = db.get(StewardAssistBatch, batch_id)
-    if batch is None or batch.status != "leased":
-        return batch.status if batch is not None else "missing"
-    now = timeutil.utcnow()
-    if batch.lease_until is None or batch.lease_until <= now:
-        return batch.status  # 恢复器负责过期 lease
-
-    lease_identity = (batch.lease_owner, batch.attempt)
-
-    # ---- tx1：预发送栅栏 + attempt reserved→in_flight + 批次 applying ----
-    local_required = False
-    cloud_allowed = True
-    with _immediate_tx(db):
-        db.expire_all()
-        batch = db.get(StewardAssistBatch, batch_id)
-        assert batch is not None
-        if batch.status != "leased" or (batch.lease_owner, batch.attempt) != lease_identity:
-            return batch.status
-        attempts = list(
-            db.scalars(
-                select(StewardModelCall)
-                .where(
-                    StewardModelCall.batch_id == batch.id,
-                    StewardModelCall.status == "reserved",
-                )
-                .order_by(StewardModelCall.id)
-            )
-        )
-        reason = _fence_check(db, batch, [a.assist_kind for a in attempts])
-        if reason is not None:
-            for attempt in attempts:
-                attempt.status = "skipped"
-                attempt.error_code = reason
-            batch.status = "superseded"
-            batch.error_code = reason
-            batch.updated_at = now
-            db.flush()
-            return batch.status
-        batch.status = "applying"
-        batch.updated_at = now
-        db.flush()
-        # 在锁内读取构建 payload 所需的运行时与出站 policy 开关（HTTP 在事务外）
-        runtime = agent_provider.resolve_runtime(
-            db, batch.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
-        )
-        setting = db.scalar(
-            select(AgentSpaceProviderSetting).where(
-                AgentSpaceProviderSetting.space_id == batch.space_id,
-                AgentSpaceProviderSetting.agent_kind == agent_provider.AGENT_KIND_STEWARD,
-            )
-        )
-        if setting is not None:
-            local_required = bool(setting.local_required)
-            cloud_allowed = bool(setting.cloud_allowed)
-
-    # ---- HTTP（无事务；受总 deadline 与单次 timeout 双重上界）----
-    assert runtime is not None  # 预发送栅栏已确保 provider 可用
-    api = runtime.api
-    for attempt in attempts:
-        if attempt.status != "reserved":
-            continue
-        # 出事务前的粗筛：剩余时间不足以覆盖结算预留就不再进事务，也不发请求。
-        if _send_budget(batch.lease_until) < _MIN_SEND_WINDOW_SECONDS:
-            break
-        with _immediate_tx(db):
-            db.expire_all()
-            batch = db.get(StewardAssistBatch, batch_id, populate_existing=True)
-            assert batch is not None
-            if (
-                batch.status != "applying"
-                or (batch.lease_owner, batch.attempt) != lease_identity
-                or batch.lease_until is None
-                or batch.lease_until <= timeutil.utcnow()
-            ):
-                break
-            reason = _fence_check(db, batch, [a.assist_kind for a in attempts])
-            user_content = _user_content_for(db, attempt)
-            if reason is None and (
-                _canonical_hash(user_content) != attempt.input_hash
-                or hashlib.sha256(
-                    f"{_PROMPTS[attempt.assist_kind]}\n{user_content}".encode()
-                ).hexdigest()
-                != attempt.prompt_digest
-            ):
-                reason = REASON_EVIDENCE_CHANGED
-            if reason is not None:
-                for unsent in attempts:
-                    if unsent.status == "reserved":
-                        unsent.status = "skipped"
-                        unsent.error_code = reason
-                batch.status = "superseded"
-                batch.error_code = reason
-                db.flush()
-                break
-            payload = _fill_model(
-                _build_payload(
-                    api,
-                    _PROMPTS[attempt.assist_kind],
-                    user_content,
-                    attempt.reserved_output_tokens or 1,
-                ),
-                attempt.model or "",
-            )
-            # R1：发送前最终 payload 检查（复用 policy_guard；不经 ProviderProxy、
-            # 不伪造 AgentRun）。block → 本次不发送（降级，安全原因码入审计）。
-            decision = steward_guard.outbound_check(
-                payload,
-                provider_kind=runtime.kind,
-                local_required=local_required,
-                cloud_allowed=cloud_allowed,
-            )
-            if decision.action == "block":
-                # Never sent: release the reservation in this same transaction.
-                attempt.status = "skipped"
-                attempt.error_code = REASON_POLICY_BLOCKED
-                db.flush()
-                continue
-            if decision.action == "redact":
-                payload = decision.value
-            url = f"{(runtime.base_url or '').rstrip('/')}{_API_PATHS[api]}"
-            headers = {"Authorization": f"Bearer {runtime.api_key}"} if runtime.api_key else {}
-            # C-R2：事务内已消耗的等待时间不得重新授予完整 timeout；扣除结算
-            # 预留后仍不足以覆盖最小发送窗口，则本笔从未发送。
-            budget = _send_budget(batch.lease_until)
-            if budget < _MIN_SEND_WINDOW_SECONDS:
-                attempt.status = "skipped"
-                attempt.error_code = REASON_INSUFFICIENT_BUDGET
-                db.flush()
-                continue
-            timeout = budget
-            attempt.status = "in_flight"
-            db.flush()
-            pending_id = attempt.id
-        # 事务提交到实际发送之间还有一段墙钟（BEGIN IMMEDIATE 锁等待、提交本身）。
-        # 这里再核对一次：到这一刻已没有足够窗口时，本笔从未发出，回退为 skipped
-        # （零计费、非 unknown），而不是带着不足的预算发出去。
-        if _send_budget(batch.lease_until) < _MIN_SEND_WINDOW_SECONDS:
-            _release_unsent(
-                db,
-                batch_id=batch_id,
-                lease_identity=lease_identity,
-                attempt_id=pending_id,
-                reason=REASON_INSUFFICIENT_BUDGET,
-            )
-            break
-        started = time.monotonic()
-        text: str | None = None
-        usage: dict[str, int] | None = None
-        exc: Exception | None = None
-        response_bytes = 0
-        try:
-            data = (transport or _post_json)(url, headers, payload, timeout)
-            response_bytes = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
-            text, usage = _parse_response(api, data)
-        except Exception as caught:  # noqa: BLE001 — 异常分类为安全码，不外泄原文
-            exc = caught
-        latency_ms = int((time.monotonic() - started) * 1000)
-        # ---- 逐笔结算（崩溃恢复点③）：在本笔执行身份仍有效时落库，再发下一笔。
-        # 后续慢请求因此无法让已返回的结果丢失（B-R1）。
-        with _immediate_tx(db):
-            db.expire_all()
-            batch = db.get(StewardAssistBatch, batch_id)
-            assert batch is not None
-            if (
-                (batch.lease_owner, batch.attempt) != lease_identity
-                or batch.lease_until is None
-                or batch.lease_until <= timeutil.utcnow()
-            ):
-                # Lease lost: leave the row for the recovery owner, never settle it.
-                return batch.status
-            _settle_attempt(
-                db,
-                batch=batch,
-                attempt_id=pending_id,
-                text=text,
-                usage=usage,
-                exc=exc,
-                latency_ms=latency_ms,
-                response_bytes=response_bytes,
-            )
-
-    if after_send is not None:
-        after_send(db, batch)
-
-    # C-R2：仍未发送的预留（预算不足、栅栏变化等）在本人份仍有效时释放为
-    # skipped——不记 unknown、不计费。身份已失效则留给恢复器，绝不越权改写。
-    _release_remaining_unsent(
-        db, batch_id=batch_id, lease_identity=lease_identity, reason=REASON_INSUFFICIENT_BUDGET
-    )
-
-    # ---- tx3：写回栅栏重验 + CAS 应用（崩溃恢复点④：写回前）----
-    return _apply_batch(
-        db,
-        batch_id,
-        now=timeutil.utcnow(),
-        lease_owner=lease_identity[0],
-        lease_attempt=lease_identity[1],
-    )
-
-
 def _user_content_for(db: Session, attempt: StewardModelCall) -> str:
     """Rebuild the reserved input; the sender verifies its hash before every HTTP call."""
     kind = attempt.assist_kind
     subject = attempt.subject_key or ""
     if kind == "terminology":
         # terminology：从批次栅栏按 digest 取回本组目标（服务端真源，不靠 echo）
-        batch = db.get(StewardAssistBatch, attempt.batch_id) if attempt.batch_id else None
-        fence = (batch.fence_json or {}) if batch is not None else {}
+        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+        fence = (plan.fence_json or {}) if plan is not None else {}
         digest = subject.split(":")[-1] if subject else ""
         for group in fence.get("terminology_groups", []):
             if group.get("digest") == digest and int(group.get("viewer_account_id", 0)) == (
@@ -1711,29 +1611,29 @@ def _user_content_for(db: Session, attempt: StewardModelCall) -> str:
 
 
 def _term_group_for(db: Session, attempt: StewardModelCall) -> dict[str, Any] | None:
-    """terminology attempt 的服务端目标组（批次栅栏 + digest + viewer 匹配）。"""
-    batch = db.get(StewardAssistBatch, attempt.batch_id) if attempt.batch_id else None
-    if batch is None:
+    """terminology attempt 的服务端目标组（plan 栅栏 + digest + viewer 匹配）。"""
+    plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+    if plan is None:
         return None
     subject = attempt.subject_key or ""
     parts = subject.split(":")
     if len(parts) != 4:
         return None
-    for group in (batch.fence_json or {}).get("terminology_groups", []):
+    for group in (plan.fence_json or {}).get("terminology_groups", []):
         if (
             group.get("digest") == parts[3]
             and int(group.get("viewer_account_id", 0)) == int(parts[1])
             and int(group.get("viewer_account_id", 0)) == (attempt.viewer_account_id or -1)
             and str(group.get("root_user_id", "")) == parts[2]
         ):
-            return {**group, "space_id": batch.space_id}
+            return {**group, "space_id": plan.space_id}
     return None
 
 
 def _mark_terminology_checked(
     db: Session,
     *,
-    batch: StewardAssistBatch,
+    plan: StewardAssistPlan,
     group: dict[str, Any],
     now: Any,
     preserve_applied: bool,
@@ -1744,7 +1644,7 @@ def _mark_terminology_checked(
     for target in group.get("targets", []):
         row = db.scalar(
             select(StewardTermProjection).where(
-                StewardTermProjection.space_id == batch.space_id,
+                StewardTermProjection.space_id == plan.space_id,
                 StewardTermProjection.viewer_account_id == int(group["viewer_account_id"]),
                 StewardTermProjection.root_user_id == int(group["root_user_id"]),
                 StewardTermProjection.target_user_id == int(target["target_user_id"]),
@@ -1755,7 +1655,7 @@ def _mark_terminology_checked(
             # authorization and semantic/request hashes in this same writer.
             row, _changed = steward_terminology.upsert_projection(
                 db,
-                space_id=batch.space_id,
+                space_id=plan.space_id,
                 viewer_account_id=int(group["viewer_account_id"]),
                 root_user_id=int(group["root_user_id"]),
                 target_user_id=int(target["target_user_id"]),
@@ -1773,354 +1673,551 @@ def _mark_terminology_checked(
             row.last_attempt_status = "checked"
 
 
-def _apply_batch(
+def settle_attempt(
     db: Session,
-    batch_id: int,
     *,
-    now: Any,
-    lease_owner: str | None,
-    lease_attempt: int,
-) -> str:
+    attempt_id: int,
+    status: str,
+    lease_owner: str,
+    text: str | None = None,
+    usage: dict[str, int] | None = None,
+    error_code: str | None = None,
+    exc: Exception | None = None,
+    latency_ms: int = 0,
+    response_bytes: int = 0,
+    now: Any = None,
+) -> str | None:
+    """Settle one attempt: record the result, then apply it. Returns its status.
+
+    **Two transactions, deliberately.** The first persists the outcome (status,
+    usage, validated product); the second applies it. Collapsing them would mean a
+    write-back failure rolls the result back too, and a paid-for model answer
+    would be lost — that is crash point ④, and it is why the old design had
+    separate tx2/tx3. ``recover_stuck_attempts`` finishes anything left
+    unapplied.
+
+    **This is the only write-back path** (the in-process and Pi carriers both end
+    here). ``lease_owner`` is required: the lease decides who may settle, so a
+    late result from a superseded executor cannot overwrite current state.
+    """
     from app.services.steward import _immediate_tx
+
+    now = now or timeutil.utcnow()
+    with _immediate_tx(db):
+        db.expire_all()
+        attempt = db.get(StewardModelCall, attempt_id)
+        if attempt is None or attempt.status != "in_flight":
+            return None
+        if attempt.lease_owner != lease_owner:
+            return None
+        # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time. Keep a
+        # simulated future clock, but refuse a lease that expired during the real
+        # writer wait — otherwise a write-back that waited behind another writer
+        # is adopted after its lease is already gone.
+        now = max(now, timeutil.utcnow())
+        # An expired lease means the result arrived after the executor lost its
+        # right to write: leave the row for the recovery owner rather than
+        # settling it. Without this a slow response could still write back — the
+        # late write the lease exists to prevent.
+        if attempt.lease_until is None or attempt.lease_until <= now:
+            return None
+        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+
+        if status != "succeeded" or exc is not None:
+            _settle_attempt_failure(
+                db, attempt, exc=exc, error_code=error_code, latency_ms=latency_ms
+            )
+            db.flush()
+            return attempt.status
+
+        settled = _settle_attempt(
+            db,
+            plan=plan,
+            attempt_id=attempt_id,
+            text=text,
+            usage=usage,
+            latency_ms=latency_ms,
+            response_bytes=response_bytes,
+        )
+        if settled is None:
+            return None
+        if plan is None:
+            db.flush()
+            return settled
+        # Write-back fence: the world is re-checked before anything is applied, so
+        # a product computed against a changed space is dropped rather than
+        # written.
+        if settled in ("succeeded", "degraded"):
+            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+            if reason is not None:
+                attempt.status = "skipped"
+                attempt.error_code = reason
+                db.flush()
+                return attempt.status
+        db.flush()
+
+    # ---- second transaction: apply the persisted product ----
+    if settled != "succeeded":
+        if settled == "degraded":
+            with _immediate_tx(db):
+                db.expire_all()
+                attempt = db.get(StewardModelCall, attempt_id)
+                if attempt is None or attempt.applied_at is not None:
+                    return settled
+                # Invalid output: still record the group as checked, so the same
+                # request hash is not retried forever.
+                plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+                if plan is not None and attempt.assist_kind == "terminology":
+                    group = _term_group_for(db, attempt)
+                    if group is not None:
+                        _mark_terminology_checked(
+                            db, plan=plan, group=group, now=now, preserve_applied=False
+                        )
+                attempt.applied_at = now
+                db.flush()
+        return settled
 
     with _immediate_tx(db):
         db.expire_all()
-        batch = db.get(StewardAssistBatch, batch_id)
-        if batch is None or batch.status != "applying":
-            return batch.status if batch is not None else "missing"
-        if (batch.lease_owner, batch.attempt) != (lease_owner, lease_attempt):
-            return batch.status
-        # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time.
-        # Retain simulated future clocks while refusing a lease that expired
-        # during the actual writer wait.
-        now = max(now, timeutil.utcnow())
-        # Expired executors leave persisted products for the recovery owner.
-        if batch.lease_until is None or batch.lease_until <= now:
-            return batch.status
-        attempt_rows = db.execute(
-            select(StewardModelCall.status, StewardModelCall.error_code).where(
-                StewardModelCall.batch_id == batch.id
-            )
-        ).all()
-        all_statuses = [row[0] for row in attempt_rows]
-        all_error_codes = {row[1] for row in attempt_rows if row[1] is not None}
-        attempts = list(
-            db.scalars(
-                select(StewardModelCall).where(
-                    StewardModelCall.batch_id == batch.id,
-                    StewardModelCall.status.in_(("succeeded", "degraded")),
-                )
-            )
-        )
-        # 结果不明/发送失败 → 批次终态 failed（不自动重发）。独立且仍通过写回栅栏
-        # 的成功产物仍要应用（B-R2）：同批其他请求失败不是拒绝它们的理由。
-        terminal_code: str | None = None
-        if "unknown" in all_statuses:
-            terminal_code = REASON_NETWORK_UNKNOWN
-        elif "failed" in all_statuses:
-            terminal_code = REASON_TRANSPORT_FAILED
-        elif REASON_PROMPT_TOO_LARGE in all_error_codes:
-            # 09-19 R5：确定性输入问题（同一输入永远超限），不是上游不确定性——
-            # 不归入 unknown、不计费、不重放，但批次终态必须如实反映「本批候选
-            # 未产生」，不再伪装 applied。预算类 skipped 是良性可重试状态，不在此列。
-            terminal_code = REASON_PROMPT_TOO_LARGE
-        kinds = sorted({a.assist_kind for a in attempts})
-        # 写回栅栏第二道：返回内容应用前重验世界（禁用开关/换 provider/改证据/
-        # 卡片变化/租约丢失 → 全部不应用，安全原因码入审计）。
-        reason = _fence_check(db, batch, kinds)
-        if reason is not None:
-            batch.status = "superseded"
-            batch.error_code = reason
-            batch.updated_at = now
-            db.flush()
-            return batch.status
-        changed_viewers: set[int] = set()
-        for attempt in attempts:
-            product = attempt.output_json
-            if not product:
-                continue
-            if attempt.assist_kind == "candidate":
-                for item in product.get("items", []):
-                    # R3：候选是线索——只落内部池（结构化 shape 对齐
-                    # candidate-review）；digest 仅基于结构，不含 rationale/措辞
-                    kind = str(item.get("kind") or "")
-                    subject_id = int(item.get("subject_user_id") or 0)
-                    object_id = int(item.get("object_user_id") or 0)
-                    digest = steward_guard.candidate_digest(kind, subject_id, object_id)
-                    candidate = db.scalar(
-                        select(StewardLlmCandidate).where(
-                            StewardLlmCandidate.space_id == batch.space_id,
-                            StewardLlmCandidate.candidate_digest == digest,
-                        )
-                    )
-                    if candidate is None:
-                        candidate = StewardLlmCandidate(
-                            space_id=batch.space_id,
-                            job_id=batch.job_id,
-                            candidate_kind=kind,
-                            payload_json={
-                                key: item[key]
-                                for key in steward_guard.CANDIDATE_PAYLOAD_KEYS
-                                if key in item
-                            },
-                            candidate_digest=digest,
-                            attribution_status="unsupported",
-                            status="proposed",
-                            created_at=now,
-                        )
-                        db.add(candidate)
-                        db.flush()
-                    steward_candidate_evidence.record_for_candidate(
-                        db, candidate, batch=batch, model_call=attempt, now=now
-                    )
-            elif attempt.assist_kind == "ranking":
-                for rank_value, card_id in enumerate(product.get("order", []), 1):
-                    card = db.get(ActionCard, int(card_id))
-                    if card is not None and card.state in ("pending", "viewed"):
-                        card.presentation_rank = rank_value
-            elif attempt.assist_kind == "terminology":
-                from app.services import steward_terminology
-
-                group = _term_group_for(db, attempt)
-                viewer_account_id = int(attempt.viewer_account_id or 0)
-                for item in product.get("items", []):
-                    target_user_id = int(item["target_user_id"])
-                    if group is None:
-                        continue
-                    target = next(
-                        (
-                            target
-                            for target in group["targets"]
-                            if target["target_user_id"] == target_user_id
-                        ),
-                        None,
-                    )
-                    if target is None:
-                        continue
-                    # 同输入 CAS 更新：相同词幂等，不覆盖反馈/last_checked 之外的审计
-                    projection, changed = steward_terminology.upsert_projection(
-                        db,
-                        space_id=batch.space_id,
-                        viewer_account_id=viewer_account_id,
-                        root_user_id=int(group["root_user_id"]),
-                        target_user_id=target_user_id,
-                        concept_code=item["concept_code"],
-                        semantic_hash=item["semantic_hash"],
-                        baseline_term=target["baseline_term"],
-                        baseline_source=target["baseline_source"],
-                        term=str(item["term"]),
-                        origin="model",
-                        source_model_call_id=int(attempt.id),
-                        now=now,
-                    )
-                    if changed:
-                        changed_viewers.add(viewer_account_id)
-                    projection.last_checked_hash = steward_terminology.request_hash_for(
-                        item["semantic_hash"]
-                    )
-                    projection.last_attempt_at = now
-                    projection.last_attempt_status = "applied"
-                    steward_terminology.upsert_term_preference_suggestion(
-                        db,
-                        space_id=batch.space_id,
-                        viewer_account_id=viewer_account_id,
-                        subject_user_id=int(group["root_user_id"]),
-                        object_user_id=target_user_id,
-                        concept_code=item["concept_code"],
-                        term=str(item["term"]),
-                        projection_id=int(projection.id),
-                        projection_revision=int(projection.revision),
-                        semantic_hash=item["semantic_hash"],
-                        reason_code=str(item.get("reason_code") or "synonym"),
-                        policy_version=batch.policy_version,
-                        origin="model",
-                        now=now,
-                    )
-                # 全组标记已检查：同 request_hash 不自动重发（含被丢弃条目）
-                assert group is not None
-                _mark_terminology_checked(
-                    db, batch=batch, group=group, now=now, preserve_applied=True
-                )
-            else:  # explanation：仅写已验证结构化产物的确定性渲染文本
-                card_id = int((attempt.subject_key or "card:0").split(":", 1)[1])
-                card = db.get(ActionCard, card_id)
-                rendered = str(product.get("rendered") or "")
-                if (
-                    card is not None
-                    and card.state in ("pending", "viewed")
-                    and rendered
-                    and product.get("schema_version") == steward_guard.EXPLANATION_SCHEMA_VERSION
-                ):
-                    card.reason_text_llm = rendered[:_EXPLAIN_MAX_CHARS]
-        # terminology degraded（无效输出）：整组记已检查——同 request_hash 不重发
-        from app.services import steward_terminology as _sterm
-
-        for attempt in attempts:
-            if attempt.assist_kind != "terminology" or attempt.status != "degraded":
-                continue
-            group = _term_group_for(db, attempt)
-            if group is None:
-                continue
-            _mark_terminology_checked(db, batch=batch, group=group, now=now, preserve_applied=False)
-        _sterm.request_projection_refresh(
-            db, space_id=batch.space_id, viewer_account_ids=changed_viewers
-        )
+        attempt = db.get(StewardModelCall, attempt_id)
+        if attempt is None or attempt.applied_at is not None:
+            # Already applied (a recovery pass won the race): do not apply twice.
+            return settled
+        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+        if plan is None:
+            return settled
+        _apply_product(db, plan=plan, attempt=attempt, now=now)
+        attempt.applied_at = now
         db.flush()
-        # B-R2/B-R6：部分成果已应用仍如实保留本批的失败事实（绝不伪装完全成功）。
-        batch.status = "failed" if terminal_code is not None else "applied"
-        batch.error_code = terminal_code
-        batch.updated_at = now
-        return batch.status
+    return settled
 
 
-# ---- 崩溃恢复（AC-2：四个崩溃点全部可恢复；不产生 Assistant 三表行）----
+def _settle_attempt(
+    db: Session,
+    *,
+    plan: StewardAssistPlan | None,
+    attempt_id: int,
+    text: str | None,
+    usage: dict[str, int] | None,
+    latency_ms: int,
+    response_bytes: int,
+) -> str | None:
+    """Validate a successful attempt's output and record it (caller holds the lock).
+
+    B-R1: the returned result must reach durable storage while the executing
+    identity is still valid. Returns the settled status, or ``None`` when the row
+    is no longer ``in_flight`` (another executor settled it, or the lease was
+    lost). Applying the product is the caller's job (``_apply_product``), so this
+    function has exactly one responsibility: turn text into a validated product.
+    """
+    fresh = db.get(StewardModelCall, attempt_id)
+    if fresh is None or fresh.status != "in_flight":
+        return None
+    fresh.latency_ms = latency_ms
+    assert text is not None
+    fresh.completion_chars = len(text)
+    fresh.response_bytes = response_bytes
+    pt, ct, billed = _bill_usage(
+        usage, fresh.reserved_input_tokens or 0, fresh.reserved_output_tokens or 0
+    )
+    fresh.prompt_tokens = pt
+    fresh.completion_tokens = ct
+    fresh.total_tokens = billed
+    fresh.status = "succeeded"
+    fresh.error_code = None
+    ctx = _visible_context(db, plan.space_id) if plan is not None else ProjectionContext(set())
+    card_ids: list[int] = []
+    expl_card: ActionCard | None = None
+    if fresh.assist_kind == "ranking" and fresh.subject_key:
+        parts = fresh.subject_key.split(":")
+        if len(parts) == 3:
+            card_ids = [int(x) for x in parts[2].split(",") if x]
+    elif fresh.assist_kind == "explanation" and fresh.subject_key:
+        try:
+            expl_card = db.get(ActionCard, int(fresh.subject_key.split(":", 1)[1]))
+        except (IndexError, ValueError):
+            expl_card = None
+    term_group: dict[str, Any] | None = None
+    if fresh.assist_kind == "terminology":
+        term_group = _term_group_for(db, fresh)
+        if term_group is None:
+            # 组上下文已失效：直接落 degraded（跳过常规校验）
+            fresh.status = "degraded"
+            fresh.error_code = REASON_INVALID_OUTPUT
+            fresh.billed_tokens = billed
+            db.flush()
+            return fresh.status
+    product = _validate_output(
+        fresh.assist_kind,
+        text,
+        ctx=ctx,
+        card_ids=card_ids,
+        card=expl_card,
+        db=db,
+        term_group=term_group,
+    )
+    if product is None:
+        fresh.status = "degraded"
+        fresh.error_code = REASON_INVALID_OUTPUT
+    else:
+        fresh.output_json = product
+    fresh.billed_tokens = billed
+    db.flush()
+    return fresh.status
 
 
-def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
-    """收敛卡在中间态的批次；返回处理数。
+def _settle_attempt_failure(
+    db: Session,
+    attempt: StewardModelCall,
+    *,
+    exc: Exception | None,
+    error_code: str | None,
+    latency_ms: int,
+) -> None:
+    """失败/未知结算：保守计费，且**不自动重发**（memory #407）。
 
-    - succeeded job 无批次（崩溃点①/历史行）→ 补登 pending 批次；
-    - pending 批次（崩溃点②，attempt 未预留）→ 无需处理，调度器直接可取；
-    - lease 过期的 leased/applying 批次（崩溃点③④）→ in_flight attempt 记
-      unknown（保守计费，不自动重发：上游未证实支持幂等键）；succeeded 且有
-      output_json 的 attempt 重跑写回栅栏后 CAS 应用；无产物可应用 → 批次
-      failed（assist_unknown_outcome）。
+    ``unknown`` 专指「无法证明上游未处理」（读超时、断连、取消）——必须计费且
+    不得重放；``failed`` 才表示可确定未产生结果。
+    """
+    attempt.latency_ms = latency_ms
+    if exc is not None:
+        status, code = _classify_transport_error(exc)
+        attempt.status = status
+        attempt.error_code = code
+    else:
+        attempt.status = "failed"
+        attempt.error_code = error_code or REASON_TRANSPORT_FAILED
+    _pt, _ct, billed = _bill_usage(
+        None, attempt.reserved_input_tokens or 0, attempt.reserved_output_tokens or 0
+    )
+    attempt.billed_tokens = billed
+
+
+def _apply_product(
+    db: Session, *, plan: StewardAssistPlan, attempt: StewardModelCall, now: Any
+) -> None:
+    """Apply one attempt's validated product (CAS; caller holds the write lock).
+
+    One attempt, not a batch: the old ``_apply_batch`` looped over every attempt in
+    the batch and ``continue``d past empty products, which is the code saying
+    attempts are independent. Each product is applied on its own, so a slow or
+    failed sibling can neither delay nor invalidate it.
+    """
+    product = attempt.output_json
+    if not product:
+        return
+    if attempt.assist_kind == "candidate":
+        _apply_candidate_product(db, plan=plan, attempt=attempt, product=product, now=now)
+        return
+    if attempt.assist_kind == "ranking":
+        for rank_value, card_id in enumerate(product.get("order", []), 1):
+            card = db.get(ActionCard, int(card_id))
+            if card is not None and card.state in ("pending", "viewed"):
+                card.presentation_rank = rank_value
+        return
+    if attempt.assist_kind == "terminology":
+        _apply_terminology_product(db, plan=plan, attempt=attempt, product=product, now=now)
+        return
+    # explanation：仅写已验证结构化产物的确定性渲染文本
+    card_id = int((attempt.subject_key or "card:0").split(":", 1)[1])
+    card = db.get(ActionCard, card_id)
+    rendered = str(product.get("rendered") or "")
+    if (
+        card is not None
+        and card.state in ("pending", "viewed")
+        and rendered
+        and product.get("schema_version") == steward_guard.EXPLANATION_SCHEMA_VERSION
+    ):
+        card.reason_text_llm = rendered[:_EXPLAIN_MAX_CHARS]
+
+
+def _apply_candidate_product(
+    db: Session, *, plan: StewardAssistPlan, attempt: StewardModelCall, product: Any, now: Any
+) -> None:
+    for item in product.get("items", []):
+        # R3：候选是线索——只落内部池（结构化 shape 对齐 candidate-review）；
+        # digest 仅基于结构，不含 rationale/措辞
+        kind = str(item.get("kind") or "")
+        subject_id = int(item.get("subject_user_id") or 0)
+        object_id = int(item.get("object_user_id") or 0)
+        digest = steward_guard.candidate_digest(kind, subject_id, object_id)
+        candidate = db.scalar(
+            select(StewardLlmCandidate).where(
+                StewardLlmCandidate.space_id == plan.space_id,
+                StewardLlmCandidate.candidate_digest == digest,
+            )
+        )
+        if candidate is None:
+            candidate = StewardLlmCandidate(
+                space_id=plan.space_id,
+                job_id=plan.job_id,
+                candidate_kind=kind,
+                payload_json={
+                    key: item[key] for key in steward_guard.CANDIDATE_PAYLOAD_KEYS if key in item
+                },
+                candidate_digest=digest,
+                attribution_status="unsupported",
+                status="proposed",
+                created_at=now,
+            )
+            db.add(candidate)
+            db.flush()
+        steward_candidate_evidence.record_for_candidate(
+            db, candidate, plan=plan, model_call=attempt, now=now
+        )
+
+
+def _apply_terminology_product(
+    db: Session, *, plan: StewardAssistPlan, attempt: StewardModelCall, product: Any, now: Any
+) -> None:
+    from app.services import steward_terminology
+
+    group = _term_group_for(db, attempt)
+    if group is None:
+        return
+    viewer_account_id = int(attempt.viewer_account_id or 0)
+    changed = False
+    for item in product.get("items", []):
+        target_user_id = int(item["target_user_id"])
+        target = next((t for t in group["targets"] if t["target_user_id"] == target_user_id), None)
+        if target is None:
+            continue
+        # 同输入 CAS 更新：相同词幂等，不覆盖反馈/last_checked 之外的审计
+        projection, updated = steward_terminology.upsert_projection(
+            db,
+            space_id=plan.space_id,
+            viewer_account_id=viewer_account_id,
+            root_user_id=int(group["root_user_id"]),
+            target_user_id=target_user_id,
+            concept_code=item["concept_code"],
+            semantic_hash=item["semantic_hash"],
+            baseline_term=target["baseline_term"],
+            baseline_source=target["baseline_source"],
+            term=str(item["term"]),
+            origin="model",
+            source_model_call_id=int(attempt.id),
+            now=now,
+        )
+        if updated:
+            changed = True
+        projection.last_checked_hash = steward_terminology.request_hash_for(item["semantic_hash"])
+        projection.last_attempt_at = now
+        projection.last_attempt_status = "applied"
+        steward_terminology.upsert_term_preference_suggestion(
+            db,
+            space_id=plan.space_id,
+            viewer_account_id=viewer_account_id,
+            subject_user_id=int(group["root_user_id"]),
+            object_user_id=target_user_id,
+            concept_code=item["concept_code"],
+            term=str(item["term"]),
+            projection_id=int(projection.id),
+            projection_revision=int(projection.revision),
+            semantic_hash=item["semantic_hash"],
+            reason_code=str(item.get("reason_code") or "synonym"),
+            policy_version=plan.policy_version,
+            origin="model",
+            now=now,
+        )
+    # 全组标记已检查：同 request_hash 不自动重发（含被丢弃条目）
+    _mark_terminology_checked(db, plan=plan, group=group, now=now, preserve_applied=True)
+    if changed:
+        steward_terminology.request_projection_refresh(
+            db, space_id=plan.space_id, viewer_account_ids={viewer_account_id}
+        )
+
+
+def heartbeat_child_run(
+    db: Session,
+    identity: Any,
+    *,
+    ttl_seconds: int | None = None,
+) -> tuple[Any, bool]:
+    """续租 child run 与它的 attempt（**同一立即事务**），返回 (expiry, cancelled)。
+
+    为何必须同事务：attempt lease 是写回栅栏看的租约，run lease 是 sidecar 心跳
+    对象。只续一个，另一个会先过期——run 健康但 attempt 过期会让写回被拒（已取得
+    的结果白丢），attempt 健康但 run 过期则会被 fence 拒。
+    """
+    from app.services.agent_execution import fence_steward_execution
+    from app.services.steward import _immediate_tx
+
+    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
+    with _immediate_tx(db):
+        run, attempt, _job = fence_steward_execution(db, identity, allow_cancel_requested=True)
+        now = timeutil.utcnow()
+        expires = now + timedelta(seconds=ttl)
+        run.lease_expires_at = expires
+        run.heartbeat_at = now
+        run.updated_at = now
+        attempt.lease_until = expires
+        db.flush()
+        return expires, bool(run.cancel_requested)
+
+
+def open_child_run(
+    db: Session, *, attempt_id: int, lease_owner: str, ttl_seconds: int | None = None
+) -> Any:
+    """为一个已租出的 attempt 建立 Pi child run（**无网络调用**）。
+
+    run 是 attempt 的**执行载体**：``agent_runs`` 行承载状态机/取消/网关门禁，
+    ``steward_model_calls.run_id``（UNIQUE）把它绑回 attempt。因此这里不做任何
+    授权判定——租约已由 ``lease_attempt`` 的 fence 完成；本函数只把「已租」
+    物化成 sidecar 能操作的对象。
+
+    返回 ``AgentRun``，或 None（attempt 已不在 in_flight / 租约已被接管）。
+    """
+    from app.services import agent_provider
+    from app.services.steward import _immediate_tx
+
+    now = timeutil.utcnow()
+    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
+    with _immediate_tx(db):
+        db.expire_all()
+        attempt = db.get(StewardModelCall, attempt_id)
+        if attempt is None or attempt.status != "in_flight" or attempt.lease_owner != lease_owner:
+            return None
+        if attempt.run_id is not None:
+            existing = db.get(AgentRun, attempt.run_id)
+            if existing is not None:
+                return existing
+        run = AgentRun(
+            session_id=None,
+            message_id=None,
+            job_id=None,
+            kind="steward",
+            status="leased",
+            attempt=1,
+            max_attempts=1,
+            lease_expires_at=attempt.lease_until or (now + timedelta(seconds=ttl)),
+            heartbeat_at=now,
+            cancel_requested=False,
+            policy_version=attempt.policy_version,
+            tool_allowlist_json=[],
+            runtime_snapshot_json=agent_provider.snapshot_for_space(
+                db, attempt.space_id, agent_provider.AGENT_KIND_STEWARD
+            ),
+            created_at=now,
+            updated_at=now,
+            first_leased_at=now,
+        )
+        db.add(run)
+        db.flush()
+        attempt.run_id = run.id
+        db.flush()
+        return run
+
+
+def recover_stuck_attempts(db: Session, *, now: Any = None) -> int:
+    """Recover interrupted attempts; return the number handled.
+
+    Two crash points converge here, and they are handled in this order because
+    the first is the only one that can still save work:
+
+    ④ **Product persisted, write-back not done** (``succeeded``/``degraded`` with
+       ``applied_at IS NULL``). The model's answer is already durable, so it is
+       re-fenced and re-applied. Dropping it would discard a paid-for result for
+       no reason.
+
+    ③ **Sent but never settled** (``in_flight`` with an expired lease). Nothing
+       proves whether the upstream processed the request, so it converges to
+       ``unknown`` with conservative billing and is **never replayed**
+       (memory #407).
+
+    ``reserved`` is untouched: it was never sent, so it is still leaseable and
+    needs no recovery at all — which is why the old "crash before send" case now
+    has no recovery step to run.
     """
     from app.services.steward import _immediate_tx
 
     now = now or timeutil.utcnow()
     handled = 0
-    resume_apply: list[tuple[int, str, int]] = []
     with _immediate_tx(db):
         db.expire_all()
-        # Legacy core committed registration atomically. Staged generations
-        # activate their own fenced delivery intent; orphan repair must never
-        # bypass that gate or revive an invalidated generation's assistance.
-        orphan_jobs = list(
-            db.scalars(
-                select(StewardJob)
-                .where(
-                    StewardJob.status == "succeeded",
-                    # The job survives result GC; its publication checkpoint
-                    # remains authoritative evidence that delivery is staged.
-                    StewardJob.checkpoint_json["generation_id"].as_integer().is_(None),
-                    ~select(StewardAssistBatch.id)
-                    .where(StewardAssistBatch.job_id == StewardJob.id)
-                    .exists(),
-                    ~select(StewardGeneration.id)
-                    .where(
-                        StewardGeneration.job_id == StewardJob.id,
-                        StewardGeneration.manifest_sealed.is_(True),
-                    )
-                    .exists(),
-                )
-                .order_by(StewardJob.id)
-                .limit(16)
+        # ④ Persisted but unapplied: save the work if the fence still passes.
+        for attempt in db.scalars(
+            select(StewardModelCall)
+            .where(
+                StewardModelCall.status.in_(("succeeded", "degraded")),
+                StewardModelCall.applied_at.is_(None),
+                StewardModelCall.output_json.is_not(None),
             )
-        )
-        for job in orphan_jobs:
-            from app.services import steward as steward_service
-
-            space = db.get(FamilySpace, job.space_id)
-            if space is None:
+            .order_by(StewardModelCall.id)
+            .limit(32)
+        ):
+            plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+            if plan is None:
                 continue
-            visible = steward_service._space_visible_user_ids(db, space)
-            batch = register_batch_for_job(
-                db,
-                job=job,
-                facts_brief=steward_service._confirmed_facts_brief(db, space, visible),
-                visible=visible,
-                cards=list(action_cards.active_cards_in_space(db, job.space_id)),
-                now=now,
+            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+            if reason is not None:
+                attempt.status = "skipped"
+                attempt.error_code = reason
+            elif attempt.status == "succeeded":
+                _apply_product(db, plan=plan, attempt=attempt, now=now)
+                attempt.applied_at = now
+            else:
+                group = _term_group_for(db, attempt)
+                if group is not None:
+                    _mark_terminology_checked(
+                        db, plan=plan, group=group, now=now, preserve_applied=False
+                    )
+            handled += 1
+        # ③ Sent, lease expired: unknowable, billed, never replayed.
+        for attempt in db.scalars(
+            select(StewardModelCall)
+            .where(
+                StewardModelCall.status == "in_flight",
+                StewardModelCall.lease_until.is_not(None),
+                StewardModelCall.lease_until <= now,
             )
-            if batch is not None:
-                handled += 1
-        # ③④：lease 过期的中间态批次（含已终态但仍残留 in_flight attempt 的批次）
+            .order_by(StewardModelCall.id)
+            .limit(32)
+        ):
+            attempt.status = "unknown"
+            attempt.error_code = REASON_NETWORK_UNKNOWN
+            attempt.billed_tokens = (attempt.reserved_input_tokens or 0) + (
+                attempt.reserved_output_tokens or 0
+            )
+            attempt.lease_owner = None
+            attempt.lease_until = None
+            handled += 1
+        db.flush()
+    return handled
+
+
+def recover_stuck_child_runs(db: Session, *, now: Any = None) -> int:
+    """收敛已建但未结算的 child run（崩溃点⑤：sidecar 被杀）。
+
+    不依赖 ``agent_queue.reaper_pass``：它选 ``AgentJob``，而 steward run 的
+    ``job_id`` 恒为 NULL，因此天然不被覆盖——这既意味着不会被误改，也意味着必须
+    在这里收敛，否则 run 会一直停在 ``leased``。
+    """
+    from app.services.steward import _immediate_tx
+
+    now = now or timeutil.utcnow()
+    handled = 0
+    with _immediate_tx(db):
+        db.expire_all()
         stale = list(
             db.scalars(
-                select(StewardAssistBatch)
+                select(AgentRun)
                 .where(
-                    StewardAssistBatch.lease_until.is_not(None),
-                    StewardAssistBatch.lease_until <= now,
-                    StewardAssistBatch.status.in_(("leased", "applying"))
-                    | (
-                        StewardAssistBatch.status.in_(("failed", "superseded"))
-                        & select(StewardModelCall.id)
-                        .where(
-                            StewardModelCall.batch_id == StewardAssistBatch.id,
-                            StewardModelCall.status.in_(("reserved", "in_flight")),
-                        )
-                        .exists()
-                    ),
+                    AgentRun.kind == "steward",
+                    AgentRun.status.in_(("leased", "running")),
+                    AgentRun.lease_expires_at.is_not(None),
+                    AgentRun.lease_expires_at <= now,
                 )
-                .order_by(StewardAssistBatch.id)
+                .order_by(AgentRun.id)
                 .limit(32)
             )
         )
-        for batch in stale:
-            has_unknown = False
-            applied_products = False
-            for attempt in db.scalars(
-                select(StewardModelCall).where(StewardModelCall.batch_id == batch.id)
-            ):
-                if attempt.status == "in_flight":
-                    attempt.status = "unknown"
-                    attempt.error_code = REASON_NETWORK_UNKNOWN
-                    attempt.billed_tokens = (attempt.reserved_input_tokens or 0) + (
-                        attempt.reserved_output_tokens or 0
-                    )
-                    has_unknown = True
-                elif attempt.status == "unknown":
-                    has_unknown = True
-                elif attempt.status == "reserved":
-                    # 崩溃点②：预留后、发送前——从未发送，释放预留（零计费）
-                    attempt.status = "skipped"
-                    attempt.error_code = REASON_LEASE_LOST
-                elif attempt.status == "succeeded" and attempt.output_json:
-                    applied_products = True
-            terminal = batch.status in ("failed", "superseded")
-            if terminal:
-                pass  # 已终态：只收敛残留 attempt，不改批次
-            elif applied_products and batch.status == "applying":
-                # ④：审计已落库、写回未完成——事务外重跑栅栏后 CAS 应用。
-                # B-R2：同批存在 unknown/failed 不阻止独立成功产物的恢复应用；
-                # 未知请求仍不重发，批次最终仍如实记为 failed。
-                from uuid import uuid4
-
-                batch.lease_owner = f"recovery:{uuid4().hex}"
-                batch.attempt += 1
-                batch.lease_until = now + timedelta(
-                    seconds=config.STEWARD_ASSIST_BATCH_LEASE_SECONDS
-                )
-                resume_apply.append((batch.id, batch.lease_owner, batch.attempt))
-            elif has_unknown:
-                # Both persisted unknown results and interrupted sends forbid replay.
-                batch.status = "failed"
-                batch.error_code = REASON_NETWORK_UNKNOWN
-            elif any(
-                status in ("failed", "degraded", "succeeded")
-                for status in db.scalars(
-                    select(StewardModelCall.status).where(StewardModelCall.batch_id == batch.id)
-                )
-            ):
-                batch.status = "failed"
-                batch.error_code = REASON_TRANSPORT_FAILED
-            else:
-                # ②：预留后、发送前崩溃——从未发送，回 pending 可重新调度
-                batch.status = "pending"
-                batch.next_attempt_at = now
-                batch.error_code = None
-            batch.updated_at = now
+        for run in stale:
+            # 置取消位而非直接改终态：终态由 agent_queue 的收敛路径统一裁决，与
+            # assistant 侧同一套语义（取消是服务端权威状态）。
+            run.cancel_requested = True
+            run.updated_at = now
             handled += 1
-    # 事务提交后：对有完整产物的批次重跑写回栅栏并 CAS 应用（恢复点④）
-    for batch_id, lease_owner, lease_attempt in resume_apply:
-        _apply_batch(
-            db,
-            batch_id,
-            now=timeutil.utcnow(),
-            lease_owner=lease_owner,
-            lease_attempt=lease_attempt,
-        )
+        db.flush()
     return handled
 
 
@@ -2129,28 +2226,293 @@ def recover_stuck_batches(db: Session, *, now: Any = None) -> int:
 _executor: ThreadPoolExecutor | None = None
 
 
-def _get_executor() -> ThreadPoolExecutor:
-    global _executor
-    if _executor is None:
-        _executor = ThreadPoolExecutor(
-            max_workers=max(1, config.STEWARD_ASSIST_MAX_CONCURRENT_BATCHES),
-            thread_name_prefix="steward-assist",
+def run_attempt(
+    db: Session,
+    *,
+    space_id: int,
+    worker_id: str,
+    transport: Any = None,
+    now: Any = None,
+) -> str | None:
+    """租一个 attempt 并用它的载体执行，然后结算。返回 attempt 终态或 None。
+
+    这是**唯一**的执行入口（测试与单机同步路径都用它）。生产路径由
+    ``maintenance`` 的调度泵调用 ``launch_due``，后者把本函数放进有界线程池——
+    HTTP 绝不发生在调用方的事务里。
+    """
+    grant = lease_attempt(db, space_id=space_id, worker_id=worker_id)
+    if grant is None:
+        return None
+    from app.services.steward_carrier import CARRIER_INPROC
+
+    if grant["carrier"] != CARRIER_INPROC:
+        # A pi attempt is executed by the sidecar and settled through the internal
+        # endpoint; running it here would double-execute the same model call.
+        return None
+    # Read everything the send needs, then end the transaction: the carrier's HTTP
+    # must never run with one open (the transport asserts this, and a held SQLite
+    # read transaction during a multi-second model call blocks writers).
+    timeout = _send_budget(grant["lease_until"])
+    outcome = _inproc().execute(
+        db,
+        grant,
+        timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, timeout),
+        api=grant["api"],
+        transport=transport,
+    )
+    return settle_attempt(
+        db,
+        attempt_id=grant["attempt_id"],
+        status=outcome.status,
+        lease_owner=worker_id,
+        text=outcome.text,
+        usage=outcome.usage,
+        error_code=outcome.error_code,
+        exc=outcome.exc,
+        latency_ms=outcome.latency_ms,
+        response_bytes=outcome.response_bytes,
+        now=now,
+    )
+
+
+def execute_plan_attempts(
+    db: Session,
+    *,
+    plan_id: int,
+    lease_owner: str = "inproc:sync",
+    transport: Any = None,
+    after_send: Callable[[Session, StewardModelCall], None] | None = None,
+) -> str | None:
+    """Drain every leaseable attempt of one plan; return the plan's final outcome.
+
+    This is the synchronous analogue of ``launch_due``: it leases and executes one
+    attempt at a time until the plan has nothing left to run. Callers get the same
+    "did this round of work complete" answer the old ``execute_batch`` gave.
+
+    ``after_send`` runs after the carrier returns but before settlement, which is
+    the only window in which the write-back fence can be observed: a test changes
+    the world there and asserts the fence refuses to apply.
+
+    An attempt is executed only while its carrier is in-process — a ``pi`` attempt
+    is run by the sidecar and settles through the internal endpoint, so executing
+    it here would double-run the same model call.
+    """
+    from app.services.steward_carrier import CARRIER_INPROC
+
+    plan = db.get(StewardAssistPlan, plan_id)
+    if plan is None:
+        return None
+    for _ in range(config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB + 1):
+        grant = lease_attempt(db, space_id=plan.space_id, worker_id=lease_owner)
+        if grant is None:
+            break
+        if grant["carrier"] != CARRIER_INPROC:
+            # Release it: leaving it in_flight would strand a sidecar attempt.
+            _release_unsent(
+                db,
+                attempt_id=grant["attempt_id"],
+                lease_owner=lease_owner,
+                reason=REASON_CARRIER_NOT_INPROC,
+            )
+            break
+        attempt = db.get(StewardModelCall, grant["attempt_id"])
+        if attempt is None:
+            break
+        # C-R2: the send budget is min(configured timeout, remaining lease minus
+        # the settlement reserve). When that is below the minimum send window the
+        # request is never sent — release the reservation as skipped (zero cost,
+        # not unknown) instead of sending with a budget that cannot be settled.
+        if _send_budget(attempt.lease_until) < _MIN_SEND_WINDOW_SECONDS:
+            _release_unsent(
+                db,
+                attempt_id=grant["attempt_id"],
+                lease_owner=lease_owner,
+                reason=REASON_INSUFFICIENT_BUDGET,
+            )
+            continue
+        # Re-check after the lease transaction committed: the lock wait and the
+        # commit itself consume wall clock, so a window that was sufficient when
+        # the attempt was leased may not be now. Below the minimum the request is
+        # never sent (skipped, zero cost, not unknown).
+        budget = _send_budget(attempt.lease_until)
+        if budget < _MIN_SEND_WINDOW_SECONDS:
+            _release_unsent(
+                db,
+                attempt_id=grant["attempt_id"],
+                lease_owner=lease_owner,
+                reason=REASON_INSUFFICIENT_BUDGET,
+            )
+            continue
+        runtime = agent_provider.resolve_runtime(
+            db, attempt.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
         )
-    return _executor
+        # Everything the carrier needs, read while the lease transaction is still
+        # open. It is then closed so the HTTP call never runs inside a write
+        # transaction (the transport asserts this).
+        send = {
+            **grant,
+            "runtime": runtime,
+            "api": runtime.api if runtime is not None else "openai-responses",
+            "user_content": _user_content_for(db, attempt),
+            "reserved_output_tokens": attempt.reserved_output_tokens,
+            "model": attempt.model,
+        }
+        db.rollback()
+        # The timeout is the budget already computed above: reading it a second
+        # time would let the two disagree (and would make the send/abort decision
+        # depend on which read happened first).
+        outcome = _inproc().execute(
+            db,
+            send,
+            timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, budget),
+            api=send["api"],
+            transport=transport,
+        )
+        attempt = db.get(StewardModelCall, grant["attempt_id"])
+        if attempt is None:
+            break
+        # ``after_send`` is a test seam that mutates the world between the carrier
+        # call and settlement — the only window in which the write-back fence can be
+        # observed. It must run *after* the send (a mutation made before it would
+        # change the request itself, not just the fence) and before settle, so the
+        # fence sees the changed world.
+        if after_send is not None:
+            after_send(db, attempt)
+        settle_attempt(
+            db,
+            attempt_id=grant["attempt_id"],
+            status=outcome.status,
+            lease_owner=lease_owner,
+            text=outcome.text,
+            usage=outcome.usage,
+            error_code=outcome.error_code,
+            exc=outcome.exc,
+            latency_ms=outcome.latency_ms,
+            response_bytes=outcome.response_bytes,
+        )
+    return plan_outcome(db, plan_id)
 
 
-def _execute_in_own_session(batch_id: int) -> None:
+def run_due_attempt(
+    db: Session, *, space_id: int | None = None, transport: Any = None, now: Any = None
+) -> str | None:
+    """同步排空第一个到期空间的可租 attempt（测试/单机便捷路径）。
+
+    生产路径是 ``launch_due``（有界线程池 + 每空间预算）。本函数把该空间当前可租
+    的 attempt 全部跑完再返回最后一个终态——等价于旧 ``run_due_batch``「把这一批
+    的 attempt 都执行掉」的粒度，因为调用方关心的是「这一轮工作做完了吗」。
+
+    需要停在「已租、未发送」中间态的调用方用 ``schedule_due_attempt`` +
+    ``execute_leased_attempt``（崩溃点用例）。
+    """
+    if space_id is None:
+        space_ids = _spaces_with_due_attempts()
+        if not space_ids:
+            return None
+        space_id = space_ids[0]
+    plan = schedule_due_attempt(db, space_id=space_id)
+    if plan is None:
+        return None
+    for _ in range(config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB + 1):
+        status = run_attempt(
+            db, space_id=space_id, worker_id="inproc:sync", transport=transport, now=now
+        )
+        if status is None:
+            break
+    # Report the plan's derived outcome, which is what callers assert on: the old
+    # run_due_batch returned the batch's final status for the same reason.
+    return plan_outcome(db, plan.id)
+
+
+def schedule_due_attempt(db: Session, *, space_id: int | None = None) -> StewardAssistPlan | None:
+    """Report the plan that has leaseable work, or None.
+
+    **It neither reserves nor fences**, and both are the design change.
+    ``plan_for_job`` already reserved every attempt in the same transaction that
+    registered the plan, so there is no "registered but nothing executable"
+    window left to close; and the send-time fence lives in ``lease_attempt``,
+    which is the single gate every carrier passes through before sending. Doing
+    it here as well would make the fence a third call site and let the two
+    disagree about which attempt was retired.
+    """
+    now = timeutil.utcnow()
+    stmt = (
+        select(StewardModelCall)
+        .where(
+            StewardModelCall.status == "reserved",
+            StewardModelCall.next_attempt_at.is_not(None),
+            StewardModelCall.next_attempt_at <= now,
+        )
+        .order_by(StewardModelCall.next_attempt_at.asc(), StewardModelCall.id.asc())
+    )
+    if space_id is not None:
+        stmt = stmt.where(StewardModelCall.space_id == space_id)
+    for attempt in db.scalars(stmt):
+        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+        if plan is None:
+            attempt.status = "skipped"
+            attempt.error_code = REASON_EVIDENCE_CHANGED
+            continue
+        db.flush()
+        return plan
+    db.flush()
+    return None
+
+
+def launch_due(*, limit: int | None = None) -> int:
+    """把本 tick 可执行的 inproc attempt 提交到有界线程池（非阻塞）。
+
+    pi 载体的 attempt 不在这里执行：它们由 sidecar 通过内部端点取走。
+    """
+
+    spaces = _spaces_with_due_attempts(limit=limit)
+    for space_id in spaces:
+        _get_executor().submit(_run_in_own_session, space_id)
+    return len(spaces)
+
+
+def _spaces_with_due_attempts(*, limit: int | None = None) -> list[int]:
+    """Distinct spaces holding a leaseable inproc attempt.
+
+    Spaces, not attempts: the per-space budget is enforced inside
+    ``lease_attempt``, so handing it one space at a time keeps that check
+    authoritative instead of duplicating it here.
+    """
+    from app.db import SessionLocal
+
+    now = timeutil.utcnow()
+    cap = limit if limit is not None else config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+    session = SessionLocal()
+    try:
+        return list(
+            session.scalars(
+                select(StewardModelCall.space_id)
+                .where(
+                    StewardModelCall.status == "reserved",
+                    StewardModelCall.carrier == "inproc",
+                    StewardModelCall.next_attempt_at.is_not(None),
+                    StewardModelCall.next_attempt_at <= now,
+                )
+                .distinct()
+                .limit(cap)
+            )
+        )
+    finally:
+        session.close()
+
+
+def _run_in_own_session(space_id: int) -> None:
     from app.db import SessionLocal
 
     session = SessionLocal()
     try:
-        execute_batch(session, batch_id)
-    except Exception as exc:  # noqa: BLE001 — 辅助失败绝不外抛拖垮调用方（AC-5）
-        # 日志脱敏（09-11 R3）：只记批次 id 与异常类名；异常原文可能携带 SQL
-        # 参数/上游响应片段，绝不进入日志（结构化日志只含关联 ID + 安全错误码）。
+        run_attempt(session, space_id=space_id, worker_id=f"inproc:{os.getpid()}")
+    except Exception as exc:  # noqa: BLE001 — 辅助失败绝不外抛拖垮调用方
+        # 日志脱敏（09-11 R3）：只记空间 id 与异常类名；异常原文可能携带 SQL
+        # 参数/上游响应片段，绝不进入日志。
         logger.warning(
-            "steward assist batch %s crashed; deterministic core retained (error=%s)",
-            batch_id,
+            "steward assist run failed for space %s; deterministic core retained (error=%s)",
+            space_id,
             type(exc).__name__,
         )
         session.rollback()
@@ -2158,9 +2520,14 @@ def _execute_in_own_session(batch_id: int) -> None:
         session.close()
 
 
-def launch_batch(batch_id: int) -> None:
-    """把批次执行提交到有界线程池（非阻塞；HTTP 只占用执行线程与自身 Session）。"""
-    _get_executor().submit(_execute_in_own_session, batch_id)
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(
+            max_workers=max(1, config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE * 2),
+            thread_name_prefix="steward-assist",
+        )
+    return _executor
 
 
 def shutdown_assist_executor() -> None:
@@ -2169,16 +2536,6 @@ def shutdown_assist_executor() -> None:
     if _executor is not None:
         _executor.shutdown(wait=False, cancel_futures=True)
         _executor = None
-
-
-def run_due_batch(
-    db: Session, *, transport: Transport | None = None, now: Any = None
-) -> str | None:
-    """同步便捷路径（测试/单机）：调度 + 执行一个到期批次。返回最终状态或 None。"""
-    batch = schedule_due_batch(db, now=now)
-    if batch is None:
-        return None
-    return execute_batch(db, batch.id, transport=transport)
 
 
 # ---- 兼容旧测试的审计读取辅助 ----
@@ -2196,17 +2553,26 @@ def batch_calls(db: Session, job_id: int) -> list[StewardModelCall]:
 
 __all__ = [
     "ASSIST_KINDS",
-    "REASON_ASSIST_DISABLED",
     "assist_enabled",
     "batch_calls",
     "candidate_user_content",
-    "execute_batch",
-    "prompt_version",
-    "launch_batch",
+    "launch_due",
+    "lease_attempt",
+    "open_child_run",
+    "plan_for_job",
+    "plan_error_code",
+    "plan_outcome",
     "prepare_registration",
-    "recover_stuck_batches",
-    "register_batch_for_job",
-    "run_due_batch",
-    "schedule_due_batch",
+    "prompt_version",
+    "recover_stuck_attempts",
+    "recover_stuck_child_runs",
+    "execute_plan_attempts",
+    "run_attempt",
+    "run_due_attempt",
+    "schedule_due_attempt",
+    "settle_attempt",
     "shutdown_assist_executor",
+    "terminology_target_retryable",
+    "trusted_explanations",
+    "STEWARD_PROMPT_VERSION",
 ]

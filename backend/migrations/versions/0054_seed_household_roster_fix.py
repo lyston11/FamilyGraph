@@ -181,4 +181,5 @@ def downgrade() -> None:
             merge_guard = context.script.get_revision("0048_steward_terminology_publication")
             assert merge_guard is not None
             merge_guard.module._preflight_parent_downgrade(planned=planned)
+
     # 数据修正刻意不逆向：不把已删除的成员资格恢复为旧种子值，也不回退补入的成员。

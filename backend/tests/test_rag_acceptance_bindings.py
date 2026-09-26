@@ -83,7 +83,8 @@ def test_tool_rechecks_signed_attempt_at_final_admission(db_session, internal_cl
     from app.services import agent_tools
 
     world = _world(db_session, internal_client, "b-tool-admission")
-    original = agent_tools.fence_execution
+    # agent_tools admits assistant runs only, so it holds the assistant fence.
+    original = agent_tools.fence_assistant_execution
     reached = False
 
     def replace_before_admission(db, identity, **kwargs):
@@ -93,7 +94,7 @@ def test_tool_rechecks_signed_attempt_at_final_admission(db_session, internal_cl
         reached = True
         return original(db, identity, **kwargs)
 
-    monkeypatch.setattr(agent_tools, "fence_execution", replace_before_admission)
+    monkeypatch.setattr(agent_tools, "fence_assistant_execution", replace_before_admission)
     monkeypatch.setattr(agent_tools, "_dispatch", lambda *a, **k: pytest.fail("stale dispatch"))
     response = internal_client.post(
         f"/internal/agent/runs/{world['run_id']}/tools/familygraph.echo/execute",

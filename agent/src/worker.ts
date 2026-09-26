@@ -14,7 +14,7 @@
  */
 
 import type { InternalClient, LeasedJob } from "./client.js";
-import type { AgentConfig } from "./config.js";
+import type { AgentConfig, AgentKind } from "./config.js";
 import { RunCancelledError } from "./errors.js";
 import { redactErrorText } from "./redact.js";
 import { RunEventBuffer, extractText, type FgEvent } from "./events.js";
@@ -22,6 +22,7 @@ import type { Logger } from "./logger.js";
 import { buildRunSession } from "./session.js";
 import { peekRunTokenClaims } from "./tokens.js";
 import { renderContextAppendix } from "./context.js";
+import { STEWARD_PROMPT_VERSION } from "./prompts/steward.js";
 
 export interface WorkerDeps {
   client: InternalClient;
@@ -33,14 +34,25 @@ export interface WorkerDeps {
   now?: () => number;
 }
 
+interface PendingSlot {
+  pending: true;
+  kind: AgentKind;
+}
+
 interface ActiveRun {
+  pending: false;
+  kind: AgentKind;
   job: LeasedJob;
   heartbeatTimer: NodeJS.Timeout;
   abort: AbortController;
   leaseLost: boolean;
   /** Server-side cancel_requested observed via heartbeat; stop tool calls, skip settle. */
   cancelRequested: boolean;
+  /** Settles (never rejects) when this slot is released. */
+  done?: Promise<void>;
 }
+
+type Slot = PendingSlot | ActiveRun;
 
 export class SidecarWorker {
   private readonly client: InternalClient;
@@ -49,7 +61,9 @@ export class SidecarWorker {
   private readonly sessionFactory: typeof buildRunSession;
   /** Injectable monotonic clock (tests); defaults to process.hrtime-based. */
   private readonly now: () => number;
-  private active: ActiveRun | null = null;
+  /** Keyed by run_id for real runs; pending reservations use a synthetic key. */
+  private readonly slots = new Map<string, Slot>();
+  private slotSeq = 0;
   private stopped = false;
 
   constructor(deps: WorkerDeps) {
@@ -70,7 +84,35 @@ export class SidecarWorker {
   }
 
   get isBusy(): boolean {
-    return this.active !== null;
+    return this.slots.size > 0;
+  }
+
+  /** Test seam: slots of this kind that are occupied (pending or running). */
+  inFlight(kind: AgentKind): number {
+    let count = 0;
+    for (const slot of this.slots.values()) {
+      if (slot.kind === kind) count += 1;
+    }
+    return count;
+  }
+
+  /** Concurrent slots for one kind. Budgets are independent: a long steward
+   * call must not consume an assistant slot. */
+  private slotsFor(kind: AgentKind): number {
+    return kind === "assistant"
+      ? this.config.maxConcurrentRuns
+      : this.config.stewardMaxConcurrentCallsPerSpace;
+  }
+
+  private enabledKinds(): AgentKind[] {
+    switch (this.config.role) {
+      case "assistant":
+        return ["assistant"];
+      case "steward":
+        return ["steward"];
+      default:
+        return ["assistant", "steward"];
+    }
   }
 
   /** Start polling; resolves immediately, loop runs in background. */
@@ -85,20 +127,32 @@ export class SidecarWorker {
   private async pollLoop(): Promise<void> {
     while (!this.stopped) {
       let didWork = false;
-      try {
-        if (this.active === null) {
-          didWork = await this.tryLeaseAndRun();
+      for (const kind of this.enabledKinds()) {
+        // Fill every free slot of this kind. The awaits are sequential on
+        // purpose: with the reservation below fanning out would be safe, but
+        // serial leases keep an empty queue at one round trip per poll instead
+        // of one per slot.
+        while (!this.stopped && this.inFlight(kind) < this.slotsFor(kind)) {
+          let leased = false;
+          try {
+            leased = (await this.leaseIntoSlot(kind)) !== null;
+          } catch (error) {
+            // Never let the poll loop die, and never spin on a failing
+            // endpoint: a transient lease error just delays the next poll.
+            this.logger.warn("poll loop iteration failed", {
+              kind,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            break;
+          }
+          if (!leased) break;
+          didWork = true;
         }
-      } catch (error) {
-        // Never let the poll loop die; transient errors just delay the next poll.
-        this.logger.warn("poll loop iteration failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
       }
-      // A run that just finished means the queue may still hold more work (the
-      // sidecar is serial), so re-poll immediately. Sleeping first would add
-      // `leasePollIntervalMs` of pure latency to every queued run after the
-      // first, which shows up as queue_wait on the backend.
+      // A run that just finished means the queue may still hold more work, so
+      // re-poll immediately. Sleeping first would add `leasePollIntervalMs` of
+      // pure latency to every queued run after the first, which shows up as
+      // queue_wait on the backend.
       if (didWork) continue;
       await this.sleep(this.config.leasePollIntervalMs);
     }
@@ -108,27 +162,111 @@ export class SidecarWorker {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /** One lease attempt + full run lifecycle. Exposed for tests. */
-  async tryLeaseAndRun(): Promise<boolean> {
-    if (this.active !== null) return false;
-    const job = await this.client.leaseJob();
-    if (job === null) return false;
+  /**
+   * Lease one job of `kind` into a slot and start running it, WITHOUT waiting
+   * for the run to finish. Returns the slot, or null when there was nothing to
+   * lease. This is the concurrency primitive: `pollLoop` uses it to fill every
+   * free slot, so a long steward call cannot block an assistant slot.
+   */
+  async leaseIntoSlot(kind: AgentKind): Promise<ActiveRun | null> {
+    if (!this.enabledKinds().includes(kind)) return null;
+    if (this.inFlight(kind) >= this.slotsFor(kind)) return null;
+
+    // Reserve BEFORE awaiting. `leaseJob` is a suspension point, so a
+    // concurrent caller would otherwise see this slot as free and lease a
+    // second job that no slot can run — that job would hold a live lease with
+    // no executor until server-side recovery reclaimed it. (SQLite's write lock
+    // guarantees two concurrent leases get *different* jobs, so this is exactly
+    // the shape the reservation prevents.)
+    const reservationKey = `pending:${kind}:${++this.slotSeq}`;
+    this.slots.set(reservationKey, { pending: true, kind });
+
+    let job: LeasedJob | null;
+    try {
+      job = await this.client.leaseJob(kind);
+    } catch (error) {
+      this.slots.delete(reservationKey); // Never leak a slot on failure.
+      throw error;
+    }
+    if (job === null) {
+      this.slots.delete(reservationKey);
+      return null;
+    }
+    if (kind === "steward") {
+      this.adoptServerConcurrency(job.max_concurrent);
+    }
+
     const abort = new AbortController();
-    const active: ActiveRun = {
+    const run: ActiveRun = {
+      pending: false,
+      kind,
       job,
       abort,
       leaseLost: false,
       cancelRequested: false,
       heartbeatTimer: this.startHeartbeat(job, abort.signal),
     };
-    this.active = active;
-    try {
-      await this.executeJob(job, active);
-    } finally {
-      clearInterval(active.heartbeatTimer);
-      this.active = null;
-    }
+    this.slots.delete(reservationKey);
+    this.slots.set(job.run_id, run);
+
+    // executeJob handles its own failures and never rejects; the catch is still
+    // required — an unhandled rejection here would terminate the process.
+    run.done = this.executeJob(job, run)
+      .catch((error) => {
+        this.logger.error("run lifecycle escaped its own error handling", {
+          run_id: job.run_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        clearInterval(run.heartbeatTimer);
+        // Remove only our own entry: a later run must not have its slot deleted
+        // by an earlier one finishing.
+        if (this.slots.get(job.run_id) === run) this.slots.delete(job.run_id);
+      });
+    return run;
+  }
+
+  /**
+   * One lease attempt + full run lifecycle, awaiting completion.
+   *
+   * Exposed for tests, which drive a single serial run and assert on its
+   * effects immediately afterwards. `pollLoop` deliberately does NOT use this
+   * (it calls `leaseIntoSlot`) — awaiting here would serialise the slots and
+   * undo the whole point of the multi-slot model.
+   */
+  async tryLeaseAndRun(kind: AgentKind = "assistant"): Promise<boolean> {
+    const run = await this.leaseIntoSlot(kind);
+    if (run === null) return false;
+    await run.done;
     return true;
+  }
+
+  /**
+   * Raise the steward slot budget to whatever the server says it will admit.
+   *
+   * The server decides how many attempts of one space may hold a lease; if the
+   * local value is smaller, a leased attempt sits with no executor until recovery
+   * reclaims it.
+   * Only ever raised, never lowered, so the value cannot oscillate between
+   * polls. This corrects a misconfiguration; it does not replace configuring
+   * STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE on both sides.
+   */
+  private adoptServerConcurrency(broadcast: number | undefined): void {
+    if (broadcast === undefined) return;
+    if (broadcast === this.config.stewardMaxConcurrentCallsPerSpace) return;
+    if (broadcast > this.config.stewardMaxConcurrentCallsPerSpace) {
+      this.logger.warn("steward concurrency raised to the server's limit", {
+        local: this.config.stewardMaxConcurrentCallsPerSpace,
+        server: broadcast,
+      });
+      this.config.stewardMaxConcurrentCallsPerSpace = broadcast;
+    } else {
+      this.logger.warn("steward concurrency below the server's limit", {
+        local: this.config.stewardMaxConcurrentCallsPerSpace,
+        server: broadcast,
+      });
+    }
   }
 
   private startHeartbeat(job: LeasedJob, signal?: AbortSignal): NodeJS.Timeout {
@@ -167,17 +305,21 @@ export class SidecarWorker {
   }
 
   private markLeaseLost(runId: string): void {
-    if (this.active?.job.run_id === runId && !this.active.leaseLost) {
-      this.active.leaseLost = true;
-      this.active.abort.abort();
+    const slot = this.slots.get(runId);
+    // Look up by run_id: with several slots in flight, comparing against a
+    // single "current" run would silently ignore every other slot's signal.
+    if (slot !== undefined && !slot.pending && !slot.leaseLost) {
+      slot.leaseLost = true;
+      slot.abort.abort();
       this.logger.warn("lease lost, aborting run", { run_id: runId });
     }
   }
 
   private markCancelRequested(runId: string): void {
-    if (this.active?.job.run_id === runId && !this.active.cancelRequested) {
-      this.active.cancelRequested = true;
-      this.active.abort.abort();
+    const slot = this.slots.get(runId);
+    if (slot !== undefined && !slot.pending && !slot.cancelRequested) {
+      slot.cancelRequested = true;
+      slot.abort.abort();
       // Cancellation is adjudicated server-side; the sidecar stops issuing
       // tool calls and skips settling (never settles "cancelled" itself).
       this.logger.warn("cancel requested by server, stopping tool calls", { run_id: runId });
@@ -193,8 +335,27 @@ export class SidecarWorker {
       // backend would have to misattribute that time to queue wait.
       const prepStartedAt = this.now();
       const projection = await this.client.getRunContext(job.run_id, job.run_token, active.abort.signal);
-      if (projection.agent_kind !== "assistant" || job.agent_kind !== "assistant") {
-        throw new Error("sidecar received a non-assistant job");
+      if (projection.agent_kind !== active.kind || job.agent_kind !== active.kind) {
+        throw new Error(
+          `sidecar received a ${job.agent_kind} job on a ${active.kind} slot`,
+        );
+      }
+      if (projection.agent_kind === "steward") {
+        // The steward prompt lives in this image, so the server can no longer
+        // hash it. Verify the version instead of trusting that the deployed
+        // image matches the backend: running stale prompt text against a newer
+        // server would silently change what the model is asked to do, and the
+        // evaluation anchor would point at a prompt nobody is using.
+        const expected = projection.steward_prompt_version;
+        if (expected === undefined) {
+          throw new Error("steward context is missing steward_prompt_version");
+        }
+        if (expected !== STEWARD_PROMPT_VERSION) {
+          throw new Error(
+            `steward prompt version mismatch: server expects ${expected}, ` +
+              `this sidecar has ${STEWARD_PROMPT_VERSION}`,
+          );
+        }
       }
       if (projection.run_id !== job.run_id || projection.attempt !== job.attempt) {
         throw new Error("context belongs to a different run attempt");

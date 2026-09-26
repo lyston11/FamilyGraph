@@ -10,7 +10,7 @@ from app import config
 from app.models.admin_access import AdminAccessAudit
 from app.models.space import SpaceMember
 from app.models.steward import (
-    StewardAssistBatch,
+    StewardAssistPlan,
     StewardDeliveryIntent,
     StewardGeneration,
     StewardJob,
@@ -181,24 +181,21 @@ def test_admin_delivery_retry_is_bounded_idempotent_and_does_not_reset_unknown(
     result = _run(db_session, space.id, deliver=True)
     intent = _intent(db_session, result["generation_id"])
     generation = db_session.get(StewardGeneration, result["generation_id"])
-    batch = StewardAssistBatch(
+    batch = StewardAssistPlan(
         space_id=space.id,
         job_id=generation.job_id,
         policy_version=steward.POLICY_VERSION,
         evidence_hash="0" * 64,
-        status="failed",
-        attempt=1,
         fence_json={},
-        error_code=steward_assist.REASON_NETWORK_UNKNOWN,
         created_at=utcnow(),
-        updated_at=utcnow(),
+        deadline_at=utcnow(),
     )
     db_session.add(batch)
     db_session.flush()
     unknown = StewardModelCall(
         space_id=space.id,
         job_id=generation.job_id,
-        batch_id=batch.id,
+        plan_id=batch.id,
         policy_version=steward.POLICY_VERSION,
         assist_kind="candidate",
         model="test",
@@ -278,7 +275,8 @@ def test_admin_delivery_retry_is_bounded_idempotent_and_does_not_reset_unknown(
     steward_delivery.drain(bind=db_session.get_bind(), generation_id=generation.id, limit=64)
     db_session.expire_all()
     assert intent.status == "done"
-    assert batch.status == "failed" and unknown.status == "unknown" and unknown.billed_tokens == 23
+    assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
+    assert unknown.status == "unknown" and unknown.billed_tokens == 23
     assert http_calls == []
     assert db_session.scalar(select(func.count(StewardModelCall.id))) == 1
     assert db_session.scalar(select(func.count(StewardJob.id))) == job_count

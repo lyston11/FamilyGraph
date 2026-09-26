@@ -205,7 +205,7 @@ def test_maintenance_tick_failure_never_leaks(db_session, caplog, monkeypatch) -
 
     monkeypatch.setattr(steward, "scan_due_spaces", lambda session: 0)
     monkeypatch.setattr(steward, "reaper_pass", lambda session: 0)
-    monkeypatch.setattr(maintenance.steward_assist, "recover_stuck_batches", _boom2)
+    monkeypatch.setattr(maintenance.steward_assist, "recover_stuck_attempts", _boom2)
     caplog.clear()
     maintenance.run_maintenance_tick()
     text = _log_text(caplog)

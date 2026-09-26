@@ -51,7 +51,7 @@ def _model_grandmother_term(db_session, space):
     _enable_provider(db_session, space)
     _drain(db_session, space)
     assert (
-        steward_assist.run_due_batch(
+        steward_assist.run_due_attempt(
             db_session,
             transport=_completions_fake(
                 _terminology_payload(

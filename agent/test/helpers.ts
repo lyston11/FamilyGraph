@@ -11,6 +11,11 @@ export function makeAgentConfig(apiPort: number): AgentConfig {
     sidecarId: "sc-test",
     healthPort: 0,
     leasePollIntervalMs: 50,
+    // Single-slot by default so the ~20 existing `tryLeaseAndRun()` assertions
+    // (written for the serial worker) keep their meaning.
+    role: "assistant",
+    maxConcurrentRuns: 1,
+    stewardMaxConcurrentCallsPerSpace: 1,
     defaultLeaseMs: 60_000,
     eventFlushIntervalMs: 20,
     eventFlushBatchSize: 8,

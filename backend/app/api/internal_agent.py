@@ -36,12 +36,14 @@ from app.errors import (
     AGENT_RUN_NOT_RUNNING,
     AGENT_TOKEN_INVALID,
     AGENT_TOKEN_SCOPE_MISMATCH,
+    STEWARD_DISABLED,
     extract_api_error,
     raise_api_error,
 )
 from app.models.account import Account
 from app.models.agent import AgentJob, AgentMessage, AgentRun, AgentSession
 from app.models.space import SpaceMember
+from app.models.steward import StewardModelCall
 from app.schemas.agent import (
     ContextMessageOut,
     ContextOut,
@@ -55,6 +57,8 @@ from app.schemas.agent import (
     LeaseRequest,
     SettleOut,
     SettleRequest,
+    StewardLeaseOut,
+    StewardLeaseRequest,
     ToolExecuteOut,
     ToolExecuteRequest,
 )
@@ -67,9 +71,15 @@ from app.services import (
     audit,
     context_builder,
     policy_guard,
+    steward_assist,
 )
 from app.services.agent_events import EventEntry
-from app.services.agent_execution import ExecutionIdentity, fence_execution
+from app.services.agent_execution import (
+    ExecutionIdentity,
+    StewardExecution,
+    fence_assistant_execution,
+    fence_steward_execution,
+)
 from app.services.provider_proxy import provider_proxy_base_url as agent_provider_proxy_base_url
 from app.utils import security, timeutil
 
@@ -181,12 +191,26 @@ def _decode_or_deny(db: Session, request: Request, *, typ: str) -> dict[str, Any
         )
 
 
-def _authorize_run(
+def _authorize_assistant_run(
     db: Session, request: Request, run_id: int
 ) -> tuple[AgentRun, AgentSession, dict[str, Any]]:
-    """run token 解码 + 与 DB 实体双向核验（scope 五元组 + allowlist）。"""
+    """run token 解码 + 与 DB 实体双向核验（scope 五元组 + allowlist）。
+
+    仅服务 assistant：Steward child run 无 session、无 queue job，判据本质不同
+    （见 ``_authorize_steward_run``）。用一个函数按 kind 分支会让两侧的检查集
+    互相污染，因此拆开并在入口断言 kind。
+    """
     _reject_user_jwt(db, request)
     claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] != "assistant":
+        _deny(
+            db,
+            request,
+            reason="kind_mismatch",
+            status_code=403,
+            code=AGENT_TOKEN_SCOPE_MISMATCH,
+            message="token 不是 assistant run token",
+        )
     if claims["run_id"] != run_id:
         _deny(
             db,
@@ -249,6 +273,52 @@ def _authorize_run(
             message="Run 所属空间成员资格已失效",
         )
     return run, agent_session, claims
+
+
+def _authorize_steward_run(
+    db: Session, request: Request, run_id: int
+) -> tuple[AgentRun, dict[str, Any]]:
+    """steward child run 的 token 核验（空间级，无账号）。
+
+    只做「token 指向的就是这个 run」的前置拒绝；完整层级判定（父 job 活跃、空间
+    匹配、viewer 仍为 active 成员、batch 绑定、租约）交给 ``fence_steward_execution``
+    ——它在写锁内重验，且与 ``fence_assistant_execution`` 拥有独立检查集。
+    """
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] != "steward":
+        _deny(
+            db,
+            request,
+            reason="kind_mismatch",
+            status_code=403,
+            code=AGENT_TOKEN_SCOPE_MISMATCH,
+            message="token 不是 steward run token",
+        )
+    if claims["run_id"] != run_id:
+        _deny(
+            db,
+            request,
+            reason="run_id_mismatch",
+            status_code=403,
+            code=AGENT_TOKEN_SCOPE_MISMATCH,
+            message="token 与目标 Run 不匹配",
+        )
+    run = db.get(AgentRun, run_id)
+    if run is None or run.kind != "steward":
+        raise_api_error(404, AGENT_RUN_NOT_FOUND, "Run 不存在")
+    return run, claims
+
+
+def _authorize_run(
+    db: Session, request: Request, run_id: int
+) -> tuple[AgentRun, AgentSession, dict[str, Any]]:
+    """Assistant-path alias: most internal endpoints are assistant-only.
+
+    Kept so those call sites read unchanged; the kind assertion inside makes a
+    steward token unable to reach them.
+    """
+    return _authorize_assistant_run(db, request, run_id)
 
 
 def _require_active_run(db: Session, request: Request, run: AgentRun) -> None:
@@ -318,6 +388,63 @@ def lease_job(
     )
 
 
+@router.post("/steward/attempts/lease", response_model=StewardLeaseOut | None)
+def lease_steward_attempt(
+    body: StewardLeaseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> StewardLeaseOut | Response:
+    """Steward sidecar 租一个 attempt 及其 child run；无可租返回 204。
+
+    独立于 ``/jobs/lease`` 而不是放开后者的 kind：两个端点服务两个不同的队列，
+    独立路由让「哪个容器能租哪类作业」成为**路由级**约束而不是 payload 校验——
+    否则任何持有 service token 的调用者（含被入侵的 assistant 容器）都能消费
+    Steward 队列。
+
+    路径从 ``/steward/jobs/lease`` 改为 ``/steward/attempts/lease``：执行单元是
+    attempt，不是 job；名字必须与实际租的东西一致，否则调用方会以为自己在租一个
+    作业级单位。
+    """
+    _reject_user_jwt(db, request)
+    _decode_or_deny(db, request, typ=agent_tokens.SERVICE_TOKEN_TYPE)
+    # 双开关：引擎开启（STEWARD_ENABLED）与执行载体切换
+    # （STEWARD_PI_RUNTIME_ENABLED）是两个独立的发布决策，必须能各自回退。
+    if not (config.STEWARD_ENABLED and config.STEWARD_PI_RUNTIME_ENABLED):
+        raise_api_error(503, STEWARD_DISABLED, "Steward Pi runtime 未开启")
+    grant = steward_assist.lease_attempt(
+        db, space_id=body.space_id, worker_id=body.leased_by, ttl_seconds=body.lease_ttl_seconds
+    )
+    if grant is None:
+        return Response(status_code=204)
+    run = steward_assist.open_child_run(
+        db, attempt_id=grant["attempt_id"], lease_owner=body.leased_by
+    )
+    if run is None:
+        return Response(status_code=204)
+    run_token = agent_tokens.issue_run_token(
+        run_id=run.id,
+        job_id=grant["steward_job_id"],
+        attempt=run.attempt,
+        agent_kind="steward",
+        space_id=grant["space_id"],
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        steward_attempt_id=grant["attempt_id"],
+        viewer_account_id=grant["viewer_account_id"],
+    )
+    return StewardLeaseOut(
+        run_id=run.id,
+        steward_job_id=grant["steward_job_id"],
+        assist_attempt_id=grant["attempt_id"],
+        assist_kind=grant["assist_kind"],
+        agent_kind="steward",
+        attempt=run.attempt,
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        policy_version=grant["policy_version"],
+        max_concurrent=config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE,
+        run_token=run_token,
+    )
+
+
 @router.post("/jobs/{job_id}/heartbeat", response_model=HeartbeatOut)
 def heartbeat_job(
     job_id: int,
@@ -336,6 +463,16 @@ def heartbeat_job(
             code=AGENT_TOKEN_SCOPE_MISMATCH,
             message="token 与目标 Job 不匹配",
         )
+    if claims["agent_kind"] == "steward":
+        # Steward child run 无 AgentJob（token 的 job_id 是 StewardJob.id）。
+        # 续租必须**同时**续 run 与 attempt：attempt lease 是写回栅栏看的租约，
+        # 只续一个会让另一个先过期。
+        ttl = body.lease_ttl_seconds if body is not None else None
+        steward_identity = StewardExecution.from_claims(claims)
+        expires, cancel_requested = steward_assist.heartbeat_child_run(
+            db, steward_identity, ttl_seconds=ttl
+        )
+        return HeartbeatOut(ok=True, lease_expires_at=expires, cancel_requested=cancel_requested)
     run, _agent_session, _claims = _authorize_run(db, request, int(claims["run_id"]))
     _require_active_run(db, request, run)
     job = db.get(AgentJob, job_id)
@@ -438,9 +575,15 @@ def run_context(run_id: int, request: Request, db: Session = Depends(get_db)) ->
     Provider 凭据只在 ProviderGateway 内解密并注入上游 Authorization；context
     仅返回站内代理路径和无密钥 projection，绝不出现在浏览器 API、SSE、领域事件或日志。
     """
+    # RT-3 ordering: reject a user JWT as forbidden *before* decoding, so the
+    # kind peek below cannot turn a 403 into a 401.
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        return _steward_run_context(db, request, run_id, claims)
     run, agent_session, _claims = _authorize_run(db, request, run_id)
     execution = ExecutionIdentity.from_claims(_claims)
-    run, agent_session, _job = fence_execution(db, execution, allow_cancel_requested=True)
+    run, agent_session, _job = fence_assistant_execution(db, execution, allow_cancel_requested=True)
     # A Pi session is stateful across turns.  Project the complete durable
     # transcript in stable id order; truncating to a recent-N window silently
     # drops earlier user/assistant turns and can make the model contradict its
@@ -569,9 +712,20 @@ def append_events_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> EventAppendOut:
-    run, _agent_session, _claims = _authorize_run(db, request, run_id)
-    execution = ExecutionIdentity.from_claims(_claims)
-    _require_active_run(db, request, run)
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        run, _steward_claims = _authorize_steward_run(db, request, run_id)
+        # The steward fence is the same one every other run-scoped endpoint uses,
+        # so lease/cancel/batch state cannot diverge between append and settle.
+        fence_steward_execution(
+            db, StewardExecution.from_claims(claims), allow_cancel_requested=True
+        )
+        execution: ExecutionIdentity | StewardExecution = StewardExecution.from_claims(claims)
+    else:
+        run, _agent_session, _claims = _authorize_run(db, request, run_id)
+        execution = ExecutionIdentity.from_claims(_claims)
+        _require_active_run(db, request, run)
     # 类型先于事务校验：未知类型不落公开流，直接审计拒绝
     for entry in body.events:
         if entry.type not in agent_events.EVENT_TYPES:
@@ -664,6 +818,10 @@ def settle_run_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> SettleOut:
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        return _settle_steward_run(db, request, run_id, body, claims)
     run, _agent_session, _claims = _authorize_run(db, request, run_id)
     policy_guard.enforce(
         policy_guard.agent_settled(status=body.status), code="POLICY_PROVIDER_BLOCKED"
@@ -676,6 +834,212 @@ def settle_run_endpoint(
             error_code=body.error_code,
             error=body.error,
             execution=ExecutionIdentity.from_claims(_claims),
+        )
+    except FastAPIHTTPException as exc:
+        db.rollback()
+        api_error = extract_api_error(exc.detail) or {}
+        audit.write_audit(
+            db,
+            action="agent_protocol_violation",
+            actor_id=None,
+            target_id=run_id,
+            detail={"endpoint": "settle", "reason": str(api_error.get("code") or "invalid")},
+        )
+        db.commit()
+        raise
+    return SettleOut(
+        ok=True,
+        run_id=settled.id,
+        status=settled.status,
+        settled_at=settled.settled_at or timeutil.utcnow(),
+    )
+
+
+def _steward_run_context(
+    db: Session, request: Request, run_id: int, claims: dict[str, Any]
+) -> ContextOut:
+    """Steward child run 的 context：空间级投影、**无会话历史**。
+
+    设计 §8.3：assist 的输入是服务端投影而非对话。引入历史会让「同一语义哈希
+    → 同一输出」的幂等与去重（``request_hash_for`` / ``last_checked_hash``）
+    失效，因此 ``messages`` 恒为 ``[]``。投影内容由服务端白名单构造（节点代号 +
+    已确认事实 id/type/revision），绝不下发姓名或 masked 原值。
+    """
+    run, _claims = _authorize_steward_run(db, request, run_id)
+    identity = StewardExecution.from_claims(claims)
+    run, steward_run, _job = fence_steward_execution(db, identity, allow_cancel_requested=True)
+    attempt = db.scalar(select(StewardModelCall).where(StewardModelCall.run_id == run.id))
+    resolution = agent_provider.resolve_for_run(
+        db, run, claims["space_id"], agent_provider.AGENT_KIND_STEWARD
+    )
+    proxy_base_url = (
+        agent_provider_proxy_base_url(run.id) if resolution.policy_result == "allowed" else None
+    )
+    context_blocks: list[dict[str, object]] = []
+    context_build_id: int | None = None
+    if attempt is not None:
+        # The viewer (terminology only) supplies the actor for the policy
+        # identity; the other kinds are space-scoped and use the space admin.
+        actor_account_id = steward_run.viewer_account_id
+        if actor_account_id is None:
+            # Space-scoped kinds have no viewer; the space admin supplies the
+            # policy identity. Resolve through the member's user, not an account
+            # column (space_members stores user_id).
+            admin_user_id = db.scalar(
+                select(SpaceMember.user_id).where(
+                    SpaceMember.space_id == claims["space_id"],
+                    SpaceMember.role == "space_admin",
+                    SpaceMember.status == "active",
+                )
+            )
+            if admin_user_id is not None:
+                actor_account_id = db.scalar(
+                    select(Account.id).where(Account.user_id == admin_user_id)
+                )
+        actor_account = db.get(Account, actor_account_id) if actor_account_id else None
+        if actor_account is not None:
+            built = context_builder.ContextBuilder(db).build(
+                actor=actor_account.user,
+                space_id=claims["space_id"],
+                agent_kind="steward",
+                query=attempt.prompt_digest,
+                run_id=run.id,
+                provider_kind=resolution.kind,
+                policy_version=run.policy_version,
+                attempt=identity.expected_attempt,
+                execution=identity,
+                provider_decision={
+                    "provider_id": resolution.provider_id,
+                    "model": resolution.model,
+                    "policy_result": resolution.policy_result,
+                },
+            )
+            context_build_id = built.build_id
+            context_blocks = (
+                policy_guard.enforce(
+                    policy_guard.context_hook(_steward_projection_blocks(db, attempt))
+                )
+                or []
+            )
+    response = ContextOut(
+        run_id=run.id,
+        session_id=None,
+        agent_kind="steward",
+        account_id=None,
+        space_id=claims["space_id"],
+        status=run.status,
+        attempt=run.attempt,
+        policy_version=run.policy_version,
+        tool_allowlist=list(run.tool_allowlist_json),
+        messages=[],
+        provider=ContextProviderOut(
+            provider_id=resolution.provider_id,
+            provider_name=resolution.provider_name,
+            model=resolution.model,
+            kind=resolution.kind,
+            api=resolution.api,
+            compat=dict(resolution.compat),
+            context_window=resolution.context_window,
+            max_tokens=resolution.max_tokens,
+            reasoning=resolution.reasoning,
+            input_modalities=list(resolution.input_modalities),
+            thinking_levels=list(resolution.thinking_levels),
+            policy_result=resolution.policy_result,
+            secret_ref=None,
+            base_url=proxy_base_url,
+            api_key=None,
+        ),
+        context_build_id=context_build_id,
+        context_blocks=context_blocks,
+        next_event_seq=agent_events.next_seq(db, run.id),
+        cancel_requested=bool(run.cancel_requested),
+        steward_prompt_version=steward_assist.STEWARD_PROMPT_VERSION,
+    )
+    db.commit()
+    return response
+
+
+def _steward_projection_blocks(db: Session, attempt: StewardModelCall) -> list[dict[str, object]]:
+    """Build the steward context blocks from the reserved attempt's projection.
+
+    The prompt text itself never leaves the server: the sidecar re-derives it from
+    this projection plus its own system prompt, which is why the blocks carry the
+    structured input rather than a ready-made prompt.
+    """
+    user_content = steward_assist._user_content_for(db, attempt)
+    return [
+        {
+            "kind": "data",
+            "trust": "untrusted_data",
+            "source_type": "steward_projection",
+            "source_id": f"attempt:{attempt.id}",
+            "scope": "space",
+            "sensitivity": "normal",
+            "revision": attempt.attempt_no,
+            "citation": attempt.prompt_digest,
+            "content": user_content,
+        }
+    ]
+
+
+def _lease_owner_for(db: Session, attempt_id: int) -> str:
+    """The attempt's current lease owner, used as the settlement capability.
+
+    Read from the row rather than trusted from the request: the sidecar proves
+    identity with its run token, and the row is the authority on who holds the
+    lease.
+    """
+    from app.models.steward import StewardModelCall
+
+    attempt = db.get(StewardModelCall, attempt_id)
+    return (attempt.lease_owner or "") if attempt is not None else ""
+
+
+def _settle_steward_run(
+    db: Session, request: Request, run_id: int, body: SettleRequest, claims: dict[str, Any]
+) -> SettleOut:
+    """Settle a Steward child run and its attempt in **one** transaction.
+
+    Why ``on_settled`` instead of two sequential calls: the run's terminal state
+    and the attempt's settlement must never be separately observable, or a crash
+    between them leaves "run succeeded / attempt still in_flight" — the double
+    terminal state R2 forbids. The hook runs inside ``_settle``'s immediate
+    transaction, after the terminal write.
+    """
+    run, _claims = _authorize_steward_run(db, request, run_id)
+    identity = StewardExecution.from_claims(claims)
+    policy_guard.enforce(
+        policy_guard.agent_settled(status=body.status), code="POLICY_PROVIDER_BLOCKED"
+    )
+    outcome: dict[str, str | None] = {}
+
+    def _hook(session: Session, settled_run: AgentRun) -> None:
+        # The attempt is named by the token, so settlement targets it directly
+        # rather than re-deriving it from the run.
+        attempt_id = claims.get("steward_attempt_id")
+        if attempt_id is None:
+            outcome["status"] = None
+            return
+        outcome["status"] = steward_assist.settle_attempt(
+            session,
+            attempt_id=int(attempt_id),
+            status=body.status,
+            lease_owner=_lease_owner_for(session, int(attempt_id)),
+            error_code=body.error_code,
+            text=body.output_text,
+            usage=body.usage,
+            latency_ms=body.latency_ms or 0,
+        )
+
+    try:
+        settled = agent_queue.settle_run(
+            db,
+            run,
+            status=body.status,
+            error_code=body.error_code,
+            error=body.error,
+            execution=identity,
+            on_settled=_hook,
         )
     except FastAPIHTTPException as exc:
         db.rollback()

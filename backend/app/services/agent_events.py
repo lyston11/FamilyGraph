@@ -32,7 +32,7 @@ from app.errors import (
 from app.models.agent import AgentJob, AgentRun, AgentRunEvent, AgentSession
 from app.schemas.agent import ContextReferenceIn, EventTimingIn
 from app.services import agent_citations
-from app.services.agent_execution import ExecutionIdentity, acquire_run_writer, fence_execution
+from app.services.agent_execution import Execution, acquire_run_writer, fence_execution
 from app.utils import timeutil
 
 # notes.md 事件类型注册表（V2.2）
@@ -65,6 +65,18 @@ PROVISIONAL_TEXT_EVENT_TYPES: frozenset[str] = frozenset(
 # 单条临时正文分片的上限（码点）。sidecar 按 MAX_PROSE_FRAGMENT_CHARS 分片，
 # 这里再夹一次：畸形或过大的分片会被拒绝，而不是让整批 append 一起失败。
 MAX_PROVISIONAL_DELTA_CHARS = 4000
+
+# 消息类事件：物化或投影对话内容。Steward child run 无会话（单轮、输入是服务端
+# 投影而非对话），因此这些事件对它一律 fail-closed——放行会让 steward run 造出
+# 带会话语义的历史行，而那正是 09-01 收敛掉的污染。
+MESSAGE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "message.user_added",
+        "message.assistant_added",
+        "assistant.text_delta",
+        "assistant.text_reset",
+    }
+)
 
 # settle 落终态时自动追加的对应事件（queue.settle 消费）
 TERMINAL_EVENT_FOR: dict[str, str] = {
@@ -229,7 +241,7 @@ def append_events(
     run: AgentRun,
     entries: list[EventEntry],
     *,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
 ) -> tuple[list[AgentRunEvent], list[int]]:
     """幂等批量追加。
 
@@ -248,6 +260,16 @@ def append_events(
     expected_next = next_seq(db, run.id)
     for entry in entries:
         _validate_entry(entry)
+        if run.kind == "steward" and entry.type in MESSAGE_EVENT_TYPES:
+            # Steward child runs are single-turn and have no conversation; a
+            # message-class event would materialize conversational history for a
+            # space-scoped execution (the contamination 09-01 removed).
+            raise_api_error(
+                422,
+                AGENT_EVENT_INVALID,
+                "Steward child run 不得发送消息类事件",
+                detail={"type": entry.type},
+            )
         fingerprint = entry.fingerprint(run.id, expected_attempt)
         prior: AgentRunEvent | None = db.scalar(
             select(AgentRunEvent).where(

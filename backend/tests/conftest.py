@@ -117,8 +117,8 @@ _TABLES = (
     "behavior_projections",
     "steward_space_schedules",
     "steward_candidate_evidence_versions",
-    # 09-11 辅助批次：steward_model_calls.batch_id 引用本表，先于其删
-    "steward_assist_batches",
+    # 09-25 E1：工作快照表；steward_model_calls.plan_id 引用本表，先于其删
+    "steward_assist_plans",
     "steward_model_calls",
     "steward_llm_candidates",
     "steward_jobs",

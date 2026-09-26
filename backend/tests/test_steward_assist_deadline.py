@@ -19,7 +19,7 @@ from sqlalchemy import select
 from test_steward import _run_job
 
 from app import config
-from app.models.steward import StewardAssistBatch, StewardModelCall
+from app.models.steward import StewardAssistPlan, StewardModelCall
 from app.services import steward_assist
 from app.utils import timeutil
 
@@ -234,8 +234,8 @@ def test_transport_budget_excludes_the_settlement_reserve(db_session, monkeypatc
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch_for(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
-    steward_assist.execute_batch(db_session, batch.id, transport=transport)
+    assert steward_assist.schedule_due_attempt(db_session) is not None
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
 
     assert seen, "transport never entered"
     # 6s 租约 - 2s 结算预留 = 4s（配置 timeout 30s 不构成上界）
@@ -253,8 +253,11 @@ def test_out_of_transaction_recheck_prevents_an_unsendable_request(db_session, m
 
     def budget(lease_until):
         seen_calls["n"] += 1
-        # 第 1 次是出事务前粗筛，第 2 次是事务内、第 3 次是提交后。
-        if seen_calls["n"] >= 3:
+        # Read 1 is the pre-send window check; read 2 is the post-commit re-check.
+        # The read that decides the timeout is the same as read 1 (the send path
+        # computes it once), so failing from the second read on is exactly the
+        # "the commit consumed the window" scenario.
+        if seen_calls["n"] >= 2:
             return 0.0
         return real_budget(lease_until)
 
@@ -266,8 +269,8 @@ def test_out_of_transaction_recheck_prevents_an_unsendable_request(db_session, m
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch_for(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
-    status = steward_assist.execute_batch(db_session, batch.id, transport=transport)
+    assert steward_assist.schedule_due_attempt(db_session) is not None
+    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
 
     assert calls == [], "unsendable request must not reach the transport"
     rows = _calls_for(db_session, job.id)
@@ -292,8 +295,8 @@ def test_released_reservations_do_not_consume_the_job_budget(db_session, monkeyp
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch_for(db_session, job.id)
-    assert steward_assist.schedule_due_batch(db_session) is not None
-    steward_assist.execute_batch(db_session, batch.id, transport=transport)
+    assert steward_assist.schedule_due_attempt(db_session) is not None
+    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
 
     assert len(calls) == 1, calls
     rows = _calls_for(db_session, job.id)
@@ -319,8 +322,8 @@ def _turn_on_explanation_only(monkeypatch) -> None:
     _turn_on(monkeypatch, candidate=False, ranking=False)
 
 
-def _batch_for(db_session, job_id: int) -> StewardAssistBatch:
-    batch = db_session.scalar(select(StewardAssistBatch).where(StewardAssistBatch.job_id == job_id))
+def _batch_for(db_session, job_id: int) -> StewardAssistPlan:
+    batch = db_session.scalar(select(StewardAssistPlan).where(StewardAssistPlan.job_id == job_id))
     assert batch is not None
     return batch
 

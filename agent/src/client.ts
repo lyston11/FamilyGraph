@@ -21,7 +21,7 @@
  */
 
 import { backoffDelayMs, sleep, type BackoffPolicy } from "./backoff.js";
-import type { AgentConfig } from "./config.js";
+import type { AgentConfig, AgentKind } from "./config.js";
 import type { FgEvent } from "./events.js";
 import {
   AuthError,
@@ -42,11 +42,19 @@ import { signServiceToken } from "./tokens.js";
 export interface LeasedJob {
   job_id: string;
   run_id: string;
-  agent_kind: "assistant";
+  agent_kind: AgentKind;
   attempt: number;
   tool_allowlist: string[];
   policy_version: string;
   run_token: string;
+  /** Steward only: the parent StewardJob id (the authorization root). */
+  steward_job_id?: string;
+  /** Steward only: the assist batch this run belongs to. */
+  steward_batch_id?: string | null;
+  /** Steward only: the assist kind (candidate|ranking|explanation|terminology). */
+  assist_kind?: string;
+  /** Steward only: server's current batch-concurrency limit (correction signal). */
+  max_concurrent?: number;
 }
 
 /** One persisted session message as projected by GET /runs/{id}/context. */
@@ -103,9 +111,11 @@ export interface RunContextBlock {
 
 export interface RunContextProjection {
   run_id: string;
-  session_id: string;
-  agent_kind: "assistant";
-  account_id: string;
+  /** null for steward child runs (space-scoped, no session). */
+  session_id: string | null;
+  agent_kind: AgentKind;
+  /** null for steward child runs (space-scoped, no account). */
+  account_id: string | null;
   space_id: string;
   status: string;
   attempt: number;
@@ -119,6 +129,9 @@ export interface RunContextProjection {
   context_blocks?: RunContextBlock[];
   provider: RunContextProvider | null;
   cancel_requested: boolean;
+  /** Steward only: the prompt version the server expects this sidecar to have
+   * loaded. Verified against STEWARD_PROMPT_VERSION before any model call. */
+  steward_prompt_version?: string;
 }
 
 export interface ToolExecutionResult {
@@ -203,13 +216,27 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
   const invalid = (field: string): never => {
     throw new InternalApiError(`invalid context projection: ${field}`, 502, "invalid_context_projection");
   };
-  const idFields = ["run_id", "session_id", "account_id", "space_id"];
-  for (const field of idFields) {
+  const agentKindRaw = raw["agent_kind"];
+  if (agentKindRaw !== "assistant" && agentKindRaw !== "steward") {
+    invalid("agent_kind");
+  }
+  const isSteward = agentKindRaw === "steward";
+  const positiveInt = (field: string): void => {
     const value = raw[field];
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) invalid(field);
-  }
-  if (raw["agent_kind"] !== "assistant") {
-    invalid("agent_kind");
+  };
+  // Cross-layer security boundary (spec §9): steward projections must carry
+  // null session/account, and assistant projections must carry positive ints.
+  // "Repairing" a malformed projection with defaults would erase the very
+  // distinction this branch exists to enforce.
+  positiveInt("run_id");
+  positiveInt("space_id");
+  if (isSteward) {
+    if (raw["session_id"] !== null) invalid("session_id");
+    if (raw["account_id"] !== null) invalid("account_id");
+  } else {
+    positiveInt("session_id");
+    positiveInt("account_id");
   }
   if (
     raw["status"] !== "queued" &&
@@ -233,9 +260,9 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
   }
   if (typeof raw["cancel_requested"] !== "boolean") invalid("cancel_requested");
   const runId = raw["run_id"] as number;
-  const sessionId = raw["session_id"] as number;
-  const agentKind = raw["agent_kind"] as "assistant";
-  const accountId = raw["account_id"] as number;
+  const sessionId = raw["session_id"] as number | null;
+  const agentKind = agentKindRaw as AgentKind;
+  const accountId = raw["account_id"] as number | null;
   const spaceId = raw["space_id"] as number;
   const status = raw["status"] as string;
   const attempt = raw["attempt"] as number;
@@ -275,9 +302,9 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
   }
   return {
     run_id: String(runId),
-    session_id: String(sessionId),
+    session_id: sessionId === null ? null : String(sessionId),
     agent_kind: agentKind,
-    account_id: String(accountId),
+    account_id: accountId === null ? null : String(accountId),
     space_id: String(spaceId),
     status,
     attempt,
@@ -289,6 +316,9 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
     context_blocks: normalizeContextBlocks(raw["context_blocks"]),
     provider: normalizeProvider(raw["provider"]),
     cancel_requested: cancelRequested,
+    ...(typeof raw["steward_prompt_version"] === "string"
+      ? { steward_prompt_version: raw["steward_prompt_version"] }
+      : {}),
   };
 }
 
@@ -453,28 +483,39 @@ export class InternalClient {
     return new InternalApiError(message, status, "http_error");
   }
 
-  /** POST /internal/agent/jobs/lease — Assistant sidecar is never a generic queue consumer. */
-  async leaseJob(): Promise<LeasedJob | null> {
+  /**
+   * POST /internal/agent/jobs/lease or /internal/agent/steward/jobs/lease.
+   *
+   * The two kinds have separate endpoints on purpose: "which container may
+   * lease which queue" is a routing-level constraint, not payload validation.
+   * The response kind is verified against the requested kind so a misrouted
+   * endpoint cannot hand this slot a job of the wrong shape.
+   */
+  async leaseJob(kind: AgentKind = "assistant"): Promise<LeasedJob | null> {
     const token = signServiceToken(this.config.serviceSecret, {
       sidecarId: this.config.sidecarId,
       nowMs: this.nowMs(),
     });
-    const { status, json } = await this.request(
-      "POST",
-      "/internal/agent/jobs/lease",
-      token,
-      { kind: "assistant", leased_by: this.config.sidecarId },
-    );
+    const path =
+      kind === "assistant" ? "/internal/agent/jobs/lease" : "/internal/agent/steward/jobs/lease";
+    const { status, json } = await this.request("POST", path, token, {
+      kind,
+      leased_by: this.config.sidecarId,
+    });
     // Empty queue: HTTP 204 with no body (request() parses it to {}).
     if (status === 204) return null;
     const raw = json as Record<string, unknown>;
-    if (String(raw["agent_kind"] ?? "") !== "assistant") {
-      throw new InternalApiError("internal lease returned non-assistant job", 409, "queue_kind_mismatch");
+    if (String(raw["agent_kind"] ?? "") !== kind) {
+      throw new InternalApiError(
+        `internal lease returned a non-${kind} job`,
+        409,
+        "queue_kind_mismatch",
+      );
     }
-    return {
+    const leased: LeasedJob = {
       job_id: String(raw["job_id"]),
       run_id: String(raw["run_id"]),
-      agent_kind: "assistant",
+      agent_kind: kind,
       attempt: Number(raw["attempt"] ?? 0),
       tool_allowlist: Array.isArray(raw["tool_allowlist"])
         ? (raw["tool_allowlist"] as unknown[]).map(String)
@@ -482,6 +523,33 @@ export class InternalClient {
       policy_version: String(raw["policy_version"] ?? ""),
       run_token: String(raw["run_token"] ?? ""),
     };
+    if (kind === "steward") {
+      // StewardLeaseOut uses steward_job_id rather than job_id: the child run has
+      // no queue job, and the parent StewardJob is the authorization root.
+      const stewardJobId = raw["steward_job_id"];
+      if (typeof stewardJobId !== "number" || !Number.isInteger(stewardJobId)) {
+        throw new InternalApiError(
+          "invalid steward lease: steward_job_id",
+          502,
+          "invalid_lease",
+        );
+      }
+      leased.steward_job_id = String(stewardJobId);
+      const batchId = raw["assist_batch_id"];
+      leased.steward_batch_id =
+        typeof batchId === "number" && Number.isInteger(batchId) ? String(batchId) : null;
+      leased.assist_kind = typeof raw["assist_kind"] === "string" ? raw["assist_kind"] : undefined;
+      const maxConcurrent = raw["max_concurrent"];
+      if (typeof maxConcurrent !== "number" || !Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
+        throw new InternalApiError(
+          "invalid steward lease: max_concurrent",
+          502,
+          "invalid_lease",
+        );
+      }
+      leased.max_concurrent = maxConcurrent;
+    }
+    return leased;
   }
 
   /**
@@ -591,6 +659,7 @@ export class InternalClient {
     runToken: string,
     outcome: "succeeded" | "failed",
     error?: { code: string; message: string },
+    steward?: { output_text: string; usage?: Record<string, number>; latency_ms?: number },
   ): Promise<void> {
     await this.request(
       "POST",
@@ -600,6 +669,16 @@ export class InternalClient {
         status: outcome,
         ...(outcome === "failed" && error
           ? { error_code: error.code, error: { message: error.message } }
+          : {}),
+        // Steward cannot report its product through the event stream: message
+        // events are refused for child runs, so the validated output travels
+        // with the settlement instead. Assistant never sends these fields.
+        ...(steward !== undefined
+          ? {
+              output_text: steward.output_text,
+              ...(steward.usage !== undefined ? { usage: steward.usage } : {}),
+              ...(steward.latency_ms !== undefined ? { latency_ms: steward.latency_ms } : {}),
+            }
           : {}),
       },
     );
