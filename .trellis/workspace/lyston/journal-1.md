@@ -1230,3 +1230,58 @@ agent 181、frontend 827、system-admin 127 各自 type-check/lint/test/build �
 ### Status
 
 [OK] **Completed**（未合并回 main；集成由人执行）
+
+## Session 35: E1 Steward 执行单元重构（attempt 级 lease / per-space 并发 / 单链路）
+<!-- trellis-session: v=2 fp=e1-steward-execution-unit -->
+
+**Date**: 2026-09-26
+**Task**: 09-25-steward-execution-unit（父 09-25-steward-pi-child-run-design）
+**Branch**: `feat/09-25-steward-execution-unit`（已合并 main、归档、worktree/分支已清理）
+
+### Summary
+
+按用户裁定「全部重写重构」把 Steward 模型辅助的执行单元从「批次」改成「一次模型调用」：
+`steward_model_calls` 成为唯一执行单元（lease_owner/lease_until/next_attempt_at/carrier），
+`steward_assist_batches` 收窄为不可变快照 `steward_assist_plans`，`steward_runs` 窄表删除
+（run 绑定即 `run_id` UNIQUE 反查）。两条执行路径合并为单一链路
+`plan_for_job → lease_attempt → carrier.execute → settle_attempt`，并发作用域从全库 1 改为
+每空间 `STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE`（默认 2）。
+
+全量检查：backend 1919 passed / 3 skipped + ruff check/format + mypy 全绿；agent
+type-check/lint/181 tests/build 通过；迁移 `upgrade → downgrade → upgrade` 隔离 DATA_DIR 往返通过；
+`docker compose config --quiet` 通过。frontend / system-admin 未被本任务触碰。
+
+### 修掉的三个真实缺陷
+
+1. **发送门未闭合**（首提交遗留）：栅栏从 `schedule_due_attempt` 移出后没有在 `lease_attempt`
+   补上 sweep，被栅栏拦下的 attempt 永不退休——空间永远停在 `reserved`，`plan_error_code` 恒为空。
+   三个降级用例（provider 不可用 / 云同意撤销 / 要求本地）因此失败。修法是补 sweep，不是放宽断言；
+   并加了变异测试验证的回归（被拦下的 attempt 不得阻塞兄弟）。
+2. **并发开关只改了一半**：后端改名后 sidecar 与 compose 仍读旧名，实际效果是 sidecar 预算可被
+   调大而服务端不会多放行任何工作——「两侧同名同值」合同被改名本身破坏。
+3. **`schedule_due_attempt` 与 `lease_attempt` 双发送门**：同时存在时两侧可能对「哪个 attempt 被
+   退休」判断不一致，故发送门只保留 `lease_attempt` 一处，并用 AST 断言调用点集合。
+
+### 附带修掉的既有测试缺陷（非 E1 引入）
+
+`tests/test_rag_acceptance_bindings.py` 把 `PRAGMA busy_timeout` 调低到 100ms 后不恢复。
+该 PRAGMA 是**连接级**的，值随连接回到连接池并泄漏给后续测试，使
+`test_lease_expiring_while_actual_writeback_waits_for_sqlite_writer_is_not_adopted`
+（专门验证等待写者期间租约过期）在 `BEGIN IMMEDIATE` 直接抛错而非等待。已用 pre-E1 基线
+（984d8bc）确认该组合在基线上同样 3/3 失败，属既有缺陷；E1 只是改变了用例数、从而改变了
+后续测试拿到哪条连接。
+
+### Lessons
+
+- **「零发送」和「谁负责退休」是两个合同**：三个降级用例同时断言两者，失败信息看起来像
+  「零发送坏了」，实际坏的是退休。修之前先分辨是哪一条，否则会去放宽正确的断言。
+- **单候选的回归证明不了「跳过并继续」**：只有一个候选时，「退休被拦下的行」与「直接放弃」
+  不可区分；必须构造「被拦下的行 + 可租的兄弟」才能用变异测试证明 sweep 存在。
+- **结构性断言要落在真实不变量的数量上**：fence 调用点从 9 处收敛到 3 处是本次重构的收益，
+  用 AST 断言具名调用者集合，比注释描述更能阻止它漂回。
+- **只在全量运行中失败的用例优先怀疑测试间状态泄漏**：先在 pre-E1 基线上复现，能立刻区分
+  「我改坏了」与「既有缺陷」；本例是连接级 PRAGMA 泄漏。
+
+### Status
+
+[OK] **Completed**（已合并 main、归档、worktree 与 feat 分支已清理）
