@@ -1,14 +1,15 @@
-# Steward Pi child run 合同（S1 骨架，2026-09-25）
+# Steward Pi child run 合同（S1 骨架 + E1 执行单元，2026-09-25）
 
-> 适用任务：`09-25-steward-child-run-skeleton`（父设计 `09-25-steward-pi-child-run-design`）。
+> 适用任务：`09-25-steward-child-run-skeleton`（S1 骨架）、`09-25-steward-execution-unit`（E1 执行单元）；
+> 父设计 `09-25-steward-pi-child-run-design`。
 > 本文只定义一个可独立适用的合同：**Steward 的模型辅助由受限 Pi child run 执行**，
 > 与 Assistant 共享执行合同但**不共享队列**。
 
 ## 1. Scope / Trigger
 
-改动以下任一处前必读：`agent_runs` 的 kind 语义、`steward_runs`、`/internal/agent/steward/*`、
-`agent_execution.py` 的两个 fence、`agent_tokens` 的 run claims、sidecar 的槽位模型、
-`steward_assist.lease_child_run/settle_child_run/heartbeat_child_run`。
+改动以下任一处前必读：`agent_runs` 的 kind 语义、`steward_model_calls` 的执行列、
+`/internal/agent/steward/*`、`agent_execution.py` 的两个 fence、`agent_tokens` 的 run claims、
+sidecar 的槽位模型、`steward_assist` 的 `lease_attempt/settle_attempt/open_child_run/heartbeat_child_run`。
 
 ## 2. 队列红线（最容易被破坏的一条）
 
@@ -31,11 +32,14 @@ SESSION_AGENT_KINDS = ("assistant",)             # agent_sessions 只能这些
 - `agent_runs.kind IN ('assistant','steward')`；`session_id` 可空。
 - `ck_agent_runs_scope_binding`：`assistant` 必须有 session；`steward` 必须**无 session 且无 job**。
   这是 DB 拒绝的，不只是服务层约定。
-- `steward_runs`：`(run_id UNIQUE, steward_job_id, assist_batch_id?, assist_kind, viewer_account_id?)`。
-  `ck_steward_runs_viewer`：`(assist_kind='terminology') = (viewer_account_id IS NOT NULL)`
-  ——其余三类是空间级或按收件人分组，**不得伪造 viewer**。
-- `steward_model_calls.run_id` 是 **UNIQUE**（`ON DELETE SET NULL`）：一个 child run ↔ 恰好一行
-  attempt，否则结算无法判断结果属于哪一行。账本比执行记录活得久（prompt digest/计费可追溯）。
+- `steward_model_calls` **就是执行单元**（E1，迁移 `0055_steward_assist_execution_unit`）：
+  `lease_owner`/`lease_until`/`next_attempt_at`/`carrier` 在 attempt 上，不在 plan 上。
+  `plan_id` 指向 `steward_assist_plans`（原 `steward_assist_batches`，收窄为不可变工作快照，无执行状态）。
+  `carrier CHECK IN ('inproc','pi')`；`INDEX ix_smc_due (status, next_attempt_at)` 供租约选行。
+- **不存在 `steward_runs` 窄表**：child run 与 attempt 的绑定就是
+  `steward_model_calls.run_id`，且它是 **UNIQUE**（`ON DELETE SET NULL`）：一个 child run ↔ 恰好一行
+  attempt，否则结算无法判断结果属于哪一行。`job_id`/`assist_kind`/`viewer_account_id` 已在 attempt 上，
+  反查是一次索引读，不需要第二张表同步。账本比执行记录活得久（prompt digest/计费可追溯）。
 - `context_builds.account_id` 可空 + `ck_context_builds_account_binding`（assistant 非空、
   steward 为空）。**父设计「无需改 context_builds」是错的**：该列原本 NOT NULL，空间级
   steward 投影无法记录。
@@ -57,7 +61,7 @@ fence_execution(db, identity, ...)             # 只按**类型**分派，不做
 - **不要合并成一个按 kind 分支的函数**：漏掉一支里的一个检查就是静默后门，且一套矩阵无法
   同时证明两支。`StewardExecution` 没有 `account_id`，所以写不出「按账号授权 steward」的代码。
 - steward 的授权根是**父 `StewardJob`**：父 job 必须 active；空间必须存在；`viewer_account_id`
-  非空时该账号的 user 必须仍是 active 成员；batch 绑定时 batch 必须 leased/applying。
+  非空时该账号的 user 必须仍是 active 成员；attempt 绑定时 attempt 必须 leased（`in_flight`）。
 - 分层判据的**残留风险**（已裁定接受）：空间级处理不因单个用户撤权而停止，撤权收敛上界是
   一个维护 tick 而非下一次内部请求。回归必须证明撤权在一个 tick 内收敛。
 - 回归矩阵：`tests/test_agent_execution_fence.py`（39 用例，两条 fence 各自完整）。该文件用
@@ -75,16 +79,17 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
 
 - assistant **必须**给 `account_id` 且**不得**给 steward 专属字段；steward **必须不**给
   `account_id`。少给或多给都 fail-closed（宁可签不出来，也不签语义含混的 token）。
-- steward 可选 claims：`steward_batch_id`、`viewer_account_id`（缺失或正整数，其他类型拒绝）。
+- steward 可选 claims：`steward_attempt_id`（= `StewardModelCall.id`）、`viewer_account_id`
+  （缺失或正整数，其他类型拒绝）。旧名 `steward_batch_id` 对应已被 E1 移除的批次。
 - `decode_run_token` 先按 kind 取必含集再校验；顺序反了会用一个宽集合放过语义错配。
 
 ## 6. Internal 协议
 
 | 端点 | steward 行为 |
 |---|---|
-| `POST /internal/agent/steward/jobs/lease` | **独立端点**，`STEWARD_ENABLED` **AND** `STEWARD_PI_RUNTIME_ENABLED` 双开关 503；无可租 204 |
+| `POST /internal/agent/steward/attempts/lease` | **独立端点**，`STEWARD_ENABLED` **AND** `STEWARD_PI_RUNTIME_ENABLED` 双开关 503；无可租 204 |
 | `POST /internal/agent/jobs/lease` | **保持 `kind="assistant"`**，不放开 |
-| `POST /jobs/{id}/heartbeat` | steward 分支**同一立即事务**内同时续 run 与 batch lease |
+| `POST /jobs/{id}/heartbeat` | steward 分支**同一立即事务**内同时续 run 与 attempt lease |
 | `GET /runs/{id}/context` | `session_id`/`account_id` 为 null、`messages: []`、带 `steward_prompt_version` |
 | `POST /runs/{id}/events/append` | `run.kind == 'steward'` 时**拒绝消息类事件**（422） |
 | `POST /runs/{id}/settle` | steward 分支经 `settle_run(on_settled=...)` **同事务**结算 attempt |
@@ -138,12 +143,15 @@ prompt 文本住在 sidecar 镜像里，服务端不再持有文本，因此 `pr
 ## 10. 部署
 
 `agent` 服务新增 `FG_AGENT_ROLE`（缺失默认 `assistant`，未知值 **fail fast**）、
-`AGENT_MAX_CONCURRENT_RUNS`（默认 2）、`STEWARD_ASSIST_MAX_CONCURRENT_BATCHES`（默认 1）、
-`STEWARD_PI_RUNTIME_ENABLED`（默认 0）。**不新增容器/端口/卷。**
+`AGENT_MAX_CONCURRENT_RUNS`（默认 2）、`STEWARD_PI_RUNTIME_ENABLED`（默认 0）。
+**不新增容器/端口/卷。**
 
-`STEWARD_ASSIST_MAX_CONCURRENT_BATCHES` 在 api 与 agent **两侧同名同值**：服务端决定放行几个
-batch，sidecar 决定能跑几个，不一致会让 batch「已预留 attempt 但无人执行」。sidecar 另从
-lease 响应读取服务端当前值作纠错（只上调不下调），但**广播是纠错机制，不替代两侧配置**。
+E1 把并发作用域从「全库批次」改为「每空间 attempt」：后端用
+`STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE`（默认 2，上界 8），旧值
+`STEWARD_ASSIST_MAX_CONCURRENT_BATCHES`（全库 1）已废弃——它让 20 个空间同时只能有一个在跑。
+sidecar 侧对应 `STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE`（同名同默认）：服务端决定放行几个
+attempt，sidecar 决定能跑几个，不一致会让 attempt「已预留但无人执行」。sidecar 另从 lease 响应读取
+服务端当前值作纠错（只上调不下调），但**广播是纠错机制，不替代两侧配置**。
 
 部署顺序：backend 先于 sidecar（后端对未注册事件类型返回 422）。回退顺序相反。
 回退：`FG_AGENT_ROLE=assistant` + `STEWARD_PI_RUNTIME_ENABLED=0`；迁移不回退。
@@ -161,12 +169,26 @@ AGENT_SERVICE_SECRET=x SECRET_KEY=y ADMIN_JWT_AUDIENCE=a ADMIN_JWT_SECRET=b ADMI
   docker compose config --quiet
 ```
 
-关键回归入口：`tests/test_steward_child_run_migration.py`（守卫/形状/往返）、
+关键回归入口：`tests/test_steward_execution_unit_migration.py`（E1 迁移守卫/形状/往返）、
+`tests/test_steward_child_run_migration.py`（S1 守卫/形状/往返）、
 `tests/test_agent_execution_fence.py`（两条 fence 矩阵）、`tests/test_steward_child_run_acceptance.py`
-（行为等价 + 受控 E2E）、`agent/test/worker-slots.test.ts`（槽位隔离四条）、
+（行为等价 + 受控 E2E + E1 发送门与 fence 调用点断言）、`agent/test/worker-slots.test.ts`（槽位隔离四条）、
 `agent/test/poll-scheduling.test.ts`（调度与槽位预算）。
 
-## 12. Wrong vs Correct
+## 12. E1 执行单元不变量（违反会静默停摆）
+
+- **发送门唯一且必须 sweep**：`_fence_check` 只允许三个调用点——`lease_attempt`（发送门）、
+  `settle_attempt`（写回门）、`recover_stuck_attempts`（补做被中断的写回）；AST 断言在
+  `test_steward_child_run_acceptance.py::test_the_write_back_fence_has_exactly_two_call_sites`。
+  发送门遇到被栅栏拦下的 attempt 必须**当场退休为 `skipped` + 安全原因码并继续看下一个候选**，
+  不得直接返回：没有别的地方会再租它，留在 `reserved` 会让本空间永远看起来有活干，
+  且 `plan_error_code` 永远为空（原因码只有栅栏跑过才存在）。
+- **plan 无状态**：`steward_assist_plans` 是不可变快照。「这批工作结果如何」一律由
+  `plan_outcome` / `plan_error_code` 从 attempt 派生，派生规则逐条复现旧 `_apply_batch` 的终态码。
+- **HTTP 不在写事务内**：发送所需的 runtime/投影/输出上界在租约事务内读出并放进 grant，
+  出事务后才发送；载体 `execute` 不读不写数据库。
+
+## 13. Wrong vs Correct
 
 ### Wrong
 
@@ -187,6 +209,13 @@ settle_run(db, run, status=body.status)
 steward_assist.settle_child_run(db, run, status=body.status)
 ```
 
+```python
+# 发送门只取一行：被栅栏拦下的 attempt 永不退休，本空间永远停在 reserved。
+attempt = db.scalar(select(StewardModelCall).where(...).limit(1))
+if _fence_check(db, plan, attempt, attempt.assist_kind) is not None:
+    return None        # 兄弟 attempt 也被一并堵住，且 plan_error_code 永远为空
+```
+
 ### Correct
 
 ```python
@@ -201,5 +230,15 @@ if (slot !== undefined && !slot.pending && !slot.cancelRequested) { ... }
 
 ```python
 settle_run(db, run, status=body.status, execution=identity,
-           on_settled=lambda s, r: steward_assist.settle_child_run(s, r, status=body.status))
+           on_settled=lambda s, r: steward_assist.settle_attempt(
+               s, attempt_id=attempt_id, status=body.status, lease_owner=owner))
+```
+
+```python
+for attempt in candidates:                    # 发送门：退休并继续，而不是放弃
+    reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+    if reason is not None:
+        attempt.status = "skipped"; attempt.error_code = reason
+        continue
+    break
 ```
