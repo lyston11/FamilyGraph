@@ -12,10 +12,10 @@
 
 | 端点 | 认证 | 请求 | 响应 |
 |---|---|---|---|
-| POST /internal/agent/jobs/lease | service token | `{kind="assistant", leased_by, lease_ttl_seconds?}`；HTTP 端点只服务 Assistant sidecar；Steward child run 走**独立端点** `/internal/agent/steward/jobs/lease`（见 [steward-child-run.md](steward-child-run.md)），不放开本端点的 kind | 200 平铺 `{job_id,run_id,agent_kind,attempt,tool_allowlist,policy_version,run_token}`；无可租 **204 空 body** |
+| POST /internal/agent/jobs/lease | service token | `{kind="assistant", leased_by, lease_ttl_seconds?}`；HTTP 端点只服务 Assistant sidecar；Steward child run 走**独立端点** `/internal/agent/steward/attempts/lease`（见 [steward-child-run.md](steward-child-run.md)），不放开本端点的 kind | 200 平铺 `{job_id,run_id,agent_kind,attempt,tool_allowlist,policy_version,run_token}`；无可租 **204 空 body** |
 | POST /internal/agent/jobs/{job_id}/heartbeat | run token | `{}` | `{ok:true, lease_expires_at, cancel_requested}` |
 | GET /internal/agent/runs/{id}/context | run token | — | ContextOut（messages 为 `{id,role,content_json,created_at}`；provider.policy_result ∈ allowed/denied/denied_no_local/denied_cloud_forbidden；allowed 时 `base_url` 为**站内代理路径** `/internal/agent/runs/{id}/provider`，`api_key` 恒为 null——真实凭据/base_url 不出服务端） |
-| POST /internal/agent/runs/{id}/provider/chat/completions 或 `/responses` | run token | 对应 Pi OpenAI adapter 的 JSON object body；空/非法/非 object 422 | ProviderGateway 代理（**唯一 egress**）：服务端 `resolve_runtime` 解密转发至已注册 Provider，成功流式透传 + `agent_provider_egress` 字节审计；上游错误一律 502 脱敏通用体，Run 非活跃或 `cancel_requested` 409，解析/解密失败 503 `AGENT_PROVIDER_PROXY_UNAVAILABLE`（fail-closed，绝不回退 sidecar env） |
+| POST /internal/agent/runs/{id}/provider/chat/completions 或 `/responses` | run token（**两个 kind 都可达**） | 对应 Pi OpenAI adapter 的 JSON object body（**必须流式**）；空/非法/非 object 422 | ProviderGateway 代理（**唯一 egress**）：服务端 `resolve_runtime` 解密转发至已注册 Provider（**解析必须带 run 自己的 kind**），成功流式透传 + `agent_provider_egress` 字节审计；上游错误一律 502 脱敏通用体，Run 非活跃或 `cancel_requested` 409，解析/解密失败 503 `AGENT_PROVIDER_PROXY_UNAVAILABLE`（fail-closed，绝不回退 sidecar env） |
 | POST /internal/agent/runs/{id}/events/append | run token | `{events:[{seq,type,public_payload}]}` | `{accepted:[{seq,event_id}], duplicates:[int]}`（(run_id,seq) 幂等） |
 | POST /internal/agent/runs/{id}/tools/{tool}/execute | run token | `{version,input,tool_call_id?}` | `{ok:true, tool, version, output}` |
 | POST /internal/agent/runs/{id}/settle | run token | `{status:"succeeded"\|"failed", error_code?, error?}`（**不接受 cancelled**——取消由服务端裁决） | SettleOut |
@@ -195,6 +195,7 @@
 - **解析顺序（services/agent_provider.resolve_for_space，agent_kind 参数 fail-closed）**：空间显式行 → 平台默认回退（虚拟 setting，`cloud_allowed=False`/`local_required=False`——默认只决定通道档位，云同意仍归 owner；云默认在 owner 同意前 `denied_cloud_forbidden`）→ `POLICY_DENIED(no_space_setting)`。`platform_default_configured` 随 `PROVIDER_UNRESOLVED` detail 下发，供前端两态文案（通道未配置 vs 空间未选/未同意云）。
 - 策略在消息创建时前置门禁：非 allowed → 409 可解释错误（PROVIDER_UNRESOLVED / PROVIDER_LOCAL_REQUIRED_UNAVAILABLE），**绝不静默换云**。
 - P1 唯一 egress：sidecar 不持 api_key、不直连云端；模型请求经上表代理端点（run token 作 Bearer），`resolve_runtime` 为唯一解密出口。compose 中 agent 容器无外网（backend 网络 `internal:true`），外网 egress 仅 api 容器。sidecar 流重试经 `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS` 注入 pi-ai（5xx/408/409/429 指数退避）。
+- **网关对两个 kind 都可达**：授权按 token 的 kind 分派（`_authorize_provider_run`），但两套检查集仍独立；`resolve_runtime` / `resolve_for_run` **必须带 run 自己的 kind**，否则 steward run 会读到 assistant 的空间设置并报出「云被禁止」这类**看似合理**的拒绝。结构性断言：`test_no_remaining_provider_resolution_defaults_to_the_assistant_kind`。
 
 ### 错误分类与分层重试（09-17 E 建立）
 

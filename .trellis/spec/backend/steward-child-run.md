@@ -87,12 +87,13 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
 
 | 端点 | steward 行为 |
 |---|---|
-| `POST /internal/agent/steward/attempts/lease` | **独立端点**，`STEWARD_ENABLED` **AND** `STEWARD_PI_RUNTIME_ENABLED` 双开关 503；无可租 204 |
+| `POST /internal/agent/steward/attempts/lease` | **独立端点**，`STEWARD_ENABLED` **AND** `STEWARD_PI_RUNTIME_ENABLED` 双开关 503；无可租 204。`space_id` **可选**：省略时服务端选一个有容量且有到期工作的空间（sidecar 不知道空间拓扑）——**不回退到全库 1**，预算仍是 per-space 且会跳过已满的空间 |
 | `POST /internal/agent/jobs/lease` | **保持 `kind="assistant"`**，不放开 |
 | `POST /jobs/{id}/heartbeat` | steward 分支**同一立即事务**内同时续 run 与 attempt lease |
-| `GET /runs/{id}/context` | `session_id`/`account_id` 为 null、`messages: []`、带 `steward_prompt_version` |
+| `GET /runs/{id}/context` | `session_id`/`account_id` 为 null、`messages: []`、带 `steward_prompt_version` 与 `steward_instructions` |
 | `POST /runs/{id}/events/append` | `run.kind == 'steward'` 时**拒绝消息类事件**（422） |
-| `POST /runs/{id}/settle` | steward 分支经 `settle_run(on_settled=...)` **同事务**结算 attempt |
+| `POST /runs/{id}/provider/*` | **两个 kind 都可达**（唯一 egress）；授权按 token 的 kind 分派，provider 解析带 run 自己的 kind |
+| `POST /runs/{id}/settle` | steward 分支经 `settle_run(on_settled=...)` **同事务**结算 attempt（phase 1）；产物写回是 phase 2，在 run 事务提交后（见 §12） |
 | `POST /runs/{id}/tools/{tool}/execute` | 复用；allowlist 按 kind |
 
 - **为什么独立端点而不是放开 `LeaseRequest.kind`**：「哪个容器能租哪类作业」必须是**路由级**
@@ -117,11 +118,19 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
 - `toolNamesFor(kind)`：steward 在 S1 为**空集**，且必须显式空而非「assistant 减去黑名单」，
   否则新增 assistant 工具会默认成为 steward 工具。
 
-## 8. prompt 版本（跨层字面量）
+## 8. prompt 文本与版本（跨层字面量）
 
-prompt 文本住在 sidecar 镜像里，服务端不再持有文本，因此 `prompt_version()` 的哈希不再能锚定
-评测报告。现行合同：
+**prompt 文本由服务端拥有**（E2/E3 修正）。sidecar 不再持有 steward system prompt：
 
+- 进程内载体发送 `steward_assist._PROMPTS[kind]` 作为 system message；
+- `prompt_digest` 是 `sha256(f"{instructions}\n{user_content}")`；
+- 因此 context 投影必须原样下发同一段文本（`steward_instructions`），Pi 载体发送它。
+  只发一段通用的 steward prompt 会让两个载体问出**不同的问题**，而记录的 digest 却声称一致——
+  对 candidate 这类是承重的：方向语义与矛盾规则就住在那段文本里，输出校验器是第二道防线而非替代品。
+- 回归：`test_steward_child_run_acceptance.py::test_both_carriers_send_the_same_prompt_text`
+  用投影里拿到的东西**重建 digest**，因此「两侧发同一件事」是可检验的而不是声明。
+- sidecar **不得**保留本地 steward prompt 作 fallback（S1 曾有）：它会被发送**代替**服务端文本，
+  反而掩盖差异。`agent/src/prompts/steward.ts` 只导出 `STEWARD_PROMPT_VERSION`。
 - `steward_assist.STEWARD_PROMPT_VERSION` 是锚点，经 context 投影下发给 sidecar；
 - sidecar `STEWARD_PROMPT_VERSION` 不匹配时 **fail-closed**（不建 session、不发模型请求）；
 - 两侧**逐字断言**该字面量（`test_agent_execution_fence.py` 与 `agent/test/worker-slots.test.ts`），
@@ -129,6 +138,33 @@ prompt 文本住在 sidecar 镜像里，服务端不再持有文本，因此 `pr
 - prompt cache key 按 kind 派生：assistant 保持 `fg-${account_id}-${session_id}`；
   steward 用 `fg-steward-${space_id}`（assistant 公式对 steward 会得出 `fg-null-null`，
   让不相关空间共享同一上游缓存前缀）。
+
+## 8.1 sidecar 的 kind 差异只允许住在一个适配器里（E2）
+
+`agent/src/adapters/kind.ts` 的 `KindAdapter` 是**唯一**知道两个 kind 差异的地方：
+`systemPrompt` / `modelPrompt` / `toolNames` / `slotBudget` / `cacheKey` / `emptyToolAllowlistIsInvalid` /
+`verifyProjection` / `adoptsServerConcurrency` / `reportsProductOnSettle` / `extractProduct` /
+`leaseRequest` / `decodeLease`。`executeJob` 与 `buildRunSession` 只依赖接口。
+
+- **结构性断言**：`agent/test/adapters-kind.test.ts` 读 `worker.ts`/`session.ts`/`client.ts`/`events.ts`，
+  出现新的 `kind === "assistant"|"steward"` 比较即失败（变异测试验证）。
+- **租约路由由适配器给出**：steward 打 `/internal/agent/steward/attempts/lease`，且 body **不含** `space_id`
+  ——sidecar 不知道空间拓扑，由服务端选一个有容量且有到期工作的空间（见 §6）。
+- **产物路由由适配器声明**：`reportsProductOnSettle`。child run 拒绝消息类事件，所以 settle 是产物的
+  唯一路径；不携带会让服务端在 `_settle_attempt` 的 `assert text is not None` 处失败。
+
+## 8.2 网关（唯一 egress）对两个 kind 都必须可达（E3）
+
+`/internal/agent/runs/{id}/provider/*` 是**唯一** egress，因此 steward child run 必须能到达它：
+
+- 授权按 token 的 kind 分派（`_authorize_provider_run`），两套检查集仍然独立；
+  assistant token 打 steward run 得 **404**（该身份看不到这个 run），不是 500。
+- **`resolve_runtime` 与 `resolve_for_run` 都必须带 run 自己的 kind**：两个 kind 有独立的空间设置，
+  按 assistant 解析 steward run 会读到不存在的配置，报「provider 不可用」或「云被禁止」——
+  一个**看似合理**的答案而不是错误，所以 review 抓不到。结构性断言见
+  `test_no_remaining_provider_resolution_defaults_to_the_assistant_kind`（变异测试验证）。
+- 经网关是 child run 唯一能拿到 `agent_provider_egress` 审计的路径（进程内载体直连 provider，无审计）；
+  审计行以 **child run id** 为 `target_id`。
 
 ## 9. 隔离与可观测性
 
@@ -172,21 +208,42 @@ AGENT_SERVICE_SECRET=x SECRET_KEY=y ADMIN_JWT_AUDIENCE=a ADMIN_JWT_SECRET=b ADMI
 关键回归入口：`tests/test_steward_execution_unit_migration.py`（E1 迁移守卫/形状/往返）、
 `tests/test_steward_child_run_migration.py`（S1 守卫/形状/往返）、
 `tests/test_agent_execution_fence.py`（两条 fence 矩阵）、`tests/test_steward_child_run_acceptance.py`
-（行为等价 + 受控 E2E + E1 发送门与 fence 调用点断言）、`agent/test/worker-slots.test.ts`（槽位隔离四条）、
-`agent/test/poll-scheduling.test.ts`（调度与槽位预算）。
+（行为等价 + 受控 E2E + 发送门与 fence 调用点断言）、
+`tests/test_steward_pi_carrier_terminology.py`（**载体等价** + 网关可达 + egress 审计 + 崩溃收敛 + 回退无孤儿）、
+`tests/test_steward_pi_carrier_remaining_kinds.py`（candidate/ranking/explanation 的每 kind 围栏与等价）、
+`agent/test/adapters-kind.test.ts`（适配器每条差异 + 无残留 kind 分支）、
+`agent/test/client.test.ts`（租约路径/请求体与 settle 产物形状）、
+`agent/test/worker-slots.test.ts`（槽位隔离四条）、`agent/test/poll-scheduling.test.ts`（调度与槽位预算）。
 
-## 12. E1 执行单元不变量（违反会静默停摆）
+## 12. 执行单元不变量（违反会静默停摆）
 
 - **发送门唯一且必须 sweep**：`_fence_check` 只允许三个调用点——`lease_attempt`（发送门）、
-  `settle_attempt`（写回门）、`recover_stuck_attempts`（补做被中断的写回）；AST 断言在
+  `record_attempt_outcome`（写回门；`settle_attempt` 为不持锁的调用方包装它）、
+  `recover_stuck_attempts`（补做被中断的写回）；AST 断言在
   `test_steward_child_run_acceptance.py::test_the_write_back_fence_has_exactly_two_call_sites`。
   发送门遇到被栅栏拦下的 attempt 必须**当场退休为 `skipped` + 安全原因码并继续看下一个候选**，
   不得直接返回：没有别的地方会再租它，留在 `reserved` 会让本空间永远看起来有活干，
   且 `plan_error_code` 永远为空（原因码只有栅栏跑过才存在）。
+- **发送门必须按 carrier 选行**：attempt 只能由它声明的载体执行。不过滤会让进程内调度泵
+  租到 `pi` attempt（sidecar 永远看不到它），置为 `in_flight` 后卡到租约过期、以 `unknown`
+  保守计费结束，白花一次调用额度。
 - **plan 无状态**：`steward_assist_plans` 是不可变快照。「这批工作结果如何」一律由
   `plan_outcome` / `plan_error_code` 从 attempt 派生，派生规则逐条复现旧 `_apply_batch` 的终态码。
 - **HTTP 不在写事务内**：发送所需的 runtime/投影/输出上界在租约事务内读出并放进 grant，
   出事务后才发送；载体 `execute` 不读不写数据库。
+- **结算分两阶段，且第一阶段必须能在别人的事务里跑**（E3）：
+  - phase 1 = `record_attempt_outcome`（**调用方持锁**）：校验租约 → 计费/状态 → 封闭校验 →
+    写回栅栏。Pi 路径在 `settle_run` 的 `on_settled` 里调它，因为 run 终态与 attempt 结果
+    必须原子可见（否则留下「run succeeded / attempt 仍 in_flight」的双终态）。
+    `_immediate_tx` **拒绝嵌套**，所以 hook 不能调会自己开事务的 `settle_attempt`。
+  - phase 2 = `apply_settled_attempt`（**自有事务**，幂等，`applied_at` 为门）：应用产物。
+    在 run 事务提交后调用；失败则产物已持久化但未应用，正是崩溃点④，由
+    `recover_stuck_attempts` 补做。合并两阶段会让写回失败连已付费的模型答案一起回滚。
+  - phase 1 内的读必须在锁内（`Session.get` 会 autobegin，先读后锁会让函数无法从刚提交的
+    调用方使用）。
+- **child run 必须能自己收敛**：`recover_stuck_child_runs` 不得只置 `cancel_requested` 等别人裁决
+  ——`agent_queue.reaper_pass` 选 `AgentJob`，而 steward run 的 `job_id` 恒为 NULL，没有任何一方
+  会写终态。它在本函数内写 `expired`（不是 `cancelled`：没人请求过取消）。
 
 ## 13. Wrong vs Correct
 
@@ -210,6 +267,19 @@ steward_assist.settle_child_run(db, run, status=body.status)
 ```
 
 ```python
+# hook 里调会自己开事务的包装函数：_immediate_tx 拒绝嵌套，settle 直接报错。
+settle_run(db, run, status=...,
+           on_settled=lambda s, r: steward_assist.settle_attempt(s, attempt_id=...))
+```
+
+```python
+# 网关用默认 kind 解析 provider：steward run 读到 assistant 的空间设置，
+# 报「云被禁止」——一个看似合理的答案，而不是错误，review 抓不到。
+runtime = agent_provider.resolve_runtime(db, space_id, run=run)
+resolution = agent_provider.resolve_for_run(db, run, space_id)
+```
+
+```python
 # 发送门只取一行：被栅栏拦下的 attempt 永不退休，本空间永远停在 reserved。
 attempt = db.scalar(select(StewardModelCall).where(...).limit(1))
 if _fence_check(db, plan, attempt, attempt.assist_kind) is not None:
@@ -230,8 +300,16 @@ if (slot !== undefined && !slot.pending && !slot.cancelRequested) { ... }
 
 ```python
 settle_run(db, run, status=body.status, execution=identity,
-           on_settled=lambda s, r: steward_assist.settle_attempt(
+           on_settled=lambda s, r: steward_assist.record_attempt_outcome(
                s, attempt_id=attempt_id, status=body.status, lease_owner=owner))
+# phase 2 在 run 事务提交后：
+steward_assist.apply_settled_attempt(db, attempt_id=attempt_id)
+```
+
+```python
+# 解析带 run 自己的 kind：两个 kind 有独立的空间设置。
+runtime = agent_provider.resolve_runtime(db, space_id, run=run, agent_kind=run.kind)
+resolution = agent_provider.resolve_for_run(db, run, space_id, run.kind)
 ```
 
 ```python

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "sidecar 槽位模型、per-kind token、prompt 版本、内部协议"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "内部端点、事件注册表、run 状态机"}
