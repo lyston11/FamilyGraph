@@ -221,7 +221,11 @@ def _authorize_assistant_run(
             message="token 与目标 Run 不匹配",
         )
     run = db.get(AgentRun, run_id)
-    if run is None:
+    if run is None or run.kind != "assistant":
+        # Kind is checked before the session is touched: a steward run has no
+        # session, so reading it first would turn a scope violation into an
+        # assertion failure rather than a clean denial. (The steward authorizer
+        # makes the mirror-image check.)
         raise_api_error(404, AGENT_RUN_NOT_FOUND, "Run 不存在")
     agent_session = db.get(AgentSession, run.session_id)
     assert agent_session is not None
@@ -321,6 +325,26 @@ def _authorize_run(
     return _authorize_assistant_run(db, request, run_id)
 
 
+def _authorize_provider_run(
+    db: Session, request: Request, run_id: int
+) -> tuple[AgentRun, int, dict[str, Any]]:
+    """Authorize one gateway call from either kind, returning its space.
+
+    The gateway is the single egress, so both kinds must reach it: a steward child
+    run that is refused here has no way to make a model call at all, and its egress
+    would go unaudited. The token's kind decides which authorizer runs — the two
+    keep independent, complete check sets — and this function only resolves the
+    space each one anchors on (an assistant run's session, a steward run's claim).
+    """
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        run, _steward_claims = _authorize_steward_run(db, request, run_id)
+        return run, int(claims["space_id"]), claims
+    run, agent_session, _claims = _authorize_assistant_run(db, request, run_id)
+    return run, agent_session.space_id, _claims
+
+
 def _require_active_run(db: Session, request: Request, run: AgentRun) -> None:
     """Reject post-lease protocol writes once a Run has stopped being active."""
     if run.status not in ("queued", "leased", "running"):
@@ -411,8 +435,14 @@ def lease_steward_attempt(
     # （STEWARD_PI_RUNTIME_ENABLED）是两个独立的发布决策，必须能各自回退。
     if not (config.STEWARD_ENABLED and config.STEWARD_PI_RUNTIME_ENABLED):
         raise_api_error(503, STEWARD_DISABLED, "Steward Pi runtime 未开启")
+    from app.services.steward_carrier import CARRIER_PI
+
     grant = steward_assist.lease_attempt(
-        db, space_id=body.space_id, worker_id=body.leased_by, ttl_seconds=body.lease_ttl_seconds
+        db,
+        space_id=body.space_id,
+        worker_id=body.leased_by,
+        carrier=CARRIER_PI,
+        ttl_seconds=body.lease_ttl_seconds,
     )
     if grant is None:
         return Response(status_code=204)
@@ -507,8 +537,13 @@ async def proxy_provider_chat_completions(
     上游错误一律脱敏为通用错误体；成功响应（含 SSE 流）原样透传。
     """
     from app.services import provider_proxy
+    from app.services.agent_execution import execution_from_claims
 
-    run, agent_session, _claims = _authorize_run(db, request, run_id)
+    # Both kinds may call the gateway: it is the only egress, and a steward child
+    # run that cannot reach it has no way to make a model call at all. The token
+    # decides which authorization applies, and the kind assertion inside each
+    # authorizer keeps the two check sets from contaminating each other.
+    run, space_id, _claims = _authorize_provider_run(db, request, run_id)
     expected_api = (
         "openai-responses"
         if request.url.path.endswith("/provider/responses")
@@ -533,13 +568,13 @@ async def proxy_provider_chat_completions(
         client, upstream, provider_id, header_ms = await provider_proxy.stream_provider_response(
             db,
             run=run,
-            space_id=agent_session.space_id,
+            space_id=space_id,
             body=body,
             content_type=request.headers.get("content-type"),
             accept=request.headers.get("accept"),
             user_agent=request.headers.get("user-agent"),
             expected_api=expected_api,
-            execution=ExecutionIdentity.from_claims(_claims),
+            execution=execution_from_claims(_claims),
         )
     except provider_proxy.ProviderProxyError as exc:
         db.commit()  # 审计先提交（拒绝路径惯例）
@@ -954,6 +989,13 @@ def _steward_run_context(
         next_event_seq=agent_events.next_seq(db, run.id),
         cancel_requested=bool(run.cancel_requested),
         steward_prompt_version=steward_assist.STEWARD_PROMPT_VERSION,
+        # The in-process carrier sends this as the system message, so the child run
+        # must send the same text: it carries the per-kind rules (candidate
+        # direction semantics, ranking's strict permutation, terminology's
+        # non-invention clause), and ``prompt_digest`` is computed over it.
+        steward_instructions=steward_assist.instructions_for(attempt)
+        if attempt is not None
+        else None,
     )
     db.commit()
     return response
@@ -1020,7 +1062,7 @@ def _settle_steward_run(
         if attempt_id is None:
             outcome["status"] = None
             return
-        outcome["status"] = steward_assist.settle_attempt(
+        outcome["status"] = steward_assist.record_attempt_outcome(
             session,
             attempt_id=int(attempt_id),
             status=body.status,
@@ -1053,6 +1095,13 @@ def _settle_steward_run(
         )
         db.commit()
         raise
+    # Phase 2, outside the run's transaction: apply the product that phase 1 just
+    # made durable. A failure here leaves the product persisted and unapplied,
+    # which is crash point ④ and is what recover_stuck_attempts finishes — losing
+    # it would discard a paid-for model answer.
+    attempt_id = claims.get("steward_attempt_id")
+    if attempt_id is not None:
+        steward_assist.apply_settled_attempt(db, attempt_id=int(attempt_id))
     return SettleOut(
         ok=True,
         run_id=settled.id,

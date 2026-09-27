@@ -52,9 +52,10 @@ class StewardLeaseRequest(_Strict):
     """
 
     kind: Literal["steward"]
-    # 租约按空间取，因此请求必须指名空间：这正是「per-space 并发」的入口——
-    # 不带 space_id 就只能全库选一个，回到旧的全局 1 行为。
-    space_id: int = Field(gt=0)
+    # 省略时由服务端选一个有容量且有到期工作的空间。sidecar 没有空间拓扑，
+    # 也不该有：它要的是「有活就给我一件」，选谁交出去是服务端的裁决，与
+    # ``/jobs/lease`` 对 assistant 队列的做法一致。显式给定时行为不变（测试与定向排空）。
+    space_id: int | None = Field(default=None, gt=0)
     leased_by: str = Field(min_length=1, max_length=120)
     lease_ttl_seconds: int | None = Field(default=None, ge=30, le=3600)
 
@@ -155,6 +156,14 @@ class ContextOut(BaseModel):
     # of server-side text) is the evaluation anchor; a mismatch must fail closed
     # rather than silently run stale prompt text against a newer backend.
     steward_prompt_version: str | None = None
+    # Steward only: the per-kind instruction block the server owns. The in-process
+    # carrier sends it as the system message, so a Pi child run must send the same
+    # text or the two carriers ask the model different questions — and
+    # ``prompt_digest``, which is computed over this text plus the projection,
+    # would describe a prompt nobody sent. It is the load-bearing part of the
+    # contract: the candidate kind's direction semantics and conflict rules live
+    # here, and the output validator is a second line rather than a substitute.
+    steward_instructions: str | None = None
 
 
 # ---- events ----

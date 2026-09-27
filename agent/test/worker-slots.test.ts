@@ -34,7 +34,7 @@ function leasedJob(kind: AgentKind, runId: string) {
     policy_version: "pv",
     run_token: `tok-${runId}`,
     ...(kind === "steward"
-      ? { steward_job_id: "1", steward_batch_id: "2", assist_kind: "terminology", max_concurrent: 1 }
+      ? { steward_job_id: "1", steward_attempt_id: "2", assist_kind: "terminology", max_concurrent: 1 }
       : {}),
   };
 }
@@ -351,19 +351,18 @@ describe("tool and prompt isolation between kinds", () => {
     expect(toolNamesFor("assistant").filter((name) => steward.has(name))).toEqual([]);
   });
 
-  it("uses a different system prompt and cache key per kind", async () => {
-    const { ASSISTANT_SYSTEM_PROMPT } = await import("../src/prompt.js");
-    const { STEWARD_SYSTEM_PROMPT, STEWARD_PROMPT_VERSION } = await import(
-      "../src/prompts/steward.js"
-    );
-    // Reusing the assistant prompt would invite prose answers where the server
-    // expects a closed schema.
-    expect(STEWARD_SYSTEM_PROMPT).not.toEqual(ASSISTANT_SYSTEM_PROMPT);
-    expect(STEWARD_SYSTEM_PROMPT).toContain("结构化");
+  it("keeps the cross-layer prompt version literal verbatim", async () => {
+    const { STEWARD_PROMPT_VERSION } = await import("../src/prompts/steward.js");
     // Cross-side literal, asserted verbatim: the server compares this exact
     // string, so a rename on one side must fail here rather than silently
     // reject every steward run at runtime (the typ-drift failure mode).
     expect(STEWARD_PROMPT_VERSION).toBe("steward-v1");
+    // There is deliberately no local steward system prompt: the server owns the
+    // text and sends it in the projection, so both carriers send the same thing
+    // and prompt_digest describes what was actually asked. A local copy would be
+    // sent instead of the server's text.
+    const module = await import("../src/prompts/steward.js");
+    expect(Object.keys(module)).toEqual(["STEWARD_PROMPT_VERSION"]);
   });
 
   it("rejects a steward context whose prompt version does not match this image", async () => {

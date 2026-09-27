@@ -71,6 +71,24 @@ describe("InternalClient protocol behavior", () => {
           });
         }
         if (req.url === "/internal/agent/jobs/empty/lease") return respond(404, {});
+        if (req.url === "/internal/agent/steward/attempts/lease") {
+          // The steward route and body are different from the assistant's: it
+          // leases an attempt (not a queue job) and must NOT carry a space_id,
+          // because the sidecar has no view of the space topology.
+          seenLeaseBodies.push(await readBody());
+          return respond(200, {
+            run_id: 52,
+            steward_job_id: 53,
+            assist_attempt_id: 54,
+            assist_kind: "terminology",
+            agent_kind: "steward",
+            attempt: 1,
+            tool_allowlist: [],
+            policy_version: "pv-9",
+            max_concurrent: 2,
+            run_token: "steward-tok",
+          });
+        }
         if (req.url === "/internal/agent/runs/r1/context") {
           if (auth !== "Bearer run-tok") return respond(401, { detail: "nope" });
           return respond(200, {
@@ -192,6 +210,43 @@ describe("InternalClient protocol behavior", () => {
     expect(leaseLine).toMatch(
       /^POST \/internal\/agent\/jobs\/lease Bearer ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
     );
+  });
+
+  it("leases a steward attempt from its own route with no space_id", async () => {
+    // This is the hop E1 broke and no test covered: the backend renamed the route
+    // to /steward/attempts/lease and made space_id optional (the server picks the
+    // space), while the sidecar kept calling /steward/jobs/lease with the old
+    // body. The Pi carrier therefore could not lease at all.
+    const client = new InternalClient(testConfig(port));
+    const job = await client.leaseJob("steward");
+
+    expect(job).not.toBeNull();
+    expect(job).toMatchObject({
+      agent_kind: "steward",
+      steward_job_id: "53",
+      steward_attempt_id: "54",
+      assist_kind: "terminology",
+      max_concurrent: 2,
+      run_token: "steward-tok",
+    });
+    expect(seenLeaseBodies).toContainEqual({ kind: "steward", leased_by: "sc-unit" });
+    const leaseLine = seenAuthHeaders.find((l) => l.includes("/steward/attempts/lease"));
+    expect(leaseLine).toMatch(
+      /^POST \/internal\/agent\/steward\/attempts\/lease Bearer ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+    );
+  });
+
+  it("rejects a malformed steward lease instead of running it", async () => {
+    // max_concurrent sizes the local slot budget; without it the sidecar would
+    // either guess or refuse every steward lease.
+    const client = new InternalClient(testConfig(port), {
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({ agent_kind: "steward", steward_job_id: 53, run_id: 52 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )) as typeof fetch,
+    });
+    await expect(client.leaseJob("steward")).rejects.toThrow(/max_concurrent/);
   });
 
   it("returns null on HTTP 204 with empty body when queue is empty", async () => {
@@ -498,11 +553,18 @@ describe("InternalClient protocol behavior", () => {
     });
     await client.settleRun("r1", "run-tok", "failed", { code: "PROVIDER_DENIED", message: "no" });
     await client.settleRun("r1", "run-tok", "succeeded");
+    // A kind whose product cannot travel through message events (child runs
+    // refuse them) reports it here. Omitting it made the server assert on a
+    // missing text, so the first steward child run would fail at settlement.
+    await client.settleRun("r1", "run-tok", "succeeded", undefined, {
+      output_text: '{"items":[]}',
+    });
     expect(bodies[0]).toEqual({
       status: "failed",
       error_code: "PROVIDER_DENIED",
       error: { message: "no" },
     });
     expect(bodies[1]).toEqual({ status: "succeeded" });
+    expect(bodies[2]).toEqual({ status: "succeeded", output_text: '{"items":[]}' });
   });
 });

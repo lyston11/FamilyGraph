@@ -47,6 +47,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app import config
+from app.errors import AGENT_LEASE_EXPIRED
 from app.models.account import Account
 from app.models.agent import AgentRun
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
@@ -534,6 +535,22 @@ def _visible_context(db: Session, space_id: int) -> ProjectionContext:
 # context 投影里上报它实际加载的版本，不匹配时 fail-closed。这同时防止「镜像过期、
 # 跑着旧 prompt 对上新后端」的静默漂移（与 memory #244 的 typ 漂移同一类教训）。
 STEWARD_PROMPT_VERSION = "steward-v1"
+
+
+def instructions_for(attempt: StewardModelCall) -> str:
+    """The per-kind instruction block for one attempt.
+
+    The in-process carrier sends this as the system message. A Pi child run must
+    send the same text, because it is not decoration: the candidate kind's
+    direction semantics and conflict rules live here, and ``prompt_digest`` is
+    computed over ``f"{instructions}\\n{user_content}"``. A carrier that sent only
+    the sidecar's generic system prompt would ask the model a different question
+    while the recorded digest claimed otherwise.
+
+    Empty string rather than None for an unknown kind: the projection field stays
+    a string, and the caller can tell "no instructions" from "no attempt" (None).
+    """
+    return _PROMPTS.get(attempt.assist_kind, "")
 
 
 def prompt_version() -> str:
@@ -1361,29 +1378,42 @@ def _reserve_plan_attempts(
         _advance_kind_cursor(db, plan.space_id, reserved_kinds[0], now)
 
 
-def lease_attempt(
-    db: Session, *, space_id: int, worker_id: str, ttl_seconds: int | None = None
-) -> dict[str, Any] | None:
-    """租一个到期 attempt 给一个执行载体（**无网络调用**）。
+def _spaces_holding_due_work(db: Session, *, now: Any, carrier: str) -> list[int]:
+    """Spaces holding a due reserved attempt for this carrier, earliest first.
 
-    与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
-    （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
-    ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
+    Used when the caller cannot name a space. The sidecar has no view of the
+    space topology and must not grow one: it asks for work and the server
+    decides whose work to hand out, exactly as ``/jobs/lease`` does for the
+    assistant queue. Ordering by the earliest due attempt keeps a space that has
+    been waiting longest from being starved by a busier one.
 
-    fence 在租约时重验一次（发送前的 TOCTOU 关口），并且是**唯一的**发送门：栅栏不过的
-    attempt 在这里落 ``skipped``（带安全原因码），循环继续看下一个候选，因此一个被栅栏
-    拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
-    一直看起来有活干。
-
-    返回 None 表示本空间没有可租 attempt（或全部被栅栏拦下）。grant 供 internal 端点签发 run token。
+    Scoped to one carrier because an attempt belongs to the executor it names:
+    offering a ``pi`` attempt to the in-process pump would strand it (see
+    ``lease_attempt``).
     """
-    from app.services.steward import _immediate_tx
+    rows = db.execute(
+        select(StewardModelCall.space_id, func.min(StewardModelCall.next_attempt_at))
+        .where(
+            StewardModelCall.status == "reserved",
+            StewardModelCall.carrier == carrier,
+            StewardModelCall.next_attempt_at.is_not(None),
+            StewardModelCall.next_attempt_at <= now,
+        )
+        .group_by(StewardModelCall.space_id)
+        .order_by(func.min(StewardModelCall.next_attempt_at).asc(), StewardModelCall.space_id.asc())
+    ).all()
+    return [int(row[0]) for row in rows]
 
-    now = timeutil.utcnow()
-    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
-    with _immediate_tx(db):
-        db.expire_all()
-        in_flight = db.scalar(
+
+def _in_flight_for_space(db: Session, *, space_id: int, now: Any) -> int:
+    """Live (unexpired) in-flight attempts of one space.
+
+    Expired leases deliberately do not count: a crashed executor leaves the row
+    reading ``in_flight`` until recovery reclaims it, and counting that row would
+    let one crash permanently consume the space's capacity.
+    """
+    return int(
+        db.scalar(
             select(func.count())
             .select_from(StewardModelCall)
             .where(
@@ -1392,12 +1422,69 @@ def lease_attempt(
                 StewardModelCall.lease_until > now,
             )
         )
-        if int(in_flight or 0) >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:
+        or 0
+    )
+
+
+def lease_attempt(
+    db: Session,
+    *,
+    space_id: int | None = None,
+    worker_id: str,
+    carrier: str,
+    ttl_seconds: int | None = None,
+) -> dict[str, Any] | None:
+    """租一个到期 attempt 给一个执行载体（**无网络调用**）。
+
+    ``carrier`` 是必填的，而且选行必须带它：载体是 attempt 的字段，一个 attempt
+    只能由它声明的载体执行。不过滤的后果是具体而严重的——进程内调度泵会租到一个
+    ``pi`` attempt（sidecar 永远看不到它），把行置为 ``in_flight`` 后直接返回，
+    该 attempt 于是被卡到租约过期、以 ``unknown`` 保守计费结束，白花一次调用额度。
+
+    与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
+    （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
+    ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
+
+    ``space_id`` 省略时由服务端选一个有容量且有到期工作的空间（sidecar 不知道空间拓扑，
+    也不该知道）。**这不回退到全库 1**：预算是 per-space 的，且选择会跳过已满的空间，
+    两个空间仍可同时推进。
+
+    fence 在租约时重验一次（发送前的 TOCTOU 关口），并且是**唯一的**发送门：栅栏不过的
+    attempt 在这里落 ``skipped``（带安全原因码），循环继续看下一个候选，因此一个被栅栏
+    拦下的 attempt 不会让本空间停摆——没有别的地方会再租它，留在 ``reserved`` 只会让空间
+    一直看起来有活干。
+
+    返回 None 表示没有本载体可租的 attempt（或全部被栅栏拦下）。grant 供 internal 端点
+    签发 run token。
+    """
+    from app.services.steward import _immediate_tx
+
+    now = timeutil.utcnow()
+    ttl = ttl_seconds if ttl_seconds is not None else config.STEWARD_ASSIST_CALL_LEASE_SECONDS
+    with _immediate_tx(db):
+        db.expire_all()
+        if space_id is None:
+            space_id = next(
+                (
+                    candidate
+                    for candidate in _spaces_holding_due_work(db, now=now, carrier=carrier)
+                    if _in_flight_for_space(db, space_id=candidate, now=now)
+                    < config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+                ),
+                None,
+            )
+            if space_id is None:
+                return None
+        if (
+            _in_flight_for_space(db, space_id=space_id, now=now)
+            >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+        ):
             return None
         candidates = db.scalars(
             select(StewardModelCall)
             .where(
                 StewardModelCall.space_id == space_id,
+                StewardModelCall.carrier == carrier,
                 StewardModelCall.status == "reserved",
                 StewardModelCall.next_attempt_at.is_not(None),
                 StewardModelCall.next_attempt_at <= now,
@@ -1699,6 +1786,127 @@ def settle_attempt(
     **This is the only write-back path** (the in-process and Pi carriers both end
     here). ``lease_owner`` is required: the lease decides who may settle, so a
     late result from a superseded executor cannot overwrite current state.
+
+    A caller that already holds a transaction must not use this function: see
+    ``record_attempt_outcome``, which is the phase-1 half without the transaction
+    management.
+    """
+    from app.services.steward import _immediate_tx
+
+    now = now or timeutil.utcnow()
+    with _immediate_tx(db):
+        # Drop the identity map before reading: another session may have changed the
+        # world between the send and now, and the write-back fence must see that
+        # change rather than a cached instance. Re-checking the fence against stale
+        # objects is the same as not checking it.
+        db.expire_all()
+        settled = record_attempt_outcome(
+            db,
+            attempt_id=attempt_id,
+            status=status,
+            lease_owner=lease_owner,
+            text=text,
+            usage=usage,
+            error_code=error_code,
+            exc=exc,
+            latency_ms=latency_ms,
+            response_bytes=response_bytes,
+            now=now,
+        )
+    if settled is None:
+        return None
+    return apply_settled_attempt(db, attempt_id=attempt_id, now=now)
+
+
+def record_attempt_outcome(
+    db: Session,
+    *,
+    attempt_id: int,
+    status: str,
+    lease_owner: str,
+    text: str | None = None,
+    usage: dict[str, int] | None = None,
+    error_code: str | None = None,
+    exc: Exception | None = None,
+    latency_ms: int = 0,
+    response_bytes: int = 0,
+    now: Any = None,
+) -> str | None:
+    """Phase 1: validate and persist the attempt's outcome. **Caller holds the lock.**
+
+    Split out from ``settle_attempt`` because the Pi path settles inside
+    ``agent_queue.settle_run``'s transaction: the run's terminal state and the
+    attempt's outcome must be atomically visible (otherwise a crash between them
+    leaves "run succeeded / attempt still in_flight", the double terminal state
+    the contract forbids). ``_immediate_tx`` refuses to nest, so the hook cannot
+    call the transaction-managing wrapper.
+
+    Returns the attempt's status, or None when this caller no longer holds the
+    lease.
+    """
+    now = now or timeutil.utcnow()
+    attempt = db.get(StewardModelCall, attempt_id)
+    if attempt is None or attempt.status != "in_flight":
+        return None
+    if attempt.lease_owner != lease_owner:
+        return None
+    # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time. Keep a
+    # simulated future clock, but refuse a lease that expired during the real
+    # writer wait — otherwise a write-back that waited behind another writer
+    # is adopted after its lease is already gone.
+    now = max(now, timeutil.utcnow())
+    # An expired lease means the result arrived after the executor lost its
+    # right to write: leave the row for the recovery owner rather than
+    # settling it. Without this a slow response could still write back — the
+    # late write the lease exists to prevent.
+    if attempt.lease_until is None or attempt.lease_until <= now:
+        return None
+    plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
+
+    if status != "succeeded" or exc is not None:
+        _settle_attempt_failure(db, attempt, exc=exc, error_code=error_code, latency_ms=latency_ms)
+        db.flush()
+        return attempt.status
+
+    settled = _settle_attempt(
+        db,
+        plan=plan,
+        attempt_id=attempt_id,
+        text=text,
+        usage=usage,
+        latency_ms=latency_ms,
+        response_bytes=response_bytes,
+    )
+    if settled is None:
+        return None
+    if plan is None:
+        db.flush()
+        return settled
+    # Write-back fence: the world is re-checked before anything is applied, so
+    # a product computed against a changed space is dropped rather than
+    # written.
+    if settled in ("succeeded", "degraded"):
+        reason = _fence_check(db, plan, attempt, attempt.assist_kind)
+        if reason is not None:
+            attempt.status = "skipped"
+            attempt.error_code = reason
+            db.flush()
+            return attempt.status
+    db.flush()
+    return settled
+
+
+def apply_settled_attempt(db: Session, *, attempt_id: int, now: Any = None) -> str | None:
+    """Phase 2: apply a persisted product. Idempotent; **own transaction**.
+
+    Safe to call twice (``applied_at`` is the guard) because a recovery pass may
+    have won the race, and safe to call long after phase 1 because that is exactly
+    crash point ④: the model's answer is durable, only the write-back is missing.
+
+    Every read happens inside the transaction: ``Session.get`` autobegins, and
+    ``_immediate_tx`` refuses a session that already has a transaction open — so
+    reading first and locking second would make this function unusable from any
+    caller that just committed.
     """
     from app.services.steward import _immediate_tx
 
@@ -1706,90 +1914,32 @@ def settle_attempt(
     with _immediate_tx(db):
         db.expire_all()
         attempt = db.get(StewardModelCall, attempt_id)
-        if attempt is None or attempt.status != "in_flight":
+        if attempt is None:
             return None
-        if attempt.lease_owner != lease_owner:
-            return None
-        # Acquiring BEGIN IMMEDIATE can outlive the caller's sampled time. Keep a
-        # simulated future clock, but refuse a lease that expired during the real
-        # writer wait — otherwise a write-back that waited behind another writer
-        # is adopted after its lease is already gone.
-        now = max(now, timeutil.utcnow())
-        # An expired lease means the result arrived after the executor lost its
-        # right to write: leave the row for the recovery owner rather than
-        # settling it. Without this a slow response could still write back — the
-        # late write the lease exists to prevent.
-        if attempt.lease_until is None or attempt.lease_until <= now:
-            return None
-        plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-
-        if status != "succeeded" or exc is not None:
-            _settle_attempt_failure(
-                db, attempt, exc=exc, error_code=error_code, latency_ms=latency_ms
-            )
-            db.flush()
-            return attempt.status
-
-        settled = _settle_attempt(
-            db,
-            plan=plan,
-            attempt_id=attempt_id,
-            text=text,
-            usage=usage,
-            latency_ms=latency_ms,
-            response_bytes=response_bytes,
-        )
-        if settled is None:
-            return None
-        if plan is None:
-            db.flush()
-            return settled
-        # Write-back fence: the world is re-checked before anything is applied, so
-        # a product computed against a changed space is dropped rather than
-        # written.
-        if settled in ("succeeded", "degraded"):
-            reason = _fence_check(db, plan, attempt, attempt.assist_kind)
-            if reason is not None:
-                attempt.status = "skipped"
-                attempt.error_code = reason
-                db.flush()
-                return attempt.status
-        db.flush()
-
-    # ---- second transaction: apply the persisted product ----
-    if settled != "succeeded":
-        if settled == "degraded":
-            with _immediate_tx(db):
-                db.expire_all()
-                attempt = db.get(StewardModelCall, attempt_id)
-                if attempt is None or attempt.applied_at is not None:
-                    return settled
-                # Invalid output: still record the group as checked, so the same
-                # request hash is not retried forever.
-                plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-                if plan is not None and attempt.assist_kind == "terminology":
-                    group = _term_group_for(db, attempt)
-                    if group is not None:
-                        _mark_terminology_checked(
-                            db, plan=plan, group=group, now=now, preserve_applied=False
-                        )
-                attempt.applied_at = now
-                db.flush()
-        return settled
-
-    with _immediate_tx(db):
-        db.expire_all()
-        attempt = db.get(StewardModelCall, attempt_id)
-        if attempt is None or attempt.applied_at is not None:
+        settled = attempt.status
+        if attempt.applied_at is not None:
             # Already applied (a recovery pass won the race): do not apply twice.
             return settled
         plan = db.get(StewardAssistPlan, attempt.plan_id) if attempt.plan_id else None
-        if plan is None:
+        if settled == "succeeded":
+            if plan is None:
+                return settled
+            _apply_product(db, plan=plan, attempt=attempt, now=now)
+            attempt.applied_at = now
+            db.flush()
             return settled
-        _apply_product(db, plan=plan, attempt=attempt, now=now)
-        attempt.applied_at = now
-        db.flush()
-    return settled
+        if settled == "degraded":
+            # Invalid output: still record the group as checked, so the same
+            # request hash is not retried forever.
+            if plan is not None and attempt.assist_kind == "terminology":
+                group = _term_group_for(db, attempt)
+                if group is not None:
+                    _mark_terminology_checked(
+                        db, plan=plan, group=group, now=now, preserve_applied=False
+                    )
+            attempt.applied_at = now
+            db.flush()
+        return settled
 
 
 def _settle_attempt(
@@ -2189,9 +2339,17 @@ def recover_stuck_child_runs(db: Session, *, now: Any = None) -> int:
     """收敛已建但未结算的 child run（崩溃点⑤：sidecar 被杀）。
 
     不依赖 ``agent_queue.reaper_pass``：它选 ``AgentJob``，而 steward run 的
-    ``job_id`` 恒为 NULL，因此天然不被覆盖——这既意味着不会被误改，也意味着必须
-    在这里收敛，否则 run 会一直停在 ``leased``。
+    ``job_id`` 恒为 NULL，因此天然不被覆盖。这条注释以前接着写「终态由
+    ``agent_queue`` 的收敛路径统一裁决」，但那个路径永远看不到这些行——
+    没有任何一方会写终态，run 会一直停在 ``leased``。所以终态在本函数内写。
+
+    与 assistant 侧的 ``reaper_pass`` 同口径（相同的事件类型、相同的审计动作），
+    但不共用代码：那边的判据是 job 的 attempt 预算与成员资格，steward run 两者
+    都没有。run 的终态是 ``expired``（租约超时）而非 ``cancelled``：没有任何人
+    请求过取消，把它记成取消会污染取消语义。attempt 侧由
+    ``recover_stuck_attempts`` 收敛为 ``unknown``（保守计费、不重发）。
     """
+    from app.services import agent_events, audit
     from app.services.steward import _immediate_tx
 
     now = now or timeutil.utcnow()
@@ -2212,10 +2370,28 @@ def recover_stuck_child_runs(db: Session, *, now: Any = None) -> int:
             )
         )
         for run in stale:
-            # 置取消位而非直接改终态：终态由 agent_queue 的收敛路径统一裁决，与
-            # assistant 侧同一套语义（取消是服务端权威状态）。
             run.cancel_requested = True
+            run.status = "expired"
+            run.settled_at = now
+            run.lease_expires_at = None
+            run.heartbeat_at = None
             run.updated_at = now
+            run.error_code = AGENT_LEASE_EXPIRED
+            agent_events.insert_event(
+                db,
+                run,
+                seq=agent_events.next_seq(db, run.id),
+                event_type=agent_events.TERMINAL_EVENT_FOR["expired"],
+                public_payload={"status": "expired", "error_code": AGENT_LEASE_EXPIRED},
+                created_at=now,
+            )
+            audit.write_audit(
+                db,
+                action="agent_lease_expired",
+                actor_id=None,
+                target_id=run.id,
+                detail={"outcome": "expired", "reason": "steward_child_run_lease_expired"},
+            )
             handled += 1
         db.flush()
     return handled
@@ -2236,18 +2412,17 @@ def run_attempt(
 ) -> str | None:
     """租一个 attempt 并用它的载体执行，然后结算。返回 attempt 终态或 None。
 
-    这是**唯一**的执行入口（测试与单机同步路径都用它）。生产路径由
+    这是**进程内路径**的唯一执行入口（测试与单机同步路径都用它）。生产路径由
     ``maintenance`` 的调度泵调用 ``launch_due``，后者把本函数放进有界线程池——
     HTTP 绝不发生在调用方的事务里。
+
+    ``carrier`` 恒为 ``inproc``：本函数就是那个载体。``pi`` attempt 由 sidecar 租走，
+    在租约层就被过滤掉，所以这里不需要再判一次载体。
     """
-    grant = lease_attempt(db, space_id=space_id, worker_id=worker_id)
-    if grant is None:
-        return None
     from app.services.steward_carrier import CARRIER_INPROC
 
-    if grant["carrier"] != CARRIER_INPROC:
-        # A pi attempt is executed by the sidecar and settled through the internal
-        # endpoint; running it here would double-execute the same model call.
+    grant = lease_attempt(db, space_id=space_id, worker_id=worker_id, carrier=CARRIER_INPROC)
+    if grant is None:
         return None
     # Read everything the send needs, then end the transaction: the carrier's HTTP
     # must never run with one open (the transport asserts this, and a held SQLite
@@ -2283,7 +2458,7 @@ def execute_plan_attempts(
     transport: Any = None,
     after_send: Callable[[Session, StewardModelCall], None] | None = None,
 ) -> str | None:
-    """Drain every leaseable attempt of one plan; return the plan's final outcome.
+    """Drain every leaseable in-process attempt of one plan; return its outcome.
 
     This is the synchronous analogue of ``launch_due``: it leases and executes one
     attempt at a time until the plan has nothing left to run. Callers get the same
@@ -2293,9 +2468,10 @@ def execute_plan_attempts(
     the only window in which the write-back fence can be observed: a test changes
     the world there and asserts the fence refuses to apply.
 
-    An attempt is executed only while its carrier is in-process — a ``pi`` attempt
-    is run by the sidecar and settles through the internal endpoint, so executing
-    it here would double-run the same model call.
+    Only in-process attempts are leased — a ``pi`` attempt is run by the sidecar and
+    settles through the internal endpoint, so executing it here would double-run the
+    same model call. That is enforced by the lease itself (``carrier`` is part of the
+    selection), not by a check here.
     """
     from app.services.steward_carrier import CARRIER_INPROC
 
@@ -2303,17 +2479,10 @@ def execute_plan_attempts(
     if plan is None:
         return None
     for _ in range(config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB + 1):
-        grant = lease_attempt(db, space_id=plan.space_id, worker_id=lease_owner)
+        grant = lease_attempt(
+            db, space_id=plan.space_id, worker_id=lease_owner, carrier=CARRIER_INPROC
+        )
         if grant is None:
-            break
-        if grant["carrier"] != CARRIER_INPROC:
-            # Release it: leaving it in_flight would strand a sidecar attempt.
-            _release_unsent(
-                db,
-                attempt_id=grant["attempt_id"],
-                lease_owner=lease_owner,
-                reason=REASON_CARRIER_NOT_INPROC,
-            )
             break
         attempt = db.get(StewardModelCall, grant["attempt_id"])
         if attempt is None:
@@ -2570,9 +2739,14 @@ __all__ = [
     "run_attempt",
     "run_due_attempt",
     "schedule_due_attempt",
+    "apply_settled_attempt",
+    "record_attempt_outcome",
+    "apply_settled_attempt",
+    "record_attempt_outcome",
     "settle_attempt",
     "shutdown_assist_executor",
     "terminology_target_retryable",
     "trusted_explanations",
     "STEWARD_PROMPT_VERSION",
+    "instructions_for",
 ]

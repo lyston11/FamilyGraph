@@ -384,7 +384,7 @@ def test_old_executor_cannot_audit_after_another_session_takes_the_lease(db_sess
     batch = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
     assert batch is not None
     original_attempt = steward_assist.lease_attempt(
-        db_session, space_id=space.id, worker_id="doomed"
+        db_session, space_id=space.id, worker_id="doomed", carrier="inproc"
     )["attempt_id"]
 
     def take_over(_session, _plan):

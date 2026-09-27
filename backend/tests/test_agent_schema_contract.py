@@ -134,10 +134,12 @@ def test_context_out_field_contract() -> None:
         "context_blocks",
         "next_event_seq",
         "cancel_requested",
-        # Steward-only: the prompt text lives in the sidecar image, so this
-        # cross-side literal is the version anchor and the sidecar fails closed
-        # on mismatch.
+        # Steward-only: the prompt text is server-owned and travels in the
+        # projection, so this cross-side literal is the version anchor and the
+        # sidecar fails closed on mismatch.
         "steward_prompt_version",
+        # Steward-only: the per-kind instruction block both carriers must send.
+        "steward_instructions",
     ]
 
 

@@ -21,6 +21,7 @@
  */
 
 import { backoffDelayMs, sleep, type BackoffPolicy } from "./backoff.js";
+import { adapterFor } from "./adapters/kind.js";
 import type { AgentConfig, AgentKind } from "./config.js";
 import type { FgEvent } from "./events.js";
 import {
@@ -49,11 +50,11 @@ export interface LeasedJob {
   run_token: string;
   /** Steward only: the parent StewardJob id (the authorization root). */
   steward_job_id?: string;
-  /** Steward only: the assist batch this run belongs to. */
-  steward_batch_id?: string | null;
+  /** Steward only: the execution unit (StewardModelCall.id). */
+  steward_attempt_id?: string | null;
   /** Steward only: the assist kind (candidate|ranking|explanation|terminology). */
   assist_kind?: string;
-  /** Steward only: server's current batch-concurrency limit (correction signal). */
+  /** Steward only: server's current per-space concurrency limit (correction signal). */
   max_concurrent?: number;
 }
 
@@ -132,6 +133,10 @@ export interface RunContextProjection {
   /** Steward only: the prompt version the server expects this sidecar to have
    * loaded. Verified against STEWARD_PROMPT_VERSION before any model call. */
   steward_prompt_version?: string;
+  /** Steward only: the per-kind instruction block the server owns. The
+   * in-process carrier sends this as the system message, so a child run must send
+   * the same text (the candidate kind's direction semantics live here). */
+  steward_instructions?: string;
 }
 
 export interface ToolExecutionResult {
@@ -319,6 +324,9 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
     ...(typeof raw["steward_prompt_version"] === "string"
       ? { steward_prompt_version: raw["steward_prompt_version"] }
       : {}),
+    ...(typeof raw["steward_instructions"] === "string"
+      ? { steward_instructions: raw["steward_instructions"] }
+      : {}),
   };
 }
 
@@ -484,7 +492,7 @@ export class InternalClient {
   }
 
   /**
-   * POST /internal/agent/jobs/lease or /internal/agent/steward/jobs/lease.
+   * POST /internal/agent/jobs/lease or /internal/agent/steward/attempts/lease.
    *
    * The two kinds have separate endpoints on purpose: "which container may
    * lease which queue" is a routing-level constraint, not payload validation.
@@ -496,12 +504,12 @@ export class InternalClient {
       sidecarId: this.config.sidecarId,
       nowMs: this.nowMs(),
     });
-    const path =
-      kind === "assistant" ? "/internal/agent/jobs/lease" : "/internal/agent/steward/jobs/lease";
-    const { status, json } = await this.request("POST", path, token, {
-      kind,
-      leased_by: this.config.sidecarId,
-    });
+    // Path and body come from the adapter: the two kinds lease from different
+    // routes with different bodies, and keeping that here would put a kind
+    // branch back into the protocol client.
+    const adapter = adapterFor(kind);
+    const spec = adapter.leaseRequest(this.config);
+    const { status, json } = await this.request("POST", spec.path, token, spec.body);
     // Empty queue: HTTP 204 with no body (request() parses it to {}).
     if (status === 204) return null;
     const raw = json as Record<string, unknown>;
@@ -523,32 +531,10 @@ export class InternalClient {
       policy_version: String(raw["policy_version"] ?? ""),
       run_token: String(raw["run_token"] ?? ""),
     };
-    if (kind === "steward") {
-      // StewardLeaseOut uses steward_job_id rather than job_id: the child run has
-      // no queue job, and the parent StewardJob is the authorization root.
-      const stewardJobId = raw["steward_job_id"];
-      if (typeof stewardJobId !== "number" || !Number.isInteger(stewardJobId)) {
-        throw new InternalApiError(
-          "invalid steward lease: steward_job_id",
-          502,
-          "invalid_lease",
-        );
-      }
-      leased.steward_job_id = String(stewardJobId);
-      const batchId = raw["assist_batch_id"];
-      leased.steward_batch_id =
-        typeof batchId === "number" && Number.isInteger(batchId) ? String(batchId) : null;
-      leased.assist_kind = typeof raw["assist_kind"] === "string" ? raw["assist_kind"] : undefined;
-      const maxConcurrent = raw["max_concurrent"];
-      if (typeof maxConcurrent !== "number" || !Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
-        throw new InternalApiError(
-          "invalid steward lease: max_concurrent",
-          502,
-          "invalid_lease",
-        );
-      }
-      leased.max_concurrent = maxConcurrent;
-    }
+    // Kind-specific response fields are the adapter's business: the two lease
+    // shapes differ, and decoding them here would put a kind branch back into the
+    // protocol client.
+    Object.assign(leased, adapter.decodeLease(raw));
     return leased;
   }
 

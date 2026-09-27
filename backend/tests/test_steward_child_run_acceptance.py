@@ -147,7 +147,9 @@ def test_a_fenced_attempt_does_not_block_its_space(db_session, monkeypatch):
 
     monkeypatch.setattr(steward_assist, "_fence_check", fence)
 
-    grant = steward_assist.lease_attempt(db_session, space_id=plan.space_id, worker_id="carrier")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier", carrier="inproc"
+    )
 
     assert grant is not None, "the space must still have leaseable work"
     assert grant["attempt_id"] == leasable.id, "the unfenced sibling must be leased"
@@ -224,7 +226,10 @@ def test_lease_attempt_takes_one_attempt_and_leases_only_it(db_session, monkeypa
     )
 
     grant = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="test-carrier"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="test-carrier",
+        carrier="inproc",
     )
 
     assert grant is not None
@@ -267,7 +272,10 @@ def test_leasing_picks_from_the_requested_space(db_session, monkeypatch):
     _core(db_session, space_a)
 
     grant = steward_assist.lease_attempt(
-        db_session, space_id=space_a.space.id, worker_id="carrier-a"
+        db_session,
+        space_id=space_a.space.id,
+        worker_id="carrier-a",
+        carrier="inproc",
     )
 
     assert grant is not None
@@ -296,12 +304,103 @@ def test_two_spaces_lease_independently(db_session, monkeypatch):
     _core(db_session, first)
     _core(db_session, second)
 
-    a = steward_assist.lease_attempt(db_session, space_id=first.space.id, worker_id="carrier-a")
-    b = steward_assist.lease_attempt(db_session, space_id=second.space.id, worker_id="carrier-b")
+    a = steward_assist.lease_attempt(
+        db_session, space_id=first.space.id, worker_id="carrier-a", carrier="inproc"
+    )
+    b = steward_assist.lease_attempt(
+        db_session, space_id=second.space.id, worker_id="carrier-b", carrier="inproc"
+    )
 
     assert a is not None, "space A must be leaseable"
     assert b is not None, "space B must be leaseable while A is in flight"
     assert a["space_id"] != b["space_id"]
+
+
+def test_a_lease_without_a_space_picks_one_with_work(db_session, monkeypatch):
+    """The sidecar asks for work without naming a space, and still gets work.
+
+    The sidecar has no view of the space topology and must not grow one: it asks
+    for work and the server decides whose work to hand out, exactly as
+    ``/jobs/lease`` does for the assistant queue. Without this the Pi carrier
+    cannot lease at all — the endpoint requires ``space_id``, and the sidecar has
+    no way to produce one.
+    """
+    world = _world(db_session)
+    _core(db_session, world)
+
+    grant = steward_assist.lease_attempt(db_session, worker_id="carrier-no-space", carrier="inproc")
+
+    assert grant is not None, "a space with due work must be found without naming it"
+    assert grant["space_id"] == world.space.id
+
+
+def test_a_lease_without_a_space_skips_a_full_one(db_session, monkeypatch):
+    """Not naming a space must not collapse the budget back to whole-database 1.
+
+    This is the property the omitted-``space_id`` path could quietly break: if the
+    server picked the first space with work regardless of its in-flight count,
+    space B would wait for space A again — exactly the global-1 behaviour E1
+    removed. Constructed with A holding a live lease at a budget of 1, so B is the
+    only admissible answer.
+    """
+    monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", 1)
+    from test_steward_assist import _provider, _steward_setting
+
+    provider = _provider(db_session, name="e2-space-skip-provider")
+    first = family(db_session, name="e2-skip-a")
+    _steward_setting(db_session, first.space, provider, candidate=True)
+    second = family(db_session, name="e2-skip-b")
+    _steward_setting(db_session, second.space, provider, candidate=True)
+    db_session.commit()
+    _core(db_session, first)
+    _core(db_session, second)
+
+    held = steward_assist.lease_attempt(
+        db_session, space_id=first.space.id, worker_id="carrier-a", carrier="inproc"
+    )
+    assert held is not None
+
+    # Give space A a *second*, earlier-due attempt: without it A holds no
+    # reserved work, so it would never be a candidate and the budget check would
+    # be unobservable (verified by mutation — that is how the first version of
+    # this test was wrong). With it, A is the first candidate by deadline and the
+    # budget is the only thing that can move the answer to B.
+    from datetime import timedelta
+
+    from app.utils.timeutil import utcnow
+
+    source = db_session.scalar(
+        select(StewardModelCall).where(StewardModelCall.space_id == first.space.id)
+    )
+    assert source is not None
+    db_session.add(
+        StewardModelCall(
+            space_id=source.space_id,
+            job_id=source.job_id,
+            policy_version=source.policy_version,
+            assist_kind=source.assist_kind,
+            prompt_digest="f" * 64,
+            prompt_chars=10,
+            status="reserved",
+            seq=source.seq + 100,
+            created_at=utcnow(),
+            plan_id=source.plan_id,
+            subject_key="a-second",
+            input_hash="g" * 64,
+            attempt_no=1,
+            carrier="inproc",
+            evidence_hash=source.evidence_hash,
+            next_attempt_at=utcnow() - timedelta(seconds=5),
+        )
+    )
+    db_session.commit()
+
+    other = steward_assist.lease_attempt(db_session, worker_id="carrier-anon", carrier="inproc")
+
+    assert other is not None, "space B must still be leaseable while A is full"
+    assert (
+        other["space_id"] == second.space.id
+    ), "the full space A had the earliest work; the budget must skip it"
 
 
 def test_per_space_budget_blocks_a_second_lease_in_the_same_space(db_session, monkeypatch):
@@ -344,11 +443,17 @@ def test_per_space_budget_blocks_a_second_lease_in_the_same_space(db_session, mo
     db_session.commit()
 
     granted = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="carrier-a"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="carrier-a",
+        carrier="inproc",
     )
     assert granted is not None
     blocked = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="carrier-b"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="carrier-b",
+        carrier="inproc",
     )
     assert blocked is None, "a full space must not lease a second attempt"
 
@@ -375,7 +480,9 @@ def test_lease_time_fence_skips_instead_of_leasing(db_session, monkeypatch):
         lambda *_a, **_k: steward_assist.REASON_EVIDENCE_CHANGED,
     )
 
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="carrier")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="carrier", carrier="inproc"
+    )
 
     assert grant is None, "a fenced-out attempt must not be leased"
     db_session.expire_all()
@@ -435,7 +542,10 @@ def test_an_expired_lease_does_not_block_the_space_forever(db_session, monkeypat
     db_session.commit()
 
     grant = steward_assist.lease_attempt(
-        db_session, space_id=plan.space_id, worker_id="live-carrier"
+        db_session,
+        space_id=plan.space_id,
+        worker_id="live-carrier",
+        carrier="inproc",
     )
 
     assert grant is not None, "an expired lease must not consume the space's budget"
@@ -447,7 +557,10 @@ def test_settle_attempt_applies_the_product_and_is_not_repeatable(db_session, mo
     world = _world(db_session)
     _core(db_session, world)
     grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="test-carrier"
+        db_session,
+        space_id=world.space.id,
+        worker_id="test-carrier",
+        carrier="inproc",
     )
     assert grant is not None
 
@@ -488,7 +601,9 @@ def test_settle_attempt_refuses_a_foreign_lease_owner(db_session, monkeypatch):
     """Only the lease holder may settle: a late result cannot overwrite state."""
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="holder")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="holder", carrier="inproc"
+    )
     assert grant is not None
 
     result = steward_assist.settle_attempt(
@@ -508,7 +623,10 @@ def test_failed_settlement_bills_conservatively_and_never_auto_retries(db_sessio
     world = _world(db_session)
     _core(db_session, world)
     grant = steward_assist.lease_attempt(
-        db_session, space_id=world.space.id, worker_id="test-carrier"
+        db_session,
+        space_id=world.space.id,
+        worker_id="test-carrier",
+        carrier="inproc",
     )
     assert grant is not None
     import httpx
@@ -528,7 +646,9 @@ def test_failed_settlement_bills_conservatively_and_never_auto_retries(db_sessio
     assert (settled.billed_tokens or 0) > 0
     # And it must not become leaseable again.
     assert (
-        steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="carrier-b")
+        steward_assist.lease_attempt(
+            db_session, space_id=world.space.id, worker_id="carrier-b", carrier="inproc"
+        )
         is None
     )
 
@@ -546,7 +666,9 @@ def test_recovery_converges_an_expired_lease_to_unknown(db_session, monkeypatch)
 
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="doomed")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="doomed", carrier="inproc"
+    )
     assert grant is not None
     attempt = db_session.get(StewardModelCall, grant["attempt_id"])
     assert attempt is not None
@@ -567,7 +689,9 @@ def test_recovery_does_not_touch_a_live_lease(db_session, monkeypatch):
     """A live lease must survive a recovery pass."""
     world = _world(db_session)
     _core(db_session, world)
-    grant = steward_assist.lease_attempt(db_session, space_id=world.space.id, worker_id="alive")
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=world.space.id, worker_id="alive", carrier="inproc"
+    )
     assert grant is not None
 
     steward_assist.recover_stuck_attempts(db_session)
@@ -659,4 +783,67 @@ def test_the_write_back_fence_has_exactly_two_call_sites():
             and child.func.id == "_fence_check"
         }
     )
-    assert callers == ["lease_attempt", "recover_stuck_attempts", "settle_attempt"]
+    assert callers == ["lease_attempt", "record_attempt_outcome", "recover_stuck_attempts"]
+
+
+def test_both_carriers_send_the_same_prompt_text(db_session, monkeypatch):
+    """A child run must send what the in-process carrier sends.
+
+    The in-process carrier sends ``_PROMPTS[kind]`` as the system message and the
+    projection as the user message, and ``prompt_digest`` is computed over those
+    two. If the Pi path sent only a generic system prompt, the two carriers would
+    ask the model different questions while the recorded digest claimed otherwise
+    — and for the candidate kind the difference is load-bearing, because the
+    direction semantics and conflict rules live in that text.
+
+    So the projection must carry the instructions verbatim, and the digest must be
+    reproducible from what the projection hands over.
+    """
+    import hashlib
+
+    from app.main import internal_app
+    from app.services.steward_assist import _PROMPTS
+
+    world, plan = _planned(db_session)
+    attempt = db_session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
+    assert attempt is not None
+    db_session.commit()
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier", carrier="inproc"
+    )
+    assert grant is not None
+    run = steward_assist.open_child_run(
+        db_session, attempt_id=grant["attempt_id"], lease_owner="carrier"
+    )
+    assert run is not None
+    run_token = agent_tokens.issue_run_token(
+        run_id=run.id,
+        job_id=grant["steward_job_id"],
+        attempt=run.attempt,
+        agent_kind="steward",
+        space_id=grant["space_id"],
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        steward_attempt_id=grant["attempt_id"],
+        viewer_account_id=grant["viewer_account_id"],
+    )
+    db_session.commit()
+
+    from fastapi.testclient import TestClient
+
+    response = TestClient(internal_app).get(
+        f"/internal/agent/runs/{run.id}/context",
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    instructions = body["steward_instructions"]
+    assert (
+        instructions == _PROMPTS[attempt.assist_kind]
+    ), "the projection must carry the same instruction text the in-process carrier sends"
+    # And the digest is reproducible from it, which is what makes "the two
+    # carriers send the same thing" checkable rather than a claim.
+    block = body["context_blocks"][0]["content"]
+    rebuilt = hashlib.sha256(f"{instructions}\n{block}".encode()).hexdigest()
+    assert rebuilt == attempt.prompt_digest
