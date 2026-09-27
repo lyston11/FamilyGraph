@@ -105,9 +105,18 @@ describe("adapterFor", () => {
     expect(adapterFor("steward").emptyToolAllowlistIsInvalid).toBe(false);
   });
 
-  it("registers no tools for the steward", () => {
-    expect(adapterFor("steward").toolNames()).toEqual([]);
-    expect(adapterFor("assistant").toolNames().length).toBeGreaterThan(0);
+  it("registers the dedicated read-only tools for the steward", () => {
+    expect(adapterFor("steward").toolNames()).toEqual([
+      "familygraph.steward.get_space_snapshot",
+      "familygraph.steward.list_space_nodes",
+      "familygraph.steward.get_viewer_target",
+      "familygraph.steward.get_viewer_term",
+      "familygraph.steward.get_evidence",
+      "familygraph.steward.get_relationship_path",
+    ]);
+    expect(adapterFor("assistant").toolNames()).not.toContain(
+      "familygraph.steward.get_space_snapshot",
+    );
   });
 
   it("derives a different cache key per kind", () => {

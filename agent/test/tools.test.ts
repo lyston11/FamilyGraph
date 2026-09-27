@@ -35,6 +35,30 @@ const SHARED_CONTRACT: Record<string, { properties: string[]; required: string[]
   },
 };
 
+const STEWARD_CONTRACT: Record<string, { properties: string[]; required: string[] }> = {
+  "familygraph.steward.get_space_snapshot": { properties: [], required: [] },
+  "familygraph.steward.list_space_nodes": {
+    properties: ["cursor", "limit"],
+    required: [],
+  },
+  "familygraph.steward.get_viewer_target": {
+    properties: ["target_user_id"],
+    required: ["target_user_id"],
+  },
+  "familygraph.steward.get_viewer_term": {
+    properties: ["root_user_id", "target_user_id"],
+    required: ["root_user_id", "target_user_id"],
+  },
+  "familygraph.steward.get_evidence": {
+    properties: ["evidence_ids", "target_user_id"],
+    required: ["target_user_id"],
+  },
+  "familygraph.steward.get_relationship_path": {
+    properties: ["from_user_id", "to_user_id"],
+    required: ["from_user_id", "to_user_id"],
+  },
+};
+
 const V2_2_TOOL_NAMES = Object.keys(SHARED_CONTRACT);
 
 /**
@@ -69,6 +93,31 @@ function schemaOf(toolName: string): {
   };
   return { properties: parameters.properties ?? {}, required: parameters.required ?? [] };
 }
+
+describe("Steward read-only tool declarations", () => {
+  it("registers exactly the closed versioned contract", () => {
+    const tools = createDomainTools(stubExecutor);
+    for (const [name, expected] of Object.entries(STEWARD_CONTRACT)) {
+      expect(TOOL_VERSIONS[name as keyof typeof TOOL_VERSIONS]).toBe(1);
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool).toBeDefined();
+      const parameters = tool!.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+      };
+      expect(Object.keys(parameters.properties ?? {}).sort()).toEqual(expected.properties);
+      expect([...(parameters.required ?? [])].sort()).toEqual(expected.required);
+      expect(parameters.additionalProperties).toBe(false);
+      expect(tool!.description).toContain("只读");
+    }
+  });
+
+  it("keeps Steward declarations disjoint from Assistant tools", () => {
+    const stewardNames = Object.keys(STEWARD_CONTRACT);
+    expect(stewardNames.some((name) => V2_2_TOOL_NAMES.includes(name))).toBe(false);
+  });
+});
 
 describe("V2.2 domain tool declarations", () => {
   it("registers the six assistant query tools at version 1", () => {

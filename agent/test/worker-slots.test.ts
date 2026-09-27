@@ -341,13 +341,20 @@ describe("sidecar slot isolation", () => {
 });
 
 describe("tool and prompt isolation between kinds", () => {
-  it("gives steward an empty tool set and assistant the full registry", async () => {
+  it("gives each kind its disjoint registered tool set", async () => {
     const { toolNamesFor, TOOL_VERSIONS } = await import("../src/tools.js");
-    expect(toolNamesFor("steward")).toEqual([]);
-    // Every registered tool is an assistant-domain tool.
-    expect(new Set(toolNamesFor("assistant"))).toEqual(new Set(Object.keys(TOOL_VERSIONS)));
-    // Disjoint, which is the property the backend also asserts.
     const steward = new Set(toolNamesFor("steward"));
+    expect(toolNamesFor("steward")).toEqual([
+      "familygraph.steward.get_space_snapshot",
+      "familygraph.steward.list_space_nodes",
+      "familygraph.steward.get_viewer_target",
+      "familygraph.steward.get_viewer_term",
+      "familygraph.steward.get_evidence",
+      "familygraph.steward.get_relationship_path",
+    ]);
+    expect(new Set(toolNamesFor("assistant"))).toEqual(
+      new Set(Object.keys(TOOL_VERSIONS).filter((name) => !steward.has(name))),
+    );
     expect(toolNamesFor("assistant").filter((name) => steward.has(name))).toEqual([]);
   });
 

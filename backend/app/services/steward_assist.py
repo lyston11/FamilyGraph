@@ -65,6 +65,7 @@ from app.models.steward import (
 from app.models.user import User
 from app.services import (
     agent_provider,
+    agent_tools,
     platform_features,
     steward_candidate_evidence,
     steward_guard,
@@ -2243,7 +2244,7 @@ def open_child_run(
             heartbeat_at=now,
             cancel_requested=False,
             policy_version=attempt.policy_version,
-            tool_allowlist_json=[],
+            tool_allowlist_json=agent_tools.default_allowlist("steward"),
             runtime_snapshot_json=agent_provider.snapshot_for_space(
                 db, attempt.space_id, agent_provider.AGENT_KIND_STEWARD
             ),

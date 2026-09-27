@@ -104,6 +104,28 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
 - `_authorize_assistant_run` 入口断言 `agent_kind == 'assistant'`，反之亦然。
 - `_reject_user_jwt` 必须**先于** kind 探测：否则 user JWT 会从 403 变成 401。
 
+## 6.1 Steward 只读工具合同（S3）
+
+Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
+`required_kind="steward"` 生成，并同时写入 run、token claim、context projection；sidecar
+`KindAdapter.toolNames()` 必须返回同一组 canonical names。工具执行先过 user-JWT rejection、run token、
+`StewardExecution` fence、allowlist、版本和闭合 schema，再进入 `steward_tools.py` 的纯读取分派。
+
+工具集合固定为：
+
+- `familygraph.steward.get_space_snapshot`：当前空间已发布投影的版本、完成统计和 policy version；输入 `{}`。
+- `familygraph.steward.list_space_nodes`：当前空间有限稳定节点摘要；只接受 `cursor` / `limit`。
+- `familygraph.steward.get_viewer_target`：带 `viewer_account_id` 时读取该 viewer 的 ready 目标投影。
+- `familygraph.steward.get_viewer_term`：带 viewer 且 root 与 token viewer 一致时读取 term projection。
+- `familygraph.steward.get_evidence`：attempt 仍为 `in_flight` 且 target 属于已发布 view 时读取结构化证据 ID。
+- `familygraph.steward.get_relationship_path`：读取当前空间已发布且已确认的路径；带 viewer 时 root 必须是该 viewer。
+
+除业务查询字段外，schema 使用 `additionalProperties=false`，拒绝 `space_id`、`account_id`、
+`viewer_account_id`、`run_id`、`attempt_id`、provider 和任意权限字段。viewer 缺失、撤权、未发布、
+跨空间、revision/attempt 绑定无法证明时统一 fail closed；不可见目标不得返回目标身份、状态或路径规模。
+工具只读现有 Steward publication/view/term/evidence projection，不读取 prompt、provider、Memory/RAG
+原文，也不产生领域写入；结果经统一 JSON 上限和 output policy guard，审计不含原始输入。
+
 ## 7. sidecar 槽位模型
 
 - `slots: Map<string, Slot>`，真 run 用 `run_id` 作 key，占位用 `pending:<kind>:<n>`。
@@ -115,8 +137,10 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
   除一个之外所有槽位的取消信号。
 - 槽位预算**按 kind 独立**：steward 长调用不得占用 assistant 槽位（这是选「改现有 sidecar」
   而非新增容器的唯一价值证明）。
-- `toolNamesFor(kind)`：steward 在 S1 为**空集**，且必须显式空而非「assistant 减去黑名单」，
-  否则新增 assistant 工具会默认成为 steward 工具。
+- `toolNamesFor(kind)`：Assistant 与 Steward 使用两个显式、互斥的集合；Steward 只注册
+  `familygraph.steward.get_space_snapshot`、`list_space_nodes`、`get_viewer_target`、
+  `get_viewer_term`、`get_evidence`、`get_relationship_path` 六个只读投影工具，
+  不通过 Assistant 集合做差集，也不继承 echo/probe/Web/写入工具。
 
 ## 8. prompt 文本与版本（跨层字面量）
 

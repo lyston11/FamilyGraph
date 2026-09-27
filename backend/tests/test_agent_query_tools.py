@@ -10,15 +10,24 @@ import json
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
+from test_agent_execution_fence import _steward_world
 
 from app.models.audit_log import AuditLog
 from app.models.relation import Relation
 from app.models.space import FamilySpace, SpaceProfileRef
 from app.models.user import User
 from app.models.v2_foundation import DisclosurePreference
-from app.services import agent_events, agent_query, agent_queue, agent_tools, visibility
+from app.services import (
+    agent_events,
+    agent_query,
+    agent_queue,
+    agent_tools,
+    steward_tools,
+    visibility,
+)
+from app.services.agent_execution import StewardExecution
 from app.services.agent_query import enforce_output_limit
-from app.services.agent_tokens import issue_service_token
+from app.services.agent_tokens import issue_run_token, issue_service_token
 from app.utils import timeutil
 from conftest import (
     create_agent_fixture,
@@ -611,25 +620,37 @@ def test_zero_write_business_tables(db_session):
 
 
 def test_registry_required_kind_gating(db_session):
-    """工具集按 kind 隔离：assistant 拿到六个查询工具，steward 一个也不拿。
-
-    本用例原先断言 ``default_allowlist("steward")`` 抛 AGENT_KIND_UNSUPPORTED。
-    09-25 起 steward 是合法的 runtime kind（受限 Pi child run），因此那一条不再
-    成立；但**保护意图不变且更强**——steward 绝不能拿到 assistant 的工具。
-    改为断言两个集合不相交（S1 阶段 steward 侧为空集，S3 会加入只读工具）。
-    """
-    _world(db_session)
+    """Assistant and Steward receive disjoint, explicitly registered tool sets."""
+    world = _world(db_session)
     assistant_default = agent_tools.default_allowlist("assistant")
     for name in ALL_SIX_TOOLS:
         assert name in assistant_default
 
     steward_default = agent_tools.default_allowlist("steward")
-    assert set(steward_default).isdisjoint(assistant_default), (
-        "assistant and steward tool sets must not overlap; "
-        f"shared: {sorted(set(steward_default) & set(assistant_default))}"
+    steward_names = set(steward_tools.STEWARD_TOOL_NAMES)
+    assert steward_names <= set(steward_default)
+    assert set(steward_default).isdisjoint(assistant_default)
+    assert all(agent_tools.REGISTRY[name].required_kind == "steward" for name in steward_names)
+
+    assert (
+        steward_tools.execute_steward_tool(
+            db_session,
+            execution=StewardExecution(
+                run_id=1,
+                steward_job_id=1,
+                expected_attempt=1,
+                space_id=world["household"].id,
+                viewer_account_id=None,
+                agent_kind="steward",
+                tool_allowlist=tuple(sorted(steward_names)),
+            ),
+            name=steward_tools.TOOL_GET_SPACE_SNAPSHOT,
+            input_payload={},
+        )["available"]
+        is False
     )
 
-    # 未知 kind 仍然 fail-closed（本用例原本保护的"不受支持即拒绝"语义）。
+    # 未知 kind 仍然 fail-closed。
     with pytest.raises(agent_tools.ToolProtocolError) as exc_info:
         agent_tools.default_allowlist("bogus")
     assert exc_info.value.code == "AGENT_KIND_UNSUPPORTED"
@@ -643,6 +664,64 @@ def test_registry_required_kind_gating(db_session):
     with pytest.raises(HTTPException) as exc_info:
         _call(db_session, limited_run, session_row, agent_query.TOOL_GET_SELF_CONTEXT)
     assert _error_code(exc_info) == "AGENT_TOOL_SCOPE_DENIED"
+
+
+def test_steward_tool_dispatch_uses_space_scope_without_session(db_session):
+    _user, space, job, _plan, run, _attempt = _steward_world(db_session, assist_kind="candidate")
+    from app.services import steward_tools
+
+    tool_name = steward_tools.TOOL_GET_SPACE_SNAPSHOT
+    run.tool_allowlist_json = [tool_name]
+    db_session.commit()
+    identity = StewardExecution(
+        run_id=run.id,
+        steward_job_id=job.id,
+        expected_attempt=run.attempt,
+        space_id=space.id,
+        viewer_account_id=None,
+        agent_kind="steward",
+        tool_allowlist=(tool_name,),
+    )
+
+    output = agent_tools.execute(
+        db_session,
+        run,
+        None,
+        {"agent_kind": "steward"},
+        name=tool_name,
+        version=1,
+        input_payload={},
+        execution=identity,
+    )
+    assert output == {
+        "available": False,
+        "reason": "not_published",
+    }
+
+
+def test_steward_tool_endpoint_admits_without_agent_session(internal_client, db_session):
+    _user, space, job, _plan, run, attempt = _steward_world(db_session, assist_kind="candidate")
+    run.tool_allowlist_json = [steward_tools.TOOL_GET_SPACE_SNAPSHOT]
+    db_session.commit()
+    token = issue_run_token(
+        run_id=run.id,
+        job_id=job.id,
+        attempt=run.attempt,
+        agent_kind="steward",
+        space_id=space.id,
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        steward_attempt_id=attempt.id,
+    )
+    response = internal_client.post(
+        f"/internal/agent/runs/{run.id}/tools/{steward_tools.TOOL_GET_SPACE_SNAPSHOT}/execute",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"version": 1, "input": {}, "tool_call_id": "steward-snapshot"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["output"] == {
+        "available": False,
+        "reason": "not_published",
+    }
 
 
 def test_tool_call_inflight_placeholder_rejected_concurrently(internal_client, db_session):

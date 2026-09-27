@@ -34,8 +34,13 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import RUNTIME_AGENT_KINDS, AgentRun, AgentSession, AgentToolCall
-from app.services import agent_query, audit, controlled_web, intake_extractor, terms
-from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
+from app.services import agent_query, audit, controlled_web, intake_extractor, steward_tools, terms
+from app.services.agent_execution import (
+    ExecutionIdentity,
+    StewardExecution,
+    fence_assistant_execution,
+    fence_steward_execution,
+)
 from app.utils import timeutil
 
 # JSON schema 子集校验支持的标量类型
@@ -133,10 +138,33 @@ def _query_tool_specs() -> tuple[ToolSpec, ...]:
     return tuple(specs)
 
 
+def _steward_tool_specs() -> tuple[ToolSpec, ...]:
+    descriptions = {
+        steward_tools.TOOL_GET_SPACE_SNAPSHOT: "读取当前空间已发布的 Steward 投影快照元数据",
+        steward_tools.TOOL_LIST_SPACE_NODES: "读取当前空间已发布投影的稳定节点摘要",
+        steward_tools.TOOL_GET_VIEWER_TARGET: "读取当前 viewer 对目标的已发布投影",
+        steward_tools.TOOL_GET_VIEWER_TERM: "读取当前 viewer 的已发布称谓投影",
+        steward_tools.TOOL_GET_EVIDENCE: "读取当前发布视图允许引用的结构化证据",
+        steward_tools.TOOL_GET_RELATIONSHIP_PATH: "读取当前空间已发布的关系路径",
+    }
+    return tuple(
+        ToolSpec(
+            name=name,
+            version=1,
+            description=descriptions[name],
+            input_schema=steward_tools.STEWARD_TOOL_INPUT_SCHEMAS[name],
+            output_schema={"type": "object"},
+            required_kind="steward",
+        )
+        for name in sorted(steward_tools.STEWARD_TOOL_NAMES)
+    )
+
+
 REGISTRY: dict[str, ToolSpec] = {
     spec.name: spec
     for spec in (
         *_query_tool_specs(),
+        *_steward_tool_specs(),
         ToolSpec(
             name=TOOL_ECHO,
             version=1,
@@ -148,8 +176,8 @@ REGISTRY: dict[str, ToolSpec] = {
                 "additionalProperties": False,
             },
             output_schema={"type": "object", "properties": {"text": {"type": "string"}}},
-            # 显式 assistant：None 会让它落入**所有** kind 的 allowlist，
-            # 包括 steward（S1 合同要求 steward 侧为空集，见 design §9）。
+            # Assistant 与 Steward 都使用显式 required_kind，避免任一侧
+            # 因默认遍历意外继承另一侧工具。
             required_kind="assistant",
         ),
         ToolSpec(
@@ -436,14 +464,14 @@ class ToolRunScope:
 def execute(
     db: Session,
     run: AgentRun,
-    agent_session: AgentSession,
+    agent_session: AgentSession | None,
     claims: dict[str, Any],
     *,
     name: str,
     version: int,
     input_payload: dict[str, Any],
     tool_call_id: str | None = None,
-    execution: ExecutionIdentity | None = None,
+    execution: ExecutionIdentity | StewardExecution | None = None,
 ) -> dict[str, Any]:
     """running 态门禁 → 副作用去重 → 注册表校验 → scope 门禁 → schema 校验 → 执行 → 审计。
 
@@ -456,9 +484,15 @@ def execute(
     claim_id: int | None = None
     try:
         if execution is not None:
-            run, agent_session, _job = fence_assistant_execution(
-                db, execution, allowed_statuses=("running",)
-            )
+            if isinstance(execution, ExecutionIdentity):
+                run, fenced_session, _job = fence_assistant_execution(
+                    db, execution, allowed_statuses=("running",)
+                )
+                agent_session = fenced_session
+            else:
+                run, _attempt, _steward_job = fence_steward_execution(
+                    db, execution, allowed_statuses=("running",)
+                )
         if run.status != "running":
             raise ToolProtocolError(
                 409,
@@ -602,7 +636,12 @@ def execute(
         db.commit()
         # 分发也纳入同一拒绝审计路径：领域工具的范围/形状拒绝同属协议违规
         output = _dispatch(
-            db, spec, run=admitted, agent_session=agent_session, input_payload=input_payload
+            db,
+            spec,
+            run=admitted,
+            agent_session=agent_session,
+            execution=execution,
+            input_payload=input_payload,
         )
         # Pass the same JSON value through the result policy on first execution
         # and replay; otherwise datetime fields bypass that policy only once.
@@ -641,18 +680,29 @@ def execute(
     }
     if tool_call_id is not None:
         audit_detail["tool_call_id"] = tool_call_id
-    # 归属语义（design.md §6）：actor_id 必须是 users.id；account/session 另存 detail。
-    account = db.get(Account, agent_session.account_id)
+    # Assistant audits carry account/session ownership; Steward audits carry the
+    # verified space/viewer scope and deliberately have no AgentSession.
+    account = db.get(Account, agent_session.account_id) if agent_session is not None else None
+    steward_scope = execution if isinstance(execution, StewardExecution) else None
+    audit_detail.update(
+        {
+            "agent_kind": run.kind,
+            "space_id": steward_scope.space_id if steward_scope is not None else None,
+            "viewer_account_id": (
+                steward_scope.viewer_account_id if steward_scope is not None else None
+            ),
+        }
+    )
+    if agent_session is not None:
+        audit_detail.update(
+            {"account_id": agent_session.account_id, "session_id": agent_session.id}
+        )
     audit.write_audit(
         db,
         action="agent_tool_executed",
         actor_id=account.user_id if account is not None else None,
         target_id=run.id,
-        detail={
-            **audit_detail,
-            "account_id": agent_session.account_id,
-            "session_id": agent_session.id,
-        },
+        detail=audit_detail,
     )
     return output
 
@@ -662,7 +712,8 @@ def _dispatch(
     spec: ToolSpec,
     *,
     run: ToolRunScope,
-    agent_session: AgentSession,
+    agent_session: AgentSession | None,
+    execution: ExecutionIdentity | StewardExecution | None,
     input_payload: dict[str, Any],
 ) -> dict[str, Any]:
     """分发执行：V2.2 只读领域工具走 AgentQueryService；骨架工具无副作用。
@@ -673,6 +724,34 @@ def _dispatch(
     V2.3 E4a：Relationship Intelligence 工具在 flag 关闭时一律拒绝（503，
     与浏览器面同一口径），拒绝走统一安全审计。
     """
+    if isinstance(execution, StewardExecution):
+        if spec.name not in steward_tools.STEWARD_TOOL_NAMES:
+            raise ToolProtocolError(
+                403,
+                "AGENT_TOOL_SCOPE_DENIED",
+                "Steward 只能调用只读工具",
+                {"tool": spec.name},
+            )
+        if (
+            spec.name in steward_tools.STEWARD_VIEWER_TOOL_NAMES
+            and execution.viewer_account_id is None
+        ):
+            raise ToolProtocolError(
+                403,
+                "STEWARD_VIEWER_SCOPE_UNAVAILABLE",
+                "该 Steward attempt 没有 viewer scope",
+                {"tool": spec.name},
+            )
+        return agent_query.enforce_output_limit(
+            steward_tools.execute_steward_tool(
+                db,
+                execution=execution,
+                name=spec.name,
+                input_payload=input_payload,
+            )
+        )
+    if agent_session is None:
+        raise ToolProtocolError(500, "INTERNAL_ERROR", "Assistant scope 缺少 session")
     if spec.name == TOOL_RESOLVE_FREE_TEXT_RELATION:
         actor, space = agent_query._resolve_scope(db, agent_session)
         return intake_extractor.parse_free_text_relation(
