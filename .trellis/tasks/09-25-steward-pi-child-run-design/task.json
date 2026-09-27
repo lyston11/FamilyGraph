@@ -20,9 +20,7 @@
   "subtasks": [],
   "children": [
     "09-25-steward-child-run-skeleton",
-    "09-25-steward-child-run-terminology",
     "09-25-steward-child-run-tools-design",
-    "09-25-steward-child-run-remaining-assists",
     "09-25-steward-child-run-cleanup",
     "09-25-steward-execution-unit",
     "09-26-steward-sidecar-adapters"

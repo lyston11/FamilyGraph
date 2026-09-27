@@ -18,13 +18,22 @@
 
 | # | 阶段 | 交付 | 前置 | 验收出口 |
 |---|---|---|---|---|
-| E1 | `steward-execution-unit` | 迁移 0055 重写 + plan/attempt 模型 + 单链路调度 + fence 收敛到 2 处 + per-space 并发 | 本设计 | 全量检查全绿 + 迁移往返 + **行为等价**（全部 kind 仍 inproc） |
+| E1 | `steward-execution-unit` | 迁移 0055 重写 + plan/attempt 模型 + 单链路调度 + fence 收敛 + per-space 并发 | 本设计 | 全量检查全绿 + 迁移往返 + **行为等价**（全部 kind 仍 inproc） |
 | E2 | `steward-sidecar-adapters` | sidecar `KindAdapter` 拆分，`executeJob` 零 `if kind` | E1 | agent 全量检查 + 槽位回归不变 |
-| E3 | `steward-pi-carrier-terminology` | terminology 走 pi carrier | E2 | 差分等价 + egress 审计 + 崩溃收敛 + 写回栅栏回归 |
-| E4 | `steward-pi-carrier-rest` | candidate/ranking/explanation 逐个走 pi carrier | E3 | 每 kind 差分 + 越权矩阵 |
-| E5 | `steward-assist-cleanup` | 删除 inproc carrier 与开关（可选，稳定后） | E4 | 删除后全量检查 |
+| E3 | （并入 E2 交付）| terminology 走 pi carrier | E2 | 差分等价 + egress 审计 + 崩溃收敛 + 写回栅栏回归 |
+| E4 | （并入 E2 交付）| candidate/ranking/explanation 逐个走 pi carrier | E3 | 每 kind 差分 + 越权矩阵 |
+| E5 | `steward-child-run-cleanup` | 删除 inproc carrier 与开关（可选，稳定后） | E4 | 删除后全量检查 |
 
 **E1 是唯一的架构性改动**，其余是增量。
+
+> **交付事实（2026-09-27）**：E3 与 E4 的验收**并入 E2 任务**完成。原因：E2 要修的两处协议缺陷
+> （租约端点改名、settle 未携带产物）只有把 Pi 载体真正跑起来才能证明，而 E3/E4 的验收正是
+> 那件事。E4 阶段**未改任何生产代码**——链路与服务端校验器已由 E1/E3 通用化，换 kind 只改一个
+> 配置值。详见 `.trellis/tasks/archive/2026-09/09-26-steward-sidecar-adapters/implement.md`。
+>
+> **E5 仍未执行**：其前置「生产已切换到 Pi 载体并稳定运行」不成立（四个 carrier 仍全默认 `inproc`）。
+> 且其清单第 2 项（删除 `run_id` 为 NULL 的兼容分支）在 E1 改变语义后已不适用——那段代码是
+> **重租幂等**，不是 inproc 兼容分支。
 
 ---
 
