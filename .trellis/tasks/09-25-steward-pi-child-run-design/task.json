@@ -23,7 +23,8 @@
     "09-25-steward-child-run-tools-design",
     "09-25-steward-child-run-cleanup",
     "09-25-steward-execution-unit",
-    "09-26-steward-sidecar-adapters"
+    "09-26-steward-sidecar-adapters",
+    "09-27-steward-readonly-tools"
   ],
   "parent": null,
   "relatedFiles": [],
