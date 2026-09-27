@@ -1285,3 +1285,57 @@ type-check/lint/181 tests/build 通过；迁移 `upgrade → downgrade → upgra
 ### Status
 
 [OK] **Completed**（已合并 main、归档、worktree 与 feat 分支已清理）
+
+## Session 36: E2 sidecar KindAdapter（含 E3/E4 载体等价）
+<!-- trellis-session: v=2 fp=e2-steward-sidecar-adapters -->
+
+**Date**: 2026-09-27
+**Task**: 09-26-steward-sidecar-adapters（父 09-25-steward-pi-child-run-design）
+**Branch**: `feat/09-26-steward-sidecar-adapters`（已合并 main、归档、worktree/分支已清理）
+
+### Summary
+
+把 sidecar 的 kind 差异收进一个 `KindAdapter`（`executeJob` / `buildRunSession` / `leaseJob`
+零 kind 分支），并**把 E3/E4 的验收一并做完**：四种 assist kind 全部经真实 HTTP 走通
+Pi 载体，与进程内载体**结构等价**。E4 阶段**未改任何生产代码**——链路与服务端校验器已由
+E1/E3 通用化，换 kind 只改一个配置值，这正是 E1 重构的目的。
+
+全量检查：backend 1939 passed / 3 skipped + ruff/mypy 全绿；agent type-check/lint/**200 tests**
+（E2 前 181）/build 通过；`docker compose config --quiet` 通过。未触碰 frontend / system-admin。
+
+### 修掉的 6 个真实缺陷（都不在 E1 的测试面内）
+
+1. **租约端点未同步**：E1 改名 `/steward/attempts/lease` 后 sidecar 仍打旧路径 → 实测 404。
+2. **产物上报缺失**：child run 拒绝消息类事件，settle 是产物唯一路径，而 sidecar 从不携带 →
+   服务端在 `assert text is not None` 处崩。
+3. **prompt 文本归属错**：进程内载体发送 `_PROMPTS[kind]`（含 candidate 的方向语义与矛盾规则），
+   `prompt_digest` 覆盖它；Pi 载体只发通用 prompt，两侧会问出**不同的问题**。改为服务端拥有文本、
+   投影下发 `steward_instructions`，并删除 sidecar 本地 steward prompt（不留 fallback）。
+4. **结算无法在别人事务里跑**：`settle_run` 持立即事务，hook 调会自己开事务的 `settle_attempt`
+   → `_immediate_tx` 拒绝嵌套直接报错。拆成 `record_attempt_outcome`（phase 1，调用方持锁）+
+   `apply_settled_attempt`（phase 2，自有事务、幂等）。
+5. **child run 永不终态**：`recover_stuck_child_runs` 只置 `cancel_requested` 并注释「交给
+   `agent_queue` 裁决」，但 `reaper_pass` 选 `AgentJob` 而 steward run 的 `job_id` 恒为 NULL。
+6. **网关不可达 + 两处默认 kind**：`/runs/{id}/provider/*` 用 assistant-only 别名授权（403）；
+   修好后 `resolve_runtime` 与 `resolve_for_run` 又各用默认 kind 解析，steward run 读到
+   assistant 的空间设置，报「云被禁止」——一个**看似合理**的答案而非错误。
+
+另修：`lease_attempt` 未按 carrier 选行（进程内泵会租到 `pi` attempt 并卡到租约过期）。
+
+### Lessons
+
+- **「协议正确但未被调用」等于没验证**：E1 只测了后端侧，sidecar→后端这一跳从未被驱动，
+  于是两处改名/缺失存活了一个任务。新协议必须有一条端到端用例，哪怕载体默认关闭。
+- **看似合理的错误答案比报错更难发现**：默认 kind 解析出「云被禁止」，review 与单测都过得去；
+  只有真跑一遍才会暴露。故补了结构性断言（网关内每次 provider 解析都必须带 run 自己的 kind），
+  变异测试验证。
+- **失败会一个接一个地露出来**：网关修好授权后才暴露 policy 解析的同一缺陷。逐层推进时，
+  每修一层都要重跑端到端，不能假定「修好了」。
+- **验收要断言「到达了更后面的检查」**：`assert status != 403` 在 provider 解析仍坏时会通过；
+  断言「请求因 body 内容被拒」才能证明授权与解析都过了。
+- **E5 不能凭清单执行**：其第 2 项（删 `run_id` 为 NULL 分支）在 E1 改变语义后已不适用
+  ——那段代码是重租幂等，不是 inproc 兼容分支。清单项也要对着代码事实复核。
+
+### Status
+
+[OK] **Completed**（已合并 main、归档、worktree 与 feat 分支已清理；E5 明确未执行并记录理由）
