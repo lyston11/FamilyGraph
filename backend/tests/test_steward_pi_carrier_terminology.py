@@ -556,3 +556,47 @@ def test_a_steward_egress_is_audited_against_its_child_run(db_session, monkeypat
     # Never the prompt or the credential.
     assert grant["assist_kind"] not in (rows[-1].detail_json or "")
     assert "sk-term-test" not in (rows[-1].detail_json or "")
+
+
+def test_no_remaining_provider_resolution_defaults_to_the_assistant_kind():
+    """Every provider resolution in the gateway passes the run's own kind.
+
+    Two of them did not, and each blocked a steward child run one check apart —
+    first with AGENT_TOKEN_SCOPE_MISMATCH, then (once authorization was fixed) with
+    POLICY_PROVIDER_BLOCKED. They were found one at a time because each fix revealed
+    the next, so the invariant is asserted structurally: the default is the assistant
+    kind, and a steward run silently reading the assistant's space settings is a
+    failure mode that produces a *plausible* answer (cloud forbidden) rather than an
+    error, which is why it survived review.
+
+    The two remaining callers that omit the kind are provably assistant-only:
+    `run_context` returns early for a steward token, and the citation validator
+    requires a session (steward runs have none, by DB constraint).
+    """
+    import ast
+    from pathlib import Path
+
+    from app.services import provider_proxy
+
+    tree = ast.parse(Path(provider_proxy.__file__).read_text(encoding="utf-8"))
+    # resolve_for_run(db, run, space_id, agent_kind) and
+    # resolve_runtime(db, space_id, *, run, agent_kind): the kind may be passed
+    # positionally or by keyword, so accept either.
+    required_positional = {"resolve_for_run": 4, "resolve_runtime": 3, "resolve_for_space": 3}
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name not in required_positional:
+            continue
+        if "agent_kind" in {kw.arg for kw in node.keywords}:
+            continue
+        if len(node.args) >= required_positional[name]:
+            continue
+        offenders.append(f"line {node.lineno}: {name} without agent_kind")
+    assert offenders == [], (
+        "a gateway provider resolution omits the run kind, so a steward run would "
+        f"read the assistant's settings: {offenders}"
+    )
