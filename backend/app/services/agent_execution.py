@@ -79,6 +79,7 @@ class StewardExecution:
     viewer_account_id: int | None
     agent_kind: str
     tool_allowlist: tuple[str, ...]
+    steward_attempt_id: int | None = None
 
     @classmethod
     def from_claims(cls, claims: dict[str, Any]) -> StewardExecution:
@@ -90,6 +91,7 @@ class StewardExecution:
             viewer_account_id=claims.get("viewer_account_id"),
             agent_kind=claims["agent_kind"],
             tool_allowlist=tuple(sorted(claims["tool_allowlist"])),
+            steward_attempt_id=claims.get("steward_attempt_id"),
         )
 
 
@@ -259,6 +261,7 @@ def fence_steward_execution(
         # breaking rather than an independent gate — a forged space_id trips the
         # job comparison above first (verified by mutation).
         or attempt.space_id != identity.space_id
+        or (identity.steward_attempt_id is not None and attempt.id != identity.steward_attempt_id)
         or attempt.viewer_account_id != identity.viewer_account_id
     ):
         raise_api_error(403, AGENT_TOKEN_SCOPE_MISMATCH, "执行身份或成员资格已变化")

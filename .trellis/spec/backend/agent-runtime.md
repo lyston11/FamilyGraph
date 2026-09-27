@@ -22,7 +22,28 @@
 
 请求模型全部 `extra="forbid"`：新增字段必须两侧同步。
 
-## 3. Token 合同
+## 2.1 Steward 只读工具合同
+
+Steward child run 的 `tool_allowlist` 由 `agent_tools.REGISTRY` 的
+`required_kind="steward"` 条目生成，并必须与 run、token claim、context projection 和
+sidecar `KindAdapter.toolNames()`一致。当前只允许以下六个 canonical 工具：
+
+```text
+familygraph.steward.get_space_snapshot
+familygraph.steward.list_space_nodes
+familygraph.steward.get_viewer_target
+familygraph.steward.get_viewer_term
+familygraph.steward.get_evidence
+familygraph.steward.get_relationship_path
+```
+
+工具执行必须经过 `StewardExecution` fence；Steward 没有 `AgentSession`，不得落入 Assistant
+query scope。输入 schema 是闭合对象并拒绝 scope 注入字段；viewer 工具要求 token 中的
+`viewer_account_id` 和当前空间 active membership；evidence 工具还要求 attempt 仍在执行且
+发布 view/证据绑定可证明。未发布、撤权、跨空间、revision/attempt 不匹配统一返回安全的
+unavailable 或固定 scope 拒绝，不返回目标身份、原始个人字段、prompt、Memory/RAG 或 provider 内容。
+这些工具只能读取已发布 Steward projection，不能注册写入、Web 或诊断工具。
+
 
 - HS256 JWT，共享密钥 `AGENT_SERVICE_SECRET`；**typ 必须逐字一致**：service=`"agent_service"`、run=`"agent_run"`（两端各自实现过一次 typ 漂移导致 401，教训见 §6）。
 - run token claims **按 kind 逐项校验**（assistant 含 account_id，steward 不含；见 [steward-child-run.md](steward-child-run.md) §5），exp ≤600s；校验失败 fail-closed + audit `agent_internal_authz_denied`。

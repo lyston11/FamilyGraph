@@ -25,7 +25,7 @@ from app import config
 from app.errors import extract_api_error
 from app.models.agent import AgentRun
 from app.models.steward import StewardAssistPlan, StewardModelCall
-from app.services import agent_tokens, steward_assist
+from app.services import agent_tokens, agent_tools, steward_assist
 
 
 @pytest.fixture(autouse=True)
@@ -817,6 +817,7 @@ def test_both_carriers_send_the_same_prompt_text(db_session, monkeypatch):
         db_session, attempt_id=grant["attempt_id"], lease_owner="carrier"
     )
     assert run is not None
+    assert sorted(run.tool_allowlist_json or []) == sorted(agent_tools.default_allowlist("steward"))
     run_token = agent_tokens.issue_run_token(
         run_id=run.id,
         job_id=grant["steward_job_id"],

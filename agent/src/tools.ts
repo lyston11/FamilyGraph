@@ -43,6 +43,12 @@ export const TOOL_VERSIONS = {
   "familygraph.record_term_usage": 1,
   "familygraph.search_web": 1,
   "familygraph.fetch_approved_page": 1,
+  "familygraph.steward.get_space_snapshot": 1,
+  "familygraph.steward.list_space_nodes": 1,
+  "familygraph.steward.get_viewer_target": 1,
+  "familygraph.steward.get_viewer_term": 1,
+  "familygraph.steward.get_evidence": 1,
+  "familygraph.steward.get_relationship_path": 1,
 } as const;
 
 export type DomainToolName = keyof typeof TOOL_VERSIONS;
@@ -84,21 +90,14 @@ export function canonicalToolName(value: string): DomainToolName | undefined {
 /**
  * Tool names a slot of this kind may register.
  *
- * Every tool in TOOL_VERSIONS is an assistant-domain tool (read-only family
- * graph queries whose scope comes from the run token claims), and the server
- * only ever advertises them in an assistant allowlist. Steward therefore gets
- * an empty set in S1: its output is a closed structured product, and giving it
- * tools would turn a single projection into repeated model-chosen queries —
- * a different authorization shape that S3 designs separately.
- *
- * This is deliberately an explicit empty list rather than "assistant tools
- * minus a denylist": a new assistant tool must not become a steward tool by
- * default. The backend asserts the same disjointness
- * (`test_registry_required_kind_gating`), and the intersection is checked here
- * so neither side can drift alone.
+ * Assistant and Steward sets are explicit and disjoint. Steward only receives
+ * the six read-only projection tools below; it never inherits a future
+ * Assistant tool by subtraction or default traversal.
  */
 export function toolNamesFor(kind: AgentKind): string[] {
-  return kind === "steward" ? [] : Object.keys(TOOL_VERSIONS);
+  return kind === "steward"
+    ? [...STEWARD_TOOL_NAMES]
+    : Object.keys(TOOL_VERSIONS).filter((name) => !name.startsWith("familygraph.steward."));
 }
 
 /** Names of the tools this sidecar may register, derived from the registry. */
@@ -211,6 +210,53 @@ const FetchApprovedPageSchema = Type.Object({
     description: "search_web 结果中签发的一次性批准凭据；不接受任意网址。",
   }),
 });
+
+const StewardEmptySchema = Type.Object({}, { additionalProperties: false });
+const StewardListSpaceNodesSchema = Type.Object(
+  {
+    cursor: Type.Optional(Type.String({ maxLength: 32 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  },
+  { additionalProperties: false },
+);
+const StewardViewerTargetSchema = Type.Object(
+  {
+    target_user_id: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+const StewardViewerTermSchema = Type.Object(
+  {
+    root_user_id: Type.Integer({ minimum: 1 }),
+    target_user_id: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+const StewardEvidenceSchema = Type.Object(
+  {
+    target_user_id: Type.Integer({ minimum: 1 }),
+    evidence_ids: Type.Optional(
+      Type.Array(Type.Integer({ minimum: 1 }), { maxItems: 32 }),
+    ),
+  },
+  { additionalProperties: false },
+);
+const StewardRelationshipSchema = Type.Object(
+  {
+    from_user_id: Type.Integer({ minimum: 1 }),
+    to_user_id: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+const STEWARD_TOOL_NAMES = [
+  "familygraph.steward.get_space_snapshot",
+  "familygraph.steward.list_space_nodes",
+  "familygraph.steward.get_viewer_target",
+  "familygraph.steward.get_viewer_term",
+  "familygraph.steward.get_evidence",
+  "familygraph.steward.get_relationship_path",
+] as const;
 
 function textResult(text: string): {
   content: Array<{ type: "text"; text: string }>;
@@ -445,6 +491,80 @@ export function createDomainTools(
       }),
   };
 
+  const stewardSpaceSnapshot: ToolDefinition = {
+    name: "familygraph.steward.get_space_snapshot",
+    label: "Steward space snapshot",
+    description: "只读读取当前空间已发布 Steward 投影的版本与完成状态；不返回未授权原始事实。",
+    parameters: StewardEmptySchema,
+    execute: async (toolCallId: string) =>
+      queryViaExecutor(executor, "familygraph.steward.get_space_snapshot", toolCallId, {}),
+  } as unknown as ToolDefinition;
+  const stewardSpaceNodes: ToolDefinition = {
+    name: "familygraph.steward.list_space_nodes",
+    label: "Steward space nodes",
+    description: "只读列出当前空间已发布投影中的稳定节点摘要，不返回姓名或原始字段。",
+    parameters: StewardListSpaceNodesSchema,
+    execute: async (toolCallId: string, params: unknown) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.steward.list_space_nodes",
+        toolCallId,
+        compactInput(params as Static<typeof StewardListSpaceNodesSchema>),
+      ),
+  } as unknown as ToolDefinition;
+  const stewardViewerTarget: ToolDefinition = {
+    name: "familygraph.steward.get_viewer_target",
+    label: "Steward viewer target",
+    description: "只读读取当前 viewer 对目标的已发布投影状态与安全摘要。",
+    parameters: StewardViewerTargetSchema,
+    execute: async (toolCallId: string, params: unknown) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.steward.get_viewer_target",
+        toolCallId,
+        compactInput(params as Static<typeof StewardViewerTargetSchema>),
+      ),
+  } as unknown as ToolDefinition;
+  const stewardViewerTerm: ToolDefinition = {
+    name: "familygraph.steward.get_viewer_term",
+    label: "Steward viewer term",
+    description: "只读读取当前 viewer 的已发布个性化称谓投影；不写入偏好。",
+    parameters: StewardViewerTermSchema,
+    execute: async (toolCallId: string, params: unknown) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.steward.get_viewer_term",
+        toolCallId,
+        compactInput(params as Static<typeof StewardViewerTermSchema>),
+      ),
+  } as unknown as ToolDefinition;
+  const stewardEvidence: ToolDefinition = {
+    name: "familygraph.steward.get_evidence",
+    label: "Steward evidence",
+    description: "只读读取当前发布视图允许引用的结构化证据 ID、类型和方向。",
+    parameters: StewardEvidenceSchema,
+    execute: async (toolCallId: string, params: unknown) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.steward.get_evidence",
+        toolCallId,
+        compactInput(params as Static<typeof StewardEvidenceSchema>),
+      ),
+  } as unknown as ToolDefinition;
+  const stewardRelationshipPath: ToolDefinition = {
+    name: "familygraph.steward.get_relationship_path",
+    label: "Steward relationship path",
+    description: "只读读取当前空间已确认且已发布的关系路径和证据引用。",
+    parameters: StewardRelationshipSchema,
+    execute: async (toolCallId: string, params: unknown) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.steward.get_relationship_path",
+        toolCallId,
+        compactInput(params as Static<typeof StewardRelationshipSchema>),
+      ),
+  } as unknown as ToolDefinition;
+
   const tools = [
     echo,
     probeScope,
@@ -459,6 +579,12 @@ export function createDomainTools(
     recordTermUsage,
     searchWeb,
     fetchApprovedPage,
+    stewardSpaceSnapshot,
+    stewardSpaceNodes,
+    stewardViewerTarget,
+    stewardViewerTerm,
+    stewardEvidence,
+    stewardRelationshipPath,
   ] as unknown as ToolDefinition[];
 
   if (!options.providerWireNames) return tools;

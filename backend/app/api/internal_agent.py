@@ -818,7 +818,15 @@ def execute_tool(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ToolExecuteOut:
-    run, agent_session, claims = _authorize_run(db, request, run_id)
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        run, _claims = _authorize_steward_run(db, request, run_id)
+        agent_session = None
+        execution: ExecutionIdentity | StewardExecution = StewardExecution.from_claims(claims)
+    else:
+        run, agent_session, _claims = _authorize_run(db, request, run_id)
+        execution = ExecutionIdentity.from_claims(claims)
     decision = policy_guard.tool_call_hook(
         tool=tool_name,
         version=body.version,
@@ -836,7 +844,7 @@ def execute_tool(
         version=body.version,
         input_payload=body.input,
         tool_call_id=body.tool_call_id,
-        execution=ExecutionIdentity.from_claims(claims),
+        execution=execution,
     )
     db.commit()
     result_decision = policy_guard.tool_result_hook(output)
