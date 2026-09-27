@@ -221,7 +221,11 @@ def _authorize_assistant_run(
             message="token 与目标 Run 不匹配",
         )
     run = db.get(AgentRun, run_id)
-    if run is None:
+    if run is None or run.kind != "assistant":
+        # Kind is checked before the session is touched: a steward run has no
+        # session, so reading it first would turn a scope violation into an
+        # assertion failure rather than a clean denial. (The steward authorizer
+        # makes the mirror-image check.)
         raise_api_error(404, AGENT_RUN_NOT_FOUND, "Run 不存在")
     agent_session = db.get(AgentSession, run.session_id)
     assert agent_session is not None
@@ -319,6 +323,26 @@ def _authorize_run(
     steward token unable to reach them.
     """
     return _authorize_assistant_run(db, request, run_id)
+
+
+def _authorize_provider_run(
+    db: Session, request: Request, run_id: int
+) -> tuple[AgentRun, int, dict[str, Any]]:
+    """Authorize one gateway call from either kind, returning its space.
+
+    The gateway is the single egress, so both kinds must reach it: a steward child
+    run that is refused here has no way to make a model call at all, and its egress
+    would go unaudited. The token's kind decides which authorizer runs — the two
+    keep independent, complete check sets — and this function only resolves the
+    space each one anchors on (an assistant run's session, a steward run's claim).
+    """
+    _reject_user_jwt(db, request)
+    claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
+    if claims["agent_kind"] == "steward":
+        run, _steward_claims = _authorize_steward_run(db, request, run_id)
+        return run, int(claims["space_id"]), claims
+    run, agent_session, _claims = _authorize_assistant_run(db, request, run_id)
+    return run, agent_session.space_id, _claims
 
 
 def _require_active_run(db: Session, request: Request, run: AgentRun) -> None:
@@ -513,8 +537,13 @@ async def proxy_provider_chat_completions(
     上游错误一律脱敏为通用错误体；成功响应（含 SSE 流）原样透传。
     """
     from app.services import provider_proxy
+    from app.services.agent_execution import execution_from_claims
 
-    run, agent_session, _claims = _authorize_run(db, request, run_id)
+    # Both kinds may call the gateway: it is the only egress, and a steward child
+    # run that cannot reach it has no way to make a model call at all. The token
+    # decides which authorization applies, and the kind assertion inside each
+    # authorizer keeps the two check sets from contaminating each other.
+    run, space_id, _claims = _authorize_provider_run(db, request, run_id)
     expected_api = (
         "openai-responses"
         if request.url.path.endswith("/provider/responses")
@@ -539,13 +568,13 @@ async def proxy_provider_chat_completions(
         client, upstream, provider_id, header_ms = await provider_proxy.stream_provider_response(
             db,
             run=run,
-            space_id=agent_session.space_id,
+            space_id=space_id,
             body=body,
             content_type=request.headers.get("content-type"),
             accept=request.headers.get("accept"),
             user_agent=request.headers.get("user-agent"),
             expected_api=expected_api,
-            execution=ExecutionIdentity.from_claims(_claims),
+            execution=execution_from_claims(_claims),
         )
     except provider_proxy.ProviderProxyError as exc:
         db.commit()  # 审计先提交（拒绝路径惯例）

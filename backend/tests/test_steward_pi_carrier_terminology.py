@@ -258,7 +258,11 @@ def test_a_pi_settlement_cannot_write_back_after_the_viewer_is_revoked(db_sessio
     db_session.commit()
 
     response = _settle(client, run.id, token, _terminology_product(payload))
+    # The refusal is a scope violation (403), not a missing run: the steward run is
+    # real and the token is its own, but the viewer's membership is gone, so the
+    # execution identity no longer resolves.
     assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "AGENT_TOKEN_SCOPE_MISMATCH"
     db_session.expire_all()
 
     # Nothing was applied, and the row is not silently left live forever: recovery
@@ -416,3 +420,84 @@ def test_rolling_the_carrier_back_leaves_no_orphan(db_session, monkeypatch):
     db_session.expire_all()
     assert db_session.get(StewardModelCall, grant["attempt_id"]).status == "unknown"
     assert db_session.get(AgentRun, run.id).status == "expired"
+
+
+# --------------------------------------------------------------------------
+# The gateway is the single egress, for both kinds
+# --------------------------------------------------------------------------
+
+
+def test_a_steward_child_run_can_reach_the_provider_gateway(db_session, monkeypatch):
+    """A child run must be able to make a model call through the only egress.
+
+    The gateway used to authorize with the assistant-only alias, so every steward
+    request was refused with AGENT_TOKEN_SCOPE_MISMATCH. That is not a cosmetic
+    gap: the gateway is the single egress, so a child run that cannot reach it has
+    no way to call a model at all — and its traffic would go unaudited, since the
+    egress audit is written there.
+
+    It also resolved the provider with the default kind, so even once authorized a
+    steward run looked up the assistant's space settings and reported the provider
+    as unavailable. Both are asserted by reaching a *later* check: an authorization
+    or resolution failure produces 403/503, while the request being rejected for its
+    body means both succeeded.
+    """
+    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
+    _world_with_terminology(db_session)
+    grant, run, token, client = _lease_and_open(db_session, carrier="pi")
+
+    # The model name must match the run's pinned snapshot, or the gateway rejects
+    # the body before sending. Read it from the snapshot rather than assuming.
+    child = db_session.get(AgentRun, run.id)
+    assert child is not None
+    snapshot = child.runtime_snapshot_json or {}
+    assert snapshot.get("model"), "the child run must pin its provider snapshot"
+
+    response = client.post(
+        f"/internal/agent/runs/{run.id}/provider/responses",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"model": snapshot["model"], "input": [], "stream": False},
+    )
+    # Authorization and resolution passed; what remains is the upstream call, which
+    # this test does not make (there is no provider at the configured URL).
+    assert response.status_code not in (403, 503), response.text
+    assert "AGENT_TOKEN_SCOPE_MISMATCH" not in response.text
+    assert "Provider 当前不可用" not in response.text
+
+
+def test_an_assistant_token_still_cannot_reach_a_steward_run(db_session, monkeypatch):
+    """Opening the gateway to both kinds must not blur the two identities.
+
+    Each kind is still authorized by its own check set, so an assistant token
+    aimed at a steward run is refused — the gateway is not a hole in the scope
+    boundary, it is the same boundary with one more admitted caller.
+
+    The refusal is 404 rather than 403 by design: the run is not visible to an
+    assistant identity at all, and the assistant authorizer checks the kind before
+    touching the session (a steward run has none, so reading it first would turn a
+    scope violation into an assertion failure).
+    """
+    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
+    _world_with_terminology(db_session)
+    _grant, run, _token, client = _lease_and_open(db_session, carrier="pi")
+
+    from app.services import agent_tokens as tokens
+
+    # An assistant token: its claims say assistant, so the steward authorizer must
+    # reject it even though the run id is real.
+    assistant_token = tokens.issue_run_token(
+        run_id=run.id,
+        job_id=1,
+        attempt=1,
+        agent_kind="assistant",
+        account_id=1,
+        space_id=1,
+        tool_allowlist=[],
+    )
+    response = client.post(
+        f"/internal/agent/runs/{run.id}/provider/responses",
+        headers={"Authorization": f"Bearer {assistant_token}"},
+        json={"model": "x", "input": [], "stream": False},
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "AGENT_RUN_NOT_FOUND"

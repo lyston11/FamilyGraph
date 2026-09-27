@@ -39,7 +39,11 @@ def test_provider_fences_original_attempt_before_upstream(
     _FakeAsyncClient.last = None
     switched = False
     if boundary == "authorization":
-        original = internal_agent._authorize_run
+        # The gateway authorizes through `_authorize_provider_run` (it admits both
+        # kinds), so that is the step this boundary patches. The property under test
+        # is unchanged: a lease that moves after authorization must still be refused
+        # at admission, with zero upstream requests.
+        original = internal_agent._authorize_provider_run
 
         def replace_after_auth(*args, **kwargs):
             nonlocal switched
@@ -48,7 +52,7 @@ def test_provider_fences_original_attempt_before_upstream(
             switched = True
             return result
 
-        monkeypatch.setattr(internal_agent, "_authorize_run", replace_after_auth)
+        monkeypatch.setattr(internal_agent, "_authorize_provider_run", replace_after_auth)
     else:
         original = provider_proxy._admit_upstream_request
 
@@ -189,14 +193,16 @@ def test_claimed_web_tool_releases_writer_before_real_gateway_network_boundary(
         # quota and DNS checks. A different SQLite connection must be writable.
         with SessionLocal() as contender:
             # The short timeout is the point: this proves the contender does not
-            # need to wait out a lock. It must be restored before the connection
-            # goes back to the pool, because ``PRAGMA busy_timeout`` is a property
-            # of the connection, not of the session, and the connect hook only sets
-            # it when a connection is created. Leaving 100ms behind hands it to
-            # whichever later test reuses this connection, which then fails with
-            # "database is locked" on work the 5000ms default would have waited out.
-            original_timeout = contender.execute(text("PRAGMA busy_timeout")).scalar_one()
-            contender.execute(text("PRAGMA busy_timeout = 100"))
+            # need to wait out a lock. It must be restored on the same DBAPI
+            # connection it was set on: ``PRAGMA busy_timeout`` belongs to the
+            # connection, and ``commit()`` returns it to the pool, so a later
+            # restore through the session can land on a *different* connection and
+            # leave the lowered value behind for whichever test reuses that one.
+            # That is how this leaked: the victim saw "database is locked" on work
+            # the 5000ms default would have waited out, only in full runs.
+            dbapi = contender.connection().connection.dbapi_connection
+            original_timeout = dbapi.execute("PRAGMA busy_timeout").fetchone()[0]
+            dbapi.execute("PRAGMA busy_timeout = 100")
             try:
                 claim = contender.scalar(
                     select(AgentToolCall).where(AgentToolCall.run_id == world["run_id"])
@@ -208,7 +214,7 @@ def test_claimed_web_tool_releases_writer_before_real_gateway_network_boundary(
                 )
                 contender.commit()
             finally:
-                contender.execute(text(f"PRAGMA busy_timeout = {int(original_timeout)}"))
+                dbapi.execute(f"PRAGMA busy_timeout = {int(original_timeout)}")
         if refuse:
             raise controlled_web.WebGatewayError(
                 503, "WEB_PROVIDER_UNAVAILABLE", "synthetic unavailable"

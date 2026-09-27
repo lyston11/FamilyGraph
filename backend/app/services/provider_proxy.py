@@ -35,7 +35,7 @@ from app.errors import (
 )
 from app.models.agent import AgentRun
 from app.services import agent_provider, audit, policy_guard
-from app.services.agent_execution import ExecutionIdentity, fence_assistant_execution
+from app.services.agent_execution import Execution, fence_execution
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ def _refresh_run_gate(db: Session, run: AgentRun | int) -> AgentRun:
 
 
 def _admit_upstream_request(
-    db: Session, run_id: int, *, execution: ExecutionIdentity | None = None
+    db: Session, run_id: int, *, execution: Execution | None = None
 ) -> AgentRun:
     """Atomically admit one upstream request before opening the socket.
 
@@ -246,11 +246,15 @@ def _admit_upstream_request(
     cancel/status fence in the same statement; cancellation either commits
     first (rowcount=0, request rejected) or waits until this admission is
     committed (the request is then considered already in flight).
+
+    ``execution`` is dispatched by *type*, so the assistant and steward check
+    sets stay independent: a steward child run has no session and no queue job,
+    so the assistant fence cannot express it (and vice versa).
     """
     db.rollback()
     if execution is not None:
         try:
-            run, _session, _job = fence_assistant_execution(db, execution)
+            run, _scope, _job = fence_execution(db, execution)
         except HTTPException as exc:
             db.rollback()
             from app.errors import extract_api_error
@@ -330,7 +334,7 @@ async def stream_provider_response(
     accept: str | None = None,
     user_agent: str | None = None,
     expected_api: str | None = None,
-    execution: ExecutionIdentity | None = None,
+    execution: Execution | None = None,
 ) -> tuple[Any, Any, int, int | None]:
     """向已注册 Provider 转发一次 chat/completions 请求。
 
@@ -347,7 +351,10 @@ async def stream_provider_response(
         # anonymous/side-effectful upstream POST. Reject before resolving or
         # decrypting provider credentials.
         raise ProviderProxyError(422, AGENT_PROVIDER_REQUEST_INVALID, "Provider 请求体不能为空")
-    runtime = agent_provider.resolve_runtime(db, space_id, run=run)
+    # Resolve against the run's own kind: the two kinds have independent space
+    # settings, so resolving a steward run as an assistant would look up a
+    # configuration that does not exist and report the provider as unavailable.
+    runtime = agent_provider.resolve_runtime(db, space_id, run=run, agent_kind=run.kind)
     if runtime is None:
         # fail-closed：解析/解密失败一律可解释拒绝，绝不回退 sidecar env
         raise ProviderProxyError(
