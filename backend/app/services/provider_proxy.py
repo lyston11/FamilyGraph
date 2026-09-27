@@ -386,7 +386,10 @@ async def stream_provider_response(
                 422, AGENT_PROVIDER_REQUEST_INVALID, "Provider 请求必须是 JSON 对象"
             )
         _validate_runtime_payload(payload, runtime)
-        resolution = agent_provider.resolve_for_run(db, run, space_id)
+        # Resolve against the run's own kind, like the runtime above: the two kinds
+        # have separate space settings, so resolving a steward run as an assistant
+        # reads a setting that does not exist and reports cloud as forbidden.
+        resolution = agent_provider.resolve_for_run(db, run, space_id, run.kind)
         decision = policy_guard.before_provider_request(
             payload,
             provider_kind=runtime.kind,

@@ -27,8 +27,9 @@ from test_steward_terminology import (
 
 from app import config
 from app.models.agent import AgentRun
+from app.models.audit_log import AuditLog
 from app.models.steward import StewardModelCall
-from app.services import agent_tokens, steward_assist, terms
+from app.services import agent_tokens, provider_proxy, steward_assist, terms
 
 # --------------------------------------------------------------------------
 # Driving one attempt through the Pi chain
@@ -501,3 +502,57 @@ def test_an_assistant_token_still_cannot_reach_a_steward_run(db_session, monkeyp
     )
     assert response.status_code == 404, response.text
     assert response.json()["error"]["code"] == "AGENT_RUN_NOT_FOUND"
+
+
+def test_a_steward_egress_is_audited_against_its_child_run(db_session, monkeypatch):
+    """The one model call a child run makes is audited, with its safe classification.
+
+    The in-process carrier talks to the provider directly, so it produces no egress
+    audit. Routing through the gateway is what buys the audit — but only if the row
+    is written against the child run, since that is the id the operator has and the
+    only link back to the attempt. `error_class`/`retryable`/`sent` must be present
+    too: they are what makes a failure diagnosable without reading prompt text.
+    """
+    from test_provider_proxy import _FakeAsyncClient, _FakeUpstream
+
+    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
+    _world_with_terminology(db_session)
+    grant, run, token, client = _lease_and_open(db_session, carrier="pi")
+
+    # Serve the upstream from a fake so no network call happens; the point is the
+    # audit, not the model.
+    _FakeAsyncClient.response = _FakeUpstream([b'{"id": "cmpl-steward"}'])
+    _FakeAsyncClient.raise_on_send = None
+    _FakeAsyncClient.last = None
+    _FakeAsyncClient.send_delay_seconds = 0.0
+    monkeypatch.setattr(provider_proxy.httpx, "AsyncClient", _FakeAsyncClient)
+
+    child = db_session.get(AgentRun, run.id)
+    assert child is not None
+    model = (child.runtime_snapshot_json or {})["model"]
+
+    response = client.post(
+        f"/internal/agent/runs/{run.id}/provider/responses",
+        headers={"Authorization": f"Bearer {token}"},
+        # Streaming is mandatory for the gateway (it proxies an SSE stream), so a
+        # non-streaming body is refused before the upstream call.
+        json={"model": model, "input": [{"role": "user", "content": "x"}], "stream": True},
+    )
+    assert response.status_code == 200, response.text
+
+    rows = list(
+        db_session.scalars(
+            select(AuditLog).where(
+                AuditLog.action == "agent_provider_egress",
+                AuditLog.target_id == run.id,
+            )
+        )
+    )
+    assert rows, "a steward model call must be audited against its child run"
+    detail = rows[-1].detail or {}
+    # The safe classification fields, which the admin latency view also reads.
+    assert detail.get("status") == "succeeded"
+    assert "bytes_read" in detail
+    # Never the prompt or the credential.
+    assert grant["assist_kind"] not in (rows[-1].detail_json or "")
+    assert "sk-term-test" not in (rows[-1].detail_json or "")
