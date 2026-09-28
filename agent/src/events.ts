@@ -39,6 +39,19 @@ export const EVENT_TYPES = [
   "run.expired",
 ] as const;
 
+/**
+ * Message-class events: they materialise or project conversation. The backend
+ * refuses them for a steward child run (single-turn, no session) and one refused
+ * entry fails the whole append batch, so a run that does not publish conversation
+ * must drop them before they are batched. Mirrors the backend's own set.
+ */
+export const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "message.user_added",
+  "message.assistant_added",
+  "assistant.text_delta",
+  "assistant.text_reset",
+]);
+
 export type FgEventType = (typeof EVENT_TYPES)[number];
 
 export function isKnownEventType(value: string): value is FgEventType {
@@ -397,6 +410,14 @@ export class RunEventBuffer {
       /** Injectable clock for tests; defaults to the process monotonic clock. */
       now?: () => number;
     },
+    /**
+     * Whether this run may publish message-class events.
+     *
+     * The backend refuses them for a steward child run and a refused entry fails
+     * the whole append batch, so a run whose answer travels with settlement must
+     * suppress them at the source rather than rely on the server to reject them.
+     */
+    private readonly publishesConversation = true,
   ) {
     this.nextSeq = Number.isInteger(startSeq) && startSeq >= 0 ? startSeq : 1;
   }
@@ -520,6 +541,13 @@ export class RunEventBuffer {
     }
 
     const mapped = mapSessionEvent(event);
+    // A run that does not publish conversation drops every message-class event
+    // here, before it can reach the append batch: the server refuses them for a
+    // child run and one refused entry loses the entire batch, so filtering in the
+    // mapper's consumer keeps the answer's own events intact.
+    const publishable = this.publishesConversation
+      ? mapped
+      : mapped.filter((item) => !MESSAGE_EVENT_TYPES.has(item.type));
     // Any non-delta event is a sequencing boundary for the coalesced chunk: the
     // pending prose must be assigned a seq before the boundary event, or a tool
     // call / final answer would appear to precede prose that arrived earlier.
@@ -537,7 +565,7 @@ export class RunEventBuffer {
         duration_ms: Math.round(this.compactionMs),
       });
     }
-    for (const item of mapped) {
+    for (const item of publishable) {
       if (item.type === "message.assistant_added" && this.webCitations.length > 0) {
         const payload = item.public_payload as AssistantMessagePayload;
         payload.web_citations = this.webCitations.slice();
@@ -607,6 +635,11 @@ export class RunEventBuffer {
     if (this.prosePending.length === 0) return;
     const pending = this.prosePending;
     this.prosePending = "";
+    // A run that does not publish conversation has nowhere to show live prose:
+    // its answer travels with settlement. Drop the pending text instead of
+    // emitting a message-class event the server would refuse (which would fail
+    // the whole batch and lose the run's other events with it).
+    if (!this.publishesConversation) return;
     // Iterate by code point so a surrogate pair is never split in half.
     const points = Array.from(pending);
     for (let start = 0; start < points.length; start += MAX_PROSE_FRAGMENT_CHARS) {

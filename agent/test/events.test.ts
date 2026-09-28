@@ -166,6 +166,40 @@ describe("RunEventBuffer", () => {
     expect(buffer.size).toBe(0);
   });
 
+  it("drops message-class events for a run that does not publish conversation", () => {
+    // A steward child run has no session and no conversation; the backend refuses
+    // these events and one refused entry fails the whole append batch, so they
+    // must be filtered before batching rather than left to the server.
+    const buffer = new RunEventBuffer(1, undefined, undefined, false);
+    buffer.onSessionEvent({ type: "agent_start" });
+    buffer.onSessionEvent({ type: "turn_start" });
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "the answer" }] },
+    });
+    // Live prose is message-class too, so a delta must not resurrect it.
+    buffer.onSessionEvent({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "partial" },
+    });
+    buffer.onSessionEvent({ type: "turn_end" });
+
+    const types = buffer.drain().map((e) => e.type);
+    expect(types).toEqual(["run.started", "turn.started", "turn.completed"]);
+    expect(types).not.toContain("message.assistant_added");
+    expect(types).not.toContain("assistant.text_delta");
+  });
+
+  it("still publishes conversation for a run that does", () => {
+    // The suppression above must be driven by the flag, not applied to every run.
+    const buffer = new RunEventBuffer(1, undefined, undefined, true);
+    buffer.onSessionEvent({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "the answer" }] },
+    });
+    expect(buffer.drain().map((e) => e.type)).toContain("message.assistant_added");
+  });
+
   it("attaches fetch_approved_page citations to the next assistant message", () => {
     const buffer = new RunEventBuffer();
     buffer.onSessionEvent({

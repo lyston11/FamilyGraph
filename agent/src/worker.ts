@@ -346,7 +346,8 @@ export class SidecarWorker {
       const events = new RunEventBuffer(projection.next_event_seq, projection.context_build_id === null
         ? undefined : { build_id: projection.context_build_id, attempt: projection.attempt,
           allowed_handles: (projection.context_blocks ?? []).map((block) => block.citation) },
-        { prepStartedAt, now: this.now });
+        { prepStartedAt, now: this.now },
+        adapter.publishesConversation);
       if (projection.cancel_requested) {
         active.cancelRequested = true;
         active.abort.abort();

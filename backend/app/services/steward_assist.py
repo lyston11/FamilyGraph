@@ -1360,16 +1360,26 @@ def lease_attempt(
                 attempt.error_code = reason
                 db.flush()
                 continue
+            # The lease is capped by the plan's remaining wall clock (otherwise
+            # each attempt would get a fresh full window and one plan could run for
+            # attempts x ttl). A plan whose clock has run out therefore cannot fund
+            # a send: leasing it would hand out a lease that is already expired, and
+            # the attempt would then converge through crash point ③ as ``unknown``
+            # with conservative billing — charging for a request never sent. Retire
+            # it as ``skipped``/``insufficient_budget`` instead (zero billing, benign
+            # per the send-budget contract) and look at the next candidate, so one
+            # stale plan cannot strand its space.
+            if (plan.deadline_at - now).total_seconds() < _MIN_SEND_WINDOW_SECONDS:
+                attempt.status = "skipped"
+                attempt.error_code = REASON_INSUFFICIENT_BUDGET
+                db.flush()
+                continue
             break
         else:
             return None
-        # The per-attempt lease is also capped by the plan's remaining wall clock:
-        # otherwise each attempt would get a fresh full window and one plan could
-        # run for (attempts x ttl) instead of one lease window.
-        plan_deadline = plan.deadline_at
         attempt.status = "in_flight"
         attempt.lease_owner = worker_id
-        attempt.lease_until = min(now + timedelta(seconds=ttl), plan_deadline)
+        attempt.lease_until = min(now + timedelta(seconds=ttl), plan.deadline_at)
         db.flush()
         # Everything the carrier needs to send is captured here, so the send path
         # never has to read the database (and therefore never holds a transaction

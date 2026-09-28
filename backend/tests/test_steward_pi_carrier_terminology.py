@@ -358,6 +358,53 @@ def test_a_stranded_lease_converges_within_one_lease_period(db_session, monkeypa
     assert db_session.get(AgentRun, run.id).status == "expired"
 
 
+def test_an_attempt_whose_plan_deadline_passed_is_never_leased(db_session, monkeypatch):
+    """A plan out of wall clock must not hand out an already-expired lease.
+
+    The lease is capped by the plan's deadline, so leasing an attempt from a plan
+    whose deadline has already passed yields a lease that expired before the
+    carrier could even read context. The carrier then fails, and the attempt
+    converges through crash point ③ as ``unknown`` with conservative billing —
+    charging for a request that was never sent. The send-budget contract says the
+    opposite: work that cannot be sent is ``skipped``/``insufficient_budget`` with
+    zero billing.
+    """
+    from datetime import timedelta
+
+    from app.utils.timeutil import utcnow
+
+    _world_with_terminology(db_session)
+    plan = db_session.scalar(
+        select(steward_assist.StewardAssistPlan).order_by(
+            steward_assist.StewardAssistPlan.id.desc()
+        )
+    )
+    assert plan is not None
+    plan.deadline_at = utcnow() - timedelta(seconds=5)
+    db_session.commit()
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="e3-sidecar", carrier=CARRIER_PI
+    )
+    db_session.expire_all()
+
+    # Nothing from that plan may be leased...
+    if grant is not None:
+        leased = db_session.get(StewardModelCall, grant["attempt_id"])
+        assert leased is not None
+        assert leased.plan_id != plan.id, "an expired plan must not fund a lease"
+    # ...and its attempts are retired as zero-billing skips, not billed unknowns.
+    stale = list(
+        db_session.scalars(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
+    )
+    assert stale, "the plan must still have attempts to reason about"
+    assert all(row.status == "skipped" for row in stale), [
+        (row.id, row.status, row.error_code) for row in stale
+    ]
+    assert all(row.error_code == "insufficient_budget" for row in stale)
+    assert all(row.billed_tokens in (None, 0) for row in stale)
+
+
 # --------------------------------------------------------------------------
 # The gateway is the single egress, for both kinds
 # --------------------------------------------------------------------------

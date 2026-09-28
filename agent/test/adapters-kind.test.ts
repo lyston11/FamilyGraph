@@ -158,6 +158,15 @@ describe("adapterFor", () => {
     expect(adapterFor("assistant").extractProduct(null)).toBeNull();
     expect(adapterFor("steward").extractProduct(null)).toBeNull();
   });
+
+  it("publishes conversation only for the assistant", () => {
+    // The backend refuses message-class events for a steward child run, and a
+    // refused entry fails the ENTIRE append batch — so emitting one costs the
+    // run's other events too. The steward's answer travels with settlement, so
+    // its prose must never be published as conversation.
+    expect(adapterFor("assistant").publishesConversation).toBe(true);
+    expect(adapterFor("steward").publishesConversation).toBe(false);
+  });
 });
 
 describe("leaseRequest", () => {

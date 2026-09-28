@@ -98,6 +98,16 @@ export interface KindAdapter {
    *  once, in the lifecycle, rather than per kind. */
   extractProduct(finalText: string | null): string | null;
 
+  /** Whether this kind may publish message-class events to its run.
+   *
+   *  The backend refuses ``message.assistant_added`` / ``assistant.text_delta`` /
+   *  ``assistant.text_reset`` for a steward child run (no session, no
+   *  conversation), and a refused entry fails the ENTIRE append batch — so
+   *  emitting one costs the run, not just the frame. The steward's answer travels
+   *  with settlement instead, which is why its prose must never be published as
+   *  conversation. Data rather than a branch, so the buffer needs no kind. */
+  readonly publishesConversation: boolean;
+
   /** Path and body for one lease request. */
   leaseRequest(config: AgentConfig): LeaseRequestSpec;
 }
@@ -123,6 +133,7 @@ const assistantAdapter: KindAdapter = Object.freeze<KindAdapter>({
   adoptsServerConcurrency: false,
   reportsProductOnSettle: false,
   extractProduct: (finalText) => finalText,
+  publishesConversation: true,
   leaseRequest: (config) => ({
     path: "/internal/agent/jobs/lease",
     body: { kind: "assistant", leased_by: config.sidecarId },
@@ -201,6 +212,7 @@ const stewardAdapter: KindAdapter = Object.freeze<KindAdapter>({
   adoptsServerConcurrency: true,
   reportsProductOnSettle: true,
   extractProduct: (finalText) => finalText,
+  publishesConversation: false,
   // The endpoint is named for what is leased (an attempt), not for the job that
   // used to be the unit, and it is a separate route from the assistant queue:
   // "which container may lease which queue" is a routing-level constraint, not
