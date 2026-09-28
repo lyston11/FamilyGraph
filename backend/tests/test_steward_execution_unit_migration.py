@@ -538,6 +538,112 @@ def test_scope_binding_is_enforced_by_the_database(upgraded):
 # --------------------------------------------------------------------------
 
 
+def _seed_finished_in_process_batch(data_dir: Path) -> None:
+    """Seed a pre-0055 batch the old executor had already applied.
+
+    The in-process executor applied products first and only then wrote the
+    batch's terminal status, so a terminal batch is proof the write-back is over.
+    """
+    engine = migration_engine(data_dir)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users (id, name, created_at, gender, privacy_mode, profile_status) "
+                "VALUES (1, 'u', '2026-01-01', 'm', 'handover', 'identity_confirmed')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO family_spaces (id, name, owner_id, kind, created_at) "
+                "VALUES (1, 's', 1, 'household', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO steward_jobs (id, space_id, cause, trigger_cursor, status, "
+                "policy_version, created_at, updated_at) "
+                "VALUES (1, 1, 'domain_event', 0, 'succeeded', 'v1', '2026-01-01', '2026-01-01'), "
+                "(2, 1, 'domain_event', 0, 'succeeded', 'v1', '2026-01-01', '2026-01-01')"
+            )
+        )
+        # A batch the executor finished, and one it was still working on.
+        # One batch per job (UNIQUE(job_id)), so each needs its own job.
+        for batch_id, status in ((1, "applied"), (2, "leased")):
+            conn.execute(
+                text(
+                    "INSERT INTO steward_assist_batches (id, space_id, job_id, evidence_hash, "
+                    "policy_version, status, attempt, fence_json, created_at, updated_at) "
+                    "VALUES (:id, 1, :job, 'h', 'v1', :status, 1, '{}', '2026-01-01', "
+                    "'2026-01-02')"
+                ),
+                {"id": batch_id, "job": batch_id, "status": status},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO steward_model_calls (id, space_id, job_id, policy_version, "
+                    "assist_kind, prompt_digest, prompt_chars, status, seq, created_at, "
+                    "batch_id, output_json) "
+                    "VALUES (:id, 1, :job, 'v1', 'candidate', 'd', 1, 'succeeded', 1, "
+                    "'2026-01-01', :batch, '{}')"
+                ),
+                {"id": batch_id, "job": batch_id, "batch": batch_id},
+            )
+
+
+def test_upgrade_closes_the_write_back_of_finished_batches(tmp_path):
+    """Historical rows must not masquerade as crash point ④.
+
+    ``applied_at IS NULL`` means "product persisted, write-back not done", so
+    leaving it NULL for every in-process-era row makes the first recovery pass
+    after deploy re-fence and rewrite the whole historical ledger. Only a batch
+    that was genuinely mid-flight may stay NULL.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    assert run_migration(data_dir, "upgrade", PARENT)[0] == 0
+    _seed_finished_in_process_batch(data_dir)
+    assert run_migration(data_dir, "upgrade", HEAD)[0] == 0
+
+    engine = migration_engine(data_dir)
+    with engine.connect() as conn:
+        applied = {
+            row[0]: row[1]
+            for row in conn.execute(text("SELECT id, applied_at FROM steward_model_calls"))
+        }
+    # The finished batch is closed...
+    assert applied[1] is not None
+    # ...and the unfinished one keeps NULL so recovery completes it.
+    assert applied[2] is None
+
+
+def test_upgrade_leaves_no_false_crash_point_four(tmp_path):
+    """Only the genuinely unfinished batch may match the recovery selector.
+
+    Asserting the predicate rather than the column keeps this honest if the
+    recovery query changes shape: the finished batch must drop out, while the
+    leased one correctly remains as real crash point ④ work.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    assert run_migration(data_dir, "upgrade", PARENT)[0] == 0
+    _seed_finished_in_process_batch(data_dir)
+    assert run_migration(data_dir, "upgrade", HEAD)[0] == 0
+
+    engine = migration_engine(data_dir)
+    with engine.connect() as conn:
+        pending = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT id FROM steward_model_calls WHERE status IN "
+                    "('succeeded','degraded') AND applied_at IS NULL "
+                    "AND output_json IS NOT NULL ORDER BY id"
+                )
+            )
+        ]
+    assert pending == [2], "only the leased batch is real crash point ④ work"
+
+
 def test_downgrade_restores_the_previous_schema(tmp_path):
     """Downgrade must restore the pre-0055 column/constraint shape.
 

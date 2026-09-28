@@ -573,6 +573,47 @@ def _narrow_plan_table(conn: sa.Connection) -> None:
         conn.execute(sa.text(f"PRAGMA foreign_keys={'ON' if previous_fk else 'OFF'}"))
 
 
+def _add_applied_at_column(conn: sa.Connection) -> None:
+    """Add crash point ④'s marker while the batch status is still readable.
+
+    ``status`` records the *call* result, not the *application* result, so
+    without this column a crash between the two loses the product permanently.
+    It is added ahead of the attempt's other new columns because
+    ``_backfill_closed_applied_at`` reads ``steward_assist_batches.status``,
+    which ``_narrow_plan_table`` drops.
+    """
+    conn.execute(sa.text("ALTER TABLE steward_model_calls ADD COLUMN applied_at DATETIME"))
+
+
+def _backfill_closed_applied_at(conn: sa.Connection) -> None:
+    """Close the write-back phase for every attempt the old executor finished.
+
+    The in-process executor owned the whole apply step: it applied the products
+    and only afterwards wrote the batch's terminal status. A terminal batch
+    therefore means the write-back is over — applied (``applied``), applied
+    alongside a failed sibling (``failed``), or deliberately not applied because
+    the fence rejected it (``superseded``).
+
+    Leaving those rows at ``applied_at IS NULL`` makes them indistinguishable
+    from crash point ④ ("product persisted, write-back not done"), so the first
+    recovery pass after deploy would re-fence and rewrite the whole in-process
+    ledger — paid-for history turned into ``skipped`` rows for no reason.
+
+    A batch still ``leased``/``applying`` is genuinely unfinished and keeps NULL
+    so recovery completes it.
+    """
+    conn.execute(
+        sa.text(
+            "UPDATE steward_model_calls SET applied_at = COALESCE("
+            "(SELECT b.updated_at FROM steward_assist_batches b WHERE b.id = batch_id),"
+            "created_at) "
+            "WHERE batch_id IN ("
+            "SELECT id FROM steward_assist_batches "
+            "WHERE status IN ('applied','failed','superseded'))"
+        )
+    )
+
+
 def _create_execution_unit_columns(conn: sa.Connection) -> None:
     """Move the lease onto the attempt and give it the fields it now owns.
 
@@ -599,10 +640,6 @@ def _create_execution_unit_columns(conn: sa.Connection) -> None:
     # also needs stay on the plan, which is immutable — copying them per attempt
     # would duplicate the same bytes for every call in a job.
     conn.execute(sa.text("ALTER TABLE steward_model_calls ADD COLUMN evidence_hash VARCHAR(64)"))
-    # Crash point ④ needs a marker for "product persisted, write-back not done".
-    # status records the *call* result, not the *application* result, so without
-    # this column a crash between the two loses the product permanently.
-    conn.execute(sa.text("ALTER TABLE steward_model_calls ADD COLUMN applied_at DATETIME"))
     # Ledger column: ON DELETE SET NULL, not CASCADE — the attempt ledger must
     # outlive the execution record (prompt digest / tokens / status / error code
     # stay traceable after the child run is pruned). Historical rows keep NULL
@@ -736,6 +773,11 @@ def upgrade() -> None:
     _relax_context_builds_account(conn)
 
     # --- the attempt becomes the execution unit ---
+    # The historical-write-back marker is written while the batch still carries
+    # its status: `_narrow_plan_table` drops that column, and without the marker
+    # every in-process-era row matches crash point ④ and gets rewritten.
+    _add_applied_at_column(conn)
+    _backfill_closed_applied_at(conn)
     _narrow_plan_table(conn)
     _create_execution_unit_columns(conn)
     _rename_batch_reference(conn)
