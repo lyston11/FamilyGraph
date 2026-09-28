@@ -133,9 +133,10 @@ export interface RunContextProjection {
   /** Steward only: the prompt version the server expects this sidecar to have
    * loaded. Verified against STEWARD_PROMPT_VERSION before any model call. */
   steward_prompt_version?: string;
-  /** Steward only: the per-kind instruction block the server owns. The
-   * in-process carrier sends this as the system message, so a child run must send
-   * the same text (the candidate kind's direction semantics live here). */
+  /** Steward only: the per-kind instruction block the server owns. The server
+   * sends this in the projection and hashes it into ``prompt_digest``, so the
+   * text that runs is the text the digest describes (the candidate kind's
+   * direction semantics live here). */
   steward_instructions?: string;
 }
 

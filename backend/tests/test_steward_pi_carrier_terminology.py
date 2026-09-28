@@ -28,7 +28,7 @@ from test_steward_terminology import (
 from app import config
 from app.models.agent import AgentRun
 from app.models.audit_log import AuditLog
-from app.models.steward import StewardModelCall
+from app.models.steward import CARRIER_PI, StewardModelCall
 from app.services import agent_tokens, provider_proxy, steward_assist, terms
 
 # --------------------------------------------------------------------------
@@ -158,71 +158,6 @@ def _terminology_product(payload: dict) -> str:
 # --------------------------------------------------------------------------
 
 
-def test_the_projection_is_identical_for_both_carriers(db_session, monkeypatch):
-    """The model must be asked the same question whichever carrier runs it.
-
-    Compared through the real context endpoint rather than by reading the code:
-    the projection is what the sidecar actually sends, and it is assembled from
-    several sources (instructions, the kind's input builder, the fence group).
-    """
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "inproc")
-    _world_with_terminology(db_session)
-    _g1, run1, token1, client1 = _lease_and_open(db_session, carrier="inproc")
-    inproc_context = _context(client1, run1.id, token1)
-
-    # A second space, so the two chains cannot share state through the same rows.
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
-    _world_with_terminology(db_session)
-    _g2, run2, token2, client2 = _lease_and_open(db_session, carrier="pi")
-    pi_context = _context(client2, run2.id, token2)
-
-    assert inproc_context["steward_instructions"] == pi_context["steward_instructions"]
-    assert inproc_context["steward_prompt_version"] == pi_context["steward_prompt_version"]
-    # The structured input is the same document; only its identity differs (the
-    # codenames and the context hash are per-space by construction).
-    inproc_payload = json.loads(inproc_context["context_blocks"][0]["content"])
-    pi_payload = json.loads(pi_context["context_blocks"][0]["content"])
-    assert inproc_payload["version"] == pi_payload["version"]
-    assert [t["concept_code"] for t in inproc_payload["targets"]] == [
-        t["concept_code"] for t in pi_payload["targets"]
-    ]
-    assert [t["baseline_term"] for t in inproc_payload["targets"]] == [
-        t["baseline_term"] for t in pi_payload["targets"]
-    ]
-    assert len(inproc_payload["targets"]) == len(pi_payload["targets"])
-
-
-def test_a_pi_attempt_settles_the_same_product_as_inproc(db_session, monkeypatch):
-    """Same input → same applied product, whichever carrier ran it.
-
-    This is the equivalence that makes the migration safe: the carrier changes who
-    issues the request, not what is asked or what is written back.
-    """
-    applied: dict[str, list[tuple[str, str]]] = {}
-    for carrier in ("inproc", "pi"):
-        monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", carrier)
-        _world_with_terminology(db_session)
-        grant, run, token, client = _lease_and_open(db_session, carrier=carrier)
-        payload = json.loads(_context(client, run.id, token)["context_blocks"][0]["content"])
-
-        response = _settle(client, run.id, token, _terminology_product(payload))
-        assert response.status_code == 200, response.text
-        db_session.expire_all()
-
-        attempt = db_session.get(StewardModelCall, grant["attempt_id"])
-        assert attempt is not None
-        assert attempt.status == "succeeded", attempt.error_code
-        assert attempt.applied_at is not None
-        # The product is the server's validated document, not the raw model text.
-        assert attempt.output_json is not None
-        applied[carrier] = [
-            (item["concept_code"], item["term"]) for item in attempt.output_json["items"]
-        ]
-
-    assert applied["inproc"], "the in-process carrier must have applied something"
-    assert applied["inproc"] == applied["pi"]
-
-
 def test_a_pi_settlement_cannot_write_back_after_the_viewer_is_revoked(db_session, monkeypatch):
     """A revoked viewer's product must not be applied, whichever carrier ran it.
 
@@ -235,12 +170,11 @@ def test_a_pi_settlement_cannot_write_back_after_the_viewer_is_revoked(db_sessio
     membership judgement. That is stronger than the fence, and it means the attempt
     stays in flight until recovery converges it rather than being applied.
     """
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     from app.models.account import Account
     from app.models.space import SpaceMember
 
     _world_with_terminology(db_session)
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI)
     payload = json.loads(_context(client, run.id, token)["context_blocks"][0]["content"])
 
     # Revoke the viewer after the projection was handed over: the product is now
@@ -290,9 +224,8 @@ def test_a_pi_settlement_is_audited_against_the_child_run(db_session, monkeypatc
     against the run id. Asserting the linkage here keeps "one egress, one audit"
     true for the steward path as well as the assistant path.
     """
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     _world_with_terminology(db_session)
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI)
 
     attempt = db_session.get(StewardModelCall, grant["attempt_id"])
     assert attempt is not None
@@ -320,9 +253,8 @@ def test_a_stuck_pi_child_run_converges_without_a_second_call(db_session, monkey
 
     from app.utils.timeutil import utcnow
 
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     _world_with_terminology(db_session)
-    grant, run, _token, _client = _lease_and_open(db_session, carrier="pi")
+    grant, run, _token, _client = _lease_and_open(db_session, carrier=CARRIER_PI)
 
     attempt = db_session.get(StewardModelCall, grant["attempt_id"])
     assert attempt is not None
@@ -375,35 +307,37 @@ def test_a_stuck_pi_child_run_converges_without_a_second_call(db_session, monkey
     )
 
 
-def test_rolling_the_carrier_back_leaves_no_orphan(db_session, monkeypatch):
-    """Turning the Pi carrier off must not strand a leased attempt.
+def test_a_stranded_lease_converges_within_one_lease_period(db_session, monkeypatch):
+    """A leased attempt nobody finishes must converge, not sit ``in_flight`` forever.
 
-    The rollback story depends on this: an operator flips the switch back to
-    in-process, and any attempt the sidecar had leased must converge within one
-    lease period rather than sit ``in_flight`` forever.
+    The carrier no longer has a rollback target (there is only one), but the
+    property it protected is unchanged and is what matters operationally: a
+    sidecar that dies holding a lease must not leave work stranded. Convergence is
+    the recovery path's job, and this asserts it still happens.
     """
     from datetime import timedelta
 
     from app.utils.timeutil import utcnow
 
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     _world_with_terminology(db_session)
-    grant, run, _token, _client = _lease_and_open(db_session, carrier="pi")
+    grant, run, _token, _client = _lease_and_open(db_session, carrier=CARRIER_PI)
 
-    # Roll back: new work goes in-process, and the in-process path must not be
-    # able to lease the stranded pi attempt (carrier is part of the selection).
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "inproc")
-    from app.services.steward_carrier import CARRIER_INPROC
-
+    # The stranded attempt itself is not handed out again while its lease is live:
+    # the lease, not the carrier, is what stops a second executor taking it. (A
+    # different attempt of the same space may still be leaseable — the per-space
+    # budget allows it — so the assertion names the attempt rather than the space.)
+    stranded = db_session.get(StewardModelCall, grant["attempt_id"])
+    assert stranded is not None and stranded.status == "in_flight"
+    assert stranded.lease_owner == "e3-sidecar"
+    second = steward_assist.lease_attempt(
+        db_session,
+        space_id=grant["space_id"],
+        worker_id="second-sidecar",
+        carrier=CARRIER_PI,
+    )
     assert (
-        steward_assist.lease_attempt(
-            db_session,
-            space_id=grant["space_id"],
-            worker_id="after-rollback",
-            carrier=CARRIER_INPROC,
-        )
-        is None
-    ), "an in-process lease must not take a pi attempt"
+        second is None or second["attempt_id"] != grant["attempt_id"]
+    ), "a live lease must not be handed to a second executor"
 
     # Once the lease expires, recovery converges both rows: the attempt to
     # ``unknown`` and the run to a terminal state. Nothing else would adjudicate
@@ -443,9 +377,8 @@ def test_a_steward_child_run_can_reach_the_provider_gateway(db_session, monkeypa
     or resolution failure produces 403/503, while the request being rejected for its
     body means both succeeded.
     """
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     _world_with_terminology(db_session)
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI)
 
     # The model name must match the run's pinned snapshot, or the gateway rejects
     # the body before sending. Read it from the snapshot rather than assuming.
@@ -478,9 +411,8 @@ def test_an_assistant_token_still_cannot_reach_a_steward_run(db_session, monkeyp
     touching the session (a steward run has none, so reading it first would turn a
     scope violation into an assertion failure).
     """
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     _world_with_terminology(db_session)
-    _grant, run, _token, client = _lease_and_open(db_session, carrier="pi")
+    _grant, run, _token, client = _lease_and_open(db_session, carrier=CARRIER_PI)
 
     from app.services import agent_tokens as tokens
 
@@ -515,9 +447,8 @@ def test_a_steward_egress_is_audited_against_its_child_run(db_session, monkeypat
     """
     from test_provider_proxy import _FakeAsyncClient, _FakeUpstream
 
-    monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "pi")
     _world_with_terminology(db_session)
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI)
 
     # Serve the upstream from a fake so no network call happens; the point is the
     # audit, not the model.

@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
+from steward_pi_harness import use_fake
 from test_steward_staged_pipeline import _family, _run
 
 from app import config
@@ -271,7 +272,7 @@ def test_admin_delivery_retry_is_bounded_idempotent_and_does_not_reset_unknown(
     assert admin_client.post(path, headers=headers, json=current_body).status_code == 202
     monkeypatch.setattr(steward_delivery, "_apply", original)
     http_calls = []
-    monkeypatch.setattr(steward_assist, "_post_json", lambda *_args: http_calls.append(True))
+    use_fake(monkeypatch, lambda *_args: http_calls.append(True))
     steward_delivery.drain(bind=db_session.get_bind(), generation_id=generation.id, limit=64)
     db_session.expire_all()
     assert intent.status == "done"

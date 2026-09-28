@@ -62,6 +62,12 @@ def _space(session: Session, name: str, *, kind: str = "household") -> FamilySpa
     owner = create_user_with_pin(session, f"{name}-own", "123456")
     space = FamilySpace(name=name, kind=kind, owner_id=owner.id, created_at=owner.created_at)
     session.add(space)
+    session.flush()
+    # Production always creates the space together with an active space_admin
+    # member (commands/spaces.py). The steward context endpoint resolves a
+    # space-scoped run's policy actor from that admin, so a fixture without one
+    # models a world that cannot exist.
+    create_space_member(session, space.id, owner.id, role="space_admin")
     session.commit()
     return space
 

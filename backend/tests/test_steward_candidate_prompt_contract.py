@@ -20,6 +20,7 @@ import json
 
 import httpx
 from sqlalchemy import select
+from steward_pi_harness import use_fake
 from test_steward import _confirm, _emit_fact_event, _person, _run_job, _space
 from test_steward_assist import (
     _batch,
@@ -141,7 +142,7 @@ def test_prompt_too_large_settles_batch_as_failed_with_reason(db_session, monkey
     _turn_on(monkeypatch, ranking=False, explanation=False)
     monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_PROMPT_BYTES", 1)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session)
@@ -168,6 +169,7 @@ def test_prompt_too_large_settles_batch_as_failed_with_reason(db_session, monkey
 
 def test_prompt_too_large_counted_in_admin_metrics(admin_client, db_session, monkeypatch) -> None:
     """AC5：超限计数可读，且响应只含计数/安全错误码（无 prompt/事实/姓名）。"""
+
     from conftest import admin_session_headers, create_system_admin
 
     monkeypatch.setattr(config, "STEWARD_ENABLED", True)
@@ -264,7 +266,7 @@ def test_oversized_fact_set_is_bounded_and_deterministic(db_session, monkeypatch
     assert again == bounded
 
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session)
 
@@ -337,7 +339,7 @@ def test_empty_subset_is_never_sent_as_a_fake_success(db_session, monkeypatch) -
     system_bytes = len(steward_assist._PROMPTS["candidate"].encode("utf-8"))
     monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_PROMPT_BYTES", system_bytes)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session)
@@ -369,7 +371,7 @@ def test_budget_skipped_stays_benign_not_prompt_too_large(db_session, monkeypatc
     _turn_on(monkeypatch, ranking=False, explanation=False)
     monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_TOKENS_PER_JOB", 100)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session)
@@ -399,7 +401,7 @@ def test_upstream_unknown_outranks_prompt_too_large(db_session, monkeypatch) -> 
     def timeout_transport(url, headers, payload, timeout):
         raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(steward_assist, "_post_json", timeout_transport)
+    use_fake(monkeypatch, timeout_transport)
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, rounds=2)
 
@@ -430,9 +432,8 @@ def test_oversized_space_still_validates_candidate_output(db_session, monkeypatc
         system_bytes + len(full.encode("utf-8")),
     )
     calls: list[dict] = []
-    monkeypatch.setattr(
-        steward_assist,
-        "_post_json",
+    use_fake(
+        monkeypatch,
         _responses_fake(calls, ['[{"kind":"spouse","subject":"n001","object":"n999"}]']),
     )
 
@@ -472,7 +473,7 @@ def test_prompt_digest_tracks_the_bounded_subset(db_session, monkeypatch) -> Non
         f"{steward_assist._PROMPTS['candidate']}\n{expected_user}".encode()
     ).hexdigest()
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session)

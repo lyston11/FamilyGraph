@@ -381,8 +381,8 @@ export async function buildRunSession(
     noContextFiles: true,
     // The adapter owns the system prompt. For the assistant it is a sidecar-local
     // constant that never travels through the projection; for the steward the
-    // server supplies the per-kind instructions, because the in-process carrier
-    // sends the same text and ``prompt_digest`` is computed over it.
+    // server supplies the per-kind instructions, because ``prompt_digest`` is
+    // computed over exactly that text.
     systemPrompt: adapter.systemPrompt(projection),
   });
   await loader.reload();

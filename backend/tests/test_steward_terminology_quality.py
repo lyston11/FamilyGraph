@@ -6,6 +6,7 @@ import json
 
 import pytest
 from sqlalchemy import select
+from steward_pi_harness import drain_all, responder_from_transport
 from test_steward import _confirm, _person, _space
 from test_steward_terminology import (
     _account_id,
@@ -20,7 +21,7 @@ from app import config
 from app.models.account import Account
 from app.models.relationship_facts import SourceFact
 from app.models.steward import StewardTermProjection
-from app.services import personal_family_view, steward_assist, steward_terminology, terms
+from app.services import personal_family_view, steward_terminology, terms
 
 
 @pytest.fixture(autouse=True)
@@ -51,16 +52,18 @@ def _model_grandmother_term(db_session, space):
     _enable_provider(db_session, space)
     _drain(db_session, space)
     assert (
-        steward_assist.run_due_attempt(
+        drain_all(
             db_session,
-            transport=_completions_fake(
-                _terminology_payload(
-                    {
-                        "target_ref": "t002",
-                        "concept_code": "Uf-Uf",
-                        "term": "姥姥",
-                        "reason_code": "synonym",
-                    }
+            responder_from_transport(
+                _completions_fake(
+                    _terminology_payload(
+                        {
+                            "target_ref": "t002",
+                            "concept_code": "Uf-Uf",
+                            "term": "姥姥",
+                            "reason_code": "synonym",
+                        }
+                    )
                 )
             ),
         )

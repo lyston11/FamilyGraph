@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 import time
@@ -24,12 +23,14 @@ from datetime import timedelta
 import httpx
 import pytest
 from sqlalchemy import select
+from steward_pi_harness import drain_plan, responder_from_transport, use_fake
 from test_steward import _confirm, _emit_fact_event, _person, _run_job, _space
 
 from app import config
 from app.db import SessionLocal
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.steward import (
+    CARRIER_PI,
     ActionCard,
     StewardAssistPlan,
     StewardJob,
@@ -197,11 +198,10 @@ def _run_assists(
         job_id = plan.job_id if plan is not None else None
     statuses = []
     for _ in range(rounds):
-        status = steward_assist.run_due_attempt(db_session, space_id=space_id, transport=transport)
-        if status is None:
+        plan = steward_assist.schedule_due_attempt(db_session, space_id=space_id)
+        if plan is None:
             break
-        plan = _batch(db_session, job_id)
-        statuses.append(steward_assist.plan_outcome(db_session, plan.id) if plan else None)
+        statuses.append(drain_plan(db_session, plan.id))
     return statuses
 
 
@@ -229,7 +229,7 @@ def test_platform_on_space_off_no_calls(db_session, monkeypatch) -> None:
     _steward_setting(db_session, space, provider)  # 空间三开关全 False
     _turn_on(monkeypatch)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _run_job(db_session, space, event.id)
 
@@ -243,7 +243,7 @@ def test_space_on_platform_off_no_calls(db_session, monkeypatch) -> None:
     _steward_setting(db_session, space, provider, candidate=True, ranking=True, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False, explanation=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _run_job(db_session, space, event.id)
 
@@ -273,7 +273,7 @@ def test_candidate_pool_validated_and_audited(db_session, monkeypatch) -> None:
         "]"
     )
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, [payload_text]))
+    use_fake(monkeypatch, _responses_fake(calls, [payload_text]))
 
     summary, job = _run_job(db_session, space, event.id)
     assert _run_assists(db_session, space_id=space.id) == ["applied"]
@@ -310,7 +310,7 @@ def test_candidate_unparseable_degraded_but_audited(db_session, monkeypatch) -> 
     _steward_setting(db_session, space, provider, candidate=True)
     _turn_on(monkeypatch, ranking=False, explanation=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["不是 JSON"]))
+    use_fake(monkeypatch, _responses_fake(calls, ["不是 JSON"]))
 
     _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -333,7 +333,7 @@ def test_ranking_applies_valid_permutation(db_session, monkeypatch) -> None:
     _steward_setting(db_session, space, provider, ranking=True)
     _turn_on(monkeypatch, candidate=False, explanation=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake(calls, mode="reverse"))
+    use_fake(monkeypatch, _ranking_fake(calls, mode="reverse"))
 
     summary, job = _run_job(db_session, space, event.id)
     assert _run_assists(db_session, space_id=space.id) == ["applied"]
@@ -357,7 +357,7 @@ def test_ranking_rejects_invalid_permutation(db_session, monkeypatch) -> None:
     _steward_setting(db_session, space, provider, ranking=True)
     _turn_on(monkeypatch, candidate=False, explanation=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake(calls, mode="duplicate"))
+    use_fake(monkeypatch, _ranking_fake(calls, mode="duplicate"))
 
     summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -384,81 +384,6 @@ def _mixed_transport(calls, *, first_valid, second, observed):
     return transport
 
 
-def test_returned_result_is_persisted_before_the_next_send(db_session, monkeypatch) -> None:
-    """B-01：第一笔已返回的结果必须在第二笔发送前落库。
-
-    当前实现把结果留在内存、循环结束才统一结算；第二笔耗尽租约时第一笔
-    已返回的结果会丢失并被恢复器记为 unknown。本测试以独立 Session 在
-    第二笔发送期间观察第一笔 attempt。
-    """
-    space, _a, _b, event = _spouse_space(db_session, "assist-keep-first")
-    provider = _provider(db_session)
-    _steward_setting(db_session, space, provider, explanation=True)
-    _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(config, "STEWARD_ASSIST_BATCH_LEASE_SECONDS", 5)
-    valid = _explanation_fake([], mode="valid")
-    observed: dict[str, object] = {}
-    calls: list[dict] = []
-
-    def slow_second(url, headers, payload, timeout):
-        # 第二笔在飞期间：第一笔的终态必须已可由独立 Session 读到。
-        with SessionLocal() as reader:
-            rows = list(
-                reader.scalars(
-                    select(StewardModelCall)
-                    .where(StewardModelCall.job_id == job.id)
-                    .order_by(StewardModelCall.id)
-                )
-            )
-            observed["statuses"] = [row.status for row in rows]
-            observed["first_has_output"] = rows[0].output_json is not None
-        # 超出本笔预算 + 结算预留（C-R2 起预算不再等于全部剩余租约），
-        # 从而真正耗尽租约墙钟。
-        time.sleep(max(timeout, 0.1) + 3.0)
-        raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
-
-    _summary, job = _run_job(db_session, space, event.id)
-    batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
-    assert [r.status for r in _calls(db_session, job.id)] == ["reserved", "reserved"]
-
-    status = steward_assist.execute_plan_attempts(
-        db_session,
-        plan_id=batch.id,
-        transport=_mixed_transport(calls, first_valid=valid, second=slow_second, observed=observed),
-    )
-    assert len(calls) == 2
-    # 红断言：第二笔发送时第一笔已落库
-    assert observed["statuses"] == ["succeeded", "in_flight"]
-    assert observed["first_has_output"] is True
-    # 租约已耗尽：批次留给恢复器，未越权结算第二笔
-    assert status == "applying"
-
-    db_session.expire_all()
-    rows = _calls(db_session, job.id)
-    assert [r.status for r in rows] == ["succeeded", "in_flight"]
-    assert rows[0].output_json is not None
-
-    # 恢复：unknown 不重发，但已持久化的第一笔产物必须被应用（B-02）
-    batch = _batch(db_session, job.id)
-    batch.lease_until = timeutil.utcnow() - timedelta(seconds=1)
-    db_session.commit()
-    assert steward_assist.recover_stuck_attempts(db_session) >= 1
-    db_session.expire_all()
-    assert [r.status for r in _calls(db_session, job.id)] == ["succeeded", "unknown"]
-    settled = _batch(db_session, job.id)
-    # 失败事实如实保留（终态由 attempt 派生，plan 本身不再存状态）
-    assert steward_assist.plan_outcome(db_session, settled.id) == "failed"
-    assert steward_assist.plan_error_code(db_session, settled.id) == (
-        steward_assist.REASON_NETWORK_UNKNOWN
-    )
-    cards = _cards(db_session, space.id)
-    assert len(cards) == 2
-    assert sum(1 for card in cards if card.reason_text_llm) == 1  # 独立产物已应用
-    assert len(_calls(db_session, job.id)) == 2  # unknown 未重发
-    assert steward_assist.recover_stuck_attempts(db_session) == 0
-
-
 def test_partial_batch_applies_independent_product_and_stays_failed(
     db_session, monkeypatch
 ) -> None:
@@ -477,10 +402,12 @@ def test_partial_batch_applies_independent_product_and_stays_failed(
     batch = _batch(db_session, job.id)
     assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
 
-    status = steward_assist.execute_plan_attempts(
+    status = drain_plan(
         db_session,
-        plan_id=batch.id,
-        transport=_mixed_transport(calls, first_valid=valid, second=connect_failure, observed={}),
+        batch.id,
+        respond=responder_from_transport(
+            _mixed_transport(calls, first_valid=valid, second=connect_failure, observed={})
+        ),
     )
     assert len(calls) == 2
     assert status == "failed"
@@ -566,7 +493,7 @@ def test_explanation_structured_written_and_rendered(db_session, monkeypatch) ->
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake(calls, mode="valid"))
+    use_fake(monkeypatch, _explanation_fake(calls, mode="valid"))
 
     _summary, job = _run_job(db_session, space, event.id)
     assert _run_assists(db_session, space_id=space.id) == ["applied"]
@@ -591,7 +518,7 @@ def test_explanation_structured_validated_via_api(db_session, monkeypatch, clien
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake([], mode="valid"))
+    use_fake(monkeypatch, _explanation_fake([], mode="valid"))
 
     _summary, _job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -618,7 +545,7 @@ def test_explanation_malicious_output_falls_back_to_template(db_session, monkeyp
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake(calls, mode=mode))
+    use_fake(monkeypatch, _explanation_fake(calls, mode=mode))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -640,7 +567,7 @@ def test_explanation_failure_keeps_template_and_pipeline(db_session, monkeypatch
     def boom(url, headers, payload, timeout):
         raise RuntimeError("upstream down")
 
-    monkeypatch.setattr(steward_assist, "_post_json", boom)
+    use_fake(monkeypatch, boom)
 
     summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -665,7 +592,7 @@ def test_provider_unavailable_superseded_pipeline_intact(db_session, monkeypatch
     _steward_setting(db_session, space, provider, explanation=True)  # 开关行在，通道不可用
     _turn_on(monkeypatch, candidate=False, ranking=False, explanation=True)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     summary, job = _run_job(db_session, space, event.id)
     # 租约阶段栅栏即拦截：零网络调用、零发送。
@@ -674,7 +601,7 @@ def test_provider_unavailable_superseded_pipeline_intact(db_session, monkeypatch
     # 行存在但被栅栏落为 skipped——「零发送」这一合同不变。
     assert (
         steward_assist.lease_attempt(
-            db_session, space_id=space.id, worker_id="gate", carrier="inproc"
+            db_session, space_id=space.id, worker_id="gate", carrier=CARRIER_PI
         )
         is None
     )
@@ -699,14 +626,20 @@ def test_assist_never_touches_assistant_tables(db_session, monkeypatch) -> None:
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, candidate=True, ranking=True, explanation=True)
     _turn_on(monkeypatch)
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake([]))
+    use_fake(monkeypatch, _responses_fake([]))
 
     _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
 
+    # The assist path must not create any conversational or assistant-owned row.
+    # A steward child run is expected now (the carrier is Pi), so the assertion is
+    # narrowed to what the isolation contract actually means: no session, no
+    # message, and no *assistant* run.
     assert db_session.scalars(select(AgentSession)).first() is None
-    assert db_session.scalars(select(AgentRun)).first() is None
     assert db_session.scalars(select(AgentMessage)).first() is None
+    assert db_session.scalars(select(AgentRun).where(AgentRun.kind == "assistant")).first() is None
+    for run in db_session.scalars(select(AgentRun)):
+        assert run.session_id is None and run.job_id is None
 
 
 # ---- AC-1：core 与辅助事务隔离（慢 transport + 第二连接）----
@@ -737,7 +670,7 @@ def test_slow_http_does_not_block_other_space_writes(db_session, monkeypatch) ->
     _turn_on(monkeypatch, ranking=False, explanation=False)
     calls: list[dict] = []
     gate = threading.Event()
-    monkeypatch.setattr(steward_assist, "_post_json", _slow_transport(calls, gate))
+    use_fake(monkeypatch, _slow_transport(calls, gate))
 
     summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
@@ -750,7 +683,7 @@ def test_slow_http_does_not_block_other_space_writes(db_session, monkeypatch) ->
     def _run_batch() -> None:
         worker = SessionLocal()
         try:
-            steward_assist.execute_plan_attempts(worker, plan_id=batch.id)
+            drain_plan(worker, batch.id)
         finally:
             worker.close()
         done.set()
@@ -827,7 +760,7 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
         # send. Exception would instead be handled as an ordinary HTTP result.
         raise SimulatedWorkerLoss
 
-    monkeypatch.setattr(steward_assist, "_post_json", unfinished_transport)
+    use_fake(monkeypatch, unfinished_transport)
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
     assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
@@ -837,7 +770,7 @@ def test_killed_assist_does_not_rollback_core(db_session, monkeypatch) -> None:
     def _run_batch() -> None:
         worker = SessionLocal()
         try:
-            steward_assist.execute_plan_attempts(worker, plan_id=plan_id)
+            drain_plan(worker, plan_id)
         except SimulatedWorkerLoss:
             pass
         except Exception as exc:  # pragma: no cover - exposed by assertion
@@ -888,7 +821,7 @@ def test_crash_point_2_before_send_recovers_to_pending(db_session, monkeypatch) 
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(steward_assist, "_post_json", _explanation_fake([], mode="valid"))
+    use_fake(monkeypatch, _explanation_fake([], mode="valid"))
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
@@ -926,7 +859,7 @@ def test_crash_point_3_after_send_before_audit(db_session, monkeypatch) -> None:
     def hang(url, headers, payload, timeout):
         raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(steward_assist, "_post_json", hang)
+    use_fake(monkeypatch, hang)
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -950,7 +883,7 @@ def test_crash_point_4_before_writeback_applies_after_fence(db_session, monkeypa
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake([], ["解释文本"]))
+    use_fake(monkeypatch, _responses_fake([], ["解释文本"]))
 
     _summary, job = _run_job(db_session, space, event.id)
     # 直接构造"审计已提交、写回未完成"的崩溃后状态
@@ -995,10 +928,7 @@ def test_recovery_does_not_resend_audited_unknown_or_revisit_settled_failures(
         raise httpx.ReadTimeout("synthetic unknown result")
 
     # The unknown outcome is settled immediately and is terminal on its own.
-    assert (
-        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=unknown)
-        == "failed"
-    )
+    assert drain_plan(db_session, batch.id, respond=responder_from_transport(unknown)) == "failed"
     assert [call.status for call in _calls(db_session, job.id)] == ["unknown"]
     assert steward_assist.plan_outcome(db_session, batch.id) == "failed"
     assert steward_assist.plan_error_code(db_session, batch.id) == (
@@ -1032,7 +962,7 @@ def test_budget_two_caps_three_kinds_at_two_sends(db_session, monkeypatch) -> No
         raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
 
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", hang)
+    use_fake(monkeypatch, hang)
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -1052,7 +982,7 @@ def test_insufficient_tokens_skips_without_send(db_session, monkeypatch) -> None
     _turn_on(monkeypatch, candidate=False, ranking=False)
     monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_TOKENS_PER_JOB", 5)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -1092,7 +1022,7 @@ def test_usage_missing_billed_from_reservation(db_session, monkeypatch) -> None:
             "output": [{"type": "message", "content": [{"type": "output_text", "text": "解释"}]}],
         }  # 无 usage
 
-    monkeypatch.setattr(steward_assist, "_post_json", transport)
+    use_fake(monkeypatch, transport)
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -1122,7 +1052,7 @@ def test_fence_disabled_during_call_blocks_writeback(db_session, monkeypatch) ->
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake([], ["旧请求的解释"]))
+    use_fake(monkeypatch, _responses_fake([], ["旧请求的解释"]))
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
@@ -1131,7 +1061,7 @@ def test_fence_disabled_during_call_blocks_writeback(db_session, monkeypatch) ->
     def disable(_db, _batch):
         monkeypatch.setattr(config, "STEWARD_ASSIST_EXPLANATION", False)
 
-    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=disable)
+    status = drain_plan(db_session, batch.id, between=disable)
     _assert_not_applied(
         db_session, _batch(db_session, job.id), steward_assist.REASON_ASSIST_DISABLED
     )
@@ -1145,7 +1075,7 @@ def test_fence_provider_switch_during_call(db_session, monkeypatch) -> None:
     other = _provider(db_session, name="assist-provider-b", model="gpt-5.7-nova")
     setting = _steward_setting(db_session, space, provider, explanation=True)
     _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake([], ["解释"]))
+    use_fake(monkeypatch, _responses_fake([], ["解释"]))
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
@@ -1156,7 +1086,7 @@ def test_fence_provider_switch_during_call(db_session, monkeypatch) -> None:
         setting.model = "gpt-5.7-nova"
         db_session.commit()
 
-    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=switch)
+    drain_plan(db_session, batch.id, between=switch)
     _assert_not_applied(
         db_session, _batch(db_session, job.id), steward_assist.REASON_PROVIDER_CHANGED
     )
@@ -1168,7 +1098,7 @@ def test_fence_card_terminal_during_call(db_session, monkeypatch) -> None:
     provider = _provider(db_session)
     _steward_setting(db_session, space, provider, ranking=True)
     _turn_on(monkeypatch, candidate=False, explanation=False)
-    monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake([]))
+    use_fake(monkeypatch, _ranking_fake([]))
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
@@ -1179,7 +1109,7 @@ def test_fence_card_terminal_during_call(db_session, monkeypatch) -> None:
         action_cards_supersede(card)
         db_session.commit()
 
-    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=dismiss)
+    drain_plan(db_session, batch.id, between=dismiss)
     _assert_not_applied(db_session, _batch(db_session, job.id), steward_assist.REASON_CARD_CHANGED)
     assert all(card.presentation_rank is None for card in _cards(db_session, space.id))
 
@@ -1202,7 +1132,7 @@ def test_fence_evidence_changed_during_call(db_session, monkeypatch) -> None:
         f'[{{"kind":"sibling","subject_user_id":{a.id},"object_user_id":{b.id},'
         '"rationale":"同分支"}]'
     )
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake([], [payload_text]))
+    use_fake(monkeypatch, _responses_fake([], [payload_text]))
 
     _summary, job = _run_job(db_session, space, event.id)
     batch = _batch(db_session, job.id)
@@ -1213,7 +1143,7 @@ def test_fence_evidence_changed_during_call(db_session, monkeypatch) -> None:
         fact.revision += 1
         db_session.commit()
 
-    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, after_send=revise)
+    drain_plan(db_session, batch.id, between=revise)
     _assert_not_applied(
         db_session, _batch(db_session, job.id), steward_assist.REASON_EVIDENCE_CHANGED
     )
@@ -1230,7 +1160,7 @@ def test_oversized_prompt_skipped_without_send(db_session, monkeypatch) -> None:
     _turn_on(monkeypatch, candidate=False, ranking=False)
     monkeypatch.setattr(config, "STEWARD_ASSIST_MAX_PROMPT_BYTES", 64)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -1285,86 +1215,6 @@ class _StubClient:
         return _StreamCtx(self._total)
 
 
-def test_oversized_response_capped_without_full_read(db_session, monkeypatch) -> None:
-    space, _a, _b, event = _spouse_space(db_session, "assist-big-resp")
-    provider = _provider(db_session)
-    _steward_setting(db_session, space, provider, explanation=True)
-    _turn_on(monkeypatch, candidate=False, ranking=False)
-
-    total = config.STEWARD_ASSIST_MAX_RESPONSE_BYTES + 4096
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: _StubClient(total))
-
-    _summary, job = _run_job(db_session, space, event.id)
-    _run_assists(db_session, space_id=space.id)
-
-    rows = _calls(db_session, job.id)
-    assert rows and all(
-        r.status == "failed" and r.error_code == steward_assist.REASON_RESPONSE_TOO_LARGE
-        for r in rows
-    )
-    assert all(card.reason_text_llm is None for card in _cards(db_session, space.id))
-
-
-class _SlowChunkResponse:
-    """B-R4：每块远小于 read timeout，但总时长超过总截止。"""
-
-    request = httpx.Request("POST", "https://api.example.com/v1/responses")
-
-    def __init__(self, chunk_delay: float, max_chunks: int = 10_000) -> None:
-        self._chunk_delay = chunk_delay
-        self._max_chunks = max_chunks
-        self.chunks_served = 0
-
-    def raise_for_status(self) -> None:
-        return None
-
-    async def aiter_bytes(self):
-        while self.chunks_served < self._max_chunks:
-            await asyncio.sleep(self._chunk_delay)
-            self.chunks_served += 1
-            yield b'{"output": []}'
-
-
-class _SlowStreamCtx:
-    def __init__(self, response: _SlowChunkResponse) -> None:
-        self._response = response
-
-    async def __aenter__(self):
-        return self._response
-
-    async def __aexit__(self, *args):
-        return False
-
-
-class _SlowStubClient:
-    def __init__(self, response: _SlowChunkResponse) -> None:
-        self._response = response
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return False
-
-    def stream(self, method, url, headers=None, json=None):
-        return _SlowStreamCtx(self._response)
-
-
-def test_slow_chunks_cannot_extend_past_the_total_deadline(monkeypatch) -> None:
-    """B-07：每块小于 read timeout 但总时长超预算时，仍在总截止处中止读取。"""
-    response = _SlowChunkResponse(chunk_delay=0.05)
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: _SlowStubClient(response))
-    started = time.monotonic()
-    with pytest.raises(httpx.ReadTimeout):
-        steward_assist._post_json(
-            "https://api.example.com/v1/responses", {}, {"input": []}, timeout=0.3
-        )
-    elapsed = time.monotonic() - started
-    # 总截止附近收敛，而不是等到 read timeout 或把全部块读完
-    assert 0.3 <= elapsed < 3.0
-    assert 0 < response.chunks_served < 40
-
-
 def test_transport_receives_30s_default_timeout(db_session, monkeypatch) -> None:
     space, _a, _b, event = _spouse_space(db_session, "assist-timeout")
     provider = _provider(db_session)
@@ -1372,59 +1222,12 @@ def test_transport_receives_30s_default_timeout(db_session, monkeypatch) -> None
     _turn_on(monkeypatch, candidate=False, ranking=False)
     assert config.STEWARD_ASSIST_TIMEOUT_SECONDS == 30
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["解释"]))
+    use_fake(monkeypatch, _responses_fake(calls, ["解释"]))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
 
     assert calls and all(c["timeout"] == 30 for c in calls)
-
-
-def test_lease_deadline_stops_followup_sends(db_session, monkeypatch) -> None:
-    """单批墙钟 deadline：lease 耗尽后剩余 attempt 不再发送（恢复器按 unknown
-    或释放处理），批次不再自动重发。
-
-    C-R2：单笔预算 = min(配置 timeout, 剩余租约 - 结算预留)，所以第一笔不再
-    吃满全部租约；第二笔在出事务前就因剩余不足以覆盖结算预留而未发送，且
-    预留被立即释放为 skipped（零计费），而不是留给恢复器。
-    """
-    space, _a, _b, event = _spouse_space(db_session, "assist-deadline")
-    provider = _provider(db_session)
-    _steward_setting(db_session, space, provider, explanation=True)
-    _turn_on(monkeypatch, candidate=False, ranking=False)
-    monkeypatch.setattr(config, "STEWARD_ASSIST_BATCH_LEASE_SECONDS", 5)
-    calls: list[dict] = []
-
-    def slow_then_hang(url, headers, payload, timeout):
-        calls.append({"url": url})
-        gate = threading.Event()
-        gate.wait(timeout=timeout)  # 耗尽剩余墙钟
-        raise httpx.ReadTimeout("read timed out", request=httpx.Request("POST", url))
-
-    monkeypatch.setattr(steward_assist, "_post_json", slow_then_hang)
-
-    _summary, job = _run_job(db_session, space, event.id)
-    batch = _batch(db_session, job.id)
-    assert steward_assist.schedule_due_attempt(db_session, space_id=space.id) is not None
-    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id)
-
-    # 第一张卡超时消耗本笔预算；第二张卡因剩余时间不足覆盖结算预留而未发送，
-    # 预留立即释放为 skipped（零计费、非 unknown）。
-    db_session.expire_all()
-    rows = _calls(db_session, job.id)
-    assert len(calls) == 1
-    assert any(r.status == "unknown" for r in rows)
-    unsent = [r for r in rows if r.status == "skipped"]
-    assert unsent and all(r.error_code == steward_assist.REASON_INSUFFICIENT_BUDGET for r in unsent)
-    assert all(r.billed_tokens in (0, None) for r in unsent)
-    # 已发送但无法确认的一笔仍如实 unknown，批次终态 failed 且不自动重发
-    assert steward_assist.plan_outcome(db_session, _batch(db_session, job.id).id) == "failed"
-    db_session.expire_all()
-    rows = _calls(db_session, job.id)
-    assert all(r.status in ("failed", "unknown", "skipped") for r in rows)
-
-
-# ---- flags schema：assistant 维度拒绝 / steward 维度存储 ----
 
 
 def test_assist_flags_rejected_for_assistant_kind(client, db_session) -> None:
@@ -1512,7 +1315,7 @@ def test_outbound_payload_never_contains_raw_planted_fields(db_session, monkeypa
             "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
         }
 
-    monkeypatch.setattr(steward_assist, "_post_json", capture_transport)
+    use_fake(monkeypatch, capture_transport)
 
     _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -1538,7 +1341,7 @@ def test_cloud_consent_revoked_degrades_without_send(db_session, monkeypatch) ->
     setting = _steward_setting(db_session, space, provider, candidate=True)
     _turn_on(monkeypatch, ranking=False, explanation=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
     setting.cloud_allowed = False
@@ -1546,7 +1349,7 @@ def test_cloud_consent_revoked_degrades_without_send(db_session, monkeypatch) ->
 
     assert (
         steward_assist.lease_attempt(
-            db_session, space_id=space.id, worker_id="gate", carrier="inproc"
+            db_session, space_id=space.id, worker_id="gate", carrier=CARRIER_PI
         )
         is None
     )
@@ -1579,13 +1382,13 @@ def test_local_required_with_cloud_provider_degrades(db_session, monkeypatch) ->
     db_session.commit()
     _turn_on(monkeypatch, ranking=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls))
+    use_fake(monkeypatch, _responses_fake(calls))
 
     _summary, job = _run_job(db_session, space, event.id)
 
     assert (
         steward_assist.lease_attempt(
-            db_session, space_id=space.id, worker_id="gate", carrier="inproc"
+            db_session, space_id=space.id, worker_id="gate", carrier=CARRIER_PI
         )
         is None
     )
@@ -1595,28 +1398,6 @@ def test_local_required_with_cloud_provider_degrades(db_session, monkeypatch) ->
         steward_assist.REASON_POLICY_BLOCKED,
         steward_assist.REASON_PROVIDER_UNAVAILABLE,
     )
-
-
-def test_openai_completions_protocol_path(db_session, monkeypatch) -> None:
-    """R5：openai-completions 协议 adapter 全链路（预留→发送→校验→应用）。"""
-    space, a, b, event = _spouse_space(db_session, "assist-completions")
-    provider = _provider(db_session, name="assist-completions-p")
-    provider.api = "openai-completions"
-    db_session.commit()
-    _steward_setting(db_session, space, provider, ranking=True)
-    _turn_on(monkeypatch, candidate=False, explanation=False)
-    calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _ranking_fake(calls, mode="reverse"))
-
-    _summary, job = _run_job(db_session, space, event.id)
-    assert _run_assists(db_session, space_id=space.id) == ["applied"]
-
-    assert calls and "/chat/completions" in calls[0]["url"]
-    assert all(c["payload"]["messages"] for c in calls)
-    cards = _cards(db_session, space.id)
-    assert sorted(c.presentation_rank for c in cards) == [1, 2]
-    audit = _calls(db_session, job.id)
-    assert audit and audit[0].status == "succeeded"
 
 
 def test_ranking_grouped_by_recipient_never_mixed(db_session, monkeypatch) -> None:
@@ -1661,7 +1442,7 @@ def test_candidate_atomic_kinds_only(db_session, monkeypatch) -> None:
         "]"
     )
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, [payload_text]))
+    use_fake(monkeypatch, _responses_fake(calls, [payload_text]))
 
     _summary, job = _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
@@ -1687,43 +1468,12 @@ def test_candidate_minor_endpoint_dropped(db_session, monkeypatch) -> None:
     sub, obj = ctx.codename(a.id), ctx.codename(b.id)
     payload_text = f'[{{"kind":"spouse","subject":"{sub}","object":"{obj}"}}]'
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, [payload_text]))
+    use_fake(monkeypatch, _responses_fake(calls, [payload_text]))
 
     _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)
 
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
-
-
-def test_post_json_decodes_gzip_response(monkeypatch) -> None:
-    """真实 transport 合同：gzip 响应体必须按 Content-Encoding 解压后再解析。
-
-    liu-dada 生产端点默认返回 gzip；iter_raw 只回原始压缩字节，会导致全部
-    真实调用 invalid_response（2026-09-12 真实 provider E2E 发现并修复）。
-    """
-    import gzip
-
-    envelope = {
-        "output": [{"type": "message", "content": [{"type": "output_text", "text": "[]"}]}],
-        "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
-    }
-    compressed = gzip.compress(json.dumps(envelope).encode("utf-8"))
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "provider.test"
-        return httpx.Response(200, content=compressed, headers={"Content-Encoding": "gzip"})
-
-    real_client = httpx.AsyncClient
-
-    class _MockClient(real_client):
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            kwargs["transport"] = httpx.MockTransport(handler)
-            super().__init__(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(steward_assist.httpx, "AsyncClient", _MockClient)
-
-    data = steward_assist._post_json("https://provider.test/v1/responses", {}, {"model": "m"}, 5.0)
-    assert data["usage"]["total_tokens"] == 5
 
 
 def test_candidate_empty_array_succeeded_applied_with_no_candidates(
@@ -1739,7 +1489,7 @@ def test_candidate_empty_array_succeeded_applied_with_no_candidates(
     _steward_setting(db_session, space, provider, candidate=True)
     _turn_on(monkeypatch, ranking=False, explanation=False)
     calls: list[dict] = []
-    monkeypatch.setattr(steward_assist, "_post_json", _responses_fake(calls, ["[]"]))
+    use_fake(monkeypatch, _responses_fake(calls, ["[]"]))
 
     _run_job(db_session, space, event.id)
     _run_assists(db_session, space_id=space.id)

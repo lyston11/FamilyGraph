@@ -60,8 +60,8 @@ describe("adapterFor", () => {
     );
     // Sharing one prompt is the specific failure: the assistant prompt asks for
     // prose and tool calls, the steward's output is a closed structured product
-    // the server validates. For the steward the text is server-owned, because the
-    // in-process carrier sends the same text and prompt_digest covers it.
+    // the server validates. For the steward the text is server-owned: the server
+    // sends it in the projection and prompt_digest covers exactly that text.
     expect(assistant).not.toBe(steward);
     expect(assistant.length).toBeGreaterThan(0);
     expect(steward).toBe("per-kind rules");
@@ -96,7 +96,8 @@ describe("adapterFor", () => {
     expect(assistant).toContain("retrieved fact");
     expect(assistant).toContain("rag:1:r1:c1");
     // The steward's projection IS its whole input: wrapping it in the assistant's
-    // citation appendix would add instructions the in-process carrier never sent.
+    // citation appendix would add instructions the server never sent, so the prompt
+    // would no longer match the digest recorded for it.
     expect(steward).toBe("retrieved fact");
   });
 

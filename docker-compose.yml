@@ -78,16 +78,18 @@ services:
       # 09-06 Steward 称谓辅助开关与批次租约总墙钟截止（与裸机部署同名同义）
       STEWARD_ASSIST_TERMINOLOGY: ${STEWARD_ASSIST_TERMINOLOGY:-0}
       STEWARD_ASSIST_TIMEOUT_SECONDS: ${STEWARD_ASSIST_TIMEOUT_SECONDS:-30}
-      # 09-25 Steward Pi child run（S1 骨架）：默认关。开启后 steward 模型辅助由
-      # sidecar 租赁受限 child run 执行，而不是进程内直连 Provider。与
-      # STEWARD_ENABLED 双开关（child run 的 lease 端点要求两者皆真），因为
-      # 「引擎开启」与「执行载体切换」是两个独立的发布决策。
+      # 09-25 Steward Pi child run：默认关。开启后 steward 模型辅助由 sidecar
+      # 租赁受限 child run 执行。与 STEWARD_ENABLED 双开关（child run 的 lease
+      # 端点要求两者皆真）。S5 起 Pi 是**唯一**载体：in-process 直连已删除，
+      # 因此本开关关闭时 steward 模型辅助不会执行（而不是回退到另一条路径）。
       STEWARD_PI_RUNTIME_ENABLED: ${STEWARD_PI_RUNTIME_ENABLED:-0}
-      # 与 agent 服务同名同值：服务端用它决定放行几个 batch，sidecar 用它决定
-      # 能跑几个。两侧不一致会让 batch「已预留 attempt 但无人执行」，直到
-      # recover_stuck_batches 收口。sidecar 也会从 lease 响应读取服务端当前值
+      # 与 agent 服务同名同值：服务端用它决定放行几个 attempt，sidecar 用它决定
+      # 能跑几个。两侧不一致会让 attempt「已预留但无人执行」，直到
+      # recover_stuck_attempts 收口。sidecar 也会从 lease 响应读取服务端当前值
       # 作为纠错（只上调不下调），但广播是纠错机制，不替代两侧配置。
-      STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-1}
+      # 默认 2 与 config.py / config.ts 的默认值一致：默认值不同会让两侧在未显式
+      # 配置时静默不一致。
+      STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-2}
       DEV_SEED_DEMO_DATA: ${DEV_SEED_DEMO_DATA:-0}
       # 09-01 个人家族视图（家庭卡/家族树投影端点）功能开关
       PERSONAL_FAMILY_VIEW_ENABLED: ${PERSONAL_FAMILY_VIEW_ENABLED:-0}
@@ -186,13 +188,14 @@ services:
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       HEALTH_PORT: "8080"
       # 09-25 S1 多槽：本实例服务哪些 kind（assistant|steward|both；未知值
-      # fail fast）。默认 assistant 保持既有部署行为不变。
+      # fail fast）。S5 起 Steward 模型辅助只经 Pi child run 执行，因此需要
+      # steward 时本实例必须包含该角色（`steward` 或 `both`）。
       FG_AGENT_ROLE: ${FG_AGENT_ROLE:-assistant}
       # assistant 槽位数：后端每账号最多放行 2 个并发 assistant run，本地更小
       # 只会人为造排队（不改变后端授权，仅影响本地并发）。
       AGENT_MAX_CONCURRENT_RUNS: ${AGENT_MAX_CONCURRENT_RUNS:-2}
       # steward 槽位数：必须与 api 服务的同名变量同值（见该处注释）。
-      STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-1}
+      STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-2}
     networks:
       - backend
     # 优雅停机：SIGTERM → worker.stop + health.close；在途 Run 由 FastAPI reaper 回收

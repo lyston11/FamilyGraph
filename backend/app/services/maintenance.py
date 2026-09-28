@@ -82,18 +82,13 @@ def run_maintenance_tick() -> dict[str, int]:
             counters["steward_delivery_failed"] = delivery["delivery_failed"]
             counters["steward_gc_rows"] = steward_gc.collect(db.get_bind())
             # ---- 09-11 辅助批次（R1：core 先泵，辅助后行；HTTP 不在本会话/事务）----
-            # 恢复四个崩溃点的中间态批次，再调度至多一个到期批次，并把 HTTP
-            # 执行提交到有界线程池（自有 Session）——模型慢调用不阻塞 core tick，
-            # 其他空间的确定性作业照常推进。
+            # 只恢复四个崩溃点的中间态：执行已收敛到 Pi child run，由 sidecar
+            # 经内部端点租取，因此本 tick 不再派发任何进程内发送。
             try:
                 counters["steward_assist_recovered"] = steward_assist.recover_stuck_attempts(db)
                 counters["steward_assist_runs_recovered"] = steward_assist.recover_stuck_child_runs(
                     db
                 )
-                # Dispatch per space: the per-space budget is enforced inside
-                # lease_attempt, so handing it one space at a time keeps that
-                # check authoritative instead of duplicating it here.
-                counters["steward_assist_scheduled"] = steward_assist.launch_due()
             except Exception as exc:  # noqa: BLE001 — 辅助调度失败不影响 core 泵
                 # 日志脱敏（09-11 R3）：不输出异常原文（可能含 SQL 参数/repr），
                 # 只记异常类名；辅助自身状态机保留安全错误码。
@@ -197,6 +192,5 @@ async def stop_maintenance_loop() -> None:
         await task
     except asyncio.CancelledError:
         pass
-    # 优雅停机：不无限等待在途 httpx（单次调用受 timeout 上界，线程有限收敛）
-    steward_assist.shutdown_assist_executor()
+    # 优雅停机：不再有辅助执行线程池（进程内路径已删除），只需停运行时泵。
     await asyncio.to_thread(steward_runtime.shutdown_runtime)

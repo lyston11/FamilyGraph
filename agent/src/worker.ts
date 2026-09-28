@@ -453,7 +453,7 @@ export class SidecarWorker {
           : "";
       // The prompt body is the adapter's business: an assistant run appends its
       // retrieved context with citation handles, a steward run's projection IS the
-      // whole input and must not gain an appendix the in-process carrier never sent.
+      // whole input and must not gain an appendix the server never sent.
       const modelPrompt = adapter.modelPrompt(projection, promptText);
       // message.user_added is backend-owned (written once at enqueue, seq 0) and
       // already present in projection.messages; the sidecar only consumes it.
