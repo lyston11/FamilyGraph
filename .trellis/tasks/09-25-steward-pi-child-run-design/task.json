@@ -24,7 +24,8 @@
     "09-25-steward-child-run-cleanup",
     "09-25-steward-execution-unit",
     "09-26-steward-sidecar-adapters",
-    "09-27-steward-readonly-tools"
+    "09-27-steward-readonly-tools",
+    "09-28-steward-pi-cutover"
   ],
   "parent": null,
   "relatedFiles": [],
