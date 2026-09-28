@@ -39,11 +39,11 @@ export interface KindAdapter {
   /** System prompt for this kind, given the projection.
    *
    * A function rather than a constant because the steward's per-kind instructions
-   * are server-owned: the in-process carrier sends them as the system message, and
-   * ``prompt_digest`` is computed over them. A child run that sent a different
-   * system message would ask the model a different question than the digest
-   * claims — and for the candidate kind the difference is load-bearing (the
-   * direction semantics and conflict rules live in that text). */
+   * are server-owned: the server sends them in the projection and computes
+   * ``prompt_digest`` over them, so the text that runs is the text the digest
+   * describes. Sending anything else would ask the model a different question than
+   * the recorded digest claims — and for the candidate kind the difference is
+   * load-bearing (the direction semantics and conflict rules live in that text). */
   systemPrompt(projection: RunContextProjection): string;
 
   /** The prompt body handed to the model, from the projection.
@@ -144,8 +144,8 @@ const stewardAdapter: KindAdapter = Object.freeze<KindAdapter>({
   modelPrompt: (projection) =>
     // The projection is the whole input: a steward run has no conversation and no
     // retrieved context to append. Wrapping it in the assistant's citation
-    // appendix would add instructions the in-process carrier never sent, so the
-    // two carriers would no longer be asking the same question.
+    // appendix would add instructions the server never sent, so the prompt would
+    // no longer match the digest the server recorded for it.
     (projection.context_blocks ?? []).map((block) => block.content).join("\n"),
   // The steward's tool set is empty by design, so "must be non-empty" cannot
   // apply; the membership half still rejects any tool it does not own.

@@ -30,14 +30,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
-import os
-import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
@@ -53,6 +49,7 @@ from app.models.agent import AgentRun
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.space import FamilySpace
 from app.models.steward import (
+    CARRIER_PI,
     STEWARD_ASSIST_KINDS,
     ActionCard,
     StewardAssistPlan,
@@ -110,7 +107,6 @@ REASON_INSUFFICIENT_BUDGET = "insufficient_budget"
 REASON_PROMPT_TOO_LARGE = "prompt_too_large"
 # A plan whose carrier is not in-process has nothing for this process to run; the
 # attempt is released rather than left in_flight, which would strand it.
-REASON_CARRIER_NOT_INPROC = "carrier_not_inproc"
 REASON_RESPONSE_TOO_LARGE = "response_too_large"
 REASON_TIMEOUT = "timeout"
 REASON_NETWORK_UNKNOWN = "network_unknown"
@@ -122,7 +118,11 @@ _EXPLAIN_MAX_CHARS = 500
 
 Transport = Callable[[str, dict[str, str], dict[str, Any], float], dict[str, Any]]
 
-# 与 provider_proxy._API_PATHS 对齐（egress 路径单点语义）
+_EXPLAIN_MAX_CHARS = 500
+
+# 与 provider_proxy._API_PATHS 对齐（egress 路径单点语义）。此处保留供 fence 判定
+# ``REASON_PROVIDER_API_UNSUPPORTED``：它不是发送实现，而是「该 Provider 协议是否
+# 被支持」的合同，与载体无关。
 _API_PATHS = {
     "openai-completions": "/chat/completions",
     "openai-responses": "/responses",
@@ -188,110 +188,6 @@ _PROMPTS: dict[str, str] = {
         "绝不编造事实、人物、关系或承诺；不输出自由文本。"
     ),
 }
-
-
-async def _post_json_async(
-    url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float
-) -> dict[str, Any]:
-    """可中断的总截止实现（C-R1）：``asyncio.timeout`` 覆盖连接、发送、响应头、
-    读取与解压。等待响应头或等待下一块数据期间超界会真正取消在途 I/O，
-    而不是等数据到达后再检查——后者实测 400ms 预算要到约 638ms 才返回。
-
-    超出 STEWARD_ASSIST_MAX_RESPONSE_BYTES 立即中止读取并抛错（调用方记
-    failed/response_too_large），绝不把无上界的响应整体读入内存。必须用
-    aiter_bytes（自动按 Content-Encoding 解压）：原始字节会直接导致 gzip 响应
-    的 JSON 解析失败（部分上游默认 gzip 响应，2026-09-12 E2E 发现）；
-    字节上界按解压后体积计。
-
-    超时一律抛 ``httpx.ReadTimeout``（调用方按 unknown 保守计费）。刻意不为
-    "连接阶段超时" 复用 connect_failed：请求已交给 transport 之后无法证明上游
-    未处理，只有 httpx 自己抛出的 ConnectError/ConnectTimeout 才是确定未发送。
-    """
-    deadline = time.monotonic() + timeout
-    chunks: list[bytes] = []
-    total = 0
-    try:
-        async with asyncio.timeout(timeout):
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", url, headers=headers, json=payload) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        total += len(chunk)
-                        if total > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
-                            raise ValueError(REASON_RESPONSE_TOO_LARGE)
-                        chunks.append(chunk)
-    except TimeoutError as exc:
-        raise httpx.ReadTimeout(
-            "total request deadline exceeded",
-            request=httpx.Request("POST", url),
-        ) from exc
-    # JSON 解析是同步代码，事件循环无法抢占：解析前后核对同一总截止，超界不接受
-    # 为预算内成功。有界处理超差由响应字节上界限制。
-    if time.monotonic() > deadline:
-        raise httpx.ReadTimeout(
-            "total request deadline exceeded",
-            request=httpx.Request("POST", url),
-        )
-    data = json.loads(b"".join(chunks))
-    if not isinstance(data, dict):
-        raise ValueError("provider response is not a JSON object")
-    return data
-
-
-def _post_json(
-    url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float
-) -> dict[str, Any]:
-    """默认 transport（同步入口）：在既有工作线程内桥接一次事件循环。
-
-    辅助网络只在有界执行线程/同步测试路径调用；持有业务写事务时调用是结构性
-    错误，这里 fail-closed 而不是在事件循环里静默降级。
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:  # pragma: no cover - 结构性误用
-        raise RuntimeError(
-            "steward assist transport requires a worker thread without a running event loop"
-        )
-    return asyncio.run(_post_json_async(url, headers, payload, timeout))
-
-
-def _send_budget(lease_until: Any) -> float:
-    """出事务前/后的单笔请求总预算（C-R2）。
-
-    ``min(配置 timeout, 剩余租约 - 结算预留)``：租约已过期或不足以覆盖结算
-    预留时返回 <= 0，调用方据此不发请求（未发送只释放预留，不记 unknown）。
-    """
-    if lease_until is None:
-        return 0.0
-    remaining = (lease_until - timeutil.utcnow()).total_seconds()
-    return float(
-        min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, remaining - _SETTLEMENT_RESERVE_SECONDS)
-    )
-
-
-def _release_unsent(
-    db: Session,
-    *,
-    attempt_id: int,
-    lease_owner: str,
-    reason: str,
-) -> None:
-    """释放一笔从未发出的预留（C-R2）：不记 unknown、不计费。
-
-    只在本执行身份仍持租约时回退 ``in_flight → skipped``；身份已失效则留给
-    恢复器，绝不越权改写。
-    """
-    from app.services.steward import _immediate_tx
-
-    with _immediate_tx(db):
-        db.expire_all()
-        row = db.get(StewardModelCall, attempt_id)
-        if row is not None and row.status == "in_flight" and row.lease_owner == lease_owner:
-            row.status = "skipped"
-            row.error_code = reason
-            db.flush()
 
 
 def _canonical_hash(value: Any) -> str:
@@ -682,33 +578,6 @@ def _explanation_user_content(card: ActionCard, ctx: ProjectionContext) -> str:
     return steward_guard.project_explanation_input(_card_projection(card, ctx), ctx)
 
 
-def _build_payload(api: str, system: str, user: str, max_out_tokens: int) -> dict[str, Any]:
-    if api == "openai-responses":
-        return {
-            "model": "",
-            "input": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_output_tokens": max_out_tokens,
-            "stream": False,
-        }
-    return {
-        "model": "",
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": max_out_tokens,
-        "stream": False,
-    }
-
-
-def _fill_model(payload: dict[str, Any], model: str) -> dict[str, Any]:
-    payload["model"] = model
-    return payload
-
-
 # ---- 注册（发布后的短交付事务；无网络）----
 
 
@@ -1016,17 +885,6 @@ def _fence_check(
 # ---- 调度：plan → attempt 预留 → 租约（独立短事务；HTTP 不在本事务）----
 
 
-def _inproc() -> Any:
-    """The in-process carrier instance.
-
-    Imported lazily because ``steward_carrier`` imports this module for the shared
-    prompt and payload helpers; a module-level import would be circular.
-    """
-    from app.services.steward_carrier import InprocCarrier
-
-    return InprocCarrier()
-
-
 # Fence reason codes: an attempt retired by one of these was *superseded*, not
 # failed — the world moved, the work is no longer applicable.
 _FENCE_REASON_CODES = frozenset(
@@ -1101,17 +959,6 @@ def _plan_verdict(db: Session, plan_id: int) -> tuple[str | None, str | None]:
         # because reservation now happens in the same transaction as registration.
         return "pending", None
     return "applied", None
-
-
-def _carrier_for(db: Session, space_id: int, kind: str) -> str:
-    """Resolve the carrier name for one kind (see services/steward_carrier).
-
-    Imported lazily: ``steward_carrier`` imports this module for the shared prompt
-    and payload helpers, so a module-level import would be circular.
-    """
-    from app.services.steward_carrier import carrier_for
-
-    return carrier_for(db, space_id, kind).carrier
 
 
 def _next_seq(db: Session, job_id: int, kind: str, seq_counters: dict[str, int]) -> int:
@@ -1212,7 +1059,7 @@ def _reserve_attempt(
         "plan_id": plan.id,
         "viewer_account_id": viewer_account_id,
         "evidence_hash": plan.evidence_hash,
-        "carrier": _carrier_for(db, plan.space_id, kind),
+        "carrier": CARRIER_PI,
         "next_attempt_at": now,
         "created_at": now,
     }
@@ -1573,37 +1420,6 @@ def _classify_transport_error(exc: Exception) -> tuple[str, str]:
     return "failed", type(exc).__name__[:64]
 
 
-def _parse_response(api: str, data: dict[str, Any]) -> tuple[str, dict[str, int] | None]:
-    """防御式解析两种协议的文本与 usage；解析失败抛错由调用方记 failed。"""
-    usage: dict[str, int] | None = None
-    raw_usage = data.get("usage") or {}
-    if api == "openai-responses":
-        text_parts: list[str] = []
-        for item in data.get("output") or []:
-            if not isinstance(item, dict) or item.get("type") != "message":
-                continue
-            for part in item.get("content") or []:
-                if isinstance(part, dict) and part.get("type") == "output_text":
-                    text_parts.append(str(part.get("text") or ""))
-        text = "".join(text_parts)
-        if "input_tokens" in raw_usage or "output_tokens" in raw_usage:
-            usage = {
-                "prompt_tokens": int(raw_usage.get("input_tokens") or 0),
-                "completion_tokens": int(raw_usage.get("output_tokens") or 0),
-                "total_tokens": int(raw_usage.get("total_tokens") or 0),
-            }
-        return text, usage
-    choices = data.get("choices") or []
-    text = str((choices[0].get("message") or {}).get("content") or "") if choices else ""
-    if "total_tokens" in raw_usage or "prompt_tokens" in raw_usage:
-        usage = {
-            "prompt_tokens": int(raw_usage.get("prompt_tokens") or 0),
-            "completion_tokens": int(raw_usage.get("completion_tokens") or 0),
-            "total_tokens": int(raw_usage.get("total_tokens") or 0),
-        }
-    return text, usage
-
-
 def _validate_output(
     kind: str,
     text: str,
@@ -1866,6 +1682,22 @@ def record_attempt_outcome(
 
     if status != "succeeded" or exc is not None:
         _settle_attempt_failure(db, attempt, exc=exc, error_code=error_code, latency_ms=latency_ms)
+        db.flush()
+        return attempt.status
+
+    # Response-size bound, carried over from the in-process carrier's streaming
+    # read. That path no longer exists, so the receiving side enforces it: an
+    # unbounded product would otherwise be accepted merely because the sender
+    # chose to send it. Refused as a plain failure (not a protocol error), which
+    # is what the carrier did and what ``response_too_large`` has always meant.
+    if text is not None and len(text.encode("utf-8")) > config.STEWARD_ASSIST_MAX_RESPONSE_BYTES:
+        _settle_attempt_failure(
+            db,
+            attempt,
+            exc=None,
+            error_code=REASON_RESPONSE_TOO_LARGE,
+            latency_ms=latency_ms,
+        )
         db.flush()
         return attempt.status
 
@@ -2398,202 +2230,6 @@ def recover_stuck_child_runs(db: Session, *, now: Any = None) -> int:
     return handled
 
 
-# ---- 有界执行线程（maintenance 用；HTTP 永不阻塞 core tick）----
-
-_executor: ThreadPoolExecutor | None = None
-
-
-def run_attempt(
-    db: Session,
-    *,
-    space_id: int,
-    worker_id: str,
-    transport: Any = None,
-    now: Any = None,
-) -> str | None:
-    """租一个 attempt 并用它的载体执行，然后结算。返回 attempt 终态或 None。
-
-    这是**进程内路径**的唯一执行入口（测试与单机同步路径都用它）。生产路径由
-    ``maintenance`` 的调度泵调用 ``launch_due``，后者把本函数放进有界线程池——
-    HTTP 绝不发生在调用方的事务里。
-
-    ``carrier`` 恒为 ``inproc``：本函数就是那个载体。``pi`` attempt 由 sidecar 租走，
-    在租约层就被过滤掉，所以这里不需要再判一次载体。
-    """
-    from app.services.steward_carrier import CARRIER_INPROC
-
-    grant = lease_attempt(db, space_id=space_id, worker_id=worker_id, carrier=CARRIER_INPROC)
-    if grant is None:
-        return None
-    # Read everything the send needs, then end the transaction: the carrier's HTTP
-    # must never run with one open (the transport asserts this, and a held SQLite
-    # read transaction during a multi-second model call blocks writers).
-    timeout = _send_budget(grant["lease_until"])
-    outcome = _inproc().execute(
-        db,
-        grant,
-        timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, timeout),
-        api=grant["api"],
-        transport=transport,
-    )
-    return settle_attempt(
-        db,
-        attempt_id=grant["attempt_id"],
-        status=outcome.status,
-        lease_owner=worker_id,
-        text=outcome.text,
-        usage=outcome.usage,
-        error_code=outcome.error_code,
-        exc=outcome.exc,
-        latency_ms=outcome.latency_ms,
-        response_bytes=outcome.response_bytes,
-        now=now,
-    )
-
-
-def execute_plan_attempts(
-    db: Session,
-    *,
-    plan_id: int,
-    lease_owner: str = "inproc:sync",
-    transport: Any = None,
-    after_send: Callable[[Session, StewardModelCall], None] | None = None,
-) -> str | None:
-    """Drain every leaseable in-process attempt of one plan; return its outcome.
-
-    This is the synchronous analogue of ``launch_due``: it leases and executes one
-    attempt at a time until the plan has nothing left to run. Callers get the same
-    "did this round of work complete" answer the old ``execute_batch`` gave.
-
-    ``after_send`` runs after the carrier returns but before settlement, which is
-    the only window in which the write-back fence can be observed: a test changes
-    the world there and asserts the fence refuses to apply.
-
-    Only in-process attempts are leased — a ``pi`` attempt is run by the sidecar and
-    settles through the internal endpoint, so executing it here would double-run the
-    same model call. That is enforced by the lease itself (``carrier`` is part of the
-    selection), not by a check here.
-    """
-    from app.services.steward_carrier import CARRIER_INPROC
-
-    plan = db.get(StewardAssistPlan, plan_id)
-    if plan is None:
-        return None
-    for _ in range(config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB + 1):
-        grant = lease_attempt(
-            db, space_id=plan.space_id, worker_id=lease_owner, carrier=CARRIER_INPROC
-        )
-        if grant is None:
-            break
-        attempt = db.get(StewardModelCall, grant["attempt_id"])
-        if attempt is None:
-            break
-        # C-R2: the send budget is min(configured timeout, remaining lease minus
-        # the settlement reserve). When that is below the minimum send window the
-        # request is never sent — release the reservation as skipped (zero cost,
-        # not unknown) instead of sending with a budget that cannot be settled.
-        if _send_budget(attempt.lease_until) < _MIN_SEND_WINDOW_SECONDS:
-            _release_unsent(
-                db,
-                attempt_id=grant["attempt_id"],
-                lease_owner=lease_owner,
-                reason=REASON_INSUFFICIENT_BUDGET,
-            )
-            continue
-        # Re-check after the lease transaction committed: the lock wait and the
-        # commit itself consume wall clock, so a window that was sufficient when
-        # the attempt was leased may not be now. Below the minimum the request is
-        # never sent (skipped, zero cost, not unknown).
-        budget = _send_budget(attempt.lease_until)
-        if budget < _MIN_SEND_WINDOW_SECONDS:
-            _release_unsent(
-                db,
-                attempt_id=grant["attempt_id"],
-                lease_owner=lease_owner,
-                reason=REASON_INSUFFICIENT_BUDGET,
-            )
-            continue
-        runtime = agent_provider.resolve_runtime(
-            db, attempt.space_id, agent_kind=agent_provider.AGENT_KIND_STEWARD
-        )
-        # Everything the carrier needs, read while the lease transaction is still
-        # open. It is then closed so the HTTP call never runs inside a write
-        # transaction (the transport asserts this).
-        send = {
-            **grant,
-            "runtime": runtime,
-            "api": runtime.api if runtime is not None else "openai-responses",
-            "user_content": _user_content_for(db, attempt),
-            "reserved_output_tokens": attempt.reserved_output_tokens,
-            "model": attempt.model,
-        }
-        db.rollback()
-        # The timeout is the budget already computed above: reading it a second
-        # time would let the two disagree (and would make the send/abort decision
-        # depend on which read happened first).
-        outcome = _inproc().execute(
-            db,
-            send,
-            timeout=min(config.STEWARD_ASSIST_TIMEOUT_SECONDS, budget),
-            api=send["api"],
-            transport=transport,
-        )
-        attempt = db.get(StewardModelCall, grant["attempt_id"])
-        if attempt is None:
-            break
-        # ``after_send`` is a test seam that mutates the world between the carrier
-        # call and settlement — the only window in which the write-back fence can be
-        # observed. It must run *after* the send (a mutation made before it would
-        # change the request itself, not just the fence) and before settle, so the
-        # fence sees the changed world.
-        if after_send is not None:
-            after_send(db, attempt)
-        settle_attempt(
-            db,
-            attempt_id=grant["attempt_id"],
-            status=outcome.status,
-            lease_owner=lease_owner,
-            text=outcome.text,
-            usage=outcome.usage,
-            error_code=outcome.error_code,
-            exc=outcome.exc,
-            latency_ms=outcome.latency_ms,
-            response_bytes=outcome.response_bytes,
-        )
-    return plan_outcome(db, plan_id)
-
-
-def run_due_attempt(
-    db: Session, *, space_id: int | None = None, transport: Any = None, now: Any = None
-) -> str | None:
-    """同步排空第一个到期空间的可租 attempt（测试/单机便捷路径）。
-
-    生产路径是 ``launch_due``（有界线程池 + 每空间预算）。本函数把该空间当前可租
-    的 attempt 全部跑完再返回最后一个终态——等价于旧 ``run_due_batch``「把这一批
-    的 attempt 都执行掉」的粒度，因为调用方关心的是「这一轮工作做完了吗」。
-
-    需要停在「已租、未发送」中间态的调用方用 ``schedule_due_attempt`` +
-    ``execute_leased_attempt``（崩溃点用例）。
-    """
-    if space_id is None:
-        space_ids = _spaces_with_due_attempts()
-        if not space_ids:
-            return None
-        space_id = space_ids[0]
-    plan = schedule_due_attempt(db, space_id=space_id)
-    if plan is None:
-        return None
-    for _ in range(config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB + 1):
-        status = run_attempt(
-            db, space_id=space_id, worker_id="inproc:sync", transport=transport, now=now
-        )
-        if status is None:
-            break
-    # Report the plan's derived outcome, which is what callers assert on: the old
-    # run_due_batch returned the batch's final status for the same reason.
-    return plan_outcome(db, plan.id)
-
-
 def schedule_due_attempt(db: Session, *, space_id: int | None = None) -> StewardAssistPlan | None:
     """Report the plan that has leaseable work, or None.
 
@@ -2629,85 +2265,6 @@ def schedule_due_attempt(db: Session, *, space_id: int | None = None) -> Steward
     return None
 
 
-def launch_due(*, limit: int | None = None) -> int:
-    """把本 tick 可执行的 inproc attempt 提交到有界线程池（非阻塞）。
-
-    pi 载体的 attempt 不在这里执行：它们由 sidecar 通过内部端点取走。
-    """
-
-    spaces = _spaces_with_due_attempts(limit=limit)
-    for space_id in spaces:
-        _get_executor().submit(_run_in_own_session, space_id)
-    return len(spaces)
-
-
-def _spaces_with_due_attempts(*, limit: int | None = None) -> list[int]:
-    """Distinct spaces holding a leaseable inproc attempt.
-
-    Spaces, not attempts: the per-space budget is enforced inside
-    ``lease_attempt``, so handing it one space at a time keeps that check
-    authoritative instead of duplicating it here.
-    """
-    from app.db import SessionLocal
-
-    now = timeutil.utcnow()
-    cap = limit if limit is not None else config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
-    session = SessionLocal()
-    try:
-        return list(
-            session.scalars(
-                select(StewardModelCall.space_id)
-                .where(
-                    StewardModelCall.status == "reserved",
-                    StewardModelCall.carrier == "inproc",
-                    StewardModelCall.next_attempt_at.is_not(None),
-                    StewardModelCall.next_attempt_at <= now,
-                )
-                .distinct()
-                .limit(cap)
-            )
-        )
-    finally:
-        session.close()
-
-
-def _run_in_own_session(space_id: int) -> None:
-    from app.db import SessionLocal
-
-    session = SessionLocal()
-    try:
-        run_attempt(session, space_id=space_id, worker_id=f"inproc:{os.getpid()}")
-    except Exception as exc:  # noqa: BLE001 — 辅助失败绝不外抛拖垮调用方
-        # 日志脱敏（09-11 R3）：只记空间 id 与异常类名；异常原文可能携带 SQL
-        # 参数/上游响应片段，绝不进入日志。
-        logger.warning(
-            "steward assist run failed for space %s; deterministic core retained (error=%s)",
-            space_id,
-            type(exc).__name__,
-        )
-        session.rollback()
-    finally:
-        session.close()
-
-
-def _get_executor() -> ThreadPoolExecutor:
-    global _executor
-    if _executor is None:
-        _executor = ThreadPoolExecutor(
-            max_workers=max(1, config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE * 2),
-            thread_name_prefix="steward-assist",
-        )
-    return _executor
-
-
-def shutdown_assist_executor() -> None:
-    """优雅停机：不无限等待 httpx（单次调用受 timeout 上界，线程必然有限收敛）。"""
-    global _executor
-    if _executor is not None:
-        _executor.shutdown(wait=False, cancel_futures=True)
-        _executor = None
-
-
 # ---- 兼容旧测试的审计读取辅助 ----
 
 
@@ -2726,7 +2283,6 @@ __all__ = [
     "assist_enabled",
     "batch_calls",
     "candidate_user_content",
-    "launch_due",
     "lease_attempt",
     "open_child_run",
     "plan_for_job",
@@ -2736,16 +2292,12 @@ __all__ = [
     "prompt_version",
     "recover_stuck_attempts",
     "recover_stuck_child_runs",
-    "execute_plan_attempts",
-    "run_attempt",
-    "run_due_attempt",
     "schedule_due_attempt",
     "apply_settled_attempt",
     "record_attempt_outcome",
     "apply_settled_attempt",
     "record_attempt_outcome",
     "settle_attempt",
-    "shutdown_assist_executor",
     "terminology_target_retryable",
     "trusted_explanations",
     "STEWARD_PROMPT_VERSION",

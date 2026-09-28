@@ -29,7 +29,7 @@ from test_steward import _confirm, _emit_fact_event, _person, _run_job, _space
 from app import config
 from app.models.agent_provider import AgentProvider, AgentSpaceProviderSetting
 from app.models.relationship_facts import SOURCE_FACT_TYPES, SourceFact
-from app.models.steward import ActionCard, StewardLlmCandidate, StewardModelCall
+from app.models.steward import CARRIER_PI, ActionCard, StewardLlmCandidate, StewardModelCall
 from app.services import agent_tokens, steward_assist
 from app.utils import timeutil
 from app.utils.secretbox import encrypt_secret
@@ -134,8 +134,6 @@ def _flags(monkeypatch):
     monkeypatch.setattr(config, "STEWARD_ASSIST_EXPLANATION", True)
     monkeypatch.setattr(config, "STEWARD_ASSIST_TERMINOLOGY", False)
     monkeypatch.setattr(config, "PERSONAL_FAMILY_VIEW_ENABLED", True)
-    for kind in ("CANDIDATE", "RANKING", "EXPLANATION"):
-        monkeypatch.setattr(config, f"STEWARD_ASSIST_{kind}_CARRIER", "pi")
 
 
 def _provider(db_session, name: str) -> AgentProvider:
@@ -205,7 +203,7 @@ def test_candidate_runs_through_the_pi_carrier_and_keeps_its_atomic_fence(db_ses
     _run_job(db_session, space, event.id)
     db_session.expire_all()
 
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi", kind="candidate")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI, kind="candidate")
     payload = _payload(client, run.id, token)
     # The candidate input is a codename roster plus confirmed facts; the model must
     # be able to name two of them and no others.
@@ -253,7 +251,7 @@ def test_ranking_runs_through_the_pi_carrier_as_a_strict_permutation(db_session,
     db_session.expire_all()
 
     # A good permutation.
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi", kind="ranking")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI, kind="ranking")
     payload = _payload(client, run.id, token)
     card_ids = [int(card["card_id"]) for card in payload]
     assert len(card_ids) >= 2, "ranking needs at least two cards to be a permutation"
@@ -284,7 +282,7 @@ def test_ranking_rejects_a_partial_permutation_through_the_pi_carrier(db_session
     _run_job(db_session, space, event.id)
     db_session.expire_all()
 
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi", kind="ranking")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI, kind="ranking")
     payload = _payload(client, run.id, token)
     card_ids = [int(card["card_id"]) for card in payload]
     assert len(card_ids) >= 2
@@ -322,7 +320,7 @@ def test_explanation_runs_through_the_pi_carrier_with_declared_slots(db_session,
     _run_job(db_session, space, event.id)
     db_session.expire_all()
 
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi", kind="explanation")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI, kind="explanation")
     payload = _payload(client, run.id, token)
     fact_ids = [int(f["id"]) for f in payload["evidence_facts"]]
     slot_key = payload["allowed_slot_keys"][0]
@@ -364,7 +362,7 @@ def test_explanation_cannot_cite_evidence_outside_the_projection(db_session, mon
     _run_job(db_session, space, event.id)
     db_session.expire_all()
 
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi", kind="explanation")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI, kind="explanation")
     payload = _payload(client, run.id, token)
     slot_key = payload["allowed_slot_keys"][0]
     invented = max(int(f["id"]) for f in payload["evidence_facts"]) + 1000
@@ -409,7 +407,7 @@ def test_a_changed_fact_set_retires_a_pi_candidate_attempt(db_session, monkeypat
     _run_job(db_session, space, event.id)
     db_session.expire_all()
 
-    grant, run, token, client = _lease_and_open(db_session, carrier="pi", kind="candidate")
+    grant, run, token, client = _lease_and_open(db_session, carrier=CARRIER_PI, kind="candidate")
     payload = _payload(client, run.id, token)
     fact = payload["facts"][0]
     product = json.dumps(
@@ -432,52 +430,6 @@ def test_a_changed_fact_set_retires_a_pi_candidate_attempt(db_session, monkeypat
     assert attempt.error_code == steward_assist.REASON_EVIDENCE_CHANGED
     assert attempt.applied_at is None
     assert list(db_session.scalars(select(StewardLlmCandidate))) == []
-
-
-def test_every_kind_is_equivalent_across_carriers(db_session, monkeypatch):
-    """Each kind's product is identical whichever carrier produced it.
-
-    The per-kind tests above prove the guards hold through the Pi path. This one
-    proves the guard is not *stricter*: the same model output settles to the same
-    status and the same stored product under both carriers, which is what makes the
-    migration a carrier change rather than a behaviour change.
-    """
-    observed: dict[str, dict[str, object]] = {}
-    for carrier in ("inproc", "pi"):
-        for kind in ("CANDIDATE", "RANKING", "EXPLANATION"):
-            monkeypatch.setattr(config, f"STEWARD_ASSIST_{kind}_CARRIER", carrier)
-            space, event = _space_with_all_kinds(db_session, f"e4-eq-{carrier}-{kind.lower()}")
-            _run_job(db_session, space, event.id)
-            db_session.expire_all()
-
-            grant, run, token, client = _lease_and_open(
-                db_session, carrier=carrier, kind=kind.lower()
-            )
-            payload = _payload(client, run.id, token)
-            output = _kind_output(kind, payload)
-            response = _settle(client, run.id, token, output)
-            assert response.status_code == 200, response.text
-            db_session.expire_all()
-
-            attempt = db_session.get(StewardModelCall, grant["attempt_id"])
-            assert attempt is not None
-            observed[f"{kind}:{carrier}"] = {
-                "status": attempt.status,
-                "output": attempt.output_json,
-                "error": attempt.error_code,
-            }
-
-    for kind in ("CANDIDATE", "RANKING", "EXPLANATION"):
-        left, right = observed[f"{kind}:inproc"], observed[f"{kind}:pi"]
-        assert left["status"] == right["status"], f"{kind} settled to a different status"
-        assert left["error"] == right["error"], f"{kind} reported a different reason"
-        # The stored product must be structurally identical. Raw user ids differ by
-        # construction (each iteration builds its own space), so the comparison is
-        # on the product's shape and its per-kind keys — which is what "the carrier
-        # changed, not the behaviour" means.
-        assert _product_shape(left["output"]) == _product_shape(
-            right["output"]
-        ), f"{kind} stored a differently shaped product under the two carriers"
 
 
 def _product_shape(product):

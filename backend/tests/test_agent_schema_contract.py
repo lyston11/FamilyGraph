@@ -138,7 +138,7 @@ def test_context_out_field_contract() -> None:
         # projection, so this cross-side literal is the version anchor and the
         # sidecar fails closed on mismatch.
         "steward_prompt_version",
-        # Steward-only: the per-kind instruction block both carriers must send.
+        # Steward-only: the per-kind instruction block the server owns and sends.
         "steward_instructions",
     ]
 

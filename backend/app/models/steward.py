@@ -47,6 +47,10 @@ STEWARD_ASSIST_KINDS: tuple[str, ...] = (
     "explanation",
     "terminology",
 )
+# 执行载体。收敛后只有 Pi child run：进程内直连 Provider 的路径已删除，
+# 因此这不是「可选值之一」而是唯一取值。历史行的 ``inproc`` 仍保留可读
+# （memory #399：不收紧 CHECK、不回写旧行）。
+CARRIER_PI = "pi"
 # ST-2 触发原因 taxonomy
 STEWARD_JOB_CAUSES = (
     "source_fact",

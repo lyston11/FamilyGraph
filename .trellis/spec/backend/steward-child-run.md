@@ -36,6 +36,7 @@ SESSION_AGENT_KINDS = ("assistant",)             # agent_sessions 只能这些
   `lease_owner`/`lease_until`/`next_attempt_at`/`carrier` 在 attempt 上，不在 plan 上。
   `plan_id` 指向 `steward_assist_plans`（原 `steward_assist_batches`，收窄为不可变工作快照，无执行状态）。
   `carrier CHECK IN ('inproc','pi')`；`INDEX ix_smc_due (status, next_attempt_at)` 供租约选行。
+  S5 起新行恒为 `'pi'`；CHECK 不收紧、历史 `'inproc'` 行不回写（memory #399）。
 - **不存在 `steward_runs` 窄表**：child run 与 attempt 的绑定就是
   `steward_model_calls.run_id`，且它是 **UNIQUE**（`ON DELETE SET NULL`）：一个 child run ↔ 恰好一行
   attempt，否则结算无法判断结果属于哪一行。`job_id`/`assist_kind`/`viewer_account_id` 已在 attempt 上，
@@ -144,15 +145,15 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
 
 ## 8. prompt 文本与版本（跨层字面量）
 
-**prompt 文本由服务端拥有**（E2/E3 修正）。sidecar 不再持有 steward system prompt：
+**prompt 文本由服务端拥有**（E2/E3 修正；S5 后是唯一事实）。sidecar 不持有 steward system prompt：
 
-- 进程内载体发送 `steward_assist._PROMPTS[kind]` 作为 system message；
-- `prompt_digest` 是 `sha256(f"{instructions}\n{user_content}")`；
-- 因此 context 投影必须原样下发同一段文本（`steward_instructions`），Pi 载体发送它。
-  只发一段通用的 steward prompt 会让两个载体问出**不同的问题**，而记录的 digest 却声称一致——
+- 服务端在 context 投影里下发 `steward_instructions`（= `steward_assist._PROMPTS[kind]`），
+  sidecar 把它作为 system message 发送；
+- `prompt_digest` 是 `sha256(f"{instructions}\n{user_content}")`，覆盖的正是**实际发送**的文本；
+- 只发一段通用的 steward prompt 会让模型被问一个与 digest 描述不同的问题——
   对 candidate 这类是承重的：方向语义与矛盾规则就住在那段文本里，输出校验器是第二道防线而非替代品。
 - 回归：`test_steward_child_run_acceptance.py::test_both_carriers_send_the_same_prompt_text`
-  用投影里拿到的东西**重建 digest**，因此「两侧发同一件事」是可检验的而不是声明。
+  用投影里拿到的东西**重建 digest**，因此「发送的就是 digest 描述的那段」是可检验的而不是声明。
 - sidecar **不得**保留本地 steward prompt 作 fallback（S1 曾有）：它会被发送**代替**服务端文本，
   反而掩盖差异。`agent/src/prompts/steward.ts` 只导出 `STEWARD_PROMPT_VERSION`。
 - `steward_assist.STEWARD_PROMPT_VERSION` 是锚点，经 context 投影下发给 sidecar；
@@ -233,8 +234,10 @@ AGENT_SERVICE_SECRET=x SECRET_KEY=y ADMIN_JWT_AUDIENCE=a ADMIN_JWT_SECRET=b ADMI
 `tests/test_steward_child_run_migration.py`（S1 守卫/形状/往返）、
 `tests/test_agent_execution_fence.py`（两条 fence 矩阵）、`tests/test_steward_child_run_acceptance.py`
 （行为等价 + 受控 E2E + 发送门与 fence 调用点断言）、
-`tests/test_steward_pi_carrier_terminology.py`（**载体等价** + 网关可达 + egress 审计 + 崩溃收敛 + 回退无孤儿）、
-`tests/test_steward_pi_carrier_remaining_kinds.py`（candidate/ranking/explanation 的每 kind 围栏与等价）、
+`tests/test_steward_pi_carrier_terminology.py`（网关可达 + egress 审计 + 崩溃收敛 + 孤立租约收敛）、
+`tests/test_steward_pi_carrier_remaining_kinds.py`（candidate/ranking/explanation 的每 kind 围栏）、
+`tests/steward_pi_harness.py`（驱动一次 Pi attempt 的测试辅助：lease → context → settle，
+`respond` 扮演模型，`between` 是写回栅栏的观察窗口）、
 `agent/test/adapters-kind.test.ts`（适配器每条差异 + 无残留 kind 分支）、
 `agent/test/client.test.ts`（租约路径/请求体与 settle 产物形状）、
 `agent/test/worker-slots.test.ts`（槽位隔离四条）、`agent/test/poll-scheduling.test.ts`（调度与槽位预算）。
@@ -248,9 +251,9 @@ AGENT_SERVICE_SECRET=x SECRET_KEY=y ADMIN_JWT_AUDIENCE=a ADMIN_JWT_SECRET=b ADMI
   发送门遇到被栅栏拦下的 attempt 必须**当场退休为 `skipped` + 安全原因码并继续看下一个候选**，
   不得直接返回：没有别的地方会再租它，留在 `reserved` 会让本空间永远看起来有活干，
   且 `plan_error_code` 永远为空（原因码只有栅栏跑过才存在）。
-- **发送门必须按 carrier 选行**：attempt 只能由它声明的载体执行。不过滤会让进程内调度泵
-  租到 `pi` attempt（sidecar 永远看不到它），置为 `in_flight` 后卡到租约过期、以 `unknown`
-  保守计费结束，白花一次调用额度。
+- **发送门必须按 carrier 选行**：attempt 只能由它声明的载体执行。S5 后新行恒为 `pi`，
+  选行条件仍在（历史 `inproc` 行因此永不被租），但进程内调度泵已删除，不再有「泵租到
+  `pi` attempt 后卡到租约过期」的路径。
 - **plan 无状态**：`steward_assist_plans` 是不可变快照。「这批工作结果如何」一律由
   `plan_outcome` / `plan_error_code` 从 attempt 派生，派生规则逐条复现旧 `_apply_batch` 的终态码。
 - **HTTP 不在写事务内**：发送所需的 runtime/投影/输出上界在租约事务内读出并放进 grant，

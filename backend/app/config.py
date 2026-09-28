@@ -239,16 +239,6 @@ STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: int = int(
 STEWARD_ASSIST_CALL_LEASE_SECONDS: int = int(
     os.environ.get("STEWARD_ASSIST_CALL_LEASE_SECONDS", "120")
 )
-# 逐 kind 的执行载体。未知值 fail-closed（carrier_for 抛错），因为拼错会静默
-# 换一个执行器。
-STEWARD_ASSIST_CANDIDATE_CARRIER: str = os.environ.get("STEWARD_ASSIST_CANDIDATE_CARRIER", "inproc")
-STEWARD_ASSIST_RANKING_CARRIER: str = os.environ.get("STEWARD_ASSIST_RANKING_CARRIER", "inproc")
-STEWARD_ASSIST_EXPLANATION_CARRIER: str = os.environ.get(
-    "STEWARD_ASSIST_EXPLANATION_CARRIER", "inproc"
-)
-STEWARD_ASSIST_TERMINOLOGY_CARRIER: str = os.environ.get(
-    "STEWARD_ASSIST_TERMINOLOGY_CARRIER", "inproc"
-)
 
 # ---- 09-13 Steward 推测层（inferred tree；fail-closed 默认关）----
 # 推测边 = LLM 候选经管家作业投影的「建议关系」，只在 PFV 以虚线/角标呈现，

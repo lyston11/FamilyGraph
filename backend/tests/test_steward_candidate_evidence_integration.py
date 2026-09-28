@@ -13,6 +13,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from steward_pi_harness import drain_plan, responder_from_transport
 from test_steward_assist import _provider, _responses_fake, _steward_setting
 from test_steward_candidate_evidence import candidate, fact, family, record, versions
 from test_steward_staged_pipeline import _run
@@ -117,10 +118,7 @@ def _assist(session, world, calls, *, reverse=False):
     assert batch is not None and batch.space_id == world.space.id
     plan_id = batch.id
     previous_calls = len(calls)
-    assert (
-        steward_assist.execute_plan_attempts(session, plan_id=plan_id, transport=transport)
-        == "applied"
-    )
+    assert drain_plan(session, plan_id, respond=responder_from_transport(transport)) == "applied"
     session.expire_all()
     batch = session.get(StewardAssistPlan, plan_id)
     call = session.scalar(
@@ -272,8 +270,10 @@ def test_real_jobs_version_only_related_support_and_never_create_public_work(db_
     assert len(versions(db_session)) == 2 and first.support_facts_json == first_snapshot
     before_calls = len(calls)
     assert (
-        steward_assist.execute_plan_attempts(
-            db_session, plan_id=last_batch.id, transport=_transport(db_session, world, calls)
+        drain_plan(
+            db_session,
+            last_batch.id,
+            respond=responder_from_transport(_transport(db_session, world, calls)),
         )
         == "applied"
     )
@@ -596,7 +596,7 @@ def test_actual_assist_response_cannot_write_support_after_source_or_lease_chang
             independent.commit()
         return response
 
-    status = steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
+    status = drain_plan(db_session, batch.id, respond=responder_from_transport(transport))
     if change == "lease":
         # The lease expired mid-call, so nothing was settled: the row stays for the
         # recovery owner and the plan reports its reserved state, not "applying".
@@ -623,8 +623,10 @@ def _prepared_writeback(session, monkeypatch):
             lambda *_args, **_kwargs: (_ for _ in ()).throw(_PauseAfterAudit),
         )
         with pytest.raises(_PauseAfterAudit):
-            steward_assist.execute_plan_attempts(
-                session, plan_id=batch.id, transport=_transport(session, world, calls)
+            drain_plan(
+                session,
+                batch.id,
+                respond=responder_from_transport(_transport(session, world, calls)),
             )
     session.expire_all()
     call = session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == batch.id))

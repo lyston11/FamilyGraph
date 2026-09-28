@@ -365,9 +365,8 @@ describe("tool and prompt isolation between kinds", () => {
     // reject every steward run at runtime (the typ-drift failure mode).
     expect(STEWARD_PROMPT_VERSION).toBe("steward-v1");
     // There is deliberately no local steward system prompt: the server owns the
-    // text and sends it in the projection, so both carriers send the same thing
-    // and prompt_digest describes what was actually asked. A local copy would be
-    // sent instead of the server's text.
+    // text and sends it in the projection, so prompt_digest describes what was
+    // actually asked. A local copy would be sent instead of the server's text.
     const module = await import("../src/prompts/steward.js");
     expect(Object.keys(module)).toEqual(["STEWARD_PROMPT_VERSION"]);
   });

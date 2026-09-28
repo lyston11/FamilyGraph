@@ -6,6 +6,7 @@ from datetime import timedelta
 import httpx
 import pytest
 from sqlalchemy import delete, select
+from steward_pi_harness import drain_all, drain_plan, responder_from_transport
 from test_steward_terminology import (
     _account_id,
     _completions_fake,
@@ -24,6 +25,7 @@ from app.models.agent_provider import AgentProvider
 from app.models.relationship_facts import SourceFact
 from app.models.space import SpaceMember
 from app.models.steward import (
+    CARRIER_PI,
     ActionCard,
     StewardModelCall,
     StewardTermProjection,
@@ -93,7 +95,7 @@ def test_unknown_result_is_not_resent_in_a_new_job_or_prompt_version(db_session,
         raise httpx.ReadTimeout("synthetic timeout")
 
     db_session.commit()
-    assert steward_assist.run_due_attempt(db_session, transport=unknown) == "failed"
+    assert drain_all(db_session, responder_from_transport(unknown)) == "failed"
     rows = list(db_session.scalars(select(StewardModelCall)))
     # The attempt that was actually sent is unknowable; the plan's other reserved
     # attempts were never sent and stay reserved (they are still leaseable).
@@ -110,7 +112,7 @@ def test_unknown_result_is_not_resent_in_a_new_job_or_prompt_version(db_session,
         max_targets=8,
     )
     assert not any(g["viewer_account_id"] == _account_id(db_session, gc) for g in groups)
-    assert steward_assist.run_due_attempt(db_session, transport=unknown) is None
+    assert drain_all(db_session, responder_from_transport(unknown)) is None
 
 
 def test_unsent_failures_have_a_cross_job_retry_limit_and_delay(db_session, monkeypatch):
@@ -122,7 +124,7 @@ def test_unsent_failures_have_a_cross_job_retry_limit_and_delay(db_session, monk
         raise httpx.ConnectTimeout("synthetic unsent timeout")
 
     db_session.commit()
-    assert steward_assist.run_due_attempt(db_session, transport=unsent) == "failed"
+    assert drain_all(db_session, responder_from_transport(unsent)) == "failed"
     assert (
         steward_terminology.collect_model_groups(
             db_session,
@@ -136,11 +138,11 @@ def test_unsent_failures_have_a_cross_job_retry_limit_and_delay(db_session, monk
     monkeypatch.setattr(timeutil, "utcnow", lambda: later)
     _integrity_scan(db_session, space)
     db_session.commit()
-    assert steward_assist.run_due_attempt(db_session, transport=unsent) == "failed"
+    assert drain_all(db_session, responder_from_transport(unsent)) == "failed"
     later += timedelta(seconds=61)
     _integrity_scan(db_session, space)
     db_session.commit()
-    assert steward_assist.run_due_attempt(db_session, transport=unsent) is None
+    assert drain_all(db_session, responder_from_transport(unsent)) is None
     viewer_calls = list(
         db_session.scalars(
             select(StewardModelCall).where(
@@ -184,9 +186,7 @@ def test_one_call_budget_rotates_from_candidate_to_terminology(db_session, monke
         return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "[]"}]}]}
 
     assert (
-        steward_assist.execute_plan_attempts(
-            db_session, plan_id=first.id, transport=empty_candidate
-        )
+        drain_plan(db_session, first.id, respond=responder_from_transport(empty_candidate))
         == "applied"
     )
     _integrity_scan(db_session, space)
@@ -212,10 +212,7 @@ def test_empty_terminology_result_is_marked_checked_and_not_resent(db_session):
     account_id = _account_id(db_session, gc)
     empty = _completions_fake(json.dumps({"version": 1, "context_hash": None, "items": []}))
 
-    assert (
-        steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=empty)
-        == "applied"
-    )
+    assert drain_plan(db_session, batch.id, respond=responder_from_transport(empty)) == "applied"
     attempt = db_session.scalar(
         select(StewardModelCall).where(
             StewardModelCall.plan_id == batch.id,
@@ -274,22 +271,37 @@ def test_midflight_input_change_discards_model_writeback(db_session, change):
             member.status = "removed"
         session.commit()
 
-    status = steward_assist.execute_plan_attempts(
+    status = drain_plan(
         db_session,
-        plan_id=batch.id,
-        after_send=changed,
-        transport=_completions_fake(
-            _terminology_payload(
-                {
-                    "target_ref": "t002",
-                    "concept_code": "Uf-Uf",
-                    "term": "姥姥",
-                    "reason_code": "synonym",
-                }
+        batch.id,
+        between=changed,
+        respond=responder_from_transport(
+            _completions_fake(
+                _terminology_payload(
+                    {
+                        "target_ref": "t002",
+                        "concept_code": "Uf-Uf",
+                        "term": "姥姥",
+                        "reason_code": "synonym",
+                    }
+                )
             )
         ),
     )
-    assert status == "superseded"
+    if change == "revoke_membership":
+        # Revoking the viewer is rejected by the run-level fence before the
+        # attempt-level one runs, so settlement is refused and the attempt
+        # converges through recovery instead of being retired as ``skipped`` in
+        # this transaction. Convergence is bounded by one maintenance tick, which
+        # is the accepted residual risk (spec §4); this asserts that bound.
+        assert status in ("applying", "superseded"), status
+        attempt = db_session.scalar(
+            select(StewardModelCall).where(StewardModelCall.plan_id == batch.id)
+        )
+        assert attempt is not None
+        _expire_and_converge(db_session, attempt)
+    else:
+        assert status == "superseded"
     projection = db_session.scalar(
         select(StewardTermProjection).where(
             StewardTermProjection.viewer_account_id == _account_id(db_session, gc),
@@ -348,22 +360,37 @@ def test_writeback_observes_changes_from_another_database_session(db_session, ch
                 row.base_url = "https://changed.example.invalid/v1"
             writer.commit()
 
-    status = steward_assist.execute_plan_attempts(
+    status = drain_plan(
         db_session,
-        plan_id=batch.id,
-        after_send=changed,
-        transport=_completions_fake(
-            _terminology_payload(
-                {
-                    "target_ref": "t002",
-                    "concept_code": "Uf-Uf",
-                    "term": "姥姥",
-                    "reason_code": "synonym",
-                }
+        batch.id,
+        between=changed,
+        respond=responder_from_transport(
+            _completions_fake(
+                _terminology_payload(
+                    {
+                        "target_ref": "t002",
+                        "concept_code": "Uf-Uf",
+                        "term": "姥姥",
+                        "reason_code": "synonym",
+                    }
+                )
             )
         ),
     )
-    assert status == "superseded"
+    if change == "revoke_membership":
+        # Revoking the viewer is rejected by the run-level fence before the
+        # attempt-level one runs, so settlement is refused and the attempt
+        # converges through recovery instead of being retired as ``skipped`` in
+        # this transaction. Convergence is bounded by one maintenance tick, which
+        # is the accepted residual risk (spec §4); this asserts that bound.
+        assert status in ("applying", "superseded"), status
+        attempt = db_session.scalar(
+            select(StewardModelCall).where(StewardModelCall.plan_id == batch.id)
+        )
+        assert attempt is not None
+        _expire_and_converge(db_session, attempt)
+    else:
+        assert status == "superseded"
     projection = db_session.scalar(
         select(StewardTermProjection).where(
             StewardTermProjection.viewer_account_id == _account_id(db_session, gc),
@@ -371,6 +398,29 @@ def test_writeback_observes_changes_from_another_database_session(db_session, ch
         )
     )
     assert projection is None or projection.term is None
+
+
+def _expire_and_converge(session, attempt) -> None:
+    """Drive one attempt to a terminal state through the recovery path.
+
+    A settlement refused by the run-level fence leaves the attempt ``in_flight``
+    until recovery adjudicates it — the same bound the spec states for revocation.
+    """
+    from datetime import timedelta
+
+    from app.models.agent import AgentRun
+    from app.utils.timeutil import utcnow
+
+    attempt.lease_until = utcnow() - timedelta(seconds=1)
+    child = session.get(AgentRun, attempt.run_id) if attempt.run_id else None
+    if child is not None:
+        child.lease_expires_at = utcnow() - timedelta(seconds=1)
+    session.commit()
+    steward_assist.recover_stuck_attempts(session)
+    steward_assist.recover_stuck_child_runs(session)
+    session.expire_all()
+    converged = session.get(StewardModelCall, attempt.id)
+    assert converged is not None and converged.status not in ("in_flight", "reserved")
 
 
 class _PauseAfterAudit(Exception):
@@ -384,7 +434,7 @@ def test_old_executor_cannot_audit_after_another_session_takes_the_lease(db_sess
     batch = steward_assist.schedule_due_attempt(db_session, space_id=space.id)
     assert batch is not None
     original_attempt = steward_assist.lease_attempt(
-        db_session, space_id=space.id, worker_id="doomed", carrier="inproc"
+        db_session, space_id=space.id, worker_id="doomed", carrier=CARRIER_PI
     )["attempt_id"]
 
     def take_over(_session, _plan):
@@ -413,7 +463,7 @@ def test_old_executor_cannot_audit_after_another_session_takes_the_lease(db_sess
             take_over(db_session, batch)
         return answer(url, headers, payload, timeout)
 
-    steward_assist.execute_plan_attempts(db_session, plan_id=batch.id, transport=transport)
+    drain_plan(db_session, batch.id, respond=responder_from_transport(transport))
     assert took_over == [True]
     db_session.expire_all()
     # 旧执行者零结算：被接管的那一笔保持 in_flight（不落 output_json、不计费），
@@ -450,17 +500,19 @@ def test_recovery_alone_applies_persisted_output_after_lease_loss(
 
     monkeypatch.setattr(steward_assist, "_apply_product", pause_after_audit)
     with pytest.raises(_PauseAfterAudit):
-        steward_assist.execute_plan_attempts(
+        drain_plan(
             db_session,
-            plan_id=batch.id,
-            transport=_completions_fake(
-                _terminology_payload(
-                    {
-                        "target_ref": "t002",
-                        "concept_code": "Uf-Uf",
-                        "term": "姥姥",
-                        "reason_code": "synonym",
-                    }
+            batch.id,
+            respond=responder_from_transport(
+                _completions_fake(
+                    _terminology_payload(
+                        {
+                            "target_ref": "t002",
+                            "concept_code": "Uf-Uf",
+                            "term": "姥姥",
+                            "reason_code": "synonym",
+                        }
+                    )
                 )
             ),
         )
@@ -541,18 +593,20 @@ def test_model_recreates_a_missing_projection_with_its_real_baseline(db_session)
             )
             writer.commit()
 
-    steward_assist.execute_plan_attempts(
+    drain_plan(
         db_session,
-        plan_id=batch.id,
-        after_send=remove_projection,
-        transport=_completions_fake(
-            _terminology_payload(
-                {
-                    "target_ref": "t002",
-                    "concept_code": "Uf-Uf",
-                    "term": "姥姥",
-                    "reason_code": "synonym",
-                }
+        batch.id,
+        between=remove_projection,
+        respond=responder_from_transport(
+            _completions_fake(
+                _terminology_payload(
+                    {
+                        "target_ref": "t002",
+                        "concept_code": "Uf-Uf",
+                        "term": "姥姥",
+                        "reason_code": "synonym",
+                    }
+                )
             )
         ),
     )
@@ -612,18 +666,20 @@ def test_reading_an_unrelated_card_does_not_discard_terminology_output(db_sessio
             reader.commit()
 
     assert (
-        steward_assist.execute_plan_attempts(
+        drain_plan(
             db_session,
-            plan_id=batch.id,
-            after_send=read_card,
-            transport=_completions_fake(
-                _terminology_payload(
-                    {
-                        "target_ref": "t002",
-                        "concept_code": "Uf-Uf",
-                        "term": "姥姥",
-                        "reason_code": "synonym",
-                    }
+            batch.id,
+            between=read_card,
+            respond=responder_from_transport(
+                _completions_fake(
+                    _terminology_payload(
+                        {
+                            "target_ref": "t002",
+                            "concept_code": "Uf-Uf",
+                            "term": "姥姥",
+                            "reason_code": "synonym",
+                        }
+                    )
                 )
             ),
         )

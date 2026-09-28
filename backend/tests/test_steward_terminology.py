@@ -17,6 +17,7 @@ import json
 
 import pytest
 from sqlalchemy import select
+from steward_pi_harness import drain_all, responder_from_transport
 from test_steward import _confirm, _person, _space
 
 from app import config
@@ -280,16 +281,18 @@ def test_model_term_applied_via_real_job_chain(db_session, monkeypatch) -> None:
     kinds = (batch_row.fence_json or {}).get("kinds", [])
     assert kinds == ["terminology"]
 
-    status = steward_assist.run_due_attempt(
+    status = drain_all(
         db_session,
-        transport=_completions_fake(
-            _terminology_payload(
-                {
-                    "target_ref": "t002",
-                    "concept_code": "Uf-Uf",
-                    "term": "姥姥",
-                    "reason_code": "synonym",
-                }
+        responder_from_transport(
+            _completions_fake(
+                _terminology_payload(
+                    {
+                        "target_ref": "t002",
+                        "concept_code": "Uf-Uf",
+                        "term": "姥姥",
+                        "reason_code": "synonym",
+                    }
+                )
             )
         ),
     )
@@ -354,7 +357,7 @@ def test_invalid_model_terms_rejected_and_marked_checked(db_session) -> None:
             "reason_code": "synonym",
         }
     )
-    status = steward_assist.run_due_attempt(db_session, transport=_completions_fake(bad))
+    status = drain_all(db_session, responder_from_transport(_completions_fake(bad)))
     assert status == "applied"  # 批次终态，但产物零应用
 
     projection = db_session.scalar(
