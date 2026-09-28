@@ -806,18 +806,16 @@ def test_the_write_back_fence_has_exactly_two_call_sites():
     assert callers == ["lease_attempt", "record_attempt_outcome", "recover_stuck_attempts"]
 
 
-def test_both_carriers_send_the_same_prompt_text(db_session, monkeypatch):
-    """A child run must send what the in-process carrier sends.
+def test_the_sent_prompt_is_the_one_the_digest_describes(db_session, monkeypatch):
+    """The projection must carry the instruction text verbatim, and the digest must
+    be reproducible from what is actually sent.
 
-    The in-process carrier sends ``_PROMPTS[kind]`` as the system message and the
-    projection as the user message, and ``prompt_digest`` is computed over those
-    two. If the Pi path sent only a generic system prompt, the two carriers would
-    ask the model different questions while the recorded digest claimed otherwise
-    — and for the candidate kind the difference is load-bearing, because the
-    direction semantics and conflict rules live in that text.
-
-    So the projection must carry the instructions verbatim, and the digest must be
-    reproducible from what the projection hands over.
+    ``prompt_digest`` is computed over ``_PROMPTS[kind]`` plus the projection, so a
+    child run that substituted a generic system prompt would ask the model a
+    different question than the recorded digest claims. For the candidate kind that
+    difference is load-bearing: the direction semantics and conflict rules live in
+    that text. Rebuilding the digest from the projection is what makes this
+    checkable rather than a claim.
     """
     import hashlib
 
@@ -862,9 +860,9 @@ def test_both_carriers_send_the_same_prompt_text(db_session, monkeypatch):
     instructions = body["steward_instructions"]
     assert (
         instructions == _PROMPTS[attempt.assist_kind]
-    ), "the projection must carry the same instruction text the in-process carrier sends"
-    # And the digest is reproducible from it, which is what makes "the two
-    # carriers send the same thing" checkable rather than a claim.
+    ), "the projection must carry the server's instruction text verbatim"
+    # And the digest is reproducible from it, which is what makes "the text that
+    # runs is the text the digest describes" checkable rather than a claim.
     block = body["context_blocks"][0]["content"]
     rebuilt = hashlib.sha256(f"{instructions}\n{block}".encode()).hexdigest()
     assert rebuilt == attempt.prompt_digest

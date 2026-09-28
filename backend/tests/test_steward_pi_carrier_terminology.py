@@ -1,10 +1,11 @@
 """E3 acceptance: terminology runs through the Pi child run carrier.
 
-The property under test is **carrier equivalence**, and it is deliberately phrased
-as "the same input produces the same product through either carrier" rather than
-"the Pi path works". The two carriers are supposed to differ in exactly one thing —
-who issues the HTTP request — so any other observable difference is a defect, and a
-test that only exercised the new path could not tell the difference.
+These tests were written to prove carrier equivalence — that the Pi path asked the
+same question and wrote back the same product as the in-process path. That
+equivalence was established before the cutover, and the in-process path is now
+gone, so what remains here is the part that is still load-bearing: the Pi chain's
+own contracts (gateway reachability, egress audit, crash convergence, a stranded
+lease converging) and the terminology fences that must hold on it.
 
 The chain is driven for real: lease → child run → context projection → settle, over
 HTTP against the internal app. A mock cannot prove an internal-protocol contract
@@ -159,7 +160,7 @@ def _terminology_product(payload: dict) -> str:
 
 
 def test_a_pi_settlement_cannot_write_back_after_the_viewer_is_revoked(db_session, monkeypatch):
-    """A revoked viewer's product must not be applied, whichever carrier ran it.
+    """A revoked viewer's product must not be applied.
 
     Carrier equivalence would be worthless if the Pi path applied products without
     the authorization the in-process path uses. Revoking the viewer between the send
@@ -439,8 +440,7 @@ def test_an_assistant_token_still_cannot_reach_a_steward_run(db_session, monkeyp
 def test_a_steward_egress_is_audited_against_its_child_run(db_session, monkeypatch):
     """The one model call a child run makes is audited, with its safe classification.
 
-    The in-process carrier talks to the provider directly, so it produces no egress
-    audit. Routing through the gateway is what buys the audit — but only if the row
+    Routing the model call through the gateway is what buys the audit — but only if the row
     is written against the child run, since that is the id the operator has and the
     only link back to the attempt. `error_class`/`retryable`/`sent` must be present
     too: they are what makes a failure diagnosable without reading prompt text.
