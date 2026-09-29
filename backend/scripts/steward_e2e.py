@@ -13,11 +13,21 @@ job/PFV/卡片/通知 → 建议审阅/提交/确认 → 撤权 → 进程中断
 
 **范围限制（09-29）**：本脚本**不启动 sidecar**，因此**不验证**模型辅助的 Pi
 执行、产物写回与降级分类——那些必须由真实执行者经
-`/internal/agent/steward/attempts/lease` 租取 attempt 才能发生。脚本仍会登记
-plan/attempt 并如实记录 `assist_reservation_observed: false`，不伪报成功。
+`/internal/agent/steward/attempts/lease` 租取 attempt 才能发生。脚本会登记
+plan/attempt 并断言预留确实发生（`assist_reservation_observed`），但不伪报执行成功。
 辅助的端到端验证入口是 pytest：`test_steward_child_run_acceptance.py`、
 `test_steward_pi_carrier_terminology.py`、`test_steward_pi_carrier_remaining_kinds.py`、
 `steward_pi_harness.py`。
+
+**场景前提（09-29，两个门，缺一不可）**：卡片产出需要同时满足两点，否则
+`evaluate_recommendation` 会返回 `profile_not_confirmed` 或 `already_connected`：
+
+1. 参与者必须经 `POST /api/me/identity/confirm` 确认身份——自助注册产生的是
+   `User(provisional)`，而推荐矩阵要求双端 `identity_confirmed`；
+2. 场景空间必须是 **`lineage`**：`household_link`（“与某位亲属共建家庭空间”）
+   天然产自家族空间；建 `household` 并把各方加为成员会命中 R5 抑制
+   （`share_active_household`，见 spec/backend/steward-recommendation-suppression.md），
+   卡片数为 0。生产数据一致：`household_link` 全部落在 lineage 空间。
 
 真实 provider 模式（STEWARD_E2E_REAL_PROVIDER=1）：成功路径改用部署环境配置的
 真实上游（name/base_url/协议/模型均由环境变量给出，平台不再绑死单一供应商）；
@@ -249,7 +259,14 @@ def main() -> int:
         # 登录换发独立 token（claim 会话语义）
         login = client.post("/api/auth/login", json={"name": name, "pin": "135246"})
         assert login.status_code == 200, login.text
-        return {"user_id": user_id, "headers": auth(login.json())}
+        headers = auth(login.json())
+        # 自助注册产生的是 User(provisional)（见 api/auth.py 的 docstring），而推荐
+        # 矩阵要求双端 identity_confirmed（`identity_fsm.recommendation_eligible`）。
+        # 未确认身份时 `evaluate_recommendation` 直接返回 profile_not_confirmed，
+        # 无论空间类型如何都不会有卡。该端点是首登门禁白名单内的唯一本人确认路径。
+        confirm = client.post("/api/me/identity/confirm", headers=headers)
+        assert confirm.status_code == 200, confirm.text
+        return {"user_id": user_id, "headers": headers}
 
     def tick_until_drained(max_ticks: int = 12) -> dict:
         """真实调度路径：连续 run_maintenance_tick 直到队列排干（含退避等待）。"""
@@ -278,7 +295,7 @@ def main() -> int:
     def wait_plans(
         timeout: float = 20.0, *, keep_ticking: bool = False, poll_seconds: float = 0.2
     ) -> list[str]:
-        """轮询至 plan 收敛（attempt 全部离开 reserved/in_flight）。
+        """轮询至已登记的 plan 收敛（attempt 全部离开 reserved/in_flight）。
 
         执行单元是 attempt（E1）：plan 自身无状态，终态由
         ``steward_assist.plan_outcome`` 从 attempt 派生。keep_ticking：辅助由
@@ -287,6 +304,11 @@ def main() -> int:
         reserved 状态；真实 Pi 执行的端到端验证入口是 pytest 套件。
         poll_seconds：真实模式下单次调用常达数十秒，放大轮询间隔避免高频 tick
         与执行事务争锁。
+
+        **不把「零个 plan」当作收敛**：plan 是在 job 跑完并投递时才登记的，
+        所以「还没登记」和「已全部收敛」在列表上都是空。早期版本直接对空列表
+        break，于是在 job 尚未跑完时就返回，后续断言只能看到空的 plan 集合。
+        因此这里要求**至少看到一个 plan** 才算收敛（未出现则轮询到超时）。
         """
         import faulthandler
 
@@ -297,13 +319,17 @@ def main() -> int:
                 maintenance.run_maintenance_tick()
             db = SessionLocal()
             try:
-                statuses = [
-                    outcome
-                    for (plan_id,) in db.execute(select(StewardAssistPlan.id)).all()
-                    if (outcome := steward_assist.plan_outcome(db, plan_id)) in ("pending",)
+                plan_ids = [
+                    plan_id for (plan_id,) in db.execute(select(StewardAssistPlan.id)).all()
                 ]
-                if not statuses:
-                    break
+                if plan_ids:
+                    statuses = [
+                        outcome
+                        for plan_id in plan_ids
+                        if (outcome := steward_assist.plan_outcome(db, plan_id)) == "pending"
+                    ]
+                    if not statuses:
+                        break
             finally:
                 db.close()
             time.sleep(poll_seconds)
@@ -318,8 +344,14 @@ def main() -> int:
     c = register("e2e-丙")
     step("register_members", user_ids=[b["user_id"], c["user_id"]])
 
+    # ---- 1b. 建**家族空间** ----
+    # 空间类型是承重的：`household_link`（“与某位亲属共建家庭空间”）天然产自
+    # **家族空间**——你在家族树里看到尚未与你同住的亲属。若建 household 并把
+    # 三方都加为成员，R5 抑制（`share_active_household`）会正确地判定“已经共同
+    # 在一个家庭里”而不再推荐共建，卡片数为 0，本脚本就停在辅助步骤之前。
+    # 生产数据一致：`household_link` 卡片 39 张全部在 lineage 空间，household 0 张。
     r = client.post(
-        "/api/spaces", json={"name": "e2e household", "kind": "household"}, headers=a["headers"]
+        "/api/spaces", json={"name": "e2e lineage", "kind": "lineage"}, headers=a["headers"]
     )
     assert r.status_code == 201, r.text
     space_id = r.json()["id"]
@@ -379,6 +411,14 @@ def main() -> int:
         notifications=len(notifs),
     )
     assert all(j.status == "succeeded" for j in jobs), jobs
+    # 场景必须真的产出卡片：这是「tick → job → 卡片」这条链的回归保护。
+    # 断言“存在”而非精确计数：精确计数会因场景微调而脆断，而本步的意图是
+    # “该链有产出”，不是“恰好 N 张”。变异验证：删掉上面的关系确认，本断言失败。
+    card_kinds = {c.kind for c in cards if c.state != "superseded"}
+    assert "household_link" in card_kinds, (
+        f"期望 tick 产出 household_link 卡片，实际 {sorted(card_kinds)}；"
+        "若为空，检查参与者是否已 identity_confirmed、场景空间是否为 lineage"
+    )
     db.close()
 
     # ---- 6. admin :8002 观测状态（真实 DB 指标）----

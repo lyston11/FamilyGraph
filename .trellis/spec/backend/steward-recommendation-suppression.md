@@ -63,6 +63,11 @@ active_edges(db, space_id, *, limit=None, exclude_conflicted=False) -> list[Stew
 - `lineage_request_possible` 仍按当前空间 kind 与成员分布计算，与本判定解耦。
 - `card_household_conflict` **只对 `household_link`** 生效；`create_household` 被抑制时
   同一对的 `lineage_request` 仍合法。
+- **推论（验证脚本必须遵守）**：`household_link` 天然产自**家族空间**——建 `household`
+  并把双方都加为 active 成员会让本抑制生效，卡片数为 0（生产数据：`household_link`
+  全部落在 lineage 空间，household 空间 0 张）。另需双端 `identity_confirmed`：自助注册
+  产生的是 `User(provisional)`，未确认时 `evaluate_recommendation` 返回
+  `profile_not_confirmed`。两条门缺一不可，`scripts/steward_e2e.py` 的场景据此建立。
 
 ### 3.3 读取、命令与后台收敛一致
 
