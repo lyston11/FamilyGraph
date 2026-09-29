@@ -78,8 +78,14 @@ export interface BuildSessionDeps {
     ): AssistantMessageEventStream;
   }["bivarianceHack"];
   agentDir?: string;
-  /** Returns true when the run must stop issuing tool calls (cancel/lease lost). */
+  /** Returns true when the run must stop issuing tool calls (cancel/lease lost/blocked). */
   shouldStopToolCalls?: () => boolean;
+  /**
+   * Notified synchronously when the guard takes its first hard-block decision.
+   * The worker uses this to abort the in-flight session immediately, instead of
+   * waiting for the model loop to end.
+   */
+  onPolicyBlock?: (code: string) => void;
   /** Abort signal propagated to Pi and pi-ai provider retries. */
   signal?: AbortSignal;
   /** Test seam: override the frozen SDK session-retry budget. */
@@ -331,6 +337,7 @@ export async function buildRunSession(
     localRequired: projection.context_blocks?.some(
       (block) => block.sensitivity === "high" || block.sensitivity === "local_required",
     ),
+    onBlock: (incident, code) => deps.onPolicyBlock?.(code),
   });
 
   const guardedStreamSimple = (m: Model<Api>, context: Context, options?: SimpleStreamOptions) => {

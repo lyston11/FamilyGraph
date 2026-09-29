@@ -3,6 +3,18 @@
  *
  * This extension is deliberately lightweight and has no network/database
  * access. FastAPI remains authoritative for data and tool authorization.
+ *
+ * Division of responsibility (2026-09-29 task 09-29-agent-policy-boundary):
+ *
+ * - FastAPI owns authorization: space/user/run/attempt fences, the tool
+ *   allowlist, closed argument schemas, membership, visibility projection,
+ *   provider local/cloud policy and Steward product write-back validation.
+ * - This guard owns the *synchronous* boundary: it must not widen what FastAPI
+ *   granted, and it must not fail a run on natural-language wording alone.
+ *
+ * Keyword markers are a diagnostic signal, never an authorization decision.
+ * A model that writes "system prompt" is not an attack; a tool call outside the
+ * allowlist is. Only the latter blocks.
  */
 
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
@@ -26,6 +38,8 @@ const INJECTION_MARKERS = [
   "绕过限制",
   "作为管理员",
 ];
+
+const MASKED_TEXT_PATTERN = /\bmasked\b|遮罩|已脱敏/i;
 
 const PII_PATTERNS = [
   /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/,
@@ -57,31 +71,78 @@ const SCOPE_KEYS = new Set([
 
 type ProviderKind = "local" | "openai_compatible";
 
+/**
+ * Hard-block classes. Every blocking decision maps to exactly one of these, so
+ * the settled error code states what was actually detected. In particular no
+ * non-secret failure may be reported as a secret leak.
+ */
+export type PolicyBlockCode =
+  | "POLICY_SECRET_IN_PROVIDER_PAYLOAD"
+  | "POLICY_TOOL_BLOCKED"
+  | "POLICY_TOOL_RESULT_BLOCKED"
+  | "POLICY_PROVIDER_BLOCKED"
+  | "POLICY_MASKED_DATA"
+  | "POLICY_GUARD_BLOCKED";
+
+/** Blocking violation kinds. Each one is evidence of a real policy violation. */
 type ViolationKind =
-  | "unsafe_input"
-  | "prompt_injection"
   | "tool_not_allowed"
   | "unsafe_tool_arguments"
-  | "tool_result_redacted"
-  | "masked_data"
   | "tool_result_too_large"
+  | "masked_data"
   | "local_provider_required"
   | "cloud_provider_forbidden"
   | "secret_in_provider_payload";
 
-type NoticeKind = "sensitive_redacted" | "pii_redacted" | "unconfirmed_fact_annotated";
+/** Non-blocking observations. They never fail a run on their own. */
+type NoticeKind =
+  | "sensitive_redacted"
+  | "pii_redacted"
+  | "unconfirmed_fact_annotated"
+  | "instruction_like_text"
+  | "masked_text";
 
-const BLOCKING_VIOLATION_KINDS = new Set<ViolationKind>([
-  "unsafe_input",
-  "prompt_injection",
-  "tool_not_allowed",
-  "unsafe_tool_arguments",
-  "masked_data",
-  "tool_result_too_large",
-  "local_provider_required",
-  "cloud_provider_forbidden",
-  "secret_in_provider_payload",
-]);
+const BLOCK_CODE_BY_VIOLATION: Record<ViolationKind, PolicyBlockCode> = {
+  secret_in_provider_payload: "POLICY_SECRET_IN_PROVIDER_PAYLOAD",
+  tool_not_allowed: "POLICY_TOOL_BLOCKED",
+  unsafe_tool_arguments: "POLICY_TOOL_BLOCKED",
+  tool_result_too_large: "POLICY_TOOL_RESULT_BLOCKED",
+  local_provider_required: "POLICY_PROVIDER_BLOCKED",
+  cloud_provider_forbidden: "POLICY_PROVIDER_BLOCKED",
+  masked_data: "POLICY_MASKED_DATA",
+};
+
+/** Fixed rule identifiers. Never build one from content or an unknown field. */
+const RULES = {
+  injectionMarker: "instruction_marker",
+  maskedText: "masked_wording",
+  maskedContract: "masked_contract_field",
+  contextContract: "context_contract",
+  secretPayload: "secret_in_provider_payload",
+  secretToolArgs: "secret_in_tool_arguments",
+  scopeOverride: "scope_override",
+  toolNotAllowed: "tool_not_allowed",
+  toolArgsTooLarge: "tool_arguments_too_large",
+  toolResultTooLarge: "tool_result_too_large",
+  toolResultContract: "tool_result_contract",
+  providerLocalRequired: "local_provider_required",
+  providerCloudForbidden: "cloud_provider_forbidden",
+  unconfirmed: "unconfirmed_fact",
+  piiRedacted: "pii_redacted",
+  sensitiveRedacted: "sensitive_redacted",
+} as const;
+
+type PolicyStage =
+  | "input"
+  | "tool_call"
+  | "tool_result"
+  | "context"
+  | "before_provider_request"
+  | "tool_execution_end";
+
+type PolicySource = "user" | "assistant" | "tool" | "payload" | "unknown";
+
+type PolicyAction = "block" | "notice" | "sanitize" | "annotate";
 
 export interface PolicyViolation {
   kind: ViolationKind;
@@ -91,6 +152,22 @@ export interface PolicyViolation {
 export interface PolicyNotice {
   kind: NoticeKind;
   detail: string;
+}
+
+/**
+ * One log-safe diagnostic record. It deliberately carries no source text, no
+ * match fragment, no prompt, no thinking, no tool input/output and no content
+ * hash: correlation uses run-scoped coordinates only.
+ */
+export interface PolicyIncident {
+  rule: string;
+  stage: PolicyStage;
+  source: PolicySource;
+  action: PolicyAction;
+  occurrences: number;
+  turnIndex?: number;
+  messageIndex?: number;
+  toolCallId?: string;
 }
 
 export interface PolicyGuardOptions {
@@ -110,6 +187,9 @@ export interface PolicyGuardOptions {
   maxToolInputChars?: number;
   onViolation?: (violation: PolicyViolation) => void;
   onNotice?: (notice: PolicyNotice) => void;
+  /** Fired once, when this run first becomes hard-blocked. */
+  onBlock?: (incident: PolicyIncident, code: PolicyBlockCode) => void;
+  onIncident?: (incident: PolicyIncident) => void;
   onSettled?: (event: { type: "agent_settled" }) => void;
 }
 
@@ -119,6 +199,15 @@ export interface PolicyGuard {
   readonly blockingViolationCount: number;
   readonly violations: readonly PolicyViolation[];
   readonly notices: readonly PolicyNotice[];
+  readonly incidents: readonly PolicyIncident[];
+  /** Total diagnostics seen, including those folded into `occurrences`. */
+  readonly incidentTotal: number;
+  /** Diagnostics beyond the bounded retention window (counted, not stored). */
+  readonly incidentsDropped: number;
+  /** True once this run has taken an irreversible hard-block decision. */
+  readonly blocked: boolean;
+  /** The first hard-block class, or null while the run is still allowed. */
+  readonly blockCode: PolicyBlockCode | null;
   /** Applies the final provider-boundary check without network/database I/O. */
   readonly beforeProviderRequest: (payload: unknown) => unknown;
 }
@@ -172,9 +261,48 @@ function normalizedText(value: unknown): string {
   return serialized(value).toLowerCase().replace(/\s+/g, " ");
 }
 
+/** Diagnostic only: natural-language markers never authorize or block. */
 function containsInjection(value: unknown): boolean {
   const text = normalizedText(value);
   return INJECTION_MARKERS.some((marker) => text.includes(marker));
+}
+
+/** Diagnostic only: prose that talks about masking is not masked data. */
+function containsMaskedWording(value: unknown): boolean {
+  if (typeof value === "string") return MASKED_TEXT_PATTERN.test(value);
+  if (Array.isArray(value)) return value.some(containsMaskedWording);
+  if (value === null || typeof value !== "object") return false;
+  return Object.values(value as Record<string, unknown>).some(containsMaskedWording);
+}
+
+/**
+ * Contract check: only a server-shaped field decides that restricted data is
+ * present. A model or user writing `masked` in prose cannot create this signal,
+ * and this signal cannot be suppressed by rewording.
+ *
+ * Tool results reach the sidecar as JSON text, so a serialized payload is
+ * parsed to find the *field*; the word itself is never the evidence.
+ */
+function containsMaskedContract(value: unknown): boolean {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text.startsWith("{") && !text.startsWith("[")) return false;
+    try {
+      return containsMaskedContract(JSON.parse(text));
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) return value.some(containsMaskedContract);
+  if (value === null || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(([key, item]) => {
+    const normalizedKey = key.toLowerCase().replaceAll("-", "_");
+    return (
+      (normalizedKey === "visibility" && String(item).toLowerCase() === "masked") ||
+      (normalizedKey === "masked" && item === true) ||
+      containsMaskedContract(item)
+    );
+  });
 }
 
 function containsSecret(value: unknown, secrets: readonly string[]): boolean {
@@ -245,36 +373,10 @@ function isUnconfirmed(value: unknown): boolean {
   });
 }
 
-function containsMaskedData(value: unknown): boolean {
-  if (typeof value === "string") {
-    return /\bmasked\b|遮罩|已脱敏/i.test(value);
-  }
-  if (Array.isArray(value)) return value.some(containsMaskedData);
-  if (value === null || typeof value !== "object") return false;
-  return Object.entries(value as Record<string, unknown>).some(([key, item]) => {
-    const normalizedKey = key.toLowerCase().replaceAll("-", "_");
-    return (
-      (normalizedKey === "visibility" && String(item).toLowerCase() === "masked") ||
-      (normalizedKey === "masked" && item === true) ||
-      containsMaskedData(item)
-    );
-  });
-}
-
 function annotateUnconfirmed(value: unknown): unknown {
   const label = unconfirmedLabel();
   if (Array.isArray(value)) return [label, ...value];
   return [label, { type: "text", text: serialized(value) }];
-}
-
-function annotateUnconfirmedMessage(value: unknown): unknown {
-  if (value !== null && typeof value === "object" && "content" in value) {
-    return {
-      ...(value as Record<string, unknown>),
-      content: annotateUnconfirmed((value as { content: unknown }).content),
-    };
-  }
-  return annotateUnconfirmed(value);
 }
 
 function safeLimit(value: number | undefined, fallback: number): number {
@@ -298,6 +400,12 @@ function boundedResultText(raw: string, maxChars: number, unconfirmed: boolean):
   return `${prefix}${truncatedText(raw, maxChars - prefix.length)}`;
 }
 
+/**
+ * Neutral wording for a withheld result. It must not itself contain a marker
+ * phrase, or the guard would flag its own safety notice on the next pass.
+ */
+const WITHHELD_RESULT_TEXT = "[FamilyGraph restricted content withheld by policy]";
+
 function sanitizeToolResult(
   content: unknown,
   secrets: readonly string[],
@@ -307,34 +415,23 @@ function sanitizeToolResult(
   redacted: boolean;
   oversized: boolean;
   unconfirmed: boolean;
-  injection: boolean;
-  masked: boolean;
+  maskedContract: boolean;
+  maskedWording: boolean;
 } {
-  const masked = containsMaskedData(content);
-  if (masked) {
+  if (containsMaskedContract(content)) {
     return {
-      content: [{ type: "text", text: "[FamilyGraph masked data blocked by policy]" }],
+      content: [{ type: "text", text: WITHHELD_RESULT_TEXT }],
       redacted: false,
       oversized: false,
       unconfirmed: false,
-      injection: false,
-      masked: true,
+      maskedContract: true,
+      maskedWording: false,
     };
   }
   const sanitized = redactSensitive(content, secrets);
   const redacted = serialized(sanitized) !== serialized(content);
   const unconfirmed = isUnconfirmed(content);
-  const injection = containsInjection(content);
-  if (injection) {
-    return {
-      content: [{ type: "text", text: "[FamilyGraph data blocked by policy]" }],
-      redacted: false,
-      oversized: false,
-      unconfirmed,
-      injection,
-      masked: false,
-    };
-  }
+  const maskedWording = containsMaskedWording(content);
   const annotated = unconfirmed ? annotateUnconfirmed(sanitized) : sanitized;
   const raw = serialized(annotated);
   if (raw.length <= maxChars) {
@@ -343,8 +440,8 @@ function sanitizeToolResult(
       redacted,
       oversized: false,
       unconfirmed,
-      injection: false,
-      masked: false,
+      maskedContract: false,
+      maskedWording,
     };
   }
   const bounded = boundedResultText(raw, maxChars, unconfirmed);
@@ -353,93 +450,208 @@ function sanitizeToolResult(
     redacted,
     oversized: true,
     unconfirmed,
-    injection: false,
-    masked: false,
+    maskedContract: false,
+    maskedWording,
   };
-}
-
-function violation(
-  violations: PolicyViolation[],
-  options: PolicyGuardOptions,
-  kind: ViolationKind,
-  detail: string,
-): void {
-  const item = { kind, detail } satisfies PolicyViolation;
-  violations.push(item);
-  options.onViolation?.(item);
-}
-
-function notice(
-  notices: PolicyNotice[],
-  options: PolicyGuardOptions,
-  kind: NoticeKind,
-  detail: string,
-): void {
-  const item = { kind, detail } satisfies PolicyNotice;
-  notices.push(item);
-  options.onNotice?.(item);
 }
 
 function canonicalPolicyToolName(value: string): string {
   return canonicalToolName(value) ?? value;
 }
 
+/** Opaque call ids are locators, not content: bound them to a safe charset. */
+function safeToolCallId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function sourceFromRole(role: unknown): PolicySource {
+  if (role === "user") return "user";
+  if (role === "assistant") return "assistant";
+  if (role === "toolResult" || role === "tool") return "tool";
+  return "unknown";
+}
+
+const MAX_INCIDENTS = 64;
+
 export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
   const violations: PolicyViolation[] = [];
   const notices: PolicyNotice[] = [];
+  const incidents: PolicyIncident[] = [];
+  const incidentIndex = new Map<string, PolicyIncident>();
+  let droppedIncidents = 0;
+  let totalIncidents = 0;
+  let blockedCode: PolicyBlockCode | null = null;
   const maxToolResultChars = safeLimit(options.maxToolResultChars, DEFAULT_MAX_TOOL_RESULT_CHARS);
   const maxToolInputChars = safeLimit(options.maxToolInputChars, DEFAULT_MAX_TOOL_INPUT_CHARS);
+
+  const incidentKey = (item: PolicyIncident): string =>
+    [
+      item.rule,
+      item.stage,
+      item.source,
+      item.action,
+      item.turnIndex ?? "",
+      item.messageIndex ?? "",
+      item.toolCallId ?? "",
+    ].join("|");
+
+  /**
+   * Records one bounded diagnostic. Deduplication uses run-scoped coordinates,
+   * never text or a text hash. Diagnostics are best-effort: a failure here must
+   * never turn a would-be block into an allow.
+   */
+  const record = (item: PolicyIncident): void => {
+    totalIncidents += 1;
+    const key = incidentKey(item);
+    const existing = incidentIndex.get(key);
+    if (existing !== undefined) {
+      existing.occurrences += 1;
+    } else if (incidents.length < MAX_INCIDENTS) {
+      incidentIndex.set(key, item);
+      incidents.push(item);
+    } else {
+      droppedIncidents += 1;
+      return;
+    }
+    try {
+      options.onIncident?.(incidentIndex.get(key) ?? item);
+    } catch {
+      // Diagnostics must not influence the decision.
+    }
+  };
+
+  const violation = (
+    kind: ViolationKind,
+    detail: string,
+    locator: Partial<Pick<PolicyIncident, "rule" | "stage" | "source" | "turnIndex" | "messageIndex" | "toolCallId">> = {},
+  ): void => {
+    const item = { kind, detail } satisfies PolicyViolation;
+    violations.push(item);
+    const code = BLOCK_CODE_BY_VIOLATION[kind];
+    const incident: PolicyIncident = {
+      rule: locator.rule ?? kind,
+      stage: locator.stage ?? "before_provider_request",
+      source: locator.source ?? "payload",
+      action: "block",
+      occurrences: 1,
+      ...(locator.turnIndex !== undefined ? { turnIndex: locator.turnIndex } : {}),
+      ...(locator.messageIndex !== undefined ? { messageIndex: locator.messageIndex } : {}),
+      ...(locator.toolCallId !== undefined ? { toolCallId: locator.toolCallId } : {}),
+    };
+    record(incident);
+    const first = blockedCode === null;
+    if (first) blockedCode = code;
+    try {
+      options.onViolation?.(item);
+    } catch {
+      // Logging/callback failure must not clear or replace the block.
+    }
+    if (first) {
+      try {
+        options.onBlock?.(incident, code);
+      } catch {
+        // Same: the block is already recorded.
+      }
+    }
+  };
+
+  const notice = (
+    kind: NoticeKind,
+    detail: string,
+    locator: Partial<Pick<PolicyIncident, "rule" | "stage" | "source" | "turnIndex" | "messageIndex" | "toolCallId">> = {},
+  ): void => {
+    const item = { kind, detail } satisfies PolicyNotice;
+    notices.push(item);
+    record({
+      rule: locator.rule ?? kind,
+      stage: locator.stage ?? "before_provider_request",
+      source: locator.source ?? "payload",
+      action: kind === "pii_redacted" || kind === "sensitive_redacted" ? "sanitize" : "notice",
+      occurrences: 1,
+      ...(locator.turnIndex !== undefined ? { turnIndex: locator.turnIndex } : {}),
+      ...(locator.messageIndex !== undefined ? { messageIndex: locator.messageIndex } : {}),
+      ...(locator.toolCallId !== undefined ? { toolCallId: locator.toolCallId } : {}),
+    });
+    try {
+      options.onNotice?.(item);
+    } catch {
+      // Diagnostics must not influence the decision.
+    }
+  };
+
+  const blockError = (): Error => {
+    const code = blockedCode ?? "POLICY_GUARD_BLOCKED";
+    const error = new Error(`policy: blocked (${code})`) as Error & { errorCode: string };
+    error.errorCode = code;
+    return error;
+  };
+
+  /**
+   * Final provider-boundary check. This is the only hook that can stop egress:
+   * it runs from `onPayload`, before the HTTP request is built, and a throw
+   * there is converted into a stream error without a request being sent. The
+   * other hooks swallow throws, so they must never be the enforcement point.
+   */
   const beforeProviderRequest = (payload: unknown): unknown => {
-    const hasSecret = containsSecret(payload, options.secrets);
-    const hasMaskedData = containsMaskedData(payload);
-    const hasPii = containsPii(payload);
+    // Sticky: once a run is hard-blocked it stays blocked, so SDK auto-retry
+    // cannot launder the decision by re-invoking this hook.
+    if (blockedCode !== null) throw blockError();
+
     const providerBlocked =
       (options.localRequired && options.providerKind !== "local") ||
       (options.cloudAllowed === false && options.providerKind !== "local");
     if (providerBlocked) {
+      const localOnly = Boolean(options.localRequired);
       violation(
-        violations,
-        options,
-        options.localRequired ? "local_provider_required" : "cloud_provider_forbidden",
-        options.localRequired
+        localOnly ? "local_provider_required" : "cloud_provider_forbidden",
+        localOnly
           ? "local-only context cannot be sent to a non-local provider"
           : "cloud provider use is disabled by policy",
+        {
+          rule: localOnly ? RULES.providerLocalRequired : RULES.providerCloudForbidden,
+          stage: "before_provider_request",
+          source: "payload",
+        },
       );
     }
-    if (hasSecret) {
+    if (containsSecret(payload, options.secrets)) {
       violation(
-        violations,
-        options,
         "secret_in_provider_payload",
         "provider payload contained secret material; transport was blocked",
+        { rule: RULES.secretPayload, stage: "before_provider_request", source: "payload" },
       );
     }
-    if (hasMaskedData) {
-      violation(violations, options, "masked_data", "provider payload contained masked data");
+    if (containsMaskedContract(payload)) {
+      violation("masked_data", "provider payload contained a masked-data contract field", {
+        rule: RULES.maskedContract,
+        stage: "before_provider_request",
+        source: "payload",
+      });
     }
-    if (hasPii) {
-      notice(
-        notices,
-        options,
-        "pii_redacted",
-        "unnecessary PII was removed before provider transport",
-      );
+    if (containsMaskedWording(payload)) {
+      notice("masked_text", "provider payload mentioned masked wording", {
+        rule: RULES.maskedText,
+        stage: "before_provider_request",
+        source: "payload",
+      });
     }
-    if (providerBlocked || hasMaskedData || hasSecret) {
-      const error = new Error(
-        providerBlocked
-          ? "policy: provider blocked by local/cloud data policy"
-          : hasMaskedData
-            ? "policy: masked data cannot reach provider"
-            : "policy: secret material cannot reach provider",
-      ) as Error & { errorCode: string };
-      error.errorCode = providerBlocked
-        ? "POLICY_PROVIDER_BLOCKED"
-        : hasMaskedData
-          ? "POLICY_MASKED_DATA"
-          : "POLICY_SECRET_IN_PROVIDER_PAYLOAD";
-      throw error;
+    if (containsInjection(payload)) {
+      notice("instruction_like_text", "provider payload contained instruction-like wording", {
+        rule: RULES.injectionMarker,
+        stage: "before_provider_request",
+        source: "payload",
+      });
     }
+    if (containsPii(payload)) {
+      notice("pii_redacted", "unnecessary PII was removed before provider transport", {
+        rule: RULES.piiRedacted,
+        stage: "before_provider_request",
+        source: "payload",
+      });
+    }
+    if (blockedCode !== null) throw blockError();
     return redactSensitive(payload, options.secrets);
   };
 
@@ -447,16 +659,16 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
     name: "familygraph-policy-guard",
     hidden: true,
     factory: (pi) => {
-      // input: cheap first-pass screening before prompt expansion.
+      // input: cheap first-pass screening. Wording is a diagnostic signal, not
+      // an authorization decision, so it never swallows the user's prompt; a
+      // secret typed here is caught at the provider boundary instead.
       pi.on("input", (event) => {
-        if (containsInjection(event.text) || containsSecret(event.text, options.secrets)) {
-          violation(
-            violations,
-            options,
-            "unsafe_input",
-            "input contains unsafe or secret material",
-          );
-          return { action: "handled" };
+        if (containsInjection(event.text)) {
+          notice("instruction_like_text", "input contained instruction-like wording", {
+            rule: RULES.injectionMarker,
+            stage: "input",
+            source: "user",
+          });
         }
         return { action: "continue" };
       });
@@ -464,32 +676,45 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
       // tool_call: only server-issued, registered domain tools may execute.
       pi.on("tool_call", (event) => {
         const canonicalName = canonicalPolicyToolName(event.toolName);
+        const toolCallId = safeToolCallId(event.toolCallId);
+        const locator = {
+          stage: "tool_call" as const,
+          source: "assistant" as const,
+          ...(toolCallId !== undefined ? { toolCallId } : {}),
+        };
+        if (containsInjection(event.input)) {
+          notice("instruction_like_text", "tool arguments contained instruction-like wording", {
+            rule: RULES.injectionMarker,
+            ...locator,
+          });
+        }
         const inputSize = serialized(event.input).length;
-        if (
-          inputSize > maxToolInputChars ||
-          containsScopeOverride(event.input) ||
-          containsInjection(event.input) ||
-          containsSecret(event.input, options.secrets)
-        ) {
-          violation(
-            violations,
-            options,
-            "unsafe_tool_arguments",
-            "tool call contained oversized, scope-overriding, instruction-like, or secret arguments",
-          );
-          return {
-            block: true,
-            reason: "policy: unsafe tool arguments",
-            terminate: true,
-          };
+        if (inputSize > maxToolInputChars) {
+          violation("unsafe_tool_arguments", "tool arguments exceeded the size limit", {
+            rule: RULES.toolArgsTooLarge,
+            ...locator,
+          });
+          return { block: true, reason: "policy: tool arguments too large", terminate: true };
+        }
+        if (containsScopeOverride(event.input)) {
+          violation("unsafe_tool_arguments", "tool arguments attempted a scope override", {
+            rule: RULES.scopeOverride,
+            ...locator,
+          });
+          return { block: true, reason: "policy: unsafe tool arguments", terminate: true };
+        }
+        if (containsSecret(event.input, options.secrets)) {
+          violation("unsafe_tool_arguments", "tool arguments contained secret material", {
+            rule: RULES.secretToolArgs,
+            ...locator,
+          });
+          return { block: true, reason: "policy: unsafe tool arguments", terminate: true };
         }
         if (!options.allowlist.has(canonicalName)) {
-          violation(
-            violations,
-            options,
-            "tool_not_allowed",
-            `tool "${canonicalName}" is not in the run allowlist`,
-          );
+          violation("tool_not_allowed", `tool "${canonicalName}" is not in the run allowlist`, {
+            rule: RULES.toolNotAllowed,
+            ...locator,
+          });
           return {
             block: true,
             reason: `policy: tool not allowed: ${canonicalName}`,
@@ -502,111 +727,114 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
       // tool_result: bound output, redact sensitive values, and label facts
       // that have not reached confirmation before they re-enter context.
       pi.on("tool_result", (event) => {
+        const toolCallId = safeToolCallId(event.toolCallId);
+        const locator = {
+          stage: "tool_result" as const,
+          source: "tool" as const,
+          ...(toolCallId !== undefined ? { toolCallId } : {}),
+        };
         const safe = sanitizeToolResult(event.content, options.secrets, maxToolResultChars);
         if (safe.redacted) {
-          notice(
-            notices,
-            options,
-            "sensitive_redacted",
-            "tool result contained redacted sensitive material",
-          );
+          notice("sensitive_redacted", "tool result contained redacted sensitive material", {
+            rule: RULES.sensitiveRedacted,
+            ...locator,
+          });
         }
         if (safe.oversized) {
-          violation(
-            violations,
-            options,
-            "tool_result_too_large",
-            "tool result exceeded the output limit",
-          );
+          violation("tool_result_too_large", "tool result exceeded the output limit", {
+            rule: RULES.toolResultTooLarge,
+            ...locator,
+          });
         }
         if (safe.unconfirmed) {
-          notice(
-            notices,
-            options,
-            "unconfirmed_fact_annotated",
-            "tool result was labeled as unconfirmed",
-          );
+          notice("unconfirmed_fact_annotated", "tool result was labeled as unconfirmed", {
+            rule: RULES.unconfirmed,
+            ...locator,
+          });
         }
-        if (safe.injection) {
-          violation(
-            violations,
-            options,
-            "prompt_injection",
-            "tool result contained an instruction-like data block",
-          );
+        if (safe.maskedWording) {
+          notice("masked_text", "tool result mentioned masked wording", {
+            rule: RULES.maskedText,
+            ...locator,
+          });
         }
-        if (safe.masked) {
-          violation(violations, options, "masked_data", "tool result contained masked data");
+        if (containsInjection(event.content)) {
+          notice("instruction_like_text", "tool result contained instruction-like wording", {
+            rule: RULES.injectionMarker,
+            ...locator,
+          });
         }
-        if (safe.redacted || safe.oversized || safe.unconfirmed || safe.injection || safe.masked) {
+        if (safe.maskedContract) {
+          violation("masked_data", "tool result carried a masked-data contract field", {
+            rule: RULES.maskedContract,
+            ...locator,
+          });
+        }
+        // Return only when content actually changed. A notice-only pass must
+        // leave the result untouched, so this handler stays pure for wording.
+        if (safe.redacted || safe.oversized || safe.unconfirmed || safe.maskedContract) {
           return {
             content: safe.content as typeof event.content,
-            isError: safe.oversized || safe.injection || safe.masked,
+            isError: safe.oversized || safe.maskedContract,
           };
         }
         return undefined;
       });
 
-      // context: only filter/sanitize the prefetched context and messages;
-      // this hook deliberately performs no database or network work.
+      // context: observation only, deliberately no message rewriting.
+      //
+      // Rewriting SDK messages here would risk breaking tool-call/result pairing
+      // and invalidating opaque (signed) thinking blocks, for no security gain:
+      // the authoritative egress control is `beforeProviderRequest`, which
+      // redacts the fully assembled payload and preserves numeric token caps.
+      // Keyword hits are recorded as bounded diagnostics and change nothing.
       pi.on("context", (event) => {
-        let changed = false;
-        const safeMessages = event.messages.flatMap((message) => {
+        event.messages.forEach((message, messageIndex) => {
+          const source = sourceFromRole((message as { role?: unknown }).role);
           if (containsInjection(message)) {
-            violation(
-              violations,
-              options,
-              "prompt_injection",
-              "context contained an instruction-like data block",
-            );
-            changed = true;
-            return [];
+            notice("instruction_like_text", "context contained instruction-like wording", {
+              rule: RULES.injectionMarker,
+              stage: "context",
+              source,
+              messageIndex,
+            });
           }
-          if (containsMaskedData(message)) {
-            violation(violations, options, "masked_data", "context contained masked data");
-            changed = true;
-            return [];
+          if (containsMaskedWording(message)) {
+            notice("masked_text", "context mentioned masked wording", {
+              rule: RULES.maskedText,
+              stage: "context",
+              source,
+              messageIndex,
+            });
           }
-          const unconfirmed = isUnconfirmed(message);
-          const safe = redactSensitive(message, options.secrets);
-          const annotated = unconfirmed ? annotateUnconfirmedMessage(safe) : safe;
-          if (unconfirmed) {
-            notice(
-              notices,
-              options,
-              "unconfirmed_fact_annotated",
-              "context contained an unconfirmed fact",
-            );
-            changed = true;
+          if (containsMaskedContract(message)) {
+            violation("masked_data", "context carried a masked-data contract field", {
+              rule: RULES.maskedContract,
+              stage: "context",
+              source,
+              messageIndex,
+            });
           }
-          if (serialized(annotated) !== serialized(message)) {
-            notice(
-              notices,
-              options,
-              "pii_redacted",
-              "context contained redacted sensitive material",
-            );
-            changed = true;
-          }
-          return [annotated as typeof message];
         });
-        return changed ? { messages: safeMessages } : undefined;
+        return undefined;
       });
 
-      // Final payload check. Secrets are never sent; unnecessary PII is
-      // removed and reported as a non-blocking redaction notice.
+      // Registered for completeness; the effective egress check runs from
+      // `onPayload` in session.ts, because this runner swallows handler throws.
       pi.on("before_provider_request", (event) => beforeProviderRequest(event.payload));
 
       // This catches unknown tools that Pi rejects before tool_call can run.
       pi.on("tool_execution_end", (event) => {
         const canonicalName = canonicalPolicyToolName(event.toolName);
         if (!options.allowlist.has(canonicalName)) {
-          violation(
-            violations,
-            options,
-            "tool_not_allowed",
-            `attempted tool "${canonicalName}" is outside the run allowlist`,
-          );
+          violation("tool_not_allowed", `attempted tool "${canonicalName}" is outside the run allowlist`, {
+            rule: RULES.toolNotAllowed,
+            stage: "tool_execution_end",
+            source: "assistant",
+            ...(safeToolCallId(event.toolCallId) !== undefined
+              ? { toolCallId: safeToolCallId(event.toolCallId) as string }
+              : {}),
+          });
         }
       });
 
@@ -617,19 +845,35 @@ export function createPolicyGuard(options: PolicyGuardOptions): PolicyGuard {
       });
     },
   };
+
   return {
     extension,
     get violationCount(): number {
       return violations.length;
     },
     get blockingViolationCount(): number {
-      return violations.filter((item) => BLOCKING_VIOLATION_KINDS.has(item.kind)).length;
+      return violations.length;
     },
     get violations(): readonly PolicyViolation[] {
       return violations;
     },
     get notices(): readonly PolicyNotice[] {
       return notices;
+    },
+    get incidents(): readonly PolicyIncident[] {
+      return incidents;
+    },
+    get incidentTotal(): number {
+      return totalIncidents;
+    },
+    get incidentsDropped(): number {
+      return droppedIncidents;
+    },
+    get blocked(): boolean {
+      return blockedCode !== null;
+    },
+    get blockCode(): PolicyBlockCode | null {
+      return blockedCode;
     },
     beforeProviderRequest,
   };

@@ -16,7 +16,8 @@
 - `private` 记忆只有 Assistant 且作者本人可检索；Steward、其他账号、其他空间和未 active 成员均为空结果。撤销、删除、过期、Profile 删除和数据权利删除必须在同一事务中将文档与 chunk tombstone，失效数据不依赖 FTS 物理清理才停止命中。
 - `ContextBuild`/`ContextBuildItem` 持久化 provider、policy version、source type/id、citation、trust 与排除原因；`ContextBuilder` 先做 scope/sensitivity/provider 决策再写追踪记录。`context` hook 只消费已预取的安全上下文，不查数据库。
 - `BehaviorProjection` 只从 append-only `DomainEvent` 重建，允许保存空间限定的词条、冷却、纠正偏好和推荐质量；禁止键盘、鼠标、停留时长等泛行为采集。重建是显式操作，Steward 普通运行不清空刚写入的投影。
-- Policy Guard 在工具结果、上下文、模型输出、provider 请求和持久化前后均 fail-closed：masked/跨 scope 内容阻断，`proposed`/`disputed`/`pending` 事实必须降级为 `[UNCONFIRMED FACT]`，敏感内容只允许 local provider；未知 hook 输入拒绝而不是放行。
+- Policy Guard 在工具结果、上下文、provider 请求前后 fail-closed：**服务端合同形状的** masked/跨 scope 内容阻断，`proposed`/`disputed`/`pending` 事实降级为 `[UNCONFIRMED FACT]`，已知密钥不得进入 provider 正文，敏感内容只允许 local provider；未知 hook 输入拒绝而不是放行。
+- **关键词不是判据（09-29）**：自然语言出现 `system prompt`/`masked`/`绕过限制` 等标记词只记有界 notice，不阻断请求也不删除消息；真正的边界是 tool allowlist、闭合参数、可见性投影与 Provider 策略。完整合同见 [policy-boundary.md](policy-boundary.md)。assistant 正文的输出侧扫描仍缺失，不得声称已覆盖。
 
 ### 可执行检查
 

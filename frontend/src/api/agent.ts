@@ -101,6 +101,11 @@ const AGENT_ERROR_COPY: Record<string, string> = {
   POLICY_TOOL_RESULT_BLOCKED: '回答涉及的某些内容被安全策略拦截，请换个问法',
   POLICY_SECRET_LEAK: '检测到不安全的输出内容，已拦截本次回答',
   POLICY_PROVIDER_BLOCKED: '当前模型与空间的安全策略不匹配，请联系空间所有者调整模型设置',
+  // sidecar 运行期策略码（09-29 策略边界）：每一类都说明实际检出的原因，
+  // 不再把非密钥类失败冒充密钥泄漏。POLICY_SECRET_LEAK 保留给历史记录。
+  POLICY_SECRET_IN_PROVIDER_PAYLOAD: '检测到凭据内容将被发送，已拦截本次回答',
+  POLICY_MASKED_DATA: '回答涉及的某些内容受权限限制，已拦截本次回答',
+  POLICY_GUARD_BLOCKED: '本次回答被安全策略拦截，请换个问法',
   PROVIDER_DENIED_NO_LOCAL: '该空间要求本地模型执行，但本地服务暂不可用',
   PROVIDER_DENIED_CLOUD_FORBIDDEN: '该空间未开放云端模型，请联系空间所有者调整配置',
   // sidecar 运行期 Provider 出网失败（网络/凭据/上游拒绝；上游错误已脱敏）

@@ -59,3 +59,56 @@ def test_tool_result_hook_annotates_nested_unconfirmed_fact() -> None:
         "data": {"result": {"fact_state": "proposed", "value": "candidate"}},
         "confirmed": False,
     }
+
+
+def test_ordinary_prose_is_not_blocked_by_keyword_matching() -> None:
+    """Natural-language markers are diagnostics, not authorization decisions.
+
+    A user asking about prompts, or an answer that quotes one, must not fail the
+    request. Rewording evades keyword matching anyway, so it cannot carry the
+    security guarantee; the tool allowlist and provider boundary do.
+    """
+    for content in (
+        "system prompt 要求 kind 只能是八种之一。",
+        "我不会绕过限制。",
+        "ignore previous instructions",
+    ):
+        decision = policy_guard.input_hook(content)
+        assert decision.allowed, content
+
+
+def test_input_hook_still_blocks_real_secret_material() -> None:
+    """Relaxing the wording check must not relax the secret check."""
+    decision = policy_guard.input_hook("api_key: sk-live-abcdefghijklmnop")
+    assert decision.action == "block"
+    assert decision.reason == "secret_in_input"
+
+
+def test_tool_call_hook_blocks_secret_arguments_but_not_wording() -> None:
+    """Tool arguments keep their real constraints."""
+    allowlist = ["familygraph.echo"]
+    wording = policy_guard.tool_call_hook(
+        tool="familygraph.echo",
+        version=1,
+        arguments={"text": "system prompt says hello"},
+        allowlist=allowlist,
+    )
+    assert wording.allowed
+
+    secret = policy_guard.tool_call_hook(
+        tool="familygraph.echo",
+        version=1,
+        arguments={"text": "api_key: sk-live-abcdefghijklmnop"},
+        allowlist=allowlist,
+    )
+    assert secret.action == "block"
+    assert secret.reason == "unsafe_tool_arguments"
+
+    not_allowlisted = policy_guard.tool_call_hook(
+        tool="familygraph.read_file",
+        version=1,
+        arguments={},
+        allowlist=allowlist,
+    )
+    assert not_allowlisted.action == "block"
+    assert not_allowlisted.reason == "tool_not_allowlisted"

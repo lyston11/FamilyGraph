@@ -74,6 +74,31 @@ describe('friendlyAgentError：其余映射不变', () => {
     expect(friendlyAgentError('AGENT_MEMBERSHIP_REVOKED')).not.toBe('操作失败，请稍后重试')
   })
 
+  it('策略阻断码（09-29）各自说明实际检出的原因，且不冒充密钥泄漏', () => {
+    // 每一类都有独立文案：把非密钥原因报成密钥泄漏既误导用户，也等于宣称一次
+    // 并未发生的泄漏。
+    expect(friendlyAgentError('POLICY_SECRET_IN_PROVIDER_PAYLOAD')).toBe(
+      '检测到凭据内容将被发送，已拦截本次回答',
+    )
+    expect(friendlyAgentError('POLICY_MASKED_DATA')).toBe(
+      '回答涉及的某些内容受权限限制，已拦截本次回答',
+    )
+    expect(friendlyAgentError('POLICY_GUARD_BLOCKED')).toBe('本次回答被安全策略拦截，请换个问法')
+
+    const distinct = new Set([
+      friendlyAgentError('POLICY_TOOL_BLOCKED'),
+      friendlyAgentError('POLICY_TOOL_RESULT_BLOCKED'),
+      friendlyAgentError('POLICY_PROVIDER_BLOCKED'),
+      friendlyAgentError('POLICY_SECRET_IN_PROVIDER_PAYLOAD'),
+      friendlyAgentError('POLICY_MASKED_DATA'),
+      friendlyAgentError('POLICY_GUARD_BLOCKED'),
+    ])
+    expect(distinct.size).toBe(6)
+
+    // 历史记录仍可读：POLICY_SECRET_LEAK 保留映射，不回填旧数据。
+    expect(friendlyAgentError('POLICY_SECRET_LEAK')).toBe('检测到不安全的输出内容，已拦截本次回答')
+  })
+
   it('sidecar 运行期错误码：空最终回答给出中文解释而非通用兜底', () => {
     expect(friendlyAgentError('PROVIDER_EMPTY_ANSWER')).toBe('模型没有返回内容，请重试或换个问法')
     expect(friendlyAgentError('PROVIDER_EMPTY_ANSWER')).not.toBe('操作失败，请稍后重试')
