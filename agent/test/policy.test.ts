@@ -347,6 +347,28 @@ describe("familygraph-policy-guard", () => {
     expect(rules).toContain("instruction_marker");
   });
 
+  it("does not treat the visibility mask placeholder as restricted data", () => {
+    const { guard, handlers } = installGuard(["familygraph.echo"]);
+    // The backend renders a field the viewer may not see as
+    // `{"__masked__": true}`. That placeholder is the *authorized* signal that
+    // nothing is being disclosed -- it is not hidden data, and blocking on it
+    // would fail every projection that contains a masked field.
+    const placeholder = {
+      nodes: [{ user_id: 48, display: { id: 48, name: "李贞", gender: { __masked__: true } } }],
+    };
+    const result = handlers.get("tool_result")!({
+      content: [{ type: "text", text: JSON.stringify(placeholder) }],
+    });
+    expect(result).toBeUndefined();
+    expect(
+      handlers.get("before_provider_request")!({
+        payload: { messages: [{ role: "tool", content: JSON.stringify(placeholder) }] },
+      }),
+    ).toBeDefined();
+    expect(guard.blocked).toBe(false);
+    expect(guard.violations).toHaveLength(0);
+  });
+
   it("preserves numeric provider token caps while still redacting credential keys", () => {
     const { guard, handlers } = installGuard(["familygraph.echo"]);
     const out = handlers.get("before_provider_request")!({
