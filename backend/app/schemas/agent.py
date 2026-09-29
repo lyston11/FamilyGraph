@@ -63,14 +63,22 @@ class StewardLeaseRequest(_Strict):
 class StewardLeaseOut(BaseModel):
     """Steward child run 的租赁结果。
 
-    ``steward_job_id`` 是**授权根**（不是 ``job_id``：child run 不经过通用队列，
-    ``agent_runs.job_id`` 恒为 NULL）。``assist_attempt_id`` 是执行单元
-    （``StewardModelCall.id``）——旧的 ``assist_batch_id`` 对应已被移除的批次。
-    ``max_concurrent`` 把服务端的每空间并发上限广播给 sidecar，两侧取较大值，
-    避免本地配置静默压低服务端上限。
+    ``job_id`` 与 ``steward_job_id`` 取同一个值（父 ``StewardJob.id``），但语义不同：
+    ``job_id`` 是**协议统一字段**——sidecar 的租约解码与心跳续租都只看它（心跳打
+    ``/internal/agent/jobs/{job_id}/heartbeat``），所以两个 lease 形状都必须携带；
+    ``steward_job_id`` 保留为**授权根**的显式命名。
+
+    缺 ``job_id`` 会让 sidecar 的 ``String(raw["job_id"])`` 得到字面量 ``"undefined"``，
+    心跳打到 ``/jobs/undefined/heartbeat`` 并被 403 拒绝，于是任何超过一个租约周期的
+    调用都会被判失租——这是本字段存在的直接原因。
+
+    ``assist_attempt_id`` 是执行单元（``StewardModelCall.id``）——旧的
+    ``assist_batch_id`` 对应已被移除的批次。``max_concurrent`` 把服务端的每空间
+    并发上限广播给 sidecar，两侧取较大值，避免本地配置静默压低服务端上限。
     """
 
     run_id: int
+    job_id: int
     steward_job_id: int
     assist_attempt_id: int
     assist_kind: str

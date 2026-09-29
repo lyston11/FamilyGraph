@@ -90,7 +90,7 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
 |---|---|
 | `POST /internal/agent/steward/attempts/lease` | **独立端点**，`STEWARD_ENABLED` **AND** `STEWARD_PI_RUNTIME_ENABLED` 双开关 503；无可租 204。`space_id` **可选**：省略时服务端选一个有容量且有到期工作的空间（sidecar 不知道空间拓扑）——**不回退到全库 1**，预算仍是 per-space 且会跳过已满的空间 |
 | `POST /internal/agent/jobs/lease` | **保持 `kind="assistant"`**，不放开 |
-| `POST /jobs/{id}/heartbeat` | steward 分支**同一立即事务**内同时续 run 与 attempt lease |
+| `POST /jobs/{id}/heartbeat` | steward 分支**同一立即事务**内同时续 run 与 attempt lease。**`{id}` 取自租约响应的 `job_id`**（= 父 `StewardJob.id`）：sidecar 对两个 kind 都解 `String(raw["job_id"])` 并据此拼心跳 URL，所以 `StewardLeaseOut` **必须**同时携带 `job_id` 与 `steward_job_id`（同值，前者是协议统一字段，后者是授权根命名）。缺 `job_id` 会让 URL 变成 `/jobs/undefined/heartbeat`，被 token-scope 检查 403 拒绝，sidecar 按失租 abort——任何超过一个租约周期的调用都会因此失败（回归：`test_steward_child_run_acceptance.py::test_the_steward_lease_carries_the_job_id_the_sidecar_heartbeats`、`agent/test/client.test.ts`、`agent/test/worker.integration.test.ts`） |
 | `GET /runs/{id}/context` | `session_id`/`account_id` 为 null、`messages: []`、带 `steward_prompt_version` 与 `steward_instructions` |
 | `POST /runs/{id}/events/append` | `run.kind == 'steward'` 时**拒绝消息类事件**（422） |
 | `POST /runs/{id}/provider/*` | **两个 kind 都可达**（唯一 egress）；授权按 token 的 kind 分派，provider 解析带 run 自己的 kind |

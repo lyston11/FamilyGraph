@@ -463,6 +463,11 @@ def lease_steward_attempt(
     )
     return StewardLeaseOut(
         run_id=run.id,
+        # Both carry the parent StewardJob id. `job_id` is the protocol-wide field
+        # the sidecar decodes and heartbeats against; `steward_job_id` keeps the
+        # explicit "authorization root" name. Omitting `job_id` made the sidecar
+        # heartbeat `/jobs/undefined/heartbeat`.
+        job_id=grant["steward_job_id"],
         steward_job_id=grant["steward_job_id"],
         assist_attempt_id=grant["attempt_id"],
         assist_kind=grant["assist_kind"],

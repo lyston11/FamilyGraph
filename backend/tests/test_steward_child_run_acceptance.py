@@ -191,6 +191,45 @@ def test_assistant_lease_endpoint_still_rejects_steward_kind(db_session, monkeyp
     assert response.status_code == 422
 
 
+def test_the_steward_lease_carries_the_job_id_the_sidecar_heartbeats(db_session, monkeypatch):
+    """The lease response must carry `job_id`, not only `steward_job_id`.
+
+    The sidecar decodes `String(raw["job_id"])` for *both* kinds and heartbeats
+    `/internal/agent/jobs/{job_id}/heartbeat`. While this response omitted
+    `job_id`, that expression evaluated to the literal string "undefined", so
+    every steward heartbeat hit `/jobs/undefined/heartbeat`, was rejected 403 by
+    the token-scope check, and the sidecar treated it as a lost lease. Any
+    steward call lasting longer than one lease period was therefore aborted —
+    the 12 expired child runs, all with a NULL heartbeat_at, are that failure.
+
+    Asserting the *value* (not merely that a request was made) is what makes this
+    catch the defect: a missing field still satisfies "a heartbeat was sent".
+    """
+    monkeypatch.setattr(config, "AGENT_RUNTIME_ENABLED", True)
+    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
+    from fastapi.testclient import TestClient
+
+    from app.main import internal_app
+
+    world, plan = _planned(db_session)
+    db_session.commit()
+
+    response = TestClient(internal_app).post(
+        "/internal/agent/steward/attempts/lease",
+        headers={"Authorization": f"Bearer {agent_tokens.issue_service_token()}"},
+        json={"kind": "steward", "space_id": plan.space_id, "leased_by": "test"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert "job_id" in body, "the sidecar heartbeats against job_id; omitting it sends 'undefined'"
+    assert body["job_id"] == body["steward_job_id"]
+    # And the id it names is the real parent job, so the heartbeat URL resolves.
+    attempt = db_session.get(StewardModelCall, body["assist_attempt_id"])
+    assert attempt is not None
+    assert body["job_id"] == attempt.job_id
+
+
 # --------------------------------------------------------------------------
 # The chain: lease → settle
 # --------------------------------------------------------------------------
