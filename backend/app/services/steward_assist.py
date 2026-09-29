@@ -85,11 +85,14 @@ _KIND_OUTPUT_CAPS: dict[str, int] = {
 # 消耗预算的 attempt 状态（skipped = 从未预留，不计入）
 _BUDGETED_STATUSES = ("reserved", "in_flight", "succeeded", "failed", "degraded", "unknown")
 
-# ---- 发送预算（C-R1/R2）----
-# 单笔请求的总预算 = min(配置 timeout, 剩余租约 - 结算预留)。结算预留保证请求
-# 返回后仍有时间做逐笔结算（短事务 + BEGIN IMMEDIATE 锁等待），否则已合法取得的
-# 结果会因租约过期而无法落库。最小发送窗口以下的剩余时间不再发请求。
-_SETTLEMENT_RESERVE_SECONDS = 2.0
+# ---- 发送窗口（C-R1/R2）----
+# 发送前只看 plan 的剩余墙钟：plan.deadline_at 是整批工作的上界
+# （STEWARD_ASSIST_BATCH_LEASE_SECONDS），attempt 租约取 min(now + CALL_LEASE_SECONDS,
+# plan.deadline_at)，所以单个 attempt 拿不到超出 plan 的新窗口。剩余窗口小于
+# _MIN_SEND_WINDOW_SECONDS 时本 attempt 落 skipped/insufficient_budget 并继续看下一个候选，
+# 而不是发出一个必然在结算前过期的请求。
+# （旧 `_SETTLEMENT_RESERVE_SECONDS` 随 in-process 载体一起删除：它是为「本进程发请求、
+#  本进程结算」的同步发送路径预留的余量，Pi 路径下发送与结算分属两侧，没有对应窗口。）
 _MIN_SEND_WINDOW_SECONDS = 0.1
 
 # ---- 安全原因码（白名单；异常原文/上游 body 永不落库或入日志）----
