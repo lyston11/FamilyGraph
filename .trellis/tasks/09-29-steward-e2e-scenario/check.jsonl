@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/steward-recommendation-suppression.md", "reason": "R5 household_link 抑制规则：只匹配 household 空间，是卡片产出位置的合同"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "关系推荐矩阵与抑制规则"}
