@@ -18,4 +18,6 @@ SDK 中止/重试的实际机制和来源坐标复用由实施前门槛验证；
 
 ## 证据入口
 
-[源码定位、推断边界与方案取舍](evidence/policy-boundary-investigation.md)
+- [源码定位、推断边界与方案取舍](evidence/policy-boundary-investigation.md)
+- [P0 SDK 机制验证](evidence/p0-sdk-mechanics.md) — 只有 `onPayload` 能阻断出站；其他 hook 吞掉抛错
+- [开发环境验收记录](acceptance-dev.md) — 四项分列、同 `input_hash` 对照、未观察到的项
