@@ -866,3 +866,131 @@ def test_the_sent_prompt_is_the_one_the_digest_describes(db_session, monkeypatch
     block = body["context_blocks"][0]["content"]
     rebuilt = hashlib.sha256(f"{instructions}\n{block}".encode()).hexdigest()
     assert rebuilt == attempt.prompt_digest
+
+
+def test_every_attempt_insert_names_its_carrier():
+    """Every `StewardModelCall(...)` construction in app/ must name its carrier.
+
+    Why this is a structural test rather than a DB default: `lease_attempt` only
+    leases rows whose `carrier` equals the caller's, and the sidecar only asks for
+    `pi`. A row inserted without a carrier would therefore be **unreachable** — it
+    would sit `reserved` until its lease expired and then be billed conservatively
+    as `unknown`, with nothing in the system able to notice it was never runnable.
+
+    The ORM default is `pi` (see `models/steward.py`), so the failure mode is not
+    "wrong value" but "a new insert path silently inherits a value". The
+    `server_default` cannot be changed to close this: altering it rebuilds the
+    table, and the rebuild rewrites the inline `run_id` foreign key as a
+    table-level one, breaking 0044's downgrade (measured — see the model comment).
+    So the guard is here, where a new insert path fails immediately instead of
+    being masked by a default.
+
+    Carrier may arrive either as a keyword or through a `**mapping` splat, because
+    production passes it in `row_common`; both are accepted, and the splat's
+    contents are checked in the same file, not assumed.
+    """
+    import ast
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    carrier_constants = {"CARRIER_PI", "CARRIER_INPROC"}
+    offenders: list[str] = []
+
+    def splat_names(func: ast.Call) -> list[str]:
+        """Names of mappings splatted into this call, e.g. ``**row_common``."""
+        return [
+            kw.value.id for kw in func.keywords if kw.arg is None and isinstance(kw.value, ast.Name)
+        ]
+
+    def mapping_has_carrier(tree: ast.AST, name: str) -> bool:
+        """True when the named dict literal (anywhere in the file) sets carrier.
+
+        Handles both plain ``x = {...}`` and annotated ``x: T = {...}``, because
+        production declares ``row_common: dict[str, Any] = {...}``.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            if not any(isinstance(t, ast.Name) and t.id == name for t in targets):
+                continue
+            if isinstance(node.value, ast.Dict) and any(
+                k is not None and isinstance(k, ast.Constant) and k.value == "carrier"
+                for k in node.value.keys
+            ):
+                return True
+        return False
+
+    for path in sorted(app_dir.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Name) and func.id == "StewardModelCall"):
+                continue
+            named = any(
+                kw.arg == "carrier"
+                and isinstance(kw.value, ast.Name)
+                and kw.value.id in carrier_constants
+                for kw in node.keywords
+            )
+            splatted = any(mapping_has_carrier(tree, name) for name in splat_names(node))
+            if not (named or splatted):
+                offenders.append(f"{path.relative_to(app_dir.parent)}:{node.lineno}")
+
+    assert not offenders, (
+        "StewardModelCall inserted without a carrier; such a row is unreachable "
+        f"by any executor: {offenders}"
+    )
+
+
+def test_no_production_code_inserts_attempts_with_raw_sql():
+    """Attempts are created through the ORM, so the guard above covers them.
+
+    A raw `INSERT INTO steward_model_calls` would bypass both the ORM default and
+    the structural check, so its presence is itself the finding — migrations are
+    excluded because they legitimately define and backfill the table.
+    """
+    import re
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    offenders = [
+        f"{path.relative_to(app_dir.parent)}:{lineno}"
+        for path in sorted(app_dir.rglob("*.py"))
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if re.search(r"insert\s+into\s+steward_model_calls", line, re.IGNORECASE)
+    ]
+    assert not offenders, f"raw insert into steward_model_calls: {offenders}"
+
+
+def test_a_row_inserted_without_a_carrier_defaults_to_the_only_live_carrier(db_session):
+    """The ORM default matches the one carrier that can actually lease.
+
+    This is the behaviour the structural test protects: if the default ever drifts
+    back to `inproc`, a forgotten keyword produces an unleaseable row. Built on a
+    real plan so the FK targets exist; the point is only what the default resolves
+    to.
+    """
+    from app.utils.timeutil import utcnow
+
+    world, plan = _planned(db_session)
+    row = StewardModelCall(
+        space_id=plan.space_id,
+        job_id=plan.job_id,
+        policy_version=plan.policy_version,
+        assist_kind="candidate",
+        prompt_digest="d" * 64,
+        prompt_chars=1,
+        status="reserved",
+        seq=999_999,
+        plan_id=plan.id,
+        created_at=utcnow(),
+    )
+    db_session.add(row)
+    db_session.flush()
+    assert row.carrier == CARRIER_PI

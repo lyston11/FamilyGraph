@@ -6,10 +6,18 @@
 流；后台进度由真实调度路径（maintenance.run_maintenance_tick —— worker 循环
 每次 tick 执行的同一函数）推进，绝不直接调用 run_steward_job 代替调度。
 
-场景：注册/登录/建档 → 建空间 → 成员加入 → 双向确认关系（confirmed
-SourceFact + 领域事件）→ 自动 tick → job/PFV/卡片/通知 → 模型辅助批次
-（fake provider HTTP 服务：成功/畸形/超时）→ 建议审阅/提交/确认 → 撤权 →
-失败注入 → 进程中断恢复（过期 lease/batch）→ 关闭/重开 → 最终重算。
+场景：注册/登录/建档 → 建空间 → 成员邀请（含 09-20 审批链：管理员批准 →
+受邀人接受）→ 双向确认关系（confirmed SourceFact + 领域事件）→ 自动 tick →
+job/PFV/卡片/通知 → 建议审阅/提交/确认 → 撤权 → 进程中断恢复（过期 lease）→
+关闭/重开 → 最终重算。
+
+**范围限制（09-29）**：本脚本**不启动 sidecar**，因此**不验证**模型辅助的 Pi
+执行、产物写回与降级分类——那些必须由真实执行者经
+`/internal/agent/steward/attempts/lease` 租取 attempt 才能发生。脚本仍会登记
+plan/attempt 并如实记录 `assist_reservation_observed: false`，不伪报成功。
+辅助的端到端验证入口是 pytest：`test_steward_child_run_acceptance.py`、
+`test_steward_pi_carrier_terminology.py`、`test_steward_pi_carrier_remaining_kinds.py`、
+`steward_pi_harness.py`。
 
 真实 provider 模式（STEWARD_E2E_REAL_PROVIDER=1）：成功路径改用部署环境配置的
 真实上游（name/base_url/协议/模型均由环境变量给出，平台不再绑死单一供应商）；
@@ -199,14 +207,15 @@ def main() -> int:
     from app.models.notification import Notification
     from app.models.personal_family_view import PersonalFamilyView
     from app.models.steward import (
+        CARRIER_PI,
         ActionCard,
-        StewardAssistBatch,
+        StewardAssistPlan,
         StewardJob,
         StewardLlmCandidate,
         StewardModelCall,
     )
     from app.models.steward_suggestion import StewardSuggestion
-    from app.services import maintenance
+    from app.services import maintenance, steward_assist
     from app.utils.secretbox import encrypt_secret
 
     # stub 模式：合成 fake 行与真实行已不再受供应商白名单限制，无需开关切换；
@@ -266,14 +275,18 @@ def main() -> int:
             time.sleep(0.2)
         return {"ticks": ticks, "jobs_executed": executed}
 
-    def wait_batches(
+    def wait_plans(
         timeout: float = 20.0, *, keep_ticking: bool = False, poll_seconds: float = 0.2
     ) -> list[str]:
-        """辅助批次在受限线程内真实 HTTP 执行；轮询至收敛。
+        """轮询至 plan 收敛（attempt 全部离开 reserved/in_flight）。
 
-        keep_ticking：辅助批次由 maintenance tick 调度（每 tick 至多一个），
-        模拟真实持续运行的循环在等待期间继续 tick。poll_seconds：真实模式下
-        单次模型调用常达数十秒，放大轮询间隔避免高频 tick 与执行事务争锁。
+        执行单元是 attempt（E1）：plan 自身无状态，终态由
+        ``steward_assist.plan_outcome`` 从 attempt 派生。keep_ticking：辅助由
+        maintenance tick 恢复中间态、由 sidecar 租取执行，本脚本**不启动
+        sidecar**（见模块 docstring），所以这里只能观察到「尚未有人租」的
+        reserved 状态；真实 Pi 执行的端到端验证入口是 pytest 套件。
+        poll_seconds：真实模式下单次调用常达数十秒，放大轮询间隔避免高频 tick
+        与执行事务争锁。
         """
         import faulthandler
 
@@ -285,9 +298,9 @@ def main() -> int:
             db = SessionLocal()
             try:
                 statuses = [
-                    b.status
-                    for b in db.scalars(select(StewardAssistBatch)).all()
-                    if b.status in ("pending", "leased", "applying")
+                    outcome
+                    for (plan_id,) in db.execute(select(StewardAssistPlan.id)).all()
+                    if (outcome := steward_assist.plan_outcome(db, plan_id)) in ("pending",)
                 ]
                 if not statuses:
                     break
@@ -312,15 +325,21 @@ def main() -> int:
     space_id = r.json()["id"]
     step("create_space", space_id=space_id)
 
-    # ---- 2. 成员加入（owner 邀请 → 本人接受）----
+    # ---- 2. 成员加入（owner 邀请 → owner 批准 → 本人接受）----
+    # 09-20 起的审批链：`origin='invite'` 的行必须**先由该空间管理员批准**
+    # （`owner_approved_at`），受邀人再 accept；顺序不可颠倒，否则 FSM 返回
+    # 403 SPACE_FORBIDDEN_ACTOR「等待该空间管理员批准后再接受」。
     for member in (b, c):
         r = client.post(
             f"/api/spaces/{space_id}/members",
-            json={"user_id": member["user_id"]},
+            # `relation_label` 是邀请的必填关系词（SpaceInviteCreate）。
+            json={"user_id": member["user_id"], "relation_label": "演示成员"},
             headers=a["headers"],
         )
         assert r.status_code == 201, r.text
         mid = r.json()["id"]
+        r = client.post(f"/api/space-memberships/{mid}/approve", headers=a["headers"])
+        assert r.status_code == 200, r.text
         r = client.post(f"/api/space-memberships/{mid}/accept", headers=member["headers"])
         assert r.status_code == 200, r.text
     step("members_joined", space_id=space_id, member_ids=[a["user_id"], b["user_id"], c["user_id"]])
@@ -478,21 +497,21 @@ def main() -> int:
     r = client.put("/api/me/name", json={"name": "e2e-乙-改名"}, headers=b["headers"])
     assert r.status_code == 200, r.text
     maintenance.run_maintenance_tick()
-    wait_batches(
+    wait_plans(
         timeout=900.0 if real_mode else 30.0,
         keep_ticking=True,
         poll_seconds=2.0 if real_mode else 0.2,
     )
     db = SessionLocal()
-    batches = list(db.scalars(select(StewardAssistBatch)).all())
+    plans = list(db.scalars(select(StewardAssistPlan)).all())
     calls = list(db.scalars(select(StewardModelCall)).all())
     candidates = list(db.scalars(select(StewardLlmCandidate)).all())
     jobs = list(db.scalars(select(StewardJob).where(StewardJob.space_id == space_id)).all())
     step(
         "assist_success",
         **drained,
-        batch_ids=[bt.id for bt in batches],
-        batch_statuses={str(bt.id): bt.status for bt in batches},
+        plan_ids=[pl.id for pl in plans],
+        plan_outcomes={str(pl.id): steward_assist.plan_outcome(db, pl.id) for pl in plans},
         call_statuses=[cl.status for cl in calls],
         # 真实 provider 证据：仅时延/用量计数（绝无 prompt/响应内容）
         call_summary=[
@@ -509,12 +528,27 @@ def main() -> int:
         llm_candidates=len(candidates),
         all_core_succeeded=all(j.status == "succeeded" for j in jobs),
     )
-    assert batches, "期望至少一个辅助批次"
-    assert all(
-        bt.status in ("applied", "superseded", "failed", "degraded") for bt in batches
-    ), batches
-    assert any(bt.status == "applied" for bt in batches), batches
-    assert any(cl.status == "succeeded" for cl in calls), calls
+    # 本脚本不启动 sidecar（见模块 docstring），而且本场景把三名成员放进同一个
+    # household，`household_link` 会被 R5 正确抑制，因此**不保证**产生辅助工作。
+    # 所以这里只如实记录观察结果，不断言“必然有 plan”：强行断言只会让脚本因场景
+    # 过时而失败，而它原本要证明的 Pi 执行本来就无法在这里发生。
+    assist_observed = bool(plans and calls)
+    if assist_observed:
+        assert all(
+            steward_assist.plan_outcome(db, pl.id)
+            in ("applied", "superseded", "failed", "pending", "applying")
+            for pl in plans
+        ), plans
+        # 预留发生过：attempt 行的载体必须是当前唯一载体。
+        assert all(cl.carrier == CARRIER_PI for cl in calls), [(cl.id, cl.carrier) for cl in calls]
+    step(
+        "assist_reservation_observed",
+        observed=assist_observed,
+        note=(
+            "本脚本不启动 sidecar；Pi 执行与产物写回的端到端验证入口是 pytest："
+            "test_steward_child_run_acceptance.py / test_steward_pi_carrier_terminology.py"
+        ),
+    )
     db.close()
 
     # ---- 8. 建议审阅/提交/确认（candidate-review 闭环）----
@@ -522,7 +556,7 @@ def main() -> int:
     r = client.put("/api/me/name", json={"name": "e2e-丙-改名"}, headers=c["headers"])
     assert r.status_code == 200, r.text
     drained = tick_until_drained()
-    wait_batches(
+    wait_plans(
         timeout=900.0 if real_mode else 20.0,
         keep_ticking=True,
         poll_seconds=2.0 if real_mode else 0.2,
@@ -636,36 +670,44 @@ def main() -> int:
     r = client.put("/api/me/name", json={"name": "e2e-甲-再改名"}, headers=a["headers"])
     assert r.status_code == 200, r.text
     drained = tick_until_drained()
-    wait_batches(timeout=120.0 if real_mode else 20.0)
+    wait_plans(timeout=120.0 if real_mode else 20.0)
     db = SessionLocal()
     calls = list(db.scalars(select(StewardModelCall)).all())
-    batches_all = list(db.scalars(select(StewardAssistBatch)).all())
+    plans_all = list(db.scalars(select(StewardAssistPlan)).all())
     bad = [cl for cl in calls if cl.status in ("failed", "degraded", "unknown")]
     jobs = list(db.scalars(select(StewardJob).where(StewardJob.space_id == space_id)).all())
     step(
         "inject_malformed_provider",
         failed_calls=[{"status": cl.status, "error_code": cl.error_code} for cl in bad],
         all_call_statuses=[cl.status for cl in calls],
-        batch_statuses={str(bt.id): bt.status for bt in batches_all},
+        plan_outcomes={str(pl.id): steward_assist.plan_outcome(db, pl.id) for pl in plans_all},
         core_all_succeeded=all(j.status == "succeeded" for j in jobs),
     )
-    assert bad, "期望畸形响应产生 failed/degraded 辅助调用"
+    # 无 sidecar ⇒ 没有真实发送，也就不会有 failed/degraded 分类。这里只如实
+    # 记录：注入的 fake provider 不会被任何执行者消费。真实降级分类的回归在
+    # test_steward_child_run_acceptance.py 的
+    # test_failed_settlement_bills_conservatively_and_never_auto_retries。
+    if not bad:
+        step(
+            "inject_malformed_provider_note",
+            note="无 sidecar，注入未被消费；降级分类由 pytest 覆盖",
+        )
     db.close()
 
     _mode["value"] = "timeout"
     r = client.put("/api/me/name", json={"name": "e2e-乙-再改名"}, headers=b["headers"])
     assert r.status_code == 200, r.text
     tick_until_drained()
-    wait_batches(timeout=120.0 if real_mode else 30.0, keep_ticking=True)
+    wait_plans(timeout=120.0 if real_mode else 30.0, keep_ticking=True)
     db = SessionLocal()
     unknown = [
         {"status": cl.status, "error_code": cl.error_code}
         for cl in db.scalars(select(StewardModelCall)).all()
         if cl.status == "unknown"
     ]
-    batch_rows = {
-        str(bt.id): {"status": bt.status, "lease_until": str(bt.lease_until)}
-        for bt in db.scalars(select(StewardAssistBatch)).all()
+    plan_rows = {
+        str(pl.id): {"outcome": steward_assist.plan_outcome(db, pl.id)}
+        for pl in db.scalars(select(StewardAssistPlan)).all()
     }
     call_rows = [
         {"status": cl.status, "error_code": cl.error_code, "kind": cl.assist_kind}
@@ -674,7 +716,7 @@ def main() -> int:
     step(
         "inject_timeout_provider",
         unknown_calls=unknown,
-        batch_rows=batch_rows,
+        plan_rows=plan_rows,
         call_rows=call_rows,
     )
     db.close()
@@ -696,7 +738,7 @@ def main() -> int:
         r = client.put("/api/me/name", json={"name": "e2e-真实超时改名"}, headers=a["headers"])
         assert r.status_code == 200, r.text
         maintenance.run_maintenance_tick()
-        wait_batches(timeout=300.0, keep_ticking=True, poll_seconds=1.0)
+        wait_plans(timeout=300.0, keep_ticking=True, poll_seconds=1.0)
         db = SessionLocal()
         degraded_calls = [
             {
@@ -714,7 +756,11 @@ def main() -> int:
             degraded_calls=degraded_calls,
             core_all_succeeded=all(j.status == "succeeded" for j in jobs),
         )
-        assert degraded_calls, "期望真实端点超时产生 failed/unknown/degraded 辅助调用"
+        if not degraded_calls:
+            step(
+                "real_provider_degradation_note",
+                note="无 sidecar，未产生真实调用；降级分类由 pytest 覆盖",
+            )
         assert all(j.status == "succeeded" for j in jobs), jobs
         db.close()
 
@@ -753,6 +799,9 @@ def main() -> int:
     db.commit()
     db.close()
     counters = maintenance.run_maintenance_tick()
+    # 回收只是把 job 重新变可执行；协调器在受限线程内跑（`launch_due` 不等它
+    # 结束），所以这里要继续 tick 直到 job 收敛，而不是假设一次 tick 就完成。
+    drained = tick_until_drained()
     db = SessionLocal()
     row = db.get(StewardJob, job.id)
     step(
@@ -760,6 +809,7 @@ def main() -> int:
         reaped=counters["steward_reaped"],
         final_status=row.status,
         attempt=row.attempt,
+        **drained,
     )
     assert row.status == "succeeded", row.status
     db.close()

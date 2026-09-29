@@ -479,21 +479,22 @@ REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     (
         "B1",
         "B1",
-        "F-R2 管家总截止：headers/body/持续 chunk 均在预算内收敛且连接释放",
+        "F-R2 管家总截止：发送窗口/租约到期与 plan deadline 在发送门收敛",
         (
-            "tests/test_steward_assist_deadline.py::test_stalled_reads_are_interrupted_within_the_total_budget",
-            "tests/test_steward_assist_deadline.py::test_repeated_deadlines_leave_no_lingering_connections",
+            # 旧 test_steward_assist_deadline.py 随 in-process 载体删除而移除
+            # （452236b）：单笔 HTTP 超时不再由服务端持有。同一意图（「窗口不足
+            # 就不发/不租，已发出的按未知保守计费」）现在的入口是发送门与租约。
+            "tests/test_steward_child_run_acceptance.py::test_lease_time_fence_skips_instead_of_leasing",
+            "tests/test_steward_pi_carrier_terminology.py::test_an_attempt_whose_plan_deadline_passed_is_never_leased",
         ),
     ),
     (
         "B1b",
         "B1",
-        "F-R2 管家总截止：connect 等待与发送前预算不足（未发送）",
+        "F-R2 管家发送前预算不足（未发送，不消耗预算）",
         (
-            "tests/test_steward_assist_deadline.py::test_connect_wait_is_bounded_by_the_total_budget",
-            "tests/test_steward_assist_deadline.py::test_out_of_transaction_recheck_prevents_an_unsendable_request",
-            "tests/test_steward_assist_deadline.py::test_send_budget_reserves_settlement_time",
-            "tests/test_steward_assist_deadline.py::test_released_reservations_do_not_consume_the_job_budget",
+            "tests/test_steward_assist.py::test_insufficient_tokens_skips_without_send",
+            "tests/test_steward_assist.py::test_oversized_prompt_skipped_without_send",
         ),
     ),
     (
@@ -501,7 +502,6 @@ REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         "B1",
         "F-R2 管家在真实传输层的总截止与慢 chunk 上限（不靠单元 fake 时钟）",
         (
-            "tests/test_steward_assist.py::test_slow_chunks_cannot_extend_past_the_total_deadline",
             "tests/test_steward_assist.py::test_slow_http_does_not_block_other_space_writes",
             "tests/test_steward_assist.py::test_transport_receives_30s_default_timeout",
         ),
@@ -511,7 +511,7 @@ REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         "B2",
         "F-R2 管家结果保全：逐笔结算/混合批次独立恢复/幂等费用/四 kind 与空结果",
         (
-            "tests/test_steward_assist.py::test_returned_result_is_persisted_before_the_next_send",
+            "tests/test_steward_assist.py::test_crash_point_4_before_writeback_applies_after_fence",
             "tests/test_steward_assist.py::test_partial_batch_applies_independent_product_and_stays_failed",
             "tests/test_steward_assist.py::test_conservative_billing",
             "tests/test_steward_assist.py::test_candidate_atomic_kinds_only",
@@ -523,7 +523,7 @@ REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         "B2",
         "F-R2 管家失租/接管/中断：旧执行者零业务写回",
         (
-            "tests/test_steward_assist.py::test_lease_deadline_stops_followup_sends",
+            "tests/test_steward_child_run_acceptance.py::test_recovery_does_not_touch_a_live_lease",
             "tests/test_steward_assist.py::test_fence_disabled_during_call_blocks_writeback",
             "tests/test_steward_assist.py::test_fence_provider_switch_during_call",
             "tests/test_steward_assist.py::test_fence_card_terminal_during_call",
@@ -550,7 +550,7 @@ REUSED_SUITES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
             "tests/test_steward_assist.py::test_budget_two_caps_three_kinds_at_two_sends",
             "tests/test_steward_assist.py::test_insufficient_tokens_skips_without_send",
             "tests/test_steward_assist.py::test_oversized_prompt_skipped_without_send",
-            "tests/test_steward_assist.py::test_oversized_response_capped_without_full_read",
+            "tests/test_steward_child_run_acceptance.py::test_an_oversized_product_is_refused_and_billed_conservatively",
             "tests/test_steward_assist.py::test_usage_missing_billed_from_reservation",
         ),
     ),
