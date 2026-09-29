@@ -32,6 +32,7 @@ import type { AgentConfig } from "../src/config.js";
 import type { SessionRetryBudget } from "../src/session.js";
 import { createLogger } from "../src/logger.js";
 import { providerWireName } from "../src/tools.js";
+import { STEWARD_PROMPT_VERSION } from "../src/prompts/steward.js";
 import { SidecarWorker } from "../src/worker.js";
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ import { SidecarWorker } from "../src/worker.js";
 interface MockJob {
   job_id: number;
   run_id: number;
-  agent_kind: "assistant" | "unexpected";
+  agent_kind: "assistant" | "steward" | "unexpected";
   /** Attempt counter, incremented by the mock at each lease like the backend. */
   attempt: number;
   tool_allowlist: string[];
@@ -69,6 +70,8 @@ interface MockState {
   }>;
   cancelOnNextHeartbeat: boolean;
   heartbeatStatus?: number;
+  /** Heartbeat URLs the worker actually called, for asserting the job id. */
+  heartbeatPaths: string[];
   /**
    * Reject every events/append with the server's cancellation verdict
    * (409 + detail.reason=cancel_requested), as FastAPI does once the browser
@@ -85,6 +88,7 @@ const state: MockState = {
   settles: [],
   cancelOnNextHeartbeat: false,
   cancelAppends: false,
+  heartbeatPaths: [],
 };
 
 let idCounter = 0;
@@ -193,6 +197,36 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(body));
       };
+      if (url === "/internal/agent/steward/attempts/lease" && req.method === "POST") {
+        // StewardLeaseOut: an attempt lease, no queue job. It must carry `job_id`
+        // as well as `steward_job_id`, because the sidecar decodes `job_id` for the
+        // heartbeat URL and omitting it produced `/jobs/undefined/heartbeat`.
+        if (!/^Bearer ey[\w-]+\.[\w-]+\.[\w-]+$/.test(auth)) {
+          return respond(401, { detail: "bad service token" });
+        }
+        await readBody(req);
+        const next = state.jobs.find((j) => j.leasedAt === undefined);
+        if (!next) {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        next.leasedAt = Date.now();
+        next.attempt += 1;
+        return respond(200, {
+          run_id: next.run_id,
+          job_id: next.job_id,
+          steward_job_id: next.job_id,
+          assist_attempt_id: next.run_id,
+          assist_kind: "candidate",
+          agent_kind: "steward",
+          attempt: next.attempt,
+          tool_allowlist: [],
+          policy_version: next.policy_version,
+          max_concurrent: 1,
+          run_token: next.run_token,
+        });
+      }
       if (url === "/internal/agent/jobs/lease" && req.method === "POST") {
         // Lease accepts only HMAC-shaped service tokens.
         if (!/^Bearer ey[\w-]+\.[\w-]+\.[\w-]+$/.test(auth)) {
@@ -227,7 +261,14 @@ function startMockFastAPI(): Promise<{ server: Server; port: number }> {
       );
       if (job === undefined) return respond(401, { detail: "unknown or unleased run token" });
 
-      if (req.method === "POST" && url === `/internal/agent/jobs/${job.job_id}/heartbeat`) {
+      if (req.method === "POST" && url.endsWith("/heartbeat")) {
+        state.heartbeatPaths.push(url);
+        // The path must name this job. A steward lease that omitted `job_id` made
+        // the sidecar heartbeat `/jobs/undefined/heartbeat`, which never matches
+        // and is exactly the production failure this test guards.
+        if (url !== `/internal/agent/jobs/${job.job_id}/heartbeat`) {
+          return respond(403, { error: { code: "AGENT_TOKEN_SCOPE_MISMATCH" } });
+        }
         if (state.heartbeatStatus !== undefined) {
           const status = state.heartbeatStatus;
           state.heartbeatStatus = undefined;
@@ -379,6 +420,7 @@ function resetState(): void {
   state.cancelOnNextHeartbeat = false;
   state.cancelAppends = false;
   state.heartbeatStatus = undefined;
+  state.heartbeatPaths.length = 0;
   state.eventsByRun.clear();
 }
 
@@ -386,7 +428,7 @@ function resetState(): void {
 function enqueueJob(options: {
   allowlist: string[];
   provider?: Record<string, unknown>;
-  agentKind?: "assistant" | "unexpected";
+  agentKind?: "assistant" | "steward" | "unexpected";
   messages?: RunContextMessage[];
   contextBlocks?: RunContextBlock[];
   contextBuildId?: number;
@@ -420,11 +462,18 @@ function enqueueJob(options: {
 }
 
 function contextProjection(job: MockJob): Record<string, unknown> {
+  // A steward projection is space-scoped: no session, no account, and it must
+  // carry the server-owned instruction text plus the prompt version the sidecar
+  // checks before any model call.
+  const steward = job.agent_kind === "steward";
   return {
     run_id: job.run_id,
-    session_id: 700,
+    session_id: steward ? null : 700,
     agent_kind: job.agent_kind,
-    account_id: 900,
+    account_id: steward ? null : 900,
+    ...(steward
+      ? { steward_prompt_version: STEWARD_PROMPT_VERSION, steward_instructions: "steward test instructions" }
+      : {}),
     space_id: 800,
     status: "leased",
     attempt: job.attempt,
@@ -1301,6 +1350,20 @@ describe("worker full cycle against mock FastAPI", () => {
 
       expect(await worker.tryLeaseAndRun()).toBe(true);
       expect(state.settles).toHaveLength(0);
+      // This run's cancellation arrived *via* the heartbeat, so the heartbeat must
+      // have named the real job. A lease whose decoded job_id were missing would
+      // send `/jobs/undefined/heartbeat`, the mock would answer 403, and the worker
+      // would report a lost lease instead of the server's cancel verdict.
+      // Asserted by value, not by shape: a lease whose job_id were missing would
+      // still produce a path-shaped URL (`/jobs/undefined/heartbeat`), which is how
+      // this defect survived. Comparing to the leased job's own id is what makes it
+      // a guard rather than a formality.
+      const leasedJobId = state.jobs.find((j) => j.leasedAt !== undefined)?.job_id;
+      expect(leasedJobId).toBeDefined();
+      expect(state.heartbeatPaths.length).toBeGreaterThan(0);
+      expect(state.heartbeatPaths).toEqual(
+        state.heartbeatPaths.map(() => `/internal/agent/jobs/${leasedJobId}/heartbeat`),
+      );
       if (completeAfterAbort) {
         expect(sessionEvents).toContainEqual(
           expect.objectContaining({
@@ -1312,6 +1375,45 @@ describe("worker full cycle against mock FastAPI", () => {
     },
     10000,
   );
+
+  it("heartbeats a steward lease against its real job id", async () => {
+    // The steward lease carries both `job_id` and `steward_job_id`; the worker
+    // heartbeats against `job.job_id`. While StewardLeaseOut omitted `job_id`, the
+    // decoded value was the literal string "undefined", so every heartbeat hit
+    // `/jobs/undefined/heartbeat`, was rejected, and the run was aborted as
+    // lease-lost once its first lease expired. The mock's heartbeat route matches
+    // the job's own id and answers 403 otherwise, so this exercises the real path.
+    resetState();
+    enqueueJob({ allowlist: [], agentKind: "steward" });
+    // The scripted stream stays open until aborted, so the run lives long enough
+    // for a heartbeat to fire. The server answers `cancel_requested` on that
+    // heartbeat, which aborts the run — proving the heartbeat reached the server
+    // rather than merely being attempted.
+    state.cancelOnNextHeartbeat = true;
+    const { worker } = makeWorker(
+      (cfg) => {
+        // Heartbeat cadence is clamped to 1s.
+        cfg.defaultLeaseMs = 3_000;
+        cfg.stewardMaxConcurrentCallsPerSpace = 1;
+        // `tryLeaseAndRun("steward")` refuses unless the role enables the kind.
+        cfg.role = "steward";
+      },
+      await buildSessionFactory([textTurn("never committed")], { waitForAbort: true }),
+    );
+
+    expect(await worker.tryLeaseAndRun("steward")).toBe(true);
+
+    const leasedJobId = state.jobs.find((j) => j.leasedAt !== undefined)?.job_id;
+    expect(leasedJobId).toBeDefined();
+    expect(state.heartbeatPaths.length).toBeGreaterThan(0);
+    expect(state.heartbeatPaths).toEqual(
+      state.heartbeatPaths.map(() => `/internal/agent/jobs/${leasedJobId}/heartbeat`),
+    );
+    expect(state.heartbeatPaths.join()).not.toContain("undefined");
+    // The server's cancel verdict travelled back on that heartbeat, so the run was
+    // aborted by it and the sidecar left the terminal state to the server.
+    expect(state.settles).toHaveLength(0);
+  }, 15000);
 
   it("settles failed with PROVIDER_EMPTY_ANSWER when the model returns no answer text", async () => {
     resetState();

@@ -37,6 +37,7 @@ describe("InternalClient protocol behavior", () => {
   const seenAuthHeaders: string[] = [];
   const seenLeaseBodies: unknown[] = [];
   const seenToolBodies: unknown[] = [];
+  const seenHeartbeatPaths: string[] = [];
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -78,6 +79,10 @@ describe("InternalClient protocol behavior", () => {
           seenLeaseBodies.push(await readBody());
           return respond(200, {
             run_id: 52,
+            // Both ids are the parent StewardJob. The sidecar decodes `job_id` for
+            // its heartbeat URL, so the lease shape must carry it; omitting it made
+            // every steward heartbeat hit `/jobs/undefined/heartbeat`.
+            job_id: 53,
             steward_job_id: 53,
             assist_attempt_id: 54,
             assist_kind: "terminology",
@@ -180,6 +185,13 @@ describe("InternalClient protocol behavior", () => {
             },
           });
         }
+        // Heartbeat route: record the target so a test can assert the URL carries a
+        // real job id. A 404 here would surface as a lease-lost abort, which is the
+        // production failure mode, so the mock must accept the correct path.
+        if (/^\/internal\/agent\/jobs\/\d+\/heartbeat$/.test(req.url ?? "")) {
+          seenHeartbeatPaths.push(req.url ?? "");
+          return respond(200, { ok: true, cancel_requested: false });
+        }
         if (req.url === "/api/health") return respond(200, { status: "ok" });
         respond(404, { detail: "nf" });
       })();
@@ -223,6 +235,10 @@ describe("InternalClient protocol behavior", () => {
     expect(job).not.toBeNull();
     expect(job).toMatchObject({
       agent_kind: "steward",
+      // The heartbeat target. Asserted by value: a missing field would still let a
+      // heartbeat be "sent" (to /jobs/undefined/heartbeat), which is exactly how
+      // this defect survived the existing assertions.
+      job_id: "53",
       steward_job_id: "53",
       steward_attempt_id: "54",
       assist_kind: "terminology",
@@ -230,6 +246,14 @@ describe("InternalClient protocol behavior", () => {
       run_token: "steward-tok",
     });
     expect(seenLeaseBodies).toContainEqual({ kind: "steward", leased_by: "sc-unit" });
+    // The heartbeat the worker sends for this lease must name the real parent job.
+    // This is the hop that silently broke: the lease omitted `job_id`, so the URL
+    // became `/jobs/undefined/heartbeat`, the token-scope check rejected it, and
+    // every steward call longer than one lease period was aborted as lease-lost.
+    seenHeartbeatPaths.length = 0;
+    await client.heartbeat(String(job!.job_id), job!.run_token);
+    expect(seenHeartbeatPaths).toEqual([`/internal/agent/jobs/53/heartbeat`]);
+    expect(seenHeartbeatPaths[0]).not.toContain("undefined");
     const leaseLine = seenAuthHeaders.find((l) => l.includes("/steward/attempts/lease"));
     expect(leaseLine).toMatch(
       /^POST \/internal\/agent\/steward\/attempts\/lease Bearer ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
