@@ -47,6 +47,11 @@ interface ActiveRun {
   leaseLost: boolean;
   /** Server-side cancel_requested observed via heartbeat; stop tool calls, skip settle. */
   cancelRequested: boolean;
+  /**
+   * First hard policy-block class for this run, or null while allowed.
+   * Sticky for the lifetime of the run: SDK auto-retry must not launder it.
+   */
+  policyBlockCode: string | null;
   /** Settles (never rejects) when this slot is released. */
   done?: Promise<void>;
 }
@@ -202,6 +207,7 @@ export class SidecarWorker {
       abort,
       leaseLost: false,
       cancelRequested: false,
+      policyBlockCode: null,
       heartbeatTimer: this.startHeartbeat(job, abort.signal),
     };
     this.slots.delete(reservationKey);
@@ -324,6 +330,27 @@ export class SidecarWorker {
     }
   }
 
+  /**
+   * Records the first hard policy-block decision for this run and stops it.
+   *
+   * Called synchronously from the guard the moment it blocks, so the run stops
+   * as soon as the decision exists rather than when the model loop happens to
+   * end. The code is sticky: SDK auto-retry re-invokes the guard, which refuses
+   * while blocked, so no further provider request or tool call is issued.
+   */
+  private markPolicyBlocked(runId: string, code: string): void {
+    const slot = this.slots.get(runId);
+    if (slot === undefined || slot.pending) return;
+    if (slot.policyBlockCode === null) {
+      slot.policyBlockCode = code;
+      this.logger.warn("policy guard blocked run; stopping model and tool calls", {
+        run_id: runId,
+        error_code: code,
+      });
+    }
+    slot.abort.abort();
+  }
+
   private async executeJob(job: LeasedJob, active: ActiveRun): Promise<void> {
     const log = this.logger.child({ run_id: job.run_id });
     const adapter = adapterFor(active.kind);
@@ -364,7 +391,9 @@ export class SidecarWorker {
       }
 
       const bundle = await this.sessionFactory(this.config, this.client, projection, job.run_token, {
-        shouldStopToolCalls: () => active.cancelRequested || active.leaseLost,
+        shouldStopToolCalls: () =>
+          active.cancelRequested || active.leaseLost || active.policyBlockCode !== null,
+        onPolicyBlock: (code) => this.markPolicyBlocked(job.run_id, code),
         signal: active.abort.signal,
       });
       const { session } = bundle;
@@ -471,27 +500,23 @@ export class SidecarWorker {
       // FastAPI owns expired/cancel-requested runs; never settle them here.
       if (active.leaseLost || active.cancelRequested) return;
 
-      if (bundle.policyGuard.blockingViolationCount > 0) {
-        const kinds = new Set(bundle.policyGuard.violations.map((v) => v.kind));
-        const errorCode =
-          kinds.has("tool_not_allowed") || kinds.has("unsafe_tool_arguments")
-            ? "POLICY_TOOL_BLOCKED"
-            : kinds.has("tool_result_too_large")
-              ? "POLICY_TOOL_RESULT_BLOCKED"
-              : kinds.has("local_provider_required") || kinds.has("cloud_provider_forbidden")
-                ? "POLICY_PROVIDER_BLOCKED"
-                : "POLICY_SECRET_LEAK";
+      // A hard policy block is reported with the class the guard actually
+      // detected. The check reads the sticky slot state as well as the guard,
+      // because the decision may have arrived through `onPolicyBlock` before
+      // this point and must not be lost if the guard instance is replaced.
+      const policyBlockCode = active.policyBlockCode ?? bundle.policyGuard.blockCode;
+      if (policyBlockCode !== null) {
         // Terminal event is backend-owned: /settle writes run.failed with the
         // error code below. The sidecar only flushes any pending turn events.
         await this.flushEvents(job.run_id, job.run_token, events.drain(), active.abort.signal);
         await this.client.settleRun(job.run_id, job.run_token, "failed", {
-          code: errorCode,
+          code: policyBlockCode,
           message: "policy guard blocked activity during this run",
         });
         log.warn("run settled failed: policy violation", {
-          error_code: errorCode,
+          error_code: policyBlockCode,
           violations: bundle.policyGuard.blockingViolationCount,
-          policy_incidents: bundle.policyGuard.violationCount,
+          policy_incidents: bundle.policyGuard.incidents.length,
         });
         return;
       }
@@ -557,12 +582,25 @@ export class SidecarWorker {
         return;
       }
       if (active.cancelRequested || active.leaseLost) return;
+      // A policy block that aborted the session surfaces here as a stream/abort
+      // error. Report the block class, never SIDECAR_ERROR: the cause is known
+      // and must stay explainable.
+      if (active.policyBlockCode !== null) {
+        const blockCode = active.policyBlockCode;
+        await this.client
+          .settleRun(job.run_id, job.run_token, "failed", {
+            code: blockCode,
+            message: "policy guard blocked activity during this run",
+          })
+          .catch(() => undefined);
+        log.warn("run settled failed: policy violation", { error_code: blockCode });
+        return;
+      }
       const rawErrorCode =
         error instanceof Error && "errorCode" in error
           ? String((error as { errorCode: unknown }).errorCode)
           : "SIDECAR_ERROR";
-      const errorCode =
-        rawErrorCode === "POLICY_SECRET_IN_PROVIDER_PAYLOAD" ? "POLICY_SECRET_LEAK" : rawErrorCode;
+      const errorCode = rawErrorCode;
       const message = redactErrorText(error instanceof Error ? error.message : String(error));
       // Never include secret material in error payloads (redactErrorText enforces).
       log.error("run failed", { error_code: errorCode, message });

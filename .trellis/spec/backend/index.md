@@ -21,6 +21,7 @@
 - [quality-guidelines.md](quality-guidelines.md)
 - [logging-guidelines.md](logging-guidelines.md)
 - [agent-runtime.md](agent-runtime.md)
+- [policy-boundary.md](policy-boundary.md) — sidecar 策略 guard 的判据/动作/硬阻断/错误分类/诊断字段，以及后端对应判据
 - [steward-child-run.md](steward-child-run.md) — Steward 模型辅助的执行单元（attempt）、发送门与 fence 调用点、队列红线、身份拆分、载体等价、sidecar `KindAdapter`、槽位模型与 prompt 文本归属
 - [memory-contract.md](memory-contract.md)
 - [memory-rag-execution-contract.md](memory-rag-execution-contract.md)

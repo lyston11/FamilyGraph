@@ -115,6 +115,11 @@ def contains_pii(value: Any) -> bool:
 
 
 def contains_prompt_injection(value: Any) -> bool:
+    """Diagnostic signal only: instruction-like wording is never an authorization
+    decision, because rewording trivially evades it and legitimate prose (a user
+    asking about prompts, a model explaining its own rules) trips it. Callers may
+    use it to record a bounded note; they must not fail a request on it.
+    """
     return any(marker in text.lower() for text in _strings(value) for marker in _INJECTION_MARKERS)
 
 
@@ -127,9 +132,13 @@ def classify(value: Any) -> str:
 
 
 def input_hook(content: Any) -> PolicyDecision:
-    """Initial input screening for unsafe/injection/secret content."""
-    if contains_prompt_injection(content):
-        return PolicyDecision("block", "prompt_injection", "sensitive")
+    """Initial input screening for unsafe/secret content.
+
+    Instruction-like wording is deliberately NOT a block reason here: a user's own
+    message is their own prompt, and keyword matching is not a security boundary.
+    What this hook must still catch is real secret material (and it stays the
+    provider boundary that prevents egress).
+    """
     if contains_secret(content):
         return PolicyDecision("block", "secret_in_input", "local_required")
     return PolicyDecision("allow", "input_checked", classify(content), value=content)
@@ -151,7 +160,7 @@ def tool_call_hook(
     encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":")).encode()
     if len(encoded) > max_argument_bytes:
         return PolicyDecision("block", "tool_arguments_too_large", value={"tool": tool})
-    if contains_prompt_injection(arguments) or contains_secret(arguments):
+    if contains_secret(arguments):
         return PolicyDecision("block", "unsafe_tool_arguments", "local_required")
     return PolicyDecision("allow", "tool_call_checked", classify(arguments), value=arguments)
 

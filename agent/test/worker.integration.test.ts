@@ -29,6 +29,7 @@ import {
   type RunContextMessage,
 } from "../src/client.js";
 import type { AgentConfig } from "../src/config.js";
+import type { SessionRetryBudget } from "../src/session.js";
 import { createLogger } from "../src/logger.js";
 import { providerWireName } from "../src/tools.js";
 import { SidecarWorker } from "../src/worker.js";
@@ -491,6 +492,8 @@ interface ScriptOptions {
   waitForAbort?: boolean;
   /** Simulate a provider completing successfully while cancellation is in flight. */
   completeAfterAbort?: boolean;
+  /** Test seam: shorten the frozen SDK session-retry budget. */
+  sessionRetrySettings?: SessionRetryBudget;
 }
 
 function scriptedStream(
@@ -690,6 +693,9 @@ async function buildSessionFactory(
   return async (cfg, cl, projection, runToken, deps) => {
     const bundle = await mod.buildRunSession(cfg, cl, projection, runToken, {
       ...deps,
+      ...(options.sessionRetrySettings !== undefined
+        ? { sessionRetrySettings: options.sessionRetrySettings }
+        : {}),
       streamOverride: scriptedStream(turns, options),
     });
     if (options.sessionEvents)
@@ -1022,9 +1028,16 @@ describe("worker full cycle against mock FastAPI", () => {
         timestamp: Date.now(),
       }),
     ];
+    // Three turns are scripted. A hard block must stop the run after the first
+    // provider request, so turns two and three are never requested: this is the
+    // AC-5 "no further model request or tool execution" property, measured on
+    // the real SDK path rather than on guard state.
+    const modelContexts: Context[] = [];
     const { worker } = makeWorker(
       undefined,
-      await buildSessionFactory([blockedToolTurn, textTurn("ok")]),
+      await buildSessionFactory([blockedToolTurn, textTurn("ok"), textTurn("ok again")], {
+        modelContexts,
+      }),
     );
 
     expect(await worker.tryLeaseAndRun()).toBe(true);
@@ -1037,10 +1050,106 @@ describe("worker full cycle against mock FastAPI", () => {
     expect(state.settles[0]!.error_code).toBe("POLICY_TOOL_BLOCKED");
     const events = state.eventsByRun.get(runKey) ?? [];
     expect(events.some((e) => e.type === "run.failed")).toBe(true);
-    expect(
-      events.filter((e) => e.type === "message.assistant_added").at(-1)?.public_payload,
-    ).toEqual({ role: "assistant", text: "ok" });
+    // Exactly one provider request: the blocked run did not continue the loop.
+    expect(modelContexts).toHaveLength(1);
+    // A hard block stops the run: the scripted follow-up turns never ran, so no
+    // assistant answer exists. Before the block was sticky the model was allowed
+    // to keep going and produce a final answer after the violation.
+    expect(events.filter((e) => e.type === "message.assistant_added")).toHaveLength(0);
     expect(JSON.stringify(events)).not.toContain("/etc/passwd");
+  }, 30000);
+
+  it("keeps a hard block across SDK session retries without new egress", async () => {
+    resetState();
+    const runKey = enqueueJob({ allowlist: ["familygraph.echo"] });
+    // A secret in the payload makes `onPayload` throw. pi-ai turns that throw
+    // into a stream error, and the SDK session layer would normally retry the
+    // turn on retryable text. The guard's block is sticky, so every retry is
+    // refused before a request is built: egress must not increase.
+    const wirePayloads: unknown[] = [];
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([textTurn("hello")], {
+        leakSecretInPayload: true,
+        wirePayloads,
+        modelContexts,
+        sessionRetrySettings: { enabled: true, maxRetries: 3, baseDelayMs: 5 },
+      }),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    // No request was ever assembled from the blocked payload...
+    expect(wirePayloads).toHaveLength(0);
+    // ...and the run reported the class the guard detected, not a generic error
+    // and not a secret-leak claim.
+    expect(state.settles).toHaveLength(1);
+    expect(state.settles[0]!.status).toBe("failed");
+    expect(state.settles[0]!.error_code).toBe("POLICY_SECRET_IN_PROVIDER_PAYLOAD");
+    expect(JSON.stringify(state.eventsByRun.get(runKey) ?? [])).not.toContain(
+      "integration-service-secret",
+    );
+  }, 30000);
+
+  it("reports a plain provider failure as itself when no policy block occurred", async () => {
+    resetState();
+    enqueueJob({ allowlist: ["familygraph.echo"] });
+    // Regression guard for the error mapping: a run that fails for a provider
+    // reason must keep its own code. It must not be relabelled as a policy
+    // block just because the policy plumbing exists.
+    const failing: AssistantMessage[] = [
+      { ...textTurn("")[0]!, stopReason: "error", errorMessage: "upstream exploded" },
+    ];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([failing], {
+        sessionRetrySettings: { enabled: false, maxRetries: 0, baseDelayMs: 5 },
+      }),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    expect(state.settles).toHaveLength(1);
+    expect(state.settles[0]!.error_code).toBe("PROVIDER_STREAM_ERROR");
+  }, 30000);
+
+  it("reports the detected class, not a secret leak, when a block aborts the run", async () => {
+    resetState();
+    enqueueJob({ allowlist: ["familygraph.echo"] });
+    const blockedToolTurn: AssistantMessage[] = [
+      assistantMessage({
+        content: [
+          {
+            type: "toolCall",
+            id: "tc_scope",
+            name: providerWireName("familygraph.echo"),
+            arguments: { space_id: 99, text: "hello" },
+          },
+        ],
+        api: "openai-completions",
+        provider: "cloud",
+        model: "test-model",
+        usage,
+        stopReason: "toolUse",
+        timestamp: Date.now(),
+      }),
+    ];
+    const modelContexts: Context[] = [];
+    const { worker } = makeWorker(
+      undefined,
+      await buildSessionFactory([blockedToolTurn, textTurn("ok")], { modelContexts }),
+    );
+
+    expect(await worker.tryLeaseAndRun()).toBe(true);
+
+    expect(state.toolCalls).toHaveLength(0);
+    expect(state.settles).toHaveLength(1);
+    // A scope-override attempt is a tool-blocking violation. It must never be
+    // reported as POLICY_SECRET_LEAK, which would both mislead and claim a
+    // leak that did not happen.
+    expect(state.settles[0]!.error_code).toBe("POLICY_TOOL_BLOCKED");
+    expect(modelContexts).toHaveLength(1);
   }, 30000);
 
   it("redacts secrets in provider payloads and fails the run", async () => {
@@ -1064,7 +1173,9 @@ describe("worker full cycle against mock FastAPI", () => {
     );
     expect(state.settles).toHaveLength(1);
     expect(state.settles[0]!.status).toBe("failed");
-    expect(state.settles[0]!.error_code).toBe("POLICY_SECRET_LEAK");
+    // The code states what was detected. It is not a secret-leak claim: the
+    // payload was blocked before egress, so nothing leaked.
+    expect(state.settles[0]!.error_code).toBe("POLICY_SECRET_IN_PROVIDER_PAYLOAD");
   }, 30000);
 
   it("refuses explainably when provider policy_result is not allowed (no model loop)", async () => {
