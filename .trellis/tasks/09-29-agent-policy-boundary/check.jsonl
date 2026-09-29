@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误响应协议、fail-closed 约束与 Provider 重试分类"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Steward attempt、产物写回和计费围栏保持不变"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "诊断字段和日志脱敏红线"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "两侧策略与错误码兼容，服务端真源边界"}
+{"file": ".trellis/tasks/09-29-agent-policy-boundary/research/policy-boundary-summary.md", "reason": "已确认机制、被否决推断及开发环境限制"}
