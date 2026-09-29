@@ -1,31 +1,42 @@
-"""Steward 模型辅助批次执行器（09-11：事务隔离 + 预算预留 + 崩溃恢复）。
+"""Steward 模型辅助执行器（执行单元 = 一次模型调用；09-25 E1 后载体为 Pi child run）。
 
 09-06 子任务 B 的候选/排序/解释三类辅助保留原有语义与红线（候选只落内部池、
-排序只改呈现顺序且必须严格排列、解释只复述卡内已确认事实），但执行模型按
-09-11 design 重构为三阶段：
+排序只改呈现顺序且必须严格排列、解释只复述卡内已确认事实），但执行模型已在
+09-25 E1 重构为「attempt 是执行单元」，**不再是批次**：
 
-1. **注册**（core 短事务内，无网络）：`run_steward_job` 提交确定性结果的同一
-   短事务里调用 `register_batch_for_job` 登记一行 `StewardAssistBatch`（R1：
-   HTTP 绝不发生在业务 DB 写事务内）。辅助失败/崩溃不回滚 core，也不阻塞
-   其他空间的 core 调度。
-2. **调度/预留**（独立短事务）：`schedule_due_batch` 选中至多一个到期批次，
-   在锁内按白名单重建 prompt 输入、预留 `StewardModelCall` attempt 行
-   （reserved 状态 + 输入 token 保守上界 + 输出 cap），随后释放连接——HTTP
-   在独立受限执行线程中进行（maintenance 经 `launch_batch` 提交，不阻塞
-   core tick）。
-3. **写回**（新 Session 短事务）：发送后先审计/计费提交，再以写回栅栏
-   （`_fence_check`）重验空间开关、provider revision、policy、facts 摘要、
-   卡片状态/revision 与 lease，任一变化即 skip/supersede（安全原因码），
-   通过后按 CAS 应用产物。
+1. **登记 + 预留**（core 短事务内，无网络）：`steward_delivery` 在确定性结果
+   提交的同一短事务里调 `plan_for_job`，一次性写一行不可变工作快照
+   `StewardAssistPlan` **并预留它的全部 attempt**（`StewardModelCall`，
+   `status=reserved`，`carrier=CARRIER_PI`）。因此不存在「plan 已存在但没有
+   可租 attempt」的窗口。HTTP 绝不发生在业务 DB 写事务内；辅助失败/崩溃不回滚
+   core，也不阻塞其他空间的 core 调度。
+2. **租取**（独立短事务，由执行载体发起）：`lease_attempt` 是**发送门**——它
+   按 `carrier` 与 `space_id` 选一个到期 attempt，重跑 `_fence_check`，通过则置
+   `in_flight` 并返回 grant（runtime/投影/输出上界在锁内读出，出事务后才发送）。
+   栅栏不过的 attempt 当场退休为 `skipped` + 安全原因码并继续看下一个候选。
+   载体是 sidecar 的 Pi child run（经 `/internal/agent/steward/attempts/lease`）；
+   进程内发送路径已删除，本模块不再自己发请求。
+3. **结算（两阶段）**：
+   - phase 1 `record_attempt_outcome`（**调用方持锁**）：校验租约 → 计费/状态 →
+     封闭校验 → 写回栅栏。Pi 路径在 `agent_queue.settle_run` 的 `on_settled` 里
+     调它，使 run 终态与 attempt 结果原子可见。
+   - phase 2 `apply_settled_attempt`（**自有事务**，幂等，`applied_at` 为门）：
+     在 run 事务提交后按 kind 应用产物。
+   合并两阶段会让写回失败连已付费的模型答案一起回滚。
 
 预算（R3/F06）：发送前预留调用次数与 token；failed/degraded/invalid-output
 同样消耗（billed_tokens）；usage 缺 total 用 input+output，缺失/负数/部分
 字段保守回落预留值；unknown（无法证明上游未处理）保守计费且不自动重发
-（上游未证实支持幂等键）。prompt/响应均有字节上界，响应流式读取后再解析。
+（上游未证实支持幂等键）。prompt 有发送前字节上界；响应字节上界由**接收端**在
+结算时判定（发送方已不在本进程）。
 
-崩溃合同（F05）：core 提交后、发送前、发送后审计前、写回前四个崩溃点全部
-凭 batch/attempt 状态经 `recover_stuck_batches` 恢复；绝不产生 Assistant
-三表（AgentSession/AgentRun/AgentMessage）行。prompt/响应明文永不落库。
+崩溃合同（F05，E1 后由 attempt 状态承载）：`recover_stuck_attempts` 处理两个
+崩溃点——④产物已持久化未写回（`succeeded`/`degraded` + `applied_at IS NULL`）
+重跑栅栏后补写回；③已发送未结算（`in_flight` + 租约过期）收敛为 `unknown`
+并保守计费、**永不重放**。`reserved` 从未发送，仍可租，无需恢复。
+`recover_stuck_child_runs` 另行收敛被杀死的 child run（写 `expired`）。
+绝不产生 Assistant 三表（AgentSession/AgentRun/AgentMessage）行；prompt/响应
+明文永不落库。
 """
 
 from __future__ import annotations
@@ -108,7 +119,8 @@ REASON_LEASE_LOST = "lease_lost"
 REASON_BUDGET_EXHAUSTED = "budget_exhausted"
 REASON_INSUFFICIENT_BUDGET = "insufficient_budget"
 REASON_PROMPT_TOO_LARGE = "prompt_too_large"
-# A plan whose carrier is not in-process has nothing for this process to run; the
+# A plan whose carrier is not this process's (the in-process carrier is deleted) has
+# nothing for this process to run; the
 # attempt is released rather than left in_flight, which would strand it.
 REASON_RESPONSE_TOO_LARGE = "response_too_large"
 REASON_TIMEOUT = "timeout"
@@ -440,7 +452,7 @@ STEWARD_PROMPT_VERSION = "steward-v1"
 def instructions_for(attempt: StewardModelCall) -> str:
     """The per-kind instruction block for one attempt.
 
-    The in-process carrier sends this as the system message. A Pi child run must
+    The (deleted) in-process carrier sent this as the system message; a Pi child run must
     send the same text, because it is not decoration: the candidate kind's
     direction semantics and conflict rules live here, and ``prompt_digest`` is
     computed over ``f"{instructions}\\n{user_content}"``. A carrier that sent only
@@ -1239,7 +1251,7 @@ def _spaces_holding_due_work(db: Session, *, now: Any, carrier: str) -> list[int
     been waiting longest from being starved by a busier one.
 
     Scoped to one carrier because an attempt belongs to the executor it names:
-    offering a ``pi`` attempt to the in-process pump would strand it (see
+    offering a ``pi`` attempt to the (deleted) in-process pump would strand it (see
     ``lease_attempt``).
     """
     rows = db.execute(
@@ -1292,7 +1304,7 @@ def lease_attempt(
     ``pi`` attempt（sidecar 永远看不到它），把行置为 ``in_flight`` 后直接返回，
     该 attempt 于是被卡到租约过期、以 ``unknown`` 保守计费结束，白花一次调用额度。
 
-    与旧 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
+    与**已删除的**旧调度 ``schedule_due_batch`` 的差别是本重构的核心：并发上限按**空间**计
     （``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE``）而不是全库 1，选行也带
     ``space_id`` 过滤。20 个空间因此可以同时推进，互不阻塞。
 
@@ -1613,7 +1625,7 @@ def settle_attempt(
     separate tx2/tx3. ``recover_stuck_attempts`` finishes anything left
     unapplied.
 
-    **This is the only write-back path** (the in-process and Pi carriers both end
+    **This is the only write-back path** (the deleted in-process carrier and the Pi carrier both end
     here). ``lease_owner`` is required: the lease decides who may settle, so a
     late result from a superseded executor cannot overwrite current state.
 
@@ -1698,7 +1710,7 @@ def record_attempt_outcome(
         db.flush()
         return attempt.status
 
-    # Response-size bound, carried over from the in-process carrier's streaming
+    # Response-size bound, carried over from the (deleted) in-process carrier's streaming
     # read. That path no longer exists, so the receiving side enforces it: an
     # unbounded product would otherwise be accepted merely because the sender
     # chose to send it. Refused as a plain failure (not a protocol error), which

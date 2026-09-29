@@ -299,7 +299,7 @@ def fence_steward_execution(
     #
     # ``succeeded`` — not ``leased``/``running`` — because an assist batch is only
     # registered *after* the deterministic core completes (see
-    # ``steward_delivery``'s assist intent → ``register_batch_for_job``), and
+    # ``steward_delivery``'s assist intent → ``steward_assist.plan_for_job``), and
     # ``_fence_check`` already gates lease time on the same condition. Requiring an
     # active job here would reject every child run at its own fence. (The design's
     # §5.2.1 wording said "status IN ('leased','running')"; that is inconsistent

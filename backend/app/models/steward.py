@@ -408,8 +408,20 @@ class StewardModelCall(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 执行载体：数据而非分支。调度层读它来选执行器，不写 `if kind == ...`。
+    #
+    # ORM 默认 `pi`：S5 后 Pi 是唯一载体，`lease_attempt` 只租「carrier 等于调用方
+    # carrier」的行，所以漏写 carrier 会造出**无人可租**的 reserved 行，静默卡到租约
+    # 过期后以 unknown 保守计费。
+    #
+    # `server_default` 仍是 `'inproc'`（0055 建列时的值），**不改**：改它必须重建该表，
+    # 而重建会把列内 `REFERENCES agent_runs (id) ON DELETE SET NULL` 规范化为表级
+    # `FOREIGN KEY` 并丢掉 `ON DELETE`，使 0044 的 downgrade 在
+    # `ALTER TABLE ... DROP COLUMN run_id` 处失败（实测：基线 downgrade 通过，重建后
+    # 失败；`recreate="always"` 与 `"auto"` 同样失败，且前者还会静默丢掉 CHECK）。
+    # 因此防线落在 `test_steward_child_run_acceptance.py` 的结构性断言上——它比一个
+    # 静默兜底的默认值更强：新增插入路径漏写 carrier 会立刻失败，而不是被默认值掩盖。
     carrier: Mapped[str] = mapped_column(
-        String(16), default="inproc", server_default="inproc", nullable=False
+        String(16), default="pi", server_default="inproc", nullable=False
     )
     # 本 attempt fence 用的证据摘要（卡片/terminology 切片在 plan 上，共用一份）。
     evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

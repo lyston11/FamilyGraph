@@ -8,8 +8,8 @@ P1 收口（08-29）：steward 的 lease/run/settle/reaper 领域执行器此前
   （过期 lease 按 cancelled 收敛，不回队重试）；
 - STEWARD_ENABLED 且 STEWARD_WORKER_ENABLED：周期执行 ``steward.reaper_pass``
   （过期 lease 回队或判 expired），并把 queued 作业 lease→execute（含失败
-  结算）连续泵干；随后按 09-11 R1/R2 恢复并调度模型辅助批次（StewardAssistBatch），
-  HTTP 在有界独立线程执行（自有 Session，绝不占用 core 写事务或 core tick）。
+  结算）连续泵干；随后恢复模型辅助 attempt 的中间态（见 steward_assist）——
+  辅助的模型调用由 sidecar 的 Pi child run 租取执行，本 tick 不再自己发送。
 
 DB 操作全部走 SessionLocal 独立会话，与请求会话隔离；单次 tick 异常只记日志
 不终止循环（调度器自身 fail-open；领域事务内部仍 fail-closed）。

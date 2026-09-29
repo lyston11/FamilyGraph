@@ -12,7 +12,7 @@
 is_internal_candidate(db: Session, candidate: StewardLlmCandidate) -> bool
 record_for_candidate(
     db: Session, candidate: StewardLlmCandidate, *,
-    batch: StewardAssistBatch, model_call: StewardModelCall, now: datetime,
+    plan: StewardAssistPlan, model_call: StewardModelCall, now: datetime,
 ) -> StewardCandidateEvidenceVersion | None
 project_version(
     db: Session, *, candidate_id: int, version_id: int,

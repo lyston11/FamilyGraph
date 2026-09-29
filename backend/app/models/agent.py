@@ -44,7 +44,7 @@ RuntimeAgentKind = Literal["assistant", "steward"]
 RUNTIME_AGENT_KINDS: tuple[RuntimeAgentKind, ...] = ("assistant", "steward")
 # 通用 durable 队列（agent_jobs）只承载 assistant：禁止在队列层重建
 # kind='steward' 第二队列（09-01 记录的红线）。Steward child run 的租约来自
-# StewardAssistBatch，其 agent_runs.job_id 恒为 NULL。
+# StewardModelCall attempt，其 agent_runs.job_id 恒为 NULL。
 QUEUE_AGENT_KINDS: tuple[str, ...] = ("assistant",)
 # 会话（agent_sessions）只承载 assistant：Steward 无单一账号，伪造 session 行
 # 就是数据污染。
@@ -235,8 +235,9 @@ class AgentRunEvent(Base):
 class AgentJob(Base):
     """durable queue 条目：lease 只扫 jobs，返回配对 run_id；heartbeat 打在 job 同步 run。
 
-    只承载 assistant（``QUEUE_AGENT_KINDS``）。Steward child run 不经过本表：
-    它的租约来自 ``StewardAssistBatch``，故其 ``agent_runs.job_id`` 为 NULL。
+      只承载 assistant（``QUEUE_AGENT_KINDS``）。Steward child run 不经过本表：
+      它的租约来自 ``StewardModelCall`` attempt（父 ``StewardJob`` 是授权根），
+    故其 ``agent_runs.job_id`` 为 NULL。
     """
 
     __tablename__ = "agent_jobs"
