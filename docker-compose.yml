@@ -75,9 +75,8 @@ services:
       STEWARD_ASSIST_CANDIDATE: ${STEWARD_ASSIST_CANDIDATE:-0}
       STEWARD_ASSIST_RANKING: ${STEWARD_ASSIST_RANKING:-0}
       STEWARD_ASSIST_EXPLANATION: ${STEWARD_ASSIST_EXPLANATION:-0}
-      # 09-06 Steward 称谓辅助开关与批次租约总墙钟截止（与裸机部署同名同义）
+      # 09-06 Steward 称谓辅助开关；plan 墙钟上界见 STEWARD_ASSIST_BATCH_LEASE_SECONDS
       STEWARD_ASSIST_TERMINOLOGY: ${STEWARD_ASSIST_TERMINOLOGY:-0}
-      STEWARD_ASSIST_TIMEOUT_SECONDS: ${STEWARD_ASSIST_TIMEOUT_SECONDS:-30}
       # 09-25 Steward Pi child run：默认关。开启后 steward 模型辅助由 sidecar
       # 租赁受限 child run 执行。与 STEWARD_ENABLED 双开关（child run 的 lease
       # 端点要求两者皆真）。S5 起 Pi 是**唯一**载体：in-process 直连已删除，

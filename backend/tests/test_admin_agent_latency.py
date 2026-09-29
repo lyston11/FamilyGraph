@@ -1084,6 +1084,17 @@ def test_latency_metrics_records_audit(
     assert len(rows) == 1
 
 
-def test_timeout_budget_config_guard() -> None:
-    """config 对超时预算的上下界校验保持 fail-closed（0.1..300）。"""
-    assert 0.1 <= config.STEWARD_ASSIST_TIMEOUT_SECONDS <= 300
+def test_assist_budget_config_guards_are_fail_closed() -> None:
+    """The remaining assist budgets keep their bounds checks.
+
+    `STEWARD_ASSIST_TIMEOUT_SECONDS` was removed: after the in-process carrier
+    was deleted it had no production consumer, so its bounds check guarded a
+    value nobody read. The budgets that still govern behaviour are asserted here
+    instead, so removing the dead knob does not quietly drop validation.
+    """
+    assert 1 <= config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB <= 64
+    assert 100 <= config.STEWARD_ASSIST_MAX_TOKENS_PER_JOB <= 1_000_000
+    assert 1 <= config.STEWARD_ASSIST_MAX_CARDS_PER_JOB <= 100
+    assert 5 <= config.STEWARD_ASSIST_BATCH_LEASE_SECONDS <= 3600
+    assert 5 <= config.STEWARD_ASSIST_CALL_LEASE_SECONDS <= 3600
+    assert 1 <= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE <= 8

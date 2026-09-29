@@ -2,8 +2,8 @@
 
 口径合同（由现有 schema 决定，避免伪精度）：
 - ``steward_model_calls.latency_ms`` 是每次模型调用真实耗时；``error_code=timeout``
-  的调用在 ``STEWARD_ASSIST_TIMEOUT_SECONDS`` 处被截断（删失样本），分位数对
-  含删失样本的全体计算，超时单列计数——高超时占比时 p50/p95 会偏小，解读需结合
+  的调用是**删失样本**（在超时预算处被截断，不是真实完成时长），分位数对含删失
+  样本的全体计算，超时单列计数——高超时占比时 p50/p95 会偏小，解读需结合
   timeout 计数；
 - ``agent_runs.lease_expires_at`` 被心跳持续前移，**不能**用它反推被租走时刻；
   首次取得执行权的权威时刻是 ``agent_runs.first_leased_at``（attempt 0→1 写一次，不可变）；

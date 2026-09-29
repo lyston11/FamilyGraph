@@ -202,9 +202,6 @@ STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB: int = int(
 STEWARD_ASSIST_MAX_TOKENS_PER_JOB: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_TOKENS_PER_JOB", "20000")
 )
-STEWARD_ASSIST_TIMEOUT_SECONDS: float = float(
-    os.environ.get("STEWARD_ASSIST_TIMEOUT_SECONDS", "30")
-)
 STEWARD_ASSIST_MAX_CARDS_PER_JOB: int = int(os.environ.get("STEWARD_ASSIST_MAX_CARDS_PER_JOB", "5"))
 # ---- 09-11 辅助批次执行限制（R5：字节/并发/墙钟均有上界）----
 # prompt 明文字节上界（超限不发送，记 skipped prompt_too_large）
@@ -377,11 +374,6 @@ def _validate_steward_scheduling() -> None:
         ("STEWARD_ASSIST_MAX_CARDS_PER_JOB", STEWARD_ASSIST_MAX_CARDS_PER_JOB, 1, 100),
         ("STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE", STEWARD_INFERRED_MAX_ACTIVE_PER_SPACE, 1, 500),
     )
-    if not (0.1 <= STEWARD_ASSIST_TIMEOUT_SECONDS <= 300):
-        raise RuntimeError(
-            f"STEWARD_ASSIST_TIMEOUT_SECONDS 必须在 [0.1, 300] 内，当前为 "
-            f"{STEWARD_ASSIST_TIMEOUT_SECONDS}"
-        )
     for name, value, low, high in bounds:
         if not low <= value <= high:
             raise RuntimeError(f"{name} 必须在 [{low}, {high}] 区间内（当前 {value}）")

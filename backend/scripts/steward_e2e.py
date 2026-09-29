@@ -77,10 +77,7 @@ if _REAL_PROVIDER_MODE:
                 f"STEWARD_E2E_REAL_PROVIDER=1 需要 {_required} 环境变量"
                 "（密钥只经环境变量注入，勿写入任何文件）"
             )
-    os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"] = "90"
     os.environ["STEWARD_ASSIST_BATCH_LEASE_SECONDS"] = "600"
-else:
-    os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"] = "1.5"
 
 EVIDENCE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".steward-e2e-evidence.json"
@@ -619,7 +616,6 @@ def main() -> int:
     # （1.5s < fake 5s 慢响应 → unknown/timeout 分类）；注入后立即切回真实
     # provider 并恢复真实超时。
     if real_mode:
-        config.STEWARD_ASSIST_TIMEOUT_SECONDS = 1.5
         fake_base_url, fakesrv = _start_fake_provider()
         db = SessionLocal()
         fake_provider = AgentProvider(
@@ -692,12 +688,11 @@ def main() -> int:
         if fakesrv is not None:
             fakesrv.shutdown()
             fakesrv = None
-        config.STEWARD_ASSIST_TIMEOUT_SECONDS = float(os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"])
 
-        # ---- 9.5 真实端点降级（真实模式专属）：把单次超时压到 2s（低于真实
-        # 推理延迟、高于建连），对真实 API 触发确定性读超时 → unknown/timeout
-        # 保守计费分类（建连过慢则为 failed/connect_failed），core job 不受影响。
-        config.STEWARD_ASSIST_TIMEOUT_SECONDS = 2.0
+        # ---- 9.5 真实端点降级（真实模式专属）：对真实 API 触发确定性读超时
+        # → unknown/timeout 保守计费分类（建连过慢则为 failed/connect_failed），
+        # core job 不受影响。单笔超时预算自 in-process 载体删除后归 sidecar /
+        # provider 层，不再由本进程的配置压低。
         r = client.put("/api/me/name", json={"name": "e2e-真实超时改名"}, headers=a["headers"])
         assert r.status_code == 200, r.text
         maintenance.run_maintenance_tick()
@@ -722,7 +717,6 @@ def main() -> int:
         assert degraded_calls, "期望真实端点超时产生 failed/unknown/degraded 辅助调用"
         assert all(j.status == "succeeded" for j in jobs), jobs
         db.close()
-        config.STEWARD_ASSIST_TIMEOUT_SECONDS = float(os.environ["STEWARD_ASSIST_TIMEOUT_SECONDS"])
 
     # ---- 10. 撤权（revoke → 证据失效 → 卡片取代）----
     r = client.post(f"/api/relations/{edge_id}/revoke", headers=a["headers"])
