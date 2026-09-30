@@ -15,8 +15,14 @@ HTTP 客户端/代理中易产生路径转义歧义，这里用普通段 `/event
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
+import time
+import weakref
 from typing import Any, NoReturn
 
+import anyio
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi import HTTPException as FastAPIHTTPException
 from fastapi.responses import StreamingResponse
@@ -25,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.api.deps import get_db
+from app.db import SessionLocal
 from app.errors import (
     AGENT_CONTEXT_INVALIDATED,
     AGENT_DISABLED,
@@ -82,6 +89,8 @@ from app.services.agent_execution import (
 )
 from app.services.provider_proxy import provider_proxy_base_url as agent_provider_proxy_base_url
 from app.utils import security, timeutil
+
+logger = logging.getLogger(__name__)
 
 
 def _require_agent_enabled() -> None:
@@ -815,13 +824,108 @@ def append_events_endpoint(
     )
 
 
-@router.post("/runs/{run_id}/tools/{tool_name}/execute", response_model=ToolExecuteOut)
-def execute_tool(
-    run_id: int,
-    tool_name: str,
-    body: ToolExecuteRequest,
-    request: Request,
-    db: Session = Depends(get_db),
+# ---- 工具执行准入（09-30：连接池/工作线程饥饿）----
+#
+# 每个工具请求都要写库（fence 写锁 → 准入 CAS → 幂等占位 → 审计），所以一个在途
+# 工具调用 = 1 个连接池连接 + 1 个工作线程。连接池上限（`app.db.POOL_MAX_CONNECTIONS`
+# = 15）**小于** AnyIO 工作线程上限（40），于是池被占满后，等待连接的请求会一直
+# **占着工作线程**直到 `pool_timeout`；足够多的这种请求即让心跳/lease/health 一起
+# 拿不到线程（09-30 受控复现：40 个请求全部耗时精确等于 pool_timeout，期间
+# anyio borrowed/total 持续 40/40）。
+#
+# 因此准入放在**事件循环**上：等名额既不占工作线程也不占数据库连接，拿到名额后
+# 才进入工作线程并打开自己的 Session。名额是进程级的，上限必须明显小于连接池
+# 上限（校验见 `config._validate_agent_tool_admission`），为其他端点留出余量。
+_TOOL_ADMISSION_WARN_SECONDS = 1.0
+_TOOL_EXECUTE_ROUTE = "/internal/agent/runs/{run_id}/tools/{tool_name}/execute"
+
+_slot_counts_lock = threading.Lock()
+_slot_active = 0
+_slot_waiting = 0
+
+# Semaphore 在首次 await 时绑定当时的 loop。生产只有一份事件循环（`app.serve`
+# 的三个 listener 跑在同一 loop 上，因而共享同一份 AnyIO 工作线程预算），但测试
+# 会为每个 TestClient 起新 loop，所以按 loop 各持一份，否则第二个 loop 上会抛
+# “bound to a different event loop”。
+_slot_semaphore: asyncio.Semaphore | None = None
+_slot_semaphore_loop: weakref.ReferenceType[asyncio.AbstractEventLoop] | None = None
+_slot_semaphore_lock = threading.Lock()
+
+
+def _tool_slot_limiter() -> asyncio.Semaphore:
+    """当前事件循环的工具执行名额上限（进程级共享，按 loop 各持一份）。"""
+    global _slot_semaphore, _slot_semaphore_loop
+    loop = asyncio.get_running_loop()
+    with _slot_semaphore_lock:
+        bound = _slot_semaphore_loop() if _slot_semaphore_loop is not None else None
+        if _slot_semaphore is None or bound is not loop:
+            _slot_semaphore = asyncio.Semaphore(config.AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS)
+            _slot_semaphore_loop = weakref.ref(loop)
+        return _slot_semaphore
+
+
+def _count_slots(*, active: int = 0, waiting: int = 0) -> tuple[int, int]:
+    """更新并在锁内读出（活跃, 等待）计数，仅供诊断日志使用。"""
+    global _slot_active, _slot_waiting
+    with _slot_counts_lock:
+        _slot_active += active
+        _slot_waiting += waiting
+        return _slot_active, _slot_waiting
+
+
+async def _acquire_tool_slot(run_id: int) -> asyncio.Semaphore:
+    """在事件循环上等一个执行名额；等待期间不占工作线程，也不占连接。
+
+    协程在等待中被取消时由 `Semaphore.acquire` 自身把等待者移出队列，且不消耗
+    名额，所以这里只需保证“拿到名额才计数/才归还”。
+    """
+    limiter = _tool_slot_limiter()
+    _count_slots(waiting=1)
+    started = time.perf_counter()
+    try:
+        await limiter.acquire()
+    finally:
+        _count_slots(waiting=-1)
+    waited = time.perf_counter() - started
+    active, waiting = _count_slots(active=1)
+    if waited >= _TOOL_ADMISSION_WARN_SECONDS:
+        # 只记实际测量的阶段与安全字段（阶段名/路由模板/run id/时长/计数）：
+        # 不含 payload、凭据、SQL 参数，也不把总响应时间说成“线程池耗尽”。
+        logger.warning(
+            "agent tool admission wait stage=tool_admission_wait route=%s run_id=%d "
+            "wait_ms=%.1f active=%d waiting=%d cap=%d",
+            _TOOL_EXECUTE_ROUTE,
+            run_id,
+            waited * 1000.0,
+            active,
+            waiting,
+            config.AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS,
+        )
+    return limiter
+
+
+def _release_tool_slot(limiter: asyncio.Semaphore) -> None:
+    _count_slots(active=-1)
+    limiter.release()
+
+
+def _execute_tool_body(
+    run_id: int, tool_name: str, body: ToolExecuteRequest, request: Request
+) -> ToolExecuteOut:
+    """同步工具体：在**自己的 Session** 内完成，绝不跨线程复用请求级 Session。
+
+    `get_db` 的请求级 Session 属于事件循环所在线程；工作线程里新建 → 授权 →
+    policy → `agent_tools.execute` → commit → `finally` 关闭，连接随之归还连接池。
+    """
+    db = SessionLocal()
+    try:
+        return _execute_tool_in_session(db, run_id, tool_name, body, request)
+    finally:
+        db.close()
+
+
+def _execute_tool_in_session(
+    db: Session, run_id: int, tool_name: str, body: ToolExecuteRequest, request: Request
 ) -> ToolExecuteOut:
     _reject_user_jwt(db, request)
     claims = _decode_or_deny(db, request, typ=agent_tokens.RUN_TOKEN_TYPE)
@@ -857,6 +961,45 @@ def execute_tool(
     if isinstance(safe_output, dict):
         output = safe_output
     return ToolExecuteOut(ok=True, tool=tool_name, version=body.version, output=output)
+
+
+@router.post("/runs/{run_id}/tools/{tool_name}/execute", response_model=ToolExecuteOut)
+async def execute_tool(
+    run_id: int,
+    tool_name: str,
+    body: ToolExecuteRequest,
+    request: Request,
+) -> ToolExecuteOut:
+    """工具执行端点：先在事件循环上等名额，再进工作线程跑同步体。
+
+    等待名额不占工作线程、不占连接，所以工具突发不会把共享资源耗尽到心跳/
+    lease/settle/health 也拿不到（09-30 AC-1/AC-2）。授权、fence、准入 CAS、
+    幂等与审计语义与改动前逐字相同，只是换到工具自己的 Session 上执行；排队
+    后进入执行仍会在 fence 内重新验证身份、租约与权限。
+    """
+    limiter = await _acquire_tool_slot(run_id)
+    dispatched = False
+    try:
+        work: asyncio.Future[ToolExecuteOut] = asyncio.ensure_future(
+            anyio.to_thread.run_sync(_execute_tool_body, run_id, tool_name, body, request)
+        )
+
+        def _on_done(future: asyncio.Future[ToolExecuteOut]) -> None:
+            # 名额只在 worker 真正结束后归还：协程取消不得提前放行下一个工具请求
+            # （否则取消路径上并发上限失效）。顺带取回异常，避免 never-retrieved 告警。
+            if not future.cancelled():
+                future.exception()
+            _release_tool_slot(limiter)
+
+        work.add_done_callback(_on_done)
+        dispatched = True
+        # shield：外层请求被取消（客户端断开）时立即返回，不再等待 worker；worker
+        # 仍会跑完，名额由上面的 done-callback 在它真正结束时释放。
+        return await asyncio.shield(work)
+    finally:
+        if not dispatched:
+            # 名额已取得但未能派发（例如在 ensure_future 之前被取消）：必须归还。
+            _release_tool_slot(limiter)
 
 
 @router.post("/runs/{run_id}/settle", response_model=SettleOut)

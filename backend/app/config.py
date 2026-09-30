@@ -106,6 +106,17 @@ AGENT_MAX_ATTEMPTS: int = int(os.environ.get("AGENT_MAX_ATTEMPTS", "3"))
 AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT: int = int(
     os.environ.get("AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT", "2")
 )
+# 工具执行并发名额（进程级，在事件循环上等待，不占工作线程也不占连接）。
+#
+# 每个工具请求都要写库（fence 写锁 → 准入 CAS → 幂等占位 → 审计），因此每个在途
+# 工具调用都持有 1 个连接池连接。连接池上限（`app.db.POOL_MAX_CONNECTIONS`=15）
+# 小于 AnyIO 工作线程上限（40）：池被占满后，等待连接的请求会**占着工作线程**直到
+# `pool_timeout`，40 个这样的请求即让心跳/lease/health 一起拿不到线程（09-30 受控
+# 复现）。默认 8 明显小于连接池上限，为心跳/lease/settle/health 留出连接与线程余量；
+# 上界由 `ensure_ready` 强制（必须 ≤ POOL_MAX_CONNECTIONS - 1）。
+AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS: int = int(
+    os.environ.get("AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS", "8")
+)
 # Context projection deliberately returns the complete durable transcript;
 # there is no recent-N truncation knob because truncation would break Pi
 # session rehydration and make answers depend on an arbitrary environment cap.
@@ -405,6 +416,24 @@ def ensure_admin_ready() -> None:
         raise RuntimeError("ADMIN_JWT_ISSUER 与 ADMIN_JWT_AUDIENCE 不得相同")
 
 
+def _validate_agent_tool_admission() -> None:
+    """工具执行名额必须给心跳/lease/settle/health 留出连接余量。
+
+    名额 ≥ 连接池上限时，工具执行可以把池占满，等待连接的请求随即占满工作线程，
+    重现「连接池等待耗尽线程池」的缺陷；故上界为 `POOL_MAX_CONNECTIONS - 1`。
+    `POOL_MAX_CONNECTIONS` 定义在 `app.db`，而 `app.db` 在模块级导入本模块，
+    所以这里用函数内导入避免循环导入（`ensure_ready` 只在启动期调用）。
+    """
+    from app.db import POOL_MAX_CONNECTIONS
+
+    if not 1 <= AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS <= POOL_MAX_CONNECTIONS - 1:
+        raise RuntimeError(
+            "AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS 必须在 1.."
+            f"{POOL_MAX_CONNECTIONS - 1} 之间：必须小于连接池上限 "
+            f"{POOL_MAX_CONNECTIONS}，为心跳/lease/health 留出连接余量"
+        )
+
+
 def ensure_ready() -> None:
     """启动前校验：SECRET_KEY 必须由环境提供且非弱默认，否则拒绝启动。"""
     if not SECRET_KEY.strip():
@@ -412,5 +441,6 @@ def ensure_ready() -> None:
             "SECRET_KEY 未设置：请通过环境变量提供会话签名密钥（拒绝以弱默认值启动）"
         )
     _reject_weak_default_secrets()
+    _validate_agent_tool_admission()
     ensure_admin_ready()
     ensure_data_dirs()
