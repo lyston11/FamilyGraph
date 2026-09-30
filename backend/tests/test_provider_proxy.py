@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import Any
 
 import httpx
 from sqlalchemy import select
 
+from app.db import SessionLocal, engine
 from app.models.agent import AgentRun
 from app.models.audit_log import AuditLog
 from app.services import agent_queue, provider_proxy
@@ -910,3 +912,145 @@ def test_proxy_audits_cancellation_during_stream_once(internal_client, db_sessio
     assert detail["error_class"] == "run_cancelled"
     assert detail["retryable"] is False
     assert detail["sent"] is True
+
+
+# ---- 09-30：流式转发不得阻塞事件循环、不得跨 chunk 持有连接 ----
+
+
+class _StreamingUpstream:
+    """慢速上游：每 gap 秒产出一块，模拟长 SSE 流。"""
+
+    def __init__(self, chunks: int, gap: float) -> None:
+        self._chunks = [b"x" * 32] * chunks
+        self._gap = gap
+        self.status_code = 200
+        self.headers = {"content-type": "text/event-stream"}
+
+    async def aiter_raw(self):
+        for chunk in self._chunks:
+            await asyncio.sleep(self._gap)
+            yield chunk
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _steward_run(db_session, name: str):
+    from app.models.agent import AgentRun
+    from app.utils import timeutil
+
+    now = timeutil.utcnow()
+    run = AgentRun(
+        session_id=None,
+        message_id=None,
+        job_id=None,
+        kind="steward",
+        status="running",
+        attempt=1,
+        max_attempts=1,
+        policy_version="p1",
+        tool_allowlist_json=[],
+        lease_expires_at=now,
+        heartbeat_at=now,
+        cancel_requested=False,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(run)
+    db_session.commit()
+    return run
+
+
+def test_per_chunk_gate_check_never_runs_on_the_event_loop(db_session, monkeypatch) -> None:
+    """per-chunk 取消复核必须在工作线程内执行。
+
+    为何是回归而不是细节：`_refresh_run_gate` 做同步 SQLite 查询。连接池被占满时
+    它在 QueuePool 里等待 `pool_timeout`（30s）。跑在工作线程里只占 1 个线程；
+    跑在**事件循环**上会让所有端点一起静默——实测 3 个 chunk 造成 90s 全进程停顿，
+    与观测到的 96–111s 停滞吻合（见任务 09-30-steward-sidecar-request-stall）。
+    """
+    _seed_provider(db_session, name="loopgate")
+    run = _steward_run(db_session, "loopgate")
+
+    calls: list[str] = []
+    original = provider_proxy._refresh_run_gate
+
+    def spy(db, run_id):
+        calls.append(threading.current_thread().name)
+        return original(db, run_id)
+
+    monkeypatch.setattr(provider_proxy, "_refresh_run_gate", spy)
+
+    async def drive() -> None:
+        own = SessionLocal()
+        try:
+            gen = provider_proxy.passthrough_with_audit(
+                own,
+                run=run,
+                provider_id=1,
+                client=_StreamingUpstream(1, 0),
+                upstream=_StreamingUpstream(2, 0),
+                on_finish=lambda: None,
+            )
+            async for _ in gen:
+                pass
+        finally:
+            own.close()
+
+    asyncio.run(drive())
+
+    assert calls, "per-chunk gate 复核未执行（用例前提不成立）"
+    assert all("MainThread" not in name for name in calls), (
+        f"gate 复核在事件循环线程上执行：{calls}；" "池耗尽时这会阻塞整个进程，必须移入工作线程"
+    )
+
+
+def test_stream_does_not_pin_a_pool_connection_between_chunks(db_session) -> None:
+    """流期间不得持续占用连接池连接。
+
+    `_refresh_run_gate` 的 `db.get()` 会开启事务并持有连接直到下一次 rollback。
+    若复用请求级 Session，一条 100s 的流就钉住 15 条连接中的 1 条 100 秒，
+    加剧池耗尽（而池耗尽正是事件循环被阻塞的前提）。用独立 Session 则每次
+    检查后立即归还。
+    """
+    _seed_provider(db_session, name="poolpin")
+    run = _steward_run(db_session, "poolpin")
+
+    samples: list[int] = []
+    stop = False
+
+    async def main() -> None:
+        nonlocal stop
+        own = SessionLocal()
+
+        async def watch() -> None:
+            while not stop:
+                samples.append(engine.pool.checkedout())
+                await asyncio.sleep(0.1)
+
+        watcher = asyncio.create_task(watch())
+        try:
+            gen = provider_proxy.passthrough_with_audit(
+                own,
+                run=run,
+                provider_id=1,
+                client=_StreamingUpstream(1, 0),
+                upstream=_StreamingUpstream(5, 0.3),
+                on_finish=lambda: None,
+            )
+            async for _ in gen:
+                pass
+        finally:
+            stop = True
+            await watcher
+            own.close()
+
+    asyncio.run(main())
+    assert samples, "未采集到池占用样本"
+    # 允许 1 的瞬时占用（检查自身），但不得在整个流期间持续持有。
+    assert max(samples) <= 1, f"流期间池占用过高：{max(samples)}"
+    held_ratio = sum(1 for n in samples if n > 0) / len(samples)
+    assert held_ratio < 0.5, (
+        f"流期间有 {held_ratio:.0%} 的时间持有连接池连接："
+        "请求级 Session 不得跨 chunk 长期持有连接"
+    )
