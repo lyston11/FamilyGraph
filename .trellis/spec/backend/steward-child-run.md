@@ -347,3 +347,40 @@ for attempt in candidates:                    # 发送门：退休并继续，�
         continue
     break
 ```
+
+## 14. 工具执行准入（09-30：连接池/工作线程饥饿）
+
+**触发**：改动 `/internal/agent/runs/{id}/tools/{name}/execute` 的并发行为、连接池参数，
+或任何「把同步 DB 工作放进工作线程」的端点前必读。
+
+**缺陷（已受控复现）**：连接池上限（`app.db.POOL_MAX_CONNECTIONS`=15）**小于** AnyIO
+工作线程上限（40）。每个工具请求都要写库（fence 写锁 → 准入 CAS → 幂等占位 → 审计），
+所以每个在途工具占 1 条连接。池被占满后，等待连接的请求会在**工作线程内**阻塞最长
+`pool_timeout`(30s)；40 个这样的请求耗尽全部工作线程，**心跳/lease/health 一起拿不到
+执行机会**（实测：40 请求全部耗时精确等于 30.0s，期间 `anyio borrowed/total` 持续 40/40）。
+
+**修复合同**：
+
+- `execute_tool` 是 `async def`：**先在事件循环上等名额**（`asyncio.Semaphore`），
+  等待期间不占工作线程、不占连接；拿到名额后才 `anyio.to_thread.run_sync` 进工作线程。
+- 工具体用**自己的 Session**（`SessionLocal`），在工作线程内创建、commit、`finally` 关闭。
+  **禁止**跨线程复用 `get_db` 的请求级 Session。
+- 名额由 **done-callback** 释放（`asyncio.shield` + `add_done_callback`）：请求被取消时
+  立即返回，但名额要等 worker **真正结束**才归还——提前放行会让取消路径绕过并发上限。
+- 名额只覆盖工具执行。**心跳、lease、settle、context、health 一律不取名额。**
+- `AGENT_TOOL_MAX_CONCURRENT_EXECUTIONS`（默认 8）由 `config.ensure_ready` 强制
+  `1 <= value <= POOL_MAX_CONNECTIONS - 1`：名额达到池上限时工具可把池占满，缺陷重现。
+- 授权、fence 检查集、准入 CAS、幂等、审计语义**逐字不变**；排队后进入执行仍在 fence 内
+  重新验证身份、租约与权限。
+- 等待超阈值（1s）记 `stage=tool_admission_wait` 结构化日志：路由模板、run_id、时长、
+  活跃/等待计数、上限。**不得**输出 payload/凭据/SQL 参数，**不得**把总响应时间说成
+  「线程池耗尽」——只报实际测量的阶段。
+
+**诊断陷阱**：不要用「日志唯一秒数」判断 API 是否静默——会漏计。用**请求计数**
+（`grep -cE '"(POST|GET) /'`）复核：修复前 3 个窗口 0 请求（真静默），修复后同长度
+窗口 1146 个 heartbeat/lease 被服务。另外，steward run 的 `turn` 间隔可达 180s+ 而
+**不是**服务端饥饿——那是上游模型响应慢；判断依据是该窗口内是否有请求被服务。
+
+**回归**：`tests/test_agent_tool_admission.py`（工具突发下心跳预算内成功 + 工作线程占用
+≤ 名额 + 批次全部完成 + 取消不泄漏名额 + 名额上界校验）。变异验证：名额设为 1000
+（等效无准入）时心跳断言必须失败。

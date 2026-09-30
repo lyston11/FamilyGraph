@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Steward fence/attempt/两阶段结算合同与并发不变量"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 单写者、BEGIN IMMEDIATE 与连接池纪律"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "并发回归用例不得无限等待；同步阻塞调用纪律"}
+{"file": ".trellis/tasks/09-30-steward-event-loop-block/research/evidence/r0-blocking-stack.md", "reason": "R0 采样证据：事件循环空闲、AnyIO 线程堆积在写锁"}
