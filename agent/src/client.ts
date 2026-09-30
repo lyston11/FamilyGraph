@@ -548,7 +548,7 @@ export class InternalClient {
     jobId: string,
     runToken: string,
     signal?: AbortSignal,
-  ): Promise<{ ok: boolean; cancelRequested: boolean }> {
+  ): Promise<{ ok: boolean; cancelRequested: boolean; runToken: string | null }> {
     const { json } = await this.request(
       "POST",
       `/internal/agent/jobs/${encodeURIComponent(jobId)}/heartbeat`,
@@ -556,8 +556,18 @@ export class InternalClient {
       {},
       signal,
     );
-    const body = json as { ok?: unknown; cancel_requested?: unknown };
-    return { ok: Boolean(body.ok), cancelRequested: Boolean(body.cancel_requested) };
+    const body = json as { ok?: unknown; cancel_requested?: unknown; run_token?: unknown };
+    // The server reissues the run token on every heartbeat. The run token has a
+    // hard TTL (AGENT_RUN_TOKEN_TTL_SECONDS_MAX, 600s) and is only minted at lease
+    // time, so a run living longer than that would get 401 on its next heartbeat
+    // -- and this client treats 401 as a lost lease. Returning the new token lets
+    // the worker adopt it; older servers omit the field and we keep the old one.
+    const reissued = typeof body.run_token === "string" && body.run_token !== "" ? body.run_token : null;
+    return {
+      ok: Boolean(body.ok),
+      cancelRequested: Boolean(body.cancel_requested),
+      runToken: reissued,
+    };
   }
 
   /** GET /internal/agent/runs/{id}/context — normalized ContextOut view. */
