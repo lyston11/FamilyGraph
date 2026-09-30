@@ -384,3 +384,41 @@ for attempt in candidates:                    # 发送门：退休并继续，�
 **回归**：`tests/test_agent_tool_admission.py`（工具突发下心跳预算内成功 + 工作线程占用
 ≤ 名额 + 批次全部完成 + 取消不泄漏名额 + 名额上界校验）。变异验证：名额设为 1000
 （等效无准入）时心跳断言必须失败。
+
+## 15. 流式转发不得在事件循环上做同步 DB（09-30）
+
+**触发**：改动 `provider_proxy.passthrough_with_audit`、per-chunk 取消复核，
+或任何「async generator 里做同步数据库访问」的代码前必读。
+
+**缺陷（已受控复现）**：`passthrough_with_audit` 每个 chunk 在**事件循环**上调用同步的
+`_refresh_run_gate`（`db.rollback()` + `db.get()`）。连接池被占满时该调用在 QueuePool
+里等待 `pool_timeout`（30s），**阻塞整个事件循环**——所有端点（含 `/api/health`、心跳、
+lease）一起静默。实测：
+
+```
+池耗尽 + 事件循环上调用 -> 30.0s；心跳协程延迟 30,055ms
+3 个 chunk -> 90.0s 全进程停顿（观测到的停滞为 96–111s = 3–4 chunk）
+```
+
+同一代码还**跨 chunk 持有连接**：请求级 Session 的 `db.get()` 开启事务，直到下一 chunk
+才 rollback，实测整个流期间 `checkedout == 1`——100s 的流钉住 15 条连接中的 1 条 100 秒。
+
+**合同**：
+
+- per-chunk 的同步 DB 复核必须 `anyio.to_thread.run_sync` 进**工作线程**，不得在事件循环上；
+- 该复核使用**独立的短生命周期 Session**（每次检查后立即归还连接），不得复用请求级 Session；
+- 检查函数、判定条件与 `ProviderProxyError`（取消/失租）语义不变——`run_cancelled`
+  分类与「取消是服务端权威裁决」的合同保持。
+
+**诊断陷阱**：同一个 `db.get()` 在工作线程里阻塞 30s 只占 1 个线程（请求变慢）；
+在**事件循环**上阻塞 30s 则全进程静默（致命）。区分二者要看 `py-spy` 采样时
+`MainThread` 停在 `select`（空闲）还是停在 `do_execute`/`get`（被钉住）。
+
+**回归**：`tests/test_provider_proxy.py` 的
+`test_per_chunk_gate_check_never_runs_on_the_event_loop` 与
+`test_stream_does_not_pin_a_pool_connection_between_chunks`。变异验证：把复核放回
+事件循环、或复用请求级 Session，对应用例必须失败。
+
+**已知未修（独立缺陷）**：连接池上限（15）相对总连接需求偏小——steward 的 4 个 core
+线程 + 每空间 2 个 assist + 心跳/lease 轮询共同争抢。实测慢响应时 4 个线程在等连接、
+仅 2 个在执行。事件循环修复后，这表现为「个别请求变慢」而非全进程静默。
