@@ -285,6 +285,14 @@ export class SidecarWorker {
           } else if (result.cancelRequested) {
             this.markCancelRequested(job.run_id);
           }
+          // Adopt the reissued token. The run token has a hard TTL (600s) and is
+          // only minted at lease time, so without this every run living longer
+          // than 10 minutes would 401 on its next heartbeat and be aborted as a
+          // lost lease. Every other request reads `job.run_token` at call time,
+          // so updating the leased job in place is enough.
+          if (result.runToken !== null) {
+            job.run_token = result.runToken;
+          }
         })
         .catch((error) => {
           // A cancellation verdict is not a lease loss: converge as cancelled so

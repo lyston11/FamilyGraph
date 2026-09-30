@@ -190,7 +190,9 @@ describe("InternalClient protocol behavior", () => {
         // production failure mode, so the mock must accept the correct path.
         if (/^\/internal\/agent\/jobs\/\d+\/heartbeat$/.test(req.url ?? "")) {
           seenHeartbeatPaths.push(req.url ?? "");
-          return respond(200, { ok: true, cancel_requested: false });
+          // The server reissues the run token on every heartbeat; without adopting
+          // it, any run living past the token TTL (600s) would 401 and be aborted.
+          return respond(200, { ok: true, cancel_requested: false, run_token: "reissued-tok" });
         }
         if (req.url === "/api/health") return respond(200, { status: "ok" });
         respond(404, { detail: "nf" });
@@ -590,5 +592,15 @@ describe("InternalClient protocol behavior", () => {
     });
     expect(bodies[1]).toEqual({ status: "succeeded" });
     expect(bodies[2]).toEqual({ status: "succeeded", output_text: '{"items":[]}' });
+  });
+
+  it("returns the reissued run token from heartbeat", async () => {
+    const client = new InternalClient(testConfig(port));
+    const result = await client.heartbeat("53", "old-tok");
+    expect(result.ok).toBe(true);
+    // The run token has a hard TTL and is only minted at lease time, so a run
+    // outliving it must adopt the reissued one; without this the next heartbeat
+    // would 401 and the run would be aborted as a lost lease.
+    expect(result.runToken).toBe("reissued-tok");
   });
 });

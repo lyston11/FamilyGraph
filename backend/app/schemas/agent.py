@@ -102,6 +102,15 @@ class HeartbeatOut(BaseModel):
     lease_expires_at: datetime
     # additive：浏览器已请求取消时为 true（B2 客户端兼容未知字段）
     cancel_requested: bool = False
+    # additive：续签的 run token。
+    #
+    # 为何必须在心跳时续签：run token 只在租约时签发一次，而
+    # `AGENT_RUN_TOKEN_TTL_SECONDS_MAX` 是 600s。任何存活超过 10 分钟的 run
+    # 都会在心跳时拿到 401，而 sidecar 把 401 当作租约失效（`worker.ts` 的
+    # `[401,403,409,410]`）——实测 run 232/244 均如此（401 出现在 token
+    # 到期后 8–18 秒内）。租约本身会续期，token 却不会，是设计缺口。
+    # 旧客户端忽略未知字段，因此加字段是 additive 的。
+    run_token: str | None = None
 
 
 # ---- context ----

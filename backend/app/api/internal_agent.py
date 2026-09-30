@@ -489,6 +489,36 @@ def lease_steward_attempt(
     )
 
 
+def _reissue_run_token(claims: dict[str, Any]) -> str:
+    """按**原 token 的 claims** 重新签发一个 run token。
+
+    为何需要：run token 只在租约时签发一次，而 `AGENT_RUN_TOKEN_TTL_SECONDS_MAX`
+    是 600s。租约本身随心跳续期，token 不续，于是任何超过 10 分钟的 run 都会在
+    下一次心跳时收到 401；sidecar 把 401 当作租约失效并 abort（实测 run 232/244
+    的 401 均出现在 token 到期后 8–18 秒内）。
+
+    只重签，不改变 claims：身份、空间、attempt、viewer、allowlist 全部沿用已校验
+    过的原 token，因此续签不会扩大权限，也不绕过任何 fence。
+    """
+    return agent_tokens.issue_run_token(
+        run_id=claims["run_id"],
+        job_id=claims["job_id"],
+        attempt=claims["attempt"],
+        agent_kind=claims["agent_kind"],
+        space_id=claims["space_id"],
+        tool_allowlist=list(claims["tool_allowlist"]),
+        # per-kind 必含集不同：assistant 必须给 account_id 且不得给 steward 专属
+        # 字段；steward 反之。逐个按 kind 传，避免用 None 触发 fail-closed。
+        account_id=claims.get("account_id") if claims["agent_kind"] == "assistant" else None,
+        steward_attempt_id=(
+            claims.get("steward_attempt_id") if claims["agent_kind"] == "steward" else None
+        ),
+        viewer_account_id=(
+            claims.get("viewer_account_id") if claims["agent_kind"] == "steward" else None
+        ),
+    )
+
+
 @router.post("/jobs/{job_id}/heartbeat", response_model=HeartbeatOut)
 def heartbeat_job(
     job_id: int,
@@ -516,7 +546,15 @@ def heartbeat_job(
         expires, cancel_requested = steward_assist.heartbeat_child_run(
             db, steward_identity, ttl_seconds=ttl
         )
-        return HeartbeatOut(ok=True, lease_expires_at=expires, cancel_requested=cancel_requested)
+        # 续签 run token：token 只在租约时签发一次，而 TTL 上限是 600s。
+        # 不续签则任何超过 10 分钟的 run 都会在心跳时收到 401，被 sidecar
+        # 当作租约失效（实测 run 232/244 均如此）。
+        return HeartbeatOut(
+            ok=True,
+            lease_expires_at=expires,
+            cancel_requested=cancel_requested,
+            run_token=_reissue_run_token(claims),
+        )
     run, _agent_session, _claims = _authorize_run(db, request, int(claims["run_id"]))
     _require_active_run(db, request, run)
     job = db.get(AgentJob, job_id)
@@ -532,6 +570,8 @@ def heartbeat_job(
         ok=True,
         lease_expires_at=expires,
         cancel_requested=bool(active_run.cancel_requested) if active_run is not None else False,
+        # 同 steward：心跳续签 token，避免长 run 因 token 过期被误判失租。
+        run_token=_reissue_run_token(claims),
     )
 
 

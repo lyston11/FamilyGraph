@@ -1033,3 +1033,51 @@ def test_a_row_inserted_without_a_carrier_defaults_to_the_only_live_carrier(db_s
     db_session.add(row)
     db_session.flush()
     assert row.carrier == CARRIER_PI
+
+
+def test_heartbeat_reissues_the_run_token(db_session, monkeypatch):
+    """心跳必须续签 run token。
+
+    为何是合同而不是细节：run token 只在租约时签发一次，而
+    `AGENT_RUN_TOKEN_TTL_SECONDS_MAX` 是 600s。不续签则任何存活超过 10 分钟的 run
+    都会在心跳时收到 401，而 sidecar 把 401 当作租约失效并 abort（实测 run 232 的
+    401 出现在 token 到期后 8 秒、run 244 为 18 秒）。租约随心跳续期，token 不续，
+    是设计缺口。
+
+    断言的是「新 token 可用且 claims 未变」，而不只是「返回了字符串」——后者无法
+    区分「续签」与「回显旧 token」。
+    """
+    monkeypatch.setattr(config, "AGENT_RUNTIME_ENABLED", True)
+    monkeypatch.setattr(config, "STEWARD_PI_RUNTIME_ENABLED", True)
+    from fastapi.testclient import TestClient
+
+    from app.main import internal_app
+    from app.services import agent_tokens
+
+    world, plan = _planned(db_session)
+    db_session.commit()
+
+    lease = TestClient(internal_app).post(
+        "/internal/agent/steward/attempts/lease",
+        headers={"Authorization": f"Bearer {agent_tokens.issue_service_token()}"},
+        json={"kind": "steward", "space_id": plan.space_id, "leased_by": "test"},
+    )
+    assert lease.status_code == 200, lease.text
+    leased = lease.json()
+    original = leased["run_token"]
+
+    beat = TestClient(internal_app).post(
+        f"/internal/agent/jobs/{leased['job_id']}/heartbeat",
+        headers={"Authorization": f"Bearer {original}"},
+        json={},
+    )
+    assert beat.status_code == 200, beat.text
+    reissued = beat.json().get("run_token")
+    assert reissued, "心跳未回传续签的 run token；长 run 会因 token 过期被误判失租"
+
+    # 新 token 可用，且 claims 与原 token 一致（续签不扩权）。
+    old_claims = agent_tokens.decode_run_token(original)
+    new_claims = agent_tokens.decode_run_token(reissued)
+    for key in ("run_id", "job_id", "attempt", "agent_kind", "space_id", "tool_allowlist"):
+        assert new_claims[key] == old_claims[key], key
+    assert new_claims["steward_attempt_id"] == old_claims["steward_attempt_id"]
