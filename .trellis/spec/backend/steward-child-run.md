@@ -422,3 +422,39 @@ lease）一起静默。实测：
 **已知未修（独立缺陷）**：连接池上限（15）相对总连接需求偏小——steward 的 4 个 core
 线程 + 每空间 2 个 assist + 心跳/lease 轮询共同争抢。实测慢响应时 4 个线程在等连接、
 仅 2 个在执行。事件循环修复后，这表现为「个别请求变慢」而非全进程静默。
+
+## 16. run token 随心跳续期（09-30）
+
+**触发**：改动 `agent_tokens.issue_run_token`、`AGENT_RUN_TOKEN_TTL_SECONDS*`、
+`HeartbeatOut`、sidecar 的 `startHeartbeat`，或任何 run 生命周期超过 token TTL 的路径前必读。
+
+**缺陷（已受控定位）**：run token 只在**租约时签发一次**，而 TTL 上限
+`AGENT_RUN_TOKEN_TTL_SECONDS_MAX` 是 **600s**。心跳复用同一 token，因此任何存活超过
+600 秒的 run 都会在心跳时收到 **401**；sidecar 把 `[401,403,409,410]` 当作租约失效
+（`worker.ts`）并立即 abort。两个独立样本的 401 均出现在 token 到期后 8–18 秒内
+（run 232：租约 12:56:09 → 到期 13:06:09 → 401 13:06:17；run 244 同理）。
+
+这是**运行时长的确定性函数**，不是偶发：租约随心跳续期，token 不续，是设计缺口。
+存活较短的 run（如 2 分钟）不受影响，因此曾被误认为间歇性故障。
+
+**合同**：
+
+- `HeartbeatOut.run_token` 在每次心跳回传**重新签发**的 token；sidecar 收到后替换
+  当前 token（`job.run_token`），其余请求按调用时刻读取，无需额外传播；
+- 续签**只复制已校验 token 的 claims**（identity/space/attempt/viewer/allowlist），
+  不得借续签扩大 scope 或绕过 fence；per-kind 必含集仍按 kind 传
+  （assistant 给 account_id、steward 不给），传错会 fail-closed；
+- 字段 additive，旧客户端忽略未知字段，因此后端可先部署；
+- **不得**用「调大 TTL」替代续签：那只是把问题推迟到更长的 run。
+
+**回归**：`tests/test_steward_child_run_acceptance.py::test_heartbeat_reissues_the_run_token`
+（断言新 token 可用**且 claims 与原 token 一致**，而不只是「返回了字符串」）、
+`agent/test/client.test.ts` 的 `returns the reissued run token from heartbeat`。
+变异验证：服务端不续签 → 后端用例失败；client 丢弃 token → sidecar 用例失败。
+
+**已知未修（独立缺陷）**：连接池上限（15）在尖峰时不足——steward 的 4 个 core 线程
+（`execute()` 在 `write_transaction` 内跑完整 job）+ 每空间 2 个 assist + 心跳/lease
+轮询共同争抢。事件循环阻塞已修后，表现为**心跳被拖慢至租约过期**（实测 run 252：
+心跳空档 157s → 409 → 失租）。注意 `expired` 的原因可能不同：**401 = token 过期**，
+**409 = 服务端已判失租**（如租约被拖过期），两者在「心跳失败」的表象下成因不同，
+排查时必须逐条核对响应码。
