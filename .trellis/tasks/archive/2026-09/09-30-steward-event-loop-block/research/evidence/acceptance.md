@@ -60,8 +60,15 @@ heartbeat/lease，且 `tool_admission_wait`=0；间隔来自**上游模型响应
 
 ## 未验证 / 边界
 
-- run 232 在修复后仍 `expired`，但原因是上游 `stream_interrupted`（模型流中断），
-  不是服务端饥饿——该窗口内 API 一直可服务。这属于上游可用性问题，不在本任务范围。
+- run 232 在修复后仍 `expired`。**本文件初版把原因写成「上游 `stream_interrupted`（模型流中断）」，
+  该归因是错的，已更正**：`stream_interrupted` 在 `provider_proxy.passthrough_with_audit`
+  里是**兜底分支**（同时覆盖 `httpx.HTTPError`、`GeneratorExit`、`CancelledError`、`Exception`），
+  sidecar 断开也会落到它；而该 run 的 egress 实际为 `upstream_status=200`、
+  `status=succeeded`，模型调用成功。
+  真实原因是一个**独立缺陷**：停滞期间事件循环被同步 SQL 调用钉住
+  （已抓到栈：`_refresh_run_gate` → `db.get()` 在 MainThread 上执行），
+  使 sidecar 的心跳重试耗尽后判失租 abort。该缺陷由后续任务
+  `09-30-steward-sidecar-request-stall` 继续定位。
 - 未逐笔测量生产上把 15 条连接占住的具体持有者；修复不依赖该定位（线程池被连接池
   等待耗尽本身就是缺陷）。
 - 未测 `busy_timeout`（SQLite 写锁）在其中的放大作用。
