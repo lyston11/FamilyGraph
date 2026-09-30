@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, cast
 
+import anyio
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -28,6 +29,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app import config
+from app.db import SessionLocal
 from app.errors import (
     AGENT_PROVIDER_PROXY_UNAVAILABLE,
     AGENT_PROVIDER_REQUEST_INVALID,
@@ -531,6 +533,29 @@ async def stream_provider_response(
     return client, upstream, runtime.provider_id, header_ms
 
 
+def _gate_check_in_own_session(run_id: int) -> None:
+    """在**自己的工作线程与 Session** 内做一次 per-chunk 取消复核。
+
+    为何不能复用调用方的请求级 Session：
+
+    1. **连接占用**：`_refresh_run_gate` 的 `db.get()` 会开启事务并**一直持有连接**
+       到下一次 rollback。实测一条 provider 流在整个流期间 `checkedout == 1`；
+       100s 的流就会钉住 15 条连接中的 1 条 100 秒，加剧池耗尽。用独立 Session
+       则每次检查后立即归还连接。
+    2. **事件循环**：池耗尽时该同步查询会阻塞 `pool_timeout`（30s）。它跑在工作
+       线程里只占 1 个线程；跑在事件循环上会让**所有**端点一起静默（实测 3 个
+       chunk = 90s 全进程停顿）。
+
+    语义不变：仍抛 `ProviderProxyError`（取消/失租），由调用方按既有分类记为
+    `run_cancelled`；检查集与判定条件逐字未改。
+    """
+    db = SessionLocal()
+    try:
+        _refresh_run_gate(db, run_id)
+    finally:
+        db.close()
+
+
 async def passthrough_with_audit(
     db: Session,
     *,
@@ -557,7 +582,17 @@ async def passthrough_with_audit(
             # Re-check between chunks.  If the browser cancels while a relay
             # is streaming, stop forwarding immediately and classify the
             # egress as failed; the sidecar cannot settle this run succeeded.
-            _refresh_run_gate(db, run_id)
+            #
+            # This must NOT run on the event loop: `_refresh_run_gate` does
+            # synchronous SQLite I/O, and when the connection pool is exhausted
+            # (tool executions plus this stream's own session hold connections)
+            # it blocks for `pool_timeout` — 30s per chunk. Blocking the loop
+            # silences every endpoint, including the heartbeat that keeps this
+            # run leased (measured: 3 chunks -> 90s of total process silence,
+            # matching the observed 96-111s stalls). Run it in a worker thread
+            # instead, and give it its own session so the request-scoped session
+            # does not pin a pool connection across the whole stream.
+            await anyio.to_thread.run_sync(_gate_check_in_own_session, run_id)
             bytes_read += len(chunk)
             yield chunk
     except ProviderProxyError:
