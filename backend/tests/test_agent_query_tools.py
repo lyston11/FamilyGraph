@@ -626,10 +626,18 @@ def test_registry_required_kind_gating(db_session):
     for name in ALL_SIX_TOOLS:
         assert name in assistant_default
 
-    steward_default = agent_tools.default_allowlist("steward")
     steward_names = set(steward_tools.STEWARD_TOOL_NAMES)
-    assert steward_names <= set(steward_default)
-    assert set(steward_default).isdisjoint(assistant_default)
+    # 无 viewer claim 的 run 不得被授予 viewer 绑定工具：它们需要
+    # `viewer_account_id`，只有 terminology attempt 带它，否则模型会调用一个必然
+    # 被 403 拒绝的工具（实测 476 次拒绝 / 60 个 run）。带 viewer 时才给全六个。
+    steward_default = agent_tools.default_allowlist("steward")
+    assert steward_names - steward_tools.STEWARD_VIEWER_TOOL_NAMES <= set(steward_default)
+    assert steward_tools.STEWARD_VIEWER_TOOL_NAMES.isdisjoint(steward_default)
+
+    steward_with_viewer = agent_tools.default_allowlist("steward", viewer_scope=True)
+    assert steward_names <= set(steward_with_viewer)
+
+    assert set(steward_with_viewer).isdisjoint(assistant_default)
     assert all(agent_tools.REGISTRY[name].required_kind == "steward" for name in steward_names)
 
     assert (

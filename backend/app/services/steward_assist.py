@@ -2101,7 +2101,11 @@ def open_child_run(
             heartbeat_at=now,
             cancel_requested=False,
             policy_version=attempt.policy_version,
-            tool_allowlist_json=agent_tools.default_allowlist("steward"),
+            # 只有带 viewer claim 的 attempt 才拿到 viewer 绑定工具；否则模型会
+            # 看到并调用一个必然被 403 拒绝的工具（实测 476 次拒绝 / 60 个 run）。
+            tool_allowlist_json=agent_tools.default_allowlist(
+                "steward", viewer_scope=attempt.viewer_account_id is not None
+            ),
             runtime_snapshot_json=agent_provider.snapshot_for_space(
                 db, attempt.space_id, agent_provider.AGENT_KIND_STEWARD
             ),
