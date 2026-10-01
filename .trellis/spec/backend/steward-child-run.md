@@ -458,3 +458,33 @@ lease）一起静默。实测：
 心跳空档 157s → 409 → 失租）。注意 `expired` 的原因可能不同：**401 = token 过期**，
 **409 = 服务端已判失租**（如租约被拖过期），两者在「心跳失败」的表象下成因不同，
 排查时必须逐条核对响应码。
+
+## 17. allowlist 必须与 attempt 的实际能力一致（10-01）
+
+**触发**：改动 `agent_tools.default_allowlist`、`steward_assist` 的 child-run 构造、
+或 `steward_tools.STEWARD_VIEWER_TOOL_NAMES` 前必读。
+
+**缺陷（已受控定位）**：`default_allowlist("steward")` 把六个工具无条件放进每个 run，
+含需要 `viewer_account_id` 的 `get_viewer_target` / `get_viewer_term`。只有 terminology
+attempt 带该 claim，于是 candidate/ranking run 的模型看到并调用一个**必然被拒绝**的工具
+（实测 476 次 403、横跨 60 个 run）。执行层判定本身是对的——缺陷在**白名单广告了
+不可用的能力**，代价是模型白耗轮次去发现拒绝。
+
+**合同**：
+
+- steward 的 `tool_allowlist` 必须与 attempt 能力一致：带 viewer claim 才给两个 viewer
+  工具（`default_allowlist("steward", viewer_scope=True)`），否则不给；
+- 执行层的 `STEWARD_VIEWER_TOOL_NAMES` → 403 `STEWARD_VIEWER_SCOPE_UNAVAILABLE`
+  **必须保留**：白名单是能力协商，403 是纵深防御，两者都要有；
+- 四个非 viewer 工具（`get_space_snapshot`/`list_space_nodes`/`get_evidence`/
+  `get_relationship_path`）在两种情况下都必须在；assistant 白名单不受影响；
+- **不得向模型广告它无法使用的能力**——这条适用于任何按 kind/scope 变化的工具。
+
+**回归**：`tests/test_steward_tools.py::test_default_allowlist_omits_viewer_tools_without_a_viewer_claim`、
+`test_assistant_allowlist_is_unaffected_by_viewer_scope`、
+`tests/test_agent_query_tools.py::test_registry_required_kind_gating`。
+变异验证：移除 `viewer_scope` 门 → 用例失败。
+
+**排查陷阱**：统计访问日志里的状态码时，JSON 里的引号是**转义**的
+（`HTTP/1.1\" 401`）。用未转义模式会得到「0 次」的假阴性——本次排查一度因此
+误判为「认证已无问题」。统计前先在已知存在的事件上校准模式。
