@@ -305,11 +305,19 @@ def default_allowlist(
     *,
     account_id: int | None = None,
     space_id: int | None = None,
+    viewer_scope: bool = False,
 ) -> list[str]:
     """Return the run's default allowlist, including Web only after both opt-ins.
 
     The optional database scope keeps backwards compatibility for tests and the
     protocol fixtures while ensuring a real run never advertises disabled Web tools.
+
+    ``viewer_scope`` (steward only) gates the two viewer-bound tools. They require
+    an ``viewer_account_id`` claim, which only terminology attempts carry, so
+    advertising them to a candidate/ranking run produces a tool the model can see
+    and call but that is guaranteed to be refused — measured as 476 rejections
+    across 60 runs before this gate existed. A run must not advertise a capability
+    it cannot use.
     """
     if kind not in RUNTIME_AGENT_KINDS:
         raise ToolProtocolError(
@@ -321,10 +329,19 @@ def default_allowlist(
     # Web tools are opt-in by policy; exclude them from the static traversal so a
     # disabled platform/space flag never advertises them to the model.
     _web_tools = {TOOL_SEARCH_WEB, TOOL_FETCH_APPROVED_PAGE}
+    # viewer-bound steward tools are only usable when the run carries a viewer claim;
+    # advertising them otherwise guarantees a 403 the model cannot recover from.
+    _unusable = (
+        steward_tools.STEWARD_VIEWER_TOOL_NAMES
+        if kind == "steward" and not viewer_scope
+        else frozenset()
+    )
     allowlist = sorted(
         name
         for name, spec in REGISTRY.items()
-        if (spec.required_kind is None or spec.required_kind == kind) and name not in _web_tools
+        if (spec.required_kind is None or spec.required_kind == kind)
+        and name not in _web_tools
+        and name not in _unusable
     )
     if (
         kind == "assistant"

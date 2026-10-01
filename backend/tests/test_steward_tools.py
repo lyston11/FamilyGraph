@@ -116,3 +116,37 @@ def test_steward_schema_rejects_scope_injection() -> None:
     with pytest.raises(agent_tools.ToolProtocolError) as exc_info:
         agent_tools.validate_input(evidence, {"target_user_id": 1, "run_id": 2})
     assert exc_info.value.code == "AGENT_TOOL_SCHEMA_INVALID"
+
+
+def test_default_allowlist_omits_viewer_tools_without_a_viewer_claim() -> None:
+    """没有 viewer claim 的 steward run 不得被授予 viewer 绑定工具。
+
+    为何是回归而不是细节：`get_viewer_target` / `get_viewer_term` 需要
+    `viewer_account_id` claim，而只有 terminology attempt 带它。此前
+    `default_allowlist("steward")` 无条件把两个工具放进**每个** run 的白名单，
+    于是 candidate/ranking run 的模型能看到并调用一个必然被 403 拒绝的工具——
+    实测 476 次拒绝、横跨 60 个 run。**不得向模型广告它无法使用的能力。**
+    """
+    from app.services import agent_tools, steward_tools
+
+    without = agent_tools.default_allowlist("steward")
+    for name in steward_tools.STEWARD_VIEWER_TOOL_NAMES:
+        assert name not in without, f"无 viewer claim 时不应授予 {name}"
+
+    with_viewer = agent_tools.default_allowlist("steward", viewer_scope=True)
+    for name in steward_tools.STEWARD_VIEWER_TOOL_NAMES:
+        assert name in with_viewer, f"有 viewer claim 时应授予 {name}"
+
+    # 非 viewer 工具两种情况下都必须在，否则会误伤空间级工具。
+    for name in steward_tools.STEWARD_TOOL_NAMES - steward_tools.STEWARD_VIEWER_TOOL_NAMES:
+        assert name in without
+        assert name in with_viewer
+
+
+def test_assistant_allowlist_is_unaffected_by_viewer_scope() -> None:
+    """viewer_scope 只影响 steward；assistant 白名单不得因它变化。"""
+    from app.services import agent_tools
+
+    assert agent_tools.default_allowlist("assistant") == agent_tools.default_allowlist(
+        "assistant", viewer_scope=True
+    )
