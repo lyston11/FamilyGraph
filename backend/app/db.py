@@ -4,6 +4,7 @@
 WAL 文件与主库同目录（同一数据卷），满足 AD-6 的备份前提。
 """
 
+import types
 from typing import Any
 
 from sqlalchemy import create_engine, event
@@ -46,5 +47,38 @@ def set_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
     finally:
         cursor.close()
 
+
+# ---- 连接池等待测量（10-01）----
+#
+# 包装 `pool.connect`：池满时等待**正好**发生在这里（内部 `_do_get` 阻塞在
+# `queue.get(wait, timeout)`），因此这段耗时就是「等了多久」。不 hook 私有方法、
+# 不改池实现，也覆盖所有取连接的路径（Session 第一次 execute、engine.connect）。
+#
+# 为何要在产品内测：池满与「事件循环被同步代码占住」在现象上都是「请求变慢」，
+# 但处置完全不同。没有这个指标时只能靠外部探针 + py-spy 事后拼接，09-30 已因此
+# 两次把 token 过期误判成别的原因。
+def _instrument_pool_wait() -> None:
+    from app.services import runtime_diagnostics
+
+    original = engine.pool.connect
+
+    def timed_connect(self: Any) -> Any:
+        started = runtime_diagnostics.now_seconds()
+        try:
+            return original()
+        finally:
+            # 必须在 finally 里记录：池满时 `original()` 会**抛** TimeoutError，
+            # 而「池满到超时」正是最需要被观测的情形。只在成功路径记录会让
+            # 最严重的情况恰好没有日志。
+            runtime_diagnostics.note_pool_wait(
+                runtime_diagnostics.now_seconds() - started, self
+            )
+
+    # mypy 把池实例上的方法赋值视为 method-assign；这里是有意的运行时插桩
+    # （SQLAlchemy 的池对象就是普通实例），因此显式忽略该检查。
+    engine.pool.connect = types.MethodType(timed_connect, engine.pool)  # type: ignore[method-assign]
+
+
+_instrument_pool_wait()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

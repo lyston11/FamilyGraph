@@ -99,6 +99,13 @@ AGENT_SERVICE_SECRET: str = os.environ.get("AGENT_SERVICE_SECRET", "")
 AGENT_SERVICE_TOKEN_TTL_SECONDS: int = int(os.environ.get("AGENT_SERVICE_TOKEN_TTL_SECONDS", "120"))
 AGENT_RUN_TOKEN_TTL_SECONDS_MAX: int = 600
 AGENT_RUN_TOKEN_TTL_SECONDS: int = int(os.environ.get("AGENT_RUN_TOKEN_TTL_SECONDS", "600"))
+# ---- 运行时可观测性（10-01）----
+# 连接池等待与事件循环延迟是两个**独立**缺陷信号，必须分开观测：
+# 「池满」只让需要连接的请求变慢；「事件循环被占住」会拖垮所有端点（含心跳）。
+# 合并成一个「响应慢」指标会导致误判——09-30 已因此把 token 过期误判两次。
+DB_POOL_WAIT_WARN_MS: int = int(os.environ.get("DB_POOL_WAIT_WARN_MS", "1000"))
+EVENT_LOOP_LAG_WARN_MS: int = int(os.environ.get("EVENT_LOOP_LAG_WARN_MS", "500"))
+EVENT_LOOP_LAG_INTERVAL_S: float = float(os.environ.get("EVENT_LOOP_LAG_INTERVAL_S", "1.0"))
 # lease 时长与重试上限（reaper 按 lease_expires_at 回队/判死）
 AGENT_LEASE_TTL_SECONDS: int = int(os.environ.get("AGENT_LEASE_TTL_SECONDS", "300"))
 AGENT_MAX_ATTEMPTS: int = int(os.environ.get("AGENT_MAX_ATTEMPTS", "3"))
@@ -348,11 +355,22 @@ def _reject_weak_default_secrets() -> None:
     if MAINTENANCE_INTERVAL_SECONDS <= 0:
         raise RuntimeError("MAINTENANCE_INTERVAL_SECONDS 必须为正数")
     _validate_steward_scheduling()
+    _validate_diagnostics()
     if AGENT_RUNTIME_ENABLED and AGENT_SERVICE_SECRET in _WEAK_SECRETS:
         raise RuntimeError(
             "AGENT_SERVICE_SECRET 命中已知弱默认值：请提供真实随机密钥，"
             "或仅开发态显式设置 DEV_ALLOW_WEAK_SECRETS=1"
         )
+
+
+def _validate_diagnostics() -> None:
+    """诊断阈值必须是正数：0 或负数会让每次 checkout 都告警（淹没日志）。"""
+    if DB_POOL_WAIT_WARN_MS <= 0:
+        raise RuntimeError("DB_POOL_WAIT_WARN_MS 必须为正数")
+    if EVENT_LOOP_LAG_WARN_MS <= 0:
+        raise RuntimeError("EVENT_LOOP_LAG_WARN_MS 必须为正数")
+    if EVENT_LOOP_LAG_INTERVAL_S <= 0:
+        raise RuntimeError("EVENT_LOOP_LAG_INTERVAL_S 必须为正数")
 
 
 def _validate_steward_scheduling() -> None:
