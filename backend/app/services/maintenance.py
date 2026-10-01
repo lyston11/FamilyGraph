@@ -21,6 +21,7 @@ serve.py 双 listener 共享 lifespan，用进程级单例防止重复启动。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from sqlalchemy import select
@@ -139,6 +140,22 @@ def _pending_queued_jobs() -> int:
 
 async def maintenance_loop(interval_seconds: float) -> None:
     """周期维护循环；取消时安静退出。"""
+    # 事件循环延迟探针随维护循环启停：它是 asyncio 任务，不占工作线程也不取连接，
+    # 因此池满时仍能记录（池满阻塞的是工作线程，不是事件循环）。这正是本模块
+    # 能在事故现场工作的前提。
+    from app.services import runtime_diagnostics
+
+    stop_probe, probe = runtime_diagnostics.start_event_loop_probe()
+    try:
+        await _maintenance_ticks(interval_seconds)
+    finally:
+        stop_probe.set()
+        probe.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await probe
+
+
+async def _maintenance_ticks(interval_seconds: float) -> None:
     while True:
         try:
             counters = await asyncio.to_thread(run_maintenance_tick)
