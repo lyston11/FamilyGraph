@@ -11,6 +11,7 @@ import logging
 import sys
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 # 请求级上下文：request_id 与当前认证用户（由依赖项回填）
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
@@ -18,8 +19,25 @@ user_id_var: contextvars.ContextVar[int | None] = contextvars.ContextVar("user_i
 
 
 class JsonFormatter(logging.Formatter):
+    """结构化 JSON 行：固定字段 + 调用方通过 ``extra=`` 附带的字段。
+
+    ``extra`` 必须被输出：诊断与计数器（如 ``db_pool_wait`` 的 ``waited_ms``、
+    ``event_loop_lag`` 的 ``lag_ms``、``maintenance tick`` 的 ``counters``）都是靠
+    ``extra`` 携带的。此前 formatter 只输出下面六个固定键，于是这些值被静默丢弃——
+    日志里能看到「事件发生了」却看不到任何数值，诊断等于无效（10-01 实测：
+    ``event_loop_lag`` 触发了 4 次，日志行里没有 ``lag_ms``）。
+
+    ``extra`` 优先于固定键：调用方显式附带的字段比默认投影更具体。
+    """
+
+    # LogRecord 自带的属性（非 extra）；其余用户附加字段一律输出。
+    _RESERVED = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+        "message",
+        "asctime",
+    }
+
     def format(self, record: logging.LogRecord) -> str:
-        entry = {
+        entry: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
@@ -27,6 +45,9 @@ class JsonFormatter(logging.Formatter):
             "user_id": user_id_var.get(),
             "request_id": request_id_var.get(),
         }
+        for key, value in record.__dict__.items():
+            if key not in self._RESERVED:
+                entry[key] = value
         return json.dumps(entry, ensure_ascii=False)
 
 
