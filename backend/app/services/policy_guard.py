@@ -47,10 +47,38 @@ _CREDENTIAL_KEY_RE = re.compile(
     r"^(?:access|auth|bearer|refresh|id|session|api|provider|client|personal|customer|x)?[-_]?(?:tokens?|api[-_]?key|secret|password)$|^(?:authorization|x[-_]?authorization|cookie|set[-_]?cookie|private[-_]?key)$",
     re.IGNORECASE,
 )
-_PII_PATTERNS = (
-    re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
-    re.compile(r"(?<!\d)(?=(?:\D*\d){10,})(?:\+?\d[\d -]{8,}\d)(?!\d)"),
-)
+# PII 检测必须在**线性**时间内完成：这些 pattern 跑在事件循环上，且输入是模型
+# payload（可达数百 KB）。此前 phone 的写法
+# `(?<!\d)(?=(?:\D*\d){10,})(?:\+?\d[\d -]{8,}\d)(?!\d)`
+# 在长输入上呈**超线性回溯**（实测 4x 输入 → 15.7x 时间；66KB → 23 秒），
+# 把事件循环钉住数秒至数十秒。后果不是「慢一点」而是**整条 provider 出站失效**：
+# 请求在 connect 阶段超时（10s），被记为 `transport_timeout`，进程重启前 100% 失败。
+# 现在用锚定写法：先找候选起始位置，再在固定窗口内匹配，全程无回溯爆炸。
+_PII_PATTERNS = (re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),)
+
+# 电话号码检测单独实现：正则版本在长输入上会超线性回溯，而任何「候选+计数」的
+# 正则写法在长数字串上又会退化成 O(n²)（每个起点都要回溯到串尾）。
+# 因此这里做**一次线性扫描**：收集连续的「电话字符」段，再数其中的数字个数。
+# 判据保持原语义——至少 10 位数字才算电话号码，所以 ISO 日期（`1970-01-01`，
+# 8 位数字）与版本号（`v4.1-flash`）不会被误判。
+_PHONE_CHARS = frozenset("0123456789 -+()")
+_PHONE_MIN_DIGITS = 10
+
+
+def _contains_phone_number(text: str) -> bool:
+    digits = 0
+    for char in text:
+        if char.isdigit():
+            digits += 1
+        elif char in _PHONE_CHARS:
+            continue
+        else:
+            if digits >= _PHONE_MIN_DIGITS:
+                return True
+            digits = 0
+    return digits >= _PHONE_MIN_DIGITS
+
+
 _INJECTION_MARKERS = (
     "ignore previous instructions",
     "ignore all instructions",
@@ -111,7 +139,12 @@ def contains_secret(value: Any) -> bool:
 
 
 def contains_pii(value: Any) -> bool:
-    return any(pattern.search(text) for text in _strings(value) for pattern in _PII_PATTERNS)
+    for text in _strings(value):
+        if any(pattern.search(text) for pattern in _PII_PATTERNS):
+            return True
+        if _contains_phone_number(text):
+            return True
+    return False
 
 
 def contains_prompt_injection(value: Any) -> bool:
