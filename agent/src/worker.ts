@@ -398,7 +398,9 @@ export class SidecarWorker {
         return;
       }
 
-      const bundle = await this.sessionFactory(this.config, this.client, projection, job.run_token, {
+      // Getter, not the token: the heartbeat renews it, and a captured value
+      // would keep using the expired one (hard TTL) on long runs.
+      const bundle = await this.sessionFactory(this.config, this.client, projection, () => job.run_token, {
         shouldStopToolCalls: () =>
           active.cancelRequested || active.leaseLost || active.policyBlockCode !== null,
         onPolicyBlock: (code) => this.markPolicyBlocked(job.run_id, code),
@@ -497,7 +499,15 @@ export class SidecarWorker {
       // already present in projection.messages; the sidecar only consumes it.
 
       // Batched event flushing while the model loop runs.
-      const flusher = this.startEventFlusher(job.run_id, job.run_token, events, active.abort.signal);
+      // Pass a getter, not the token: the heartbeat renews the run token, and a
+      // captured value would keep sending the expired one (the token has a hard
+      // TTL, so a long run's appends would 401 after ~10 minutes).
+      const flusher = this.startEventFlusher(
+        job.run_id,
+        () => job.run_token,
+        events,
+        active.abort.signal,
+      );
 
       try {
         await session.prompt(modelPrompt, { source: "rpc", expandPromptTemplates: false });
@@ -654,7 +664,7 @@ export class SidecarWorker {
 
   private startEventFlusher(
     runId: string,
-    runToken: string,
+    currentRunToken: () => string,
     events: { drain(): FgEvent[] },
     signal?: AbortSignal,
   ): { flushAll(): Promise<void> } {
@@ -670,7 +680,7 @@ export class SidecarWorker {
         while (pending.length > 0) {
           const batch = pending.splice(0, this.config.eventFlushBatchSize);
           try {
-            await this.flushBuffered(runId, runToken, batch, signal);
+            await this.flushBuffered(runId, currentRunToken(), batch, signal);
           } catch (error) {
             // Reinsert at the head so a retry preserves strict sequence order;
             // later batches remain queued behind this failed batch.

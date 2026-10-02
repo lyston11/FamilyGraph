@@ -83,7 +83,7 @@ describe("provider prompt cache key", () => {
     vi.spyOn(client, "executeTool");
     const agentDir = mkdtempSync(join(tmpdir(), "fg-cache-key-test-"));
     dirs.push(agentDir);
-    const bundle = await buildRunSession(config, client, context, "synthetic-run-token", {
+    const bundle = await buildRunSession(config, client, context, () => "synthetic-run-token", {
       agentDir,
       // No provider traffic: this test is about the session identity the SDK
       // forwards, not about the wire.

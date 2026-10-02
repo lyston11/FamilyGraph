@@ -196,7 +196,7 @@ describe("assistant retry governance against the real SDK", () => {
     const client = new InternalClient(config);
     const agentDir = mkdtempSync(join(tmpdir(), "fg-retry-test-"));
     dirs.push(agentDir);
-    const bundle = await buildRunSession(config, client, projection(), "synthetic-run-token", {
+    const bundle = await buildRunSession(config, client, projection(), () => "synthetic-run-token", {
       agentDir,
       signal: options.signal,
       // Layer 2 stays at the shipped budget count; only the delay shrinks so

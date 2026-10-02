@@ -182,7 +182,7 @@ function buildModelLiteral(
 export function resolveProvider(
   config: AgentConfig,
   provider: RunContextProjection["provider"],
-  runToken: string,
+  runToken: () => string,
   expectedRunId?: string,
 ): {
   entry: {
@@ -250,7 +250,7 @@ export function resolveProvider(
     );
   }
   const baseUrl = parsed.toString().replace(/\/$/, "");
-  const apiKey = runToken;
+  const apiKey = runToken();
   const providerName = provider.provider_name || provider.provider_id || "familygraph-provider";
   return {
     entry: { kind: provider.kind, baseUrl, apiKey, model: provider.model },
@@ -271,7 +271,7 @@ export async function buildRunSession(
   config: AgentConfig,
   client: InternalClient,
   projection: RunContextProjection,
-  runToken: string,
+  runToken: () => string,
   deps: BuildSessionDeps = {},
 ): Promise<SessionBundle> {
   // Validate the allowlist against the tools THIS kind may register. Checking
@@ -400,7 +400,13 @@ export async function buildRunSession(
         // Cancel requested / lease lost: no further tool calls reach FastAPI.
         throw new Error("run stop requested; tool call skipped");
       }
-      return client.executeTool(projection.run_id, runToken, toolName, call, deps.signal);
+      return client.executeTool(
+        projection.run_id,
+        runToken(),
+        toolName,
+        call,
+        deps.signal,
+      );
     },
     { providerWireNames: true },
   );

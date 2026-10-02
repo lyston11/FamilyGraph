@@ -21,6 +21,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentKind, AgentConfig } from "../src/config.js";
 import { SidecarWorker } from "../src/worker.js";
+import { resolveProvider } from "../src/session.js";
 import { createLogger } from "../src/logger.js";
 import { makeAgentConfig } from "./helpers.js";
 
@@ -405,5 +406,87 @@ describe("tool and prompt isolation between kinds", () => {
     // model call, leaving it failed rather than succeeded.
     await waitFor(() => worker.inFlight("steward") === 0);
     expect(worker.inFlight("steward")).toBe(0);
+  });
+});
+
+
+
+
+
+// ---- run token 续签必须被请求路径按需读取（10-02）----
+
+describe("run token renewal reaches the provider and event paths", () => {
+  it("resolves the provider api key from a getter, so renewal is picked up", async () => {
+    // 为何是回归：run token 有硬 TTL（600s），心跳会续签它。若 provider 路径在
+    // 建 session 时**按值捕获**旧 token，长 run 到期后 provider 请求就会 401——
+    // 实测 run 466/467 存活 601/602 秒后正是这样失败的（events/append 与
+    // provider/responses 401，而心跳仍 200）。
+    let token = "original-token";
+    const provider = {
+      kind: "openai_compatible" as const,
+      base_url: "/internal/agent/runs/1/provider",
+      model: "m",
+      api: "openai-responses" as const,
+      policy_result: "allowed" as const,
+      provider_name: "p",
+      api_key: null,
+      provider_id: "2",
+      secret_ref: null,
+    };
+
+    const first = resolveProvider(
+      { ...makeAgentConfig(0) } as AgentConfig,
+      provider,
+      () => token,
+      "1",
+    );
+    expect(first.entry.apiKey).toBe("original-token");
+
+    // 模拟心跳续签后重新解析：必须看到新 token，而不是缓存的旧值。
+    token = "renewed-token";
+    const second = resolveProvider(
+      { ...makeAgentConfig(0) } as AgentConfig,
+      provider,
+      () => token,
+      "1",
+    );
+    expect(second.entry.apiKey).toBe("renewed-token");
+  });
+
+  it("keeps the worker's event flusher reading the token at send time", async () => {
+    // flusher 在启动时若捕获旧 token，长 run 的 append 会在 TTL 到期后 401。
+    // 断言「按需读取」的契约：续签后 flusher 发出的 token 必须变。
+    const job = leasedJob("steward", "run-flush");
+    const sentTokens: string[] = [];
+
+    const worker = new SidecarWorker({
+      client: {
+        appendEvents: async (_runId: string, token: string) => {
+          sentTokens.push(token);
+          return { duplicates: 0 };
+        },
+      } as never,
+      config: { ...makeAgentConfig(0), role: "both" } as AgentConfig,
+      logger: createLogger(),
+    });
+
+    const flusher = (
+      worker as unknown as {
+        startEventFlusher: (
+          runId: string,
+          token: () => string,
+          events: { drain(): unknown[] },
+          signal?: AbortSignal,
+        ) => { flushAll(): Promise<void> };
+      }
+    ).startEventFlusher(job.run_id, () => job.run_token, {
+      drain: () => [{ seq: 1, type: "run.started", payload: {} }],
+    });
+
+    job.run_token = "renewed-token";
+    await flusher.flushAll();
+
+    expect(sentTokens).toContain("renewed-token");
+    expect(sentTokens).not.toContain("tok-run-flush");
   });
 });
