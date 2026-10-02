@@ -33,7 +33,7 @@ from test_steward_assist import (
 )
 
 from app import config
-from app.models.steward import StewardLlmCandidate, StewardModelCall
+from app.models.steward import StewardAssistPlan, StewardLlmCandidate, StewardModelCall
 from app.services import steward as steward_service
 from app.services import steward_assist, steward_guard
 from app.utils import timeutil
@@ -483,3 +483,37 @@ def test_prompt_digest_tracks_the_bounded_subset(db_session, monkeypatch) -> Non
     assert row.status == "succeeded", (row.status, row.error_code)
     assert row.input_hash == expected_hash
     assert row.prompt_digest == expected_digest
+
+
+def test_plan_window_covers_every_attempt_it_reserves(db_session, monkeypatch):
+    """plan 墙钟必须容纳本 plan 预留的每一个 attempt。
+
+    为何是回归：每次 attempt 是一次**完整模型 run**（实测 p50=142s、p90=320s），
+    而旧的固定窗口是 120s——连一个 run 都装不下。第一个 attempt 跑完时窗口早已
+    过期，同 plan 的第二个 attempt 在发送门被退休为 `skipped/insufficient_budget`
+    （生产实测 42 次，每次前一个 run 都在 deadline 之后约 190–200s 才结束）。
+
+    断言「窗口 ≥ attempt 数 × 单次窗口」，而不是某个具体秒数：这样它对配置调整
+    不敏感，只对「窗口与 attempt 数脱钩」这一缺陷敏感。
+    """
+    space, anchor, facts, event = _space_with_facts(db_session, "window", 3)
+    provider = _provider(db_session)
+    _steward_setting(db_session, space, provider, candidate=True, ranking=True)
+    _turn_on(monkeypatch, candidate=True, ranking=True)
+    _run_job(db_session, space, event.id)
+
+    # `_run_job` 内部已调 `plan_for_job`（core 事务提交后登记 plan 并预留 attempt）。
+    plan = db_session.scalar(select(StewardAssistPlan).order_by(StewardAssistPlan.id.desc()))
+    assert plan is not None, "用例前提不成立：未登记 plan"
+
+    reserved = db_session.scalars(
+        select(StewardModelCall).where(StewardModelCall.plan_id == plan.id)
+    ).all()
+    assert len(reserved) >= 2, f"用例前提不成立：只预留了 {len(reserved)} 个 attempt"
+
+    single = config.STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS
+    span = (plan.deadline_at - plan.created_at).total_seconds()
+    assert span >= single * len(reserved), (
+        f"plan 窗口 {span:.0f}s 小于 {len(reserved)} 个 attempt × {single}s；"
+        "同 plan 的后续 attempt 会在发送门被退休为 insufficient_budget"
+    )

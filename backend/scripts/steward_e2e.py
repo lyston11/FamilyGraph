@@ -95,7 +95,7 @@ if _REAL_PROVIDER_MODE:
                 f"STEWARD_E2E_REAL_PROVIDER=1 需要 {_required} 环境变量"
                 "（密钥只经环境变量注入，勿写入任何文件）"
             )
-    os.environ["STEWARD_ASSIST_BATCH_LEASE_SECONDS"] = "600"
+    os.environ["STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS"] = "600"
 
 EVIDENCE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".steward-e2e-evidence.json"

@@ -230,9 +230,23 @@ STEWARD_ASSIST_MAX_PROMPT_BYTES: int = int(
 STEWARD_ASSIST_MAX_RESPONSE_BYTES: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_RESPONSE_BYTES", str(256 * 1024))
 )
-# 辅助批次 lease 时长（同时是单批总墙钟 deadline；lease 过期由恢复收敛）
-STEWARD_ASSIST_BATCH_LEASE_SECONDS: int = int(
-    os.environ.get("STEWARD_ASSIST_BATCH_LEASE_SECONDS", "120")
+# plan 的**总墙钟**（`plan.deadline_at`）：整批工作的上界，也是发送门的判据。
+#
+# 它必须容纳「一个 plan 的多个 attempt 各自跑完一次 Pi child run」。旧值 120s 是
+# 从 in-process 同步发送时代继承的：那时一次发送就是一个 HTTP 调用，120s 足够。
+# 现在每次 attempt 是一次完整模型 run，实测 p50=142s、p90=320s、max=804s，
+# 因此 120s 连**一个** run 都装不下：第一个 attempt 跑完时窗口早已过期，同 plan 的
+# 后续 attempt 在发送门被退休为 `skipped/insufficient_budget`（实测 42 次，
+# 每次前一个 run 都在 deadline 之后约 190–200s 才结束）。
+#
+# 按「每次 attempt 一次 run」定尺：600s 覆盖实测多 attempt plan 的 100%
+# （attempts×120 仅 63%、attempts×300 为 89%）。
+STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS: int = int(
+    os.environ.get("STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS", "600")
+)
+# 单次 attempt 的租约（sidecar 心跳续期）。它不是 plan 的墙钟上界——上界见上。
+STEWARD_ASSIST_CALL_LEASE_SECONDS: int = int(
+    os.environ.get("STEWARD_ASSIST_CALL_LEASE_SECONDS", "120")
 )
 # 全局并发批次上界（1=串行；调度器一次至多 lease 一个未过期批次）
 # terminology 有界目标（每 job 至多 2 个 viewer 组、每组至多 8 个目标）
@@ -247,12 +261,6 @@ STEWARD_TERMINOLOGY_MAX_TARGETS_PER_GROUP: int = int(
 # 互相阻塞。按空间计让每个空间独立推进。
 STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE", "2")
-)
-# 单次 attempt 的租约（sidecar 心跳续期）。它**不是**整个 plan 的墙钟上界：
-# 上界由 STEWARD_ASSIST_BATCH_LEASE_SECONDS 表达（见 plan.deadline_at），否则
-# 每个 attempt 都会拿到一个全新窗口，一个 plan 可能跑 (attempts × ttl)。
-STEWARD_ASSIST_CALL_LEASE_SECONDS: int = int(
-    os.environ.get("STEWARD_ASSIST_CALL_LEASE_SECONDS", "120")
 )
 
 # ---- 09-13 Steward 推测层（inferred tree；fail-closed 默认关）----
@@ -390,7 +398,7 @@ def _validate_steward_scheduling() -> None:
         ("STEWARD_ALERT_QUEUE_SECONDS", STEWARD_ALERT_QUEUE_SECONDS, 0, 86400),
         ("STEWARD_ASSIST_MAX_PROMPT_BYTES", STEWARD_ASSIST_MAX_PROMPT_BYTES, 1024, 1 << 20),
         ("STEWARD_ASSIST_MAX_RESPONSE_BYTES", STEWARD_ASSIST_MAX_RESPONSE_BYTES, 1024, 1 << 22),
-        ("STEWARD_ASSIST_BATCH_LEASE_SECONDS", STEWARD_ASSIST_BATCH_LEASE_SECONDS, 5, 3600),
+        ("STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS", STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS, 60, 7200),
         ("STEWARD_ASSIST_CALL_LEASE_SECONDS", STEWARD_ASSIST_CALL_LEASE_SECONDS, 5, 3600),
         (
             "STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE",

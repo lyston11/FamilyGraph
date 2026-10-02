@@ -54,8 +54,6 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-from app import config
-
 revision: str = "0055_steward_assist_execution_unit"
 down_revision: str | None = "0054_seed_household_roster_fix"
 branch_labels: str | Sequence[str] | None = None
@@ -553,10 +551,15 @@ def _narrow_plan_table(conn: sa.Connection) -> None:
         )
         # The old batch lease was the plan's whole wall-clock bound, so deriving
         # deadline_at from created_at preserves the semantics existing rows were
-        # built under instead of inventing a new one. The TTL is interpolated as a
-        # validated integer (config bounds it to 5..3600) because SQLite cannot
-        # bind a parameter inside a datetime() modifier.
-        ttl = int(config.STEWARD_ASSIST_BATCH_LEASE_SECONDS)
+        # built under instead of inventing a new one.
+        #
+        # The TTL is a **historical literal**, deliberately not read from config:
+        # it describes what the rows being migrated were created under, so reading
+        # live config would make this migration produce different results after any
+        # future default change (and it did break the moment the key was renamed).
+        # SQLite cannot bind a parameter inside a datetime() modifier, hence the
+        # interpolated literal.
+        ttl = 120  # STEWARD_ASSIST_BATCH_LEASE_SECONDS as it stood when 0055 shipped
         conn.execute(
             sa.text(
                 "INSERT INTO steward_assist_plans_new "
