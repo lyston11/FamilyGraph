@@ -1095,6 +1095,6 @@ def test_assist_budget_config_guards_are_fail_closed() -> None:
     assert 1 <= config.STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB <= 64
     assert 100 <= config.STEWARD_ASSIST_MAX_TOKENS_PER_JOB <= 1_000_000
     assert 1 <= config.STEWARD_ASSIST_MAX_CARDS_PER_JOB <= 100
-    assert 5 <= config.STEWARD_ASSIST_BATCH_LEASE_SECONDS <= 3600
+    assert 60 <= config.STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS <= 7200
     assert 5 <= config.STEWARD_ASSIST_CALL_LEASE_SECONDS <= 3600
     assert 1 <= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE <= 8

@@ -98,7 +98,8 @@ _BUDGETED_STATUSES = ("reserved", "in_flight", "succeeded", "failed", "degraded"
 
 # ---- 发送窗口（C-R1/R2）----
 # 发送前只看 plan 的剩余墙钟：plan.deadline_at 是整批工作的上界
-# （STEWARD_ASSIST_BATCH_LEASE_SECONDS），attempt 租约取 min(now + CALL_LEASE_SECONDS,
+# （= attempt 数 × STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS），
+# attempt 租约取 min(now + CALL_LEASE_SECONDS,
 # plan.deadline_at)，所以单个 attempt 拿不到超出 plan 的新窗口。剩余窗口小于
 # _MIN_SEND_WINDOW_SECONDS 时本 attempt 落 skipped/insufficient_budget 并继续看下一个候选，
 # 而不是发出一个必然在结算前过期的请求。
@@ -736,7 +737,9 @@ def plan_for_job(
         evidence_hash=evidence_hash,
         policy_version=job.policy_version,
         fence_json=fence,
-        deadline_at=now + timedelta(seconds=config.STEWARD_ASSIST_BATCH_LEASE_SECONDS),
+        # 占位值：真正的墙钟在 `_reserve_plan_attempts` 里按**本 plan 的 attempt 数**
+        # 设定（每个 attempt 一次完整 run）。这里先给一个最小值，避免任何路径读到 None。
+        deadline_at=now + timedelta(seconds=config.STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS),
         created_at=now,
     )
     db.add(plan)
@@ -1105,6 +1108,27 @@ def _reserve_attempt(
     budget["tokens"] += est_in + reserved_out
 
 
+def _count_planned_attempts(*, db: Session, fence: dict[str, Any], kinds: list[str]) -> int:
+    """本 plan 将预留的 attempt 数（决定 plan 墙钟）。
+
+    与 `_reserve_plan_attempts` 的预留条件保持一致：candidate 一次、每个有效的
+    ranking 组一次、每个解释目标一次、每个 terminology 组一次。ranking 组少于 2 张
+    卡时会被跳过，因此这里也要跳过，否则会多算窗口。
+    """
+    total = 0
+    if "candidate" in kinds:
+        total += 1
+    if "ranking" in kinds:
+        for group in fence.get("ranking_groups", []):
+            if len(group.get("card_ids", [])) >= 2:
+                total += 1
+    if "explanation" in kinds:
+        total += len(fence.get("explain_ids", []))
+    if "terminology" in kinds:
+        total += len(fence.get("terminology_groups", []))
+    return total
+
+
 def _reserve_plan_attempts(
     db: Session,
     *,
@@ -1124,6 +1148,14 @@ def _reserve_plan_attempts(
     """
     seq_counters: dict[str, int] = {}
     reserved_kinds: list[str] = []
+    # plan 的墙钟必须容纳本 plan 会预留的**每一个** attempt 各自跑完一次 run。
+    # 每个 attempt 一次完整模型 run（实测 p50=142s、p90=320s），因此按
+    # 「attempt 数 × 每次窗口」定尺，而不是旧的固定 120s（连一个 run 都装不下，
+    # 使同 plan 的第二个 attempt 必然在发送门被退休）。
+    planned_attempts = _count_planned_attempts(db=db, fence=fence, kinds=kinds)
+    plan.deadline_at = now + timedelta(
+        seconds=config.STEWARD_ASSIST_ATTEMPT_WINDOW_SECONDS * max(1, planned_attempts)
+    )
     for kind in kinds:
         before = budget["calls"]
         if kind == "candidate":
