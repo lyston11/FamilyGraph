@@ -39,7 +39,7 @@ describe("resolveProvider（P1 唯一 egress 代理路径）", () => {
     const { entry } = resolveProvider(
       config,
       { ...ALLOWED, base_url: `/internal/agent/runs/42/provider`, api_key: null },
-      "run-token-abc",
+      () => "run-token-abc",
     );
     expect(entry.baseUrl).toBe("http://api:8001/internal/agent/runs/42/provider");
     expect(entry.apiKey).toBe("run-token-abc");
@@ -50,7 +50,7 @@ describe("resolveProvider（P1 唯一 egress 代理路径）", () => {
     const { entry } = resolveProvider(
       config,
       { ...ALLOWED, base_url: "/internal/agent/runs/42/provider", api_key: null },
-      "tok",
+      () => "tok",
     );
     expect(entry.baseUrl).toBe("http://api:8001/internal/agent/runs/42/provider");
   });
@@ -61,7 +61,7 @@ describe("resolveProvider（P1 唯一 egress 代理路径）", () => {
       resolveProvider(
         config,
         { ...ALLOWED, kind: "local", base_url: "http://localhost:11434/v1", api_key: "local-key" },
-        "tok",
+        () => "tok",
       ),
     ).toThrow(ProviderPolicyError);
   });
@@ -72,7 +72,7 @@ describe("resolveProvider（P1 唯一 egress 代理路径）", () => {
       resolveProvider(
         config,
         { ...ALLOWED, policy_result: "denied", base_url: null, api_key: null },
-        "tok",
+        () => "tok",
       ),
     ).toThrow(ProviderPolicyError);
   });

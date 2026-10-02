@@ -144,7 +144,7 @@ describe("assistant text delta to first visible event", () => {
     dirs.push(agentDir);
     const deltaTimes: number[] = [];
 
-    const bundle = await buildRunSession(config, client, projection(), "synthetic-run-token", {
+    const bundle = await buildRunSession(config, client, projection(), () => "synthetic-run-token", {
       agentDir,
       streamOverride: deltaStream(deltaTimes),
     });
@@ -230,7 +230,7 @@ describe("assistant text delta to first visible event", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "fg-first-text-"));
     dirs.push(agentDir);
 
-    const bundle = await buildRunSession(config, client, projection(), "synthetic-run-token", {
+    const bundle = await buildRunSession(config, client, projection(), () => "synthetic-run-token", {
       agentDir,
       streamOverride: deltaStream([]),
     });

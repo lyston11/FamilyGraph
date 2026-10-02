@@ -182,7 +182,7 @@ describe("restored Pi history", () => {
     const requests: CapturedRequest[] = [];
     const agentDir = mkdtempSync(join(tmpdir(), "fg-history-test-"));
     dirs.push(agentDir);
-    const bundle = await buildRunSession(config, client, context, "synthetic-run-token", {
+    const bundle = await buildRunSession(config, client, context, () => "synthetic-run-token", {
       agentDir,
       streamOverride: offlineStream(requests, script),
     });
