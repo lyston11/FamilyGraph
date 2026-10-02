@@ -48,6 +48,14 @@ class JsonFormatter(logging.Formatter):
         for key, value in record.__dict__.items():
             if key not in self._RESERVED:
                 entry[key] = value
+        # traceback 必须输出：`logger.exception(...)` 把堆栈放在 `exc_info` 里，
+        # 而 `exc_info` 是 LogRecord 的内部属性，会被上面的循环跳过。此前全仓
+        # 所有异常堆栈因此都是空的——2026-10-01 09:02 的进程级故障正是因为
+        # 「只知道某路由抛了未处理异常，不知道抛的是什么」而无法定位。
+        if record.exc_info:
+            entry["exc_info"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            entry["stack_info"] = self.formatStack(record.stack_info)
         return json.dumps(entry, ensure_ascii=False)
 
 

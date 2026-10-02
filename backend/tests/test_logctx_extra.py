@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 from app.logctx import JsonFormatter
 
@@ -54,3 +55,30 @@ def test_base_fields_are_still_present_and_not_duplicated() -> None:
     # `msg` 是格式化后的消息（预期存在）；其余 LogRecord 内部属性不得外泄。
     for internal in ("levelno", "pathname", "lineno", "args", "exc_info"):
         assert internal not in entry, f"内部属性 {internal} 不应出现在日志输出中"
+
+
+def test_tracebacks_are_emitted() -> None:
+    """`logger.exception(...)` 的堆栈必须出现在输出里。
+
+    为何是回归而不是细节：`exc_info` 是 LogRecord 的内部属性，早先的输出循环会跳过它，
+    于是**全仓所有异常堆栈都是空的**。2026-10-01 的进程级故障因此无法定位——
+    日志只说「某路由抛了未处理异常」，不说抛的是什么。没有堆栈的 ERROR 日志
+    对排查等于无效。
+    """
+    try:
+        raise ValueError("probe-error-message")
+    except ValueError:
+        record = logging.LogRecord(
+            "app.main", logging.ERROR, __file__, 1, "unhandled exception", (), sys.exc_info()
+        )
+
+    entry = _format(record)
+    assert "exc_info" in entry, "logger.exception 的堆栈未被输出"
+    assert "Traceback" in entry["exc_info"]
+    assert "probe-error-message" in entry["exc_info"]
+
+
+def test_no_traceback_key_when_there_is_no_exception() -> None:
+    """没有异常时不得输出空的 exc_info，避免噪音。"""
+    record = logging.LogRecord("app.main", logging.INFO, __file__, 1, "hello", (), None)
+    assert "exc_info" not in _format(record)
