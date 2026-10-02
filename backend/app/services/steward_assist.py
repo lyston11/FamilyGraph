@@ -1899,6 +1899,24 @@ def _settle_attempt(
     if product is None:
         fresh.status = "degraded"
         fresh.error_code = REASON_INVALID_OUTPUT
+        # 诊断：只记**结构性**事实，不记模型原文。
+        #
+        # 为何需要：`degraded/invalid_output` 只说明「输出未通过封闭校验」，但不说明
+        # 为什么——是 JSON 不可解析、id 集合不符、还是字段越权。没有这一点，排查只能
+        # 靠猜（历史 15 次全部无法归因）。这里记录形状特征：长度、是否像 JSON、
+        # 以及校验器要求的集合规模，足以区分主要失败模式而不泄露内容。
+        logger.warning(
+            "assist output rejected by the closed validator",
+            extra={
+                "event": "assist_output_rejected",
+                "assist_kind": fresh.assist_kind,
+                "text_chars": len(text),
+                "looks_like_json": text.lstrip()[:1] in ("[", "{"),
+                "expected_ids": len(card_ids),
+                "attempt_id": fresh.id,
+                "run_id": fresh.run_id,
+            },
+        )
     else:
         fresh.output_json = product
     fresh.billed_tokens = billed

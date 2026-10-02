@@ -517,3 +517,41 @@ def test_plan_window_covers_every_attempt_it_reserves(db_session, monkeypatch):
         f"plan 窗口 {span:.0f}s 小于 {len(reserved)} 个 attempt × {single}s；"
         "同 plan 的后续 attempt 会在发送门被退休为 insufficient_budget"
     )
+
+
+def test_invalid_output_is_diagnosable_without_leaking_content(db_session, monkeypatch, caplog):
+    """`invalid_output` 必须留下可归因的诊断，且不记录模型原文。
+
+    为何是回归：`degraded/invalid_output` 只说「未通过封闭校验」，不说为什么——
+    是 JSON 不可解析、id 集合不符、还是字段越权。历史 15 次全部无法归因，排查只能
+    靠猜。诊断必须记**结构性**事实（长度、是否像 JSON、期望的 id 数），因为这些足以
+    区分主要失败模式，而原文（可能含用户数据）绝不能入日志。
+    """
+    import logging
+
+    space, anchor, facts, event = _space_with_facts(db_session, "diag", 3)
+    provider = _provider(db_session)
+    _steward_setting(db_session, space, provider, candidate=True, ranking=True)
+    _turn_on(monkeypatch, candidate=True, ranking=True)
+    # 模型返回一个**不是**合法排序的形状：对象包裹而非数组。
+    use_fake(monkeypatch, _responses_fake([], ['{"order": [1, 2]}']))
+    caplog.set_level(logging.WARNING, logger="app.services.steward_assist")
+
+    _run_job(db_session, space, event.id)
+    _run_assists(db_session, space_id=space.id)
+
+    rejected = [r for r in caplog.records if getattr(r, "event", None) == "assist_output_rejected"]
+    if not rejected:
+        # 该场景下模型输出可能被判为其它终态；用例前提不成立时明确失败，
+        # 而不是静默通过。
+        codes = [c.error_code for c in _calls(db_session) if c.error_code]
+        raise AssertionError(f"未产生 invalid_output 诊断；实际错误码: {codes}")
+
+    record = rejected[0]
+    assert record.assist_kind in ("candidate", "ranking")
+    assert isinstance(record.text_chars, int) and record.text_chars > 0
+    assert isinstance(record.looks_like_json, bool)
+    # 原文绝不入日志。
+    rendered = record.getMessage() + str(getattr(record, "text_chars", ""))
+    for secret in ('"order"', "order", "1, 2"):
+        assert secret not in rendered
