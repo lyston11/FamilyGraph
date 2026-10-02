@@ -133,3 +133,41 @@ cd frontend && npx vitest run src/api/__tests__/agentErrors.spec.ts
 - **assistant 正文没有输出侧 DLP**：guard 覆盖 input/tool_call/tool_result/context/
   provider payload，不覆盖已持久化正文的输出扫描。不得声称本次改动补齐了浏览器输出检查。
 - 关键词信号不构成注入防护。真正的防护是工具授权、闭合 schema、可见性投影与 Provider 边界。
+
+## PII/密钥扫描必须在事件循环上保持线性（2026-10-02）
+
+**触发**：改动 `policy_guard` 的 `_PII_PATTERNS`、`_SECRET_PATTERNS`、
+`contains_pii`/`contains_secret`/`classify`，或任何在 provider 出站路径上
+（`before_provider_request`）执行的检查前必读。
+
+**故障（已受控定位）**：phone 正则
+
+```python
+re.compile(r"(?<!\d)(?=(?:\D*\d){10,})(?:\+?\d[\d -]{8,}\d)(?!\d)")
+```
+
+的前瞻在每个起始位置都扫描到输入末尾，成本随 payload 长度**平方增长**
+（实测 4x 输入 → 15.7x 时间；66KB → 23.4 秒）。该检查跑在**事件循环**上，
+每次 provider 请求都执行；真实 steward payload（≈18KB）需 ~1.0s，
+越过阈值后超过 10s connect 预算，于是请求在连接阶段超时并被记为
+`transport_timeout`（`sent=false`）——**全进程 100% 出站失败 18.8 小时**，
+而同机 curl/httpx（新进程）始终 0.25s 正常。
+
+**合同**：
+
+- provider 出站路径上的扫描必须**线性**；禁止嵌套量词、前瞻循环、
+  以及「候选 + 变长计数」这类会退化为 O(n²) 的写法；
+- 需要「≥N 位数字」这类判据时用**显式线性扫描**（收集连续候选段后计数），
+  不要用正则前瞻表达；
+- **保留原判据**：电话号码要求 ≥10 位数字，因此 ISO 日期（`1970-01-01`，8 位）
+  与版本号（`v4.1-flash`）不得被误判为 PII——首次简化版丢了这条判据，
+  破坏了 lineage 生日投影；
+- 该路径上的任何新增检查都要有**复杂度回归**（4x 输入不得 ~10x 时间），
+  不要写墙钟阈值断言（对机器性能敏感）。
+
+**回归**：`tests/test_policy_guard_pii_performance.py`。变异验证：
+还原旧正则 → 复杂度断言失败；移除电话检测 → 检测断言失败。
+
+**诊断陷阱**：`logger.exception()` 的堆栈在 `exc_info` 里；日志 formatter 必须
+输出它，否则**所有** traceback 静默丢失（本项目曾如此，导致故障期间
+「只知道哪个路由抛了、不知道抛了什么」）。
