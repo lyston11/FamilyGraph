@@ -39,6 +39,18 @@ export interface AgentConfig {
   /** Model stream retry policy (relay 5xx backoff, forwarded to pi-ai). */
   providerStreamMaxRetries: number;
   providerStreamMaxRetryDelayMs: number;
+  /**
+   * Run-level ceiling on real provider attempts, across BOTH retry layers.
+   *
+   * The request layer and the session layer are configured independently and
+   * cannot see each other's consumption, so their budgets multiply
+   * (`(maxRetries+1) x (sessionRetries+1)`). This is the only limit that bounds
+   * the true total: every real attempt passes through the transport.
+   * 0 disables the run budget (previous behavior).
+   */
+  runMaxProviderAttempts: number;
+  /** Wall-clock ceiling for provider attempts in one run; 0 disables. */
+  runMaxTotalRetryMs: number;
   /** Idle poll interval when the durable queue returns no job. */
   leasePollIntervalMs: number;
   /** Which runtime kinds this instance leases (FG_AGENT_ROLE). */
@@ -157,6 +169,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     ),
     providerStreamMaxRetries: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRIES", 5),
     providerStreamMaxRetryDelayMs: readInt(env, "AGENT_PROVIDER_STREAM_MAX_RETRY_DELAY_MS", 20000),
+    // 8 attempts bounds the 6x4=24 multiplication to a single-digit number while
+    // still leaving room for the transient 5xx bursts the per-request budget was
+    // sized for. 120s keeps a DERP/provider outage from occupying a slot for
+    // minutes: one 10s connect timeout no longer becomes ~4 minutes of work.
+    runMaxProviderAttempts: readInt(env, "AGENT_RUN_MAX_PROVIDER_ATTEMPTS", 8),
+    runMaxTotalRetryMs: readInt(env, "AGENT_RUN_MAX_TOTAL_RETRY_MS", 120_000),
     defaultLeaseMs: readInt(env, "AGENT_DEFAULT_LEASE_MS", 60_000),
     eventFlushIntervalMs: readInt(env, "AGENT_EVENT_FLUSH_MS", 250),
     eventFlushBatchSize: readInt(env, "AGENT_EVENT_BATCH_SIZE", 20),

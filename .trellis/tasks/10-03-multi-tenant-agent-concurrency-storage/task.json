@@ -1,0 +1,31 @@
+{
+  "id": "multi-tenant-agent-concurrency-storage",
+  "name": "multi-tenant-agent-concurrency-storage",
+  "title": "Assistant 与 Steward 多租户并发及存储架构重设计",
+  "description": "为每用户 Assistant 与每空间 Steward 建立可并发、可隔离、公平调度的资源模型，并规划从 SQLite 迁移到支持并发读写的持久化与协调基础设施",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lyston",
+  "assignee": "lyston",
+  "createdAt": "2026-10-03",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-03-agent-resource-isolation",
+    "10-03-postgres-migration",
+    "10-03-redis-coordination",
+    "10-03-pgvector-rag"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

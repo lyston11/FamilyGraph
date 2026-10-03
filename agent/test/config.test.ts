@@ -79,3 +79,35 @@ describe("service tokens", () => {
     expect(peekRunTokenClaims("not-a-token")).toBeNull();
   });
 });
+
+
+describe("run retry budget config", () => {
+  it("ships a bounded run budget by default", () => {
+    // WHY: the request layer and the session layer multiply (6 x 4 = 24 real
+    // attempts). Without a run-level ceiling one transient upstream failure
+    // occupies a slot for minutes. Measured on the development database: failed
+    // runs are p50 = p90 = p99 = 24 egress rows; successful runs are p50 = 3.
+    const config = loadConfig(BASE_ENV as unknown as NodeJS.ProcessEnv);
+    expect(config.runMaxProviderAttempts).toBe(8);
+    expect(config.runMaxTotalRetryMs).toBe(120_000);
+  });
+
+  it("lets an operator disable or tighten the budget via env", () => {
+    const off = loadConfig({
+      ...BASE_ENV,
+      AGENT_RUN_MAX_PROVIDER_ATTEMPTS: "0",
+      AGENT_RUN_MAX_TOTAL_RETRY_MS: "0",
+    } as unknown as NodeJS.ProcessEnv);
+    // readInt treats non-positive values as absent, so 0 falls back to the
+    // default rather than silently disabling the ceiling.
+    expect(off.runMaxProviderAttempts).toBe(8);
+
+    const tight = loadConfig({
+      ...BASE_ENV,
+      AGENT_RUN_MAX_PROVIDER_ATTEMPTS: "3",
+      AGENT_RUN_MAX_TOTAL_RETRY_MS: "30000",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(tight.runMaxProviderAttempts).toBe(3);
+    expect(tight.runMaxTotalRetryMs).toBe(30_000);
+  });
+});

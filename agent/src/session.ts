@@ -25,6 +25,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { streamSimple as openAICompletionsStreamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import type { RunRetryBudget } from "./retry-budget.js";
 import { streamSimple as openAIResponsesStreamSimple } from "@earendil-works/pi-ai/api/openai-responses";
 import type {
   Api,
@@ -90,6 +91,15 @@ export interface BuildSessionDeps {
   signal?: AbortSignal;
   /** Test seam: override the frozen SDK session-retry budget. */
   sessionRetrySettings?: SessionRetryBudget;
+  /**
+   * Run-level budget wrapping the provider transport.
+   *
+   * Both retry layers (pi-ai request retry and Pi session retry) funnel through
+   * the HTTP transport, so charging attempts here is the only place that sees
+   * the true total. Without it the two budgets multiply (shipped values:
+   * 6 x 4 = 24 real attempts per transient failure).
+   */
+  retryBudget?: RunRetryBudget;
 }
 
 /**
@@ -348,6 +358,9 @@ export async function buildRunSession(
       // 网关层按指数退避重试（5xx/408/409/429），不改变请求内容。
       maxRetries: config.providerStreamMaxRetries,
       maxRetryDelayMs: config.providerStreamMaxRetryDelayMs,
+      // Run-level budget: charge every real attempt here, where both retry
+      // layers meet. Undefined keeps the platform fetch untouched.
+      ...(deps.retryBudget ? { fetch: deps.retryBudget.wrapFetch(globalThis.fetch) } : {}),
       onPayload: async (payload: unknown, _payloadModel: Model<Api>) => {
         // Redaction happens here directly; do NOT re-dispatch through the
         // coding-agent runner's before_provider_request hook, which stringifies

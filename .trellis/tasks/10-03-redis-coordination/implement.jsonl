@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Internal agent admission and control-plane compatibility"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Steward lease and slot boundaries that Redis cannot replace"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Redis boundary and current resource facts"}

@@ -22,6 +22,11 @@ import type { Logger } from "./logger.js";
 import { buildRunSession } from "./session.js";
 import { peekRunTokenClaims } from "./tokens.js";
 import { adapterFor } from "./adapters/kind.js";
+import {
+  RunRetryBudget,
+  classifyProviderStreamError,
+  resolveRetryBudgetLimits,
+} from "./retry-budget.js";
 
 export interface WorkerDeps {
   client: InternalClient;
@@ -398,6 +403,11 @@ export class SidecarWorker {
         return;
       }
 
+      // One budget per run: it must never be shared with another run, and the
+      // two retry layers (request + session) are only bounded together here.
+      const retryLimits = resolveRetryBudgetLimits(this.config);
+      const retryBudget = retryLimits === null ? null : new RunRetryBudget(retryLimits);
+
       // Getter, not the token: the heartbeat renews it, and a captured value
       // would keep using the expired one (hard TTL) on long runs.
       const bundle = await this.sessionFactory(this.config, this.client, projection, () => job.run_token, {
@@ -405,6 +415,7 @@ export class SidecarWorker {
           active.cancelRequested || active.leaseLost || active.policyBlockCode !== null,
         onPolicyBlock: (code) => this.markPolicyBlocked(job.run_id, code),
         signal: active.abort.signal,
+        retryBudget: retryBudget ?? undefined,
       });
       const { session } = bundle;
       const abortSession = () => {
@@ -545,12 +556,23 @@ export class SidecarWorker {
         const message = redactErrorText(
           lastAssistantError.current.errorMessage ?? "provider stream ended in error",
         );
-        await this.flushEvents(job.run_id, job.run_token, events.drain(), active.abort.signal);
-        await this.client.settleRun(job.run_id, job.run_token, "failed", {
-          code: "PROVIDER_STREAM_ERROR",
+        // A budget stop is not an upstream failure: reporting it as
+        // PROVIDER_STREAM_ERROR would blame the provider and hide that the
+        // sidecar deliberately stopped retrying. See retry-budget.ts for why
+        // both the sentinel message AND a genuinely exhausted budget are needed.
+        const code = classifyProviderStreamError({
           message,
+          budgetExhausted: retryBudget !== null && retryBudget.snapshot().exhausted,
         });
-        log.warn("run settled failed: provider stream error", { message });
+        await this.flushEvents(job.run_id, job.run_token, events.drain(), active.abort.signal);
+        await this.client.settleRun(job.run_id, job.run_token, "failed", { code, message });
+        log.warn("run settled failed: provider stream error", {
+          error_code: code,
+          message,
+          ...(code === "PROVIDER_RETRY_BUDGET_EXHAUSTED" && retryBudget !== null
+            ? { retry_budget: retryBudget.snapshot() }
+            : {}),
+        });
         return;
       }
       // No usable answer: the model completed its turn without producing any

@@ -1,0 +1,27 @@
+# pgvector 优先的 RAG 检索扩展
+
+## Goal
+
+在 PostgreSQL 主存储确定后评估并原型化 pgvector；保留 Memory/RAG 的 source、revision、scope、visibility、citation、撤权和可重建索引合同，只有证据证明不足时才引入独立向量数据库。
+
+## Scope
+
+- embedding row 与 source/document/chunk、revision、space/scope、visibility policy version 的绑定。
+- pgvector ANN/过滤/延迟/规模基准，embedding 生成与索引更新的低优先级 background budget。
+- revision、删除、撤权、重建、失败重试和旧向量不可见行为。
+- 对比 pgvector 与独立向量库的容量、过滤、运维、故障和一致性成本；输出是否拆独立 vector DB 子任务的证据。
+- Steward 仍不绕过现有 projection/授权边界接入私有 RAG。
+
+## Dependencies / non-dependencies
+
+- 依赖父任务接受的 PostgreSQL 真源；最好在 PostgreSQL schema/事务实验确认后进行。
+- 依赖现有 `memory-rag-execution-contract` 与 `rag-index-lifecycle-contract`；不依赖 Redis。
+- embedding/index 任务不得占用 control-plane 保留容量，也不得改变 Agent provider/tool 合同。
+
+## Acceptance Criteria
+
+- pgvector 原型能按 scope/visibility/revision/citation 正确查询，撤权/删除后旧向量不可见且可回收。
+- embedding 失败、索引重建、版本切换和 PostgreSQL/worker 重启均可恢复，不产生半切换状态。
+- 有真实规模与延迟基准；未达到阈值前不引入独立向量库。
+- 若 pgvector 不足，给出独立服务的持久事实、授权同步、故障回退和迁移设计，不直接接入生产。
+- RAG 关闭、来源失效、版本冲突和引用读取回归保持 fail-closed。

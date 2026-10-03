@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify vector schema and migration safety"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "Verify authorization and citation safety"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "Verify index lifecycle and fail-closed behavior"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Verify benchmark and evidence boundaries"}
