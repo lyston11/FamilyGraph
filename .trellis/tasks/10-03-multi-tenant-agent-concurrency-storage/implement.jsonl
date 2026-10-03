@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PostgreSQL migration, SQLite WAL/transaction/backup/refusal guard constraints"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Assistant/Steward runtime, internal protocol, run and resource boundaries"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Steward attempt, lease, fence, settle, sidecar slots and control-plane contracts"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "RAG/source/revision/scope/visibility and context-build trust boundary"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "Index lifecycle, rebuild, revocation and background work boundaries"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Confirmed current architecture facts and unresolved storage/concurrency decisions"}

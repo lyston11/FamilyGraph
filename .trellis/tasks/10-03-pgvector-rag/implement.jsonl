@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PostgreSQL schema/index/transaction and migration constraints"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "Source/revision/scope/visibility/citation execution contract"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "Index lifecycle, rebuild, revocation and background lease contract"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "pgvector-first boundary and current RAG facts"}

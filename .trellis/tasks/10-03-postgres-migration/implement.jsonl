@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database migration, transaction, refusal guard and backup contracts"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Persisted Agent run/control-plane compatibility"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Lease/attempt/fence/settle persistence invariants"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "SQLite limits and PostgreSQL migration questions"}

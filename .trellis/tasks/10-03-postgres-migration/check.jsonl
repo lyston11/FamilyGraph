@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify migration and recovery safety"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Verify protocol compatibility"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Verify lease/fence/settle invariants"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Verify evidence-backed migration scope"}
