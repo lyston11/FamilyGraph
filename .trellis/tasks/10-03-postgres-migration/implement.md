@@ -25,6 +25,10 @@
 
 ## Phase B：控制层 schema
 
+- [x] 验证租约配额形态：持久化 `counters` 行 + `SKIP LOCKED` 取候选。12 并发 worker
+      下每空间上限真正生效（对比朴素移植的 5/5 越限），且无候选路径不泄漏名额。
+      证据 `research/evidence/lease-counter-prototype.md`。
+- [ ] 验证四条归还路径（settle / cancel / 租约过期恢复 / 栅栏退休）各自归还且不重复归还。
 - [ ] 建立 runs/events/attempts/lease/settle/audit 的 PostgreSQL schema 和索引。
 - [ ] 实现 lease `SKIP LOCKED`/CAS、renewal、cancel、settle/recovery 并做并发故障注入。
 - [ ] 验证 Assistant/Steward fence、token scope、egress one-audit 和两阶段写回。
