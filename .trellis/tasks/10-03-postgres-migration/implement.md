@@ -13,6 +13,9 @@
 - [x] **识别阻塞项**：RAG 用 FTS5 `tokenize='trigram'`（为 CJK 选的），PostgreSQL
       无对等物；`pg_trgm`/`tsvector`/`pgroonga` 语义各不同，需要独立决策与检索质量
       对照基准，不能夹在 schema 迁移里替换。
+- [x] 记录解决方案：`research/evidence/solution-decision.md`，确定 CAS/父行锁/advisory
+      lock/counter row 分类、PGroonga-first 词法候选、Unicode n-gram 后备、PG baseline
+      + 静态快照导入 + 拒绝式对账路线。
 - [ ] 建立完整 agent/RAG schema prototype（本次只做租约表）。
 
 ## Phase B：控制层 schema

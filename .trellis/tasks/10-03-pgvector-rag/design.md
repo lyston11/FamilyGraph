@@ -16,6 +16,10 @@ embedding 记录必须绑定 `source/document/chunk`、`source_revision`、`inde
 
 第一阶段在 PostgreSQL 中评估 exact/ANN index、过滤组合、数据量、更新/删除、并发写入、查询 p50/p95/p99、备份恢复和运维成本。只有 pgvector 在目标规模或过滤/延迟/隔离要求上明确不满足，才设计独立向量服务；该服务也不能成为业务事实来源，必须有授权同步、revision 绑定、故障回退和重建路径。
 
-## 5. 失败语义
+## 6. 与 PostgreSQL 词法检索的边界
+
+pgvector 不替代当前 FTS5 trigram 词法检索。PostgreSQL 迁移采用 PGroonga 作为中文/日文词法检索首选；若部署不允许扩展，再评估应用 Unicode n-gram 倒排表。`tsvector`/`pg_trgm` 只能作为经过 golden corpus 证明的辅助路径，不能未经基准直接替换当前 CJK 语义。
+
+Hybrid retrieval 的固定顺序是：授权 scope/visibility projection → lexical 与 vector 候选 → union/rerank → 最终 revision/citation 验证。向量索引失效只能禁用 vector 候选，不得放宽词法检索或授权。
 
 RAG/embedding 关闭、来源失效、revision 冲突、授权不可证明时 fail closed 或回退确定性/无向量路径，不伪造命中。PostgreSQL/worker 重启、embedding provider timeout、重复 job 和部分索引失败可恢复，不产生半切换 active version。

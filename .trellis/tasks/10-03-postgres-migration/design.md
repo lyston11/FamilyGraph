@@ -44,6 +44,14 @@ M6 domain writer cutover and SQLite retirement
 
 PostgreSQL 故障时不新增 lease；已有 lease 由持久 recovery 收口。导入使用隔离 SQLite 快照，不复制正在运行主库。开发 systemd 与线上 compose 完全分离，线上只由用户手动发布。回滚只回路由/读写阶段，不删除已验证导入数据。
 
-## 6. 兼容性
+## 7. 已确认的解决方案（2026-10-04）
+
+详细证据见 `research/evidence/solution-decision.md`。本任务采用以下具体方案：
+
+- `BEGIN IMMEDIATE` 不做机械替换：单行状态用 CAS；已有资源锁父/协调行；自然键创建用事务级 advisory lock + 唯一约束；跨行配额用持久化 capacity counter；极少数无法分解的事务才使用 `SERIALIZABLE` + 有界重试。
+- 租约事务先锁 global/kind/tenant counter，再用 `FOR UPDATE SKIP LOCKED` 取候选。`SKIP LOCKED` 只负责候选行去重，不负责租户并发上限；counter 是配额真相。
+- FTS5 trigram 不替换为普通 `tsvector` 或无索引 `ILIKE`。第一候选是 PostgreSQL PGroonga 扩展；若部署不能接受 PGroonga，则评估应用维护 Unicode n-gram 倒排表。pgvector 只负责语义候选，不取代中文词法检索。
+- SQLite→PostgreSQL 第一阶段采用审查后的 PG baseline + 静态隔离快照导入 + 拒绝式对账 + 开发停机切换，不采用第一阶段双主双写。PG 成为唯一 writer 后 SQLite 不再接收回写。
+
 
 internal API、token claims、Assistant/Steward kind、sidecar 无 DB、provider gateway、egress/fence/settle、RAG scope/revision/citation 保持版本兼容。需要新增的 capacity/queue/retry/migration health 字段采用 additive schema 并有双侧测试。
