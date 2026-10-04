@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Verify internal protocol and Assistant contracts"}
-{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Verify Steward contracts and no shared queue regression"}
-{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Verify resource findings and failure evidence"}

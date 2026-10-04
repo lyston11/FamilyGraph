@@ -25,3 +25,14 @@
 - SQLite 历史数据导入有行数、摘要、授权 scope、状态和审计对账；校验失败不切 writer。
 - 有明确开发灰度、备份、回滚、双主禁止和线上手动发布步骤。
 - 明确 SQLite 退出主协调路径的阶段和过渡期并发上限。
+
+
+## Scope assessment (2026-10-04): split required before implementation
+
+完整范围不可能一次安全完成，依据见 `research/evidence/scope-assessment.md`：
+18 处 check-then-act 需逐处重新论证（SQLite 的单写者串行化在 READ COMMITTED 下不存在）；
+租约语义已实测证伪朴素移植；RAG 的 FTS5 trigram 检索无对等物、需独立决策；
+导入对账与连接池重设是独立工作量。
+
+拆分为 P1 schema+事务、P2 租约与恢复、P3 导入对账、P4 RAG 检索方案、P5 连接池与灰度。
+本任务在 P1 之前**保持 in_progress**，不声称已迁移。

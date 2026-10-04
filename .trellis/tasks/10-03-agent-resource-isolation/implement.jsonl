@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Internal runtime and control-plane protocol contracts"}
-{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "Steward slots, lease, fence, settle and sidecar isolation"}
-{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Current resource limits and confirmed concurrency gaps"}

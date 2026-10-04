@@ -2,9 +2,18 @@
 
 ## Phase A：盘点与实验
 
-- [ ] 扫描 SQLite-specific SQL、`BEGIN IMMEDIATE`、PRAGMA、FK/CHECK/partial index、Alembic downgrade 和并发 fixture。
-- [ ] 启动隔离 PostgreSQL，验证连接池、事务隔离、时间/JSON/枚举/唯一约束映射。
-- [ ] 建立 agent/RAG 关键表的 schema prototype，先不接业务流量。
+- [x] 扫描 SQLite-specific SQL、`BEGIN IMMEDIATE`、PRAGMA、FK/CHECK/partial index、
+      Alembic downgrade 和并发 fixture。结果见
+      `research/evidence/compatibility-inventory.md`（18 处 BEGIN IMMEDIATE / 12 文件、
+      11 处 json_extract / 4 文件、FTS5 虚拟表、sqlite3 驱动 5 文件）。
+- [x] 启动隔离 PostgreSQL（`postgres:16-alpine`，独立端口与库），实测租约语义。
+- [x] 建立租约原型并**证伪朴素移植**：`SKIP LOCKED` + 计数子查询会静默违反每租户
+      并发上限（实测 5/5 worker 领同一租户）；修正版用租户级 `pg_advisory_xact_lock`
+      后上限生效，且跨租户不阻塞（0.009s）。
+- [x] **识别阻塞项**：RAG 用 FTS5 `tokenize='trigram'`（为 CJK 选的），PostgreSQL
+      无对等物；`pg_trgm`/`tsvector`/`pgroonga` 语义各不同，需要独立决策与检索质量
+      对照基准，不能夹在 schema 迁移里替换。
+- [ ] 建立完整 agent/RAG schema prototype（本次只做租约表）。
 
 ## Phase B：控制层 schema
 
