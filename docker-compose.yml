@@ -89,6 +89,13 @@ services:
       # 默认 2 与 config.py / config.ts 的默认值一致：默认值不同会让两侧在未显式
       # 配置时静默不一致。
       STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-2}
+      # 10-03 执行面多租户准入：全局与单租户名额 + 有界等待。默认值必须与
+      # config.py 一致，否则未显式配置时两侧语义不同。
+      # 全局名额必须小于连接池上限（15），为 heartbeat/lease/settle/health 留余量。
+      AGENT_EXECUTION_GLOBAL_CAPACITY: ${AGENT_EXECUTION_GLOBAL_CAPACITY:-8}
+      AGENT_EXECUTION_PER_TENANT_CAPACITY: ${AGENT_EXECUTION_PER_TENANT_CAPACITY:-2}
+      AGENT_EXECUTION_MAX_WAIT_SECONDS: ${AGENT_EXECUTION_MAX_WAIT_SECONDS:-10}
+      AGENT_EXECUTION_MAX_QUEUE: ${AGENT_EXECUTION_MAX_QUEUE:-64}
       DEV_SEED_DEMO_DATA: ${DEV_SEED_DEMO_DATA:-0}
       # 09-01 个人家族视图（家庭卡/家族树投影端点）功能开关
       PERSONAL_FAMILY_VIEW_ENABLED: ${PERSONAL_FAMILY_VIEW_ENABLED:-0}

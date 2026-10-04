@@ -442,6 +442,48 @@ def ensure_admin_ready() -> None:
         raise RuntimeError("ADMIN_JWT_ISSUER 与 ADMIN_JWT_AUDIENCE 不得相同")
 
 
+# 执行面准入的租户维度参数。默认值按「先证明隔离，再谈吞吐」定：
+# 全局 8 与既有工具名额同量级（连接池 15，必须留出控制面余量）；
+# 单租户 2 使一个空间/账号的突发最多占全局的四分之一。
+AGENT_EXECUTION_GLOBAL_CAPACITY: int = int(
+    os.environ.get("AGENT_EXECUTION_GLOBAL_CAPACITY", "8")
+)
+AGENT_EXECUTION_PER_TENANT_CAPACITY: int = int(
+    os.environ.get("AGENT_EXECUTION_PER_TENANT_CAPACITY", "2")
+)
+# 有界等待：超时即明确拒绝，不制造无界排队（无界排队会把过载伪装成卡住）。
+AGENT_EXECUTION_MAX_WAIT_SECONDS: float = float(
+    os.environ.get("AGENT_EXECUTION_MAX_WAIT_SECONDS", "10")
+)
+AGENT_EXECUTION_MAX_QUEUE: int = int(os.environ.get("AGENT_EXECUTION_MAX_QUEUE", "64"))
+
+
+def _validate_agent_execution_admission() -> None:
+    """执行面名额必须给控制面留出连接与工作线程余量。
+
+    与工具准入同源的理由：每个在途执行请求占 1 条连接 + 1 个工作线程，而
+    heartbeat/lease/settle/cancel/health 共享这两个资源。全局名额达到连接池上限
+    时，控制面会被执行面挤到拿不到资源（09-30 实测：心跳协程延迟 30s）。
+    """
+    from app.db import POOL_MAX_CONNECTIONS
+
+    if not 1 <= AGENT_EXECUTION_GLOBAL_CAPACITY <= POOL_MAX_CONNECTIONS - 1:
+        raise RuntimeError(
+            "AGENT_EXECUTION_GLOBAL_CAPACITY 必须在 1.."
+            f"{POOL_MAX_CONNECTIONS - 1} 之间：必须小于连接池上限 "
+            f"{POOL_MAX_CONNECTIONS}，为心跳/lease/settle/health 留出连接余量"
+        )
+    if not 1 <= AGENT_EXECUTION_PER_TENANT_CAPACITY <= AGENT_EXECUTION_GLOBAL_CAPACITY:
+        raise RuntimeError(
+            "AGENT_EXECUTION_PER_TENANT_CAPACITY 必须在 1.."
+            f"{AGENT_EXECUTION_GLOBAL_CAPACITY} 之间：高于全局上限时单租户上限永不生效"
+        )
+    if AGENT_EXECUTION_MAX_WAIT_SECONDS <= 0:
+        raise RuntimeError("AGENT_EXECUTION_MAX_WAIT_SECONDS 必须为正：等待必须有界")
+    if AGENT_EXECUTION_MAX_QUEUE < 1:
+        raise RuntimeError("AGENT_EXECUTION_MAX_QUEUE 必须为正：队列必须有界")
+
+
 def _validate_agent_tool_admission() -> None:
     """工具执行名额必须给心跳/lease/settle/health 留出连接余量。
 
@@ -468,5 +510,6 @@ def ensure_ready() -> None:
         )
     _reject_weak_default_secrets()
     _validate_agent_tool_admission()
+    _validate_agent_execution_admission()
     ensure_admin_ready()
     ensure_data_dirs()
