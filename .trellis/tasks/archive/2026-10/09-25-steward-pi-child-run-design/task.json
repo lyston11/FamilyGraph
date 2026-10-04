@@ -3,7 +3,7 @@
   "name": "steward-pi-child-run-design",
   "title": "Steward Pi child run 架构重设计",
   "description": "让管家与助手共用 Pi 运行时：恢复 08-26 原始设计，为 StewardJob 定义受限 Pi child run 的父子作业、凭据、上下文与审计合同",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "lyston",
   "assignee": "lyston",
   "createdAt": "2026-09-25",
-  "completedAt": null,
+  "completedAt": "2026-10-04",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -30,5 +30,8 @@
   "parent": null,
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "status": "completed",
+    "resolution": "delivered: S1/E1/terminology/remaining-assists/tools-design/S5 all archived"
+  }
 }

@@ -184,3 +184,21 @@ Sidecar 现状：
 **用户裁定**：Q1=**现有 sidecar 改多槽并发**（`FG_AGENT_ROLE=both`）；Q2=**复用 `agent_runs`/`agent_run_events` + 窄表 `steward_runs`**；Q3=**先迁 terminology 一类**；Q4=**无跨 run 历史**；Q5=**工具化独立成 Stage 3**；Q6=**接受分层 membership 判据**（残留风险与回归义务见 `design.md` §5.2.1）。
 
 > Q1 选 A2 使 `worker.ts` 的单槽→多槽改造成为**本设计最大的风险项**（动 assistant 热路径）；改造点与新增回归见 `design.md` §7.2/§7.4，若回归面失控可回退 A3（新增容器，§7.6）。
+
+## Resolution (2026-10-04): delivered, archived
+
+本父任务描述的能力已经交付并归档：
+
+- `09-25-steward-child-run-skeleton`（S1 骨架）— 归档
+- `09-25-steward-execution-unit`（E1 执行单元，迁移 0055）— 归档
+- `09-25-steward-child-run-terminology` — 归档
+- `09-25-steward-child-run-remaining-assists` — 归档
+- `09-25-steward-child-run-tools-design`（Steward 只读工具集）— 归档
+- S5「移除 in-process 辅助路径与开关」— 由 `09-28-steward-pi-cutover` 交付并归档
+
+`implement.md` 中 6/7 的勾选状态来自 E1 迁移 checklist，已随 E1 合并而失效；它不再
+反映剩余工作。合同本身（队列红线、两个 fence、run token per-kind claims、发送门
+sweep、两阶段结算、sidecar 槽位、prompt provenance、网关 kind 路由）已固化在
+`.trellis/spec/backend/steward-child-run.md`，并由回归守护。
+
+本任务没有剩余工作。
