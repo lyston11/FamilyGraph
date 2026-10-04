@@ -9,10 +9,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, text
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 if TYPE_CHECKING:
     pass
@@ -27,19 +28,17 @@ NON_TERMINAL_STATUSES = ("pending", "active")
 class Relation(Base):
     __tablename__ = "relations"
     __table_args__ = (
-        Index(
+        partial_unique_index(
             "uq_relations_pair_fwd",
             "from_user",
             "to_user",
-            unique=True,
-            sqlite_where=text("status IN ('pending','active')"),
+            where="status IN ('pending','active')",
         ),
-        Index(
+        partial_unique_index(
             "uq_relations_pair_rev",
             "to_user",
             "from_user",
-            unique=True,
-            sqlite_where=text("status IN ('pending','active')"),
+            where="status IN ('pending','active')",
         ),
     )
 

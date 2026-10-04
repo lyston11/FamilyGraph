@@ -21,11 +21,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 SPACE_MEMBER_STATUSES = ("pending", "active", "rejected", "withdrawn", "removed")
 SPACE_MEMBER_ROLES = ("space_admin", "member")
@@ -71,11 +71,10 @@ class SpaceMember(Base):
     __table_args__ = (
         UniqueConstraint("space_id", "user_id", name="uq_space_member_pair"),
         CheckConstraint("role IN ('space_admin','member')", name="ck_sm_role"),
-        Index(
+        partial_unique_index(
             "uq_space_active_admin",
             "space_id",
-            unique=True,
-            sqlite_where=text("role = 'space_admin' AND status = 'active'"),
+            where="role = 'space_admin' AND status = 'active'",
         ),
         CheckConstraint(
             "status IN ('pending','active','rejected','withdrawn','removed')",
@@ -247,13 +246,12 @@ class SpaceManagerApplication(Base):
         CheckConstraint("request_kind IN ('space_admin')", name="ck_sma_kind"),
         CheckConstraint("status IN ('pending','approved','rejected')", name="ck_sma_status"),
         CheckConstraint("space_id IS NOT NULL", name="ck_sma_space_required"),
-        Index(
+        partial_unique_index(
             "uq_space_manager_application_pending",
             "applicant_user_id",
             "space_id",
             "request_kind",
-            unique=True,
-            sqlite_where=text("status = 'pending'"),
+            where="status = 'pending'",
         ),
         Index("ix_space_manager_applications_applicant", "applicant_user_id"),
         Index("ix_space_manager_applications_space", "space_id"),

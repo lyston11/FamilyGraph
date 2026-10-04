@@ -20,6 +20,7 @@ from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integ
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 # ---- 枚举常量（服务层与迁移共用；CHECK 约束兜底）----
 SOURCE_FACT_TYPES = (
@@ -64,14 +65,13 @@ class SourceFact(Base):
         _check_in("state", SOURCE_FACT_STATES, "ck_sf_state"),
         _check_in("provenance", SOURCE_FACT_PROVENANCES, "ck_sf_provenance"),
         CheckConstraint("subject_user_id != object_user_id", name="ck_sf_no_self"),
-        Index(
+        partial_unique_index(
             "uq_source_facts_active",
             "subject_user_id",
             "object_user_id",
             "fact_type",
             sa.text("COALESCE(space_id, -1)"),
-            unique=True,
-            sqlite_where=sa.text("state != 'revoked'"),
+            where="state != 'revoked'",
         ),
         Index("ix_source_facts_subject", "subject_user_id"),
         Index("ix_source_facts_object", "object_user_id"),

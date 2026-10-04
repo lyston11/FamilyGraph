@@ -13,7 +13,15 @@
 - [x] **识别阻塞项**：RAG 用 FTS5 `tokenize='trigram'`（为 CJK 选的），PostgreSQL
       无对等物；`pg_trgm`/`tsvector`/`pgroonga` 语义各不同，需要独立决策与检索质量
       对照基准，不能夹在 schema 迁移里替换。
-- [ ] 建立完整 agent/RAG schema prototype（本次只做租约表）。
+- [x] 逐处分类 43 个 `BEGIN IMMEDIATE` 调用点（25 个 `immediate=True` + 18 个
+      `_immediate_tx`）：A 条件 UPDATE / B 租约+counter / C 锁父行 / D advisory lock。
+      证据 `research/evidence/begin-immediate-classification.md`。
+- [x] **修复局部唯一索引的跨方言退化**（阻塞项）：16 个索引曾只有 `sqlite_where`，
+      在 PostgreSQL 上退化为全表唯一索引（如 `UNIQUE(session_id)` = 一个 session 一生
+      只能有一行）。改用 `app/models/indexes.py::partial_unique_index()` 统一两方言谓词；
+      结构性回归 + 真实 PostgreSQL 语义验证 + 变异验证。
+      证据 `research/evidence/partial-index-portability.md`。
+- [ ] 建立完整 agent/RAG schema prototype（本次只做租约表 + 索引可移植性）。
 
 ## Phase B：控制层 schema
 

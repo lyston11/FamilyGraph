@@ -33,6 +33,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 # 两种 runtime kind：assistant 走会话式 Pi Runtime；steward 走受限 child run
 # （StewardJob 的模型辅助，见 services/steward_assist.py）。
@@ -98,12 +99,11 @@ class AgentMessage(Base):
     __tablename__ = "agent_messages"
     __table_args__ = (
         CheckConstraint("role IN ('user','assistant','system')", name="ck_agent_messages_role"),
-        Index(
+        partial_unique_index(
             "uq_agent_messages_session_key",
             "session_id",
             "idempotency_key",
-            unique=True,
-            sqlite_where=sa.text("idempotency_key IS NOT NULL"),
+            where="idempotency_key IS NOT NULL",
         ),
         Index("ix_agent_messages_session_id", "session_id"),
     )
@@ -142,11 +142,10 @@ class AgentRun(Base):
             "(kind = 'steward' AND session_id IS NULL AND job_id IS NULL)",
             name="ck_agent_runs_scope_binding",
         ),
-        Index(
+        partial_unique_index(
             "uq_agent_runs_session_active",
             "session_id",
-            unique=True,
-            sqlite_where=sa.text("status IN ('queued','leased','running')"),
+            where="status IN ('queued','leased','running')",
         ),
         Index("ix_agent_runs_session_id", "session_id"),
     )
@@ -289,12 +288,11 @@ class AgentToolCall(Base):
 
     __tablename__ = "agent_tool_calls"
     __table_args__ = (
-        Index(
+        partial_unique_index(
             "uq_agent_tool_calls_run_call",
             "run_id",
             "tool_call_id",
-            unique=True,
-            sqlite_where=sa.text("tool_call_id IS NOT NULL"),
+            where="tool_call_id IS NOT NULL",
         ),
         Index("ix_agent_tool_calls_run_id", "run_id"),
     )
