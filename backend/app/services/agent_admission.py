@@ -49,6 +49,7 @@ class _Waiter:
     tenant: str
     future: asyncio.Future[None]
     seq: int
+    enqueued_at: float
 
 
 @dataclass
@@ -162,7 +163,14 @@ class ResourceLimiter:
                 raise AdmissionRejected(self.name, tenant, 0.0, "queue_full")
             self._seq += 1
             future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-            self._waiters.append(_Waiter(tenant=tenant, future=future, seq=self._seq))
+            self._waiters.append(
+                _Waiter(
+                    tenant=tenant,
+                    future=future,
+                    seq=self._seq,
+                    enqueued_at=time.monotonic(),
+                )
+            )
 
         started = time.perf_counter()
         try:
@@ -187,6 +195,19 @@ class ResourceLimiter:
                 self._waiters = [w for w in self._waiters if w.future is not future]
             raise
 
+    def _waiter_priority(self, waiter: _Waiter) -> tuple[int, float, int]:
+        """出队优先级：先按「本租户已占名额」分组，再按等待时长。
+
+        分组是为了让**没有在用名额**的租户先跑（它显然不是造成拥塞的一方）；
+        组内按等待时长排序（aging），使最早入队者优先，避免一个持续提交的租户
+        用后来的请求插队饿死先到者。最后用入队序号兜底，保证排序稳定、可复现。
+        """
+        return (
+            self._active.get(waiter.tenant, 0),
+            waiter.enqueued_at,
+            waiter.seq,
+        )
+
     def release(self, tenant: str) -> None:
         """归还名额并唤醒一个等待者。
 
@@ -205,7 +226,7 @@ class ResourceLimiter:
         candidates = [w for w in self._waiters if not w.future.done() and self._has_room(w.tenant)]
         if not candidates:
             return
-        candidates.sort(key=lambda w: (self._active.get(w.tenant, 0), w.seq))
+        candidates.sort(key=self._waiter_priority)
         chosen = candidates[0]
         self._waiters = [w for w in self._waiters if w is not chosen]
         self._active[chosen.tenant] = self._active.get(chosen.tenant, 0) + 1

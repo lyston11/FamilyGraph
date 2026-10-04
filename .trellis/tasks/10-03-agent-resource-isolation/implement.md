@@ -17,7 +17,8 @@
 - [ ] control-plane **独立 worker 池**（当前靠「全局名额 < 池上限」提供余量，非独立池）。
 - [x] 建立 Assistant account quota、Steward space quota、global cap 与保留量式公平
       （等待者优先、突发租户让位）。
-- [ ] aging/权重式公平队列（当前只有保留量 + 轮转选择）。
+- [x] aging 式公平队列：同组内按等待时长出队（`_waiter_priority`），后来者不得插队。
+      变异验证：改为 LIFO 后用例失败。
 - [ ] 在队列等待、worker 取消、租约过期、进程停止和 recovery 中验证名额无泄漏。
 
 ## Phase C：RetryBudget
@@ -40,7 +41,8 @@
 ## Phase E：验收
 
 - [x] 部分矩阵：两空间并发工具 + 控制面在突发下仍被服务（见 acceptance-matrix）。
-- [ ] 完整矩阵：同用户跨空间、同空间多用户、RAG/index、撤权/取消/重启。
+- [x] 多租户同时突发的控制面预算内响应（3 空间 × 6 并发工具 + 心跳 1s 预算）。
+- [ ] 完整矩阵：同用户跨空间、RAG/index、撤权/取消/重启。
 - [ ] 记录 control p95/p99、tenant queue wait、retry 次数、run deadline、DB wait 和用户可见终态。
 - [ ] 运行 backend/agent 相关检查和 mutation；未达到父任务 AC-2/3/6 时不得完成。
 

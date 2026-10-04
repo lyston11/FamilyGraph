@@ -21,7 +21,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from test_agent_tool_admission import _steward_tool_world
+from test_agent_tool_admission import _borrowed_workers, _steward_tool_world
 
 from app import config
 from app.api import internal_agent as internal_api
@@ -83,6 +83,38 @@ def test_a_waiting_tenant_reserves_capacity_from_a_bursting_one() -> None:
         # 剩下的全局名额留给 B。
         limiter.release("space:B")
         assert limiter.snapshot().active_by_tenant.get("space:A") == 3
+
+    asyncio.run(main())
+
+
+def test_earliest_waiter_wins_within_a_tenant_group() -> None:
+    """同组内按等待时长出队（aging）：后来者不得插队饿死先到者。
+
+    若按「入队序号」以外的顺序（或后进先出）出队，一个持续提交的租户就能用后来的
+    请求反复插队，使先到的请求长期拿不到名额——这正是公平队列要消除的饥饿。
+    """
+
+    async def main() -> None:
+        limiter = _limiter(global_capacity=1, per_tenant_capacity=1, max_wait_seconds=5.0)
+        await limiter.acquire("space:holder")  # 占住唯一名额
+
+        # 两个不同租户依次入队；B 先到，C 后到。
+        first = asyncio.ensure_future(limiter.acquire("space:B"))
+        await asyncio.sleep(0.01)
+        second = asyncio.ensure_future(limiter.acquire("space:C"))
+        await asyncio.sleep(0.01)
+        assert limiter.snapshot().waiting == 2
+
+        # 释放一个名额：必须给先到的 B。
+        limiter.release("space:holder")
+        await asyncio.sleep(0.01)
+        assert first.done(), "先到的等待者没有被优先满足"
+        assert not second.done(), "后到的等待者插队了"
+
+        # 清理，避免 pending task 警告。
+        limiter.release("space:B")
+        await asyncio.wait_for(second, timeout=1.0)
+        limiter.release("space:C")
 
     asyncio.run(main())
 
@@ -318,3 +350,96 @@ def test_two_tenants_do_not_starve_each_other_through_the_real_endpoint(
     assert (
         b_seconds < config.AGENT_EXECUTION_MAX_WAIT_SECONDS + hold_seconds * 2
     ), f"跨租户请求等待 {b_seconds:.2f}s，超出有界等待预期"
+
+
+def test_control_plane_keeps_its_budget_under_multi_tenant_burst(
+    internal_client, db_session, monkeypatch
+) -> None:
+    """多租户同时突发时，控制面（心跳）仍必须在预算内被服务。
+
+    这是 AC-2 在**多租户**情形下的证据：既有回归只测单租户突发。多租户下每个空间
+    都占自己的额度，若额度之和能吃掉连接池/工作线程，心跳就会重新拿不到执行机会。
+
+    断言三件事，缺一不可：
+    1. 心跳在预算内被服务（不是靠拒绝全部工具通过）；
+    2. 参与突发的工具请求最终全部完成（拒绝一切不算隔离成功）；
+    3. 执行面占用的工作线程不超过全局名额（等名额确实不占线程）。
+    """
+    import time as _time
+
+    from app.services import steward_tools
+
+    worlds = [_steward_tool_world(db_session) for _ in range(3)]
+    run_ids = [run_id for run_id, _job, _token in worlds]
+    assert len(set(run_ids)) == 3, "用例前提不成立：三个空间的 run 不互异"
+
+    original = steward_tools.execute_steward_tool
+
+    def held(db, *, execution, name, input_payload):
+        result = original(db, execution=execution, name=name, input_payload=input_payload)
+        _time.sleep(0.3)
+        return result
+
+    monkeypatch.setattr(steward_tools, "execute_steward_tool", held)
+    tool = steward_tools.TOOL_GET_SPACE_SNAPSHOT
+
+    results: list[int] = []
+    lock = threading.Lock()
+
+    def fire(token: str, run_id: int, index: int) -> None:
+        response = internal_client.post(
+            f"/internal/agent/runs/{run_id}/tools/{tool}/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"version": 1, "input": {}, "tool_call_id": f"tc-{run_id}-{index}"},
+        )
+        with lock:
+            results.append(response.status_code)
+
+    per_tenant = 6
+    heartbeat: dict[str, object] = {}
+
+    def fire_heartbeat(job_id: int, token: str) -> None:
+        started = _time.perf_counter()
+        try:
+            response = internal_client.post(
+                f"/internal/agent/jobs/{job_id}/heartbeat",
+                headers={"Authorization": f"Bearer {token}"},
+                json={},
+            )
+            heartbeat["status"] = response.status_code
+        except Exception as exc:  # noqa: BLE001 - 观测：失败也要记录
+            heartbeat["error"] = type(exc).__name__
+        heartbeat["seconds"] = _time.perf_counter() - started
+
+    with internal_client:
+        with ThreadPoolExecutor(max_workers=3 * per_tenant) as pool:
+            futures = [
+                pool.submit(fire, token, run_id, index)
+                for run_id, _job, token in worlds
+                for index in range(per_tenant)
+            ]
+            _time.sleep(0.15)
+            hb = threading.Thread(
+                target=fire_heartbeat,
+                args=(worlds[0][1], worlds[0][2]),
+                daemon=True,
+            )
+            hb.start()
+            hb.join(timeout=1.0)
+            assert (
+                not hb.is_alive()
+            ), "多租户突发期间心跳在 1s 预算内未被服务：执行面挤占了控制面资源"
+            borrowed = _borrowed_workers(internal_client)
+            for future in futures:
+                future.result(timeout=60)
+
+    assert heartbeat.get("error") is None, f"心跳请求失败：{heartbeat.get('error')}"
+    assert heartbeat["status"] == 200, f"心跳状态码异常：{heartbeat}"
+    assert all(
+        status == 200 for status in results
+    ), f"存在失败的工具请求（{len(results)} 个）：{sorted(set(results))}"
+    assert len(results) == 3 * per_tenant
+    assert borrowed <= config.AGENT_EXECUTION_GLOBAL_CAPACITY, (
+        f"执行面占用工作线程 {borrowed} 超过全局名额 {config.AGENT_EXECUTION_GLOBAL_CAPACITY}："
+        "等名额不应占用工作线程"
+    )
