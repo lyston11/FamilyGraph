@@ -112,6 +112,10 @@ const AGENT_ERROR_COPY: Record<string, string> = {
   PROVIDER_STREAM_ERROR: '模型服务暂时不可用，请稍后重试',
   // sidecar 运行期：模型完成回合但没有返回任何正文（空最终回答）
   PROVIDER_EMPTY_ANSWER: '模型没有返回内容，请重试或换个问法',
+  // sidecar 运行期：本轮真实出站尝试达到 run 级预算上限而主动停止重试。
+  // 与 PROVIDER_STREAM_ERROR 分开：后者是上游故障，这里是「上游持续不可达，
+  // 已按预算停止」，用户重试才有意义。
+  PROVIDER_RETRY_BUDGET_EXHAUSTED: '模型服务持续不可用，已停止重试，请稍后再试',
   SIDECAR_ERROR: '助手服务暂时不可用，请稍后重试',
   // 服务端收敛：执行期间空间成员资格被撤销（不是服务故障，重试也不会成功）
   AGENT_MEMBERSHIP_REVOKED: '你已不是该空间的活跃成员，本次回答已停止',

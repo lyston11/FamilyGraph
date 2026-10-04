@@ -36,6 +36,7 @@ from app.errors import (
     AGENT_CONTEXT_INVALIDATED,
     AGENT_DISABLED,
     AGENT_EVENT_INVALID,
+    AGENT_EXECUTION_BUSY,
     AGENT_INTERNAL_FORBIDDEN,
     AGENT_JOB_NOT_FOUND,
     AGENT_PROVIDER_PROXY_UNAVAILABLE,
@@ -80,6 +81,7 @@ from app.services import (
     policy_guard,
     steward_assist,
 )
+from app.services.agent_admission import AdmissionRejected, ResourceLimiter
 from app.services.agent_events import EventEntry
 from app.services.agent_execution import (
     ExecutionIdentity,
@@ -593,51 +595,78 @@ async def proxy_provider_chat_completions(
     from app.services import provider_proxy
     from app.services.agent_execution import execution_from_claims
 
-    # Both kinds may call the gateway: it is the only egress, and a steward child
-    # run that cannot reach it has no way to make a model call at all. The token
-    # decides which authorization applies, and the kind assertion inside each
-    # authorizer keeps the two check sets from contaminating each other.
-    run, space_id, _claims = _authorize_provider_run(db, request, run_id)
-    expected_api = (
-        "openai-responses"
-        if request.url.path.endswith("/provider/responses")
-        else "openai-completions"
-    )
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            if int(content_length) > config.AGENT_PROVIDER_PROXY_MAX_BYTES:
-                raise_api_error(413, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求体过大")
-        except ValueError:
-            raise_api_error(422, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求长度无效")
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > config.AGENT_PROVIDER_PROXY_MAX_BYTES:
-            raise_api_error(413, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求体过大")
-        chunks.append(chunk)
-    body = b"".join(chunks)
+    # 租户名额只覆盖**建连阶段**（授权 + 解密解析 + 建立上游连接），这是本端点里
+    # 真正消耗工作线程与数据库连接的部分。流本身是异步的、不占工作线程也不应持有
+    # 连接（`test_stream_does_not_pin_a_pool_connection_between_chunks` 锁定了这一
+    # 点），所以不把名额跨整个流持有——否则会把一次数分钟的流变成一个租户额度，
+    # 既拖住同租户的工具调用，也重新引入「请求级 Session 跨 chunk 持连接」。
+    #
+    # 已知边界（未覆盖）：上游**并发流数**本身不受本层限制，因此一个租户仍可同时
+    # 持有多个已建立的上游流。要限制它需要流级配额，属于后续阶段。
+    provider_tenant = _peek_execution_tenant(request)
+    if provider_tenant is not None:
+        await _acquire_execution_slot(
+            "agent_provider",
+            provider_tenant,
+            route="/internal/agent/runs/{run_id}/provider",
+            run_id=run_id,
+        )
     try:
-        client, upstream, provider_id, header_ms = await provider_proxy.stream_provider_response(
-            db,
-            run=run,
-            space_id=space_id,
-            body=body,
-            content_type=request.headers.get("content-type"),
-            accept=request.headers.get("accept"),
-            user_agent=request.headers.get("user-agent"),
-            expected_api=expected_api,
-            execution=execution_from_claims(_claims),
+        # Both kinds may call the gateway: it is the only egress, and a steward
+        # child run that cannot reach it has no way to make a model call at all.
+        # The token decides which authorization applies, and the kind assertion
+        # inside each authorizer keeps the two check sets from contaminating each
+        # other.
+        run, space_id, _claims = _authorize_provider_run(db, request, run_id)
+        expected_api = (
+            "openai-responses"
+            if request.url.path.endswith("/provider/responses")
+            else "openai-completions"
         )
-    except provider_proxy.ProviderProxyError as exc:
-        db.commit()  # 审计先提交（拒绝路径惯例）
-        # 安全重试提示（例如永久错误的 x-should-retry:false）必须真的下发，
-        # 否则 sidecar 会按 5xx 继续重试。机器可读 detail（如 cancel_requested）
-        # 同理：sidecar 靠它区分「服务端已裁决取消」与普通协议冲突。
-        raise_api_error(
-            exc.status_code, exc.code, exc.message, detail=exc.detail, headers=exc.headers
-        )
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > config.AGENT_PROVIDER_PROXY_MAX_BYTES:
+                    raise_api_error(413, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求体过大")
+            except ValueError:
+                raise_api_error(422, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求长度无效")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > config.AGENT_PROVIDER_PROXY_MAX_BYTES:
+                raise_api_error(413, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 请求体过大")
+            chunks.append(chunk)
+        body = b"".join(chunks)
+        try:
+            (
+                client,
+                upstream,
+                provider_id,
+                header_ms,
+            ) = await provider_proxy.stream_provider_response(
+                db,
+                run=run,
+                space_id=space_id,
+                body=body,
+                content_type=request.headers.get("content-type"),
+                accept=request.headers.get("accept"),
+                user_agent=request.headers.get("user-agent"),
+                expected_api=expected_api,
+                execution=execution_from_claims(_claims),
+            )
+        except provider_proxy.ProviderProxyError as exc:
+            db.commit()  # 审计先提交（拒绝路径惯例）
+            # 安全重试提示（例如永久错误的 x-should-retry:false）必须真的下发，
+            # 否则 sidecar 会按 5xx 继续重试。机器可读 detail（如 cancel_requested）
+            # 同理：sidecar 靠它区分「服务端已裁决取消」与普通协议冲突。
+            raise_api_error(
+                exc.status_code, exc.code, exc.message, detail=exc.detail, headers=exc.headers
+            )
+    finally:
+        # 建连阶段结束即归还租户名额；下面的流式转发不再持有它。
+        if provider_tenant is not None:
+            _execution_admission_limiter("agent_provider").release(provider_tenant)
     media_type = upstream.headers.get("content-type", "application/json")
     return StreamingResponse(
         provider_proxy.passthrough_with_audit(
@@ -949,6 +978,136 @@ def _release_tool_slot(limiter: asyncio.Semaphore) -> None:
     limiter.release()
 
 
+# 执行面准入：全局 + 租户双层。与工具准入**分开**：工具准入限制的是「同时在跑的
+# 工具」，这里限制的是「一个租户同时在跑的执行单元」，两者共同保证控制面余量。
+#
+# 租户键按 kind 取：Assistant=account（同一用户跨空间共享一份额度，这是有意的——
+# 他就是同一个人的并发预算）；Steward=space（空间级工作不能因为 viewer 不同而
+# 共享或扩大额度）。键里不放用户可识别内容，只放整数 id。
+# 每个**执行平面**各持一个准入器。平面必须分开，否则会把两种时间尺度绑在一起：
+# 一次 provider 流可以持续数分钟，而工具调用是毫秒级；共用一个额度会让一个长流
+# 把同一租户的工具调用全部挡住，反之亦然。控制面不在这套额度内。
+_execution_limiters: dict[str, ResourceLimiter] = {}
+_execution_limiters_loop: weakref.ReferenceType[asyncio.AbstractEventLoop] | None = None
+_execution_limiters_lock = threading.Lock()
+
+
+def _execution_admission_limiter(resource: str) -> ResourceLimiter:
+    """取某个执行平面的准入器（按事件循环各持一份，理由同工具名额）。
+
+    `resource` 只能是下面登记的平面名；未知名字直接失败，避免拼错时静默地
+    每个请求各建一个准入器（那样配额等于不存在）。
+    """
+    global _execution_limiters_loop
+    if resource not in _EXECUTION_PLANES:
+        raise RuntimeError(f"unknown execution plane: {resource}")
+    loop = asyncio.get_running_loop()
+    with _execution_limiters_lock:
+        bound = _execution_limiters_loop() if _execution_limiters_loop is not None else None
+        if bound is not loop:
+            _execution_limiters.clear()
+            _execution_limiters_loop = weakref.ref(loop)
+        limiter = _execution_limiters.get(resource)
+        if limiter is None:
+            limiter = ResourceLimiter(
+                name=resource,
+                global_capacity=config.AGENT_EXECUTION_GLOBAL_CAPACITY,
+                per_tenant_capacity=config.AGENT_EXECUTION_PER_TENANT_CAPACITY,
+                max_wait_seconds=config.AGENT_EXECUTION_MAX_WAIT_SECONDS,
+                max_queue=config.AGENT_EXECUTION_MAX_QUEUE,
+            )
+            _execution_limiters[resource] = limiter
+        return limiter
+
+
+def execution_tenant_key(claims: dict[str, Any]) -> str:
+    """从已校验的 run token claims 派生租户键。
+
+    Assistant 用 account_id，Steward 用 space_id：这与两个 kind 的授权主体一致
+    （Assistant 是账号锚定，Steward 是空间锚定），因此额度不会跨主体串味。
+    两个 claim 都经 `decode_run_token` 按 kind 校验过类型，这里只做读取。
+    """
+    if claims.get("agent_kind") == "steward":
+        return f"space:{claims['space_id']}"
+    return f"account:{claims['account_id']}"
+
+
+# 执行平面名：只用于准入记账与诊断，不含租户数据。
+_EXECUTION_PLANES = frozenset({"agent_tool", "agent_provider"})
+
+
+async def _acquire_execution_slot(resource: str, tenant: str, *, route: str, run_id: int) -> None:
+    """在事件循环上等一个执行名额；超时/队列满则有界拒绝（503 + 明确错误码）。
+
+    控制面端点**不调用**本函数：heartbeat/lease/settle/cancel/context/health 必须
+    始终可执行，这正是保留余量的目的。
+    """
+    limiter = _execution_admission_limiter(resource)
+    started = time.perf_counter()
+    try:
+        await limiter.acquire(tenant)
+    except AdmissionRejected as rejected:
+        snapshot = limiter.snapshot()
+        logger.warning(
+            "agent execution admission rejected resource=%s route=%s run_id=%d tenant_kind=%s "
+            "waited_ms=%.1f reason=%s active=%d waiting=%d global_cap=%d tenant_cap=%d",
+            resource,
+            route,
+            run_id,
+            tenant.split(":", 1)[0],
+            rejected.waited_seconds * 1000.0,
+            rejected.reason,
+            snapshot.active,
+            snapshot.waiting,
+            snapshot.global_capacity,
+            snapshot.per_tenant_capacity,
+        )
+        raise_api_error(
+            503,
+            AGENT_EXECUTION_BUSY,
+            "执行资源繁忙，请稍后重试",
+        )
+    waited = time.perf_counter() - started
+    if waited >= _TOOL_ADMISSION_WARN_SECONDS:
+        snapshot = limiter.snapshot()
+        logger.warning(
+            "agent execution admission wait resource=%s route=%s run_id=%d tenant_kind=%s "
+            "wait_ms=%.1f active=%d waiting=%d global_cap=%d tenant_cap=%d",
+            resource,
+            route,
+            run_id,
+            tenant.split(":", 1)[0],
+            waited * 1000.0,
+            snapshot.active,
+            snapshot.waiting,
+            snapshot.global_capacity,
+            snapshot.per_tenant_capacity,
+        )
+
+
+def _peek_execution_tenant(request: Request) -> str | None:
+    """在事件循环上解析 run token 并派生租户键，用于取名额**之前**排队。
+
+    这里只做密码学校验（无数据库访问、无审计写），所以可以在事件循环上安全调用；
+    真正的授权、fence、撤权检查仍在工作线程内的原路径上执行，语义不变。
+
+    解析失败返回 None：让请求按原路径进入工作线程并得到既有 401，而不是在这里
+    改变错误语义。
+    """
+    raw = _bearer_token(request)
+    if raw is None:
+        return None
+    try:
+        claims = agent_tokens.decode_run_token(raw)
+    except agent_tokens.AgentTokenError:
+        return None
+    try:
+        return execution_tenant_key(claims)
+    except KeyError:
+        # claims 缺 kind 所需字段：同样交给原路径按既有契约拒绝。
+        return None
+
+
 def _execute_tool_body(
     run_id: int, tool_name: str, body: ToolExecuteRequest, request: Request
 ) -> ToolExecuteOut:
@@ -1017,6 +1176,13 @@ async def execute_tool(
     幂等与审计语义与改动前逐字相同，只是换到工具自己的 Session 上执行；排队
     后进入执行仍会在 fence 内重新验证身份、租约与权限。
     """
+    tenant = _peek_execution_tenant(request)
+    if tenant is not None:
+        # 执行面租户名额先于工具名额：先让**租户**排队，避免一个租户的工具突发
+        # 占满全局工具名额（那正是本次要消除的跨租户挤占）。
+        await _acquire_execution_slot(
+            "agent_tool", tenant, route=_TOOL_EXECUTE_ROUTE, run_id=run_id
+        )
     limiter = await _acquire_tool_slot(run_id)
     dispatched = False
     try:
@@ -1030,6 +1196,9 @@ async def execute_tool(
             if not future.cancelled():
                 future.exception()
             _release_tool_slot(limiter)
+            if tenant is not None:
+                # 归还顺序与取得顺序相反：先放工具名额，再放租户名额。
+                _execution_admission_limiter("agent_tool").release(tenant)
 
         work.add_done_callback(_on_done)
         dispatched = True
@@ -1040,6 +1209,8 @@ async def execute_tool(
         if not dispatched:
             # 名额已取得但未能派发（例如在 ensure_future 之前被取消）：必须归还。
             _release_tool_slot(limiter)
+            if tenant is not None:
+                _execution_admission_limiter("agent_tool").release(tenant)
 
 
 @router.post("/runs/{run_id}/settle", response_model=SettleOut)

@@ -139,6 +139,8 @@ AGENT_RUN_NOT_FOUND = "AGENT_RUN_NOT_FOUND"  # run 不存在或 token 不指向�
 AGENT_JOB_NOT_FOUND = "AGENT_JOB_NOT_FOUND"  # job 不存在或 token 不指向它
 AGENT_JOB_NOT_ACTIVE = "AGENT_JOB_NOT_ACTIVE"  # heartbeat 目标不在 leased/running
 AGENT_KIND_UNSUPPORTED = "AGENT_KIND_UNSUPPORTED"  # runtime 只承载 assistant
+# 执行面租户准入在有界等待内未取得名额：过载时的明确拒绝，不是故障
+AGENT_EXECUTION_BUSY = "AGENT_EXECUTION_BUSY"
 AGENT_RUN_SESSION_BUSY = "AGENT_RUN_SESSION_BUSY"  # 每 session 同时一个 active Run（RT-2）
 AGENT_RUN_ACCOUNT_LIMIT = "AGENT_RUN_ACCOUNT_LIMIT"  # 每账户 ≤2 并发 Assistant Run（RT-2）
 AGENT_RUN_TERMINAL = "AGENT_RUN_TERMINAL"  # 终态不可复活（settle/cancel 再入）

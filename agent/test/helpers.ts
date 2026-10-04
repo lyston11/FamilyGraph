@@ -7,6 +7,8 @@ export function makeAgentConfig(apiPort: number): AgentConfig {
     internalApiBaseUrl: `http://127.0.0.1:${apiPort}`,
     providerStreamMaxRetries: 5,
     providerStreamMaxRetryDelayMs: 1000,
+    runMaxProviderAttempts: 0,
+    runMaxTotalRetryMs: 0,
     serviceSecret: "test-service-secret",
     sidecarId: "sc-test",
     healthPort: 0,

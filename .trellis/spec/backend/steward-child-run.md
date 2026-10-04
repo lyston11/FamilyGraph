@@ -385,6 +385,58 @@ for attempt in candidates:                    # 发送门：退休并继续，�
 ≤ 名额 + 批次全部完成 + 取消不泄漏名额 + 名额上界校验）。变异验证：名额设为 1000
 （等效无准入）时心跳断言必须失败。
 
+## 14.1 执行面多租户准入（10-03）
+
+**触发**：改动 `/internal/agent/runs/{id}/tools/{name}/execute`、
+`/internal/agent/runs/{id}/provider/*` 的准入，或 `app/services/agent_admission.py`、
+`AGENT_EXECUTION_*` 前必读。
+
+第 14 节的全局工具名额只保证「别把连接池打满」，**不区分调用者**：一个空间提交几十个
+工具调用即可占满全部名额，另一个空间的 Assistant 只能排队。「能并发 lease」不等于
+「能隔离执行」，因此在其上加了一层**租户维度**的准入。
+
+**资源主体**：Assistant = `account_id`（同一用户跨空间共享一份并发预算，因为他就是
+同一个人的并发），Steward = `space_id`（空间级工作不因 viewer 不同而共享或扩大额度）。
+键形如 `account:9` / `space:2`，只含整数 id。
+
+**平面必须分开**：`agent_tool` 与 `agent_provider` 各持一个 limiter。共用会把两种时间
+尺度绑在一起——一次 provider 流可长达数分钟，而工具调用是毫秒级；共用会让长流把同租户
+的工具调用全部挡住，反之亦然。
+
+**按竞争保留，而不是静态均分**（这条最容易做错）：没有其他租户等待时，一个租户**可以
+用满全局名额**。一次模型回合合法地扇出几十个工具调用（生产实测单回合 26 个），静态把
+单租户限到 2 会把正常工作量变成秒级排队。只有当**别的租户在等待**时，本租户的新增名额
+才被压到 `per_tenant_capacity`，为等待者保留 `global - per_tenant_capacity`。已在执行的
+调用不被抢占，因此只是停止继续授予，不打断进行中的工作。
+
+**有界等待**：`AGENT_EXECUTION_MAX_WAIT_SECONDS`（默认 10s）内未取得名额即返回
+`503 AGENT_EXECUTION_BUSY`。不得无界排队——那会把过载伪装成「卡住」。队列也有上限
+（`AGENT_EXECUTION_MAX_QUEUE`），队满立即拒绝。
+
+**边界竞态（必须保留的处理）**：`release` 可能在 `wait_for` 超时的同一瞬间把名额授予
+等待者（此时 `_active` 已加一）。`acquire` 必须把「future 已完成」当作成功返回，否则
+那个名额永远无人归还，反复触发会逐步吃掉并发上限。取消路径同理：若已授予则先归还再抛出。
+
+**控制面不取名额**：heartbeat/lease/settle/cancel/context/health 一律不走本层，这正是
+保留余量的目的；全局名额由 `config._validate_agent_execution_admission` 强制小于
+`POOL_MAX_CONNECTIONS`。
+
+**provider 端点只覆盖建连阶段**：名额在「授权 + 解析 + 建立上游连接」期间持有，
+流式转发开始前归还。不跨整个流持有有两个理由：会把一次数分钟的流变成一个租户额度；
+以及会重新引入「请求级 Session 跨 chunk 持连接」——
+`test_stream_does_not_pin_a_pool_connection_between_chunks` 锁定了这一点。
+**已知未覆盖**：上游**并发流数**不受本层限制，一个租户仍可同时持有多个已建立的上游流；
+限制它需要流级配额，属于后续阶段。
+
+**单实例边界**：limiter 是进程内状态，只保护当前实例，**不是**跨实例全局配额。跨实例
+配额需要持久化协调（PostgreSQL/Redis），属父任务后续阶段。
+
+**回归**：`tests/test_agent_execution_admission.py`（无竞争时可用满全局；有等待者时按
+保留量让位；有界拒绝；队满立即拒绝；取消不泄漏；超时竞态不丢名额；配置上界校验；
+**端点上真的接线了**——名额耗尽时返回 503）。变异验证：删除 `execute_tool` 中的
+`_acquire_execution_slot` 调用 → 端到端用例失败。工具突发下心跳仍被服务的既有回归
+（`test_agent_tool_admission.py`）必须继续通过。
+
 ## 15. 流式转发不得在事件循环上做同步 DB（09-30）
 
 **触发**：改动 `provider_proxy.passthrough_with_audit`、per-chunk 取消复核，

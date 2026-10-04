@@ -234,7 +234,15 @@ unavailable 或固定 scope 拒绝，不返回目标身份、原始个人字段�
 | 正常结束 | （无） | （无） | （无） | `status=succeeded` |
 
 - **永久上游拒绝不得伪装为可重试 5xx**：网关保留上游真实 4xx 状态，而不是统一转 502。实测（pi-ai/pi-coding-agent 0.84.3）`x-should-retry:false` 只约束**请求层**；若永久错误仍以 5xx 返回，Pi 的会话层仍会按错误文本重启整轮，真实出站数会翻倍。两处必须同批发布。
-- **两层重试预算显式冻结**：请求层 = `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS`（可被 abort 中断，`Retry-After` 受 `maxRetryDelayMs` 约束；退避 `min(0.5·2^i, 8)s`×jitter）；会话层 = `agent/src/session.ts` 的 `SESSION_RETRY_BUDGET`（enabled/3 次/2s 起，退避 `base·2^(attempt-1)` 无 jitter），显式声明而不继承 SDK 默认值。真实出站数是两层相乘：暂时失败最多 `(requestRetries+1)×(sessionRetries+1)`（当前配置 6×4=24，实测整轮墙钟约 79s），永久 4xx 恰好 1 次。改预算属策略变更，需先有实际请求数/等待总量与可用性证据（E-R3/E-R5）；当前只冻结不降额。
+- **两层重试预算显式冻结**：请求层 = `AGENT_PROVIDER_STREAM_MAX_RETRIES`/`_MAX_RETRY_DELAY_MS`（可被 abort 中断，`Retry-After` 受 `maxRetryDelayMs` 约束；退避 `min(0.5·2^i, 8)s`×jitter）；会话层 = `agent/src/session.ts` 的 `SESSION_RETRY_BUDGET`（enabled/3 次/2s 起，退避 `base·2^(attempt-1)` 无 jitter），显式声明而不继承 SDK 默认值。真实出站数是两层相乘：暂时失败最多 `(requestRetries+1)×(sessionRetries+1)`（当前配置 6×4=24），永久 4xx 恰好 1 次。
+- **run 级重试预算（10-03）**：两层各自的数值仍冻结，但它们**相乘**这件事由 `agent/src/retry-budget.ts` 的 `RunRetryBudget` 在**传输层**统一封顶——这是两层唯一共同的必经点。`AGENT_RUN_MAX_PROVIDER_ATTEMPTS`（默认 8）与 `AGENT_RUN_MAX_TOTAL_RETRY_MS`（默认 120000）由 `session.ts` 把 `wrapFetch` 注入 pi-ai 的 `options.fetch`；每个真实尝试在 `fetch` 处计数，预算耗尽后**不再打开 socket**。
+  - 生产实测依据（开发库 `agent_runs` × `agent_provider_egress`）：失败 run 的真实出站尝试数 **p50 = p90 = p99 = 24**（正是 6×4 的上界），成功 run **p50 = 3**、p90 = 7、p99 = 11、max = 17。27/435 成功 run 超过 8 次。
+  - 因此默认 8 会**截断 6% 的成功 run**：这是刻意的取舍（一个 DERP 不可达不再把 slot 占用 4 分钟），但把它当作「只降失败成本」的改动是错的。要恢复长尾成功率就调高该值，不要再叠加层数。
+  - **拒绝形态不是自由选择**：预算耗尽时若 `throw Error`，OpenAI SDK 会把它包装成自己的 `APIConnectionError("Connection error.")`，其文本**匹配** SDK 的暂时性模式，于是两层继续重试（只是不再到 socket），run 仍要烧掉约 60s 退避才失败（实测：尝试数正确但用例 30s 超时）。正确做法是返回一个**合成的永久 4xx**（`RUN_RETRY_BUDGET_HTTP_STATUS = 400`）+ 网关同形的脱敏 envelope：层 1 只重试 408/409/429/5xx，层 2 的文本模式不匹配该 sentinel，两层都不重试。
+  - `RUN_RETRY_BUDGET_EXHAUSTED_MESSAGE` 的文本是**行为契约**（必须同时不匹配 `RETRYABLE_PROVIDER_ERROR_PATTERN` 与 overflow 模式），改文案属行为变更。
+  - 结算错误码：仅当**消息含 sentinel 且预算确实耗尽**才报 `PROVIDER_RETRY_BUDGET_EXHAUSTED`（`classifyProviderStreamError`）。只用消息会信任上游脱敏文本；只用预算会把预算后发生的无关失败（如产物不可解析）误归因。
+  - 回归：`agent/test/retry-budget.test.ts`（真实 SDK + 本地假网关：封顶、超限不再尝试、健康 run 不受影响、预算不跨 run 共享）。变异验证：删除 `session.ts` 的 `fetch` 注入 → 4 个用例失败（其中两个按 24 次尝试超时）。
+  - **尚未实现**（本子任务剩余）：账户/空间级配额与公平队列、控制面独立 worker 池、sidecar 分进程。当前预算只做 run 级封顶。
 - **压缩与重试分开**：context overflow 走自动压缩，不进任一层重试；空最终回答仍按 `PROVIDER_EMPTY_ANSWER` 结算 failed；取消/失租优先级不变（服务端权威）。
 - `AGENT_PROVIDER_UPSTREAM_REJECTED` 注册在 `app/errors.py`（后端自己会发出的码）；sidecar 仍以 `PROVIDER_STREAM_ERROR` 结算，前端文案不变。
 - 管理员延迟指标的 `provider_retry` 只计 `retryable != false` 的失败：`upstream_rejected`/`run_cancelled`/`stream_interrupted` 不是重试，计入会造出虚假重试段；历史审计行无该字段时沿用旧的 `failed` 口径，不回填。

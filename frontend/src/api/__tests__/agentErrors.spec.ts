@@ -65,6 +65,18 @@ describe('friendlyAgentError：其余映射不变', () => {
     )
   })
 
+  it('run 重试预算耗尽（10-03）与上游故障区分开', () => {
+    // WHY 单独一个码：PROVIDER_STREAM_ERROR 表示上游故障；预算耗尽表示
+    // 「上游持续不可达，sidecar 已按 run 级预算停止重试」。两者的用户动作
+    // 不同（前者稍后重试即可，后者需要等上游恢复），合并会误导用户。
+    expect(friendlyAgentError('PROVIDER_RETRY_BUDGET_EXHAUSTED')).toBe(
+      '模型服务持续不可用，已停止重试，请稍后再试',
+    )
+    expect(friendlyAgentError('PROVIDER_RETRY_BUDGET_EXHAUSTED')).not.toBe(
+      friendlyAgentError('PROVIDER_STREAM_ERROR'),
+    )
+  })
+
   it('撤权收敛码（09-19）说明是权限变化，不是服务故障', () => {
     expect(friendlyAgentError('AGENT_MEMBERSHIP_REVOKED')).toBe(
       '你已不是该空间的活跃成员，本次回答已停止',

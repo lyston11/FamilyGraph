@@ -149,6 +149,8 @@ function makeConfig(port: number): AgentConfig {
     internalApiBaseUrl: `http://127.0.0.1:${port}`,
     providerStreamMaxRetries: 0,
     providerStreamMaxRetryDelayMs: 1000,
+    runMaxProviderAttempts: 0,
+    runMaxTotalRetryMs: 0,
     serviceSecret: "integration-service-secret",
     sidecarId: "sc-it",
     healthPort: 0,
