@@ -187,9 +187,28 @@ provider 层不能无条件重试后再由 session 层从头重试。一次连�
 
 短期先做 control/model/tool/background 的 limiter 和连接池边界，以便可验证迁移；长期 Assistant 与 Steward 分进程/独立 worker pool，建立故障域隔离。最终选择以并发矩阵和资源预算实验为依据，不凭默认值决定。
 
-## 9. 失败与回滚
+## 10. 新增跨子任务问题边界
 
-- PostgreSQL 不可用：控制面 fail closed，不新增 lease；已有 lease 由安全恢复逻辑处理；不回写 SQLite 形成双主。
-- Redis 不可用：降级到 PostgreSQL 有界 admission 或暂停新的非控制面执行；不放宽额度。
-- 向量服务不可用：回退到确定性/非向量检索路径，不影响授权和核心家庭数据。
-- 迁移校验不通过：停在当前阶段，保留 SQLite/旧读路径，禁止切换 writer；拒绝任何线上自动修复。
+本任务不把以下风险当作 PostgreSQL schema 的附带实现：
+
+### 10.1 Control-plane / execution-plane 故障域
+
+独立 limiter 不能自动等于独立 worker/DB pool。必须同时测量 AnyIO worker、SQLAlchemy checkout、事件循环、sidecar heap 和 provider stream；否则只是在一个共享队列外面再包一层 semaphore。`10-04-control-plane-fault-domain` 负责控制面保留容量、分池/分进程、重启和多实例 recovery。
+
+### 10.2 Provider 长流与短请求
+
+建连 admission、已建立的长流、工具执行和 control request 有不同时间尺度，不能共用一个名额或只看 connect timeout。`10-04-provider-reliability-boundaries` 负责 stream-level quota、backpressure、连接生命周期、upstream circuit 和长流 deadline；`RunRetryBudget` 只解决尝试次数乘法，不替代这些边界。
+
+### 10.3 PostgreSQL 可运行性
+
+数据库迁移成功不代表系统可运行。每实例 pool 总和、PgBouncer session 语义、WAL/PITR、故障切换、writer epoch、长事务和数据保留都会决定是否真正支持多租户。`10-04-postgres-operations-cutover` 负责这些运行和发布问题。
+
+### 10.4 中文词法检索
+
+RAG 的词法检索不是 pgvector 的附带项。当前 FTS5 trigram 的中文行为必须用 golden corpus 对照；`tsvector` 或 `pg_trgm` 不能未经证据替代。`10-04-lexical-search-migration` 负责 PGroonga-first 与 Unicode n-gram 后备。
+
+### 10.5 集成容量与故障证据
+
+单 run 成功、单实例 pytest 或单一数据库 benchmark 都不能证明多用户隔离。`10-04-multitenant-load-acceptance` 负责 account×space×kind 矩阵、故障注入、资源安全日志和最终切换 gate。
+
+父任务的最终完成条件是：这些子任务的合同可以组合，且所有控制面、执行面、数据库、Provider、Redis、词法/向量索引和恢复证据在同一矩阵中不互相破坏。

@@ -27,12 +27,14 @@
 - 明确 SQLite 退出主协调路径的阶段和过渡期并发上限。
 
 
-## Scope assessment (2026-10-04): split required before implementation
+## Cross-task boundaries (2026-10-04)
 
-完整范围不可能一次安全完成，依据见 `research/evidence/scope-assessment.md`：
-18 处 check-then-act 需逐处重新论证（SQLite 的单写者串行化在 READ COMMITTED 下不存在）；
-租约语义已实测证伪朴素移植；RAG 的 FTS5 trigram 检索无对等物、需独立决策；
-导入对账与连接池重设是独立工作量。
+本任务只负责 PostgreSQL 作为持久真源的 schema、事务、lease/CAS、导入对账和 writer 迁移。以下问题已拆到独立子任务，不再隐含在本任务中：
 
-拆分为 P1 schema+事务、P2 租约与恢复、P3 导入对账、P4 RAG 检索方案、P5 连接池与灰度。
-本任务在 P1 之前**保持 in_progress**，不声称已迁移。
+- `10-04-control-plane-fault-domain`：backend/sidecar control-plane worker、DB reserve、故障域和多实例 recovery；
+- `10-04-provider-reliability-boundaries`：长流容量、backpressure、连接生命周期和 circuit breaker；
+- `10-04-postgres-operations-cutover`：连接预算、PgBouncer、WAL/PITR、HA、归档、writer epoch 和发布恢复；
+- `10-04-lexical-search-migration`：FTS5 trigram 的 PGroonga/Unicode n-gram 质量迁移；
+- `10-04-multitenant-load-acceptance`：跨子任务的真实并发与故障注入验收。
+
+本任务必须为这些子任务提供 PostgreSQL transaction/capacity/health 接缝，但不把它们未完成的结果伪装成 PostgreSQL migration 已完成。

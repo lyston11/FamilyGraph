@@ -4,3 +4,4 @@
 {"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "Verify RAG/vector does not bypass source/revision/scope/visibility contracts"}
 {"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "Verify background index/vector lifecycle and recovery"}
 {"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Verify checks are grounded in confirmed facts and open decisions"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/evidence/architecture-gap-review.md", "reason": "Verify cross-cutting control-plane, sidecar, provider, operations, lexical and acceptance gaps are not omitted"}

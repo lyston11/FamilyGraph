@@ -18,6 +18,10 @@
 - 依赖现有 `memory-rag-execution-contract` 与 `rag-index-lifecycle-contract`；不依赖 Redis。
 - embedding/index 任务不得占用 control-plane 保留容量，也不得改变 Agent provider/tool 合同。
 
+## Boundary with lexical search
+
+`pgvector` 只负责语义候选，不替代当前 SQLite FTS5 trigram 的中文词法能力。`10-04-lexical-search-migration` 独立评估 PGroonga 与 Unicode n-gram；两者可以在 PostgreSQL 内组成 hybrid retrieval，但必须共享 source/revision/scope/visibility/citation 和 index-version 合同。未完成词法基准前，不得把 `tsvector` 或无索引 `ILIKE` 当作 pgvector 的配套默认方案。
+
 ## Acceptance Criteria
 
 - pgvector 原型能按 scope/visibility/revision/citation 正确查询，撤权/删除后旧向量不可见且可回收。

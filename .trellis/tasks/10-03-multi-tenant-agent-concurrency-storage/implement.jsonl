@@ -4,3 +4,4 @@
 {"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "RAG/source/revision/scope/visibility and context-build trust boundary"}
 {"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "Index lifecycle, rebuild, revocation and background work boundaries"}
 {"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/multi-tenant-concurrency-storage-summary.md", "reason": "Confirmed current architecture facts and unresolved storage/concurrency decisions"}
+{"file": ".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/research/evidence/architecture-gap-review.md", "reason": "Cross-cutting gap review showing control-plane, sidecar, provider stream, operations, lexical search and load-acceptance boundaries"}

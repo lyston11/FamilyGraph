@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/memory-rag-execution-contract.md","reason":"RAG source, scope, visibility and citation trust boundary"}
+{"file":".trellis/spec/backend/rag-index-lifecycle-contract.md","reason":"Index versioning, rebuild, deletion and authorization lifecycle"}
+{"file":".trellis/tasks/10-03-postgres-migration/research/evidence/solution-decision.md","reason":"FTS5 trigram and PGroonga-first migration decision"}

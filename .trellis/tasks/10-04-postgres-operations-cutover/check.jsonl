@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Migration, FK, backup and SQLite transition constraints"}
+{"file":".trellis/spec/backend/agent-runtime.md","reason":"Agent durable state, audit and recovery contracts"}
+{"file":".trellis/tasks/10-03-postgres-migration/design.md","reason":"PostgreSQL source-of-truth and migration boundaries"}

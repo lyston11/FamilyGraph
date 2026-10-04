@@ -115,14 +115,40 @@ Redis 不承载 run 终态、attempt 结算、lease 真相、授权事实或审�
 
 ## Parent / child task map
 
-本父任务负责共同合同、依赖关系、跨子任务集成和最终多租户验收；实现工作拆为以下独立子任务：
+本父任务负责共同合同、依赖关系、跨子任务集成和最终多租户验收；实现工作拆为以下独立子任务。除了四个原始子任务，以下新增任务用于承接已经发现、但不应继续隐藏在 PostgreSQL 或 Redis 任务里的问题：
+
+### 已有核心子任务
 
 1. `10-03-agent-resource-isolation`：Assistant(account)/Steward(space) 配额、公平调度、control-plane 保留容量、执行池隔离、RetryBudget。它可以先以当前 SQLite 做运行时实验，但不得把 SQLite 宣称为最终并发存储。
 2. `10-03-postgres-migration`：PostgreSQL schema、事务/锁/CAS、lease/settle 迁移、历史导入、校验、灰度和回滚。它必须保留现有 Agent/RAG 授权合同，并为资源调度提供持久真源。
 3. `10-03-redis-coordination`：PostgreSQL 真源之上的 Redis admission/token bucket/cache/wakeup；依赖资源 key 合同，但不得把 Redis 变成 lease 真源。
 4. `10-03-pgvector-rag`：pgvector-first 原型与基准；依赖 PostgreSQL schema 和现有 RAG source/revision/scope/visibility/citation 合同，只有证据不足才另开独立向量库子任务。
 
-子任务之间的等待关系必须写在各自工件中；父任务不把任务树顺序当作隐式依赖。所有子任务最终必须汇入同一套 account/space/kind/control-plane 资源合同和并发验收矩阵。
+### 新增独立子任务
+
+5. `10-04-control-plane-fault-domain`：control/execution/background/admin 的 worker、limiter、DB reserve，以及 Assistant/Steward sidecar 故障域、优雅停机、多实例 lease/recovery。它承接 `agent-resource-isolation` 中尚未完成的 control-plane 与分进程问题。
+6. `10-04-provider-reliability-boundaries`：provider 长流并发、stream-level quota、连接生命周期、backpressure、upstream/kind/tenant circuit breaker 和总时限。run-level retry 已有实现，但不等于长流和故障域已经隔离。
+7. `10-04-postgres-operations-cutover`：PostgreSQL 连接预算、PgBouncer 兼容性、backup/WAL/PITR、HA/重启、writer epoch、数据保留和开发切换/回滚。它不重复 schema/租约迁移，而是负责可运行、可恢复、可发布。
+8. `10-04-lexical-search-migration`：SQLite FTS5 trigram 的中文词法迁移，比较 PGroonga、`pg_trgm`/`tsvector` 和 Unicode n-gram 后备；不把无索引 `ILIKE` 当生产方案。
+9. `10-04-multitenant-load-acceptance`：多 account×space×kind 的容量基线、压测、故障注入、安全诊断和最终验收矩阵；它是父任务的集成验收入口，不是单 run smoke test。
+
+### 依赖关系
+
+```text
+agent-resource-isolation
+        ↓ resource key / budget contract
+postgres-migration ───────────────┐
+        ↓ durable lease/capacity   │
+redis-coordination                 │
+pgvector-rag + lexical-search      │
+control-plane-fault-domain         │
+provider-reliability-boundaries ───┤
+postgres-operations-cutover ───────┤
+                                   ↓
+                    multitenant-load-acceptance
+```
+
+`postgres-migration` 不再隐含 PostgreSQL 运维、Provider 长流、中文词法和最终压测；每个子任务的 PRD/design/implement 都必须保留自己的失败语义、回滚点和验收边界。父任务最终以全矩阵和数据对账为准，不以子任务归档状态推断整体完成。
 
 
 - 多租户资源模型、调度与公平性设计；

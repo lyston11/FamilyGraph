@@ -50,6 +50,14 @@
 - [ ] 运行 backend/agent/full relevant checks，记录未运行的前端/高成本检查。
 - [ ] 变异验证：移除 tenant quota、移除 control-plane reserve、恢复乘法 retry、绕过 PostgreSQL CAS、取消 visibility filter 时测试必须失败。
 
+## Phase 5.5：跨子任务问题闭合
+
+- [ ] `10-04-control-plane-fault-domain`：完成 control/execution/background/admin 分池、DB reserve、sidecar 故障域、优雅停机和多实例 recovery。
+- [ ] `10-04-provider-reliability-boundaries`：完成 stream-level quota、长流 deadline、backpressure、连接生命周期和 upstream/kind/tenant circuit。
+- [ ] `10-04-postgres-operations-cutover`：完成连接预算、PgBouncer 兼容性、backup/WAL/PITR、writer epoch、保留/归档和开发切换回滚。
+- [ ] `10-04-lexical-search-migration`：完成 FTS5 trigram 的 PGroonga/Unicode n-gram 对照语料和生产候选选择。
+- [ ] `10-04-multitenant-load-acceptance`：用统一矩阵验证新增子任务没有互相破坏，形成最终 release gate。
+
 ## Phase 6：灰度与收尾
 
 - [ ] 仅在开发环境切换一小类 control-plane/attempt 流量，核对业务计数、审计、scope、run/attempt 状态和数据摘要。

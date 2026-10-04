@@ -22,7 +22,13 @@
     "10-03-agent-resource-isolation",
     "10-03-postgres-migration",
     "10-03-redis-coordination",
-    "10-03-pgvector-rag"
+    "10-03-pgvector-rag",
+    "10-04-control-plane-fault-domain",
+    "10-04-provider-reliability-boundaries",
+    "10-04-postgres-operations-cutover",
+    "10-04-lexical-search-migration",
+    "10-04-multitenant-load-acceptance",
+    "10-04-rag-lexical-search"
   ],
   "parent": null,
   "relatedFiles": [],
