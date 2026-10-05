@@ -1,5 +1,15 @@
 # 实施计划：PostgreSQL 主存储与租约协调迁移
 
+> 执行方式已重置：先完成 `10-05-migration-proof-gates`，再进入 Phase B 业务实现。未通过 Gate 的探针或测试不得被当作迁移完成证据。
+
+## Phase 0：执行前证明门（硬前置）
+
+- [ ] 完成 `10-05-migration-proof-gates` 的 PRD/design/implement 校验。
+- [ ] 固化 inventory ID、环境 manifest、证据等级和当前失败/未决风险。
+- [ ] 逐项检查 43 个事务调用点的锁参与者、锁序、CAS/counter 语义和调用方。
+- [ ] 为每个关键不变量建立正向、负向、mutation、故障注入和回滚用例。
+- [ ] 只有 Phase 0 全部通过后，才允许修改 Phase B 业务实现。
+
 ## Phase A：盘点与实验
 
 - [x] 扫描 SQLite-specific SQL、`BEGIN IMMEDIATE`、PRAGMA、FK/CHECK/partial index、

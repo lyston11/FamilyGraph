@@ -27,6 +27,12 @@
 - 明确 SQLite 退出主协调路径的阶段和过渡期并发上限。
 
 
+## Execution reset (2026-10-05)
+
+当前任务在执行阶段连续暴露出「本地测试通过、换 PostgreSQL 才失败」的缺陷：partial index 方言谓词丢失、JSON 约束/查询方言不兼容、`BEGIN IMMEDIATE` 被行锁替代后出现反向锁序死锁。问题根因不是单个实现粗心，而是缺少执行前证明门。
+
+因此在 `10-05-migration-proof-gates` 完成前，本任务只允许做证据、原型和设计更新，不允许继续扩大业务代码实现或切 writer。该子任务是本任务的硬前置，完成条件见其 `prd.md` / `design.md` / `implement.md`。
+
 ## Cross-task boundaries (2026-10-04)
 
 本任务只负责 PostgreSQL 作为持久真源的 schema、事务、lease/CAS、导入对账和 writer 迁移。以下问题已拆到独立子任务，不再隐含在本任务中：

@@ -113,7 +113,16 @@ pgvector   = 第一阶段向量检索优先方案
 
 Redis 不承载 run 终态、attempt 结算、lease 真相、授权事实或审计；向量索引不取代 source/revision/scope/visibility/citation。SQLite 仅作为迁移过渡，退出目标多租户协调主路径。
 
-## Parent / child task map
+## Execution quality gate (2026-10-05)
+
+此前执行中连续出现 partial index 方言谓词丢失、JSON CHECK/查询不兼容、`BEGIN IMMEDIATE` 迁移后反向锁序死锁等问题。父任务因此增加硬性流程门：
+
+- `10-05-migration-proof-gates` 是 `postgres-migration` 的前置，不完成不得继续扩大迁移业务实现。
+- 每个子任务必须先产出 PRD/design/implement、风险登记、证据等级、正向/负向/mutation 用例和回滚点。
+- SQLite 单元测试通过只能证明 SQLite；PostgreSQL 事务、约束、索引、恢复和多实例行为必须在真实隔离 PG 上验证。
+- 任何失败必须分类为实现 bug、oracle 错误、环境阻塞、设计未决或范围越界，并回到相应规划阶段；不得放宽断言或更换环境消除失败。
+- 父任务不得依据“所有子任务已归档”宣布完成，必须由最终 load-acceptance 矩阵、数据对账、备份恢复和开发灰度证据共同闭合。
+
 
 本父任务负责共同合同、依赖关系、跨子任务集成和最终多租户验收；实现工作拆为以下独立子任务。除了四个原始子任务，以下新增任务用于承接已经发现、但不应继续隐藏在 PostgreSQL 或 Redis 任务里的问题：
 

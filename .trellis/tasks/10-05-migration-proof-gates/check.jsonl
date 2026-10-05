@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify dialect, migration, rollback and concurrency compliance"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Verify lease, settle, egress and recovery contracts"}

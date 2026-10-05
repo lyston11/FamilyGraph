@@ -40,9 +40,41 @@ M6 domain writer cutover and SQLite retirement
 
 每一步先执行 refusal guards，再做 DDL/version move；切换前完成备份和恢复演练。双写必须有明确主写者、幂等 key、失败处理和对账，不允许两边独立裁决 lease/settle。校验失败停留在旧阶段，不自动修数据。
 
-## 5. 恢复与部署
+## 6. 执行质量门（2026-10-05）
 
-PostgreSQL 故障时不新增 lease；已有 lease 由持久 recovery 收口。导入使用隔离 SQLite 快照，不复制正在运行主库。开发 systemd 与线上 compose 完全分离，线上只由用户手动发布。回滚只回路由/读写阶段，不删除已验证导入数据。
+本任务不再采用「边探索边改业务代码」的执行方式。任何 Phase B 及以后实现必须先通过 `10-05-migration-proof-gates` 的对应 Gate：
+
+```text
+Gate 0 scope/worktree/environment
+Gate 1 schema/SQL/dialect inventory
+Gate 2 lock/CAS/counter/idempotency proof
+Gate 3 real PostgreSQL prototype
+Gate 4 failure injection/recovery
+Gate 5 snapshot/import/reconciliation/backup
+Gate 6 development shadow/cutover
+Gate 7 cross-task load acceptance
+```
+
+每个实现切片必须同时具备：正向用例、负向用例、mutation 证明、真实调用方核对、回滚点和未覆盖清单。SQLite 测试通过不代表 PostgreSQL 通过；源码推断不代表多连接或开发灰度证据。任何 Gate 失败必须停在当前阶段并更新设计，不得通过放宽断言、切换环境或跳过验证推进。
+
+### 问题分类与处理
+
+- 实现 bug：保留失败用例，修实现；
+- oracle 错误：先补充反例和语义证据，再改断言；
+- 环境阻塞：记录环境 manifest，不改业务逻辑绕过；
+- 设计未决：回到 PRD/design，禁止先写代码；
+- 范围越界：拆子任务，不在当前任务顺手实现。
+
+### 锁序硬约束
+
+PostgreSQL 迁移统一采用：
+
+```text
+global capacity → kind capacity → tenant capacity → parent/resource → run → attempt/event
+```
+
+任何路径不得先锁 run/attempt 再回头锁 counter。无法遵守时必须改为边界外 admission 或独立幂等 release transaction，并以双连接死锁探针证明。
+
 
 ## 7. 已确认的解决方案（2026-10-04）
 

@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "10-05-migration-proof-gates"
+  ],
   "parent": "10-03-multi-tenant-agent-concurrency-storage",
   "relatedFiles": [],
   "notes": "",

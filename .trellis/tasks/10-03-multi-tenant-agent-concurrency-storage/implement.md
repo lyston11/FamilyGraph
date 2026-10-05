@@ -10,7 +10,15 @@
 - [ ] 完成 PostgreSQL 为真源、Redis 为加速层、pgvector-first 的评审决策；若否决，更新设计与故障语义。
 - [ ] 识别可拆分子任务：调度/资源隔离、PostgreSQL 迁移、Redis admission、RAG/pgvector、压测/可观测性。
 
-## Phase 1：资源模型与控制面优先
+## Phase 0.5：执行前证明门（新增硬前置）
+
+- [ ] 完成 `10-05-migration-proof-gates`，并将其状态置为 verified，而不是仅创建文档。
+- [ ] 所有子任务在执行前完成 PRD/design/implement、证据等级、失败语义、回滚点和 owner。
+- [ ] 任何 PostgreSQL/Redis/pgvector 原型必须运行在隔离服务；建立环境 manifest，禁止把本地单元结果当作跨服务证据。
+- [ ] 对每个关键不变量建立正向、负向、mutation、双连接并发和故障恢复用例。
+- [ ] 全局锁序、连接预算、控制面保留容量、重试预算和跨任务接缝必须在代码前冻结。
+- [ ] Gate 未通过时，父任务只能更新设计/证据，不得进入业务实现或开发切换。
+
 
 - [ ] 定义 `account_id` Assistant、`space_id` Steward、global/kind/control-plane 的 quota key 与持久/运行时状态。
 - [ ] 设计 fair queue、tenant credits、最大排队、拒绝、取消、回收、饥饿避免和优先级规则。
