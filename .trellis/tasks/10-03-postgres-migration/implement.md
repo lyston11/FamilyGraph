@@ -21,7 +21,14 @@
       只能有一行）。改用 `app/models/indexes.py::partial_unique_index()` 统一两方言谓词；
       结构性回归 + 真实 PostgreSQL 语义验证 + 变异验证。
       证据 `research/evidence/partial-index-portability.md`。
-- [ ] 建立完整 agent/RAG schema prototype（本次只做租约表 + 索引可移植性）。
+- [x] **验证 schema 在 PostgreSQL 上可建**：逐表实建，87 张表中 84 张直接成功；
+      唯一阻塞是 `json_extract`（已修，修后 87/87）。因此**不需要重写全部历史 Alembic**。
+      证据 `research/evidence/pg-schema-feasibility.md`。
+- [x] **运行期 SQL 可移植性**：11 处 `func.json_extract` 会在 PG 上**执行时**失败
+      （不是建表失败，更隐蔽）。改用 SQLAlchemy 的 JSON 索引形式（JSON 列）与
+      `json_text_field`（Text 列）；结构性回归 + 真实 PG 执行 + 变异验证。
+      证据 `research/evidence/runtime-sql-portability.md`。
+- [ ] 建立完整 agent/RAG schema prototype 的**其余部分**：约束/索引/触发器逐条语义审查。
 
 ## Phase B：控制层 schema
 
