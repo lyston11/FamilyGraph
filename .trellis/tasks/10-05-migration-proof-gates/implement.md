@@ -13,7 +13,8 @@
 
 - [x] 为每张表、列、FK、CHECK、unique/partial index、trigger、raw SQL、migration、backup/export 路径生成 stable ID。自动扫描产物：`research/evidence/gate-1-inventory.{json,md}`；当前仅为 L0 inventory。
 - [ ] 逐项比较 SQLite/PostgreSQL DDL render，特别是 `sqlite_where`/`postgresql_where`、JSON CHECK、NULL、FK action 和 partial unique index。源码 stable inventory 已生成，方言执行矩阵仍未通过。
-- [ ] 每条 raw SQL 在两个数据库真实执行；不能只做 compile。
+- [x] 三条历史迁移的 SQLite 专属构造已在真实 PostgreSQL 上确认失败（`0042` json_extract / `0022` last_insert_rowid / `0014` FTS5），并含方言感知修复的反证。证据：`research/evidence/migration-replay-blockers.md`（L2）。
+- [ ] 其余 raw SQL 在两个数据库真实执行；不能只做 compile。
 - [ ] 记录排序、时间、JSON 类型、整数/布尔、空值和错误码差异。
 - [ ] 完成 RAG source/revision/scope/visibility/citation 与 lexical/vector index 的边界卡。
 
