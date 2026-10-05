@@ -2,16 +2,16 @@
 
 ## Phase 0：冻结与基线
 
-- [ ] 确认当前主检出干净；业务代码只能在任务 worktree 修改。
-- [ ] 建立环境 manifest：Python/SQLAlchemy/Alembic/PostgreSQL/Docker 版本、DATABASE_URL 目标、隔离端口和数据目录。
-- [ ] 将已有发现写入风险登记，标记 L0-L3 证据等级；没有 L4 前不得声称开发可用。
-- [ ] 固定父任务与 5 个架构子任务的边界、依赖和阻塞关系。
+- [x] 确认当前主检出干净；业务代码只能在任务 worktree 修改。
+- [x] 建立环境 manifest：Python/SQLAlchemy/Alembic/PostgreSQL/Docker 版本、DATABASE_URL 目标、隔离端口和数据目录。证据：`research/evidence/environment-manifest.json`。
+- [x] 将已有发现写入风险登记，标记 L0-L3 证据等级；没有 L4 前不得声称开发可用。
+- [x] 固定父任务与 5 个架构子任务的边界、依赖和阻塞关系。
 
 验证：`task.py current --source`、`git status --short`、`task.py validate`。
 
 ## Phase 1：Schema / SQL / dialect inventory
 
-- [ ] 为每张表、列、FK、CHECK、unique/partial index、trigger、raw SQL、migration、backup/export 路径生成 stable ID。
+- [x] 为每张表、列、FK、CHECK、unique/partial index、trigger、raw SQL、migration、backup/export 路径生成 stable ID。自动扫描产物：`research/evidence/gate-1-inventory.{json,md}`；当前仅为 L0 inventory。
 - [ ] 逐项比较 SQLite/PostgreSQL DDL render，特别是 `sqlite_where`/`postgresql_where`、JSON CHECK、NULL、FK action 和 partial unique index。
 - [ ] 每条 raw SQL 在两个数据库真实执行；不能只做 compile。
 - [ ] 记录排序、时间、JSON 类型、整数/布尔、空值和错误码差异。
