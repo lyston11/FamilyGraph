@@ -28,6 +28,11 @@
       （不是建表失败，更隐蔽）。改用 SQLAlchemy 的 JSON 索引形式（JSON 列）与
       `json_text_field`（Text 列）；结构性回归 + 真实 PG 执行 + 变异验证。
       证据 `research/evidence/runtime-sql-portability.md`。
+- [x] **验证 PostgreSQL 行锁语义**：`acquire_run_writer` 的 no-op UPDATE 在 PG 上确实
+      串行化（8 并发无冲突；反证：不取锁则 7 次冲突）。
+- [x] **发现并记录锁序死锁**：租约（counter→run）与结算（run→counter）交叉会真实死锁。
+      固定顺序 `global → kind → tenant counter → run → attempt`；结算必须在 fence 前
+      归还 counter。证据 `research/evidence/lock-order-deadlock.md`。
 - [ ] 建立完整 agent/RAG schema prototype 的**其余部分**：约束/索引/触发器逐条语义审查。
 
 ## Phase B：控制层 schema

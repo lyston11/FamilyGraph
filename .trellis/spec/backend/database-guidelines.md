@@ -305,3 +305,75 @@ WITH picked AS (
     FROM picked WHERE a.id = picked.id RETURNING a.id;
 -- 3) 无候选则归还：SELECT bump_counter('space', :space, 'steward_assist', -1);
 ```
+
+## Scenario: 锁顺序（PostgreSQL 迁移新增的约束，2026-10-04）
+
+### 1. Scope / Trigger
+
+引入任何**行锁**（`FOR UPDATE`、no-op `UPDATE ... WHERE id=`、counter 行）或把
+`BEGIN IMMEDIATE` 换成行锁前必读。
+
+### 2. Contracts
+
+SQLite 的 `BEGIN IMMEDIATE` 是**全库**写锁——没有「部分顺序」，因此锁序问题在 SQLite
+上**永远测不出来**。迁移到行锁后，锁序成为必须显式设计的约束。
+
+固定顺序：
+
+```text
+global counter → kind counter → account/space counter → run 行 → attempt 行
+```
+
+**counter 永远先于 run 行**。两条实现要求：
+
+1. 租约路径：先取 counter，再进 fence（fence 内部会取 run 行锁）。
+2. 结算路径：必须在 `fence_*_execution`（或任何取 run 行锁的函数）**之前**归还
+   counter。否则结算是 `run → counter`，与租约相反。
+
+第 2 条最易漏：`record_attempt_outcome` 在调用方事务内运行，而调用方
+（`settle_run` 的 `on_settled`）之前已经过 `fence_execution`。
+
+### 3. Validation & Error Matrix
+
+实测交叉顺序（两事务各持一锁后互等）：
+
+```
+死锁被检测到: ['A']       ← PostgreSQL DeadlockDetected 中止其一
+```
+
+### 4. Verified mechanism
+
+`agent_execution.acquire_run_writer` 的 no-op UPDATE 在 PostgreSQL 上**确实**提供
+行级串行化：
+
+```sql
+UPDATE agent_runs SET updated_at = updated_at WHERE id = :run_id
+```
+
+8 并发事务「取写锁 → 读 max(seq) → 插入」：成功 8、唯一冲突 0、seq 连续 `[0..7]`。
+**反证**：不取写锁时同一并发形状 → 表中仅 1 条、7 次唯一冲突。因此该机制有效且用例
+有判别力。
+
+### 5. Tests Required
+
+- 并发跑「租约」与「结算」路径，断言无 `DeadlockDetected` 且两者都完成。
+- 变异验证：把 counter 归还移到 fence 之后，用例必须暴露交叉顺序。
+- 三把以上锁（global + kind + tenant + run）的顺序仍需独立验证。
+
+### 6. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 结算：先 fence（取 run 行锁），再归还 counter -> 与租约路径锁序相反
+run, _, _ = fence_steward_execution(db, identity)
+steward_assist.record_attempt_outcome(db, ...)   # 内部归还 counter
+```
+
+#### Correct
+
+```python
+# counter 在进入 fence 之前处理；fence 之后只做行内更新
+steward_assist.release_capacity(db, ...)         # 先 counter
+run, _, _ = fence_steward_execution(db, identity)
+```
