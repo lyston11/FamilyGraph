@@ -1,2 +1,6 @@
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify dialect, migration, rollback and concurrency compliance"}
-{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Verify lease, settle, egress and recovery contracts"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify dialect, migration, rollback, lock and concurrency compliance"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "Verify source/scope/citation invariants are preserved by storage migration"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "Verify index rebuild, revision, deletion and authorization failure behavior"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify fail-closed errors, bounded retry and recovery semantics"}
+{"file": ".trellis/tasks/10-03-postgres-migration/research/evidence/solution-decision.md", "reason": "Check the measured PostgreSQL concurrency and dialect decisions are actually enforced"}
+{"file": ".trellis/tasks/10-03-postgres-migration/research/evidence/execution-risk-register.md", "reason": "Check every known process failure mode has evidence and a regression gate"}

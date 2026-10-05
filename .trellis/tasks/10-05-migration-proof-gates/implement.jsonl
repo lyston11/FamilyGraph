@@ -1,2 +1,6 @@
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite/PostgreSQL transaction, migration, constraint and refusal-guard rules"}
-{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "Agent run/lease/settle/egress/control-plane contracts affected by migration"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite/PostgreSQL transaction, migration, constraint, lock and refusal-guard contracts"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "Memory/RAG source, scope, citation and ContextBuild boundaries during storage migration"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "RAG index revision, rebuild, deletion and authorization lifecycle for the migration proof gates"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Fail-closed error, retry, recovery and rollback semantics for injected migration failures"}
+{"file": ".trellis/tasks/10-03-postgres-migration/research/evidence/solution-decision.md", "reason": "Measured PostgreSQL lease, lock, dialect and lexical-search findings that define the proof gates"}
+{"file": ".trellis/tasks/10-03-postgres-migration/research/evidence/execution-risk-register.md", "reason": "Known execution-process defects and mandatory evidence-level rules"}
