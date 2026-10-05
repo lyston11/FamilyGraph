@@ -1,13 +1,13 @@
 {
-  "generated_at_utc": "2026-10-05T08:23:58Z",
+  "generated_at_utc": "2026-10-05T08:24:32Z",
   "host": "lystondeMacBook-Air.local",
   "platform": "macOS-26.2-arm64-arm-64bit",
   "python": "3.12.12",
   "git": {
     "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
     "branch": "feat/10-05-migration-proof-gates",
-    "commit": "168f3ef36ed8848a2ad4b1e4d14ae2dae962ecb0",
-    "status": "M  .trellis/spec/backend/database-guidelines.md\nUU .trellis/tasks/10-03-postgres-migration/implement.md\nA  .trellis/tasks/10-03-postgres-migration/research/evidence/begin-immediate-classification.md\nA  .trellis/tasks/10-03-postgres-migration/research/evidence/counter-return-paths.md\nA  .trellis/tasks/10-03-postgres-migration/research/evidence/lease-counter-prototype.md\n M .trellis/tasks/10-05-migration-proof-gates/research/tools/build_inventory.py\n M .trellis/tasks/10-05-migration-proof-gates/research/tools/build_manifest.py\n M .trellis/tasks/10-05-migration-proof-gates/research/tools/build_schema_inventory.py\n M .trellis/tasks/10-05-migration-proof-gates/research/tools/build_tx_inventory.py\nM  backend/app/api/admin_steward.py\nM  backend/app/config.py\nM  backend/app/db.py\nM  backend/app/models/agent.py\nA  backend/app/models/checks.py\nA  backend/app/models/indexes.py\nA  backend/app/models/json_expr.py\nM  backend/app/models/memory.py\nM  backend/app/models/notification.py\nM  backend/app/models/relation.py\nM  backend/app/models/relationship_facts.py\nM  backend/app/models/space.py\nM  backend/app/models/steward.py\nM  backend/app/models/steward_inferred.py\nM  backend/app/models/steward_suggestion.py\nM  backend/app/models/term_registry.py\nM  backend/app/models/v2_foundation.py\nM  backend/app/services/steward_gc.py\nM  backend/app/services/steward_suggestions.py\nA  backend/tests/test_dialect_checks.py\nA  backend/tests/test_partial_index_portability.py\nA  backend/tests/test_quota_state_transitions.py\nA  backend/tests/test_sql_portability.py\nA  research/evidence/lock-order-deadlock.md\nA  research/evidence/partial-index-portability.md\nA  research/evidence/pg-schema-feasibility.md\nA  research/evidence/runtime-sql-portability.md\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/environment-manifest.json\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/gate-1-inventory.json\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/gate-1-inventory.md\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/gate-1-report.md\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/schema-inventory.json\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/schema-inventory.md\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/tx-inventory.json\n?? .trellis/tasks/10-05-migration-proof-gates/research/evidence/tx-inventory.md"
+    "commit": "3bf4a06972e0ad623e8a44f15d262424460adb91",
+    "status": ""
   },
   "tools": {
     "docker": "/usr/local/bin/docker",

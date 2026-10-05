@@ -1,0 +1,617 @@
+{
+  "by_kind": {
+    "comment": 4,
+    "string-literal": 14,
+    "docstring": 5,
+    "code": 5,
+    "test": 47
+  },
+  "real_code_by_token": {
+    "strftime": 2,
+    "json_extract": 5,
+    "fts5": 11,
+    "last_insert_rowid": 1
+  },
+  "items": [
+    {
+      "id": "SQL-json_extract-backend/app/api/admin_steward.py:454",
+      "token": "json_extract",
+      "path": "backend/app/api/admin_steward.py",
+      "line": 454,
+      "kind": "comment",
+      "text": "# 用 SQLAlchemy 的 JSON 索引形式而不是裸 json_extract：前者按方言渲染"
+    },
+    {
+      "id": "SQL-strftime-backend/app/backup.py:20",
+      "token": "strftime",
+      "path": "backend/app/backup.py",
+      "line": 20,
+      "kind": "string-literal",
+      "text": "stamp = datetime.now(UTC).strftime(\"%Y%m%d-%H%M%S\")"
+    },
+    {
+      "id": "SQL-strftime-backend/app/dev_seed.py:833",
+      "token": "strftime",
+      "path": "backend/app/dev_seed.py",
+      "line": 833,
+      "kind": "string-literal",
+      "text": "stamp = datetime.now(UTC).strftime(\"%Y%m%d-%H%M%S\")"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/checks.py:5",
+      "token": "json_extract",
+      "path": "backend/app/models/checks.py",
+      "line": 5,
+      "kind": "docstring",
+      "text": "部分 CHECK 约束用 SQLite 的 JSON 函数表达（`json_extract(col, '$.k')`）。PostgreSQL"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/checks.py:6",
+      "token": "json_extract",
+      "path": "backend/app/models/checks.py",
+      "line": 6,
+      "kind": "docstring",
+      "text": "没有 `json_extract`，因此这类约束会让**建表本身失败**（实测 87 张表中有 2 张因此建不出来）。"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/checks.py:13",
+      "token": "json_extract",
+      "path": "backend/app/models/checks.py",
+      "line": 13,
+      "kind": "docstring",
+      "text": "SQLite 的 `json_extract(col,'$.version') = 1` 是**类型敏感**的：JSON 数字 `1` 相等，"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/json_expr.py:14",
+      "token": "json_extract",
+      "path": "backend/app/models/json_expr.py",
+      "line": 14,
+      "kind": "docstring",
+      "text": "SELECT json_extract(CAST('{\"space_id\":5}' AS JSON), '$.space_id');  -- NULL"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/json_expr.py:19",
+      "token": "json_extract",
+      "path": "backend/app/models/json_expr.py",
+      "line": 19,
+      "kind": "docstring",
+      "text": "- SQLite：`json_extract(col, '$.k')`"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/json_expr.py:55",
+      "token": "json_extract",
+      "path": "backend/app/models/json_expr.py",
+      "line": 55,
+      "kind": "comment",
+      "text": "# SQLite 侧直接用 json_extract；类型转换交给比较运算（SQLite 动态类型）。"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/json_expr.py:62",
+      "token": "json_extract",
+      "path": "backend/app/models/json_expr.py",
+      "line": 62,
+      "kind": "string-literal",
+      "text": "return f\"json_extract({col}, '{element.path}')\""
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/memory.py:32",
+      "token": "json_extract",
+      "path": "backend/app/models/memory.py",
+      "line": 32,
+      "kind": "comment",
+      "text": "# SQLite 的 json_extract 是类型敏感的（数字 1 相等、字符串 \"1\" 不等），"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/memory.py:41",
+      "token": "json_extract",
+      "path": "backend/app/models/memory.py",
+      "line": 41,
+      "kind": "string-literal",
+      "text": "+ \"AND coalesce(json_extract(source_span_json, '$.version') = 1, 0) \""
+    },
+    {
+      "id": "SQL-json_extract-backend/app/models/memory.py:42",
+      "token": "json_extract",
+      "path": "backend/app/models/memory.py",
+      "line": 42,
+      "kind": "string-literal",
+      "text": "+ \"AND coalesce(json_extract(source_span_json, '$.kind') = source_kind, 0))\""
+    },
+    {
+      "id": "SQL-fts5-backend/app/models/rag.py:135",
+      "token": "fts5",
+      "path": "backend/app/models/rag.py",
+      "line": 135,
+      "kind": "string-literal",
+      "text": "String(32), default=\"fts5-trigram-v1\", nullable=False"
+    },
+    {
+      "id": "SQL-fts5-backend/app/models/rag.py:156",
+      "token": "fts5",
+      "path": "backend/app/models/rag.py",
+      "line": 156,
+      "kind": "string-literal",
+      "text": "String(32), default=\"fts5-trigram-v2\", nullable=False"
+    },
+    {
+      "id": "SQL-fts5-backend/app/services/memory_rag.py:52",
+      "token": "fts5",
+      "path": "backend/app/services/memory_rag.py",
+      "line": 52,
+      "kind": "string-literal",
+      "text": "RAG_INDEX_VERSION = \"fts5-trigram-v2\""
+    },
+    {
+      "id": "SQL-fts5-backend/app/services/memory_rag.py:683",
+      "token": "fts5",
+      "path": "backend/app/services/memory_rag.py",
+      "line": 683,
+      "kind": "string-literal",
+      "text": "\"fts5-trigram-v1\": _chunk_text_v1,"
+    },
+    {
+      "id": "SQL-fts5-backend/app/services/memory_rag.py:684",
+      "token": "fts5",
+      "path": "backend/app/services/memory_rag.py",
+      "line": 684,
+      "kind": "string-literal",
+      "text": "\"fts5-trigram-v2\": _chunk_text,"
+    },
+    {
+      "id": "SQL-json_extract-backend/app/services/steward_gc.py:116",
+      "token": "json_extract",
+      "path": "backend/app/services/steward_gc.py",
+      "line": 116,
+      "kind": "comment",
+      "text": "# 在 PostgreSQL 下渲染 `->`/`->>` + CAST；裸 func.json_extract 只在 SQLite 存在。"
+    },
+    {
+      "id": "SQL-fts5-backend/migrations/versions/0014_memory_rag.py:226",
+      "token": "fts5",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 226,
+      "kind": "string-literal",
+      "text": "sa.Column(\"index_version\", sa.String(32), nullable=False, server_default=\"fts5-trigram-1\"),"
+    },
+    {
+      "id": "SQL-fts5-backend/migrations/versions/0014_memory_rag.py:245",
+      "token": "fts5",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 245,
+      "kind": "string-literal",
+      "text": "\"CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(\""
+    },
+    {
+      "id": "SQL-last_insert_rowid-backend/migrations/versions/0022_system_admin_space_manager.py:104",
+      "token": "last_insert_rowid",
+      "path": "backend/migrations/versions/0022_system_admin_space_manager.py",
+      "line": 104,
+      "kind": "string-literal",
+      "text": "system_admin_id = conn.execute(sa.text(\"SELECT last_insert_rowid()\")).scalar_one()"
+    },
+    {
+      "id": "SQL-json_extract-backend/migrations/versions/0042_memory_source_contract.py:28",
+      "token": "json_extract",
+      "path": "backend/migrations/versions/0042_memory_source_contract.py",
+      "line": 28,
+      "kind": "code",
+      "text": "\"AND coalesce(json_extract(source_span_json, '$.version') = 1, 0) \""
+    },
+    {
+      "id": "SQL-json_extract-backend/migrations/versions/0042_memory_source_contract.py:29",
+      "token": "json_extract",
+      "path": "backend/migrations/versions/0042_memory_source_contract.py",
+      "line": 29,
+      "kind": "code",
+      "text": "\"AND coalesce(json_extract(source_span_json, '$.kind') = source_kind, 0))\""
+    },
+    {
+      "id": "SQL-fts5-backend/migrations/versions/0047_rag_lifecycle_integrity.py:103",
+      "token": "fts5",
+      "path": "backend/migrations/versions/0047_rag_lifecycle_integrity.py",
+      "line": 103,
+      "kind": "string-literal",
+      "text": "\"target_index_version\", sa.String(32), nullable=False, server_default=\"fts5-trigram-v2\""
+    },
+    {
+      "id": "SQL-fts5-backend/migrations/versions/0047_rag_lifecycle_integrity.py:123",
+      "token": "fts5",
+      "path": "backend/migrations/versions/0047_rag_lifecycle_integrity.py",
+      "line": 123,
+      "kind": "code",
+      "text": "\"WHERE target_index_version != 'fts5-trigram-v2' \""
+    },
+    {
+      "id": "SQL-fts5-backend/migrations/versions/0048_steward_terminology_publication.py:200",
+      "token": "fts5",
+      "path": "backend/migrations/versions/0048_steward_terminology_publication.py",
+      "line": 200,
+      "kind": "code",
+      "text": "\"WHERE target_index_version != 'fts5-trigram-v2' \""
+    },
+    {
+      "id": "SQL-fts5-backend/migrations/versions/0055_steward_assist_execution_unit.py:410",
+      "token": "fts5",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 410,
+      "kind": "code",
+      "text": "\"WHERE target_index_version != 'fts5-trigram-v2' \""
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_dialect_checks.py:6",
+      "token": "json_extract",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 6,
+      "kind": "test",
+      "text": "`json_extract`。PostgreSQL 没有该函数，因此这两张表在 PG 上**根本建不出来**"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_dialect_checks.py:10",
+      "token": "json_extract",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 10,
+      "kind": "test",
+      "text": "`json_extract(col,'$.version') = 1` 是**类型敏感**的："
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_dialect_checks.py:142",
+      "token": "json_extract",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 142,
+      "kind": "test",
+      "text": "for token in (\"json_extract\", \"strftime\", \"julianday\", \"AUTOINCREMENT\"):"
+    },
+    {
+      "id": "SQL-strftime-backend/tests/test_dialect_checks.py:142",
+      "token": "strftime",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 142,
+      "kind": "test",
+      "text": "for token in (\"json_extract\", \"strftime\", \"julianday\", \"AUTOINCREMENT\"):"
+    },
+    {
+      "id": "SQL-julianday-backend/tests/test_dialect_checks.py:142",
+      "token": "julianday",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 142,
+      "kind": "test",
+      "text": "for token in (\"json_extract\", \"strftime\", \"julianday\", \"AUTOINCREMENT\"):"
+    },
+    {
+      "id": "SQL-AUTOINCREMENT-backend/tests/test_dialect_checks.py:142",
+      "token": "AUTOINCREMENT",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 142,
+      "kind": "test",
+      "text": "for token in (\"json_extract\", \"strftime\", \"julianday\", \"AUTOINCREMENT\"):"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_dialect_checks.py:151",
+      "token": "json_extract",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 151,
+      "kind": "test",
+      "text": "# SQLite 的 json_extract 把 JSON `true` 折成整数 1，因此 `{\"version\":true}` 满足"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_dialect_checks.py:152",
+      "token": "json_extract",
+      "path": "backend/tests/test_dialect_checks.py",
+      "line": 152,
+      "kind": "test",
+      "text": "# `json_extract(...) = 1`；PostgreSQL 保留 JSON 类型，`'true'::jsonb != '1'::jsonb`。"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_index_lifecycle.py:399",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_index_lifecycle.py",
+      "line": 399,
+      "kind": "test",
+      "text": "index_version=\"fts5-trigram-v1-staged\","
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_index_lifecycle.py:421",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_index_lifecycle.py",
+      "line": 421,
+      "kind": "test",
+      "text": "monkeypatch.setitem(memory_rag.INDEX_CHUNKERS, \"fts5-trigram-v2-test\", memory_rag._chunk_text)"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_index_lifecycle.py:423",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_index_lifecycle.py",
+      "line": 423,
+      "kind": "test",
+      "text": "db_session, target_version=\"fts5-trigram-v2-test\", worker_id=\"switcher\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_index_lifecycle.py:431",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_index_lifecycle.py",
+      "line": 431,
+      "kind": "test",
+      "text": "assert doc.index_version == \"fts5-trigram-v2-test\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:36",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 36,
+      "kind": "test",
+      "text": "V3 = \"fts5-trigram-v3-test\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:656",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 656,
+      "kind": "test",
+      "text": "monkeypatch.setattr(memory_rag, \"RAG_INDEX_VERSION\", \"fts5-trigram-v1\")"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:661",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 661,
+      "kind": "test",
+      "text": "monkeypatch.setattr(memory_rag, \"RAG_INDEX_VERSION\", \"fts5-trigram-v2\")"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:667",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 667,
+      "kind": "test",
+      "text": "assert search(db_session, user, space)[0].index_version == \"fts5-trigram-v2\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:668",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 668,
+      "kind": "test",
+      "text": "assert memory_rag.ensure_memory_index(db_session, memory).index_version == \"fts5-trigram-v2\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:670",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 670,
+      "kind": "test",
+      "text": "db_session, target_version=\"fts5-trigram-v1\", worker_id=\"switcher\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:674",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 674,
+      "kind": "test",
+      "text": "assert search(db_session, user, space)[0].index_version == \"fts5-trigram-v1\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:740",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 740,
+      "kind": "test",
+      "text": "monkeypatch.setattr(memory_rag, \"RAG_INDEX_VERSION\", \"fts5-trigram-v1\")"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:751",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 751,
+      "kind": "test",
+      "text": "monkeypatch.setattr(memory_rag, \"RAG_INDEX_VERSION\", \"fts5-trigram-v2\")"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:753",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 753,
+      "kind": "test",
+      "text": "db_session, target_version=\"fts5-trigram-v2\", worker_id=\"switcher\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:759",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 759,
+      "kind": "test",
+      "text": "assert search(db_session, user, space)[0].index_version == \"fts5-trigram-v1\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:867",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 867,
+      "kind": "test",
+      "text": "patch.setattr(memory_rag, \"RAG_INDEX_VERSION\", \"fts5-trigram-v1\")"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:912",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 912,
+      "kind": "test",
+      "text": "assert document.index_version == \"fts5-trigram-v1\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:915",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 915,
+      "kind": "test",
+      "text": "assert [row.text for row in actual] == memory_rag.INDEX_CHUNKERS[\"fts5-trigram-v1\"]("
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_acceptance.py:928",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_acceptance.py",
+      "line": 928,
+      "kind": "test",
+      "text": "assert search(db_session, user, space)[0].index_version == \"fts5-trigram-v1\""
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_migrations.py:127",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_migrations.py",
+      "line": 127,
+      "kind": "test",
+      "text": "patch.setattr(memory_rag, \"RAG_INDEX_VERSION\", \"fts5-trigram-v1\")"
+    },
+    {
+      "id": "SQL-fts5-backend/tests/test_rag_lifecycle_migrations.py:146",
+      "token": "fts5",
+      "path": "backend/tests/test_rag_lifecycle_migrations.py",
+      "line": 146,
+      "kind": "test",
+      "text": "db, target_version=\"fts5-trigram-v2\", worker_id=\"migration\""
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:5",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 5,
+      "kind": "test",
+      "text": "`app/` 中有 11 处用 `func.json_extract(col, \"$.k\")` 做运行期查询。这些**不是**建表"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:7",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 7,
+      "kind": "test",
+      "text": "`UndefinedFunction: function json_extract(...) does not exist` —— 也就是说它们会"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:16",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 16,
+      "kind": "test",
+      "text": "| `json_text_field(col, \"$.k\")`（**Text** 列） | `json_extract(col,'$.k')` |"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:18",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 18,
+      "kind": "test",
+      "text": "| `func.json_extract(col, \"$.k\")` | `json_extract(...)` | `json_extract(...)` ← 不存在 | ❌ |"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:26",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 26,
+      "kind": "test",
+      "text": "SELECT json_extract(CAST('{\"a\":1}' AS JSON), '$.a');  -- NULL（期望 1）"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:41",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 41,
+      "kind": "test",
+      "text": "\"json_extract\","
+    },
+    {
+      "id": "SQL-strftime-backend/tests/test_sql_portability.py:42",
+      "token": "strftime",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 42,
+      "kind": "test",
+      "text": "\"strftime\","
+    },
+    {
+      "id": "SQL-julianday-backend/tests/test_sql_portability.py:43",
+      "token": "julianday",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 43,
+      "kind": "test",
+      "text": "\"julianday\","
+    },
+    {
+      "id": "SQL-AUTOINCREMENT-backend/tests/test_sql_portability.py:44",
+      "token": "AUTOINCREMENT",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 44,
+      "kind": "test",
+      "text": "\"AUTOINCREMENT\","
+    },
+    {
+      "id": "SQL-last_insert_rowid-backend/tests/test_sql_portability.py:46",
+      "token": "last_insert_rowid",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 46,
+      "kind": "test",
+      "text": "\"last_insert_rowid\","
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:51",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 51,
+      "kind": "test",
+      "text": "# 目前为空——所有 json_extract 都应通过方言感知的辅助表达。"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:96",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 96,
+      "kind": "test",
+      "text": "def test_the_json_extract_call_sites_are_actually_gone():"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:97",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 97,
+      "kind": "test",
+      "text": "\"\"\"盘点基线：`func.json_extract` 的出现次数必须为 0。\"\"\""
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:98",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 98,
+      "kind": "test",
+      "text": "n = sum(1 for _r, _l, name in _sql_expression_calls() if name == \"json_extract\")"
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:99",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 99,
+      "kind": "test",
+      "text": "assert n == 0, f\"仍有 {n} 处 func.json_extract 调用\""
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:118",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 118,
+      "kind": "test",
+      "text": "assert \"json_extract\" not in p.lower(), f\"PostgreSQL 上仍渲染出 json_extract：{p}\""
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:132",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 132,
+      "kind": "test",
+      "text": "assert \"json_extract\" in s, f\"SQLite 应使用 json_extract：{s}\""
+    },
+    {
+      "id": "SQL-json_extract-backend/tests/test_sql_portability.py:133",
+      "token": "json_extract",
+      "path": "backend/tests/test_sql_portability.py",
+      "line": 133,
+      "kind": "test",
+      "text": "assert \"json_extract\" not in p.lower(), f\"PostgreSQL 不应出现 json_extract：{p}\""
+    }
+  ]
+}
