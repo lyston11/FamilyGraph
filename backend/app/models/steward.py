@@ -38,6 +38,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 # ---- 枚举常量（服务层与迁移共用；CHECK 约束兜底）----
 # Steward 模型辅助的四类（models 是低层，服务层从这里取，避免两处字面量漂移）
@@ -137,13 +138,12 @@ class ActionCard(Base):
     __table_args__ = (
         CheckConstraint(_CARD_KIND_CHECK_SQL, name="ck_ac_kind"),
         CheckConstraint(_CARD_STATE_CHECK_SQL, name="ck_ac_state"),
-        Index(
+        partial_unique_index(
             "uq_action_cards_active_dedupe",
             "space_id",
             "dedupe_key",
             "evidence_version",
-            unique=True,
-            sqlite_where=sa.text(_ACTIVE_STATE_SQL),
+            where=_ACTIVE_STATE_SQL,
         ),
         Index("ix_action_cards_space_state", "space_id", "state"),
         Index("ix_action_cards_recipient", "recipient_account_id", "state"),
@@ -210,11 +210,10 @@ class StewardJob(Base):
     __table_args__ = (
         CheckConstraint(_JOB_CAUSE_CHECK_SQL, name="ck_sj_cause"),
         CheckConstraint(_JOB_STATUS_CHECK_SQL, name="ck_sj_status"),
-        Index(
+        partial_unique_index(
             "uq_steward_jobs_space_active",
             "space_id",
-            unique=True,
-            sqlite_where=sa.text(_ACTIVE_JOB_STATUS_SQL),
+            where=_ACTIVE_JOB_STATUS_SQL,
         ),
         Index("ix_steward_jobs_lease_scan", "status", "created_at"),
     )

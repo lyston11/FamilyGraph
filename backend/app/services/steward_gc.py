@@ -112,18 +112,19 @@ def _obsolete_candidates() -> Select[tuple[int]]:
     # successor has not replaced the publication. Compare the same two input
     # rows as valid_generation in this read-only discovery query; inferred-only
     # changes deliberately do not invalidate ordinary confirmed delivery.
+    # 可移植的 JSON 索引形式：SQLAlchemy 在 SQLite 下渲染 JSON_EXTRACT，
+    # 在 PostgreSQL 下渲染 `->`/`->>` + CAST；裸 func.json_extract 只在 SQLite 存在。
+    # 与 `steward_delivery.py` 的 valid_generation 查询保持同一写法。
     inputs_changed = or_(
-        func.coalesce(func.json_extract(versions, "$.version"), "")
-        != steward_snapshot.SNAPSHOT_VERSION,
-        func.coalesce(func.json_extract(versions, "$.config"), "")
-        != steward_snapshot.config_fingerprint(),
-        func.coalesce(func.json_extract(versions, "$.global[0]"), -1)
+        func.coalesce(versions["version"].as_string(), "") != steward_snapshot.SNAPSHOT_VERSION,
+        func.coalesce(versions["config"].as_string(), "") != steward_snapshot.config_fingerprint(),
+        func.coalesce(versions["global"][0].as_integer(), -1)
         != func.coalesce(global_revision.structural, 0),
-        func.coalesce(func.json_extract(versions, "$.global[1]"), -1)
+        func.coalesce(versions["global"][1].as_integer(), -1)
         != func.coalesce(global_revision.presentation, 0),
-        func.coalesce(func.json_extract(versions, "$.space[0]"), -1)
+        func.coalesce(versions["space"][0].as_integer(), -1)
         != func.coalesce(space_revision.structural, 0),
-        func.coalesce(func.json_extract(versions, "$.space[1]"), -1)
+        func.coalesce(versions["space"][1].as_integer(), -1)
         != func.coalesce(space_revision.presentation, 0),
     )
     return (

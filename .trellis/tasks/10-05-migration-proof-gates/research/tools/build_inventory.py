@@ -2,7 +2,26 @@ from __future__ import annotations
 import ast, json, os, re, subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[4]
+def _repo_root() -> Path:
+    """解析仓库根目录。
+
+    不要用 `Path(__file__).parents[N]`：任务 worktree 下 tools/ 位于
+    `.trellis/tasks/<task>/research/tools/`，深度变化时 N 会静默指错目录，
+    扫描结果为空却不报错（本文件初版即因此产出空 inventory）。
+    """
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, cwd=Path(__file__).parent
+        ).strip()
+        if out:
+            return Path(out)
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[5]
+
+
+ROOT = _repo_root()
 BACKEND = ROOT / 'backend'
 OUT = Path(__file__).resolve().parents[1] / 'evidence'
 OUT.mkdir(parents=True, exist_ok=True)
@@ -27,13 +46,13 @@ models=files('app/models/**/*.py')
 migrations=files('migrations/versions/*.py')
 all_py=files('**/*.py')
 raw_patterns={
- 'begin_immediate':r'BEGIN\\s+IMMEDIATE|immediate\\s*=\\s*True|_immediate_tx',
- 'raw_json_extract':r'json_extract\\s*\\(',
- 'raw_sql':r'(?i)(?:text\\(|exec_driver_sql\\(|execute\\()',
- 'sqlite_where':r'sqlite_where',
- 'postgresql_where':r'postgresql_where',
- 'sqlite_specific':r'(?i)(?:sqlite|pragma|fts5|autoincrement|without\\s+rowid)',
- 'backup':r'(?i)(?:backup|pg_dump|restore|snapshot|export|import)',
+ 'begin_immediate': r"BEGIN\s+IMMEDIATE|immediate\s*=\s*True|_immediate_tx",
+ 'raw_json_extract': r"json_extract\s*\(",
+ 'raw_sql': r"(?i)(?:text\(|exec_driver_sql\(|execute\()",
+ 'sqlite_where': r"sqlite_where",
+ 'postgresql_where': r"postgresql_where",
+ 'sqlite_specific': r"(?i)(?:sqlite|pragma|fts5|autoincrement|without\s+rowid)",
+ 'backup': r"(?i)(?:backup|pg_dump|restore|snapshot|export|import)",
 }
 report={
  'root':str(ROOT), 'branch':git(['git','branch','--show-current']),

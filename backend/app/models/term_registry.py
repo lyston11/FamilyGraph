@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 # ---- 枚举常量（服务层与迁移共用；CHECK 约束兜底）----
 TERM_LEVELS = ("system", "locale", "space", "personal")
@@ -213,21 +213,19 @@ class TermEntry(Base):
         _check_in("level", TERM_LEVELS, "ck_te_level"),
         _check_in("status", TERM_STATUSES, "ck_te_status"),
         # personal：每账号每概念至多一条 active 词条（superseded 历史不受限）
-        Index(
+        partial_unique_index(
             "uq_term_entries_personal_active",
             "owner_account_id",
             "concept_code",
-            unique=True,
-            sqlite_where=sa.text("level = 'personal' AND status = 'active'"),
+            where="level = 'personal' AND status = 'active'",
         ),
         # space：同空间同概念同词至多一条 active 别名
-        Index(
+        partial_unique_index(
             "uq_term_entries_space_active",
             "space_id",
             "concept_code",
             "term",
-            unique=True,
-            sqlite_where=sa.text("level = 'space' AND status = 'active'"),
+            where="level = 'space' AND status = 'active'",
         ),
         Index("ix_term_entries_space_level", "space_id", "level"),
         Index("ix_term_entries_concept", "concept_code"),

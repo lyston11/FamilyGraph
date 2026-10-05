@@ -445,9 +445,7 @@ def ensure_admin_ready() -> None:
 # 执行面准入的租户维度参数。默认值按「先证明隔离，再谈吞吐」定：
 # 全局 8 与既有工具名额同量级（连接池 15，必须留出控制面余量）；
 # 单租户 2 使一个空间/账号的突发最多占全局的四分之一。
-AGENT_EXECUTION_GLOBAL_CAPACITY: int = int(
-    os.environ.get("AGENT_EXECUTION_GLOBAL_CAPACITY", "8")
-)
+AGENT_EXECUTION_GLOBAL_CAPACITY: int = int(os.environ.get("AGENT_EXECUTION_GLOBAL_CAPACITY", "8"))
 AGENT_EXECUTION_PER_TENANT_CAPACITY: int = int(
     os.environ.get("AGENT_EXECUTION_PER_TENANT_CAPACITY", "2")
 )

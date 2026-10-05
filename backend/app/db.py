@@ -70,9 +70,7 @@ def _instrument_pool_wait() -> None:
             # 必须在 finally 里记录：池满时 `original()` 会**抛** TimeoutError，
             # 而「池满到超时」正是最需要被观测的情形。只在成功路径记录会让
             # 最严重的情况恰好没有日志。
-            runtime_diagnostics.note_pool_wait(
-                runtime_diagnostics.now_seconds() - started, self
-            )
+            runtime_diagnostics.note_pool_wait(runtime_diagnostics.now_seconds() - started, self)
 
     # mypy 把池实例上的方法赋值视为 method-assign；这里是有意的运行时插桩
     # （SQLAlchemy 的池对象就是普通实例），因此显式忽略该检查。

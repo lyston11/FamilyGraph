@@ -1,7 +1,26 @@
 from __future__ import annotations
 import ast,json,re
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[4]
+def _repo_root() -> Path:
+    """解析仓库根目录。
+
+    不要用 `Path(__file__).parents[N]`：任务 worktree 下 tools/ 位于
+    `.trellis/tasks/<task>/research/tools/`，深度变化时 N 会静默指错目录，
+    扫描结果为空却不报错（本文件初版即因此产出空 inventory）。
+    """
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, cwd=Path(__file__).parent
+        ).strip()
+        if out:
+            return Path(out)
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[5]
+
+
+ROOT = _repo_root()
 MODEL_ROOT=ROOT/'backend/app/models'
 OUT=ROOT/'.trellis/tasks/10-05-migration-proof-gates/research/evidence'
 items=[]

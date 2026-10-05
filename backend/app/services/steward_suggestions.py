@@ -25,7 +25,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import config
@@ -769,14 +769,17 @@ def _proposal_belongs_to_space(session: Session, fact: SourceFact, space_id: int
     ):
         return True
     from app.models.audit_log import AuditLog
+    from app.models.json_expr import json_text_field
 
     return (
         session.scalar(
             select(AuditLog.id)
             .where(
                 AuditLog.action == "relationship_proposal_created",
-                func.json_extract(AuditLog.detail_json, "$.space_id") == space_id,
-                func.json_extract(AuditLog.detail_json, "$.source_fact_id") == fact.id,
+                # detail_json 是 Text 列，用方言感知的取值表达式（见 models/json_expr.py）。
+                json_text_field(AuditLog.detail_json, "$.space_id", as_type="integer") == space_id,
+                json_text_field(AuditLog.detail_json, "$.source_fact_id", as_type="integer")
+                == fact.id,
             )
             .limit(1)
         )
