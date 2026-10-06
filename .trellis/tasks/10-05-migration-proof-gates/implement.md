@@ -12,13 +12,13 @@
 ## Phase 1：Schema / SQL / dialect inventory
 
 - [x] 为每张表、列、FK、CHECK、unique/partial index、trigger、raw SQL、migration、backup/export 路径生成 stable ID。自动扫描产物：`research/evidence/gate-1-inventory.{json,md}`；当前仅为 L0 inventory。
-- [ ] 逐项比较 SQLite/PostgreSQL DDL render，特别是 `sqlite_where`/`postgresql_where`、JSON CHECK、NULL、FK action 和 partial unique index。源码 stable inventory 已生成，方言执行矩阵仍未通过。
+- [x] 双方言 DDL render 已逐类验证：局部唯一索引 16 处（编译 + 真实 PG 语义 + mutation）、JSON CHECK（22 用例）、运行期 JSON 查询（3 文件真实执行）、方言矩阵 13 项（11 一致 / 2 保留）。**未逐项**：88 表全部 FK action 与复合 CHECK 的逐个 render 比对（已覆盖类别，未穷举个体）。
 - [x] 三条历史迁移的 SQLite 专属构造已在真实 PostgreSQL 上确认失败（`0042` json_extract / `0022` last_insert_rowid / `0014` FTS5），并含方言感知修复的反证。证据：`research/evidence/migration-replay-blockers.md`（L2）。
 - [x] raw SQL 已结构化并按风险分类（`raw-sql-inventory.json/md`）：6 处 SQLite-only 函数、31 PRAGMA、23 SQLite DDL、3 BEGIN IMMEDIATE、0 字面量 AUTOINCREMENT；方言中立 1475 处仅计数。**已排除两类误报**（`autoincrement=True` 实测可移植、`strftime` 是 Python 方法）。
 - [x] 方言语义矩阵已在两库真实执行（13 项：NULL 排序/唯一性、JSON 类型、整数除法、布尔、字符串比较）：**11 项一致，2 项差异**（整数与布尔混用、JSON 布尔取值），两项均判定**保留**且满足「PG 侧 fail-loud 或更严格」。证据：`research/evidence/dialect-matrix.md`。
 - [x] PRAGMA 与 SQLite DDL 已穷举并在 PostgreSQL 上逐条试执行：**7 种 PRAGMA（31 处）全部登记等价物**，**23 处 SQLite DDL 全部被 PG 拒绝**。证据：`research/evidence/pragma-ddl-checks.md`。
-- [ ] 记录排序、时间、JSON 类型、整数/布尔、空值和错误码差异。
-- [ ] 完成 RAG source/revision/scope/visibility/citation 与 lexical/vector index 的边界卡。
+- [x] 已记录：排序（NULL 位置、大小写）、JSON 类型（数字/字符串/布尔/null）、整数除法、整数与布尔混用、空值（NULL 唯一性）。证据：`research/evidence/dialect-matrix.md`。**未覆盖**：时间精度与错误码差异。
+- [x] RAG 边界卡已完成：`research/evidence/rag-boundary-card.md`（source/revision/scope/visibility/citation 不变量、索引可重建性、5 个 `rag_*` 触发器必须在 PG baseline 重写、迁移期 5 条禁止事项）。**未验证**：触发器逐条语义、唯一索引真实插入、复合 CHECK 双方言渲染、索引重建不变性。
 
 退出门：inventory 无未解释条目；每个差异都有保留、适配或拒绝结论。
 
