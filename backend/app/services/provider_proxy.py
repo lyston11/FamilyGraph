@@ -36,7 +36,7 @@ from app.errors import (
     AGENT_PROVIDER_UPSTREAM_REJECTED,
 )
 from app.models.agent import AgentRun
-from app.services import agent_provider, audit, policy_guard
+from app.services import agent_provider, audit, policy_guard, provider_circuit
 from app.services.agent_execution import Execution, fence_execution
 
 logger = logging.getLogger(__name__)
@@ -444,6 +444,28 @@ async def stream_provider_response(
                 connect=float(config.AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS),
             ),
         )
+        # 熔断检查必须在**发送前**：它的全部价值就是避免把明知会失败的请求发出去。
+        # 上游整体不可用时（DERP 丢路由、provider 挂掉），每个 run 各自重试会让
+        # 故障放大为「每租户 × 每 run × 24 次尝试」——实测最坏持续 18.8 小时。
+        #
+        # 被熔断拒绝时**不消耗上游尝试**（零出站），因此审计写 sent=False：
+        # 连接未建立，这是可观测事实，不是「猜测上游没处理」。
+        circuit_key = provider_circuit.circuit_key(provider_id=runtime.provider_id, kind=run.kind)
+        if not provider_circuit.breaker().allow(circuit_key):
+            # 关闭由 `except ProviderProxyError` 统一处理，这里不重复。
+            _audit_egress(
+                db,
+                run=run,
+                provider_id=runtime.provider_id,
+                status="failed",
+                status_code=None,
+                bytes_read=0,
+                error_class="upstream_circuit_open",
+                retryable=True,
+                sent=False,
+            )
+            raise ProviderProxyError(502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问")
+        circuit_allowed = True
         # Atomically admit the request immediately before constructing the
         # upstream POST.  A later cancellation may stop the stream, but cannot
         # retroactively revoke an already-admitted request.
@@ -476,6 +498,8 @@ async def stream_provider_response(
             sent=True,
             header_ms=int(float(config.AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS) * 1000),
         )
+        if circuit_allowed:
+            provider_circuit.breaker().record_failure(circuit_key)
         raise ProviderProxyError(
             502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
         ) from None
@@ -495,10 +519,16 @@ async def stream_provider_response(
             retryable=failure.retryable,
             sent=failure.sent,
         )
+        if circuit_allowed:
+            provider_circuit.breaker().record_failure(circuit_key)
         raise ProviderProxyError(
             502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
         ) from None
     assert client is not None  # construction either returned or raised above
+    # 连接建立且拿到响应头 = 上游可达，记成功（即使状态码是 4xx/5xx：那是应用层
+    # 拒绝，说明网络路径正常，不该触发熔断）。
+    if circuit_allowed:
+        provider_circuit.breaker().record_success(circuit_key)
     if upstream.status_code >= 400:
         await upstream.aclose()
         await client.aclose()

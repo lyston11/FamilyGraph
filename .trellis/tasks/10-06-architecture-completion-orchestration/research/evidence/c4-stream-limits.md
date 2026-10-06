@@ -52,8 +52,9 @@ ruff: 仅剩 main 上既有的 2 个
 
 1. **backpressure**：上游 SSE 快于消费端时的处理未实现。当前是逐块 `yield`，
    消费端慢会自然形成 TCP 背压，但没有显式的缓冲上限或丢弃策略。
-2. **circuit breaker**：按 provider profile / kind / tenant 的熔断未实现。
-   open 时应在**发送前**快速拒绝且不影响 control-plane；半开只允许有界探针。
+2. ~~circuit breaker 未实现~~ → **已闭合**：`app/services/provider_circuit.py`。
+   按 **`upstream × kind`** 分区（**不含 tenant**，理由见下），open 时在**发送前**
+   拒绝（零出站，审计 `sent=False`），half_open 只放有界探针，需多次成功才关闭。
 3. **连接生命周期**：persistent `AsyncClient`（实测节省约 49.5ms/请求）未实施，
    需先基准。
 4. **故障注入**：DERP 不可达、DNS 失败、connect/header/stream 中断、
@@ -64,3 +65,48 @@ ruff: 仅剩 main 上既有的 2 个
 
 流级名额与 deadline：**L1**（SQLite 单测 + 变异验证）。
 配额在真实 PostgreSQL 多连接下的行为未单独验证（结构复用 C2/C3 已验的 counter 机制）。
+
+
+## 熔断器（后续更新）
+
+### 分区决策：`upstream × kind`，**不含 tenant**
+
+| 方案 | 问题 |
+|---|---|
+| 全局 | 一个上游不可用放大成「整个系统不可用」——比不熔断更糟 |
+| 含 tenant | 上游可用性是**上游**的属性；按租户分区会让每个租户各自重复发现同一个上游故障，熔断失去意义 |
+| **`upstream × kind`（采用）** | 一个 profile 挂掉不牵连另一个；Assistant 与 Steward 走不同设置也不互相影响 |
+
+租户隔离由 capacity/stream 配额负责（C2/C4 已交付），不是熔断的职责。
+
+### 状态机
+
+```
+closed --(连续失败 ≥ 阈值)--> open
+open --(冷却结束)--> half_open（只放有界探针）
+half_open --(探针失败)--> open（重新计时）
+half_open --(成功 ≥ N 次)--> closed
+```
+
+**为什么需要多次成功**：一次成功就关闭会让上游抖动时熔断反复开合。
+
+### 为什么不用 Redis 共享熔断状态
+
+熔断状态是「**本进程**观察到的上游健康」。跨实例共享会引入 Redis 依赖（而 Redis
+本身可能故障），且各实例网络路径可能不同（Tailscale DERP 即如此——同一上游在
+不同实例上确实可能一好一坏）。跨实例的**持久**信号由 egress 审计承担。
+
+### 记账语义
+
+- **连接建立且拿到响应头 = 成功**（即使状态码是 4xx/5xx：那是应用层拒绝，说明
+  网络路径正常，不该触发熔断）；
+- 传输类失败（超时/连接异常）记失败；
+- 被熔断拒绝时**不消耗上游尝试**，审计 `sent=False`（连接未建立，可观测事实）。
+
+### 变异验证（3 组）
+
+| 变异 | 结果 |
+|---|---|
+| 冷却期内也放行 | 3 个用例失败 |
+| 分区键加入 tenant | 分区用例失败 |
+| half_open 不限制探针 | 探针限制用例失败 |
