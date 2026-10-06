@@ -104,3 +104,38 @@
 已完成并可用：65 个事务入口分类（含强制机制与 mutation 验证）、方言阻塞探针、死锁探针、14 个触发器阻塞证据、环境 manifest。
 
 **不得**据此放行 `postgres-migration` 的业务实现。
+
+
+## 完成总结（2026-10-06）
+
+### Gate 0–5：已完成，均有可复跑证据
+
+| Gate | 内容 | 证据 | 等级 |
+|---|---|---|---|
+| 0 | 范围/环境/边界 | `environment-manifest.json`、`integration-note.md` | L0 |
+| 1 | inventory + 方言 | `gate-1-inventory.json`、`trigger-inventory.json`、`dialect-matrix.md`、`pragma-ddl-checks.md`、`raw-sql-inventory.md`、`rag-boundary-card.md` | L0 + L2 |
+| 2 | 锁序/并发/mutation | `lock-order-graph.md`、`pg_three_lock_probe`、`pg_deadlock_probe`、`gate-2-mutation-closure.md`、`gate-2-deadlock-timeout.md` | L0 + L2/L3 |
+| 3 | PostgreSQL prototype + 触发器等价物 + 门禁 | `gate-3-baseline-prototype.md`、`gate-3-guards-probe.md` | L2 |
+| 4 | 故障注入 | `gate-4-fault-injection.md` | 原型 L3 |
+| 5 | 快照/导入/对账/refusal/backup | `gate-5-import-reconcile.md`、`gate-5-sequence-and-restore.md` | 原型 |
+
+### Gate 6/7：已移交（原设计存在循环依赖，见 `prd.md` 范围修正）
+
+### 交付物
+
+- **10 个扫描器**（`scripts/migration-proof/build_*.py`）：无需数据库，静态分析
+- **12 个探针**（`scripts/migration-proof/pg_*.py`、`import_*`、`dialect_matrix`）：
+  需要 `PGTEST_DSN`，未设置时 SKIP + exit 2
+
+### 探针纪律（实测踩坑后固化）
+
+1. 时间类探针必须要求效应量达到可观测下界，否则报 FAIL；
+2. 并发探针必须让 worker 争用**同一**资源且取锁顺序**相反**；
+3. 摘要必须区分「已演练」与「已跳过」，不得把 SKIP 汇报成 PASS。
+
+### 本任务发现的真实缺陷（都已被探针捕获并修正）
+
+- 我自己实现里的**迁移幂等缺陷**：先 UPDATE 再 SELECT 会把上次已迁移行计入审计
+- 既有 9 个 settle/cancel 用例**守护不住**锁内 CAS 复核（变异验证实证）
+- 三锁探针**两次假通过**（资源不相交 / 两个都反向）
+- `deadlock_timeout` 探针曾在噪声下打印负 delta 仍宣告 PASS
