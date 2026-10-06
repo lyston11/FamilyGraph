@@ -388,9 +388,6 @@ run, _, _ = fence_steward_execution(db, identity)
 
 ### 2. Signatures（可复跑的探针与扫描器）
 
-工具当前位于任务目录 `scripts/migration-proof/`。
-**任务归档前必须把它们提升到 `scripts/`**，否则本段命令在归档后会失效。
-
 ```bash
 # 扫描器（从仓库根运行，不需要数据库）
 ./backend/.venv/bin/python scripts/migration-proof/build_tx_entries.py        # 事务入口枚举

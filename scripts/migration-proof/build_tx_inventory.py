@@ -13,7 +13,7 @@ def _repo_root() -> Path:
     """解析仓库根目录。
 
     不要用 `Path(__file__).parents[N]`：任务 worktree 下 tools/ 位于
-    `.trellis/tasks/<task>/research/tools/`，深度变化时 N 会静默指错目录，
+    `.trellis/tasks/<task>/research/tools/`（工具当时的存放位置），深度变化时 N 会静默指错目录，
     扫描结果为空却不报错（本文件初版即因此产出空 inventory）。
     """
     import subprocess

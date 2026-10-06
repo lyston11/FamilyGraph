@@ -2,13 +2,16 @@
 
 ## 事实
 
-`feat/10-05-migration-proof-gates` 相对 `main` 有 30 个 commit：
+每个数字都附带**生成它的确切命令**，避免不同查询口径互相矛盾（上一版本就因此陈旧）。
 
-| 来源 | 数量 | 是否触碰 `backend/` |
+| 项 | 命令 | 值 |
 |---|---|---|
-| 本任务（10-05）自身 commit（`3bf4a069..HEAD`） | 19 | **0** |
-| 经 merge `3bf4a069` 带入的 commit | 11 | 其中 4 个触碰 `backend/` |
-| （其余为 10-03 的规划/证据 commit） | — | 否 |
+| 分支相对 main 的 commit（含 merge） | `git rev-list --count main..HEAD` | 32 |
+| 分支相对 main 的 commit（不含 merge） | `git rev-list --count --no-merges main..HEAD` | 31 |
+| 本任务自身 commit | `git rev-list --count 3bf4a069..HEAD` | 21 |
+| merge 带入的 commit | `git rev-list --count main..3bf4a069` | 11 |
+| 其中触碰 `backend/` | `git rev-list --count main..3bf4a069 -- backend/` | 4 |
+| **本任务自身触碰 `backend/`** | `git rev-list --count 3bf4a069..HEAD -- backend/` | **0** |
 
 带入的 4 个业务 commit：
 

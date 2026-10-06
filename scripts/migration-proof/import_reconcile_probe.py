@@ -13,7 +13,7 @@
 
 用法：
 
-    PGTEST_DSN=postgresql://... python3 research/tools/import_reconcile_probe.py
+    PGTEST_DSN=postgresql://... python3 scripts/migration-proof/import_reconcile_probe.py
 """
 from __future__ import annotations
 

@@ -14,7 +14,7 @@
 
 用法：
 
-    PGTEST_DSN=postgresql://... python3 research/tools/pg_fault_injection.py
+    PGTEST_DSN=postgresql://... python3 scripts/migration-proof/pg_fault_injection.py
 """
 from __future__ import annotations
 

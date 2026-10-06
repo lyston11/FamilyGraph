@@ -3,7 +3,7 @@
 用法（隔离 PostgreSQL，禁止指向开发库或线上）：
 
     PGTEST_DSN=postgresql://postgres:probe@127.0.0.1:55435/familygraph \\
-        ./backend/.venv/bin/python research/tools/pg_replay_probe.py
+        ./backend/.venv/bin/python scripts/migration-proof/pg_replay_probe.py
 
 覆盖三处历史迁移的 SQLite 专属构造，以及修复后的方言感知反证：
 

@@ -3,7 +3,7 @@
 用法：
 
     PGTEST_DSN=postgresql://postgres:probe@127.0.0.1:55435/familygraph \\
-        ./backend/.venv/bin/python research/tools/pg_deadlock_probe.py
+        ./backend/.venv/bin/python scripts/migration-proof/pg_deadlock_probe.py
 
 两条事务路径：
 

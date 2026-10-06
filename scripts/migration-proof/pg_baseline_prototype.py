@@ -19,7 +19,7 @@ baseline 时若不显式重写，这些不变量会**静默消失**——不是�
 
 用法：
 
-    PGTEST_DSN=postgresql://... python3 research/tools/pg_baseline_prototype.py
+    PGTEST_DSN=postgresql://... python3 scripts/migration-proof/pg_baseline_prototype.py
 
 退出码 0 = 全部负向用例按预期被拒绝、正向用例被接受。
 """
