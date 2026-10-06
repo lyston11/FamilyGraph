@@ -18,6 +18,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from migration_offsets import offset_to
 from sqlalchemy import create_engine, text
 
 BACKEND = Path(__file__).parents[1]
@@ -222,7 +223,12 @@ def test_deep_downgrade_honours_parent_refusal_before_version_move(tmp_path):
                 )
             )
 
-        result = _migrate(tmp_path, "downgrade", "-2", expect_success=False)
+        result = _migrate(
+            tmp_path,
+            "downgrade",
+            offset_to("0053_member_approval_and_labels"),
+            expect_success=False,
+        )
 
         assert result.returncode != 0
         assert "retain data and roll forward" in result.stderr

@@ -74,6 +74,7 @@ from app.models.user import User
 from app.services import (
     agent_provider,
     agent_tools,
+    capacity,
     platform_features,
     steward_candidate_evidence,
     steward_guard,
@@ -1359,22 +1360,48 @@ def lease_attempt(
     with _immediate_tx(db):
         db.expire_all()
         if space_id is None:
-            space_id = next(
-                (
-                    candidate
-                    for candidate in _spaces_holding_due_work(db, now=now, carrier=carrier)
-                    if _in_flight_for_space(db, space_id=candidate, now=now)
+            # 服务端选空间。counter 已登记时，选空间的判据必须**以 counter 为准**，
+            # 否则会选中一个 counter 已满的空间、占用失败后直接返回 None，
+            # 而实际上**其他空间仍有容量**——那会把「该空间满」误变成「全库没活」。
+            chosen: int | None = None
+            for candidate in _spaces_holding_due_work(db, now=now, carrier=carrier):
+                specs = capacity.steward_assist_specs(space_id=candidate)
+                outcome = capacity.try_acquire(db, specs)
+                if outcome is True:
+                    chosen = candidate
+                    break
+                if outcome is False:
+                    # 该空间 counter 满：跳过它看下一个（不得靠异常控流）
+                    continue
+                # counter 未登记：沿用原有计数查询
+                if (
+                    _in_flight_for_space(db, space_id=candidate, now=now)
                     < config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
-                ),
-                None,
-            )
-            if space_id is None:
+                ):
+                    chosen = candidate
+                    break
+            if chosen is None:
                 return None
-        if (
-            _in_flight_for_space(db, space_id=space_id, now=now)
-            >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
-        ):
-            return None
+            space_id = chosen
+            # 占用状态由上面的循环决定：counter 命中即已占用（需归还），
+            # 未登记路径未占用（无需归还）。
+            acquired = (
+                True
+                if capacity.registered(db, capacity.steward_assist_specs(space_id=space_id))
+                else None
+            )
+        else:
+            # 显式 space_id：配额以 counter 为准；未登记时沿用原有计数查询，
+            # 使 SQLite 单测行为与改动前一致（渐进引入）。
+            specs = capacity.steward_assist_specs(space_id=space_id)
+            acquired = capacity.try_acquire(db, specs)
+            if acquired is False:
+                return None
+            if acquired is None and (
+                _in_flight_for_space(db, space_id=space_id, now=now)
+                >= config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+            ):
+                return None
         candidates = db.scalars(
             select(StewardModelCall)
             .where(
@@ -1423,10 +1450,18 @@ def lease_attempt(
                 continue
             break
         else:
+            # 没有可租候选：**必须**归还名额，否则名额永久泄漏、该空间再也租不到。
+            # 只在确实占用过（counter 命中或未登记路径两者都试一次）时归还；
+            # `try_release` 自身对未登记维度是 no-op，因此这里可直接调用。
+            capacity.try_release(db, capacity.steward_assist_specs(space_id=space_id))
             return None
         attempt.status = "in_flight"
         attempt.lease_owner = worker_id
         attempt.lease_until = min(now + timedelta(seconds=ttl), plan.deadline_at)
+        # 记录「本行占用过名额」。只有 counter 已登记（确实占用）时才写；
+        # 未登记的渐进路径不写，因此后续 release_attempt 对它是 no-op。
+        if acquired is True:
+            capacity.mark_attempt_acquired(attempt, now=now)
         db.flush()
         # Everything the carrier needs to send is captured here, so the send path
         # never has to read the database (and therefore never holds a transaction
@@ -1780,6 +1815,9 @@ def record_attempt_outcome(
         if reason is not None:
             attempt.status = "skipped"
             attempt.error_code = reason
+            # 归还路径 ③（写回栅栏退休）：统一走 release_attempt，
+            # 门在行上（acquired 非空 + released 为空），不可能重复归还。
+            capacity.release_attempt(db, attempt, space_id=attempt.space_id)
             db.flush()
             return attempt.status
     db.flush()
@@ -1920,6 +1958,9 @@ def _settle_attempt(
     else:
         fresh.output_json = product
     fresh.billed_tokens = billed
+    # 归还路径 ⑤（成功/降级结算）：本函数是成功路径的**唯一出口**，把归还放在这里
+    # 就不会漏掉「产物无效但仍要归还」的分支。行级门保证与其它四处不重复。
+    capacity.release_attempt(db, fresh, space_id=fresh.space_id)
     db.flush()
     return fresh.status
 
@@ -1945,6 +1986,8 @@ def _settle_attempt_failure(
     else:
         attempt.status = "failed"
         attempt.error_code = error_code or REASON_TRANSPORT_FAILED
+    # 归还路径 ④（结算为失败/未知）：统一走 release_attempt，行级门保证恰好一次。
+    capacity.release_attempt(db, attempt, space_id=attempt.space_id)
     _pt, _ct, billed = _bill_usage(
         None, attempt.reserved_input_tokens or 0, attempt.reserved_output_tokens or 0
     )
@@ -2214,6 +2257,9 @@ def recover_stuck_attempts(db: Session, *, now: Any = None) -> int:
             if reason is not None:
                 attempt.status = "skipped"
                 attempt.error_code = reason
+                # 归还路径 ②（写回栅栏退休）：统一走 release_attempt，
+                # 行级门（acquired 非空 + released 为空）保证恰好一次。
+                capacity.release_attempt(db, attempt, space_id=attempt.space_id)
             elif attempt.status == "succeeded":
                 _apply_product(db, plan=plan, attempt=attempt, now=now)
                 attempt.applied_at = now
@@ -2242,6 +2288,8 @@ def recover_stuck_attempts(db: Session, *, now: Any = None) -> int:
             )
             attempt.lease_owner = None
             attempt.lease_until = None
+            # 归还路径 ①（租约过期恢复）：统一走 release_attempt。
+            capacity.release_attempt(db, attempt, space_id=attempt.space_id)
             handled += 1
         db.flush()
     return handled

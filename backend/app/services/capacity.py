@@ -42,6 +42,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -207,3 +208,139 @@ def snapshot(
         if row is not None:
             out[(spec.scope_kind, spec.scope_id, spec.resource_kind)] = (row.active, row.capacity)
     return out
+
+
+# ---------------------------------------------------------------- 配额主体辅助
+#
+# 三个真实租约入口各自的配额维度。`global` 与 `agent_kind` 是所有入口共享的上层，
+# 因此每次占用都带它们——否则单租户可以把全库打满。
+RESOURCE_ASSISTANT_RUN = "assistant_run"
+RESOURCE_STEWARD_JOB = "steward_job"
+RESOURCE_STEWARD_ASSIST = "steward_assist"
+
+KIND_ASSISTANT = "assistant"
+KIND_STEWARD = "steward"
+
+
+def assistant_run_specs(*, account_id: int, capacity_account: int) -> list[CounterSpec]:
+    """Assistant run 的配额维度：account + agent_kind + global。"""
+    return [
+        CounterSpec("global", 0, RESOURCE_ASSISTANT_RUN),
+        CounterSpec("agent_kind", 0, RESOURCE_ASSISTANT_RUN),
+        CounterSpec("account", account_id, RESOURCE_ASSISTANT_RUN),
+    ]
+
+
+def steward_job_specs(*, space_id: int) -> list[CounterSpec]:
+    """Steward 确定性内核作业：space + agent_kind + global。"""
+    return [
+        CounterSpec("global", 0, RESOURCE_STEWARD_JOB),
+        CounterSpec("agent_kind", 0, RESOURCE_STEWARD_JOB),
+        CounterSpec("space", space_id, RESOURCE_STEWARD_JOB),
+    ]
+
+
+def steward_assist_specs(*, space_id: int) -> list[CounterSpec]:
+    """Steward 模型辅助 attempt：space + agent_kind + global。
+
+    space 维度是 ``STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE`` 的持久化真相；
+    ``_in_flight_for_space`` 的计数查询在 PostgreSQL 上会越限（实测 5/2）。
+    """
+    return [
+        CounterSpec("global", 0, RESOURCE_STEWARD_ASSIST),
+        CounterSpec("agent_kind", 0, RESOURCE_STEWARD_ASSIST),
+        CounterSpec("space", space_id, RESOURCE_STEWARD_ASSIST),
+    ]
+
+
+def registered(db: Session, specs: Sequence[CounterSpec]) -> bool:
+    """这些维度里是否**已经登记**过计数行。
+
+    ## 为什么需要这个判据
+
+    counter 是渐进引入的：登记了才由它裁决配额。未登记时沿用原有计数查询路径，
+    这样：
+
+    - SQLite 单测（未 bootstrap counter）行为与改动前**逐字一致**，2018 个既有用例不受影响；
+    - PostgreSQL 部署 bootstrap counter 后，配额由持久化计数行裁决（并发下才正确）。
+
+    把「没配置」当成「容量 0」会让尚未登记的入口全部停摆；当成「无限」则等于没接。
+    因此必须显式区分。
+    """
+    return any(
+        db.get(AgentCapacityCounter, (s.scope_kind, s.scope_id, s.resource_kind)) is not None
+        for s in specs
+    )
+
+
+def try_acquire(db: Session, specs: Sequence[CounterSpec]) -> bool | None:
+    """配额占用，三态返回。
+
+    - ``None``：这些维度**未登记** counter → 调用方应走原有计数路径；
+    - ``True``：已占用（所有登记维度都成功 +1）；
+    - ``False``：某个维度已满 → 调用方应跳过该候选，**不得**靠捕获异常控流。
+
+    只对**已登记**的维度占用：未登记的维度不限制（渐进引入），
+    已登记的维度仍然受 ``CHECK (active <= capacity)`` 兜底。
+    """
+    active_specs = [
+        s
+        for s in specs
+        if db.get(AgentCapacityCounter, (s.scope_kind, s.scope_id, s.resource_kind)) is not None
+    ]
+    if not active_specs:
+        return None
+    if not acquire(db, active_specs):
+        return False
+    return True
+
+
+def try_release(db: Session, specs: Sequence[CounterSpec]) -> int:
+    """归还已登记的维度；未登记的直接跳过。"""
+    active_specs = [
+        s
+        for s in specs
+        if db.get(AgentCapacityCounter, (s.scope_kind, s.scope_id, s.resource_kind)) is not None
+    ]
+    if not active_specs:
+        return 0
+    return release(db, active_specs)
+
+
+# ---------------------------------------------------- attempt 级占用/归还门
+def mark_attempt_acquired(attempt: Any, *, now: datetime | None = None) -> None:
+    """记录该 attempt 已占用名额（`lease_attempt` 成功占用后调用）。
+
+    只有**真正占用过** counter 才写这个时间戳；未登记 counter 的渐进路径不写，
+    因此后续 `release_attempt` 对它是 no-op，不会凭空递减。
+    """
+    attempt.capacity_acquired_at = now or timeutil.utcnow()
+
+
+def release_attempt(
+    db: Session,
+    attempt: Any,
+    *,
+    space_id: int,
+    now: datetime | None = None,
+) -> bool:
+    """归还该 attempt 占用的名额；**恰好一次**，返回是否本次真的归还了。
+
+    门在行上：`capacity_acquired_at` 非空（确实占用过）且 `capacity_released_at`
+    为空（尚未归还）。该条件对同一行只能成立一次，且崩溃后重跑仍成立——已写入的
+    `released_at` 会阻止第二次递减。
+
+    四个归还点（写回栅栏 / 失败结算 / 租约过期恢复 / 崩溃点④退休）都调用本函数，
+    因此不需要在四处分别实现「记得归还」。
+    """
+    moment = now or timeutil.utcnow()
+    if attempt.capacity_acquired_at is None:
+        return False  # 未登记 counter 的路径：从未占用，无需归还
+    if attempt.capacity_released_at is not None:
+        return False  # 已归还：第二次调用必须 no-op，否则名额凭空增加
+    released = release(db, steward_assist_specs(space_id=space_id), now=moment)
+    if released == 0:
+        # 维度未登记（例如配置被移除）：不写门，留给诊断发现不一致。
+        return False
+    attempt.capacity_released_at = moment
+    return True

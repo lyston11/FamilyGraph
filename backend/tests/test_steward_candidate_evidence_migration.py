@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from migration_offsets import deep_downgrade_offset
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 from test_rag_lifecycle_migrations import migrate, migration_engine
@@ -273,7 +274,7 @@ def test_ambiguous_relative_deep_downgrade_preserves_entire_schema(tmp_path, for
         # top of this head, or it lands on a different revision and stops being
         # ambiguous. `-7` walks past 0049 and hits the 0044 merge fork
         # (0055→0054→0053→0052→0051→0050→0049→0048).
-        result = migrate(tmp_path, "downgrade", "-7", foreign_keys=foreign_keys)
+        result = migrate(tmp_path, "downgrade", deep_downgrade_offset(), foreign_keys=foreign_keys)
         assert result.returncode != 0 and "ambiguous" in result.stderr.lower()
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
         assert _snapshot(engine, schema=True) == before

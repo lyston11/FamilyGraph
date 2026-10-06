@@ -41,6 +41,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from migrations._preflight import run_ancestor_preflight
+
 revision = "0056_agent_capacity_counters"
 down_revision = "0055_steward_assist_execution_unit"
 branch_labels = None
@@ -119,54 +121,9 @@ def downgrade() -> None:
 
     connection = op.get_bind()
     context = op.get_context()
-    destination = context.opts.get("destination_rev")
-    if context.script is not None and destination is not None and down_revision is not None:
-        planned = {
-            item.revision
-            for item in context.script.iterate_revisions(
-                down_revision, destination, select_for_downgrade=True
-            )
-        }
-        # 生成器惰性：必须显式消费才会真正走位（否则守卫形同虚设）。
-        #
-        # 同时要从**每个 planned revision 的 down_revision** 再走一次：迁移自身的
-        # preflight 正是从它的父 revision 开始走位（见 0051/0053 的注释），而那一步
-        # 才是真正抛 "Ambiguous walk" 的地方。只从 revision 自己走会漏掉它，
-        # 结果本迁移已 DROP 表后才由祖先报错（实测 DDL_COUNT=2）。
-        for revision in planned:
-            list(
-                context.script.iterate_revisions(
-                    revision, destination, select_for_downgrade=True
-                )
-            )
-            revision_obj = context.script.get_revision(revision)
-            parent = revision_obj.down_revision if revision_obj is not None else None
-            if isinstance(parent, str):
-                list(
-                    context.script.iterate_revisions(
-                        parent, destination, select_for_downgrade=True
-                    )
-                )
-        if "0049_steward_candidate_evidence" in planned or destination != down_revision:
-            candidate_guard = context.script.get_revision("0050_term_alias_spouse_fix")
-            assert candidate_guard is not None
-            candidate_guard.module._refuse_if_candidate_evidence(connection)
-        if "0051_run_event_timing" in planned or destination != down_revision:
-            timing_guard = context.script.get_revision("0052_seed_lineage_membership_boundary")
-            assert timing_guard is not None
-            timing_guard.module._refuse_if_timing_evidence(connection)
-        if "0053_member_approval_and_labels" in planned:
-            if connection.scalar(
-                sa.text("SELECT 1 FROM space_member_approvals LIMIT 1")
-            ) or connection.scalar(sa.text("SELECT 1 FROM member_relation_labels LIMIT 1")):
-                raise RuntimeError(
-                    "owner-approval or relation-label evidence exists; "
-                    "retain data and roll forward"
-                )
-        if "0048_steward_terminology_publication" in planned:
-            merge_guard = context.script.get_revision("0048_steward_terminology_publication")
-            assert merge_guard is not None
-            merge_guard.module._preflight_parent_downgrade(planned=planned)
+    # 祖先拒绝必须先于本迁移的任何 DDL（SQLite DDL 不保证事务回滚，
+    # 否则会留下半降级 schema）。实现与理由见 migrations/_preflight.py。
+    run_ancestor_preflight(connection, context, down_revision=down_revision)
 
     # 本迁移自己的 refusal guard：任何 active > 0 说明仍有在途租约，
     # 直接 DROP 会丢失容量真相。
