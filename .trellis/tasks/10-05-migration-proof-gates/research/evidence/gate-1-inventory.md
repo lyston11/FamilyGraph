@@ -2,7 +2,7 @@
 
 - root: `/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates`
 - branch: `feat/10-05-migration-proof-gates`
-- commit: `910e7295e987cc18cf7897ea99030d9ddcc391b3`
+- commit: `36e0e0fb14f87c1fb22853e97c32e998545a3b89`
 - worktree: `/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates`
 
 ## 统计
@@ -10,7 +10,7 @@
 - `app_python`: **214**
 - `model_python`: **35**
 - `migration_python`: **59**
-- `tables`: **0**
+- `tables`: **88**
 - `indexes`: **112**
 - `constraints`: **105**
 - `migrations`: **59**

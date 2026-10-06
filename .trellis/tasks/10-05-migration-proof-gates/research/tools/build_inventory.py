@@ -81,6 +81,30 @@ for p in models:
                 report[bucket].append(entry)
 for p in migrations:
     report['migrations'].append({'path':str(p.relative_to(ROOT)),'lines':len(p.read_text(errors='replace').splitlines())})
+# 表清单：模型用 __tablename__ 而不是 Table(...)，必须单独扫描。
+# 否则 gate-1-inventory 的 tables 恒为空，与 schema-inventory 的 88 表口径不一致。
+for p in models:
+    src = p.read_text(errors='replace')
+    rel = str(p.relative_to(ROOT))
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        continue
+    for cls in [x for x in ast.walk(tree) if isinstance(x, ast.ClassDef)]:
+        for n in cls.body:
+            value = None
+            if (isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
+                    and n.target.id == '__tablename__'):
+                value = n.value
+            elif isinstance(n, ast.Assign) and any(
+                    isinstance(z, ast.Name) and z.id == '__tablename__' for z in n.targets):
+                value = n.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                report['tables'].append({
+                    'id': f'SCHEMA-TABLE-{rel}:{cls.lineno}', 'kind': 'table',
+                    'table': value.value, 'path': rel, 'line': cls.lineno,
+                    'owner': 'backend-model', 'status': 'inventory', 'evidence': 'L0',
+                })
 # trigger / virtual table：SQLite 专属 DDL，PostgreSQL 上不存在
 report['triggers'] = []
 report['virtual_tables'] = []
@@ -92,7 +116,9 @@ for p in migrations + py:
         if 'CREATE TRIGGER' in up:
             report['triggers'].append({'id': f'TRIGGER-{rel}:{n}', 'path': rel, 'line': n,
                                        'owner': 'backend-migration', 'status': 'inventory', 'evidence': 'L0',
-                                       'note': 'SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查'})
+                                       'count_basis': 'source-site',
+                                       'note': 'SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，'
+                                               '循环展开后的实际对象数见 trigger-inventory.json（69）'})
         if 'VIRTUAL TABLE' in up:
             report['virtual_tables'].append({'id': f'VIRTUAL-{rel}:{n}', 'path': rel, 'line': n,
                                              'owner': 'backend-migration', 'status': 'blocked',

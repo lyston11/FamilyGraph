@@ -1,13 +1,13 @@
 {
   "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
   "branch": "feat/10-05-migration-proof-gates",
-  "commit": "910e7295e987cc18cf7897ea99030d9ddcc391b3",
+  "commit": "36e0e0fb14f87c1fb22853e97c32e998545a3b89",
   "worktree": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
   "counts": {
     "app_python": 214,
     "model_python": 35,
     "migration_python": 59,
-    "tables": 0,
+    "tables": 88,
     "indexes": 112,
     "constraints": 105,
     "migrations": 59,
@@ -39850,7 +39850,888 @@
       }
     ]
   },
-  "tables": [],
+  "tables": [
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/account.py:23",
+      "kind": "table",
+      "table": "accounts",
+      "path": "backend/app/models/account.py",
+      "line": 23,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/account_binding.py:31",
+      "kind": "table",
+      "table": "account_bindings",
+      "path": "backend/app/models/account_binding.py",
+      "line": 31,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/admin_access.py:22",
+      "kind": "table",
+      "table": "admin_access_sessions",
+      "path": "backend/app/models/admin_access.py",
+      "line": 22,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/admin_access.py:55",
+      "kind": "table",
+      "table": "admin_access_audits",
+      "path": "backend/app/models/admin_access.py",
+      "line": 55,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent.py:62",
+      "kind": "table",
+      "table": "agent_sessions",
+      "path": "backend/app/models/agent.py",
+      "line": 62,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent.py:96",
+      "kind": "table",
+      "table": "agent_messages",
+      "path": "backend/app/models/agent.py",
+      "line": 96,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent.py:124",
+      "kind": "table",
+      "table": "agent_runs",
+      "path": "backend/app/models/agent.py",
+      "line": 124,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent.py:194",
+      "kind": "table",
+      "table": "agent_run_events",
+      "path": "backend/app/models/agent.py",
+      "line": 194,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent.py:234",
+      "kind": "table",
+      "table": "agent_jobs",
+      "path": "backend/app/models/agent.py",
+      "line": 234,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent.py:281",
+      "kind": "table",
+      "table": "agent_tool_calls",
+      "path": "backend/app/models/agent.py",
+      "line": 281,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent_provider.py:36",
+      "kind": "table",
+      "table": "agent_providers",
+      "path": "backend/app/models/agent_provider.py",
+      "line": 36,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent_provider.py:75",
+      "kind": "table",
+      "table": "agent_space_provider_settings",
+      "path": "backend/app/models/agent_provider.py",
+      "line": 75,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/agent_provider.py:118",
+      "kind": "table",
+      "table": "agent_platform_defaults",
+      "path": "backend/app/models/agent_provider.py",
+      "line": 118,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/attachment.py:13",
+      "kind": "table",
+      "table": "attachments",
+      "path": "backend/app/models/attachment.py",
+      "line": 13,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/audit_log.py:17",
+      "kind": "table",
+      "table": "audit_log",
+      "path": "backend/app/models/audit_log.py",
+      "line": 17,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/auth_challenge.py:16",
+      "kind": "table",
+      "table": "auth_challenges",
+      "path": "backend/app/models/auth_challenge.py",
+      "line": 16,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/context.py:14",
+      "kind": "table",
+      "table": "context_builds",
+      "path": "backend/app/models/context.py",
+      "line": 14,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/context.py:49",
+      "kind": "table",
+      "table": "context_build_items",
+      "path": "backend/app/models/context.py",
+      "line": 49,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/controlled_web.py:24",
+      "kind": "table",
+      "table": "web_platform_configs",
+      "path": "backend/app/models/controlled_web.py",
+      "line": 24,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/controlled_web.py:47",
+      "kind": "table",
+      "table": "web_space_configs",
+      "path": "backend/app/models/controlled_web.py",
+      "line": 47,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/controlled_web.py:74",
+      "kind": "table",
+      "table": "web_approved_urls",
+      "path": "backend/app/models/controlled_web.py",
+      "line": 74,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/controlled_web.py:108",
+      "kind": "table",
+      "table": "web_request_usage",
+      "path": "backend/app/models/controlled_web.py",
+      "line": 108,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/controlled_web.py:141",
+      "kind": "table",
+      "table": "web_citations",
+      "path": "backend/app/models/controlled_web.py",
+      "line": 141,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/derived_fact.py:20",
+      "kind": "table",
+      "table": "derived_facts",
+      "path": "backend/app/models/derived_fact.py",
+      "line": 20,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/invite_code.py:36",
+      "kind": "table",
+      "table": "invite_codes",
+      "path": "backend/app/models/invite_code.py",
+      "line": 36,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/memory.py:56",
+      "kind": "table",
+      "table": "memory_candidates",
+      "path": "backend/app/models/memory.py",
+      "line": 56,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/memory.py:114",
+      "kind": "table",
+      "table": "memories",
+      "path": "backend/app/models/memory.py",
+      "line": 114,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/node_position.py:11",
+      "kind": "table",
+      "table": "node_positions",
+      "path": "backend/app/models/node_position.py",
+      "line": 11,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/notification.py:29",
+      "kind": "table",
+      "table": "notifications",
+      "path": "backend/app/models/notification.py",
+      "line": 29,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/personal_family_view.py:29",
+      "kind": "table",
+      "table": "personal_family_views",
+      "path": "backend/app/models/personal_family_view.py",
+      "line": 29,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/personal_family_view.py:68",
+      "kind": "table",
+      "table": "personal_family_view_nodes",
+      "path": "backend/app/models/personal_family_view.py",
+      "line": 68,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/personal_family_view.py:92",
+      "kind": "table",
+      "table": "personal_family_view_edges",
+      "path": "backend/app/models/personal_family_view.py",
+      "line": 92,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/personal_family_view.py:128",
+      "kind": "table",
+      "table": "personal_family_bridges",
+      "path": "backend/app/models/personal_family_view.py",
+      "line": 128,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/platform_features.py:13",
+      "kind": "table",
+      "table": "platform_feature_configs",
+      "path": "backend/app/models/platform_features.py",
+      "line": 13,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/rag.py:22",
+      "kind": "table",
+      "table": "rag_documents",
+      "path": "backend/app/models/rag.py",
+      "line": 22,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/rag.py:100",
+      "kind": "table",
+      "table": "rag_chunks",
+      "path": "backend/app/models/rag.py",
+      "line": 100,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/rag.py:142",
+      "kind": "table",
+      "table": "rag_index_maintenance_state",
+      "path": "backend/app/models/rag.py",
+      "line": 142,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/rag.py:165",
+      "kind": "table",
+      "table": "rag_index_maintenance_failures",
+      "path": "backend/app/models/rag.py",
+      "line": 165,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/refresh_session.py:15",
+      "kind": "table",
+      "table": "refresh_sessions",
+      "path": "backend/app/models/refresh_session.py",
+      "line": 15,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/relation.py:28",
+      "kind": "table",
+      "table": "relations",
+      "path": "backend/app/models/relation.py",
+      "line": 28,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/relationship_facts.py:54",
+      "kind": "table",
+      "table": "source_facts",
+      "path": "backend/app/models/relationship_facts.py",
+      "line": 54,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/relationship_facts.py:113",
+      "kind": "table",
+      "table": "social_relations",
+      "path": "backend/app/models/relationship_facts.py",
+      "line": 113,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/relationship_facts.py:144",
+      "kind": "table",
+      "table": "raw_relation_inputs",
+      "path": "backend/app/models/relationship_facts.py",
+      "line": 144,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:44",
+      "kind": "table",
+      "table": "family_spaces",
+      "path": "backend/app/models/space.py",
+      "line": 44,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:69",
+      "kind": "table",
+      "table": "space_members",
+      "path": "backend/app/models/space.py",
+      "line": 69,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:119",
+      "kind": "table",
+      "table": "space_member_approvals",
+      "path": "backend/app/models/space.py",
+      "line": 119,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:158",
+      "kind": "table",
+      "table": "member_relation_labels",
+      "path": "backend/app/models/space.py",
+      "line": 158,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:202",
+      "kind": "table",
+      "table": "space_profile_refs",
+      "path": "backend/app/models/space.py",
+      "line": 202,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:231",
+      "kind": "table",
+      "table": "space_manager_applications",
+      "path": "backend/app/models/space.py",
+      "line": 231,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/space.py:288",
+      "kind": "table",
+      "table": "manager_transfer_consents",
+      "path": "backend/app/models/space.py",
+      "line": 288,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:90",
+      "kind": "table",
+      "table": "behavior_projections",
+      "path": "backend/app/models/steward.py",
+      "line": 90,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:129",
+      "kind": "table",
+      "table": "action_cards",
+      "path": "backend/app/models/steward.py",
+      "line": 129,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:202",
+      "kind": "table",
+      "table": "steward_jobs",
+      "path": "backend/app/models/steward.py",
+      "line": 202,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:255",
+      "kind": "table",
+      "table": "steward_space_schedules",
+      "path": "backend/app/models/steward.py",
+      "line": 255,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:287",
+      "kind": "table",
+      "table": "steward_assist_plans",
+      "path": "backend/app/models/steward.py",
+      "line": 287,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:328",
+      "kind": "table",
+      "table": "steward_model_calls",
+      "path": "backend/app/models/steward.py",
+      "line": 328,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:462",
+      "kind": "table",
+      "table": "steward_llm_candidates",
+      "path": "backend/app/models/steward.py",
+      "line": 462,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:502",
+      "kind": "table",
+      "table": "steward_candidate_evidence_versions",
+      "path": "backend/app/models/steward.py",
+      "line": 502,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:566",
+      "kind": "table",
+      "table": "steward_generations",
+      "path": "backend/app/models/steward.py",
+      "line": 566,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:616",
+      "kind": "table",
+      "table": "steward_generation_views",
+      "path": "backend/app/models/steward.py",
+      "line": 616,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:663",
+      "kind": "table",
+      "table": "steward_retry_budgets",
+      "path": "backend/app/models/steward.py",
+      "line": 663,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:693",
+      "kind": "table",
+      "table": "steward_input_revisions",
+      "path": "backend/app/models/steward.py",
+      "line": 693,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:704",
+      "kind": "table",
+      "table": "steward_view_targets",
+      "path": "backend/app/models/steward.py",
+      "line": 704,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:731",
+      "kind": "table",
+      "table": "steward_publications",
+      "path": "backend/app/models/steward.py",
+      "line": 731,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:746",
+      "kind": "table",
+      "table": "steward_view_demands",
+      "path": "backend/app/models/steward.py",
+      "line": 746,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:771",
+      "kind": "table",
+      "table": "steward_delivery_intents",
+      "path": "backend/app/models/steward.py",
+      "line": 771,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:810",
+      "kind": "table",
+      "table": "steward_finding_deliveries",
+      "path": "backend/app/models/steward.py",
+      "line": 810,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:828",
+      "kind": "table",
+      "table": "steward_inferred_overlays",
+      "path": "backend/app/models/steward.py",
+      "line": 828,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:845",
+      "kind": "table",
+      "table": "steward_term_projections",
+      "path": "backend/app/models/steward.py",
+      "line": 845,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward.py:913",
+      "kind": "table",
+      "table": "steward_term_suppressions",
+      "path": "backend/app/models/steward.py",
+      "line": 913,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward_inferred.py:64",
+      "kind": "table",
+      "table": "steward_inferred_edges",
+      "path": "backend/app/models/steward_inferred.py",
+      "line": 64,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward_suggestion.py:58",
+      "kind": "table",
+      "table": "steward_suggestions",
+      "path": "backend/app/models/steward_suggestion.py",
+      "line": 58,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/steward_suggestion.py:131",
+      "kind": "table",
+      "table": "steward_suggestion_recipients",
+      "path": "backend/app/models/steward_suggestion.py",
+      "line": 131,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/system_admin.py:22",
+      "kind": "table",
+      "table": "system_admins",
+      "path": "backend/app/models/system_admin.py",
+      "line": 22,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/system_admin.py:40",
+      "kind": "table",
+      "table": "system_admin_accounts",
+      "path": "backend/app/models/system_admin.py",
+      "line": 40,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/system_admin.py:63",
+      "kind": "table",
+      "table": "system_admin_refresh_sessions",
+      "path": "backend/app/models/system_admin.py",
+      "line": 63,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/term_registry.py:200",
+      "kind": "table",
+      "table": "term_entries",
+      "path": "backend/app/models/term_registry.py",
+      "line": 200,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/term_registry.py:259",
+      "kind": "table",
+      "table": "term_usages",
+      "path": "backend/app/models/term_registry.py",
+      "line": 259,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/user.py:50",
+      "kind": "table",
+      "table": "users",
+      "path": "backend/app/models/user.py",
+      "line": 50,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:42",
+      "kind": "table",
+      "table": "platform_role_assignments",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 42,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:67",
+      "kind": "table",
+      "table": "owner_invitations",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 67,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:86",
+      "kind": "table",
+      "table": "disclosure_preferences",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 86,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:129",
+      "kind": "table",
+      "table": "ownership_transfers",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 129,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:163",
+      "kind": "table",
+      "table": "claim_disputes",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 163,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:190",
+      "kind": "table",
+      "table": "data_right_requests",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 190,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:224",
+      "kind": "table",
+      "table": "domain_events",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 224,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:247",
+      "kind": "table",
+      "table": "member_creation_requests",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 247,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    },
+    {
+      "id": "SCHEMA-TABLE-backend/app/models/v2_foundation.py:279",
+      "kind": "table",
+      "table": "profile_fact_reviews",
+      "path": "backend/app/models/v2_foundation.py",
+      "line": 279,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
+    }
+  ],
   "indexes": [
     {
       "id": "SCHEMA-Index-backend/app/models/account_binding.py:38",
@@ -42054,7 +42935,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0010_relationship_facts.py:40",
@@ -42063,7 +42945,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0014_memory_rag.py:251",
@@ -42072,7 +42955,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0014_memory_rag.py:258",
@@ -42081,7 +42965,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0014_memory_rag.py:264",
@@ -42090,7 +42975,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0024_agent_runtime_assistant_only.py:19",
@@ -42099,7 +42985,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0040_agent_session_title.py:23",
@@ -42108,7 +42995,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0045_steward_staged_publication.py:189",
@@ -42117,7 +43005,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0047_rag_lifecycle_integrity.py:93",
@@ -42126,7 +43015,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0048_steward_terminology_publication.py:117",
@@ -42135,7 +43025,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0048_steward_terminology_publication.py:152",
@@ -42144,7 +43035,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0049_steward_candidate_evidence.py:104",
@@ -42153,7 +43045,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0049_steward_candidate_evidence.py:111",
@@ -42162,7 +43055,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     },
     {
       "id": "TRIGGER-backend/migrations/versions/0055_steward_assist_execution_unit.py:499",
@@ -42171,7 +43065,8 @@
       "owner": "backend-migration",
       "status": "inventory",
       "evidence": "L0",
-      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+      "count_basis": "source-site",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同；本项是**源码位点**计数，循环展开后的实际对象数见 trigger-inventory.json（69）"
     }
   ],
   "virtual_tables": [
