@@ -1,7 +1,7 @@
 {
   "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
   "branch": "feat/10-05-migration-proof-gates",
-  "commit": "3bf4a06972e0ad623e8a44f15d262424460adb91",
+  "commit": "910e7295e987cc18cf7897ea99030d9ddcc391b3",
   "worktree": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
   "counts": {
     "app_python": 214,
@@ -10,7 +10,9 @@
     "tables": 0,
     "indexes": 112,
     "constraints": 105,
-    "migrations": 59
+    "migrations": 59,
+    "triggers": 14,
+    "virtual_tables": 1
   },
   "matches": {
     "begin_immediate": [
@@ -39851,1091 +39853,1959 @@
   "tables": [],
   "indexes": [
     {
+      "id": "SCHEMA-Index-backend/app/models/account_binding.py:38",
       "kind": "Index",
       "path": "backend/app/models/account_binding.py",
-      "line": 38
+      "line": 38,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/account_binding.py:39",
       "kind": "Index",
       "path": "backend/app/models/account_binding.py",
-      "line": 39
+      "line": 39,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/account_binding.py:40",
       "kind": "Index",
       "path": "backend/app/models/account_binding.py",
-      "line": 40
+      "line": 40,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/admin_access.py:28",
       "kind": "Index",
       "path": "backend/app/models/admin_access.py",
-      "line": 28
+      "line": 28,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/admin_access.py:64",
       "kind": "Index",
       "path": "backend/app/models/admin_access.py",
-      "line": 64
+      "line": 64,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/admin_access.py:65",
       "kind": "Index",
       "path": "backend/app/models/admin_access.py",
-      "line": 65
+      "line": 65,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/admin_access.py:66",
       "kind": "Index",
       "path": "backend/app/models/admin_access.py",
-      "line": 66
+      "line": 66,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/admin_access.py:67",
       "kind": "Index",
       "path": "backend/app/models/admin_access.py",
-      "line": 67
+      "line": 67,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/agent.py:108",
       "kind": "Index",
       "path": "backend/app/models/agent.py",
-      "line": 108
+      "line": 108,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/agent.py:150",
       "kind": "Index",
       "path": "backend/app/models/agent.py",
-      "line": 150
+      "line": 150,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/agent.py:199",
       "kind": "Index",
       "path": "backend/app/models/agent.py",
-      "line": 199
+      "line": 199,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/agent.py:246",
       "kind": "Index",
       "path": "backend/app/models/agent.py",
-      "line": 246
+      "line": 246,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/agent.py:297",
       "kind": "Index",
       "path": "backend/app/models/agent.py",
-      "line": 297
+      "line": 297,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/attachment.py:17",
       "kind": "Index",
       "path": "backend/app/models/attachment.py",
-      "line": 17
+      "line": 17,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/audit_log.py:32",
       "kind": "Index",
       "path": "backend/app/models/audit_log.py",
-      "line": 32
+      "line": 32,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/audit_log.py:33",
       "kind": "Index",
       "path": "backend/app/models/audit_log.py",
-      "line": 33
+      "line": 33,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/context.py:17",
       "kind": "Index",
       "path": "backend/app/models/context.py",
-      "line": 17
+      "line": 17,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/context.py:18",
       "kind": "Index",
       "path": "backend/app/models/context.py",
-      "line": 18
+      "line": 18,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/context.py:51",
       "kind": "Index",
       "path": "backend/app/models/context.py",
-      "line": 51
+      "line": 51,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/controlled_web.py:55",
       "kind": "Index",
       "path": "backend/app/models/controlled_web.py",
-      "line": 55
+      "line": 55,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/controlled_web.py:82",
       "kind": "Index",
       "path": "backend/app/models/controlled_web.py",
-      "line": 82
+      "line": 82,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/controlled_web.py:114",
       "kind": "Index",
       "path": "backend/app/models/controlled_web.py",
-      "line": 114
+      "line": 114,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/controlled_web.py:145",
       "kind": "Index",
       "path": "backend/app/models/controlled_web.py",
-      "line": 145
+      "line": 145,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/derived_fact.py:31",
       "kind": "Index",
       "path": "backend/app/models/derived_fact.py",
-      "line": 31
+      "line": 31,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/derived_fact.py:38",
       "kind": "Index",
       "path": "backend/app/models/derived_fact.py",
-      "line": 38
+      "line": 38,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/derived_fact.py:39",
       "kind": "Index",
       "path": "backend/app/models/derived_fact.py",
-      "line": 39
+      "line": 39,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/derived_fact.py:40",
       "kind": "Index",
       "path": "backend/app/models/derived_fact.py",
-      "line": 40
+      "line": 40,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/invite_code.py:56",
       "kind": "Index",
       "path": "backend/app/models/invite_code.py",
-      "line": 56
+      "line": 56,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/invite_code.py:57",
       "kind": "Index",
       "path": "backend/app/models/invite_code.py",
-      "line": 57
+      "line": 57,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:71",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 71
+      "line": 71,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:72",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 72
+      "line": 72,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:73",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 73
+      "line": 73,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:134",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 134
+      "line": 134,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:135",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 135
+      "line": 135,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:136",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 136
+      "line": 136,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/memory.py:137",
       "kind": "Index",
       "path": "backend/app/models/memory.py",
-      "line": 137
+      "line": 137,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/node_position.py:15",
       "kind": "Index",
       "path": "backend/app/models/node_position.py",
-      "line": 15
+      "line": 15,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/notification.py:40",
       "kind": "Index",
       "path": "backend/app/models/notification.py",
-      "line": 40
+      "line": 40,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/notification.py:46",
       "kind": "Index",
       "path": "backend/app/models/notification.py",
-      "line": 46
+      "line": 46,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:35",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 35
+      "line": 35,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:42",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 42
+      "line": 42,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:43",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 43
+      "line": 43,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:74",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 74
+      "line": 74,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:75",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 75
+      "line": 75,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:97",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 97
+      "line": 97,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:98",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 98
+      "line": 98,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:136",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 136
+      "line": 136,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:137",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 137
+      "line": 137,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/personal_family_view.py:138",
       "kind": "Index",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 138
+      "line": 138,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/rag.py:60",
       "kind": "Index",
       "path": "backend/app/models/rag.py",
-      "line": 60
+      "line": 60,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/rag.py:61",
       "kind": "Index",
       "path": "backend/app/models/rag.py",
-      "line": 61
+      "line": 61,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/rag.py:112",
       "kind": "Index",
       "path": "backend/app/models/rag.py",
-      "line": 112
+      "line": 112,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/relationship_facts.py:76",
       "kind": "Index",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 76
+      "line": 76,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/relationship_facts.py:77",
       "kind": "Index",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 77
+      "line": 77,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/relationship_facts.py:78",
       "kind": "Index",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 78
+      "line": 78,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/relationship_facts.py:120",
       "kind": "Index",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 120
+      "line": 120,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/relationship_facts.py:121",
       "kind": "Index",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 121
+      "line": 121,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:83",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 83
+      "line": 83,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:84",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 84
+      "line": 84,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:135",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 135
+      "line": 135,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:175",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 175
+      "line": 175,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:212",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 212
+      "line": 212,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:213",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 213
+      "line": 213,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:256",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 256
+      "line": 256,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:257",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 257
+      "line": 257,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/space.py:298",
       "kind": "Index",
       "path": "backend/app/models/space.py",
-      "line": 298
+      "line": 298,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:112",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 112
+      "line": 112,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:119",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 119
+      "line": 119,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:148",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 148
+      "line": 148,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:149",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 149
+      "line": 149,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:150",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 150
+      "line": 150,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:151",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 151
+      "line": 151,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:218",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 218
+      "line": 218,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:268",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 268
+      "line": 268,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:374",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 374
+      "line": 374,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:524",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 524
+      "line": 524,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:578",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 578
+      "line": 578,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:579",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 579
+      "line": 579,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:580",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 580
+      "line": 580,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:629",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 629
+      "line": 629,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:630",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 630
+      "line": 630,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:631",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 631
+      "line": 631,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:675",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 675
+      "line": 675,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:713",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 713
+      "line": 713,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:735",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 735
+      "line": 735,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:752",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 752
+      "line": 752,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:783",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 783
+      "line": 783,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:784",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 784
+      "line": 784,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:785",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 785
+      "line": 785,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:786",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 786
+      "line": 786,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:868",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 868
+      "line": 868,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward.py:869",
       "kind": "Index",
       "path": "backend/app/models/steward.py",
-      "line": 869
+      "line": 869,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_inferred.py:82",
       "kind": "Index",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 82
+      "line": 82,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_inferred.py:83",
       "kind": "Index",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 83
+      "line": 83,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_inferred.py:84",
       "kind": "Index",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 84
+      "line": 84,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_suggestion.py:74",
       "kind": "Index",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 74
+      "line": 74,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_suggestion.py:75",
       "kind": "Index",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 75
+      "line": 75,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_suggestion.py:76",
       "kind": "Index",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 76
+      "line": 76,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_suggestion.py:77",
       "kind": "Index",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 77
+      "line": 77,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_suggestion.py:136",
       "kind": "Index",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 136
+      "line": 136,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/steward_suggestion.py:142",
       "kind": "Index",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 142
+      "line": 142,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/system_admin.py:26",
       "kind": "Index",
       "path": "backend/app/models/system_admin.py",
-      "line": 26
+      "line": 26,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/system_admin.py:65",
       "kind": "Index",
       "path": "backend/app/models/system_admin.py",
-      "line": 65
+      "line": 65,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/term_registry.py:230",
       "kind": "Index",
       "path": "backend/app/models/term_registry.py",
-      "line": 230
+      "line": 230,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/term_registry.py:231",
       "kind": "Index",
       "path": "backend/app/models/term_registry.py",
-      "line": 231
+      "line": 231,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/term_registry.py:232",
       "kind": "Index",
       "path": "backend/app/models/term_registry.py",
-      "line": 232
+      "line": 232,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/term_registry.py:270",
       "kind": "Index",
       "path": "backend/app/models/term_registry.py",
-      "line": 270
+      "line": 270,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/term_registry.py:277",
       "kind": "Index",
       "path": "backend/app/models/term_registry.py",
-      "line": 277
+      "line": 277,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/term_registry.py:278",
       "kind": "Index",
       "path": "backend/app/models/term_registry.py",
-      "line": 278
+      "line": 278,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/v2_foundation.py:101",
       "kind": "Index",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 101
+      "line": 101,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/v2_foundation.py:228",
       "kind": "Index",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 228
+      "line": 228,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-Index-backend/app/models/v2_foundation.py:258",
       "kind": "Index",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 258
+      "line": 258,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     }
   ],
   "constraints": [
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/account.py:26",
       "kind": "CheckConstraint",
       "path": "backend/app/models/account.py",
-      "line": 26
+      "line": 26,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/account_binding.py:34",
       "kind": "CheckConstraint",
       "path": "backend/app/models/account_binding.py",
-      "line": 34
+      "line": 34,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/admin_access.py:27",
       "kind": "CheckConstraint",
       "path": "backend/app/models/admin_access.py",
-      "line": 27
+      "line": 27,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/admin_access.py:60",
       "kind": "CheckConstraint",
       "path": "backend/app/models/admin_access.py",
-      "line": 60
+      "line": 60,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:70",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 70
+      "line": 70,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:101",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 101
+      "line": 101,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:138",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 138
+      "line": 138,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:139",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 139
+      "line": 139,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:140",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 140
+      "line": 140,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:244",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 244
+      "line": 244,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent.py:245",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent.py",
-      "line": 245
+      "line": 245,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent_provider.py:41",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent_provider.py",
-      "line": 41
+      "line": 41,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent_provider.py:42",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent_provider.py",
-      "line": 42
+      "line": 42,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent_provider.py:84",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent_provider.py",
-      "line": 84
+      "line": 84,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/agent_provider.py:85",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/agent_provider.py",
-      "line": 85
+      "line": 85,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/agent_provider.py:122",
       "kind": "CheckConstraint",
       "path": "backend/app/models/agent_provider.py",
-      "line": 122
+      "line": 122,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/attachment.py:16",
       "kind": "CheckConstraint",
       "path": "backend/app/models/attachment.py",
-      "line": 16
+      "line": 16,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/controlled_web.py:28",
       "kind": "CheckConstraint",
       "path": "backend/app/models/controlled_web.py",
-      "line": 28
+      "line": 28,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/controlled_web.py:52",
       "kind": "CheckConstraint",
       "path": "backend/app/models/controlled_web.py",
-      "line": 52
+      "line": 52,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/controlled_web.py:53",
       "kind": "CheckConstraint",
       "path": "backend/app/models/controlled_web.py",
-      "line": 53
+      "line": 53,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/controlled_web.py:54",
       "kind": "CheckConstraint",
       "path": "backend/app/models/controlled_web.py",
-      "line": 54
+      "line": 54,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/controlled_web.py:79",
       "kind": "CheckConstraint",
       "path": "backend/app/models/controlled_web.py",
-      "line": 79
+      "line": 79,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/controlled_web.py:113",
       "kind": "CheckConstraint",
       "path": "backend/app/models/controlled_web.py",
-      "line": 113
+      "line": 113,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/invite_code.py:39",
       "kind": "CheckConstraint",
       "path": "backend/app/models/invite_code.py",
-      "line": 39
+      "line": 39,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/invite_code.py:40",
       "kind": "CheckConstraint",
       "path": "backend/app/models/invite_code.py",
-      "line": 40
+      "line": 40,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/invite_code.py:45",
       "kind": "CheckConstraint",
       "path": "backend/app/models/invite_code.py",
-      "line": 45
+      "line": 45,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/invite_code.py:51",
       "kind": "CheckConstraint",
       "path": "backend/app/models/invite_code.py",
-      "line": 51
+      "line": 51,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/invite_code.py:55",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/invite_code.py",
-      "line": 55
+      "line": 55,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/memory.py:53",
       "kind": "CheckConstraint",
       "path": "backend/app/models/memory.py",
-      "line": 53
+      "line": 53,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/memory.py:123",
       "kind": "CheckConstraint",
       "path": "backend/app/models/memory.py",
-      "line": 123
+      "line": 123,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/memory.py:128",
       "kind": "CheckConstraint",
       "path": "backend/app/models/memory.py",
-      "line": 128
+      "line": 128,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/node_position.py:14",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/node_position.py",
-      "line": 14
+      "line": 14,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/notification.py:34",
       "kind": "CheckConstraint",
       "path": "backend/app/models/notification.py",
-      "line": 34
+      "line": 34,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/notification.py:36",
       "kind": "CheckConstraint",
       "path": "backend/app/models/notification.py",
-      "line": 36
+      "line": 36,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/notification.py:48",
       "kind": "CheckConstraint",
       "path": "backend/app/models/notification.py",
-      "line": 48
+      "line": 48,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/personal_family_view.py:34",
       "kind": "CheckConstraint",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 34
+      "line": 34,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/personal_family_view.py:73",
       "kind": "CheckConstraint",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 73
+      "line": 73,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/personal_family_view.py:133",
       "kind": "CheckConstraint",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 133
+      "line": 133,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/personal_family_view.py:134",
       "kind": "CheckConstraint",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 134
+      "line": 134,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/personal_family_view.py:135",
       "kind": "CheckConstraint",
       "path": "backend/app/models/personal_family_view.py",
-      "line": 135
+      "line": 135,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/platform_features.py:17",
       "kind": "CheckConstraint",
       "path": "backend/app/models/platform_features.py",
-      "line": 17
+      "line": 17,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:34",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 34
+      "line": 34,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:39",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 39
+      "line": 39,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:43",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 43
+      "line": 43,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:47",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 47
+      "line": 47,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:51",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 51
+      "line": 51,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:54",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 54
+      "line": 54,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:59",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 59
+      "line": 59,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:105",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 105
+      "line": 105,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/rag.py:108",
       "kind": "CheckConstraint",
       "path": "backend/app/models/rag.py",
-      "line": 108
+      "line": 108,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/relationship_facts.py:51",
       "kind": "CheckConstraint",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 51
+      "line": 51,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/relationship_facts.py:67",
       "kind": "CheckConstraint",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 67
+      "line": 67,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/relationship_facts.py:119",
       "kind": "CheckConstraint",
       "path": "backend/app/models/relationship_facts.py",
-      "line": 119
+      "line": 119,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:47",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 47
+      "line": 47,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/space.py:72",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/space.py",
-      "line": 72
+      "line": 72,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:73",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 73
+      "line": 73,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:79",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 79
+      "line": 79,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:134",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 134
+      "line": 134,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/space.py:172",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/space.py",
-      "line": 172
+      "line": 172,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:173",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 173
+      "line": 173,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:174",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 174
+      "line": 174,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/space.py:210",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/space.py",
-      "line": 210
+      "line": 210,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:211",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 211
+      "line": 211,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:246",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 246
+      "line": 246,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:247",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 247
+      "line": 247,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:248",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 248
+      "line": 248,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/space.py:293",
       "kind": "CheckConstraint",
       "path": "backend/app/models/space.py",
-      "line": 293
+      "line": 293,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-UniqueConstraint-backend/app/models/space.py:297",
       "kind": "UniqueConstraint",
       "path": "backend/app/models/space.py",
-      "line": 297
+      "line": 297,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:139",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 139
+      "line": 139,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:140",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 140
+      "line": 140,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:211",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 211
+      "line": 211,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:212",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 212
+      "line": 212,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:354",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 354
+      "line": 354,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:358",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 358
+      "line": 358,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:359",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 359
+      "line": 359,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:471",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 471
+      "line": 471,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:472",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 472
+      "line": 472,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:514",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 514
+      "line": 514,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:515",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 515
+      "line": 515,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:577",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 577
+      "line": 577,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:627",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 627
+      "line": 627,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:710",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 710
+      "line": 710,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:782",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 782
+      "line": 782,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:857",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 857
+      "line": 857,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward.py:860",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward.py",
-      "line": 860
+      "line": 860,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_inferred.py:69",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 69
+      "line": 69,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_inferred.py:70",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 70
+      "line": 70,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_inferred.py:71",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 71
+      "line": 71,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_inferred.py:72",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_inferred.py",
-      "line": 72
+      "line": 72,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_suggestion.py:63",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 63
+      "line": 63,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_suggestion.py:64",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 64
+      "line": 64,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/steward_suggestion.py:65",
       "kind": "CheckConstraint",
       "path": "backend/app/models/steward_suggestion.py",
-      "line": 65
+      "line": 65,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/system_admin.py:25",
       "kind": "CheckConstraint",
       "path": "backend/app/models/system_admin.py",
-      "line": 25
+      "line": 25,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/system_admin.py:43",
       "kind": "CheckConstraint",
       "path": "backend/app/models/system_admin.py",
-      "line": 43
+      "line": 43,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/term_registry.py:197",
       "kind": "CheckConstraint",
       "path": "backend/app/models/term_registry.py",
-      "line": 197
+      "line": 197,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/user.py:53",
       "kind": "CheckConstraint",
       "path": "backend/app/models/user.py",
-      "line": 53
+      "line": 53,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:47",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 47
+      "line": 47,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:95",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 95
+      "line": 95,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:96",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 96
+      "line": 96,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:97",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 97
+      "line": 97,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:134",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 134
+      "line": 134,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:168",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 168
+      "line": 168,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:195",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 195
+      "line": 195,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:196",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 196
+      "line": 196,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     },
     {
+      "id": "SCHEMA-CheckConstraint-backend/app/models/v2_foundation.py:284",
       "kind": "CheckConstraint",
       "path": "backend/app/models/v2_foundation.py",
-      "line": 284
+      "line": 284,
+      "owner": "backend-model",
+      "status": "inventory",
+      "evidence": "L0"
     }
   ],
   "migrations": [
@@ -41174,6 +42044,145 @@
     {
       "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
       "lines": 875
+    }
+  ],
+  "triggers": [
+    {
+      "id": "TRIGGER-backend/migrations/versions/0009_agent_runtime.py:38",
+      "path": "backend/migrations/versions/0009_agent_runtime.py",
+      "line": 38,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0010_relationship_facts.py:40",
+      "path": "backend/migrations/versions/0010_relationship_facts.py",
+      "line": 40,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0014_memory_rag.py:251",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 251,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0014_memory_rag.py:258",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 258,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0014_memory_rag.py:264",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 264,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0024_agent_runtime_assistant_only.py:19",
+      "path": "backend/migrations/versions/0024_agent_runtime_assistant_only.py",
+      "line": 19,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0040_agent_session_title.py:23",
+      "path": "backend/migrations/versions/0040_agent_session_title.py",
+      "line": 23,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0045_steward_staged_publication.py:189",
+      "path": "backend/migrations/versions/0045_steward_staged_publication.py",
+      "line": 189,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0047_rag_lifecycle_integrity.py:93",
+      "path": "backend/migrations/versions/0047_rag_lifecycle_integrity.py",
+      "line": 93,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0048_steward_terminology_publication.py:117",
+      "path": "backend/migrations/versions/0048_steward_terminology_publication.py",
+      "line": 117,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0048_steward_terminology_publication.py:152",
+      "path": "backend/migrations/versions/0048_steward_terminology_publication.py",
+      "line": 152,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0049_steward_candidate_evidence.py:104",
+      "path": "backend/migrations/versions/0049_steward_candidate_evidence.py",
+      "line": 104,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0049_steward_candidate_evidence.py:111",
+      "path": "backend/migrations/versions/0049_steward_candidate_evidence.py",
+      "line": 111,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    },
+    {
+      "id": "TRIGGER-backend/migrations/versions/0055_steward_assist_execution_unit.py:499",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 499,
+      "owner": "backend-migration",
+      "status": "inventory",
+      "evidence": "L0",
+      "note": "SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查"
+    }
+  ],
+  "virtual_tables": [
+    {
+      "id": "VIRTUAL-backend/migrations/versions/0014_memory_rag.py:245",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 245,
+      "owner": "backend-migration",
+      "status": "blocked",
+      "evidence": "L2",
+      "note": "FTS5 虚拟表在 PostgreSQL 上不存在（已实测 SyntaxError）"
     }
   ]
 }

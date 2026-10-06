@@ -17,6 +17,16 @@ def _repo_root() -> Path:
 ROOT = _repo_root()
 EV = ROOT / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"
 
+# 入口总数。任何变化都必须显式更新——共享分类键会掩盖同函数内的新增入口。
+EXPECTED_ENTRIES = 65
+
+# 同函数内存在多个事务边界的函数 -> 入口数。这些函数的一条分类要覆盖多个边界，
+# 因此必须显式登记，变化时强制复核。
+MULTI_ENTRY_FUNCTIONS = {
+    ("backend/app/services/steward_pipeline.py", "_stage_view"): 2,
+    ("backend/app/services/steward_pipeline.py", "execute"): 3,
+}
+
 # (path, function) -> (category, invariant, lock_object, order_position, evidence, note)
 # A=CAS  B=lease+counter  C=parent/row lock  D=advisory+unique
 C = {
@@ -101,6 +111,31 @@ def main() -> None:
         raise SystemExit("未分类的事务入口（必须显式分类）：\n" + "\n".join(f"  {p}::{f}" for p, f in missing))
     if stale:
         raise SystemExit("分类表指向已不存在的入口：\n" + "\n".join(f"  {p}::{f}" for p, f in stale))
+
+    # 强制机制必须覆盖**入口数**而不是**函数数**。
+    #
+    # 分类键是 (path, function)，因此同一函数内的第二个、第三个事务入口会共享一条
+    # 分类——新增调用点会静默通过（check 用第 66 个入口实证了这一点）。
+    # 这里改为断言「入口数 == 已分类入口数」：任何新增入口都会改变计数并失败，
+    # 直到作者显式更新 EXPECTED_ENTRIES 并复核该函数的分类是否仍然成立。
+    if len(entries) != EXPECTED_ENTRIES:
+        raise SystemExit(
+            f"事务入口数从 {EXPECTED_ENTRIES} 变为 {len(entries)}：\n"
+            "  新增或删除了事务入口。请复核其所在函数的分类是否仍然成立，\n"
+            "  然后显式更新 EXPECTED_ENTRIES。共享分类键会掩盖同函数内的新增入口，\n"
+            "  因此计数断言是必要的第二道防线。\n"
+            + "\n".join(f"  {e['path']}:{e['line']} {e['function']} ({e['form']})" for e in entries)
+        )
+
+    # 同函数多入口必须显式登记，避免「一个函数一条分类」掩盖差异。
+    from collections import Counter
+    per_fn = Counter((e["path"], e["function"]) for e in entries)
+    multi = {k: n for k, n in per_fn.items() if n > 1}
+    if multi != MULTI_ENTRY_FUNCTIONS:
+        raise SystemExit(
+            f"同函数多入口集合变化：\n  实际 {multi}\n  预期 {MULTI_ENTRY_FUNCTIONS}\n"
+            "  这些函数内部有多个事务边界，分类时必须逐条确认。"
+        )
 
     cards = []
     for e in entries:

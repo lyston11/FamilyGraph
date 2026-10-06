@@ -2,7 +2,7 @@
 
 - root: `/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates`
 - branch: `feat/10-05-migration-proof-gates`
-- commit: `3bf4a06972e0ad623e8a44f15d262424460adb91`
+- commit: `910e7295e987cc18cf7897ea99030d9ddcc391b3`
 - worktree: `/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates`
 
 ## 统计
@@ -14,6 +14,8 @@
 - `indexes`: **112**
 - `constraints`: **105**
 - `migrations`: **59**
+- `triggers`: **14**
+- `virtual_tables`: **1**
 
 ## 稳定 ID 规则
 

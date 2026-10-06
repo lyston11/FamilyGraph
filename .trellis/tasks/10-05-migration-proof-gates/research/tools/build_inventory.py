@@ -60,7 +60,7 @@ report={
  'worktree':git(['git','rev-parse','--show-toplevel']),
  'counts':{'app_python':len(py),'model_python':len(models),'migration_python':len(migrations)},
  'matches':{k:grep(v, all_py if k not in ('sqlite_where','postgresql_where') else models) for k,v in raw_patterns.items()},
- 'tables':[], 'indexes':[], 'constraints':[], 'migrations':[],
+ 'tables':[], 'indexes':[], 'constraints':[], 'migrations':[], 'triggers':[], 'virtual_tables':[],
 }
 # AST inventory: model table names, Index/CheckConstraint/ForeignKey declarations.
 for p in models:
@@ -71,10 +71,34 @@ for p in models:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name=node.func.id
             if name in {'Table','Index','CheckConstraint','ForeignKeyConstraint','UniqueConstraint','PrimaryKeyConstraint'}:
-                report['constraints' if name in {'CheckConstraint','ForeignKeyConstraint','UniqueConstraint','PrimaryKeyConstraint'} else 'indexes' if name=='Index' else 'tables'].append({'kind':name,'path':rel,'line':node.lineno})
+                bucket = ('constraints'
+                          if name in {'CheckConstraint','ForeignKeyConstraint','UniqueConstraint','PrimaryKeyConstraint'}
+                          else 'indexes' if name == 'Index' else 'tables')
+                # PG-1 要求每个条目记录 owner/status/evidence；缺字段的条目无法验收。
+                entry = {'id': f'SCHEMA-{name}-{rel}:{node.lineno}', 'kind': name,
+                         'path': rel, 'line': node.lineno,
+                         'owner': 'backend-model', 'status': 'inventory', 'evidence': 'L0'}
+                report[bucket].append(entry)
 for p in migrations:
     report['migrations'].append({'path':str(p.relative_to(ROOT)),'lines':len(p.read_text(errors='replace').splitlines())})
-for key in ('tables','indexes','constraints','migrations'):
+# trigger / virtual table：SQLite 专属 DDL，PostgreSQL 上不存在
+report['triggers'] = []
+report['virtual_tables'] = []
+for p in migrations + py:
+    src = p.read_text(errors='replace')
+    rel = str(p.relative_to(ROOT))
+    for n, line in enumerate(src.splitlines(), 1):
+        up = line.upper()
+        if 'CREATE TRIGGER' in up:
+            report['triggers'].append({'id': f'TRIGGER-{rel}:{n}', 'path': rel, 'line': n,
+                                       'owner': 'backend-migration', 'status': 'inventory', 'evidence': 'L0',
+                                       'note': 'SQLite/PostgreSQL 触发器语法与语义不同，需逐条审查'})
+        if 'VIRTUAL TABLE' in up:
+            report['virtual_tables'].append({'id': f'VIRTUAL-{rel}:{n}', 'path': rel, 'line': n,
+                                             'owner': 'backend-migration', 'status': 'blocked',
+                                             'evidence': 'L2',
+                                             'note': 'FTS5 虚拟表在 PostgreSQL 上不存在（已实测 SyntaxError）'})
+for key in ('tables','indexes','constraints','migrations','triggers','virtual_tables'):
     report['counts'][key]=len(report[key])
 (OUT/'gate-1-inventory.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
 
