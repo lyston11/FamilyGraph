@@ -9,7 +9,7 @@
 | C0 | 环境/边界冻结 | **done** | 本任务 | manifest、worktree、依赖矩阵 | `c0-environment.md` | — |
 | C1 | PG baseline/schema/dialect | **done** | postgres-migration | 87 表 + 66 trigger 等价物 + 13 负向/正向用例 | `c1-baseline.md` | — |
 | C2 | counter/lease/CAS/settle/recovery | **done** | postgres-migration | 3 个租约入口 + 全部归还路径已接线 | `c2-capacity.md`、`c2-lock-order-verified.md` | — |
-| C3 | control-plane fault domain | **partial** | 10-04-control-plane-fault-domain | 集群级名额已交付；AC-5 分进程未做 | `c3-cluster-capacity.md` | AC-5 分进程/分池 |
+| C3 | control-plane fault domain | **done（可自主部分）** | 10-04-control-plane-fault-domain | 集群级名额 + **AC-5 分进程** | `c3-cluster-capacity.md`、`deployment-split.test.ts` | 真实双进程部署验收 |
 | C4 | Provider stream reliability | **partial** | 10-04-provider-reliability-boundaries | 流级名额 + deadline 已交付；circuit/backpressure 未做 | `c4-stream-limits.md` | circuit、backpressure、故障注入 |
 | C5 | Redis coordination | **partial** | 10-03-redis-coordination | 降级层已交付并验证；未接入准入路径 | `c5-redis-degradation.md` | 接入 admission、wakeup、token bucket |
 | C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法方言分派已交付；pgvector 未接入 | `c6-lexical-dispatch.md` | pgvector union/rerank、版本切换 |
@@ -61,7 +61,7 @@ C3-C10 todo 见下表
 |---|---|---|---|---|---|
 | 1 | ~~RAG 接入真实 schema（词法）~~ → **已完成**；pgvector union/rerank 仍待做 | `10-03-pgvector-rag` | C1/C2 已完成 | pgvector 已实测可行 | 把 filter-then-ANN 接入 `search_rag` 的 union/rerank |
 | 2 | ~~Redis 接入准入路径~~ → **已完成**（负缓存形态） | — | — | — | 剩余：wakeup/pub-sub、token bucket、circuit hint |
-| 3 | control-plane AC-5 分进程/分池 | `10-04-control-plane-fault-domain` | 无 | 需要进程模型设计 | 设计 Assistant/Steward 独立进程与资源预算 |
+| 3 | ~~control-plane AC-5 分进程~~ → **已完成**（两个独立服务 + profile 门禁的 combined） | — | — | 剩余：真实 `docker compose up` 端到端观察 | 起两个 sidecar 并验证互不干扰 |
 | 4 | ~~Provider circuit breaker~~ → **已完成**（`upstream × kind` 分区）；**backpressure 仍待做** | `10-04-provider-reliability-boundaries` | 无 | 可立即开始 | 实现上游 SSE 快于消费端时的缓冲上限/丢弃策略 |
 | 5 | PITR / WAL archive / HA / failover | `10-04-postgres-operations-cutover` | 需要真实 PG 集群与归档存储 | 环境就绪 | 按 runbook 配置 archive_mode 并演练 PITR |
 | 6 | PgBouncer 兼容性（transaction pooling 对 `FOR UPDATE`/advisory lock 的影响） | `10-04-postgres-operations-cutover` | 需要 PgBouncer 实例 | 环境就绪 | 起 PgBouncer 后重跑 `pg_capacity_concurrency.py` |
