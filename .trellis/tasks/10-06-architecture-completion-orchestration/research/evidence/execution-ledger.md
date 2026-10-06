@@ -11,9 +11,9 @@
 | C2 | counter/lease/CAS/settle/recovery | **done** | postgres-migration | 3 个租约入口 + 全部归还路径已接线 | `c2-capacity.md`、`c2-lock-order-verified.md` | — |
 | C3 | control-plane fault domain | **done（可自主部分）** | 10-04-control-plane-fault-domain | 集群级名额 + **AC-5 分进程** | `c3-cluster-capacity.md`、`deployment-split.test.ts` | 真实双进程部署验收 |
 | C4 | Provider stream reliability | **done（可自主部分）** | 10-04-provider-reliability-boundaries | 流级名额 + deadline + **circuit + backpressure 守护** | `c4-stream-limits.md` | 真实上游故障注入 |
-| C5 | Redis coordination | **partial** | 10-03-redis-coordination | 降级层已交付并验证；未接入准入路径 | `c5-redis-degradation.md` | 接入 admission、wakeup、token bucket |
-| C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法方言分派已交付；pgvector 未接入 | `c6-lexical-dispatch.md` | pgvector union/rerank、版本切换 |
-| C7 | operations/cutover | **partial** | 10-04-postgres-operations-cutover | epoch + migration health 已交付；PITR/HA 未做 | `c7-writer-epoch.md` | 写路径接入 epoch、PITR、PgBouncer |
+| C5 | Redis coordination | **done（可自主部分）** | 10-03-redis-coordination | 降级层 + **准入负缓存已接入** | `c5-redis-degradation.md` | wakeup、token bucket、circuit hint |
+| C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法已接入真实 schema；pgvector **机制**已交付（filter-then-ANN + RRF） | `c6-lexical-dispatch.md` | 真实 embedding provider + 接入 search_rag |
+| C7 | operations/cutover | **done（可自主部分）** | 10-04-postgres-operations-cutover | epoch + migration health + **全部写路径守卫** | `c7-writer-epoch.md` | PITR、HA、PgBouncer、备份演练 |
 | C8 | final load acceptance | **partial** | 10-04-multitenant-load-acceptance | 三层配额守恒已验；真实负载未做 | `c8-capacity-acceptance.md` | 真实部署与负载 |
 | C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | 真实部署 |
 | C10 | reconciliation/archive | todo | 本任务 | 对账 + 回滚演练 | — | C9 |

@@ -52,9 +52,11 @@ PASS
 
 ## 未完成（诚实声明）
 
-1. **pgvector 语义路径未接入**：`10-03-pgvector-rag` 的 filter-then-ANN 已实测，
-   但尚未接入 `search_rag` 的 union/rerank。
-   （词法路径已接入真实 schema，见下。）
+1. **pgvector 语义路径**：**机制已交付**（embedding 抽象、filter-then-ANN SQL、
+   RRF 融合），但**未接入 `search_rag`**，且**没有真实 embedding provider**
+   （代码库此前完全没有 embedding 能力）。接入需要：选定 provider → 补
+   `resolve_embedder` 实现 → 建 `rag_chunk_embeddings` → 在 `search_rag` 里
+   union/rerank。
 2. **索引版本切换回归**：`index_version` 切换与「查询必须带过滤」的 mutation 回归未做。
 3. **PG 上的 `_rows_to_hits` 语义**：该函数仍假设 FTS5 的 `rank` 语义（`bm25` 越小越好），
    而 PGroonga 的 `pgroonga_score` 越大越好。分派器已用 `ORDER BY rank DESC` 处理排序，
@@ -96,3 +98,61 @@ PASS
 **实测正是后者**：最小表探针通过，真实 schema 探针连续撞上三个 NOT NULL 列
 （`embedding_status`、`created_at`、`updated_at`）。这说明「SQL 形状对」不等于
 「能在真实表上跑」。
+
+
+## 语义检索机制（后续更新）
+
+`app/services/rag_embeddings.py` 交付三件事：
+
+### 1. embedding provider 抽象
+
+```python
+EmbeddingConfig(provider, model, dimension)
+load_config()          # 从环境读；未配置时 configured=False（fail-closed，不报错）
+resolve_embedder(cfg)  # 未配置/未实现 → EmbeddingUnavailable
+```
+
+**未配置时 fail-closed**：不伪造命中、不静默退化为「无结果」（那会让用户以为确实
+没有资料），也不回落到 `DeterministicEmbedder`。
+
+`DeterministicEmbedder` 只用于**测试与开发**：它用 token 哈希投影，**没有语义
+相似性**——"叔叔" 与 "伯父" 不会被判为相近。把它当生产实现会让语义检索退化成比
+词法更差的字面检索，却让系统看起来「已启用向量检索」。因此 `resolve_embedder`
+**不会**返回它（已用变异验证：让未配置回落到它会失败）。
+
+### 2. filter-then-ANN 而不是 post-filter
+
+```sql
+WITH authorized AS (          -- ① 先按授权过滤
+  SELECT ... WHERE <eligibility>
+)
+SELECT ... FROM authorized    -- ② 再在授权集合上 ANN
+ORDER BY embedding <=> :q LIMIT :limit
+```
+
+**为什么不能反过来**：实测 post-filter 在低选择性下**静默返回不足 k**（允许 1/10
+空间时只剩 1 条，应为 10），而 RAG **无法区分**「无相关内容」与「被授权过滤掉」——
+静默缺失会表现为「检索不到」，无人能发现。
+
+代价是 ANN 索引只作用于过滤后集合（可能退化），因此用 `over_fetch`（默认 8×）
+再在 union/rerank 阶段裁到 k。**宁可多取再裁，也不要可能静默少返回**。
+
+### 3. RRF 融合（确定性）
+
+```text
+score(d) = Σ 1 / (60 + rank_i(d))
+```
+
+**为什么不用分数加权**：词法 `bm25`（越小越好）与向量余弦距离（越小越好）
+**不同量纲**，直接比较会随数据分布漂移且不可复现。RRF 只用**名次**。
+
+同分时按 `chunk_id` 升序兜底——否则相对顺序取决于字典插入顺序，同一查询两次可能
+给出不同顺序，引用列表随之漂移。
+
+### 变异验证（3 组）
+
+| 变异 | 结果 |
+|---|---|
+| 改成 post-filter（先排序再过滤） | 结构断言失败 |
+| RRF 同分时去掉 chunk_id 兜底 | 确定性用例失败 |
+| 未配置时返回 DeterministicEmbedder | fail-closed 用例失败 |
