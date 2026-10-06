@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 from sqlalchemy import select
@@ -1054,3 +1056,80 @@ def test_stream_does_not_pin_a_pool_connection_between_chunks(db_session) -> Non
         f"流期间有 {held_ratio:.0%} 的时间持有连接池连接："
         "请求级 Session 不得跨 chunk 长期持有连接"
     )
+
+
+# ---------------------------------------------------------------- 流级墙钟上限（C4）
+
+
+def test_stream_deadline_interrupts_and_audits_the_reason():
+    """流超过墙钟上限必须**有界失败**，并保留 `stream_deadline_exceeded` 原因。
+
+    没有上限时，一个永不结束的上游可以把流永久挂住且不产生任何错误——用户看到
+    永远转圈，名额/连接/审计中的 in-flight 记录一直不释放。
+
+    本用例用一个「永远产出 chunk」的上游 + 极小上限，断言：
+
+    1. 抛出 `StreamDeadlineExceeded`（而不是正常结束的截断流——那样 sidecar 无从
+       区分「上游答完了」与「被服务端掐断」）；
+    2. 审计里 `error_class` 是 `stream_deadline_exceeded`，**不是**被通用
+       `except Exception` 改写的 `stream_interrupted`（后者会丢失真正原因）；
+    3. `sent=True`（流已开始，上游可能已处理）。
+    """
+    import asyncio as _asyncio
+
+    from app.services.provider_proxy import StreamDeadlineExceeded, passthrough_with_audit
+
+    class _EndlessUpstream:
+        status_code = 200
+
+        async def aiter_raw(self):
+            while True:
+                yield b"chunk"
+                await _asyncio.sleep(0)  # 让出控制权，避免饿死事件循环
+
+        async def aclose(self):
+            return None
+
+    class _Client:
+        async def aclose(self):
+            return None
+
+    audited: list[dict] = []
+
+    async def _run():
+        gen = passthrough_with_audit(
+            None,  # type: ignore[arg-type] - 审计被下面的 monkeypatch 截获
+            run=SimpleNamespace(id=4242),
+            provider_id=7,
+            client=_Client(),
+            upstream=_EndlessUpstream(),
+            on_finish=lambda: None,
+            max_duration_seconds=0.05,
+        )
+        chunks = 0
+        try:
+            async for _chunk in gen:
+                chunks += 1
+                if chunks > 10_000:  # 上限保护：用例自身不得无限跑
+                    break
+        except StreamDeadlineExceeded:
+            return "deadline"
+        return "completed"
+
+    # 本用例只验证墙钟上限，因此把「流中复核」替换成 no-op：它需要真实 run 行，
+    # 而那个路径已有独立用例覆盖（test_proxy_audits_cancellation_during_stream_once）。
+    with (
+        patch.object(provider_proxy, "_audit_egress") as audit,
+        patch.object(provider_proxy, "_gate_check_in_own_session"),
+    ):
+        audit.side_effect = lambda *_a, **kw: audited.append(kw)
+        outcome = _asyncio.run(_asyncio.wait_for(_run(), timeout=10))
+
+    assert outcome == "deadline", "流未按墙钟上限中断"
+    assert audited, "流级超限未落审计"
+    detail = audited[-1]
+    assert detail["status"] == "failed"
+    assert (
+        detail["error_class"] == "stream_deadline_exceeded"
+    ), f"原因被改写：{detail['error_class']}"
+    assert detail["sent"] is True

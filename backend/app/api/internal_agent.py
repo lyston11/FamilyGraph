@@ -670,17 +670,55 @@ async def proxy_provider_chat_completions(
             _execution_admission_limiter("agent_provider").release(provider_tenant)
         if provider_tenant is not None and _CLUSTER_RESOURCE.get("agent_provider"):
             _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_provider"])
+
+    # ---- 流级名额（C4）----
+    #
+    # 与建连名额分开、且**覆盖流的整个生命周期**。理由：建连名额在上面已归还，
+    # 所以一个租户可以同时持有多个**已建立**的长流；而一个 100 秒的流不占工作
+    # 线程也不占连接（`test_stream_does_not_pin_a_pool_connection_between_chunks`），
+    # 因此没有任何既有名额能限制「同时有多少个上游流在跑」。
+    #
+    # 取得失败即 503（与建连拒绝同一个错误码）：这是有界拒绝，不是排队——
+    # 流已经建好连接，再排队会把上游连接悬着，代价远高于直接拒绝。
+    stream_tenant = _peek_execution_tenant(request)
+    stream_kind, stream_id = _split_tenant(stream_tenant)
+    stream_slot = await _try_acquire_stream_slot(
+        tenant_kind=stream_kind, tenant_id=stream_id
+    )
+    if stream_slot is False:
+        await upstream.aclose()
+        logger.warning(
+            "agent stream admission rejected run_id=%d tenant_kind=%s reason=stream_full",
+            run_id,
+            stream_kind,
+        )
+        raise_api_error(503, AGENT_EXECUTION_BUSY, "执行资源繁忙，请稍后重试")
     media_type = upstream.headers.get("content-type", "application/json")
+    async def _stream_with_slot() -> Any:
+        """转发流，并保证流级名额在**流真正结束**时归还。
+
+        放在生成器的 finally 里而不是端点内：StreamingResponse 返回后端点即结束，
+        但流还在跑；只有生成器结束（正常读完、客户端断开、上游中断、deadline）
+        才意味着这个名额不再被占用。
+        """
+        try:
+            async for chunk in provider_proxy.passthrough_with_audit(
+                db,
+                run=run,
+                provider_id=provider_id,
+                client=client,
+                upstream=upstream,
+                on_finish=db.commit,
+                header_ms=header_ms,
+                max_duration_seconds=config.AGENT_STREAM_MAX_DURATION_SECONDS,
+            ):
+                yield chunk
+        finally:
+            if stream_slot is not None:
+                _release_stream_slot_soon(stream_kind, stream_id)
+
     return StreamingResponse(
-        provider_proxy.passthrough_with_audit(
-            db,
-            run=run,
-            provider_id=provider_id,
-            client=client,
-            upstream=upstream,
-            on_finish=db.commit,
-            header_ms=header_ms,
-        ),
+        _stream_with_slot(),
         status_code=upstream.status_code,
         media_type=media_type,
     )
@@ -1033,6 +1071,66 @@ def execution_tenant_key(claims: dict[str, Any]) -> str:
     if claims.get("agent_kind") == "steward":
         return f"space:{claims['space_id']}"
     return f"account:{claims['account_id']}"
+
+
+def _split_tenant(tenant: str | None) -> tuple[str, int]:
+    """把 `account:12` / `space:7` 拆成 (kind, id)；无法解析时返回 ("account", 0)。
+
+    无法解析只在 token 缺失时发生（`_peek_execution_tenant` 返回 None），那时
+    流级名额按未登记处理——真正的授权仍在工作线程内的原路径上执行。
+    """
+    if not tenant or ":" not in tenant:
+        return "account", 0
+    kind, _, raw = tenant.partition(":")
+    try:
+        return kind, int(raw)
+    except ValueError:
+        return "account", 0
+
+
+async def _try_acquire_stream_slot(*, tenant_kind: str, tenant_id: int) -> bool | None:
+    """在工作线程里尝试占用一个流级名额（同步 DB 工作不得在事件循环上做）。"""
+    from anyio import to_thread
+
+    def _attempt() -> bool | None:
+        db = SessionLocal()
+        try:
+            return capacity.try_acquire_stream(
+                db,
+                tenant_kind=tenant_kind,
+                tenant_id=tenant_id,
+                capacity_tenant=config.AGENT_STREAM_PER_TENANT_CAPACITY,
+            )
+        finally:
+            db.commit()
+            db.close()
+
+    return await to_thread.run_sync(_attempt)
+
+
+def _release_stream_slot(tenant_kind: str, tenant_id: int) -> None:
+    """同步归还流级名额（供已在工作线程内的调用方使用）。"""
+    db = SessionLocal()
+    try:
+        capacity.release_stream(db, tenant_kind=tenant_kind, tenant_id=tenant_id)
+    finally:
+        db.commit()
+        db.close()
+
+
+def _release_stream_slot_soon(tenant_kind: str, tenant_id: int) -> None:
+    """从事件循环调度流级名额归还（同 `_release_cluster_slot_soon` 的理由）。"""
+    from anyio import to_thread
+
+    task = asyncio.ensure_future(
+        to_thread.run_sync(_release_stream_slot, tenant_kind, tenant_id)
+    )
+
+    def _swallow(fut: asyncio.Future[None]) -> None:
+        if not fut.cancelled():
+            fut.exception()
+
+    task.add_done_callback(_swallow)
 
 
 # 执行平面名：只用于准入记账与诊断，不含租户数据。

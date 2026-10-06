@@ -69,6 +69,15 @@ _NO_RETRY_HEADERS = {"x-should-retry": "false"}
 _TRANSIENT_RETRY_HEADERS = {"retry-after-ms": "500"}
 
 
+class StreamDeadlineExceeded(Exception):
+    """流级墙钟超限。
+
+    单独的类型（而非复用 `httpx` 异常）是为了在审计里保留
+    `stream_deadline_exceeded` 这个原因——它表示「服务端主动掐断」，
+    与「上游中断」(`stream_interrupted`) 是不同的运维信号。
+    """
+
+
 @dataclass(frozen=True)
 class EgressFailure:
     """一次出站尝试的安全分类结果。
@@ -565,11 +574,17 @@ async def passthrough_with_audit(
     upstream: Any,
     on_finish: Any,
     header_ms: int | None = None,
+    max_duration_seconds: float | None = None,
 ) -> Any:
     """流式透传生成器：逐块回传 sidecar，结束后统计字节数并落用量审计。
 
     客户端中断/生成器关闭时同样关闭上游流（不泄漏连接）；审计提交由
     on_finish（端点注入的 db.commit）负责，错误不回滚已透传内容。
+
+    `max_duration_seconds`：**流级墙钟上限**。没有它，一个永不结束的上游可以把
+    流永久挂住且不产生任何错误——用户看到永远转圈，而资源（名额、连接、审计中的
+    in-flight 记录）一直不释放。超限即中断并归为 `stream_deadline_exceeded`，
+    这是一次**有界失败**，不是成功。
     """
     # Keep a scalar id: the request-scoped SQLAlchemy session may expire or
     # detach the ORM instance between streaming chunks.
@@ -577,8 +592,25 @@ async def passthrough_with_audit(
     bytes_read = 0
     outcome = "succeeded"
     failure: EgressFailure | None = None
+    deadline = (
+        time.monotonic() + max_duration_seconds
+        if max_duration_seconds is not None and max_duration_seconds > 0
+        else None
+    )
     try:
         async for chunk in upstream.aiter_raw():
+            if deadline is not None and time.monotonic() > deadline:
+                # 有界失败：中断并记明确原因。
+                #
+                # 用**专用异常**而不是 `break`：break 会让客户端看到一个「正常结束」
+                # 的截断流，sidecar 无从区分「上游答完了」与「被服务端掐断」。
+                # 专用异常必须排在通用 `except Exception` **之前**，否则会被改写成
+                # `stream_interrupted`，丢失真正的原因。
+                failure = EgressFailure("stream_deadline_exceeded", retryable=False, sent=True)
+                outcome = "failed"
+                raise StreamDeadlineExceeded(
+                    f"stream exceeded {max_duration_seconds}s wall-clock limit"
+                )
             # Re-check between chunks.  If the browser cancels while a relay
             # is streaming, stop forwarding immediately and classify the
             # egress as failed; the sidecar cannot settle this run succeeded.
@@ -600,6 +632,9 @@ async def passthrough_with_audit(
         # 不能标成上游错误或“未处理”。
         outcome = "failed"
         failure = EgressFailure("run_cancelled", retryable=False, sent=True)
+        raise
+    except StreamDeadlineExceeded:
+        # 墙钟超限：分类已在上方设好，这里只负责让它继续向外传播。
         raise
     except httpx.HTTPError:
         # 流中中断/超时：上游可能已处理（部分响应已发出），

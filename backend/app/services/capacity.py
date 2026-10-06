@@ -456,3 +456,43 @@ def try_acquire_cluster(db: Session, *, resource_kind: str) -> bool | None:
 def release_cluster(db: Session, *, resource_kind: str) -> int:
     """归还集群级名额；未登记时 no-op。"""
     return try_release(db, cluster_specs(resource_kind))
+
+
+# ---------------------------------------------------- 流级名额（C4）
+#
+# 与建连名额的关键区别：建连名额在流开始前就归还，所以一个租户可以同时持有多个
+# **已建立**的长流。流级名额覆盖**流的整个生命周期**，因此它是唯一能限制
+# 「同时有多少个上游流在跑」的层。
+#
+# 三层维度：global → agent_kind → tenant。kind 维度防止一类 agent 把另一类挤掉
+# （Steward 批量计算 vs Assistant 交互请求的时间尺度不同）。
+RESOURCE_PROVIDER_STREAM = "provider_stream"
+
+
+def stream_specs(*, tenant_kind: str, tenant_id: int, capacity_tenant: int) -> list[CounterSpec]:
+    """流级三层维度。`tenant_kind` 只接受 account/space（与 `_execution_tenant_key` 一致）。"""
+    kind = KIND_ASSISTANT if tenant_kind == "account" else KIND_STEWARD
+    scope_kind = "account" if tenant_kind == "account" else "space"
+    return [
+        CounterSpec("global", 0, RESOURCE_PROVIDER_STREAM),
+        CounterSpec("agent_kind", 0 if kind == KIND_ASSISTANT else 1, RESOURCE_PROVIDER_STREAM),
+        CounterSpec(scope_kind, tenant_id, RESOURCE_PROVIDER_STREAM),
+    ]
+
+
+def try_acquire_stream(
+    db: Session, *, tenant_kind: str, tenant_id: int, capacity_tenant: int
+) -> bool | None:
+    """尝试占用一个流级名额。`None` = 未登记 → 不限制（渐进引入）。"""
+    specs = stream_specs(
+        tenant_kind=tenant_kind, tenant_id=tenant_id, capacity_tenant=capacity_tenant
+    )
+    return try_acquire(db, specs)
+
+
+def release_stream(db: Session, *, tenant_kind: str, tenant_id: int) -> int:
+    """归还流级名额；未登记时 no-op。"""
+    return try_release(
+        db,
+        stream_specs(tenant_kind=tenant_kind, tenant_id=tenant_id, capacity_tenant=0),
+    )
