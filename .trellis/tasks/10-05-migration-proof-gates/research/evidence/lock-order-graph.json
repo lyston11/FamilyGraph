@@ -1,0 +1,902 @@
+{
+  "method": "DFS-first-reach (not line-number order; cross-file line numbers are incomparable)",
+  "frozen_order": [
+    "global_write_lock",
+    "counter",
+    "run_row"
+  ],
+  "counter_implemented": false,
+  "total_entries": 63,
+  "entries_with_multiple_lock_types": 44,
+  "entries_violating_frozen_order": 0,
+  "entries": [
+    {
+      "id": "TX-command_transaction-api/action_cards.py:461",
+      "path": "backend/app/api/action_cards.py",
+      "function": "execute_card",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-api/admin_steward.py:517",
+      "path": "backend/app/api/admin_steward.py",
+      "function": "steward_delivery_retry",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/bindings.py:92",
+      "path": "backend/app/commands/bindings.py",
+      "function": "confirm_binding",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/members.py:429",
+      "path": "backend/app/commands/members.py",
+      "function": "create_managed_member",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/members.py:396",
+      "path": "backend/app/commands/members.py",
+      "function": "create_member",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/members.py:1097",
+      "path": "backend/app/commands/members.py",
+      "function": "merge_duplicate_profile",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/ownership.py:126",
+      "path": "backend/app/commands/ownership.py",
+      "function": "accept_transfer",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/registration.py:162",
+      "path": "backend/app/commands/registration.py",
+      "function": "create_my_invite_code",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/registration.py:198",
+      "path": "backend/app/commands/registration.py",
+      "function": "redeem_invite_code",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/registration.py:53",
+      "path": "backend/app/commands/registration.py",
+      "function": "register_user",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-commands/spaces.py:534",
+      "path": "backend/app/commands/spaces.py",
+      "function": "create_shared_household",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-dev_seed.py:434",
+      "path": "backend/app/dev_seed.py",
+      "function": "maybe_seed_demo_data",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/admin_bootstrap.py:169",
+      "path": "backend/app/services/admin_bootstrap.py",
+      "function": "_bootstrap_admin_if_needed",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:422",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "_settle",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:92",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "enqueue_run",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:340",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "heartbeat",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:301",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "lease_next",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:711",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "prune_finished",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:556",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "reaper_pass",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:504",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "request_cancel",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/agent_queue.py:185",
+      "path": "backend/app/services/agent_queue.py",
+      "function": "submit_user_message",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/notifications.py:378",
+      "path": "backend/app/services/notifications.py",
+      "function": "mark_all_notifications_read",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/notifications.py:360",
+      "path": "backend/app/services/notifications.py",
+      "function": "mark_notification_read",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:1241",
+      "path": "backend/app/services/steward.py",
+      "function": "_rebuild_space_derived",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:468",
+      "path": "backend/app/services/steward.py",
+      "function": "enqueue_steward_job",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:1256",
+      "path": "backend/app/services/steward.py",
+      "function": "flush_buffer",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:602",
+      "path": "backend/app/services/steward.py",
+      "function": "lease_next_steward_job",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:788",
+      "path": "backend/app/services/steward.py",
+      "function": "reaper_pass",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:860",
+      "path": "backend/app/services/steward.py",
+      "function": "scan_due_spaces",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward.py:685",
+      "path": "backend/app/services/steward.py",
+      "function": "settle_steward_job",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:1789",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "apply_settled_attempt",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:2088",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "heartbeat_child_run",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:1324",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "lease_attempt",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:2116",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "open_child_run",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:2173",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "recover_stuck_attempts",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:2250",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "recover_stuck_child_runs",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-_immediate_tx-services/steward_assist.py:1637",
+      "path": "backend/app/services/steward_assist.py",
+      "function": "settle_attempt",
+      "form": "_immediate_tx",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_delivery.py:754",
+      "path": "backend/app/services/steward_delivery.py",
+      "function": "_claim_due",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_delivery.py:875",
+      "path": "backend/app/services/steward_delivery.py",
+      "function": "_defer_changed_snapshot",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_delivery.py:849",
+      "path": "backend/app/services/steward_delivery.py",
+      "function": "_record_failure",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_delivery.py:891",
+      "path": "backend/app/services/steward_delivery.py",
+      "function": "drain",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_demand.py:98",
+      "path": "backend/app/services/steward_demand.py",
+      "function": "register",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_gc.py:248",
+      "path": "backend/app/services/steward_gc.py",
+      "function": "collect",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/steward_inferred.py:447",
+      "path": "backend/app/services/steward_inferred.py",
+      "function": "confirm_edge",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/steward_inferred.py:655",
+      "path": "backend/app/services/steward_inferred.py",
+      "function": "dismiss_edge",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/steward_inferred.py:687",
+      "path": "backend/app/services/steward_inferred.py",
+      "function": "reinstate_edge",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_overlay.py:422",
+      "path": "backend/app/services/steward_overlay.py",
+      "function": "_fail",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_overlay.py:321",
+      "path": "backend/app/services/steward_overlay.py",
+      "function": "_heartbeat",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_overlay.py:81",
+      "path": "backend/app/services/steward_overlay.py",
+      "function": "claim_due",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_overlay.py:328",
+      "path": "backend/app/services/steward_overlay.py",
+      "function": "execute",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:237",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "_fail_target",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:195",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "_reserve_search",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:662",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "_reuse_view",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:540",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "_stage_view",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:144",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "begin_job",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [],
+      "distinct_locks": [
+        "global_write_lock"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:772",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "execute",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:156",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "heartbeat",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:1063",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "publish",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:1171",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "record_failure",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-write_transaction-services/steward_pipeline.py:354",
+      "path": "backend/app/services/steward_pipeline.py",
+      "function": "save_target",
+      "form": "write_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/steward_suggestions.py:1331",
+      "path": "backend/app/services/steward_suggestions.py",
+      "function": "dismiss_suggestion",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/steward_suggestions.py:1562",
+      "path": "backend/app/services/steward_suggestions.py",
+      "function": "restore_term",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    },
+    {
+      "id": "TX-command_transaction-services/steward_suggestions.py:1391",
+      "path": "backend/app/services/steward_suggestions.py",
+      "function": "submit_suggestion",
+      "form": "command_transaction",
+      "envelope": "global_write_lock",
+      "row_lock_sequence": [
+        "run_row"
+      ],
+      "distinct_locks": [
+        "global_write_lock",
+        "run_row"
+      ],
+      "violates_frozen_order": false
+    }
+  ]
+}
