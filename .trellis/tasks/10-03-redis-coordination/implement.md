@@ -27,3 +27,19 @@
 ## 回滚
 
 关闭 Redis 加速开关，回退 PostgreSQL 有界 admission/缓存未命中路径；不删除 PostgreSQL 状态、不重放未经确认的消息、不把 Redis 改为 lease 真源。
+
+
+## 已完成的实测（2026-10-06）
+
+- [x] Redis 自身语义验证（真实 Redis 7）：`SET NX EX` 单赢家、TTL 生效、
+      `INCR` 原子单调、连接失败 **fail-loud**（抛 `ConnectionError`）。
+      证据：`research/evidence/redis-degradation-probe.md`。
+- [x] 结论：Redis 可作**加速层**（CAS/TTL/原子计数成立且失败显式）。
+
+## 未完成（本任务的核心，需代码实现）
+
+- [ ] **降级策略**：Redis 不可用时 admission 回退 PostgreSQL 还是有界 fail-closed。
+- [ ] 缓存失效是否会放宽授权（必须证明不会）。
+- [ ] wakeup/pub-sub 丢失时的行为。
+- [ ] tenant token bucket 与 PostgreSQL counter 的一致性。
+- [ ] circuit hint 不得成为 lease/settle 真源的可测断言。

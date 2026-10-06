@@ -27,3 +27,20 @@
 ## 回滚
 
 关闭向量查询并回退确定性/既有词法路径；保留 source/revision/chunk 数据和旧 active version，不删除合法引用。索引构建失败不得切换 active pointer。
+
+
+## 已完成的实测（2026-10-06）
+
+- [x] pgvector 可用性验证（0.8.7，官方 `pgvector/pgvector:pg16` 镜像，`CREATE EXTENSION` 成功）。
+- [x] **ANN 与授权过滤组合实测**：post-filter 在低选择性下静默返回不足 k
+      （允许 1/10 空间时只剩 **1** 条），filter-then-ANN 取满 k=10。
+      证据：`research/evidence/pgvector-filter-probe.md`。
+- [x] 硬约束已登记：**必须先按 scope/visibility/revision 过滤再向量排序**，过滤列需索引。
+
+## 未完成
+
+- [ ] 真实 embedding 分布（探针用确定性合成向量）。
+- [ ] IVFFlat 与 HNSW 的召回/延迟对比。
+- [ ] 10 万级规模与索引构建时间。
+- [ ] 与 PGroonga 词法结果的 union + 确定性 rerank。
+- [ ] embedding 生成、更新、删除与 revision 绑定。
