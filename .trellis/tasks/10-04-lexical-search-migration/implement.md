@@ -39,3 +39,23 @@
 - [ ] 与 `rag_chunks` 的 revision/scope/visibility 过滤组合。
 - [ ] PGroonga 索引的 `pg_dump`/恢复行为与重建成本。
 - [ ] 中文分词模式在专业术语/人名上的调优。
+
+
+## AC 逐条状态（2026-10-06，归档前核查）
+
+**本任务曾被过早归档，已恢复为 in_progress。** 下表说明原因：AC 中多项未满足，
+仅凭「已完成基准」不足以宣告完成。
+
+| AC | 状态 | 说明 |
+|---|---|---|
+| golden corpus 对比召回/排序/延迟/索引成本 | **PARTIAL** | 召回与排序已实测（四方对照，子串真源）；**延迟与索引成本未测**（12 条语料，非规模基准） |
+| 明确默认实现 | **DONE** | PGroonga 主路径 + Unicode n-gram 后备，已实测决定 |
+| 撤权/删除/revision/citation/scope 过滤 + 索引版本切换回归与 mutation | **NOT-DONE** | 未实现：PGroonga 索引与 `rag_chunks` 的 revision/scope/visibility 过滤组合未验证 |
+| pgvector hybrid 不越权、不改 citation 认证 | **NOT-DONE** | 未验证 union/rerank 与授权过滤的组合 |
+| 仅在所有 PG 内方案不达标时才建独立服务 | **N/A** | PGroonga 达标，无需独立服务 |
+
+### 未完成项（因此不能归档）
+
+- **golden corpus 对比召回/排序/延迟/索引成本**：召回与排序已实测（四方对照，子串真源）；**延迟与索引成本未测**（12 条语料，非规模基准）
+- **撤权/删除/revision/citation/scope 过滤 + 索引版本切换回归与 mutation**：未实现：PGroonga 索引与 `rag_chunks` 的 revision/scope/visibility 过滤组合未验证
+- **pgvector hybrid 不越权、不改 citation 认证**：未验证 union/rerank 与授权过滤的组合

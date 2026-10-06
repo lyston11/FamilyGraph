@@ -1,16 +1,16 @@
 {
-  "id": "lexical-search-migration",
-  "name": "lexical-search-migration",
-  "title": "中文词法检索迁移与 PGroonga 基准",
-  "description": "为 SQLite FTS5 trigram 设计 PGroonga-first 词法迁移，并与 Unicode n-gram 后备及现有语义检索做质量基准",
-  "status": "completed",
+  "id": "pgvector-rag",
+  "name": "pgvector-rag",
+  "title": "pgvector 优先的 RAG 检索扩展",
+  "description": "在保留 source/revision/scope/visibility/citation 合同前提下评估并原型化 pgvector，只有证据不足才引入独立向量服务",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
   "priority": "P2",
   "creator": "lyston",
   "assignee": "lyston",
-  "createdAt": "2026-10-04",
+  "createdAt": "2026-10-03",
   "completedAt": "2026-10-06",
   "branch": null,
   "base_branch": "main",
@@ -22,5 +22,6 @@
   "parent": "10-03-multi-tenant-agent-concurrency-storage",
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {},
+  "archived_at": null
 }
