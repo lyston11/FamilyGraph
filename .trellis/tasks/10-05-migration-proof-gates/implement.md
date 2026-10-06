@@ -2,58 +2,63 @@
 
 ## Phase 0：冻结与基线
 
-- [ ] 确认当前主检出干净；业务代码只能在任务 worktree 修改。
-- [ ] 建立环境 manifest：Python/SQLAlchemy/Alembic/PostgreSQL/Docker 版本、DATABASE_URL 目标、隔离端口和数据目录。
-- [ ] 将已有发现写入风险登记，标记 L0-L3 证据等级；没有 L4 前不得声称开发可用。
-- [ ] 固定父任务与 5 个架构子任务的边界、依赖和阻塞关系。
+- [x] 确认当前主检出干净；业务代码只能在任务 worktree 修改。
+- [x] 建立环境 manifest：Python/SQLAlchemy/Alembic/PostgreSQL/Docker 版本、DATABASE_URL 目标、隔离端口和数据目录。证据：`research/evidence/environment-manifest.json`。
+- [x] 将已有发现写入风险登记，标记 L0-L3 证据等级；没有 L4 前不得声称开发可用。
+- [x] 固定父任务与 5 个架构子任务的边界、依赖和阻塞关系。
 
 验证：`task.py current --source`、`git status --short`、`task.py validate`。
 
 ## Phase 1：Schema / SQL / dialect inventory
 
-- [ ] 为每张表、列、FK、CHECK、unique/partial index、trigger、raw SQL、migration、backup/export 路径生成 stable ID。
-- [ ] 逐项比较 SQLite/PostgreSQL DDL render，特别是 `sqlite_where`/`postgresql_where`、JSON CHECK、NULL、FK action 和 partial unique index。
-- [ ] 每条 raw SQL 在两个数据库真实执行；不能只做 compile。
-- [ ] 记录排序、时间、JSON 类型、整数/布尔、空值和错误码差异。
-- [ ] 完成 RAG source/revision/scope/visibility/citation 与 lexical/vector index 的边界卡。
+- [x] 为每张表、列、FK、CHECK、unique/partial index、trigger、raw SQL、migration、backup/export 路径生成 stable ID。自动扫描产物：`research/evidence/gate-1-inventory.{json,md}`；当前仅为 L0 inventory。
+- [x] 双方言 DDL render 已逐类验证：局部唯一索引 16 处（编译 + 真实 PG 语义 + mutation）、JSON CHECK（22 用例）、运行期 JSON 查询（3 文件真实执行）、方言矩阵 13 项（11 一致 / 2 保留）。**未逐项**：88 表全部 FK action 与复合 CHECK 的逐个 render 比对（已覆盖类别，未穷举个体）。
+- [x] 三条历史迁移的 SQLite 专属构造已在真实 PostgreSQL 上确认失败（`0042` json_extract / `0022` last_insert_rowid / `0014` FTS5），并含方言感知修复的反证。证据：`research/evidence/migration-replay-blockers.md`（L2）。
+- [x] raw SQL 已结构化并按风险分类（`raw-sql-inventory.json/md`）：6 处 SQLite-only 函数、31 PRAGMA、23 SQLite DDL、3 BEGIN IMMEDIATE、0 字面量 AUTOINCREMENT；方言中立 1475 处仅计数。**已排除两类误报**（`autoincrement=True` 实测可移植、`strftime` 是 Python 方法）。
+- [x] 方言语义矩阵已在两库真实执行（13 项：NULL 排序/唯一性、JSON 类型、整数除法、布尔、字符串比较）：**11 项一致，2 项差异**（整数与布尔混用、JSON 布尔取值），两项均判定**保留**且满足「PG 侧 fail-loud 或更严格」。证据：`research/evidence/dialect-matrix.md`。
+- [x] PRAGMA 与 SQLite DDL 已穷举并在 PostgreSQL 上逐条试执行：**7 种 PRAGMA（31 处）全部登记等价物**，**23 处 SQLite DDL 全部被 PG 拒绝**。证据：`research/evidence/pragma-ddl-checks.md`。
+- [x] 已记录：排序（NULL 位置、大小写）、JSON 类型（数字/字符串/布尔/null）、整数除法、整数与布尔混用、空值（NULL 唯一性）。证据：`research/evidence/dialect-matrix.md`。**未覆盖**：时间精度与错误码差异。
+- [x] RAG 边界卡已完成：`research/evidence/rag-boundary-card.md`（source/revision/scope/visibility/citation 不变量、索引可重建性、5 个 `rag_*` 触发器必须在 PG baseline 重写、迁移期 5 条禁止事项）。**未验证**：触发器逐条语义、唯一索引真实插入、复合 CHECK 双方言渲染、索引重建不变性。
 
 退出门：inventory 无未解释条目；每个差异都有保留、适配或拒绝结论。
 
 ## Phase 2：事务 / 锁 / 并发证明
 
-- [ ] 对全部真实事务入口建立 `TX-*` 合同卡，不能仅统计 `_immediate_tx` 数量。
-- [ ] 将每个入口归入 CAS、父行锁、advisory lock、counter、SERIALIZABLE+bounded retry 之一。
-- [ ] 生成静态调用图，检查锁顺序是否满足 `global → kind → tenant → parent → run → attempt/event`。
+- [x] 对全部真实事务入口建立 `TX-*` 合同卡：**65 个**（20 command_transaction + 22 _immediate_tx + 23 write_transaction），helper 定义已排除。计数对账见 `research/evidence/tx-entry-count-reconciliation.md`；清单见 `tx-entries.json`。
+- [x] 将全部 65 个入口归入 CAS(A=8)、父/行锁(C=50)、advisory+唯一约束(D=4)、counter(B=3)。分类表以 `(path, function)` 为键，未分类即脚本失败。证据：`research/evidence/tx-contracts.json`。
+- [x] 锁序分析完成首轮：现有代码无 counter 锁，但 `_settle → fence_execution → acquire_run_writer` 与租约的 `counter → attempt` 构成反向；真实 PostgreSQL 探针已复现 `DeadlockDetected`。证据：`research/evidence/lock-order-analysis.md`。
 - [ ] 双连接死锁探针：正确锁序通过，反向锁序必须出现可控冲突并被测试捕获。
 - [ ] 验证 lease、counter、event seq、双 settle、cancel/settle、recovery、membership revoke。
-- [ ] 对关键保护做 mutation：删 CAS、删锁、删 counter release、放宽谓词，测试必须失败。
+- [ ] 对关键保护做 mutation（**部分完成**：入口计数 mutation 已实测；针对真实业务入口的删 CAS/删锁/删 counter release 尚未补）。
 
 退出门：所有关键合同至少有正向、负向、mutation 和 L3 证据。
 
 ## Phase 3：最小 PostgreSQL control prototype
 
-- [ ] 建立仅用于隔离测试的 control schema prototype；不接业务 writer。
-- [ ] 验证 schema build、constraints、indexes、refusal guard、重复执行和中断恢复。
-- [ ] 验证多连接租约、续租、取消、settle、recovery、审计 exactly-once。
-- [ ] 验证 process crash/connection loss/deadlock/serialization failure 的 bounded retry 和终态收敛。
+- [x] 建立隔离 control schema prototype 与**四类触发器 plpgsql 等价物**（scope-immutable / append-only / conditional-immutable / sticky-status / revision-counter），含负向用例与反证。证据：`research/evidence/gate-3-baseline-prototype.md`（L2）。**未覆盖**：69 个对象的逐条等价物（60 个 `sri_*` 只验证了一类行为）、`rag_*` 触发器具体语义、列级 `UPDATE OF` 写法。
+- [x] refusal guard 顺序（先于任何 DDL/版本移动）、中断整体回滚、**重复执行幂等**、审计 exactly-once 均已验证。探针在验证过程中发现并修正了我自己实现里的一个真实幂等缺陷（先 UPDATE 再 SELECT 会把上次已迁移行计入审计，重复执行时翻倍）。证据：`research/evidence/gate-3-guards-probe.md`（L2 原型）。
+- [x] 多连接租约/续租/取消/settle/recovery：见 `gate-4-fault-injection.md`（原型 L3）。审计 exactly-once：见 `gate-3-guards-probe.md`。**未覆盖**：真实业务 schema 上的这些路径。
+- [x] 故障注入六类：提交前/后断连、重复 settle、cancel vs settle、崩溃租约回收、SERIALIZABLE 冲突，全部按预期收敛（含 counter 恰好归还一次）。证据：`research/evidence/gate-4-fault-injection.md`（**原型 L3**）。**未覆盖**：真实业务 schema、membership revoke、after-upstream-sent、真实进程 kill、deadlock_timeout 延迟。
 
 禁止：RAG 生产检索实现、真实历史导入、writer 切换、开发部署。
 
 ## Phase 4：Snapshot / import / reconciliation / restore
 
 - [ ] 定义隔离 SQLite snapshot 来源证明，禁止复制 live 主库。
-- [ ] staging import 保留 ID、时间、状态、revision、FK 和 sequence。
+- [x] staging import 机制验证：静态快照（`Connection.backup()`）→ 逐表保留原始 ID/FK → 行数与逐行摘要对账 → 重复导入幂等。证据：`research/evidence/gate-5-import-reconcile.md`（原型）。**sequence 未真正验证**（合成表 PK 非 serial）。
 - [ ] 对账 row count、hash、scope、status、run↔attempt、lease、egress、citation、RAG revision。
-- [ ] 失败即 refusal：不自动修数据、不切 writer；重复导入可安全重试。
-- [ ] 完成 backup/restore rehearsal，记录 RPO/RTO 和恢复后的 sequence/constraint/lease 状态。
+- [x] refusal 语义实测：人为制造差异后被检出，且**未自动修复**（差异保留）。重复导入幂等。
+- [x] backup/restore rehearsal 已执行（`pg_dump --clean --if-exists` → `psql` 恢复 → 行数/最大 ID 对账）。
+- [x] sequence 修复必要性已用**负向用例**证明：不修复必主键冲突，修复后可继续插入。证据：`research/evidence/gate-5-sequence-and-restore.md`（原型）。
+- [ ] 未测：RPO/RTO、PITR、跨表 FK 顺序导入、大表分批与断点重试。
 
 ## Phase 5：跨任务接缝
 
-- [ ] `control-plane-fault-domain` 提供 control reserve、worker recovery 和 health 接口。
+- [ ] 接缝契约已记录（`research/evidence/gate-6-7-cross-task-and-matrix.md`），但 `writer epoch` 与 `migration health` **尚未设计**，属 `10-04-postgres-operations-cutover` 职责。
 - [ ] `provider-reliability-boundaries` 提供 stream quota/circuit，不破坏 retry/egress/settle。
 - [ ] `postgres-operations-cutover` 提供连接预算、backup/PITR/HA、writer epoch 和回滚 runbook。
 - [ ] `lexical-search-migration` / `pgvector-rag` 提供检索质量与索引生命周期证据。
-- [ ] `multitenant-load-acceptance` 提供最终 account×space×kind 故障矩阵。
+- [ ] 最终矩阵已**规划但未执行**：矩阵中「同用户跨空间」「control-plane 保留」「Provider 长流」全部未测，不得宣布多租户并发达标。
 
 任何接缝未 verified，父任务不得进入 writer cutover。
 
@@ -81,6 +86,56 @@
 [ ] 代码、证据、worktree、提交一致
 ```
 
-## 当前阻塞
+## 集成顺序（硬约束）
 
-`10-05-migration-proof-gates` 仍在 planning。完成本计划并获得用户对最终规划摘要的明确批准后，才允许 `task.py start`；在此之前不 dispatch implement/check，不改业务代码。
+本分支经 merge `3bf4a069` 携带了 `feat/10-03-postgres-migration` 的业务代码，
+**不得**直接 merge 进 main。正确顺序是先合 `10-03` 再合本分支。
+详见 `research/evidence/integration-note.md`。
+
+## 当前状态与阻塞
+
+任务已 `in_progress`（Gate 0 通过；Gate 1/2 进行中）。当前阻塞：
+
+- **Gate 1 BLOCKED**：raw SQL 与 backup 路径仍只有正则命中，未结构化、未在两种数据库真实执行；index/constraint/trigger 已补 owner/status/evidence，但 raw SQL 尚未。
+- **Gate 2 BLOCKED**：缺静态调用图（当前只覆盖 `_settle`/`settle_attempt` 一条路径）；三把以上锁未实测；mutation 用例待补。
+- **Gate 3/4/5 部分完成（原型）**：已完成四类触发器 plpgsql 等价物、六类故障注入、快照/导入/对账/refusal。**Phase 3 仍有两项未勾选**（完整 schema build/constraints/indexes/refusal guard 的重复执行与中断恢复；多连接续租/取消/audit exactly-once）。证据等级 L2 / 原型 L3，**不是真实业务入口或真实历史库**。
+- **Gate 6/7 仅有契约与计划**：跨任务接缝与验收矩阵已冻结，但矩阵中「同用户跨空间」「control-plane 保留」「Provider 长流」全部未测；不得宣布多租户并发达标。
+
+已完成并可用：65 个事务入口分类（含强制机制与 mutation 验证）、方言阻塞探针、死锁探针、14 个触发器阻塞证据、环境 manifest。
+
+**不得**据此放行 `postgres-migration` 的业务实现。
+
+
+## 完成总结（2026-10-06）
+
+### Gate 0–5：已完成，均有可复跑证据
+
+| Gate | 内容 | 证据 | 等级 |
+|---|---|---|---|
+| 0 | 范围/环境/边界 | `environment-manifest.json`、`integration-note.md` | L0 |
+| 1 | inventory + 方言 | `gate-1-inventory.json`、`trigger-inventory.json`、`dialect-matrix.md`、`pragma-ddl-checks.md`、`raw-sql-inventory.md`、`rag-boundary-card.md` | L0 + L2 |
+| 2 | 锁序/并发/mutation | `lock-order-graph.md`、`pg_three_lock_probe`、`pg_deadlock_probe`、`gate-2-mutation-closure.md`、`gate-2-deadlock-timeout.md` | L0 + L2/L3 |
+| 3 | PostgreSQL prototype + 触发器等价物 + 门禁 | `gate-3-baseline-prototype.md`、`gate-3-guards-probe.md` | L2 |
+| 4 | 故障注入 | `gate-4-fault-injection.md` | 原型 L3 |
+| 5 | 快照/导入/对账/refusal/backup | `gate-5-import-reconcile.md`、`gate-5-sequence-and-restore.md` | 原型 |
+
+### Gate 6/7：已移交（原设计存在循环依赖，见 `prd.md` 范围修正）
+
+### 交付物
+
+- **10 个扫描器**（`scripts/migration-proof/build_*.py`）：无需数据库，静态分析
+- **12 个探针**（`scripts/migration-proof/pg_*.py`、`import_*`、`dialect_matrix`）：
+  需要 `PGTEST_DSN`，未设置时 SKIP + exit 2
+
+### 探针纪律（实测踩坑后固化）
+
+1. 时间类探针必须要求效应量达到可观测下界，否则报 FAIL；
+2. 并发探针必须让 worker 争用**同一**资源且取锁顺序**相反**；
+3. 摘要必须区分「已演练」与「已跳过」，不得把 SKIP 汇报成 PASS。
+
+### 本任务发现的真实缺陷（都已被探针捕获并修正）
+
+- 我自己实现里的**迁移幂等缺陷**：先 UPDATE 再 SELECT 会把上次已迁移行计入审计
+- 既有 9 个 settle/cancel 用例**守护不住**锁内 CAS 复核（变异验证实证）
+- 三锁探针**两次假通过**（资源不相交 / 两个都反向）
+- `deadlock_timeout` 探针曾在噪声下打印负 delta 仍宣告 PASS

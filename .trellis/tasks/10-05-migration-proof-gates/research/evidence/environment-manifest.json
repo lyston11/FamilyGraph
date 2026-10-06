@@ -1,0 +1,62 @@
+{
+  "generated_at_utc": "2026-10-06T05:31:30Z",
+  "host": "lystondeMacBook-Air.local",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "python": "3.12.12",
+  "git": {
+    "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
+    "branch": "feat/10-05-migration-proof-gates",
+    "commit": "9d5344f19b4b045c2ec56bd9ae06d03476d0ec55",
+    "status": ""
+  },
+  "tools": {
+    "docker": "/usr/local/bin/docker",
+    "psql": "not-found",
+    "pg_dump": "not-found",
+    "pg_restore": "not-found",
+    "python3": "/opt/homebrew/Caskroom/miniforge/base/bin/python3"
+  },
+  "tool_versions": {
+    "docker": "Docker version 29.4.0, build 9d7ad9f",
+    "docker_server": "UNAVAILABLE: CalledProcessError: Command '('docker', 'version', '--format', '{{.Server.Version}}')' returned non-zero exit status 1."
+  },
+  "postgres_isolation": {
+    "image": "postgres:16-alpine",
+    "container": "fg-pg-gate1（一次性，探针结束即删除）",
+    "port": "55435 -> 5432",
+    "database": "familygraph（独立 database，非开发库）",
+    "dsn_env_var": "PGTEST_DSN",
+    "execution_host": "开发服务器（经 ssh lyston + docker exec）",
+    "local_docker_daemon": "DOWN —— L2/L3 探针无法在本机复现，必须在 PG 主机执行"
+  },
+  "target_databases": {
+    "development": "/home/ubuntu/projects/FamilyGraph/backend/data/db/app.db（systemd 栈，本任务不写入）",
+    "production": "Docker Compose familygraph-prod（命名卷，本任务禁止接触）",
+    "migration_target": "PostgreSQL（尚未切换，仍为 SQLite）"
+  },
+  "python_packages": {
+    "SQLAlchemy": "2.0.36",
+    "alembic": "1.14.1",
+    "psycopg": "3.3.6",
+    "psycopg2-binary": "not-installed",
+    "pytest": "8.3.4"
+  },
+  "environment_policy": {
+    "production_touched": false,
+    "development_writer_cutover": false,
+    "live_sqlite_copied": false,
+    "redis_source_of_truth": false
+  },
+  "isolation_requirements": {
+    "postgres_database": "dedicated database/container only",
+    "data_dir": "temporary directory only",
+    "network": "no production listener or database",
+    "probe_connection": "探针需要 PostgreSQL。开发服务器上的隔离容器 fg-pg-g2 经 SSH 隧道访问；隧道断开时探针会因连接失败报 exit 1，这不是代码缺陷——重连后应全部通过。时间类探针（deadlock_timeout）在隧道下因抖动可能报 FAIL，应在容器内直接运行。",
+    "probe_exit_codes": {
+      "0": "通过",
+      "1": "断言不符（真缺陷）或连接失败（隧道断开时）",
+      "2": "缺 DSN/驱动/工具（环境阻塞，不算通过）",
+      "3": "import_reconcile_probe 拒绝运行（目标库已有同名业务表）"
+    }
+  }
+}

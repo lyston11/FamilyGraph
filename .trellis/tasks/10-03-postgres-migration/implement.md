@@ -6,7 +6,9 @@
 
 - [ ] 完成 `10-05-migration-proof-gates` 的 PRD/design/implement 校验。
 - [ ] 固化 inventory ID、环境 manifest、证据等级和当前失败/未决风险。
-- [ ] 逐项检查 43 个事务调用点的锁参与者、锁序、CAS/counter 语义和调用方。
+- [ ] 逐项检查**真实扫描出的 46 个**事务调用点（见 `10-05` 的 `tx-inventory.json`；
+      早前记录的 18/43 是不同统计口径，数量只作索引，以 ID 清单为准）的锁参与者、锁序、
+      CAS/counter 语义和调用方。
 - [ ] 为每个关键不变量建立正向、负向、mutation、故障注入和回滚用例。
 - [ ] 只有 Phase 0 全部通过后，才允许修改 Phase B 业务实现。
 
