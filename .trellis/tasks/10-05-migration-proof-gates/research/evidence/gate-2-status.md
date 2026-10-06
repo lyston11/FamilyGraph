@@ -11,7 +11,7 @@
 | 反向锁序在 PostgreSQL 上真实死锁 | `pg_deadlock_probe.py`（反向死锁、正向无死锁） | L2 |
 | 原型：counter + SKIP LOCKED 每租户上限生效 | `pg_control_proof.py` | L3（原型） |
 
-## Gate 2 缺口状态
+## Gate 2 缺口状态（对照 implement.md 勾选）
 
 1. ~~无静态调用图~~ → **已闭合**：`lock-order-graph.md`，63 入口，violations=0（基线）。
 2. ~~三把以上锁未实测~~ → **已闭合**：`pg_three_lock_probe.py` 四把锁，一正一反真实死锁。
@@ -42,5 +42,9 @@ Gate 2 的**全部门禁要求已闭合**：
 **剩余是实现期工作**：在真实 schema 上为三个 B 类入口引入 counter，并重跑本门全部探针
 （`entries_violating_frozen_order` 必须仍为 0）。
 
-Gate 2 因此可以标记为 **PASS（门禁闭合）**，但仍**不**放行 `postgres-migration` 的业务
-实现——因为 Gate 1（raw SQL 逐条真跑）与 Gate 5（真实库对账/backup）尚未闭合。
+Gate 2 的**门禁项已完成**，但仍有实现期缺口（三个 B 类入口未在真实 schema 运行、
+membership revoke 未验、counter 归还未在真实入口验证）。因此**不**放行
+`postgres-migration` 的业务实现。
+
+放行条件（PRD PG-8）：PG-0..PG-7 **全部通过**。当前 PG-6/PG-7 未执行、PG-4/PG-5 为原型，
+故 PG-8 未满足。

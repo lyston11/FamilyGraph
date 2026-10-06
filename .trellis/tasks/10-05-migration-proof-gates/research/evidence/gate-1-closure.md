@@ -39,7 +39,11 @@ SQLite DDL 构造         23（PG 全部拒绝）
 
 ## 结论
 
-Gate 1 的**门禁要求已闭合**：inventory 完整、每项有 owner/status/evidence、
-raw SQL 与方言差异已逐项给出结论、双方言修复有编译与语义双重证据。
+Gate 1 的**门禁要求已完成**（不是「PG-1 已验收」）：inventory 完整、每项有
+owner/status/evidence、raw SQL 与方言差异已逐项给出结论、双方言修复有编译与语义双重证据、
+RAG 边界卡已落盘。
+
+**未穷举**（不因此判定失败，但必须记录）：88 表全部 FK action 与复合 CHECK 的逐个 render
+比对（已覆盖类别，未逐表穷举）；时间精度与错误码差异。
 
 上述 4 项剩余风险属于**实现期**工作（写 PG baseline 时逐表核对），不是本门能闭合的。
