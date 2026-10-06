@@ -6,12 +6,12 @@
 
 | 项 | 命令 | 值 |
 |---|---|---|
-| 分支相对 main 的 commit（含 merge） | `git rev-list --count main..HEAD` | 32 |
+| 分支相对 main 的 commit（含 merge） | `git rev-list --count main..HEAD` | 46 |
 | 分支相对 main 的 commit（不含 merge） | `git rev-list --count --no-merges main..HEAD` | 31 |
-| 本任务自身 commit | `git rev-list --count 3bf4a069..HEAD` | 21 |
+| 本任务自身 commit | `git rev-list --count 3bf4a069..HEAD` | 35 |
 | merge 带入的 commit | `git rev-list --count main..3bf4a069` | 11 |
 | 其中触碰 `backend/` | `git rev-list --count main..3bf4a069 -- backend/` | 4 |
-| **本任务自身触碰 `backend/`** | `git rev-list --count 3bf4a069..HEAD -- backend/` | **0** |
+| **本任务自身触碰 `backend/`** | `git rev-list --count 3bf4a069..HEAD -- backend/` | **1**（仅新增测试 `tests/test_agent_queue_settle_race.py`，无生产代码改动） |
 
 带入的 4 个业务 commit：
 
