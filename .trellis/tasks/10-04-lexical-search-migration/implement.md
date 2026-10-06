@@ -61,3 +61,15 @@
 - **安全含义**：PGroonga 索引**不随业务状态自动移除条目**，可见性完全依赖查询层过滤。因此实现必须保证所有检索路径都带 `status`/`scope`/`revision` 过滤，并有回归守护
 - ~~PGroonga 索引不存储于 PG relation~~ → **已实测并量化**：`pg_dump` 导出 DDL 但不导出索引数据；恢复时自动重建，恢复后查询正常（20000 行 / 4ms）。**运维影响**：恢复耗时含索引重建；`pg_class` 看不到索引体积（2 万条时数据目录 `pgrn*` 约 8.5MB，SQL 侧读 0），容量规划会低估
 - **pgvector hybrid 不越权、不改 citation 认证**：未验证 union/rerank 与授权过滤的组合
+
+
+## 阻塞状态（2026-10-06）
+
+剩余项**均依赖 PostgreSQL 迁移实现落地**，不是设计未决：
+
+- `索引版本切换与「查询必须带过滤」的 mutation 回归`——现有 RAG 服务跑在 SQLite FTS5 上；PGroonga/pgvector 路径只有在
+  `10-03-postgres-migration` 的 Phase B（真实 schema + counter）完成后才能接入并回归。
+
+因此本任务保持 **in_progress**：设计决策与基准已完成（可复跑），实现被前置任务阻塞。
+不得在 PG 迁移落地前把 PGroonga/pgvector 路径写入生产代码——那正是「先实现后验证」的
+反面模式，也是 `10-05` 建立证明门要防的事。
