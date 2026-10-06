@@ -53,6 +53,7 @@ REDIS_DEGRADATION_POLICY = "pg_fallback"
 #: 那会让 Redis 故障变成**每个请求**的固定延迟开销（fail-loud 也要有界）。
 _UNAVAILABLE_COOLDOWN_SECONDS = float(os.environ.get("REDIS_UNAVAILABLE_COOLDOWN_SECONDS", "5"))
 
+
 #: 单次操作的超时。必须小：加速层不该成为延迟来源。
 #:
 #: 生产默认 0.5s（同机 Redis 足够）。**经 SSH 隧道/跨可用区时必须调大**——实测
@@ -257,3 +258,99 @@ def scoped_key(
     if scope_kind not in {"global", "account", "space", "agent_kind"}:
         raise ValueError(f"unsupported scope_kind: {scope_kind}")
     return f"fg:{layer}:{scope_kind}:{scope_id}:{resource}:{epoch}"
+
+
+# ---------------------------------------------------- 配额快速拒绝标记（C5 接入）
+#
+# ## 为什么是「负缓存」而不是「令牌桶」
+#
+# 冻结的降级策略是 `pg_fallback`：Redis 失效不能改变可用性语义。若 Redis 持有
+# 令牌并**授权**请求，那它就是配额真源——Redis 一挂就必须 fail-closed，与策略矛盾。
+#
+# 因此 Redis 只存**负缓存**：某租户近期被权威路径判为「已满」时写一个短 TTL 标记；
+# 后续请求命中标记即**快速拒绝**，不再打数据库。
+#
+# 三个性质保证它安全：
+#
+# 1. **只能拒绝，永不授权**——标记存在时拒绝，不存在时**照常走**权威路径。
+#    因此 Redis 故障（返回 None）等价于「没有标记」，行为退化为未接入状态。
+# 2. **不 fail-open**：命中标记时拒绝，而不是放行。
+# 3. **权威裁决不变**：真正的准入仍由进程内 limiter + 集群 counter 决定。
+#
+# 代价（必须显式承认）：标记有 TTL，因此租户释放名额后最长 TTL 内仍可能被拒。
+# 这是**有界**的假拒绝（默认 1 秒），换来的是「满租户的突发只打一次数据库」。
+
+#: 标记 TTL。短是刻意的：它直接决定「名额释放后仍被拒」的上界。
+#:
+#: ## 硬约束：TTL 必须 > 权威路径的单次判定耗时
+#:
+#: 若 TTL 小于「一次权威判定 + 一次 Redis 往返」的耗时，标记会在下一个请求到来前
+#: 就过期，负缓存完全失效（每个请求仍然打数据库）。
+#:
+#: 同机 Redis 下该耗时是毫秒级，1 秒有充足余量。**经 SSH 隧道或跨可用区时**该耗时
+#: 可达秒级——那种环境下必须调大（实测隧道下 1 秒会失效）。这不是「测试特例」：
+#: 任何高延迟 Redis 部署都适用同一条约束。
+_OVER_QUOTA_TTL_SECONDS = int(os.environ.get("REDIS_OVER_QUOTA_TTL_SECONDS", "1"))
+
+
+def over_quota_key(*, tenant: str, resource: str) -> str:
+    """负缓存 key：按租户 + 执行平面分区。
+
+    与熔断器不同，这里**必须**按租户分区：它表达的是「这个租户满了」，
+    而不是「这个上游坏了」。混淆两者会让一个租户的饱和拒绝其他租户。
+    """
+    return f"fg:quota:{resource}:{tenant}"
+
+
+def is_marked_over_quota(*, tenant: str, resource: str) -> bool:
+    """该租户近期是否被判为已满。Redis 不可用时返回 False（走权威路径）。"""
+    return accelerator().get(over_quota_key(tenant=tenant, resource=resource)) is not None
+
+
+def mark_over_quota(*, tenant: str, resource: str) -> bool:
+    """权威路径判定「已满」后写标记；写失败不影响正确性。"""
+    return accelerator().set(
+        over_quota_key(tenant=tenant, resource=resource),
+        "1",
+        ttl_seconds=_OVER_QUOTA_TTL_SECONDS,
+    )
+
+
+def clear_over_quota(*, tenant: str, resource: str) -> bool:
+    """名额释放后清标记，缩短假拒绝窗口。清失败只影响延迟，不影响正确性。"""
+    return accelerator().delete(over_quota_key(tenant=tenant, resource=resource))
+
+
+# ---------------------------------------------------- 异步包装（事件循环安全）
+#
+# **必须用这些异步版本，不能在事件循环上直接调用同步版本。**
+#
+# Redis 客户端是同步的（`redis.Redis`），单次操作最多阻塞
+# `REDIS_OPERATION_TIMEOUT_SECONDS`（默认 0.5s）。若在事件循环上调用，Redis 变慢
+# 就会把整个进程的所有端点一起卡住——这正是 09-30 那次缺陷的形态（同步 I/O 阻塞
+# 事件循环，心跳拿不到执行机会）。
+#
+# 因此所有在 async 上下文中使用负缓存的调用点都必须走 `asyncio.to_thread`。
+
+
+async def is_marked_over_quota_async(*, tenant: str, resource: str) -> bool:
+    """`is_marked_over_quota` 的事件循环安全版本。"""
+    import asyncio
+
+    return await asyncio.to_thread(
+        is_marked_over_quota, tenant=tenant, resource=resource
+    )
+
+
+async def mark_over_quota_async(*, tenant: str, resource: str) -> bool:
+    """`mark_over_quota` 的事件循环安全版本。"""
+    import asyncio
+
+    return await asyncio.to_thread(mark_over_quota, tenant=tenant, resource=resource)
+
+
+async def clear_over_quota_async(*, tenant: str, resource: str) -> bool:
+    """`clear_over_quota` 的事件循环安全版本。"""
+    import asyncio
+
+    return await asyncio.to_thread(clear_over_quota, tenant=tenant, resource=resource)

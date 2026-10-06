@@ -80,6 +80,7 @@ from app.services import (
     capacity,
     context_builder,
     policy_guard,
+    redis_accel,
     steward_assist,
 )
 from app.services.agent_admission import AdmissionRejected, ResourceLimiter
@@ -668,6 +669,9 @@ async def proxy_provider_chat_completions(
         # 建连阶段结束即归还租户名额；下面的流式转发不再持有它。
         if provider_tenant is not None:
             _execution_admission_limiter("agent_provider").release(provider_tenant)
+            await redis_accel.clear_over_quota_async(
+                tenant=provider_tenant, resource="agent_provider"
+            )
         if provider_tenant is not None and _CLUSTER_RESOURCE.get("agent_provider"):
             _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_provider"])
 
@@ -682,9 +686,7 @@ async def proxy_provider_chat_completions(
     # 流已经建好连接，再排队会把上游连接悬着，代价远高于直接拒绝。
     stream_tenant = _peek_execution_tenant(request)
     stream_kind, stream_id = _split_tenant(stream_tenant)
-    stream_slot = await _try_acquire_stream_slot(
-        tenant_kind=stream_kind, tenant_id=stream_id
-    )
+    stream_slot = await _try_acquire_stream_slot(tenant_kind=stream_kind, tenant_id=stream_id)
     if stream_slot is False:
         await upstream.aclose()
         logger.warning(
@@ -694,6 +696,7 @@ async def proxy_provider_chat_completions(
         )
         raise_api_error(503, AGENT_EXECUTION_BUSY, "执行资源繁忙，请稍后重试")
     media_type = upstream.headers.get("content-type", "application/json")
+
     async def _stream_with_slot() -> Any:
         """转发流，并保证流级名额在**流真正结束**时归还。
 
@@ -1122,9 +1125,7 @@ def _release_stream_slot_soon(tenant_kind: str, tenant_id: int) -> None:
     """从事件循环调度流级名额归还（同 `_release_cluster_slot_soon` 的理由）。"""
     from anyio import to_thread
 
-    task = asyncio.ensure_future(
-        to_thread.run_sync(_release_stream_slot, tenant_kind, tenant_id)
-    )
+    task = asyncio.ensure_future(to_thread.run_sync(_release_stream_slot, tenant_kind, tenant_id))
 
     def _swallow(fut: asyncio.Future[None]) -> None:
         if not fut.cancelled():
@@ -1143,11 +1144,30 @@ async def _acquire_execution_slot(resource: str, tenant: str, *, route: str, run
     控制面端点**不调用**本函数：heartbeat/lease/settle/cancel/context/health 必须
     始终可执行，这正是保留余量的目的。
     """
+    # Redis 负缓存快速拒绝（C5 接入）。
+    #
+    # 只做**拒绝**：命中标记说明该租户近期被权威路径判为已满，直接 503，
+    # 不打数据库、不进排队。标记不存在时照常走权威路径——因此 Redis 故障
+    # （`get` 返回 None）等价于「没有标记」，行为退化为未接入状态，
+    # **不会** fail-open，也不会改变任何授权语义。
+    if await redis_accel.is_marked_over_quota_async(tenant=tenant, resource=resource):
+        logger.warning(
+            "agent execution admission rejected resource=%s route=%s run_id=%d "
+            "tenant_kind=%s reason=redis_over_quota_cache",
+            resource,
+            route,
+            run_id,
+            tenant.split(":", 1)[0],
+        )
+        raise_api_error(503, AGENT_EXECUTION_BUSY, "执行资源繁忙，请稍后重试")
+
     limiter = _execution_admission_limiter(resource)
     started = time.perf_counter()
     try:
         await limiter.acquire(tenant)
     except AdmissionRejected as rejected:
+        # 权威路径判定已满：写负缓存，使该租户的后续突发不再逐个打数据库。
+        await redis_accel.mark_over_quota_async(tenant=tenant, resource=resource)
         snapshot = limiter.snapshot()
         logger.warning(
             "agent execution admission rejected resource=%s route=%s run_id=%d tenant_kind=%s "
@@ -1180,6 +1200,7 @@ async def _acquire_execution_slot(resource: str, tenant: str, *, route: str, run
         acquired_cluster = await _try_acquire_cluster_slot(cluster_kind)
         if acquired_cluster is False:
             limiter.release(tenant)
+            await redis_accel.mark_over_quota_async(tenant=tenant, resource=resource)
             logger.warning(
                 "agent execution admission rejected resource=%s route=%s run_id=%d "
                 "tenant_kind=%s reason=cluster_full",
@@ -1235,6 +1256,21 @@ async def _try_acquire_cluster_slot(resource_kind: str) -> bool | None:
             db.close()
 
     return await to_thread.run_sync(_attempt)
+
+
+def _clear_over_quota_soon(*, tenant: str, resource: str) -> None:
+    """从事件循环调度负缓存清理（同 `_release_cluster_slot_soon` 的理由）。"""
+    from anyio import to_thread
+
+    task = asyncio.ensure_future(
+        to_thread.run_sync(lambda: redis_accel.clear_over_quota(tenant=tenant, resource=resource))
+    )
+
+    def _swallow(fut: asyncio.Future[bool]) -> None:
+        if not fut.cancelled():
+            fut.exception()
+
+    task.add_done_callback(_swallow)
 
 
 def _release_cluster_slot(resource_kind: str) -> None:
@@ -1379,6 +1415,8 @@ async def execute_tool(
             if tenant is not None:
                 # 归还顺序与取得顺序相反：先放工具名额，再放租户名额，最后放集群名额。
                 _execution_admission_limiter("agent_tool").release(tenant)
+                # done-callback 在事件循环上执行，因此这里也必须调度到线程。
+                _clear_over_quota_soon(tenant=tenant, resource="agent_tool")
                 _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_tool"])
 
         work.add_done_callback(_on_done)
@@ -1392,6 +1430,8 @@ async def execute_tool(
             _release_tool_slot(limiter)
             if tenant is not None:
                 _execution_admission_limiter("agent_tool").release(tenant)
+                # done-callback 在事件循环上执行，因此这里也必须调度到线程。
+                _clear_over_quota_soon(tenant=tenant, resource="agent_tool")
                 _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_tool"])
 
 
