@@ -58,5 +58,5 @@
 
 - **golden corpus 对比召回/排序/延迟/索引成本**：召回与排序已实测（四方对照，子串真源）；**延迟与索引成本未测**（12 条语料，非规模基准）
 - **撤权/删除 + 索引版本切换的回归与 mutation**：`scope/status/revision` 过滤与 PGroonga 的组合已实测（含 EXPLAIN 确认过滤未被忽略），但**撤权后旧条目不可见**与**索引版本切换**的回归/mutation 仍未做
-- **PGroonga 索引不存储于 PG relation**：实测确认（`pg_relation_size` 返回 0，索引是数据目录下的 `pgrn*` 文件）。因此 `pg_dump` **不导出**它，恢复后必须重建；重建耗时未测
+- ~~PGroonga 索引不存储于 PG relation~~ → **已实测并量化**：`pg_dump` 导出 DDL 但不导出索引数据；恢复时自动重建，恢复后查询正常（20000 行 / 4ms）。**运维影响**：恢复耗时含索引重建；`pg_class` 看不到索引体积（2 万条时数据目录 `pgrn*` 约 8.5MB，SQL 侧读 0），容量规划会低估
 - **pgvector hybrid 不越权、不改 citation 认证**：未验证 union/rerank 与授权过滤的组合
