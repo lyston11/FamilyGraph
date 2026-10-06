@@ -16,6 +16,38 @@
 
 依赖 postgres-migration 的 schema/事务合同和父任务的 control/resource budget；不实现业务迁移本身，也不操作线上环境。
 
+## 实测证据（2026-10-06）：连接预算已量化
+
+`scripts/migration-proof/pg_connection_budget_probe.py` 在 PostgreSQL 16.15 上实测：
+
+| 项 | 值 |
+|---|---|
+| `max_connections` | 100 |
+| `superuser_reserved_connections` | 3（可用 97） |
+| 当前池 | `pool_size=5` + `max_overflow=10` = **单实例 15** |
+| `max_locks_per_transaction` | 64 |
+
+**多实例总需求**：
+
+| 实例数 | 总需求 | 占可用 | 结论 |
+|---|---|---|---|
+| 2 | 30 | 31% | 安全 |
+| 4 | 60 | 62% | 安全 |
+| 6 | 90 | 93% | **超限** |
+| 8 | 120 | 124% | **超限** |
+
+**结论**：当前配置下最多约 **4 个实例**可安全并行（按 70% 留余量）。超出后新实例或
+新请求会随机连接失败，且难以归因到配置。证据：
+`research/evidence/pg-connection-budget.md`。
+
+### 实测发现（两个待实现项）
+
+1. **超级用户会吃掉保留连接**：探针以超级用户建立到 99 个连接
+   （`max_connections=100`），说明 `superuser_reserved_connections` 只对非超级用户生效。
+   **生产应用必须使用非超级用户**，否则占用为运维/恢复保留的连接。
+2. **`application_name` 为空**：`pg_stat_activity` 无法区分连接归属，多实例/多池场景下
+   无法诊断「哪个池占满了连接」。需在 engine 的 `connect_args` 中设置。
+
 ## Acceptance Criteria
 
 - 隔离环境完成 backup/restore/PITR/故障重启演练，关键 run/attempt/lease/audit/RAG 合同不丢失。
