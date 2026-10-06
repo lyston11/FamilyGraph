@@ -207,12 +207,13 @@ Multi-deliverable scope: consider a parent task plus independently verifiable ch
 Inline mode (this project): skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
 [/workflow-state:planning]
 
-<!-- Per-turn breadcrumb: shown throughout Phase 1 when codex.dispatch_mode=inline,
-     also used by Pi. Alternate to [workflow-state:planning]. The main agent
-     edits code directly in Phase 2, so jsonl curation is skipped — the inline
-     workflow loads `trellis-before-dev` instead of injecting JSONL into a
-     sub-agent. Pi resolves status -> planning only, so Pi reads whichever body
-     the [workflow-state:planning] block above carries. -->
+<!-- Per-turn breadcrumb: shown throughout Phase 1 when codex.dispatch_mode=inline.
+     Codex opt-in alternate to [workflow-state:planning], also used by Pi.
+     The main agent edits code directly in Phase 2, so jsonl curation is
+     skipped — the inline workflow loads `trellis-before-dev` instead of
+     injecting JSONL into a sub-agent. Pi reads this variant only when the
+     [workflow-state:planning] body above carries the inline instructions
+     (Pi resolves status -> planning, with no dispatch_mode mapping). -->
 
 [workflow-state:planning-inline]
 Load `trellis-brainstorm`; stay in planning.
