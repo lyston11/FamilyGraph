@@ -22,6 +22,26 @@
 
 `pgvector` 只负责语义候选，不替代当前 SQLite FTS5 trigram 的中文词法能力。`10-04-lexical-search-migration` 独立评估 PGroonga 与 Unicode n-gram；两者可以在 PostgreSQL 内组成 hybrid retrieval，但必须共享 source/revision/scope/visibility/citation 和 index-version 合同。未完成词法基准前，不得把 `tsvector` 或无索引 `ILIKE` 当作 pgvector 的配套默认方案。
 
+## 实测证据（2026-10-06）：ANN 必须 filter-then-ANN
+
+`scripts/migration-proof/pgvector_filter_probe.py` 在真实 pgvector 0.8.7 上实测
+（2000 行 / 维度 64 / k=10 / HNSW）：
+
+| 过滤条件 | post-filter 剩余 | 精确应有 |
+|---|---|---|
+| 无过滤 | 10 | 10 |
+| 允许 5/10 空间 | **5** | 10 |
+| 允许 1/10 空间 | **1** | 10 |
+| 允许不存在的空间 | **0** | 0 |
+
+**post-filter 会静默返回不足 k 的结果**：允许 1/10 空间时只有 1 条，而 RAG 无法区分
+「无相关内容」与「被授权过滤掉」。filter-then-ANN 在两种选择性下都取满 k=10。
+
+因此本任务的硬约束：**必须先按 scope/visibility/revision 过滤再向量排序**，
+且过滤列必须有索引。证据：`research/evidence/pgvector-filter-probe.md`。
+
+**未覆盖**：真实 embedding 分布、IVFFlat 对比、10 万级规模、与 lexical 的 union/rerank。
+
 ## Acceptance Criteria
 
 - pgvector 原型能按 scope/visibility/revision/citation 正确查询，撤权/删除后旧向量不可见且可回收。
