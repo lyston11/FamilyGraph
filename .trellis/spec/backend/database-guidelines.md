@@ -508,3 +508,85 @@ partial_unique_index("uq_agent_runs_session_active", "session_id",
 steward_assist.release_capacity(db, ...)
 run, _, _ = fence_steward_execution(db, identity)
 ```
+
+## Scenario: 持久化容量计数与集群级名额（2026-10-06，C2–C5）
+
+### 1. Scope / Trigger
+
+改动执行准入、租约配额、集群级上限或 Redis 加速层前必读。适用于
+`app/services/capacity.py`、`app/services/redis_accel.py`、
+`app/api/internal_agent.py` 的准入路径、`app/services/{agent_queue,steward,steward_assist}.py`。
+
+### 2. Signatures
+
+```python
+# 租户级（C2）
+capacity.ensure_counter(db, spec, capacity=n)          # 幂等；不重置 active
+capacity.try_acquire(db, specs) -> bool | None         # None = 未登记（不限制）
+capacity.release(db, specs) -> int
+capacity.mark_acquired(db, *, table, row_id, now=None) # 门列写入（Core SQL）
+capacity.release_attempt(db, attempt, *, space_id) -> bool
+capacity.release_job(db, job, *, space_id) -> bool
+
+# 集群级（C3）
+capacity.try_acquire_cluster(db, *, resource_kind) -> bool | None
+capacity.release_cluster(db, *, resource_kind) -> int
+
+# 流级（C4）
+capacity.try_acquire_stream(db, *, tenant_kind, tenant_id, capacity_tenant) -> bool | None
+capacity.release_stream(db, *, tenant_kind, tenant_id) -> int
+
+# Redis 加速与降级（C5）
+redis_accel.accelerator().try_set_if_absent(key, ttl_seconds=n) -> bool | None
+redis_accel.scoped_key(layer=..., scope_kind=..., scope_id=..., resource=..., epoch=...)
+```
+
+迁移：`0056_agent_capacity_counters`（计数表 + 门列）、`0057_steward_capacity_release_gate`。
+
+### 3. Contracts
+
+- **`SKIP LOCKED` 不保证配额**：实测 READ COMMITTED 下计数子查询读不到并发未提交的
+  `in_flight`，每租户上限 2 被放成 **5**。配额真相是持久化计数行。
+- **进程内 limiter 不保证集群配额**：两实例各配 2 时集群实际并发 **4**（实测）。
+  因此执行平面需要**两层**：进程内负责排队与公平，集群级 counter 负责跨实例总量。
+- **三态返回是安全要求**：`None` = 本层无结论 → 走 PostgreSQL；折成 `False` 会让
+  故障时全部拒绝，折成 `True` 会 fail-open（配额失效，比不可用更糟）。
+- **归还恰好一次**：门在**行上**（`capacity_acquired_at` 非空 + `capacity_released_at`
+  为空），不用 `status`——status 是可变业务状态，会被多条路径改写（`in_flight` →
+  `unknown` → `skipped`），用它推断「已归还」会失去依据。
+- **门列不进 ORM 映射**：迁移拒绝用例会在**中间 revision**（如 0048）上用 ORM 写同一
+  张表，那时列还不存在。`deferred=True` 只影响 SELECT、不影响 INSERT，因此无效；
+  门列用 Core SQL 按需读写。
+- **`capacity.release()` 不得 flush**：调用方事务里可能持有与配额无关的脏状态
+  （`_settle` 的陈旧 run 副本）；flush 会把那份脏状态落库并覆盖真实终态，
+  使调用方的状态复核失效（实测 `test_stale_orm_object_cannot_settle_twice` 失败）。
+- **锁序**：`global → kind → tenant → run → attempt`。`_settle` 的 counter 归还**必须
+  早于** `fence_execution`（后者取 run 行锁），否则是 `run → counter` 反向锁序。
+  两者同一事务，fence 失败会整体回滚，因此提前归还是安全的。
+- **流级名额覆盖流的整个生命周期**：建连名额在流开始前归还，而一个 100 秒的流不占
+  工作线程也不占连接，因此没有任何既有名额能限制「同时有多少个上游流在跑」。
+- **流级墙钟上限用专用异常**：`break` 会让客户端看到「正常结束」的截断流；且必须排在
+  通用 `except Exception` 之前，否则原因被改写成 `stream_interrupted`。
+- **Redis 降级策略 = `pg_fallback`**：Redis 是加速层，失效不应改变可用性语义；
+  回退必须**有界**（沿用 counter，而非「Redis 挂了就全放」）。不可用后进入冷却，
+  否则故障会变成每个请求的固定延迟。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| 新增迁移未调用 `run_ancestor_preflight` | 深层降级先 DROP 再被祖先拒绝（实测 DDL=2，半降级 schema） |
+| 迁移拒绝用例的相对偏移写成字面量 | 新增迁移后偏移失准 → 用 `tests/migration_offsets.py` 计算 |
+| 配额状态写入未分类 | `test_quota_state_transitions` 失败（分类表按行号，移动代码需重新确认） |
+| 未登记 counter | 不限制（渐进引入），既有 SQLite 测试行为不变 |
+| Redis 不可用 | 返回 `None`（无结论），**不得** fail-open |
+| 流超过墙钟上限 | 抛 `StreamDeadlineExceeded`，审计记 `stream_deadline_exceeded` |
+
+### 5. 已知未闭合（不得当作通过）
+
+- RAG（PGroonga/pgvector）**未接入真实 schema**：设计决策与基准已完成，实现阻塞于
+  PG 迁移 Phase B。
+- Redis **未接入真实准入路径**：降级层已实现并验证，但准入仍直接走 PostgreSQL。
+- control-plane AC-5（Assistant/Steward 分进程）未做：`FG_AGENT_ROLE=both` 时共享进程。
+- `writer epoch` 与 `migration health` 未设计（归 `10-04-postgres-operations-cutover`）。
+- 多租户 p95/p99 与故障矩阵未执行（归 `10-04-multitenant-load-acceptance`）。
