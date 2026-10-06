@@ -424,17 +424,6 @@ class StewardModelCall(Base):
     )
     # 本 attempt fence 用的证据摘要（卡片/terminology 切片在 plan 上，共用一份）。
     evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # ---- C2 容量占用/归还门（迁移 0057）----
-    #
-    # 归还必须**恰好一次**。四个归还点分散在不同函数（写回栅栏、失败结算、租约过期
-    # 恢复、崩溃点④退休），靠「每个调用点都记得归还」不可证明。因此门放在**行上**：
-    # 归还 = 「acquired 非空且 released 为空」时递减并写 released_at；该条件对同一行
-    # 只能成立一次，且崩溃重跑仍成立（已写入的 released_at 阻止第二次递减）。
-    #
-    # 不用 status 当门：status 是可变业务状态，会被多条路径改写（in_flight → unknown
-    # → skipped），用它推断「是否已归还」会失去依据。专用时间戳是单调的。
-    capacity_acquired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    capacity_released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 产物是否已写回（崩溃恢复点④的判据）。``status`` 只表示**调用**结果，
     # 不表示**应用**结果：succeeded + output_json + applied_at IS NULL 就是
     # 「结果已持久化、写回未完成」，恢复器必须补做写回，否则产物永久丢失。

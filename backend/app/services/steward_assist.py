@@ -1461,7 +1461,9 @@ def lease_attempt(
         # 记录「本行占用过名额」。只有 counter 已登记（确实占用）时才写；
         # 未登记的渐进路径不写，因此后续 release_attempt 对它是 no-op。
         if acquired is True:
-            capacity.mark_attempt_acquired(attempt, now=now)
+            capacity.mark_acquired(
+                db, table=capacity.GATE_TABLE_ATTEMPT, row_id=attempt.id, now=now
+            )
         db.flush()
         # Everything the carrier needs to send is captured here, so the send path
         # never has to read the database (and therefore never holds a transaction

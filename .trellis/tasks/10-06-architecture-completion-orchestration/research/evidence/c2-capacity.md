@@ -141,3 +141,54 @@ backend: 2018 passed, 25 skipped
 counter 并发探针: 配额成立 + 反证越限 + 归还恰好一次 + 锁序承重
 双方言迁移: SQLite upgrade/downgrade + refusal；PostgreSQL create_all + 66 触发器
 ```
+
+
+## 接线完成：三个租约入口 + 全部归还路径
+
+| 入口 | 配额维度 | +1 时机 | 归还路径 |
+|---|---|---|---|
+| `agent_queue.lease_next` / `_check_concurrency` | account + kind + global | 建 queued run | `_settle`（**fence 之前**） |
+| `steward.lease_next_steward_job` | space + kind + global | **入队**（配额含 queued） | `settle_steward_job`、`reaper_pass` 耗尽 |
+| `steward_assist.lease_attempt` | space + kind + global | 取得租约 → in_flight | 5 条：写回栅栏×2、失败/未知结算、成功/降级结算、租约过期恢复 |
+
+### 渐进引入（关键设计）
+
+`try_acquire` 三态：`None` = 该维度未登记 counter → 沿用原有计数查询；`True` = 已占用；
+`False` = 已满 → 跳过候选看下一个（**不得**靠捕获异常控流，异常会中止整个事务）。
+
+这保证：SQLite 单测（未 bootstrap counter）行为与改动前**逐字一致**；
+PostgreSQL 部署 bootstrap 后由持久化计数行裁决。
+
+### 归还恰好一次：门在行上
+
+五个归还点分散在不同函数，靠「每个调用点都记得」不可证明。门改为**行级**：
+
+```text
+capacity_acquired_at IS NOT NULL   -> 曾占用
+capacity_released_at IS NULL       -> 尚未归还
+```
+
+该条件对同一行只能成立一次，崩溃重跑仍成立。**不用 status 当门**：status 是可变业务
+状态，会被多条路径改写（in_flight → unknown → skipped），用它推断「已归还」会失去依据。
+
+### 本次踩到的四个真实缺陷（都由测试抓出）
+
+1. **`fence_execution` 在 `_settle` 顶部**，所以「之后归还」就是 `run → counter` 反向锁序。
+   我第一版正是这么写的；改到 fence **之前**（同一事务，fence 失败会整体回滚，安全）。
+2. **`capacity.release()` 内部的 `db.flush()`** 会把调用方无关的脏状态一并落库，
+   覆盖真实终态 → `test_stale_orm_object_cannot_settle_twice` 不再抛 `AGENT_RUN_TERMINAL`。
+   移除内部 flush；另给只读查询加 `no_autoflush`。
+3. **门列不能进 ORM 映射**：迁移拒绝用例会在**中间 revision**（0048）上用 ORM 写同一张表，
+   那时列还不存在 → `table steward_jobs has no column named capacity_acquired_at`。
+   `deferred=True` 只影响 SELECT、不影响 INSERT，因此无效；改为 Core SQL 按需读写。
+4. **`test_quota_state_transitions` 的分类表按行号**，本次接线触发 **3 轮**更新。
+   这是**刻意**的（注释写明「移动代码时应重新确认分类」），因此不改成更宽松的键。
+
+### 验证
+
+```
+backend: 2023 passed, 25 skipped
+ruff: 仅剩 main 上既有的 2 个（test_invitation_reachability）
+mypy: 215 source files 无问题
+变异: 删 released 门 → 跨路径用例失败；删 acquired 门 → 未占用用例失败
+```

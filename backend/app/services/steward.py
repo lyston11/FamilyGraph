@@ -68,6 +68,7 @@ from app.models.user import User
 from app.models.v2_foundation import DomainEvent
 from app.services import (
     action_cards,
+    capacity,
     person_identity,
     recommendation_matrix,
     steward_events,
@@ -563,6 +564,10 @@ def _enqueue_core_job_locked(
     )
     db.add(job)
     db.flush()
+    # 配额：StewardJob 的活跃态**包含 queued**，因此 +1 发生在入队。
+    # counter 未登记时 try_acquire 返回 None（沿用原有计数查询），保证既有行为不变。
+    if capacity.try_acquire(db, capacity.steward_job_specs(space_id=space_id)) is True:
+        capacity.mark_acquired(db, table=capacity.GATE_TABLE_JOB, row_id=job.id, now=now)
     if cause == "admin_rerun":
         # Reserve one auditable opportunity; scans/restarts cannot reset past
         # attempts. The admin endpoint also enforces its space-level cooldown.
@@ -761,6 +766,8 @@ def settle_steward_job(
         job.error_json = error
         safe_code = error_code or (str(error.get("code")) if error and error.get("code") else None)
         job.error_code = safe_code
+        # 归还 steward job 名额（行级门保证恰好一次；终态即离开活跃态）。
+        capacity.release_job(db, job, space_id=job.space_id)
         db.flush()
         emit_domain_event(
             db,
@@ -821,6 +828,10 @@ def reaper_pass(db: Session, *, now: datetime | None = None) -> int:
             job.status = outcome
             job.lease_expires_at = None
             job.leased_by = None
+            # 配额：`queued` 仍是活跃态（内部转换，不动 counter）；只有耗尽为
+            # `expired` 才离开活跃态，必须归还。行级门保证与结算路径不重复归还。
+            if exhausted:
+                capacity.release_job(db, job, space_id=job.space_id)
             job.heartbeat_at = None
             job.updated_at = moment
             if exhausted:

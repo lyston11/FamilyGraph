@@ -35,51 +35,57 @@ down_revision = "0056_agent_capacity_counters"
 branch_labels = None
 depends_on = None
 
-TABLE = "steward_model_calls"
+# 两张配额承载表的门列：assist attempt 与 steward job。
+# 两张表都需要同样的「恰好一次」保证，因此用同一对列名，便于统一审计。
+TABLES = ("steward_model_calls", "steward_jobs")
 
 
-def _has_column(name: str) -> bool:
+def _has_column(table: str, name: str) -> bool:
     from sqlalchemy import inspect
 
     inspector = inspect(op.get_bind())
-    if TABLE not in inspector.get_table_names():
+    if table not in inspector.get_table_names():
         return False
-    return name in {col["name"] for col in inspector.get_columns(TABLE)}
+    return name in {col["name"] for col in inspector.get_columns(table)}
 
 
 def upgrade() -> None:
     # 幂等：重复执行不得报错（迁移可能在中断后重跑）
-    if _has_column("capacity_acquired_at"):
-        return
-    op.add_column(
-        TABLE,
-        sa.Column("capacity_acquired_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        TABLE,
-        sa.Column("capacity_released_at", sa.DateTime(timezone=True), nullable=True),
-    )
+    for table in TABLES:
+        if _has_column(table, "capacity_acquired_at"):
+            continue
+        op.add_column(
+            table,
+            sa.Column("capacity_acquired_at", sa.DateTime(timezone=True), nullable=True),
+        )
+        op.add_column(
+            table,
+            sa.Column("capacity_released_at", sa.DateTime(timezone=True), nullable=True),
+        )
 
 
 def downgrade() -> None:
     # refusal guard：仍有未归还的占用说明在途租约存在，DROP 列会丢失「欠一次归还」
     # 的证据，使名额永久泄漏且无法事后对账。必须先 settle/recover 再降级。
-    if not _has_column("capacity_acquired_at"):
+    present = [t for t in TABLES if _has_column(t, "capacity_acquired_at")]
+    if not present:
         return
     connection = op.get_bind()
     context = op.get_context()
     # 祖先拒绝必须先于本迁移的任何 DDL（SQLite DDL 不保证事务回滚）。
     run_ancestor_preflight(connection, context, down_revision=down_revision)
-    outstanding = connection.execute(
-        sa.text(
-            f"SELECT count(*) FROM {TABLE}"
-            " WHERE capacity_acquired_at IS NOT NULL AND capacity_released_at IS NULL"
-        )
-    ).scalar()
-    if outstanding:
-        raise RuntimeError(
-            f"refusal: {outstanding} attempt(s) still hold capacity; "
-            "settle or recover them before downgrading"
-        )
-    op.drop_column(TABLE, "capacity_released_at")
-    op.drop_column(TABLE, "capacity_acquired_at")
+    for table in present:
+        outstanding = connection.execute(
+            sa.text(
+                f"SELECT count(*) FROM {table}"
+                " WHERE capacity_acquired_at IS NOT NULL AND capacity_released_at IS NULL"
+            )
+        ).scalar()
+        if outstanding:
+            raise RuntimeError(
+                f"refusal: {outstanding} row(s) in {table} still hold capacity; "
+                "settle or recover them before downgrading"
+            )
+    for table in present:
+        op.drop_column(table, "capacity_released_at")
+        op.drop_column(table, "capacity_acquired_at")

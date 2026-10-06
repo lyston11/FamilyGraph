@@ -45,6 +45,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app.models.agent import AgentCapacityCounter
@@ -164,7 +165,11 @@ def acquire(
         row.active += 1
         row.version += 1
         row.updated_at = moment
-    db.flush()
+    # 刻意**不**调用 `db.flush()`：调用方事务里可能持有与本次配额无关的脏状态
+    # （例如 `_settle` 的陈旧 run 副本）。在这里 flush 会把那份脏状态一并落库，
+    # 覆盖真实终态，使调用方的状态复核失效——实测表现为
+    # `test_stale_orm_object_cannot_settle_twice` 不再抛 AGENT_RUN_TERMINAL。
+    # 计数行的可见性由调用方事务提交保证；同一会话内后续读取走 identity map。
     return True
 
 
@@ -191,7 +196,7 @@ def release(
         row.version += 1
         row.updated_at = moment
         released += 1
-    db.flush()
+    # 同 `acquire`：不 flush，避免把调用方无关的脏状态一起落库。
     return released
 
 
@@ -307,40 +312,104 @@ def try_release(db: Session, specs: Sequence[CounterSpec]) -> int:
     return release(db, active_specs)
 
 
-# ---------------------------------------------------- attempt 级占用/归还门
-def mark_attempt_acquired(attempt: Any, *, now: datetime | None = None) -> None:
-    """记录该 attempt 已占用名额（`lease_attempt` 成功占用后调用）。
+# ---------------------------------------------------- 行级占用/归还门
+#
+# 门列**不在 ORM 映射里**（0057 只加数据库列）。原因：ORM 列会让 INSERT/SELECT 带上
+# 它们，而迁移拒绝用例会在**中间 revision**（如 0048）上用 ORM 写同一张表，那时列
+# 还不存在——实测 `table steward_jobs has no column named capacity_acquired_at`。
+# 门是基础设施簿记，不是业务字段，因此用 Core SQL 按需读写。
 
-    只有**真正占用过** counter 才写这个时间戳；未登记 counter 的渐进路径不写，
-    因此后续 `release_attempt` 对它是 no-op，不会凭空递减。
-    """
-    attempt.capacity_acquired_at = now or timeutil.utcnow()
+GATE_TABLE_ATTEMPT = "steward_model_calls"
+GATE_TABLE_JOB = "steward_jobs"
 
 
-def release_attempt(
+def _gate_state(db: Session, *, table: str, row_id: int) -> tuple[Any, Any] | None:
+    """读取 (acquired_at, released_at)；行不存在时返回 None。"""
+    row = db.execute(
+        sa_text(f"SELECT capacity_acquired_at, capacity_released_at FROM {table} WHERE id = :id"),
+        {"id": row_id},
+    ).first()
+    return (row[0], row[1]) if row is not None else None
+
+
+def mark_acquired(db: Session, *, table: str, row_id: int, now: datetime | None = None) -> None:
+    """记录该行已占用名额。只有 counter 已登记（确实占用）时才调用。"""
+    db.execute(
+        sa_text(f"UPDATE {table} SET capacity_acquired_at = :now WHERE id = :id"),
+        {"now": now or timeutil.utcnow(), "id": row_id},
+    )
+
+
+def release_gate(
     db: Session,
-    attempt: Any,
     *,
-    space_id: int,
+    table: str,
+    row_id: int,
+    specs: Sequence[CounterSpec],
     now: datetime | None = None,
 ) -> bool:
-    """归还该 attempt 占用的名额；**恰好一次**，返回是否本次真的归还了。
+    """归还该行占用的名额；**恰好一次**，返回本次是否真的归还了。
 
     门在行上：`capacity_acquired_at` 非空（确实占用过）且 `capacity_released_at`
     为空（尚未归还）。该条件对同一行只能成立一次，且崩溃后重跑仍成立——已写入的
     `released_at` 会阻止第二次递减。
-
-    四个归还点（写回栅栏 / 失败结算 / 租约过期恢复 / 崩溃点④退休）都调用本函数，
-    因此不需要在四处分别实现「记得归还」。
     """
     moment = now or timeutil.utcnow()
-    if attempt.capacity_acquired_at is None:
-        return False  # 未登记 counter 的路径：从未占用，无需归还
-    if attempt.capacity_released_at is not None:
-        return False  # 已归还：第二次调用必须 no-op，否则名额凭空增加
-    released = release(db, steward_assist_specs(space_id=space_id), now=moment)
-    if released == 0:
-        # 维度未登记（例如配置被移除）：不写门，留给诊断发现不一致。
+    state = _gate_state(db, table=table, row_id=row_id)
+    if state is None:
         return False
-    attempt.capacity_released_at = moment
+    acquired, released = state
+    if acquired is None:
+        return False  # 未登记 counter 的路径：从未占用，无需归还
+    if released is not None:
+        return False  # 已归还：第二次调用必须 no-op，否则名额凭空增加
+    if release(db, specs, now=moment) == 0:
+        return False  # 维度未登记（配置被移除）：不写门，留给诊断发现不一致
+    db.execute(
+        sa_text(f"UPDATE {table} SET capacity_released_at = :now WHERE id = :id"),
+        {"now": moment, "id": row_id},
+    )
     return True
+
+
+def release_attempt(
+    db: Session, attempt: Any, *, space_id: int, now: datetime | None = None
+) -> bool:
+    """归还 assist attempt 占用的名额（五个归还点共用，保证恰好一次）。"""
+    return release_gate(
+        db,
+        table=GATE_TABLE_ATTEMPT,
+        row_id=attempt.id,
+        specs=steward_assist_specs(space_id=space_id),
+        now=now,
+    )
+
+
+def release_job(db: Session, job: Any, *, space_id: int, now: datetime | None = None) -> bool:
+    """归还 steward job 占用的名额；行级门保证恰好一次。"""
+    return release_gate(
+        db,
+        table=GATE_TABLE_JOB,
+        row_id=job.id,
+        specs=steward_job_specs(space_id=space_id),
+        now=now,
+    )
+
+
+def release_account_run(
+    db: Session, *, account_id: int | None, now: datetime | None = None
+) -> bool:
+    """归还账户级 assistant run 名额。
+
+    `account_id is None` 表示该 run 不消耗账户并发（steward child run 没有
+    AgentSession），直接 no-op——不能把「无账户」当成「账户 0」。
+    """
+    if account_id is None:
+        return False
+    moment = now or timeutil.utcnow()
+    released = release(
+        db,
+        assistant_run_specs(account_id=account_id, capacity_account=0),
+        now=moment,
+    )
+    return released > 0
