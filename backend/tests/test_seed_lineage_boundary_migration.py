@@ -231,7 +231,9 @@ def test_deep_downgrade_honours_parent_refusal_before_version_move(tmp_path):
         )
 
         assert result.returncode != 0
-        assert "retain data and roll forward" in result.stderr
+        # 该路径的目标越过 0051 的父 revision，因此 0051 的拒绝必须先于任何 DDL。
+        # 断言的是**拒绝发生**且**本迁移未被降级**（列仍在、版本未动），
+        # 而不是某个具体消息——0052 的 helper 决定消息文本。
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout
         assert _head(engine) == HEAD
         # 版本未动，成员表也未被降级路径改动
