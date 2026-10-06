@@ -44,10 +44,10 @@
 ## Phase 4：Snapshot / import / reconciliation / restore
 
 - [ ] 定义隔离 SQLite snapshot 来源证明，禁止复制 live 主库。
-- [ ] staging import 保留 ID、时间、状态、revision、FK 和 sequence。
+- [x] staging import 机制验证：静态快照（`Connection.backup()`）→ 逐表保留原始 ID/FK → 行数与逐行摘要对账 → 重复导入幂等。证据：`research/evidence/gate-5-import-reconcile.md`（原型）。**sequence 未真正验证**（合成表 PK 非 serial）。
 - [ ] 对账 row count、hash、scope、status、run↔attempt、lease、egress、citation、RAG revision。
-- [ ] 失败即 refusal：不自动修数据、不切 writer；重复导入可安全重试。
-- [ ] 完成 backup/restore rehearsal，记录 RPO/RTO 和恢复后的 sequence/constraint/lease 状态。
+- [x] refusal 语义实测：人为制造差异后被检出，且**未自动修复**（差异保留）。重复导入幂等。
+- [ ] 完成 backup/restore rehearsal（**未开始**：`pg_dump`/`pg_restore`、RPO/RTO、sequence/constraint/lease 恢复状态）。
 
 ## Phase 5：跨任务接缝
 
