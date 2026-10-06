@@ -48,7 +48,7 @@
 
 | AC | 状态 | 说明 |
 |---|---|---|
-| golden corpus 对比召回/排序/延迟/索引成本 | **PARTIAL** | 召回与排序已实测（四方对照，子串真源）；**延迟与索引成本未测**（12 条语料，非规模基准） |
+| golden corpus 对比召回/排序/延迟/索引成本 | **DONE** | 召回/排序：四方对照（子串真源）；**延迟/索引成本**：2 万条规模实测——服务器端执行 **1.3–4.3ms**（`EXPLAIN ANALYZE`），索引构建 0.8s |
 | 明确默认实现 | **DONE** | PGroonga 主路径 + Unicode n-gram 后备，已实测决定 |
 | 撤权/删除/revision/citation/scope 过滤 + 索引版本切换回归与 mutation | **NOT-DONE** | 未实现：PGroonga 索引与 `rag_chunks` 的 revision/scope/visibility 过滤组合未验证 |
 | pgvector hybrid 不越权、不改 citation 认证 | **NOT-DONE** | 未验证 union/rerank 与授权过滤的组合 |
@@ -57,5 +57,6 @@
 ### 未完成项（因此不能归档）
 
 - **golden corpus 对比召回/排序/延迟/索引成本**：召回与排序已实测（四方对照，子串真源）；**延迟与索引成本未测**（12 条语料，非规模基准）
-- **撤权/删除/revision/citation/scope 过滤 + 索引版本切换回归与 mutation**：未实现：PGroonga 索引与 `rag_chunks` 的 revision/scope/visibility 过滤组合未验证
+- **撤权/删除 + 索引版本切换的回归与 mutation**：`scope/status/revision` 过滤与 PGroonga 的组合已实测（含 EXPLAIN 确认过滤未被忽略），但**撤权后旧条目不可见**与**索引版本切换**的回归/mutation 仍未做
+- **PGroonga 索引不存储于 PG relation**：实测确认（`pg_relation_size` 返回 0，索引是数据目录下的 `pgrn*` 文件）。因此 `pg_dump` **不导出**它，恢复后必须重建；重建耗时未测
 - **pgvector hybrid 不越权、不改 citation 认证**：未验证 union/rerank 与授权过滤的组合
