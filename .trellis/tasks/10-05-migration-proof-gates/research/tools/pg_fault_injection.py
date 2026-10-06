@@ -4,7 +4,7 @@
 
 | 故障 | 注入方式 | 期望 |
 |---|---|---|
-| deadlock | 交叉锁序 | `DeadlockDetected`，一方中止且无部分写入 |
+| deadlock | 见 `pg_deadlock_probe.py`（本脚本不注入；docstring 原列此项与实现不符） |
 | serialization failure | `SERIALIZABLE` + 并发写同一行 | `SerializationFailure`，可重试 |
 | 提交前连接丢失 | 事务内 kill 连接 | 全部回滚，无半状态 |
 | 提交后连接丢失 | 提交后 kill 连接 | 状态持久，重试幂等 |

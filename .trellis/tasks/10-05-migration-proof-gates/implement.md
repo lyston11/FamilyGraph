@@ -83,13 +83,20 @@
 [ ] 代码、证据、worktree、提交一致
 ```
 
+## 集成顺序（硬约束）
+
+本分支经 merge `3bf4a069` 携带了 `feat/10-03-postgres-migration` 的业务代码，
+**不得**直接 merge 进 main。正确顺序是先合 `10-03` 再合本分支。
+详见 `research/evidence/integration-note.md`。
+
 ## 当前状态与阻塞
 
 任务已 `in_progress`（Gate 0 通过；Gate 1/2 进行中）。当前阻塞：
 
 - **Gate 1 BLOCKED**：raw SQL 与 backup 路径仍只有正则命中，未结构化、未在两种数据库真实执行；index/constraint/trigger 已补 owner/status/evidence，但 raw SQL 尚未。
 - **Gate 2 BLOCKED**：缺静态调用图（当前只覆盖 `_settle`/`settle_attempt` 一条路径）；三把以上锁未实测；mutation 用例待补。
-- **Gate 3-7 未开始**：PostgreSQL baseline prototype、故障注入、导入对账、跨任务接缝、最终矩阵。
+- **Gate 3/4/5 已完成（原型）**：baseline prototype + 四类触发器等价物、六类故障注入、快照/导入/对账/refusal。证据等级为 L2 / 原型 L3，**不是真实业务入口或真实历史库**。
+- **Gate 6/7 仅有契约与计划**：跨任务接缝与验收矩阵已冻结，但矩阵中「同用户跨空间」「control-plane 保留」「Provider 长流」全部未测；不得宣布多租户并发达标。
 
 已完成并可用：65 个事务入口分类（含强制机制与 mutation 验证）、方言阻塞探针、死锁探针、14 个触发器阻塞证据、环境 manifest。
 

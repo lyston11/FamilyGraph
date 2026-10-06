@@ -134,6 +134,18 @@ def main() -> int:
         print("SKIP: 需要 PGTEST_DSN 指向隔离 PostgreSQL（不得指向开发库/线上）")
         return 2
 
+    # 安全守卫：本探针会 DROP 与业务同名的表。若目标库里已经存在**真实**业务表，
+    # 立即拒绝运行，避免 PGTEST_DSN 误指开发库/线上时造成破坏。
+    with psycopg.connect(dsn) as guard:
+        existing = guard.execute(
+            "SELECT count(*) FROM information_schema.tables"
+            " WHERE table_schema='public' AND table_name IN"
+            " ('agent_runs','steward_model_calls','accounts','spaces')"
+        ).fetchone()[0]
+    if existing:
+        print(f"REFUSE: 目标库已存在 {existing} 张同名业务表，拒绝运行（PGTEST_DSN 必须指向空库）")
+        return 3
+
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="fg-import-probe-") as tmp:
         snap = Path(tmp) / "snapshot.db"

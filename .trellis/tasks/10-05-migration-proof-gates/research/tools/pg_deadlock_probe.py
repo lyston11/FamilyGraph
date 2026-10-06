@@ -85,6 +85,9 @@ def _run(dsn: str, reverse: bool) -> tuple[list[str], list[tuple[str, str]]]:
         t.start()
     for t in threads:
         t.join(timeout=30)
+    with psycopg.connect(dsn) as cleanup:
+        cleanup.execute("DROP TABLE IF EXISTS dc_counters, dc_runs CASCADE")
+        cleanup.commit()
     return deadlocks, results
 
 
