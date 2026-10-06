@@ -1,7 +1,7 @@
 {
   "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
   "branch": "feat/10-05-migration-proof-gates",
-  "commit": "4a34bd3a1e04d07053aa617e15cae253d3ecb0cb",
+  "commit": "773503e039d5729427addc592ab859c24bd458ca",
   "worktree": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
   "counts": {
     "app_python": 214,
@@ -410,6 +410,11 @@
         "path": "backend/tests/test_action_cards_api.py",
         "line": 1021,
         "text": "已实测该用例确实守护写锁：把 `command_transaction(db, immediate=True)` 改回"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 183,
+        "text": "两个并发线程在 SQLite 上会被 `BEGIN IMMEDIATE` 串行化，且后到的线程往往在"
       },
       {
         "path": "backend/tests/test_invite_codes_service.py",
@@ -4054,6 +4059,11 @@
         "path": "backend/tests/test_agent_queue.py",
         "line": 477,
         "text": "text(\"UPDATE agent_sessions SET space_id = :sid WHERE id = :id\"),"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 248,
+        "text": "src = Path(\"app/services/agent_queue.py\").read_text()"
       },
       {
         "path": "backend/tests/test_agent_tool_admission.py",
@@ -8830,6 +8840,16 @@
         "path": "backend/tests/test_admin_read_model.py",
         "line": 678,
         "text": "text(\"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'admin_access%'\")"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 15,
+        "text": "结果断言在 pysqlite 上测不出锁缺失」。因此本文件必须用**真实并发**"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 183,
+        "text": "两个并发线程在 SQLite 上会被 `BEGIN IMMEDIATE` 串行化，且后到的线程往往在"
       },
       {
         "path": "backend/tests/test_agent_tool_admission.py",
@@ -28402,6 +28422,61 @@
         "path": "backend/tests/test_agent_queue.py",
         "line": 322,
         "text": "from app.models.space import SpaceMember"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 26,
+        "text": "from __future__ import annotations"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 28,
+        "text": "import threading"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 30,
+        "text": "import pytest"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 31,
+        "text": "from fastapi import HTTPException"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 32,
+        "text": "from sqlalchemy import func, select"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 34,
+        "text": "from app.db import SessionLocal"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 35,
+        "text": "from app.models.agent import AgentRun, AgentRunEvent"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 36,
+        "text": "from app.services import agent_queue"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 37,
+        "text": "from conftest import create_agent_fixture, create_agent_session"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 245,
+        "text": "import ast"
+      },
+      {
+        "path": "backend/tests/test_agent_queue_settle_race.py",
+        "line": 246,
+        "text": "from pathlib import Path"
       },
       {
         "path": "backend/tests/test_agent_schema_contract.py",

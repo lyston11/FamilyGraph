@@ -1,13 +1,13 @@
 {
-  "generated_at_utc": "2026-10-06T04:07:44Z",
+  "generated_at_utc": "2026-10-06T04:35:10Z",
   "host": "lystondeMacBook-Air.local",
   "platform": "macOS-26.2-arm64-arm-64bit",
   "python": "3.12.12",
   "git": {
     "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
     "branch": "feat/10-05-migration-proof-gates",
-    "commit": "4a34bd3a1e04d07053aa617e15cae253d3ecb0cb",
-    "status": "M .trellis/spec/backend/database-guidelines.md\n M .trellis/tasks/10-05-migration-proof-gates/research/evidence/integration-note.md\nD  scripts/evidence/gate-1-inventory.json\nD  scripts/evidence/gate-1-inventory.md\n M scripts/migration-proof/build_inventory.py\n M scripts/migration-proof/build_manifest.py\n M scripts/migration-proof/build_schema_inventory.py\n M scripts/migration-proof/build_tx_inventory.py\n M scripts/migration-proof/import_reconcile_probe.py\n M scripts/migration-proof/pg_baseline_prototype.py\n M scripts/migration-proof/pg_deadlock_probe.py\n M scripts/migration-proof/pg_fault_injection.py\n M scripts/migration-proof/pg_replay_probe.py"
+    "commit": "773503e039d5729427addc592ab859c24bd458ca",
+    "status": ""
   },
   "tools": {
     "docker": "/usr/local/bin/docker",
