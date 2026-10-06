@@ -50,6 +50,13 @@
   "isolation_requirements": {
     "postgres_database": "dedicated database/container only",
     "data_dir": "temporary directory only",
-    "network": "no production listener or database"
+    "network": "no production listener or database",
+    "probe_connection": "探针需要 PostgreSQL。开发服务器上的隔离容器 fg-pg-g2 经 SSH 隧道访问；隧道断开时探针会因连接失败报 exit 1，这不是代码缺陷——重连后应全部通过。时间类探针（deadlock_timeout）在隧道下因抖动可能报 FAIL，应在容器内直接运行。",
+    "probe_exit_codes": {
+      "0": "通过",
+      "1": "断言不符（真缺陷）或连接失败（隧道断开时）",
+      "2": "缺 DSN/驱动/工具（环境阻塞，不算通过）",
+      "3": "import_reconcile_probe 拒绝运行（目标库已有同名业务表）"
+    }
   }
 }
