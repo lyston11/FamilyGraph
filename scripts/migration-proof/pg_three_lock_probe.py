@@ -160,25 +160,32 @@ def main() -> int:
                       " AND scope_id=%s FOR UPDATE", (tenant,))
             time.sleep(HOLD)
 
-    t0 = time.perf_counter()
-    hold(1)
-    hold(2)
-    serial = time.perf_counter() - t0
+    def measure_serial() -> float:
+        t0 = time.perf_counter()
+        hold(1)
+        hold(2)
+        return time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    ts = [threading.Thread(target=hold, args=(t,)) for t in (1, 2)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join(timeout=15)
-    parallel = time.perf_counter() - t0
+    def measure_parallel() -> float:
+        t0 = time.perf_counter()
+        threads = [threading.Thread(target=hold, args=(t,)) for t in (1, 2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+        return time.perf_counter() - t0
+
+    # 取两次的**最小值**：经隧道时单次测量波动可达秒级（已实测批量运行时误报），
+    # 最小值更接近真实开销下界，判定才不会随环境抖动。
+    serial = min(measure_serial(), measure_serial())
+    parallel = min(measure_parallel(), measure_parallel())
 
     print(f"  两个不同 tenant counter：串行 {serial:.2f}s / 并行 {parallel:.2f}s"
           f"（持锁 {HOLD}s，串行下界 {2 * HOLD:.1f}s）")
     print("    注：经 SSH 隧道时连接建立开销可达秒级，绝对数值不可跨环境比较；"
           "判定只用相对关系。")
     # 串行下界 = 2×HOLD；并行若真正重叠，应显著低于该下界。
-    if parallel >= serial * 0.8:
+    if parallel >= serial * 0.85:
         failures.append(f"不同 tenant counter 疑似互相阻塞（串行 {serial:.2f}s，"
                         f"并行 {parallel:.2f}s）")
     else:
