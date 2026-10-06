@@ -25,9 +25,28 @@ from pathlib import Path
 
 
 def _repo_root() -> Path:
-    return Path(subprocess.check_output(
-        ["git", "rev-parse", "--show-toplevel"], text=True,
-        cwd=Path(__file__).parent).strip())
+    """解析仓库根。
+
+    本脚本**同时需要仓库文件与数据库连接**：它扫描源码里的 PRAGMA/DDL，再把它们送到
+    PostgreSQL 试执行。因此它必须**从仓库内运行**（可用 SSH 隧道指向隔离库），
+    **不能**在只有数据库的容器里跑——容器内没有 git，也没有源码。
+
+    允许用 `MIGRATION_PROOF_SRC` 显式指定仓库根（例如把源码挂载进容器时）。
+    """
+    explicit = os.environ.get("MIGRATION_PROOF_SRC")
+    if explicit:
+        return Path(explicit)
+    try:
+        return Path(subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True,
+            cwd=Path(__file__).parent).strip())
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(
+            "SKIP: 无法定位仓库根（本脚本需要源码 + 数据库，须在仓库内运行；"
+            "容器内请设 MIGRATION_PROOF_SRC 指向挂载的仓库）："
+            f"{type(exc).__name__}"
+        )
+        raise SystemExit(2) from exc
 
 
 ROOT = _repo_root()
