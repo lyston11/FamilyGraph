@@ -130,10 +130,24 @@ def main() -> int:
     if label_ok != "ok":
         failures.append(f"对照组未正常完成（{label_ok}）")
 
+    # 测量噪声守卫：经 SSH 隧道时抖动可达秒级，会淹没 ~1s 的信号。
+    # 若「有死锁」不比「无死锁」慢，说明本次测量被噪声主导——此时**必须报 FAIL**，
+    # 而不是打印一个负数结论还宣告 PASS（初版就出现过 -0.26s 的荒谬输出）。
+    delta = t_default - t_ok
+    # 可观测下界：默认 deadlock_timeout=1s，扣掉 0.3s 持锁窗口后，delta 应接近 1s。
+    # 取 0.5s 作为下界（远大于隧道抖动，又明显低于理论值）。
+    MIN_OBSERVABLE = 0.5
     print()
-    print(f"  结论：一次真实死锁会让被中止方额外等待约 {t_default - t_ok:.2f}s；"
-          f"deadlock_timeout 可会话级调整（200ms 时约 {t_small:.2f}s）。")
-    print("  因此 lease/settle 的延迟预算必须计入该量级，且重试必须 bounded。")
+    if delta < MIN_OBSERVABLE:
+        failures.append(
+            f"测量被噪声主导：delta={delta:+.2f}s < {MIN_OBSERVABLE}s。"
+            f"有死锁 {t_default:.2f}s / 无死锁 {t_ok:.2f}s。"
+            "应在**无隧道**环境（PG 主机上直接运行）重跑，不能据此宣告已量化。"
+        )
+    else:
+        print(f"  结论：一次真实死锁会让被中止方额外等待约 {delta:.2f}s；"
+              f"deadlock_timeout 可会话级调整（200ms 时约 {t_small:.2f}s）。")
+        print("  因此 lease/settle 的延迟预算必须计入该量级，且重试必须 bounded。")
 
     with _conn(dsn) as c:
         c.execute("DROP TABLE IF EXISTS dt_rows CASCADE")
