@@ -10,7 +10,7 @@
 | `immediate=True` + `_immediate_tx` | 43 | `write_transaction` 包装层 |
 | AST 数调用表达式（未排除 helper 定义） | 46 | 同上，且把 helper 定义当成入口 |
 
-**决定性口径**（`research/tools/build_tx_entries.py`，显式排除 helper 定义）：
+**决定性口径**（`scripts/migration-proof/build_tx_entries.py`，显式排除 helper 定义）：
 
 ```
 command_transaction(..., immediate=True)   20

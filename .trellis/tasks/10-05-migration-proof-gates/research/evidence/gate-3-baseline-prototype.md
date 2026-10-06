@@ -17,7 +17,7 @@
 
 ## 原型：四类语义等价物（plpgsql）
 
-`research/tools/pg_baseline_prototype.py` 为四类触发器各建一个 PostgreSQL 等价物：
+`scripts/migration-proof/pg_baseline_prototype.py` 为四类触发器各建一个 PostgreSQL 等价物：
 
 | 类别 | 数量 | PostgreSQL 形态 |
 |---|---|---|

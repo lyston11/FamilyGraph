@@ -2,7 +2,7 @@
 
 ## 实测结果
 
-`research/tools/pg_fault_injection.py`，隔离 PostgreSQL 16：
+`scripts/migration-proof/pg_fault_injection.py`，隔离 PostgreSQL 16：
 
 ```
 [OK ] 提交前断连      -> status=reserved owner=None counter=0     （全部回滚）

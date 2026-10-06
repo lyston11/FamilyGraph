@@ -6,7 +6,7 @@
 
 ## Proof script
 
-`research/tools/pg_control_proof.py`
+`scripts/migration-proof/pg_control_proof.py`
 
 脚本建立隔离的：
 

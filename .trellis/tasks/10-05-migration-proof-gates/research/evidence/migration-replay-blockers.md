@@ -51,7 +51,7 @@ PG baseline**——是必需的，而不是风格偏好。
 
 ```bash
 PGTEST_DSN=postgresql://postgres:probe@<隔离主机>:5432/familygraph \
-  ./backend/.venv/bin/python research/tools/pg_replay_probe.py
+  ./backend/.venv/bin/python scripts/migration-proof/pg_replay_probe.py
 ```
 
 退出码：`0` = 全部符合预期；`1` = 有断言不符；`2` = 缺少 DSN 或驱动（环境阻塞，不算通过）。

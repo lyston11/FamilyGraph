@@ -1,6 +1,14 @@
 from __future__ import annotations
 import ast,json
 from pathlib import Path
+
+# 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
+import os as _os
+OUT_DIR = Path(_os.environ.get(
+    "MIGRATION_PROOF_OUT",
+    str(Path(__file__).resolve().parents[2]
+        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+))
 def _repo_root() -> Path:
     """解析仓库根目录。
 
@@ -17,7 +25,7 @@ def _repo_root() -> Path:
             return Path(out)
     except Exception:
         pass
-    return Path(__file__).resolve().parents[5]
+    return Path(__file__).resolve().parents[2]
 
 
 ROOT = _repo_root()
@@ -39,6 +47,6 @@ for p in sorted((ROOT/'backend/app').rglob('*.py')):
 seen=set(); out=[]
 for x in items:
  if x['id'] not in seen:seen.add(x['id']);out.append(x)
-( ROOT/'.trellis/tasks/10-05-migration-proof-gates/research/evidence/tx-inventory.json').write_text(json.dumps({'count':len(out),'items':out},ensure_ascii=False,indent=2)+'\n')
-(ROOT/'.trellis/tasks/10-05-migration-proof-gates/research/evidence/tx-inventory.md').write_text('# Transaction stable inventory（自动生成）\n\n'+f'- 真实候选调用点：**{len(out)}**\n- 当前分类：全部 `UNCLASSIFIED`，禁止将候选数量当作已完成语义分析。\n- 下一步：为每个条目补 Contract ID、保护不变量、锁参与者、锁序、CAS/counter/retry 分类和 L2/L3 证据。\n')
+( OUT_DIR/'tx-inventory.json').write_text(json.dumps({'count':len(out),'items':out},ensure_ascii=False,indent=2)+'\n')
+(OUT_DIR/'tx-inventory.md').write_text('# Transaction stable inventory（自动生成）\n\n'+f'- 真实候选调用点：**{len(out)}**\n- 当前分类：全部 `UNCLASSIFIED`，禁止将候选数量当作已完成语义分析。\n- 下一步：为每个条目补 Contract ID、保护不变量、锁参与者、锁序、CAS/counter/retry 分类和 L2/L3 证据。\n')
 print(len(out))

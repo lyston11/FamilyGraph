@@ -15,7 +15,15 @@ def _repo_root() -> Path:
 
 
 ROOT = _repo_root()
-EV = ROOT / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"
+import os as _os
+
+# 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
+OUT_DIR = Path(_os.environ.get(
+    "MIGRATION_PROOF_OUT",
+    str(Path(__file__).resolve().parents[2]
+        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+))
+EV = OUT_DIR
 
 # 入口总数。任何变化都必须显式更新——共享分类键会掩盖同函数内的新增入口。
 EXPECTED_ENTRIES = 65

@@ -18,10 +18,18 @@ def _repo_root() -> Path:
             return Path(out)
     except Exception:
         pass
-    return Path(__file__).resolve().parents[5]
+    return Path(__file__).resolve().parents[2]
 
 
 ROOT = _repo_root()
+
+# 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
+import os as _os
+OUT_DIR = Path(_os.environ.get(
+    "MIGRATION_PROOF_OUT",
+    str(Path(__file__).resolve().parents[2]
+        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+))
 
 def cmd(*args):
     try: return subprocess.check_output(args,cwd=ROOT,text=True,stderr=subprocess.STDOUT,timeout=10).strip()
@@ -54,6 +62,7 @@ m={
  'environment_policy':{'production_touched':False,'development_writer_cutover':False,'live_sqlite_copied':False,'redis_source_of_truth':False},
  'isolation_requirements':{'postgres_database':'dedicated database/container only','data_dir':'temporary directory only','network':'no production listener or database'},
 }
-out=ROOT/'.trellis/tasks/10-05-migration-proof-gates/research/evidence/environment-manifest.json'
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+out=OUT_DIR/'environment-manifest.json'
 out.write_text(json.dumps(m,ensure_ascii=False,indent=2)+'\n')
 print(json.dumps(m,ensure_ascii=False))

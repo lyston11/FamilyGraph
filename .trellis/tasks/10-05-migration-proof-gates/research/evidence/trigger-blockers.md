@@ -17,7 +17,7 @@
 ```
 
 **按源码行计数会漏掉 55 个**（全部是 `sri_*`，保护 steward 投影新鲜度不变量）。
-可复跑：`research/tools/build_trigger_inventory.py`（同时记录两种口径与循环展开点）。
+可复跑：`scripts/migration-proof/build_trigger_inventory.py`（同时记录两种口径与循环展开点）。
 
 ## 结论
 
@@ -29,7 +29,7 @@
 PostgreSQL **不支持**这种 `BEGIN ... END` 触发器体，也没有 `RAISE(ABORT, ...)`：
 它要求 `CREATE FUNCTION ... LANGUAGE plpgsql` + `CREATE TRIGGER ... EXECUTE FUNCTION`。
 
-## 实测（`research/tools/pg_replay_probe.py`，隔离 PostgreSQL，可复跑）
+## 实测（`scripts/migration-proof/pg_replay_probe.py`，隔离 PostgreSQL，可复跑）
 
 ```
 [OK ] 0009 scope-immutable trigger (SQLite RAISE/ABORT)

@@ -2,7 +2,7 @@
 
 ## 实测结果
 
-`research/tools/import_reconcile_probe.py`，隔离 PostgreSQL 16 + 合成 SQLite 库：
+`scripts/migration-proof/import_reconcile_probe.py`，隔离 PostgreSQL 16 + 合成 SQLite 库：
 
 ```
 快照 integrity_check = ok

@@ -15,8 +15,16 @@ def _repo_root() -> Path:
 
 
 ROOT = _repo_root()
+import os as _os
+
+# 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
+OUT_DIR = Path(_os.environ.get(
+    "MIGRATION_PROOF_OUT",
+    str(Path(__file__).resolve().parents[2]
+        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+))
 BACKEND = ROOT / "backend"
-OUT = ROOT / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"
+OUT = OUT_DIR
 
 TOKENS = ("json_extract", "strftime", "julianday", "last_insert_rowid", "fts5", "AUTOINCREMENT")
 
