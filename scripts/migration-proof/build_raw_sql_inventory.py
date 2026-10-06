@@ -68,7 +68,9 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     by_risk: dict[str, list[dict]] = {k: [] for k in RISK}
     for path in sorted(BACKEND.rglob("*.py")):
-        if not is_source_file(path):
+        # 生产代码口径：排除依赖库（.venv 等）**和测试**。
+        # 迁移风险看的是会发布出去的代码；测试自身的 PRAGMA 另行统计。
+        if not is_source_file(path) or "/tests/" in str(path) or path.name.startswith("test_"):
             continue
         src = path.read_text(errors="replace")
         rel = str(path.relative_to(ROOT))
