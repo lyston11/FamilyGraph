@@ -144,6 +144,8 @@ snapshot provenance
 
 ## 9. Gate 通过条件
 
+本任务负责**实现前**的 Gate 0–5：
+
 ```text
 Gate 0 scope/worktree/env
 → Gate 1 inventory/dialect
@@ -151,8 +153,14 @@ Gate 0 scope/worktree/env
 → Gate 3 real PostgreSQL prototype
 → Gate 4 fault/recovery
 → Gate 5 import/reconciliation/backup
-→ Gate 6 dev shadow/cutover readiness
-→ Gate 7 cross-task load acceptance
 ```
 
 任何前置 Gate 失败，后续 Gate 自动阻塞。
+
+**Gate 6（dev shadow/cutover）与 Gate 7（cross-task load acceptance）移交**：
+
+- 二者都必须基于**已存在的实现**才能执行（shadow read 需要可切的路由，压测需要
+  已落地的 counter/lease），因此不能作为「实现前门禁」——原设计存在循环依赖；
+- Gate 6 由 `10-03-postgres-migration` 在实现后满足；
+- Gate 7 由 `10-04-multitenant-load-acceptance` 作为父任务 release gate 满足；
+- 本任务交付的探针与扫描器在这两个阶段**重跑**，而不是重新发明。

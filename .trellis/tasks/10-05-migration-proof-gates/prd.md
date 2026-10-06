@@ -83,8 +83,29 @@ SQLite/PG 差异
 | PG-5 | 正向、负向、mutation、故障恢复四类证据都存在；不能只靠 happy path。 |
 | PG-6 | snapshot/import/reconciliation/backup/restore/refusal/runbook 在隔离环境演练；校验失败不会切 writer。 |
 | PG-7 | 所有跨任务接缝已有输入/输出/健康信号/回滚语义；未完成子任务明确阻塞父任务。 |
-| PG-8 | 全部风险、未覆盖项、证据等级和回滚点落盘；只有 PG-0..PG-7 全部通过才允许 `postgres-migration` 进入业务实现阶段。 |
+| PG-8 | 全部风险、未覆盖项、证据等级和回滚点落盘；**PG-0..PG-5 全部通过**才允许 `postgres-migration` 进入业务实现阶段。 |
+
+## 范围修正（2026-10-06）：PG-6/PG-7 不属于本任务
+
+原 PRD 要求「PG-0..PG-7 全部通过才放行」，但其中两项存在**循环依赖**：
+
+| 项 | 问题 |
+|---|---|
+| PG-6 dev shadow / cutover readiness | shadow read 与 writer 切换**必须基于已存在的实现**；实现之前无法执行 |
+| PG-7 cross-task load acceptance | 多租户压测**必须基于已实现的 counter/lease**；且它是父任务的 release gate |
+
+让「实现前的证明门」依赖「实现后的验收」是自相矛盾的。因此修正为：
+
+- **本任务负责 PG-0..PG-5**（实现前门禁）：范围/环境、inventory、锁序/并发证明、
+  PostgreSQL prototype、故障恢复、导入对账与备份。
+- **PG-6/PG-7 移交**：
+  - PG-6 的实现由 `10-03-postgres-migration` 在实现 counter 后自行满足；
+  - PG-7 归 `10-04-multitenant-load-acceptance`（父任务的最终 release gate）。
+
+本任务交付的是「迁移是否可以安全开始实现」的证据包，以及可复跑的探针与扫描器，
+供 PG-6/PG-7 在其对应阶段重跑。
 
 ## 当前状态
 
-仍处于 `planning`。之前的 partial-index、JSON、raw SQL、lock-order 和 counter-return 发现已进入风险登记，但 PG-1..PG-8 尚未全部通过。
+PG-0..PG-5 的门禁工作已完成并有可复跑证据（见 `research/evidence/gate-*-*.md` 与
+`scripts/migration-proof/`）。PG-6/PG-7 按上述修正移交，不作为本任务的完成条件。
