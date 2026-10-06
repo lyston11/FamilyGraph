@@ -11,15 +11,12 @@
 | 反向锁序在 PostgreSQL 上真实死锁 | `pg_deadlock_probe.py`（反向死锁、正向无死锁） | L2 |
 | 原型：counter + SKIP LOCKED 每租户上限生效 | `pg_control_proof.py` | L3（原型） |
 
-## 缺口（因此 Gate 2 仍 BLOCKED）
+## 缺口（Gate 2 剩余）
 
-1. **无静态调用图**：当前只确认了 `_settle → fence_execution → acquire_run_writer` 与
-   租约 `counter → attempt` 这一条最明显的反向路径。其余 65 个入口中哪些会**同时**
-   持有两类锁尚未逐条判定。
-2. **三把以上锁未实测**：只验证了两把交叉（counter 与 run 行）。
-   `global + kind + tenant + run` 的顺序未做探针。
-3. **mutation 用例未补**：设计要求「删 CAS / 删锁 / 删 counter release 必须让测试失败」，
-   目前只有入口计数 mutation，没有针对真实业务入口的锁/CAS mutation。
+1. ~~无静态调用图~~ → **已闭合**：`lock-order-graph.md`，63 入口，violations=0（基线）。
+2. ~~三把以上锁未实测~~ → **已闭合**：`pg_three_lock_probe.py` 四把锁，一正一反真实死锁。
+3. ~~mutation 用例未补~~ → **已闭合（首个真实入口）**：`gate-2-mutation-closure.md`，
+   删除 `_settle` 锁内 CAS 复核 → 2 个用例失败；既有 9 个用例守护不住，已实证。
 4. **真实入口未在 PostgreSQL 上运行**：三个 B 类入口（`lease_next`、
    `lease_next_steward_job`、`lease_attempt`）的证据是**原型形态**，不是真实入口行为
    （`tx-contracts.json` 已按此标注为 L2）。
