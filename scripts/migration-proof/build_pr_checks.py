@@ -23,6 +23,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import is_source_file  # noqa: E402
+
 
 def _repo_root() -> Path:
     """解析仓库根。
@@ -71,7 +76,7 @@ def collect() -> dict:
     pragmas: list[dict] = []
     ddls: list[dict] = []
     for path in sorted(BACKEND.rglob("*.py")):
-        if "__pycache__" in str(path) or "/tests/" in str(path):
+        if not is_source_file(path) or "/tests/" in str(path):
             continue
         src = path.read_text(errors="replace")
         rel = str(path.relative_to(ROOT))

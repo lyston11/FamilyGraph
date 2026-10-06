@@ -27,8 +27,7 @@ ROOT = _repo_root()
 import os as _os
 OUT_DIR = Path(_os.environ.get(
     "MIGRATION_PROOF_OUT",
-    str(Path(__file__).resolve().parents[2]
-        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+    str(ROOT / "artifacts/migration-proof"),
 ))
 
 def cmd(*args):

@@ -7,6 +7,11 @@ from __future__ import annotations
 import ast, json, subprocess
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import is_source_file  # noqa: E402
+
 
 def _repo_root() -> Path:
     out = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True,
@@ -20,8 +25,7 @@ import os as _os
 # 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
 OUT_DIR = Path(_os.environ.get(
     "MIGRATION_PROOF_OUT",
-    str(Path(__file__).resolve().parents[2]
-        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+    str(ROOT / "artifacts/migration-proof"),
 ))
 BACKEND = ROOT / "backend"
 OUT = OUT_DIR
@@ -54,7 +58,7 @@ def _docstring_lines(tree: ast.AST) -> set[int]:
 def scan() -> list[dict]:
     findings = []
     for path in sorted(BACKEND.rglob("*.py")):
-        if "__pycache__" in str(path):
+        if not is_source_file(path):
             continue
         src = path.read_text(errors="replace")
         try:
@@ -91,6 +95,7 @@ def scan() -> list[dict]:
 
 
 def main() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     items = scan()
     by_kind: dict[str, int] = {}
     by_token: dict[str, int] = {}

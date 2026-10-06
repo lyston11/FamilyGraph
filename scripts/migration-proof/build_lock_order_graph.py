@@ -39,7 +39,7 @@ ROOT = _repo_root()
 APP = ROOT / "backend/app"
 OUT_DIR = Path(os.environ.get(
     "MIGRATION_PROOF_OUT",
-    str(ROOT / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+    str(ROOT / "artifacts/migration-proof"),
 ))
 
 # 函数名 -> 锁类型。位次越小越先取（冻结顺序）。

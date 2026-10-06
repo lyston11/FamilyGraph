@@ -11,6 +11,11 @@ import re
 import subprocess
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import is_source_file  # noqa: E402
+
 
 def _repo_root() -> Path:
     return Path(subprocess.check_output(
@@ -24,8 +29,7 @@ import os as _os
 # 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
 OUT_DIR = Path(_os.environ.get(
     "MIGRATION_PROOF_OUT",
-    str(Path(__file__).resolve().parents[2]
-        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+    str(ROOT / "artifacts/migration-proof"),
 ))
 BACKEND = ROOT / "backend"
 EV = OUT_DIR
@@ -61,9 +65,10 @@ EXECUTED = {
 
 
 def main() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     by_risk: dict[str, list[dict]] = {k: [] for k in RISK}
     for path in sorted(BACKEND.rglob("*.py")):
-        if "__pycache__" in str(path) or "/tests/" in str(path) or path.name.startswith("test_"):
+        if not is_source_file(path):
             continue
         src = path.read_text(errors="replace")
         rel = str(path.relative_to(ROOT))
@@ -105,7 +110,7 @@ def main() -> None:
                     })
     neutral = 0
     for path in sorted(BACKEND.rglob("*.py")):
-        if "__pycache__" in str(path) or "/tests/" in str(path):
+        if not is_source_file(path) or "/tests/" in str(path):
             continue
         for line in path.read_text(errors="replace").splitlines():
             if re.search(RISK["dialect_neutral_sql"][0], line):

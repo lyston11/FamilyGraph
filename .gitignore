@@ -42,3 +42,6 @@ backend/.ruff_cache
 
 # Playwright MCP 会话产物（日志/截图，本地调试证据，不入库）
 .playwright-mcp/
+
+# migration-proof 扫描器输出（可再生，不入库）
+artifacts/

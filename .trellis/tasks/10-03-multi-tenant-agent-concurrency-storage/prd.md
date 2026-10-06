@@ -201,6 +201,8 @@ C0 scope/env/worktree
 完整执行清单、停止条件、提交顺序和最终命令见：
 `.trellis/tasks/10-06-architecture-completion-orchestration/{prd,design,implement}.md`。
 
+## Out of Scope
+
 - 本任务直接实现所有业务 API 或重新设计家庭域授权；
 - 把 sidecar 变成可访问数据库的服务；
 - 绕过 Provider gateway 或放宽数据出境/可见性策略；

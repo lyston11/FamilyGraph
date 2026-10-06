@@ -27,8 +27,7 @@ import os as _os
 # 证据输出目录：可用 MIGRATION_PROOF_OUT 覆盖（任务归档后指向持久位置）。
 OUT_DIR = Path(_os.environ.get(
     "MIGRATION_PROOF_OUT",
-    str(Path(__file__).resolve().parents[2]
-        / ".trellis/tasks/10-05-migration-proof-gates/research/evidence"),
+    str(ROOT / "artifacts/migration-proof"),
 ))
 EV = OUT_DIR
 
@@ -59,6 +58,7 @@ def _enclosing(tree: ast.AST, lineno: int) -> str:
 
 
 def main() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     entries = []
     for path in sorted((ROOT / "backend/app").rglob("*.py")):
         if "__pycache__" in str(path):
