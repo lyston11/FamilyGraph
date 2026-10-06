@@ -48,7 +48,9 @@
 - [x] staging import 机制验证：静态快照（`Connection.backup()`）→ 逐表保留原始 ID/FK → 行数与逐行摘要对账 → 重复导入幂等。证据：`research/evidence/gate-5-import-reconcile.md`（原型）。**sequence 未真正验证**（合成表 PK 非 serial）。
 - [ ] 对账 row count、hash、scope、status、run↔attempt、lease、egress、citation、RAG revision。
 - [x] refusal 语义实测：人为制造差异后被检出，且**未自动修复**（差异保留）。重复导入幂等。
-- [ ] 完成 backup/restore rehearsal（**未开始**：`pg_dump`/`pg_restore`、RPO/RTO、sequence/constraint/lease 恢复状态）。
+- [x] backup/restore rehearsal 已执行（`pg_dump --clean --if-exists` → `psql` 恢复 → 行数/最大 ID 对账）。
+- [x] sequence 修复必要性已用**负向用例**证明：不修复必主键冲突，修复后可继续插入。证据：`research/evidence/gate-5-sequence-and-restore.md`（原型）。
+- [ ] 未测：RPO/RTO、PITR、跨表 FK 顺序导入、大表分批与断点重试。
 
 ## Phase 5：跨任务接缝
 
