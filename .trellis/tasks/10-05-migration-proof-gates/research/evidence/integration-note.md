@@ -2,22 +2,21 @@
 
 ## 事实
 
-每个数字都附带**生成它的确切命令**，避免不同查询口径互相矛盾（上一版本就因此陈旧）。
+每个数字都附带**生成它的确切命令**；以 `git rev-list --count` 现场结果为准。
 
 | 项 | 命令 | 值 |
 |---|---|---|
-| 分支相对 main 的 commit（含 merge） | `git rev-list --count main..HEAD` | 46 |
-| 分支相对 main 的 commit（不含 merge） | `git rev-list --count --no-merges main..HEAD` | 31 |
-| 本任务自身 commit | `git rev-list --count 3bf4a069..HEAD` | 35 |
+| 分支相对 main（含 merge） | `git rev-list --count main..HEAD` | 48 |
+| 分支相对 main（不含 merge） | `git rev-list --count --no-merges main..HEAD` | 47 |
+| 本任务自身 commit | `git rev-list --count 3bf4a069..HEAD` | 37 |
 | merge 带入的 commit | `git rev-list --count main..3bf4a069` | 11 |
 | 其中触碰 `backend/` | `git rev-list --count main..3bf4a069 -- backend/` | 4 |
-| **本任务自身触碰 `backend/`** | `git rev-list --count 3bf4a069..HEAD -- backend/` | **1**（仅新增测试 `tests/test_agent_queue_settle_race.py`，无生产代码改动） |
+| **本任务自身触碰 `backend/`** | `git rev-list --count 3bf4a069..HEAD -- backend/` | **1**（仅新增测试，无生产代码） |
 
-带入的 4 个业务 commit：
+带入的生产修复（来自 `feat/10-03-postgres-migration`）：
 
 ```
 73cfd21e fix(db): keep partial unique indexes partial on PostgreSQL
-34eff92e test(db): classify every quota-bearing status transition
 72a62995 fix(models): render the JSON snapshot CHECK for PostgreSQL too
 071df48d fix(db): make runtime JSON queries portable to PostgreSQL
 ```

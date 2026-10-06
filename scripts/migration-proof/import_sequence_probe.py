@@ -80,15 +80,19 @@ def test_sequence_repair(dsn: str, failures: list[str]) -> None:
             failures.append("修复 sequence 后仍无法插入")
 
 
-def test_backup_restore(dsn: str, failures: list[str]) -> None:
-    """pg_dump → pg_restore → 对账。缺少 pg_dump/pg_restore 时明确记录为环境阻塞。"""
+def test_backup_restore(dsn: str, failures: list[str]) -> bool:
+    """pg_dump → restore → 对账。返回**是否真正演练**（False = 跳过）。
+
+    返回值是必需的：初版即使 SKIP 也打印「PASS: ... backup/restore 已演练」，
+    把「未执行」汇报成「已执行」——这正是本任务要防的失败模式。
+    """
     if not shutil.which("pg_dump") or not shutil.which("pg_restore"):
-        print("  SKIP: pg_dump/pg_restore 不在 PATH（环境阻塞，不是通过）")
-        return
+        print("  SKIP: pg_dump/pg_restore 不在 PATH（环境阻塞，**不是通过**）")
+        return False
     restore_dsn = os.environ.get("PGTEST_DSN_RESTORE")
     if not restore_dsn:
-        print("  SKIP: 需要 PGTEST_DSN_RESTORE 指向第二个隔离库")
-        return
+        print("  SKIP: 需要 PGTEST_DSN_RESTORE 指向第二个隔离库（**未演练**）")
+        return False
 
     with tempfile.TemporaryDirectory(prefix="fg-restore-") as tmp:
         dump = os.path.join(tmp, "dump.sql")
@@ -101,7 +105,7 @@ def test_backup_restore(dsn: str, failures: list[str]) -> None:
         if r.returncode != 0:
             print(f"  BAD: pg_dump 失败：{r.stderr.strip()[:160]}")
             failures.append("pg_dump 失败")
-            return
+            return False
         print(f"  OK  pg_dump -> {os.path.getsize(dump)} bytes")
 
         r = subprocess.run(["psql", "-q", "-f", dump, dst],
@@ -109,7 +113,7 @@ def test_backup_restore(dsn: str, failures: list[str]) -> None:
         if r.returncode != 0:
             print(f"  BAD: restore 失败：{r.stderr.strip()[:160]}")
             failures.append("pg_restore/psql 恢复失败")
-            return
+            return False
         print("  OK  restore 完成")
 
         # 对账：行数与最大 id
@@ -120,6 +124,7 @@ def test_backup_restore(dsn: str, failures: list[str]) -> None:
         print(f"  [{'OK ' if ok else 'BAD'}] 恢复后对账 -> 源 {na} / 目标 {nb}")
         if not ok:
             failures.append(f"恢复后对账不一致：源 {na} 目标 {nb}")
+        return ok
 
 
 def main() -> int:
@@ -137,7 +142,7 @@ def main() -> int:
     print("sequence 修复：")
     test_sequence_repair(dsn, failures)
     print("backup/restore：")
-    test_backup_restore(dsn, failures)
+    restore_ran = test_backup_restore(dsn, failures)
 
     with _conn(dsn) as c:
         c.execute("DROP TABLE IF EXISTS sq_items CASCADE")
@@ -148,8 +153,13 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("PASS: sequence 修复必要性已证明；backup/restore 已演练")
-    return 0
+    # 摘要必须如实区分两种结果，不能把 SKIP 说成已演练。
+    if restore_ran:
+        print("PASS: sequence 修复必要性已证明；backup/restore **已演练**")
+        return 0
+    print("PARTIAL: sequence 修复必要性已证明；backup/restore **未演练**"
+          "（缺 pg_dump/pg_restore 或 PGTEST_DSN_RESTORE）")
+    return 2
 
 
 if __name__ == "__main__":
