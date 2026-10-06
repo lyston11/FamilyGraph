@@ -51,11 +51,11 @@
 
 ## Phase 5：跨任务接缝
 
-- [ ] `control-plane-fault-domain` 提供 control reserve、worker recovery 和 health 接口。
+- [ ] 接缝契约已记录（`research/evidence/gate-6-7-cross-task-and-matrix.md`），但 `writer epoch` 与 `migration health` **尚未设计**，属 `10-04-postgres-operations-cutover` 职责。
 - [ ] `provider-reliability-boundaries` 提供 stream quota/circuit，不破坏 retry/egress/settle。
 - [ ] `postgres-operations-cutover` 提供连接预算、backup/PITR/HA、writer epoch 和回滚 runbook。
 - [ ] `lexical-search-migration` / `pgvector-rag` 提供检索质量与索引生命周期证据。
-- [ ] `multitenant-load-acceptance` 提供最终 account×space×kind 故障矩阵。
+- [ ] 最终矩阵已**规划但未执行**：矩阵中「同用户跨空间」「control-plane 保留」「Provider 长流」全部未测，不得宣布多租户并发达标。
 
 任何接缝未 verified，父任务不得进入 writer cutover。
 
