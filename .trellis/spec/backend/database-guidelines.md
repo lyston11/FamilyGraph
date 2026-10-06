@@ -407,6 +407,16 @@ PGTEST_DSN=... ./backend/.venv/bin/python scripts/migration-proof/import_reconci
 
 退出码约定：`0` = 通过；`1` = 断言不符（真缺陷）；`2` = 缺 DSN/驱动（环境阻塞，**不算通过**）。
 
+工具位于 `scripts/migration-proof/`（持久位置，任务归档后仍有效）；证据输出目录可用
+`MIGRATION_PROOF_OUT` 覆盖。
+
+**探针的两条纪律**（都是实测踩坑后加的）：
+
+1. **噪声守卫**：时间类探针必须要求效应量达到可观测下界，否则报 FAIL。
+   `pg_deadlock_timeout_probe` 曾在隧道抖动下打印 `delta=-0.26s` 仍宣告 PASS。
+2. **用例构造守卫**：并发探针必须让两个 worker 争用**同一**资源且取锁顺序**相反**。
+   三锁探针先后因「不同租户（资源不相交）」与「两个都反向（同序）」两次假通过。
+
 ### 3. Contracts（实测结论，不是推断）
 
 - **局部唯一索引必须双方言**：只用 `sqlite_where` 会让 PostgreSQL 退化为**全表**唯一索引
