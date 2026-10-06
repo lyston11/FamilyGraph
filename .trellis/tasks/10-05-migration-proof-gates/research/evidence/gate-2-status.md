@@ -20,7 +20,8 @@
 4. **真实入口未在 PostgreSQL 上运行**：三个 B 类入口（`lease_next`、
    `lease_next_steward_job`、`lease_attempt`）的证据是**原型形态**，不是真实入口行为
    （`tx-contracts.json` 已按此标注为 L2）。
-5. **`deadlock_timeout` 延迟未测量**：默认 1s 对 lease/settle 延迟预算的影响未知。
+5. ~~`deadlock_timeout` 延迟未测量~~ → **已闭合**：实测检测开销≈`deadlock_timeout`
+   （默认 1.0s，200ms 时 0.2s）。证据：`gate-2-deadlock-timeout.md`。
 
 ## 结论
 
