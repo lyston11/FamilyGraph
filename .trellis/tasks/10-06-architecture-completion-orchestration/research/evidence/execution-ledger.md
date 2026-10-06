@@ -54,6 +54,37 @@ C3-C10 todo 见下表
 | C7 operations | `writer epoch`/`migration health` 未设计 | 独立设计 |
 | C8 load | 无真实多实例对象可压 | C3–C7 |
 
+
+## ORCH-10：无主 TBD 清单（每项都有 owner、依赖、恢复条件与下一命令）
+
+| # | 未完成项 | Owner | 依赖 | 恢复条件 | 下一命令 |
+|---|---|---|---|---|---|
+| 1 | RAG 接入真实 schema（PGroonga/pgvector） | `10-04-lexical-search-migration`、`10-03-pgvector-rag` | C1/C2 已完成（**已解除**） | PG baseline 已可建；可开始接入 | 在真实 schema 上建 `ix_rag_chunks_pgroonga` 并跑 `pgroonga_branch_probe.py` |
+| 2 | Redis 接入真实准入路径 | `10-03-redis-coordination` | 无（降级层已交付） | 可立即开始 | 在 `_acquire_execution_slot` 前加 `try_set_if_absent`，miss 则走 PG |
+| 3 | control-plane AC-5 分进程/分池 | `10-04-control-plane-fault-domain` | 无 | 需要进程模型设计 | 设计 Assistant/Steward 独立进程与资源预算 |
+| 4 | Provider circuit breaker / backpressure | `10-04-provider-reliability-boundaries` | 无 | 可立即开始 | 按 provider/kind/tenant 分区实现 + 故障注入 |
+| 5 | PITR / WAL archive / HA / failover | `10-04-postgres-operations-cutover` | 需要真实 PG 集群与归档存储 | 环境就绪 | 按 runbook 配置 archive_mode 并演练 PITR |
+| 6 | PgBouncer 兼容性（transaction pooling 对 `FOR UPDATE`/advisory lock 的影响） | `10-04-postgres-operations-cutover` | 需要 PgBouncer 实例 | 环境就绪 | 起 PgBouncer 后重跑 `pg_capacity_concurrency.py` |
+| 7 | 真实多租户负载 p95/p99 | `10-04-multitenant-load-acceptance` | 需要真实多实例部署 | 部署就绪 | 按 C8 探针的场景在真实部署上重跑 |
+| 8 | 开发环境灰度（C9 shadow → writer） | 本任务 | 需要开发环境部署 | operations Gate 通过 | 按 `FG_WRITER_STAGE` 逐级推进并观察 `/ready` |
+| 9 | 真实历史库导入与对账 | `10-03-postgres-migration` | C1/C2 已完成 | 可开始 | 用 `import_reconcile_probe.py` 的流程对真实快照执行 |
+
+**不存在无主 TBD**：以上每项都有 owner、依赖、恢复条件和下一命令。
+
+## C9/C10 为何不能在本轮完成
+
+C9（开发灰度切换）与 C10（最终对账 + 回滚演练）需要：
+
+1. **真实开发环境部署**（当前开发环境仍跑 SQLite，未部署本次的 PG 路径）；
+2. **真实历史库快照**（不得直接复制运行中的主库）；
+3. **真实多实例**（灰度需要两个实例才能验证 epoch 失效与不双主）。
+
+这三项都涉及「接触真实环境」——属于本任务 PRD 的**停止条件**（线上/不可逆数据风险），
+因此必须由用户决定时机，不能自主执行。
+
+**可以自主完成的部分已完成**：epoch 机制、migration health 端点、回滚语义、
+不双主的守卫、以及全部可执行的容量验收。
+
 ## 环境
 
 - 主检出：`/Users/lyston/PycharmProjects/familygraph`（只做串行 merge）

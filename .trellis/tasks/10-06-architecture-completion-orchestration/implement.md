@@ -2,11 +2,11 @@
 
 ## Phase 0：启动前
 
-- [ ] 读取本任务 `implement.jsonl` / `check.jsonl` / `prd.md` / `design.md`。
-- [ ] 确认 main 干净、任务 worktree、branch、base commit 和环境 manifest。
-- [ ] 执行 `task.py validate`；确认所有子任务 PRD/design/implement 存在且依赖写入各自工件。
-- [ ] 建立 `execution-ledger.md`：每个 Gate、owner、输入、输出、验证、commit、阻塞和下一命令。
-- [ ] 启动后不再向用户询问下一步；按本文件继续。
+- [x] 读取本任务 `implement.jsonl` / `check.jsonl` / `prd.md` / `design.md`。
+- [x] 确认 main 干净、任务 worktree、branch、base commit 和环境 manifest。
+- [x] 执行 `task.py validate`；确认所有子任务 PRD/design/implement 存在且依赖写入各自工件。
+- [x] 建立 `execution-ledger.md`：每个 Gate、owner、输入、输出、验证、commit、阻塞和下一命令。含 ORCH-10 无主 TBD 清单。
+- [x] 启动后不再向用户询问下一步；按本文件继续。
 
 ## Phase A：PostgreSQL baseline / transaction
 
