@@ -1,8 +1,27 @@
-# Gate 1：14 个迁移触发器全部使用 SQLite 专属语法（实测阻塞）
+# Gate 1：全部 69 个迁移触发器使用 SQLite 专属语法（实测阻塞）
+
+## 计数口径修正（重要）
+
+初版用 `grep 'CREATE TRIGGER'` 数源码行，得到 **14**。但其中 4 处位于 `for` 循环内，
+会按配置矩阵展开。对隔离 `DATA_DIR` 跑 `alembic upgrade head` 后统计 `sqlite_master`：
+
+```
+实际触发器总数: 69
+   60  sri_* (steward input revision 计数器)
+    3  rag_chunks_*
+    2  rag_documents_*
+    1  trg_agent_sessions_scope_immutable
+    1  trg_raw_relation_inputs_immutable
+    1  trg_scev_immutable
+    1  trg_slc_internal_sticky
+```
+
+**按源码行计数会漏掉 55 个**（全部是 `sri_*`，保护 steward 投影新鲜度不变量）。
+可复跑：`research/tools/build_trigger_inventory.py`（同时记录两种口径与循环展开点）。
 
 ## 结论
 
-仓库的**全部 14 个触发器**定义在 Alembic 迁移里，全部使用 SQLite 语法：
+仓库的**全部 69 个触发器**定义在 Alembic 迁移里，全部使用 SQLite 语法：
 
 - `CREATE TRIGGER ... BEFORE UPDATE ON t WHEN <cond> BEGIN SELECT RAISE(ABORT, 'msg'); END;`
 - `CREATE TRIGGER ... AFTER UPDATE ON t BEGIN INSERT ... ON CONFLICT ... END;`
@@ -23,7 +42,7 @@ PostgreSQL **不支持**这种 `BEGIN ... END` 触发器体，也没有 `RAISE(A
 第三行是**对照**：同一实例上 PostgreSQL 原生形态（`plpgsql` 函数 + `EXECUTE FUNCTION`）
 建立成功。说明失败来自 SQLite 语法本身，不是权限或配置。
 
-## 触发器清单（14 个，来自 10 个迁移文件）
+## 源码位点（14 处，来自 10 个迁移文件；展开后 69 个实际触发器）
 
 | 迁移 | 行 | 保护的不变量 |
 |---|---|---|
