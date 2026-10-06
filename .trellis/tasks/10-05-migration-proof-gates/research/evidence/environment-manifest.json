@@ -1,13 +1,13 @@
 {
-  "generated_at_utc": "2026-10-06T03:19:11Z",
+  "generated_at_utc": "2026-10-06T03:27:25Z",
   "host": "lystondeMacBook-Air.local",
   "platform": "macOS-26.2-arm64-arm-64bit",
   "python": "3.12.12",
   "git": {
     "root": "/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates",
     "branch": "feat/10-05-migration-proof-gates",
-    "commit": "910e7295e987cc18cf7897ea99030d9ddcc391b3",
-    "status": "M .trellis/tasks/10-05-migration-proof-gates/research/tools/build_manifest.py\n M .trellis/tasks/10-05-migration-proof-gates/research/tools/build_tx_contracts.py\n?? .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_deadlock_probe.py\n?? .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_replay_probe.py"
+    "commit": "96a94a020ad3a047450a3f340fa453289b2ab0d2",
+    "status": ""
   },
   "tools": {
     "docker": "/usr/local/bin/docker",

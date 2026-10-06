@@ -2,7 +2,7 @@
 
 - root: `/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates`
 - branch: `feat/10-05-migration-proof-gates`
-- commit: `36e0e0fb14f87c1fb22853e97c32e998545a3b89`
+- commit: `96a94a020ad3a047450a3f340fa453289b2ab0d2`
 - worktree: `/Users/lyston/PycharmProjects/fg-10-05-migration-proof-gates`
 
 ## 统计
