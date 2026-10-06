@@ -50,13 +50,14 @@
 |---|---|---|
 | golden corpus 对比召回/排序/延迟/索引成本 | **DONE** | 召回/排序：四方对照（子串真源）；**延迟/索引成本**：2 万条规模实测——服务器端执行 **1.3–4.3ms**（`EXPLAIN ANALYZE`），索引构建 0.8s |
 | 明确默认实现 | **DONE** | PGroonga 主路径 + Unicode n-gram 后备，已实测决定 |
-| 撤权/删除/revision/citation/scope 过滤 + 索引版本切换回归与 mutation | **NOT-DONE** | 未实现：PGroonga 索引与 `rag_chunks` 的 revision/scope/visibility 过滤组合未验证 |
+| 撤权/删除/revision/citation/scope 过滤 + 索引版本切换回归与 mutation | **PARTIAL** | 过滤组合、**撤权后不可见**（含反证：无过滤仍能查到，证明过滤承重）、物理删除后条目消失、revision 过滤均已实测。**索引版本切换**与**「查询必须带过滤」的 mutation 回归**未做 |
 | pgvector hybrid 不越权、不改 citation 认证 | **NOT-DONE** | 未验证 union/rerank 与授权过滤的组合 |
 | 仅在所有 PG 内方案不达标时才建独立服务 | **N/A** | PGroonga 达标，无需独立服务 |
 
 ### 未完成项（因此不能归档）
 
 - **golden corpus 对比召回/排序/延迟/索引成本**：召回与排序已实测（四方对照，子串真源）；**延迟与索引成本未测**（12 条语料，非规模基准）
-- **撤权/删除 + 索引版本切换的回归与 mutation**：`scope/status/revision` 过滤与 PGroonga 的组合已实测（含 EXPLAIN 确认过滤未被忽略），但**撤权后旧条目不可见**与**索引版本切换**的回归/mutation 仍未做
+- ~~撤权后旧条目不可见~~ → **已实测**（`pgroonga-revocation-probe.md`）：撤权后带过滤查询返回空，**反证**不带过滤仍能查到（证明过滤条件承重，不是靠索引删除生效）；物理删除后条目消失；revision 过滤有效。**剩余**：索引版本切换回归、以及「查询必须带过滤」的 mutation 回归（属实现工作）
+- **安全含义**：PGroonga 索引**不随业务状态自动移除条目**，可见性完全依赖查询层过滤。因此实现必须保证所有检索路径都带 `status`/`scope`/`revision` 过滤，并有回归守护
 - ~~PGroonga 索引不存储于 PG relation~~ → **已实测并量化**：`pg_dump` 导出 DDL 但不导出索引数据；恢复时自动重建，恢复后查询正常（20000 行 / 4ms）。**运维影响**：恢复耗时含索引重建；`pg_class` 看不到索引体积（2 万条时数据目录 `pgrn*` 约 8.5MB，SQL 侧读 0），容量规划会低估
 - **pgvector hybrid 不越权、不改 citation 认证**：未验证 union/rerank 与授权过滤的组合
