@@ -23,7 +23,7 @@
 ## Phase 2：事务 / 锁 / 并发证明
 
 - [x] 对全部真实事务入口建立 `TX-*` 合同卡：**65 个**（20 command_transaction + 22 _immediate_tx + 23 write_transaction），helper 定义已排除。计数对账见 `research/evidence/tx-entry-count-reconciliation.md`；清单见 `tx-entries.json`。
-- [ ] 将每个入口归入 CAS、父行锁、advisory lock、counter、SERIALIZABLE+bounded retry 之一。
+- [x] 将全部 65 个入口归入 CAS(A=8)、父/行锁(C=50)、advisory+唯一约束(D=4)、counter(B=3)。分类表以 `(path, function)` 为键，未分类即脚本失败。证据：`research/evidence/tx-contracts.json`。
 - [x] 锁序分析完成首轮：现有代码无 counter 锁，但 `_settle → fence_execution → acquire_run_writer` 与租约的 `counter → attempt` 构成反向；真实 PostgreSQL 探针已复现 `DeadlockDetected`。证据：`research/evidence/lock-order-analysis.md`。
 - [ ] 双连接死锁探针：正确锁序通过，反向锁序必须出现可控冲突并被测试捕获。
 - [ ] 验证 lease、counter、event seq、双 settle、cancel/settle、recovery、membership revoke。
