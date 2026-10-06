@@ -127,6 +127,26 @@ def main() -> int:
         failures.append(f"create_all 失败：{type(exc).__name__}: {exc}")
         print(f"  [BAD] create_all -> {type(exc).__name__}: {str(exc)[:160]}")
 
+    # 1b) 扩展索引：PGroonga 不在 ORM 元数据里（扩展索引），create_all 看不到它。
+    #     与 69 个触发器同类问题：漏建不会报错，只会让检索静默退化为顺序扫描。
+    #     因此 baseline 必须显式建，且建成后断言索引存在。
+    extension_indexes: list[str] = []
+    if created:
+        try:
+            from app.services import rag_search_provider
+
+            with engine.begin() as conn:
+                from sqlalchemy import text as sa_text
+
+                conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS pgroonga"))
+                conn.execute(sa_text(rag_search_provider.PGROONGA_INDEX_DDL))
+            extension_indexes.append("ix_rag_chunks_pgroonga")
+            print("  [OK ] PGroonga 扩展索引已建立")
+        except Exception as exc:  # noqa: BLE001
+            # 环境缺 PGroonga 是**环境阻塞**，不是 baseline 缺陷。如实记录，不算通过。
+            print(f"  [SKIP] PGroonga 不可用：{type(exc).__name__}: {str(exc)[:120]}")
+            extension_indexes.append(f"SKIPPED:{type(exc).__name__}")
+
     if created:
         print("  [OK ] ORM metadata create_all 成功")
 
@@ -168,6 +188,7 @@ def main() -> int:
         "fks": fks, "uniques": uniques, "partial_indexes": partial,
         "triggers_created": triggers_pg,
         "sqlite_trigger_objects_expected": 69,
+        "extension_indexes": extension_indexes,
         "failures": failures,
         "note": ("baseline 由 ORM metadata + 显式 plpgsql 触发器等价物组成；"
                  "不重放历史 Alembic（0042/0022/0014 已实测在 PG 上失败）。"),

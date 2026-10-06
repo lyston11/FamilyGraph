@@ -54,6 +54,7 @@ PASS
 
 1. **pgvector 语义路径未接入**：`10-03-pgvector-rag` 的 filter-then-ANN 已实测，
    但尚未接入 `search_rag` 的 union/rerank。
+   （词法路径已接入真实 schema，见下。）
 2. **索引版本切换回归**：`index_version` 切换与「查询必须带过滤」的 mutation 回归未做。
 3. **PG 上的 `_rows_to_hits` 语义**：该函数仍假设 FTS5 的 `rank` 语义（`bm25` 越小越好），
    而 PGroonga 的 `pgroonga_score` 越大越好。分派器已用 `ORDER BY rank DESC` 处理排序，
@@ -64,3 +65,34 @@ PASS
 
 方言分派与授权过滤：**L1**（单测 + 真实 PG 执行 + 反证）。
 端到端检索语义（union/rerank、revision 切换）：未验证。
+
+
+## 接入真实 schema（后续更新）
+
+`rag_schema_e2e_probe.py` 在**真实 88 表 schema** 上端到端验证：
+
+```
+真实 schema 带过滤命中 [9201]（期望 [9201]）
+反证（无过滤）命中 [9201, 9202]（期望含 9202）
+OK  授权过滤承重（去掉它就能查到撤权内容）
+PASS
+```
+
+`pg_baseline_build.py` 现在会显式建立 PGroonga 扩展索引并断言其存在：
+
+```
+[OK ] PGroonga 扩展索引已建立
+[OK ] ORM metadata create_all 成功
+表=88 索引=255 CHECK=118 FK=212 UNIQUE=32 局部索引=16 触发器=0
+```
+
+### 为什么真实 schema 探针与最小表探针都要保留
+
+两者的失败含义不同：
+
+- `pgroonga_branch_probe.py`（2 张最小表）失败 → provider 写错了 SQL；
+- `rag_schema_e2e_probe.py`（真实 88 表）失败 → 真实 schema 上有 provider 没考虑到的约束。
+
+**实测正是后者**：最小表探针通过，真实 schema 探针连续撞上三个 NOT NULL 列
+（`embedding_status`、`created_at`、`updated_at`）。这说明「SQL 形状对」不等于
+「能在真实表上跑」。
