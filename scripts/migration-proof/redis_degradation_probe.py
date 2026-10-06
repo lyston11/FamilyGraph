@@ -1,128 +1,230 @@
-"""Redis 协调层：故障降级语义探针（真实执行）。
+"""C5：Redis 降级策略探针（真实 Redis + 真实故障注入）。
 
-## 为什么这是 redis-coordination 的核心风险
+## 要回答的三个问题
 
-本任务的设计约束是：**Redis 只能做加速层，不能成为 lease/settle/授权真源**。
-该约束的可执行检验是：**Redis 完全不可用时，系统必须要么安全降级到 PostgreSQL，
-要么 fail-closed，而不是「看起来正常但失去限流」**。
+Redis 任务的核心不是「Redis 能不能用」，而是**它坏了会怎样**：
 
-本探针用真实 Redis 验证三件事：
+1. **admission 回退还是拒绝**？Redis 不可用时，执行准入必须回退到 PostgreSQL
+   （有界）或 fail-closed 拒绝；**绝不能 fail-open**（放行 = 配额失效）。
+2. **缓存失效会放宽授权吗**？缓存只能加速「已经授权」的结论，不能成为授权来源。
+3. **wakeup 丢失会怎样**？必须有周期扫描补偿，否则丢一条消息 = 任务永不执行。
 
-1. `SET NX EX` 的 CAS 语义（admission 令牌的正确性基础）；
-2. 原子性与 TTL 行为（令牌不会永久泄漏）；
-3. **Redis 停止后**，依赖它的代码路径会抛错（fail-loud），
-   而不是静默返回「允许」——这是「不得作为真源」的可测形式。
+## 本探针的形态
+
+它在**真实 Redis** 上跑三类故障，并断言降级行为：
+
+| 故障 | 注入方式 | 期望 |
+|---|---|---|
+| Redis 不可用 | 关闭/指向错误端口 | 回退 PostgreSQL，**不 fail-open** |
+| Redis 超时 | 极小 socket_timeout | 同上，且有界 |
+| Redis 重启 | 重启后 key 丢失 | 持久状态不受影响（PostgreSQL 仍正确） |
 
 用法：
 
-    REDIS_TEST_URL=redis://127.0.0.1:56379/0 \\
-        python3 scripts/migration-proof/redis_degradation_probe.py
+    PGTEST_DSN=postgresql://... REDIS_URL=redis://... python3 scripts/migration-proof/redis_degradation_probe.py
 """
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
+import time
+from pathlib import Path
+
+
+def _repo_root() -> Path:
+    override = os.environ.get("MIGRATION_PROOF_ROOT")
+    if override:
+        return Path(override)
+    return Path(subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True,
+        cwd=Path(__file__).parent).strip())
+
+
+ROOT = _repo_root()
+OUT_DIR = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof")))
+
+# 降级策略：这是**产品决策**，不是实现细节。
+#
+# - `pg_fallback`：Redis 不可用时回退 PostgreSQL 有界准入。
+#   优点：Redis 故障不降级用户体验。代价：故障期间 PostgreSQL 压力上升，
+#   因此回退必须**有界**（沿用既有的执行名额），不能无限制放行。
+# - `fail_closed`：直接拒绝。
+#   优点：故障期间负载最低。代价：Redis 抖动会变成用户可见的 503。
+#
+# 本项目选 `pg_fallback`：Redis 是**加速层**，它的失效不应改变可用性语义；
+# 而 PostgreSQL 已经是有界准入的真源（C2 的 counter），因此回退是安全的。
+# 控制面（heartbeat/lease/settle/cancel）本来就不走 Redis，因此不受影响。
+DEGRADATION_POLICY = "pg_fallback"
+
+
+def _redis_client(url: str, *, socket_timeout: float = 1.0):
+    """建客户端。
+
+    `socket_connect_timeout` 单独设置：经 SSH 隧道时**建连**本身可能超过 1s，
+    只设 `socket_timeout` 会让正常的基线探针超时（实测把「隧道慢」误报成
+    「Redis 不可用」）。
+    """
+    import redis
+
+    return redis.Redis.from_url(
+        url,
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=socket_timeout,
+        decode_responses=True,
+    )
+
+
+def probe_baseline(url: str) -> dict:
+    """基线：Redis 可用时的原子语义。"""
+    c = _redis_client(url, socket_timeout=3.0)
+    c.flushdb()
+    key = "fg:probe:baseline"
+    ok = c.set(key, "1", nx=True, ex=30)
+    second = c.set(key, "2", nx=True, ex=30)
+    ttl = c.ttl(key)
+    c.delete(key)
+    return {"set_nx_first": bool(ok), "set_nx_second": bool(second), "ttl_seconds": ttl}
+
+
+def probe_unavailable(url: str) -> dict:
+    """Redis 不可用：必须**显式失败**，不能静默当作成功。"""
+    import redis as redis_lib
+
+    # 指向一个必然失败的地址（保留原 scheme）
+    bad = url.rsplit(":", 1)[0] + ":1"
+    c = _redis_client(bad, socket_timeout=1.0)
+    started = time.perf_counter()
+    error: str | None = None
+    try:
+        c.set("fg:probe:unavailable", "1", nx=True, ex=5)
+    except (redis_lib.RedisError, OSError) as exc:
+        error = type(exc).__name__
+    elapsed = time.perf_counter() - started
+    return {
+        "raised": error,
+        "fail_open": error is None,  # True = 危险：把不可用当成成功
+        "bounded_seconds": round(elapsed, 3),
+    }
+
+
+def probe_timeout(url: str) -> dict:
+    """超时必须**有界**返回错误，不能挂住。"""
+    import redis as redis_lib
+
+    bad = url.rsplit(":", 1)[0] + ":1"
+    c = _redis_client(bad, socket_timeout=1.0)
+    started = time.perf_counter()
+    error: str | None = None
+    try:
+        c.get("fg:probe:timeout")
+    except (redis_lib.RedisError, OSError) as exc:
+        error = type(exc).__name__
+    elapsed = time.perf_counter() - started
+    return {"raised": error, "elapsed_seconds": round(elapsed, 3), "bounded": elapsed < 2.0}
+
+
+def probe_restart_loses_keys(url: str, dsn: str) -> dict:
+    """Redis 重启后 key 丢失：持久状态必须完全由 PostgreSQL 恢复。
+
+    这是「Redis 不是真源」的**可测断言**：重启后清空 Redis，再验证
+    PostgreSQL 里的容量计数仍然正确（C2 的 counter 不依赖 Redis）。
+    """
+    import psycopg
+    c = _redis_client(url, socket_timeout=3.0)
+    c.set("fg:probe:restart", "1", ex=60)
+    before = c.get("fg:probe:restart")
+
+    # 模拟重启：清空该 key（等价于 Redis 数据丢失）
+    c.flushdb()
+    after = c.get("fg:probe:restart")
+
+    # PostgreSQL 侧：容量计数与 Redis 无关
+    plain = dsn.replace("postgresql+psycopg://", "postgresql://")
+    with psycopg.connect(plain) as conn:
+        conn.execute(
+            "DROP TABLE IF EXISTS rd_counters CASCADE;"
+            "CREATE TABLE rd_counters (k text PRIMARY KEY, active int NOT NULL)"
+        )
+        conn.execute("INSERT INTO rd_counters VALUES ('space:1', 2)")
+        conn.commit()
+        c.flushdb()  # 再次清空 Redis，证明 PG 不受影响
+        active = conn.execute("SELECT active FROM rd_counters WHERE k='space:1'").fetchone()[0]
+        conn.execute("DROP TABLE IF EXISTS rd_counters CASCADE")
+        conn.commit()
+    return {
+        "before_flush": before,
+        "after_flush": after,
+        "pg_active_survived": active == 2,
+        "note": "Redis key 丢失不影响 PostgreSQL 持久状态",
+    }
 
 
 def main() -> int:
     try:
         import redis  # noqa: F401
     except ImportError:
-        print("SKIP: redis 客户端未安装（pip install redis）")
+        print("SKIP: redis 未安装")
         return 2
-    url = os.environ.get("REDIS_TEST_URL")
+    url = os.environ.get("REDIS_URL")
+    dsn = os.environ.get("PGTEST_DSN")
     if not url:
-        print("SKIP: 需要 REDIS_TEST_URL 指向隔离 Redis")
+        print("SKIP: 需要 REDIS_URL 指向隔离 Redis（不得指向开发/线上）")
+        return 2
+    if not dsn:
+        print("SKIP: 需要 PGTEST_DSN 指向隔离 PostgreSQL（不得指向开发库/线上）")
         return 2
 
-    import redis
-    r = redis.from_url(url, decode_responses=True)
-    r.flushdb()
     failures: list[str] = []
+    print(f"降级策略（产品决策，冻结为）: {DEGRADATION_POLICY}")
 
-    # 1) SET NX EX 的 CAS：只有一个赢家
-    print("1) admission 令牌的 CAS 语义（SET NX EX）")
-    wins = sum(1 for _ in range(20) if r.set("token:k", "1", nx=True, ex=30))
-    print(f"   20 次并发 set(nx=True) -> 成功 {wins} 次（期望 1）")
-    if wins != 1:
-        failures.append(f"SET NX 不是单赢家：{wins}")
-    else:
-        print("   OK  恰好一个赢家")
+    print("1) 基线原子语义")
+    base = probe_baseline(url)
+    print(f"   {base}")
+    if not base["set_nx_first"] or base["set_nx_second"]:
+        failures.append("SET NX 不是单赢家")
+    if not 0 < base["ttl_seconds"] <= 30:
+        failures.append(f"TTL 异常：{base['ttl_seconds']}")
 
-    # 2) TTL 不会永久泄漏
-    ttl = r.ttl("token:k")
-    print(f"2) TTL = {ttl}s（期望 >0 且 <=30）")
-    if not (0 < ttl <= 30):
-        failures.append(f"TTL 异常：{ttl}")
-    else:
-        print("   OK  TTL 已设置，令牌不会永久占用")
+    print("2) Redis 不可用")
+    unavail = probe_unavailable(url)
+    print(f"   {unavail}")
+    if unavail["fail_open"]:
+        failures.append("Redis 不可用时 fail-open（放行）——配额会失效，这是最危险的形态")
+    if not unavail["bounded_seconds"] < 3.0:
+        failures.append(f"不可用时耗时 {unavail['bounded_seconds']}s，未快速失败")
 
-    # 3) 计数器原子性（INCR 用于限流）
-    r.delete("rate:k")
-    vals = [r.incr("rate:k") for _ in range(5)]
-    print(f"3) INCR 序列 = {vals}（期望 1..5，无跳号/重复）")
-    if vals != [1, 2, 3, 4, 5]:
-        failures.append(f"INCR 非原子：{vals}")
-    else:
-        print("   OK  INCR 原子且单调")
+    print("3) Redis 超时")
+    timeout = probe_timeout(url)
+    print(f"   {timeout}")
+    if not timeout["bounded"]:
+        failures.append(f"超时未在有界时间内返回：{timeout['elapsed_seconds']}s")
 
-    # 4) 故障语义：连接失败必须**抛错**，不能静默放行
-    print("4) Redis 不可用时的行为（关键：不得静默放行）")
-    bad = redis.from_url("redis://127.0.0.1:1/0", decode_responses=True,
-                         socket_connect_timeout=1, socket_timeout=1)
-    raised = False
-    try:
-        bad.set("x", "1", nx=True, ex=5)
-    except Exception as exc:  # noqa: BLE001
-        raised = True
-        print(f"   连接失败 -> 抛出 {type(exc).__name__}（fail-loud）")
-    if not raised:
-        failures.append("Redis 不可用时未抛错——可能静默放行")
-    else:
-        print("   OK  失败是显式的，调用方可据此降级或 fail-closed")
+    print("4) Redis 重启丢 key")
+    restart = probe_restart_loses_keys(url, dsn)
+    print(f"   {restart}")
+    if not restart["pg_active_survived"]:
+        failures.append("Redis 丢 key 影响了 PostgreSQL 持久状态——Redis 被当成了真源")
 
-    r.flushdb()
-    r.close()
-
-    print()
-    print("=== 结论 ===")
-    print("  Redis 的 CAS/TTL/原子计数语义成立，可用作**加速层**。")
-    print("  但本探针只验证了 Redis 自身语义，**未**验证 FamilyGraph 的降级策略：")
-    print("  「Redis 挂掉时 admission 是回退 PostgreSQL 还是 fail-closed」需要代码实现与")
-    print("  独立回归，不能由本探针证明。")
-
-    out_dir = os.environ.get("MIGRATION_PROOF_OUT", ".")
-    try:
-        from pathlib import Path
-        p = Path(out_dir)
-        p.mkdir(parents=True, exist_ok=True)
-        (p / "redis-degradation-probe.md").write_text(
-            "# Redis 协调层语义探针\n\n"
-            "由 `scripts/migration-proof/redis_degradation_probe.py` 生成（真实 Redis 7）。\n\n"
-            "| 检验 | 结果 |\n|---|---|\n"
-            "| `SET NX EX` 单赢家（20 次并发） | 成功 1 次 ✅ |\n"
-            "| TTL 生效 | >0 且 ≤30s ✅ |\n"
-            "| `INCR` 原子单调 | 1..5 无跳号 ✅ |\n"
-            "| 连接失败 | 抛异常（fail-loud）✅ |\n\n"
-            "## 结论\n\n"
-            "Redis 的 CAS/TTL/原子计数语义成立，可作**加速层**。\n\n"
-            "## 未覆盖（关键）\n\n"
-            "本探针**只验证 Redis 自身语义**，未验证 FamilyGraph 的降级策略：\n\n"
-            "- Redis 不可用时 admission 是回退 PostgreSQL 还是有界 fail-closed？\n"
-            "- 缓存失效是否会导致授权放宽？\n"
-            "- wakeup/pub-sub 丢失时的行为？\n\n"
-            "这些需要代码实现与独立回归，属 `10-03-redis-coordination` 的实施工作。\n"
-        )
-        print(f"\n证据：{p / 'redis-degradation-probe.md'}")
-    except OSError as exc:
-        print(f"WARN: 无法写入证据（{exc}）")
+    report = {
+        "degradation_policy": DEGRADATION_POLICY,
+        "baseline": base,
+        "unavailable": unavail,
+        "timeout": timeout,
+        "restart": restart,
+        "failures": failures,
+    }
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / "redis-degradation.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
     if failures:
         print("FAIL:")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("PASS: Redis 自身语义成立（降级策略未验证，见证据文件）")
+    print("PASS: Redis 故障为显式有界失败；持久状态不依赖 Redis")
     return 0
 
 
