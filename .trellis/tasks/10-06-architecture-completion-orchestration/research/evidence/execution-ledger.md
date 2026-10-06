@@ -14,8 +14,8 @@
 | C5 | Redis coordination | **partial** | 10-03-redis-coordination | 降级层已交付并验证；未接入准入路径 | `c5-redis-degradation.md` | 接入 admission、wakeup、token bucket |
 | C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法方言分派已交付；pgvector 未接入 | `c6-lexical-dispatch.md` | pgvector union/rerank、版本切换 |
 | C7 | operations/cutover | **partial** | 10-04-postgres-operations-cutover | epoch + migration health 已交付；PITR/HA 未做 | `c7-writer-epoch.md` | 写路径接入 epoch、PITR、PgBouncer |
-| C8 | final load acceptance | todo | 10-04-multitenant-load-acceptance | account×space×kind 矩阵 | — | C3–C7 |
-| C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | C8 |
+| C8 | final load acceptance | **partial** | 10-04-multitenant-load-acceptance | 三层配额守恒已验；真实负载未做 | `c8-capacity-acceptance.md` | 真实部署与负载 |
+| C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | 真实部署 |
 | C10 | reconciliation/archive | todo | 本任务 | 对账 + 回滚演练 | — | C9 |
 
 ## 执行规则（不得回问用户）
