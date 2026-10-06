@@ -27,7 +27,7 @@
 - [x] 锁序分析完成首轮：现有代码无 counter 锁，但 `_settle → fence_execution → acquire_run_writer` 与租约的 `counter → attempt` 构成反向；真实 PostgreSQL 探针已复现 `DeadlockDetected`。证据：`research/evidence/lock-order-analysis.md`。
 - [ ] 双连接死锁探针：正确锁序通过，反向锁序必须出现可控冲突并被测试捕获。
 - [ ] 验证 lease、counter、event seq、双 settle、cancel/settle、recovery、membership revoke。
-- [ ] 对关键保护做 mutation：删 CAS、删锁、删 counter release、放宽谓词，测试必须失败。
+- [ ] 对关键保护做 mutation（**部分完成**：入口计数 mutation 已实测；针对真实业务入口的删 CAS/删锁/删 counter release 尚未补）。
 
 退出门：所有关键合同至少有正向、负向、mutation 和 L3 证据。
 
