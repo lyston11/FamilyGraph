@@ -1,0 +1,438 @@
+{
+  "pragmas": [
+    {
+      "id": "PRAGMA-integrity_check-backend/app/backup.py:35",
+      "path": "backend/app/backup.py",
+      "line": 35,
+      "pragma": "integrity_check",
+      "postgres_equivalent": "由 pg_verify_checksums / pg_dump 校验取代",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-integrity_check-backend/app/backup.py:59",
+      "path": "backend/app/backup.py",
+      "line": 59,
+      "pragma": "integrity_check",
+      "postgres_equivalent": "由 pg_verify_checksums / pg_dump 校验取代",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/app/db.py:43",
+      "path": "backend/app/db.py",
+      "line": 43,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-journal_mode-backend/app/db.py:44",
+      "path": "backend/app/db.py",
+      "line": 44,
+      "pragma": "journal_mode",
+      "postgres_equivalent": "WAL 由服务器配置，非连接级",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-busy_timeout-backend/app/db.py:45",
+      "path": "backend/app/db.py",
+      "line": 45,
+      "pragma": "busy_timeout",
+      "postgres_equivalent": "由 lock_timeout / statement_timeout 取代",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-synchronous-backend/app/db.py:46",
+      "path": "backend/app/db.py",
+      "line": 46,
+      "pragma": "synchronous",
+      "postgres_equivalent": "由服务器 fsync 配置取代",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0022_system_admin_space_manager.py:157",
+      "path": "backend/migrations/versions/0022_system_admin_space_manager.py",
+      "line": 157,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0022_system_admin_space_manager.py:182",
+      "path": "backend/migrations/versions/0022_system_admin_space_manager.py",
+      "line": 182,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-table_info-backend/migrations/versions/0023_system_admin_decision_ref.py:19",
+      "path": "backend/migrations/versions/0023_system_admin_decision_ref.py",
+      "line": 19,
+      "pragma": "table_info",
+      "postgres_equivalent": "由 information_schema.columns 取代",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0024_agent_runtime_assistant_only.py:68",
+      "path": "backend/migrations/versions/0024_agent_runtime_assistant_only.py",
+      "line": 68,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0024_agent_runtime_assistant_only.py:71",
+      "path": "backend/migrations/versions/0024_agent_runtime_assistant_only.py",
+      "line": 71,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0024_agent_runtime_assistant_only.py:222",
+      "path": "backend/migrations/versions/0024_agent_runtime_assistant_only.py",
+      "line": 222,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0040_agent_session_title.py:52",
+      "path": "backend/migrations/versions/0040_agent_session_title.py",
+      "line": 52,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0040_agent_session_title.py:54",
+      "path": "backend/migrations/versions/0040_agent_session_title.py",
+      "line": 54,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0040_agent_session_title.py:91",
+      "path": "backend/migrations/versions/0040_agent_session_title.py",
+      "line": 91,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_key_check-backend/migrations/versions/0042_memory_source_contract.py:235",
+      "path": "backend/migrations/versions/0042_memory_source_contract.py",
+      "line": 235,
+      "pragma": "foreign_key_check",
+      "postgres_equivalent": "由 FK 约束在写入时强制；迁移期可临时禁用后校验 pg_constraint",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:109",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 109,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:110",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 110,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:165",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 165,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:174",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 174,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:177",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 177,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:259",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 259,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:264",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 264,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:265",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 265,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:317",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 317,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:527",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 527,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:528",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 528,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:576",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 576,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:696",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 696,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:697",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 697,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "PRAGMA-foreign_keys-backend/migrations/versions/0055_steward_assist_execution_unit.py:762",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 762,
+      "pragma": "foreign_keys",
+      "postgres_equivalent": "外键由 FK 约束本身强制，无需开关",
+      "pg_result": "blocked:SyntaxError"
+    }
+  ],
+  "ddls": [
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0009_agent_runtime.py:38",
+      "path": "backend/migrations/versions/0009_agent_runtime.py",
+      "line": 38,
+      "kind": "trigger",
+      "text": "CREATE TRIGGER trg_agent_sessions_scope_immutable",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0009_agent_runtime.py:44",
+      "path": "backend/migrations/versions/0009_agent_runtime.py",
+      "line": 44,
+      "kind": "trigger_body",
+      "text": "SELECT RAISE(ABORT, 'agent_sessions scope is immutable');",
+      "pg_result": "blocked:UndefinedColumn"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0010_relationship_facts.py:40",
+      "path": "backend/migrations/versions/0010_relationship_facts.py",
+      "line": 40,
+      "kind": "trigger",
+      "text": "CREATE TRIGGER trg_raw_relation_inputs_immutable",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0010_relationship_facts.py:43",
+      "path": "backend/migrations/versions/0010_relationship_facts.py",
+      "line": 43,
+      "kind": "trigger_body",
+      "text": "SELECT RAISE(ABORT, 'raw_relation_inputs is append-only');",
+      "pg_result": "blocked:UndefinedColumn"
+    },
+    {
+      "id": "DDL-virtual_table-backend/migrations/versions/0014_memory_rag.py:245",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 245,
+      "kind": "virtual_table",
+      "text": "\"CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(\"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0014_memory_rag.py:251",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 251,
+      "kind": "trigger",
+      "text": "\"CREATE TRIGGER rag_chunks_ai AFTER INSERT ON rag_chunks BEGIN \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0014_memory_rag.py:258",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 258,
+      "kind": "trigger",
+      "text": "\"CREATE TRIGGER rag_chunks_ad AFTER DELETE ON rag_chunks BEGIN \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0014_memory_rag.py:264",
+      "path": "backend/migrations/versions/0014_memory_rag.py",
+      "line": 264,
+      "kind": "trigger",
+      "text": "\"CREATE TRIGGER rag_chunks_au AFTER UPDATE OF text ON rag_chunks BEGIN \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0024_agent_runtime_assistant_only.py:19",
+      "path": "backend/migrations/versions/0024_agent_runtime_assistant_only.py",
+      "line": 19,
+      "kind": "trigger",
+      "text": "CREATE TRIGGER trg_agent_sessions_scope_immutable",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0024_agent_runtime_assistant_only.py:25",
+      "path": "backend/migrations/versions/0024_agent_runtime_assistant_only.py",
+      "line": 25,
+      "kind": "trigger_body",
+      "text": "SELECT RAISE(ABORT, 'agent_sessions scope is immutable');",
+      "pg_result": "blocked:UndefinedColumn"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0040_agent_session_title.py:23",
+      "path": "backend/migrations/versions/0040_agent_session_title.py",
+      "line": 23,
+      "kind": "trigger",
+      "text": "CREATE TRIGGER trg_agent_sessions_scope_immutable",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0040_agent_session_title.py:29",
+      "path": "backend/migrations/versions/0040_agent_session_title.py",
+      "line": 29,
+      "kind": "trigger_body",
+      "text": "SELECT RAISE(ABORT, 'agent_sessions scope is immutable');",
+      "pg_result": "blocked:UndefinedColumn"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0045_steward_staged_publication.py:189",
+      "path": "backend/migrations/versions/0045_steward_staged_publication.py",
+      "line": 189,
+      "kind": "trigger",
+      "text": "f\"CREATE TRIGGER sri_{table}_{layer}_{event.lower()} \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0047_rag_lifecycle_integrity.py:93",
+      "path": "backend/migrations/versions/0047_rag_lifecycle_integrity.py",
+      "line": 93,
+      "kind": "trigger",
+      "text": "f\"CREATE TRIGGER rag_documents_revision_{suffix} BEFORE {operation} \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0047_rag_lifecycle_integrity.py:95",
+      "path": "backend/migrations/versions/0047_rag_lifecycle_integrity.py",
+      "line": 95,
+      "kind": "trigger_body",
+      "text": "\"SELECT RAISE(ABORT, 'rag document revision mirror conflict'); END\"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0048_steward_terminology_publication.py:117",
+      "path": "backend/migrations/versions/0048_steward_terminology_publication.py",
+      "line": 117,
+      "kind": "trigger",
+      "text": "f\"CREATE TRIGGER IF NOT EXISTS sri_{table}_inferred_{event.lower()} \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0048_steward_terminology_publication.py:152",
+      "path": "backend/migrations/versions/0048_steward_terminology_publication.py",
+      "line": 152,
+      "kind": "trigger",
+      "text": "f\"CREATE TRIGGER sri_{table}_presentation_{event.lower()} \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0049_steward_candidate_evidence.py:104",
+      "path": "backend/migrations/versions/0049_steward_candidate_evidence.py",
+      "line": 104,
+      "kind": "trigger",
+      "text": "f\"CREATE TRIGGER trg_scev_immutable BEFORE UPDATE ON {_TABLE} WHEN \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0049_steward_candidate_evidence.py:106",
+      "path": "backend/migrations/versions/0049_steward_candidate_evidence.py",
+      "line": 106,
+      "kind": "trigger_body",
+      "text": "+ \" BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END\"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0049_steward_candidate_evidence.py:111",
+      "path": "backend/migrations/versions/0049_steward_candidate_evidence.py",
+      "line": 111,
+      "kind": "trigger",
+      "text": "\"CREATE TRIGGER trg_slc_internal_sticky BEFORE UPDATE OF attribution_status \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0049_steward_candidate_evidence.py:114",
+      "path": "backend/migrations/versions/0049_steward_candidate_evidence.py",
+      "line": 114,
+      "kind": "trigger_body",
+      "text": "\"BEGIN SELECT RAISE(ABORT, 'candidate internal mode is sticky'); END\"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger-backend/migrations/versions/0055_steward_assist_execution_unit.py:499",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 499,
+      "kind": "trigger",
+      "text": "f\"CREATE TRIGGER {_EVIDENCE_TRIGGER} BEFORE UPDATE ON {_EVIDENCE_TABLE} WHEN \"",
+      "pg_result": "blocked:SyntaxError"
+    },
+    {
+      "id": "DDL-trigger_body-backend/migrations/versions/0055_steward_assist_execution_unit.py:501",
+      "path": "backend/migrations/versions/0055_steward_assist_execution_unit.py",
+      "line": 501,
+      "kind": "trigger_body",
+      "text": "+ \" BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END\"",
+      "pg_result": "blocked:SyntaxError"
+    }
+  ]
+}
