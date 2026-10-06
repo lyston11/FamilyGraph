@@ -590,3 +590,104 @@ redis_accel.scoped_key(layer=..., scope_kind=..., scope_id=..., resource=..., ep
 - control-plane AC-5（Assistant/Steward 分进程）未做：`FG_AGENT_ROLE=both` 时共享进程。
 - `writer epoch` 与 `migration health` 未设计（归 `10-04-postgres-operations-cutover`）。
 - 多租户 p95/p99 与故障矩阵未执行（归 `10-04-multitenant-load-acceptance`）。
+
+## Scenario: 词法检索方言分派与 writer epoch（2026-10-06，C6–C7）
+
+### 1. Scope / Trigger
+
+改动 RAG 词法检索、PGroonga 索引、检索过滤条件，或改动任何写事务入口、迁移阶段切换前必读。
+适用于 `app/services/rag_search_provider.py`、`app/services/memory_rag.py`、
+`app/services/writer_epoch.py`、`app/commands/context.py`、`migrations/versions/0058_*`。
+
+### 2. Signatures
+
+```python
+# 词法检索分派（C6）
+rag_search_provider.build_lexical(dialect, *, match_terms, fallback_terms,
+                                  eligibility, hit_sql) -> list[LexicalQuery]
+rag_search_provider.PGROONGA_INDEX_DDL   # 必须纳入 PG baseline
+
+# writer epoch（C7）
+writer_epoch.read_state(db) -> WriterState
+writer_epoch.advance(db, *, to_stage, actor) -> WriterState      # 只允许相邻阶段
+writer_epoch.guard(db) -> None                                    # 写事务起点调用
+writer_epoch.check_epoch(db, *, held) -> None
+writer_epoch.migration_health(db) -> dict[str, object]
+```
+
+端点：`GET /api/ready`、`GET /admin-api/ready`（只返回治理元数据）。
+
+### 3. Contracts
+
+- **授权过滤不在检索 provider 层**：`eligibility` 由调用方传入并原样拼进两种方言的
+  SQL。检索索引不承载授权（撤权只改主表状态，索引条目仍在，PGroonga 与 pgvector
+  都实测确认）。可见性**完全**依赖该谓词——在这里放宽就是授权漏洞。
+- **`eligibility` 是裸谓词**：模板为 `WHERE <condition> AND <eligibility>`，
+  **不带**前导 `AND`。带前导 `AND` 会拼出 `AND AND`（语法错误）。
+- **PGroonga 与 FTS5 的三点差异**：PGroonga 无虚拟表、无 `bm25()`，用
+  `&@~` + `pgroonga_score`；且**不需要短词后备**（两字中文词正常匹配），
+  后备词项合并进主查询（另起 LIKE 会失去索引）。
+- **查询语法必须转义**：FTS5 的 `MATCH` 与 Groonga 的 `&@~` 都接受查询语法，
+  用户输入必须按短语处理（整体加引号），否则输入会变成语法。
+- **PGroonga 索引必须在 baseline 显式创建**：它是扩展索引，不在 ORM 元数据里，
+  `create_all` 看不到——与 69 个触发器同类问题。漏建会静默退化为顺序扫描。
+- **未知方言 fail-loud**：静默降级会隐藏「检索没接上」。
+- **writer epoch 用数据库单行而非 env**：改 env 需要逐实例重启，重启期间新旧并存
+  正是双主窗口。一次 `UPDATE` 同时完成切换与旧实例失效。
+- **阶段只能逐级移动**：跳级会让「哪些面已经切过」不可知，无法安全回滚。
+- **epoch 首次采纳、之后比对**：首次采纳避免「每次启动后第一个写失败」；
+  之后不同即拒绝（`WriterEpochMismatch`，**安全**异常，不得重试）。
+- **`advance` 必须同步本进程 epoch**：执行切换的实例就是当前 writer，
+  不同步会把自己锁在门外。
+- **守卫在取写锁之前**：epoch 过期时连 `BEGIN IMMEDIATE` 都不该取。
+- **回滚 = 相邻退一级 + epoch 递增**，只回退**路由**；禁止把 PG 新状态盲写回 SQLite。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| 检索 SQL 缺 `eligibility` | 授权漏洞（实测：去掉过滤能查到撤权内容） |
+| 未知方言 | `ValueError`，不静默降级 |
+| 阶段跳级 | `ValueError`（`abs(delta) != 1`） |
+| epoch 过期后写入 | `WriterEpochMismatch`，拒绝 |
+| `stage != 'sqlite'` 时 DROP `writer_state` | refusal（路由真相会丢失） |
+| SQLite 的 DATETIME 直接 `.isoformat()` | `AttributeError`（SQLite 返回字符串） |
+
+### 5. 已知未闭合（不得当作通过）
+
+- **pgvector 未接入** `search_rag` 的 union/rerank；索引版本切换无回归。
+- **Redis 未接入真实准入路径**（降级层已交付并验证）。
+- **control-plane AC-5 分进程**未做。
+- **Provider circuit breaker / backpressure** 未实现。
+- **PITR / WAL archive / HA / failover / PgBouncer 兼容性**未验证。
+- **真实多租户 p95/p99** 未测；**开发灰度（C9）与最终对账（C10）**未执行
+  （属停止条件：需接触真实环境与不可逆数据）。
+
+### 6. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 检索 SQL 直接写 FTS5 语法：PostgreSQL 上既无虚拟表也无 bm25()
+sql = text("... FROM rag_chunks_fts WHERE rag_chunks_fts MATCH :m ...")
+
+# 用 env 表达切换阶段：改 env 需要逐实例重启，重启期间新旧并存 = 双主窗口
+STAGE = os.environ["FG_WRITER_STAGE"]
+
+# 阶段跳级：sqlite -> pg_all 会让「哪些面已切过」不可知
+advance(db, to_stage="pg_all", actor="ops")
+```
+
+#### Correct
+
+```python
+# 按方言分派；eligibility 原样传入并承重
+for lexical in rag_search_provider.build_lexical(
+    db.bind.dialect.name, match_terms=..., fallback_terms=...,
+    eligibility=eligibility, hit_sql=_HIT_SQL,
+):
+    collect(lexical.sql, {**params, **lexical.params}, rank_by_order=lexical.rank_by_order)
+
+# 阶段存数据库单行：一次 UPDATE 完成切换 + 旧实例失效
+advance(db, to_stage="shadow", actor="ops")   # 相邻，epoch +1
+```
