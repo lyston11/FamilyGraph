@@ -388,21 +388,24 @@ run, _, _ = fence_steward_execution(db, identity)
 
 ### 2. Signatures（可复跑的探针与扫描器）
 
+工具当前位于任务目录 `.trellis/tasks/10-05-migration-proof-gates/research/tools/`。
+**任务归档前必须把它们提升到 `scripts/`**，否则本段命令在归档后会失效。
+
 ```bash
 # 扫描器（从仓库根运行，不需要数据库）
-./backend/.venv/bin/python research/tools/build_tx_entries.py        # 事务入口枚举
-./backend/.venv/bin/python research/tools/build_tx_contracts.py      # 分类 + 强制完整性
-./backend/.venv/bin/python research/tools/build_raw_sql_inventory.py # 方言风险分类
-./backend/.venv/bin/python research/tools/build_trigger_inventory.py # 触发器（含循环展开）
-./backend/.venv/bin/python research/tools/build_inventory.py         # 表/索引/约束
+./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/build_tx_entries.py        # 事务入口枚举
+./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/build_tx_contracts.py      # 分类 + 强制完整性
+./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/build_raw_sql_inventory.py # 方言风险分类
+./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/build_trigger_inventory.py # 触发器（含循环展开）
+./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/build_inventory.py         # 表/索引/约束
 
 # 探针（必须 PGTEST_DSN；未设置时 SKIP + exit 2，不会误连）
-PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_replay_probe.py
-PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_deadlock_probe.py
-PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_control_proof.py
-PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_baseline_prototype.py
-PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_fault_injection.py
-PGTEST_DSN=... ./backend/.venv/bin/python research/tools/import_reconcile_probe.py
+PGTEST_DSN=... ./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_replay_probe.py
+PGTEST_DSN=... ./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_deadlock_probe.py
+PGTEST_DSN=... ./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_control_proof.py
+PGTEST_DSN=... ./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_baseline_prototype.py
+PGTEST_DSN=... ./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/pg_fault_injection.py
+PGTEST_DSN=... ./backend/.venv/bin/python .trellis/tasks/10-05-migration-proof-gates/research/tools/import_reconcile_probe.py
 ```
 
 退出码约定：`0` = 通过；`1` = 断言不符（真缺陷）；`2` = 缺 DSN/驱动（环境阻塞，**不算通过**）。

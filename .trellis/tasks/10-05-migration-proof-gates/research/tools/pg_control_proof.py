@@ -1,7 +1,9 @@
 from __future__ import annotations
-import os, threading, time
-import psycopg
-from psycopg.rows import dict_row
+import os, sys, threading, time
+
+# psycopg 在 main() 内导入：缺驱动时必须按约定 SKIP + exit 2，
+# 不能在模块顶层 ImportError 变成 exit 1。
+
 
 DSN = os.environ.get("PGTEST_DSN")
 if not DSN:
@@ -15,7 +17,10 @@ CREATE TABLE proof_attempts(id bigint PRIMARY KEY, run_id bigint NOT NULL REFERE
 CREATE TABLE proof_events(run_id bigint NOT NULL, seq integer NOT NULL, body text NOT NULL, PRIMARY KEY(run_id,seq));
 '''
 
-def connect(): return psycopg.connect(DSN,row_factory=dict_row)
+def connect():
+    import psycopg
+    from psycopg.rows import dict_row
+    return psycopg.connect(DSN, row_factory=dict_row)
 
 def setup():
  with connect() as c:
@@ -61,6 +66,11 @@ def append_event(run,seq,body):
     return cur.fetchone() is not None
 
 def main():
+ try:
+  import psycopg  # noqa: F401
+ except ImportError:
+  print("SKIP: psycopg 未安装")
+  return 2
  setup(); results=[]; lock=threading.Lock(); barrier=threading.Barrier(8)
  def w(i):
   barrier.wait(); row=lease('a' if i<4 else 'b',f'w{i}')
@@ -82,4 +92,4 @@ def main():
   row=c.execute("SELECT active FROM proof_counters WHERE scope='global'").fetchone(); assert row['active']==0,row
  print({'lease_results':len([x for x in results if x[1]]),'counts':counts,'event_duplicate':True,'settle_idempotent':True,'counter_active':0})
 
-if __name__=='__main__':main()
+if __name__=='__main__':sys.exit(main())

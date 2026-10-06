@@ -2,13 +2,13 @@
 
 ## 事实
 
-`feat/10-05-migration-proof-gates` 相对 `main` 有 27 个 commit：
+`feat/10-05-migration-proof-gates` 相对 `main` 有 30 个 commit：
 
 | 来源 | 数量 | 是否触碰 `backend/` |
 |---|---|---|
-| 本任务（10-05）自身 commit（`3bf4a069..HEAD`） | 16 | **0** |
-| 经 merge `3bf4a069` 带入的 10-03 业务 commit | 4 | 是 |
-| 10-03 的规划/证据 commit | 7 | 否 |
+| 本任务（10-05）自身 commit（`3bf4a069..HEAD`） | 19 | **0** |
+| 经 merge `3bf4a069` 带入的 commit | 11 | 其中 4 个触碰 `backend/` |
+| （其余为 10-03 的规划/证据 commit） | — | 否 |
 
 带入的 4 个业务 commit：
 
@@ -45,3 +45,9 @@ merge 是**刻意的**：Gate 1 的扫描必须审计「实际会发布的代码
 
 - 没有 rebase、reset 或改写历史（AGENTS.md 禁止）。
 - 没有把 10-05 的 commit 摘出来单独成分支（会丢失「审计真实代码」这一前提）。
+
+
+## 计数为现场生成
+
+上述数字由 `git rev-list --count` 现场计算。若与文档不符，**以 git 为准**并更新本文件——
+陈旧计数会误导集成判断。
