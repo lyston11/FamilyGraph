@@ -77,6 +77,7 @@ from app.services import (
     agent_tokens,
     agent_tools,
     audit,
+    capacity,
     context_builder,
     policy_guard,
     steward_assist,
@@ -667,6 +668,8 @@ async def proxy_provider_chat_completions(
         # 建连阶段结束即归还租户名额；下面的流式转发不再持有它。
         if provider_tenant is not None:
             _execution_admission_limiter("agent_provider").release(provider_tenant)
+        if provider_tenant is not None and _CLUSTER_RESOURCE.get("agent_provider"):
+            _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_provider"])
     media_type = upstream.headers.get("content-type", "application/json")
     return StreamingResponse(
         provider_proxy.passthrough_with_audit(
@@ -1067,6 +1070,28 @@ async def _acquire_execution_slot(resource: str, tenant: str, *, route: str, run
             AGENT_EXECUTION_BUSY,
             "执行资源繁忙，请稍后重试",
         )
+    # 集群级上限：进程内 limiter 只能约束**本实例**。两个实例各自
+    # global_capacity=2 时集群实际并发可达 4（实测 `cross_instance_capacity.py`：
+    # 观测 4，配置 2）。因此拿到本实例名额后，再尝试占一个**持久化**名额；
+    # 失败说明全集群已满，必须释放本实例名额并给出同一个有界拒绝。
+    #
+    # 未登记（部署未 bootstrap）时返回 None，按「无限」处理——未启用集群层的部署
+    # 行为与改动前逐字一致。
+    cluster_kind = _CLUSTER_RESOURCE.get(resource)
+    if cluster_kind is not None:
+        acquired_cluster = await _try_acquire_cluster_slot(cluster_kind)
+        if acquired_cluster is False:
+            limiter.release(tenant)
+            logger.warning(
+                "agent execution admission rejected resource=%s route=%s run_id=%d "
+                "tenant_kind=%s reason=cluster_full",
+                resource,
+                route,
+                run_id,
+                tenant.split(":", 1)[0],
+            )
+            raise_api_error(503, AGENT_EXECUTION_BUSY, "执行资源繁忙，请稍后重试")
+
     waited = time.perf_counter() - started
     if waited >= _TOOL_ADMISSION_WARN_SECONDS:
         snapshot = limiter.snapshot()
@@ -1083,6 +1108,63 @@ async def _acquire_execution_slot(resource: str, tenant: str, *, route: str, run
             snapshot.global_capacity,
             snapshot.per_tenant_capacity,
         )
+
+
+# 执行平面 -> 集群级 counter 资源名。只有登记在此的平面才受集群上限约束；
+# 控制面端点不取名额，因此不出现在这里（这正是保留余量的机制）。
+_CLUSTER_RESOURCE = {
+    "agent_provider": capacity.RESOURCE_CLUSTER_PROVIDER,
+    "agent_tool": capacity.RESOURCE_CLUSTER_TOOL,
+}
+
+
+async def _try_acquire_cluster_slot(resource_kind: str) -> bool | None:
+    """在**工作线程**里尝试占用一个集群级名额。
+
+    必须在工作线程内执行：它要取数据库连接并开事务，在事件循环上做会重演
+    `09-30` 那次的连接池饥饿（同步 DB 工作阻塞事件循环）。短事务、无网络 I/O。
+
+    返回 `None` 表示该资源未登记 counter（部署未 bootstrap）→ 不限制。
+    """
+    from anyio import to_thread
+
+    def _attempt() -> bool | None:
+        db = SessionLocal()
+        try:
+            return capacity.try_acquire_cluster(db, resource_kind=resource_kind)
+        finally:
+            db.commit()
+            db.close()
+
+    return await to_thread.run_sync(_attempt)
+
+
+def _release_cluster_slot(resource_kind: str) -> None:
+    """归还集群级名额（同步版本，供已在工作线程内的调用方使用）。"""
+    db = SessionLocal()
+    try:
+        capacity.release_cluster(db, resource_kind=resource_kind)
+    finally:
+        db.commit()
+        db.close()
+
+
+def _release_cluster_slot_soon(resource_kind: str) -> None:
+    """从**事件循环**调度集群名额归还。
+
+    done-callback 在事件循环上执行，同步 DB 工作会阻塞它（09-30 的教训），
+    因此必须转到工作线程。
+    """
+    from anyio import to_thread
+
+    task = asyncio.ensure_future(to_thread.run_sync(_release_cluster_slot, resource_kind))
+
+    def _swallow(fut: asyncio.Future[None]) -> None:
+        # 取回异常，避免 never-retrieved 告警；归还是幂等的，失败由计数行对账发现。
+        if not fut.cancelled():
+            fut.exception()
+
+    task.add_done_callback(_swallow)
 
 
 def _peek_execution_tenant(request: Request) -> str | None:
@@ -1197,8 +1279,9 @@ async def execute_tool(
                 future.exception()
             _release_tool_slot(limiter)
             if tenant is not None:
-                # 归还顺序与取得顺序相反：先放工具名额，再放租户名额。
+                # 归还顺序与取得顺序相反：先放工具名额，再放租户名额，最后放集群名额。
                 _execution_admission_limiter("agent_tool").release(tenant)
+                _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_tool"])
 
         work.add_done_callback(_on_done)
         dispatched = True
@@ -1211,6 +1294,7 @@ async def execute_tool(
             _release_tool_slot(limiter)
             if tenant is not None:
                 _execution_admission_limiter("agent_tool").release(tenant)
+                _release_cluster_slot_soon(_CLUSTER_RESOURCE["agent_tool"])
 
 
 @router.post("/runs/{run_id}/settle", response_model=SettleOut)

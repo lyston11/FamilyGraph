@@ -49,7 +49,17 @@ branch_labels = None
 depends_on = None
 
 SCOPE_KINDS = ("global", "agent_kind", "account", "space", "provider")
-RESOURCE_KINDS = ("assistant_run", "steward_job", "steward_assist", "tool", "provider_stream")
+# 资源名清单。`cluster_*` 是 C3 的**集群级**执行名额（跨实例总量），与租户级
+# 资源并列存放：同一张计数表、同一套 CHECK，只是 scope 只有 global 一维。
+RESOURCE_KINDS = (
+    "assistant_run",
+    "steward_job",
+    "steward_assist",
+    "tool",
+    "provider_stream",
+    "cluster_provider",
+    "cluster_tool",
+)
 
 
 def _table_exists(name: str) -> bool:
@@ -95,7 +105,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "resource_kind IN ('assistant_run','steward_job','steward_assist',"
-            "'tool','provider_stream')",
+            "'tool','provider_stream','cluster_provider','cluster_tool')",
             name="ck_acc_resource_kind",
         ),
         sa.CheckConstraint("capacity >= 0", name="ck_acc_capacity_non_negative"),

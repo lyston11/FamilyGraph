@@ -413,3 +413,46 @@ def release_account_run(
         now=moment,
     )
     return released > 0
+
+
+# ---------------------------------------------------- 集群级执行名额（C3/AC-4）
+#
+# `ResourceLimiter` 的 active 是**进程内**状态，两个实例各自 global_capacity=2 时
+# 集群实际并发可达 4（实测见 `scripts/migration-proof/cross_instance_capacity.py`：
+# 观测 4，配置 2）。因此执行平面还需要一层**集群级**上限，真相在持久化计数行里。
+#
+# 分工（两层都必须有）：
+#
+# - 进程内 limiter：负责**排队与公平**。它是唯一能在事件循环上等待、按租户 aging
+#   出队、并有界拒绝的地方；持久化计数行做不到这些（它只能在事务里快速尝试）。
+# - 集群级 counter：负责**跨实例总量**。它不排队，只在名额满时立刻返回 False，
+#   由进程内层决定是继续等还是拒绝。
+#
+# 顺序固定：先过进程内（本地排队/公平），再过集群级（总量）。这样等待发生在事件
+# 循环上，不占工作线程，也不在数据库事务里阻塞。
+
+RESOURCE_CLUSTER_PROVIDER = "cluster_provider"
+RESOURCE_CLUSTER_TOOL = "cluster_tool"
+
+
+def cluster_specs(resource_kind: str) -> list[CounterSpec]:
+    """集群级名额只有一个 global 维度：总量是全局的，不分租户。
+
+    租户维度由进程内 limiter 负责（它知道谁是租户），集群层只回答「全集群还剩几个」。
+    """
+    return [CounterSpec("global", 0, resource_kind)]
+
+
+def try_acquire_cluster(db: Session, *, resource_kind: str) -> bool | None:
+    """尝试占用一个集群级名额。
+
+    `None` = 未登记（部署未 bootstrap）→ 调用方按「无限」处理，保持既有行为；
+    这样未启用集群层的部署与改动前**逐字一致**。
+    """
+    specs = cluster_specs(resource_kind)
+    return try_acquire(db, specs)
+
+
+def release_cluster(db: Session, *, resource_kind: str) -> int:
+    """归还集群级名额；未登记时 no-op。"""
+    return try_release(db, cluster_specs(resource_kind))
