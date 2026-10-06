@@ -377,3 +377,118 @@ steward_assist.record_attempt_outcome(db, ...)   # 内部归还 counter
 steward_assist.release_capacity(db, ...)         # 先 counter
 run, _, _ = fence_steward_execution(db, identity)
 ```
+
+## Scenario: PostgreSQL 迁移执行前证明门（2026-10-05，10-05-migration-proof-gates）
+
+### 1. Scope / Trigger
+
+改动 PostgreSQL 迁移、方言相关模型/迁移、事务边界或锁序前必读。适用于
+`app/models/`、`app/services/{agent_queue,steward,steward_assist,steward_pipeline}.py`、
+`migrations/versions/`。
+
+### 2. Signatures（可复跑的探针与扫描器）
+
+```bash
+# 扫描器（从仓库根运行，不需要数据库）
+./backend/.venv/bin/python research/tools/build_tx_entries.py        # 事务入口枚举
+./backend/.venv/bin/python research/tools/build_tx_contracts.py      # 分类 + 强制完整性
+./backend/.venv/bin/python research/tools/build_raw_sql_inventory.py # 方言风险分类
+./backend/.venv/bin/python research/tools/build_trigger_inventory.py # 触发器（含循环展开）
+./backend/.venv/bin/python research/tools/build_inventory.py         # 表/索引/约束
+
+# 探针（必须 PGTEST_DSN；未设置时 SKIP + exit 2，不会误连）
+PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_replay_probe.py
+PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_deadlock_probe.py
+PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_control_proof.py
+PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_baseline_prototype.py
+PGTEST_DSN=... ./backend/.venv/bin/python research/tools/pg_fault_injection.py
+PGTEST_DSN=... ./backend/.venv/bin/python research/tools/import_reconcile_probe.py
+```
+
+退出码约定：`0` = 通过；`1` = 断言不符（真缺陷）；`2` = 缺 DSN/驱动（环境阻塞，**不算通过**）。
+
+### 3. Contracts（实测结论，不是推断）
+
+- **局部唯一索引必须双方言**：只用 `sqlite_where` 会让 PostgreSQL 退化为**全表**唯一索引
+  （`UNIQUE(session_id)` = 一个 session 一生只能有一个 run）。用
+  `app/models/indexes.partial_unique_index()`，它把同一谓词喂给两个方言。
+- **JSON CHECK 必须方言渲染**：`json_extract` 在 PG 上让**建表失败**。用
+  `app/models/checks.DialectCheck`。SQLite 的 `json_extract(...) = 1` 是**类型敏感**的
+  （字符串 `"1"` ≠ 数字 `1`），PG 侧必须用 jsonb 对 jsonb（`-> 'k') = '1'::jsonb`），
+  **不能**写成 `->> ... ::int`（那会接受字符串 `"1"`，是不同约束）。
+- **运行期 JSON 查询必须可移植**：`func.json_extract` 能建表、只在**执行时**失败。
+  JSON 列用 `col["k"].as_string()/as_integer()`；**Text** 列用
+  `app/models/json_expr.json_text_field()`（`CAST(x AS JSON)` 在 SQLite 上求值为整数 0，不可用）。
+- **历史 Alembic 不能在 PG 上重放**：`0042`（`json_extract` CHECK）、`0022`
+  （`last_insert_rowid()`）、`0014`（FTS5 虚拟表）实测分别抛 `UndefinedFunction`/
+  `UndefinedFunction`/`SyntaxError`。**69 个触发器**全部使用 SQLite 语法
+  （`BEGIN...END` + `RAISE(ABORT)`）并实测语法错误。因此必须使用审查后的 PG baseline。
+- **ORM metadata 可建表 ≠ 迁移可重放**：`create_all` 走元数据，绕过迁移链，
+  因此**看不到触发器**（触发器只存在于迁移里）。`pg-schema-feasibility` 的 87/87
+  与迁移链可重放是两件事，不得互相代替。
+- **锁序**：`global capacity → kind capacity → tenant capacity → run row → attempt row`。
+  实测交叉顺序（租约 `counter→run` vs 结算 `run→counter`）产生真实 `DeadlockDetected`。
+  `_settle` 经 `fence_execution → acquire_run_writer` 先取 run 行锁，因此 counter 归还
+  **必须早于** fence，否则锁序相反。
+- **SQLite 测不出该死锁**：`BEGIN IMMEDIATE` 是全库写锁，没有「部分顺序」。
+  这类缺陷**只能在真实 PostgreSQL 多连接上**发现。
+- **配额需要持久化 counter**：`SKIP LOCKED` + 计数子查询在 READ COMMITTED 下会静默
+  违反每租户上限（实测 5/5 越限）。必须用 counter 行 + 固定锁序；名额满时**先查容量**，
+  不能靠捕获异常控流（异常会中止整个事务）。
+- **counter 归还恰好一次**：门是 settle 的 `status` 条件 UPDATE affected rows 与
+  recovery 的 `applied_at IS NULL`。发送门退休 `reserved` attempt **从未计入**，
+  写回栅栏退休 `in_flight` attempt **必须归还**——两处目标状态相同、语义相反。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| 新增事务入口未分类 | `build_tx_contracts.py` 退出 1 |
+| 入口数变化（如 65 → 66） | 退出 1，要求复核并更新 `EXPECTED_ENTRIES` |
+| 探针缺 `PGTEST_DSN` | 退出 2（SKIP），**不得**视为通过 |
+| `import_reconcile_probe` 目标库已有同名业务表 | 退出 3，拒绝运行（防误指真实库） |
+| 对账发现差异 | 报告差异，**不自动修复**（refusal） |
+
+### 5. 已知未闭合（不得当作通过）
+
+- 静态调用图只覆盖 `_settle`/`settle_attempt` 一条反向路径；65 个入口中哪些同时持有
+  两类锁未逐条判定。
+- 三把以上锁的顺序未实测；`deadlock_timeout` 对延迟预算的影响未测量。
+- 触发器只验证了**四类语义**；60 个 `sri_*` 的逐表 `scope_id` 解析、`rag_*` 的具体
+  语义、列级 `UPDATE OF` 写法均未验证。
+- 故障注入与对账是**原型**（`fi_*`/`proof_*` 最小模型、合成数据），不是真实业务
+  schema 或真实历史库。
+- `writer epoch` 与 `migration health` 未设计（归 `10-04-postgres-operations-cutover`）。
+
+### 6. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 用 sqlite_where 声明唯一索引：PG 上谓词消失，唯一性范围被放大到整表
+Index("uq_agent_runs_session_active", "session_id", unique=True,
+      sqlite_where=text("status IN ('queued','leased','running')"))
+
+# PG 侧把类型敏感的比较写成会放宽语义的形态
+"coalesce((source_span_json::jsonb ->> 'version')::int = 1, false)"   # 接受了字符串 "1"
+
+# 结算时先 fence（取 run 行锁）再归还 counter —— 与租约路径锁序相反
+run, _, _ = fence_steward_execution(db, identity)
+steward_assist.record_attempt_outcome(db, ...)      # 内部归还 counter
+```
+
+#### Correct
+
+```python
+from app.models.indexes import partial_unique_index
+
+partial_unique_index("uq_agent_runs_session_active", "session_id",
+                     where="status IN ('queued','leased','running')")
+
+# 保留类型敏感语义：jsonb 对 jsonb
+"coalesce((source_span_json::jsonb -> 'version') = '1'::jsonb, false)"
+
+# counter 先于 fence
+steward_assist.release_capacity(db, ...)
+run, _, _ = fence_steward_execution(db, identity)
+```
