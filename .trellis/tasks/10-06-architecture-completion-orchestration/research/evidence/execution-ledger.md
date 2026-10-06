@@ -8,7 +8,7 @@
 |---|---|---|---|---|---|---|
 | C0 | 环境/边界冻结 | **done** | 本任务 | manifest、worktree、依赖矩阵 | `c0-environment.md` | — |
 | C1 | PG baseline/schema/dialect | **done** | postgres-migration | 87 表 + 66 trigger 等价物 + 13 负向/正向用例 | `c1-baseline.md` | — |
-| C2 | counter/lease/CAS/settle/recovery | doing | postgres-migration | counter schema + 真实入口接入 | — | — |
+| C2 | counter/lease/CAS/settle/recovery | **doing（机制已完成，入口未接入）** | postgres-migration | counter schema + 真实入口接入 | `c2-capacity.md` | 真实入口接线 |
 | C3 | control-plane fault domain | todo | 10-04-control-plane-fault-domain | pool/reserve/recovery | — | C2 |
 | C4 | Provider stream reliability | todo | 10-04-provider-reliability-boundaries | quota/deadline/circuit | — | C2 |
 | C5 | Redis coordination | todo | 10-03-redis-coordination | admission/degradation | — | C2 |

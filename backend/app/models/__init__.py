@@ -9,6 +9,7 @@ from app.models.agent import (
     AgentRun,
     AgentRunEvent,
     AgentSession,
+    AgentCapacityCounter,
     AgentToolCall,
 )
 from app.models.agent_provider import (
@@ -94,6 +95,7 @@ __all__ = [
     "AgentRunEvent",
     "AgentSession",
     "AgentSpaceProviderSetting",
+    "AgentCapacityCounter",
     "AgentToolCall",
     "AuditLog",
     "AuthChallenge",
