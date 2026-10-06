@@ -17,6 +17,23 @@
 - 不依赖 pgvector；不允许以 Redis lock 替代 PostgreSQL CAS。
 - 必须与运行时资源隔离子任务的 admission 接口兼容，但可单独用故障注入验收。
 
+## 实测证据（2026-10-06）：Redis 自身语义成立，降级策略未验证
+
+`scripts/migration-proof/redis_degradation_probe.py` 在真实 Redis 7 上实测：
+
+| 检验 | 结果 |
+|---|---|
+| `SET NX EX` 单赢家（20 次并发） | 成功 **1** 次 ✅ |
+| TTL 生效 | 25s（>0 且 ≤30）✅ |
+| `INCR` 原子单调 | 1..5 无跳号 ✅ |
+| 连接失败 | 抛 `ConnectionError`（**fail-loud**）✅ |
+
+**Redis 可作加速层**：CAS/TTL/原子计数语义成立，且不可用时**显式抛错**（不是静默放行）。
+
+**但本探针只验证 Redis 自身语义**，未验证 FamilyGraph 的降级策略——「Redis 不可用时
+admission 回退 PostgreSQL 还是有界 fail-closed」「缓存失效是否放宽授权」「wakeup 丢失的
+行为」都需要代码实现与独立回归。证据：`research/evidence/redis-degradation-probe.md`。
+
 ## Acceptance Criteria
 
 - Redis 可用时能提供有界 tenant admission/cache/wakeup，不改变授权和结算语义。
