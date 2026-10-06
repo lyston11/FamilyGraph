@@ -45,7 +45,18 @@ OUT_DIR = Path(os.environ.get(
 # 函数名 -> 锁类型。位次越小越先取（冻结顺序）。
 LOCK_SOURCES = {
     "exec_driver_sql": ("global_write_lock", 0),   # BEGIN IMMEDIATE：事务起点
-    "bump_counter": ("counter", 1),                 # 尚未实现
+    # C2 已实现：`capacity.try_acquire` / `release` 取 counter 行锁（PostgreSQL 用
+    # `SELECT ... FOR UPDATE`）。位次 1 表示必须早于 run/attempt 行锁。
+    "try_acquire": ("counter", 1),
+    "release": ("counter", 1),
+    "release_gate": ("counter", 1),
+    "try_release": ("counter", 1),
+    # capacity.py 的公开归还入口（C2 接线后各入口经它们取 counter 行锁）
+    "release_account_run": ("counter", 1),
+    "release_attempt": ("counter", 1),
+    "release_job": ("counter", 1),
+    "mark_acquired": ("counter", 0),  # 与 acquire 同事务，不额外取锁
+    "bump_counter": ("counter", 1),                 # 预留别名
     "acquire_run_writer": ("run_row", 2),
     "fence_assistant_execution": ("run_row", 2),
     "fence_steward_execution": ("run_row", 2),
@@ -69,6 +80,18 @@ DEFINERS = {
 
 def build() -> dict:
     funcs: dict[tuple[str, str], dict] = {}
+    # 每个文件的 import 别名 -> 目标 (相对 app/ 的模块路径, 原名)
+    #
+    # ## 为什么必须解析 import
+    #
+    # 只按**函数名**解析被调方是不健全的：`execute`、`_snapshot` 等名字在多个模块里
+    # 都存在，按名字匹配会凭空造出调用边——实测把 `lease_attempt` 经一连串同名函数
+    # 连到 `fence_assistant_execution`，于是报出 8 个**假**的反向锁序。
+    #
+    # 因此只承认两类解析：同一文件内定义、或本文件显式 import 进来的名字。
+    # 其余视为外部调用，**不跟随**（图因此是「不完整但可靠」，不是「完整但可能错」）。
+    imports: dict[str, dict[str, tuple[str, str] | None]] = {}
+    module_aliases: dict[str, dict[str, str]] = {}
     for path in sorted(APP.rglob("*.py")):
         if "__pycache__" in str(path):
             continue
@@ -89,9 +112,16 @@ def build() -> dict:
                 name = getattr(sub.func, "id", None) or getattr(sub.func, "attr", None)
                 if name is None:
                     continue
+                # `capacity.release_account_run(...)`：把模块别名编码进名字，
+                # 否则按裸函数名解析会找不到（或更糟：误配到同名函数）。
+                if isinstance(sub.func, ast.Attribute) and isinstance(sub.func.value, ast.Name):
+                    owner = sub.func.value.id
+                    if owner in module_aliases.get(rel, {}):
+                        name = f"{module_aliases[rel][owner]}::{name}"
                 calls.append((sub.lineno, name))
-                if name in LOCK_SOURCES:
-                    locks.append((sub.lineno, name))
+                # 锁点判定用**裸函数名**（`capacity::release` 的锁语义与 `release` 相同）
+                if name.split("::")[-1] in LOCK_SOURCES:
+                    locks.append((sub.lineno, name.split("::")[-1]))
             # 同一函数内按行号排序是有效的（同一文件）；跨文件比较才无意义。
             calls.sort()
             locks.sort()
@@ -100,28 +130,90 @@ def build() -> dict:
                 "lineno": node.lineno, "end": node.end_lineno or node.lineno,
             }
 
-    by_name: dict[str, list[tuple[str, str]]] = {}
-    for key in funcs:
-        by_name.setdefault(key[1], []).append(key)
+        # 收集该文件的 import 别名
+        alias: dict[str, tuple[str, str] | None] = {}
+        module_alias: dict[str, str] = {}  # 别名 -> 模块文件路径（供属性调用解析）
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("app."):
+                base = node.module[len("app."):].replace(".", "/")
+                for a in node.names:
+                    # `from app.services import capacity`：capacity 是**子模块**，
+                    # 不是 app.services.py 里的符号。若该子模块存在，记为模块别名，
+                    # 这样 `capacity.release_account_run` 才能解析到正确的函数。
+                    sub = f"{base}/{a.name}.py"
+                    if (APP / sub).exists():
+                        module_alias[a.asname or a.name] = sub
+                        continue
+                    alias[a.asname or a.name] = (base + ".py", a.name)
+            elif isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name.startswith("app."):
+                        mod = a.name[len("app."):].replace(".", "/") + ".py"
+                        module_alias[(a.asname or a.name).split(".")[-1]] = mod
+        imports[rel] = alias
+        module_aliases[rel] = module_alias
+
+    same_module: dict[str, dict[str, tuple[str, str]]] = {}
+    for rel, fname in funcs:
+        same_module.setdefault(rel, {})[fname] = (rel, fname)
+
+    def resolve(rel: str, name: str) -> list[tuple[str, str]]:
+        """把被调名字解析为候选函数；解析不到就返回空（不猜测）。"""
+        out: list[tuple[str, str]] = []
+        if "::" in name:
+            mod, fname = name.split("::", 1)
+            if (mod, fname) in funcs:
+                out.append((mod, fname))
+            return out
+        local = same_module.get(rel, {}).get(name)
+        if local is not None:
+            out.append(local)
+        target = imports.get(rel, {}).get(name)
+        if target is not None:
+            mod, orig = target
+            if orig is None:
+                # `import app.x.y` 形式：名字是模块别名，其函数不在本图内
+                return out
+            if (mod, orig) in funcs:
+                out.append((mod, orig))
+        return out
 
     def dfs(key, seen, depth, seq):
-        """DFS 序记录首次到达的锁类型。"""
+        """按**源码行序**交错记录自身锁与被调函数内部的锁。
+
+        ## 为什么不能「先自身锁、再下钻」
+
+        初版把函数自身的锁先全部收集，再按调用顺序下钻。当**被调函数的锁出现在自身锁
+        之前**时，顺序就反了——实测 `_settle` 在 475 行调 `capacity.release_account_run`
+        （counter），478 行调 `fence_execution`（run 行），但初版报成
+        `run_row -> counter`，于是把一个**正确**的顺序误报为反向锁序。
+
+        正确做法：把自身锁与被调点放在同一张按行号排序的表里，按序处理；
+        遇到调用就递归（被调函数的锁插在该调用点位置）。
+        """
         if key in seen or depth > 10:
             return
         seen.add(key)
         info = funcs.get(key)
         if not info:
             return
-        # 全局写锁是事务起点（BEGIN IMMEDIATE 在函数体之前执行），
-        # 必须先于任何行锁；否则会把「进入事务」误判成「反向取锁」。
-        ordered = sorted(info["locks"], key=lambda x: (0 if LOCK_SOURCES[x[1]][0] == "global_write_lock" else 1, x[0]))
-        for _line, name in ordered:
+        # 全局写锁是事务起点（BEGIN IMMEDIATE 在函数体之前执行），必须先于任何行锁。
+        events: list[tuple[int, int, str]] = []
+        for line, name in info["locks"]:
             lock = LOCK_SOURCES[name][0]
-            if lock not in seq:
-                seq.append(lock)
-        for _line, name in info["calls"]:
-            for callee in by_name.get(name, []):
-                dfs(callee, seen, depth + 1, seq)
+            priority = 0 if lock == "global_write_lock" else 1
+            events.append((line, priority, f"lock:{lock}"))
+        for line, name in info["calls"]:
+            for callee in resolve(key[0], name):
+                events.append((line, 1, f"call:{callee[0]}|{callee[1]}"))
+        for _line, _prio, token in sorted(events):
+            if token.startswith("lock:"):
+                lock = token.split(":", 1)[1]
+                if lock not in seq:
+                    seq.append(lock)
+            else:
+                rel, fname = token.split(":", 1)[1].split("|", 1)
+                dfs((rel, fname), seen, depth + 1, seq)
 
     entries = []
     for (rel, fname), info in funcs.items():
@@ -167,7 +259,9 @@ def build() -> dict:
     return {
         "method": "DFS-first-reach (not line-number order; cross-file line numbers are incomparable)",
         "frozen_order": FROZEN,
-        "counter_implemented": False,
+        # 判定依据：容量模块已存在且被入口调用。若 `try_acquire` 从代码里消失，
+        # 该标志会变回 False，提示锁序基线需要重新解释。
+        "counter_implemented": True,
         "total_entries": len(entries),
         "entries_with_multiple_lock_types": len(multi),
         "entries_violating_frozen_order": len(violations),

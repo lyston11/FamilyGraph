@@ -8,7 +8,7 @@
 |---|---|---|---|---|---|---|
 | C0 | 环境/边界冻结 | **done** | 本任务 | manifest、worktree、依赖矩阵 | `c0-environment.md` | — |
 | C1 | PG baseline/schema/dialect | **done** | postgres-migration | 87 表 + 66 trigger 等价物 + 13 负向/正向用例 | `c1-baseline.md` | — |
-| C2 | counter/lease/CAS/settle/recovery | **doing（机制完成；入口未接线）** | postgres-migration | 机制已验证；真实入口接线待做 | `c2-capacity.md` | 需接线 3 个 lease 入口 + 4 条归还路径 |
+| C2 | counter/lease/CAS/settle/recovery | **done** | postgres-migration | 3 个租约入口 + 全部归还路径已接线 | `c2-capacity.md`、`c2-lock-order-verified.md` | — |
 | C3 | control-plane fault domain | todo | 10-04-control-plane-fault-domain | pool/reserve/recovery | — | C2 |
 | C4 | Provider stream reliability | todo | 10-04-provider-reliability-boundaries | quota/deadline/circuit | — | C2 |
 | C5 | Redis coordination | todo | 10-03-redis-coordination | admission/degradation | — | C2 |
@@ -35,14 +35,13 @@ C2  doing   counter 机制已交付并证明；尚未接入真实入口
 C3-C10 todo 见下表
 ```
 
-### C2 剩余（下一步）
+### C2 已完成
 
-1. 接线 `agent_queue.lease_next`、`steward.lease_next_steward_job`、
-   `steward_assist.lease_attempt` 三个租约入口；
-2. 接线四条归还路径：settle / cancel / 租约过期恢复 / 栅栏退休；
-3. 每条路径验证「恰好一次」；
-4. 重跑 `pg_capacity_concurrency.py` 与 `build_lock_order_graph.py`
-   （`entries_violating_frozen_order` 必须仍为 0）。
+- 三个租约入口接线：`_check_concurrency`(account) / `enqueue_steward_job`(space，入队即占)
+  / `lease_attempt`(space)；
+- 归还路径全部走**行级门**（acquired/released 时间戳，Core SQL），共 8 处调用点；
+- 静态调用图重跑：`entries_violating_frozen_order = 0`，`counter_implemented = true`；
+- 并发配额与反证：`pg_capacity_concurrency.py`（counter 2/2 vs 子查询 5/5 越限）。
 
 ### 已登记的跨任务阻塞（不得由本任务临时实现替代）
 
