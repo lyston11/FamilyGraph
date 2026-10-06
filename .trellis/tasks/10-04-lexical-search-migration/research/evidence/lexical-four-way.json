@@ -1,0 +1,228 @@
+{
+  "corpus": [
+    "爷爷是家里的长辈，喜欢下棋",
+    "奶奶做的饭最好吃",
+    "叔叔在城里工作",
+    "叔父与父亲是兄弟",
+    "家族树关系图谱用于展示亲属结构",
+    "家族成员的称谓由关系路径决定",
+    "舅舅是母亲的兄弟",
+    "姨妈是母亲的姐妹",
+    "堂兄是伯父的儿子",
+    "外祖父是母亲的父亲",
+    "家族树支持多代展示",
+    "亲属关系通过血缘或婚姻建立"
+  ],
+  "results": [
+    {
+      "query": "爷",
+      "truth": [
+        0
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        0
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        0
+      ],
+      "pgroonga": [
+        0
+      ]
+    },
+    {
+      "query": "爷爷",
+      "truth": [
+        0
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        0
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        0
+      ],
+      "pgroonga": [
+        0
+      ]
+    },
+    {
+      "query": "叔叔",
+      "truth": [
+        2
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        2
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        2,
+        3
+      ],
+      "pgroonga": [
+        2
+      ]
+    },
+    {
+      "query": "叔父",
+      "truth": [
+        3
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        3
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        2,
+        3,
+        8,
+        9
+      ],
+      "pgroonga": [
+        3
+      ]
+    },
+    {
+      "query": "家族",
+      "truth": [
+        4,
+        5,
+        10
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        4,
+        5,
+        10
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        0,
+        4,
+        5,
+        10
+      ],
+      "pgroonga": [
+        4,
+        5,
+        10
+      ]
+    },
+    {
+      "query": "家族树",
+      "truth": [
+        4,
+        10
+      ],
+      "fts5_native": [
+        4,
+        10
+      ],
+      "fts5_like": [
+        4,
+        10
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        0,
+        4,
+        5,
+        10
+      ],
+      "pgroonga": [
+        4,
+        10
+      ]
+    },
+    {
+      "query": "家族树关系",
+      "truth": [
+        4
+      ],
+      "fts5_native": [
+        4
+      ],
+      "fts5_like": [
+        4
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        0,
+        4,
+        5,
+        10,
+        11
+      ],
+      "pgroonga": [
+        4
+      ]
+    },
+    {
+      "query": "亲属",
+      "truth": [
+        4,
+        11
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        4,
+        11
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        3,
+        4,
+        6,
+        7,
+        9,
+        11
+      ],
+      "pgroonga": [
+        4,
+        11
+      ]
+    },
+    {
+      "query": "舅舅",
+      "truth": [
+        6
+      ],
+      "fts5_native": [],
+      "fts5_like": [
+        6
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        6
+      ],
+      "pgroonga": [
+        6
+      ]
+    },
+    {
+      "query": "外祖父",
+      "truth": [
+        9
+      ],
+      "fts5_native": [
+        9
+      ],
+      "fts5_like": [
+        9
+      ],
+      "pg_trgm": [],
+      "ngram": [
+        3,
+        8,
+        9
+      ],
+      "pgroonga": [
+        9
+      ]
+    }
+  ]
+}

@@ -62,12 +62,25 @@ PostgreSQL 侧用普通表 + B-tree 索引即完成，**不需要任何扩展**�
 `叔父与父亲是兄弟`（仅共享 `父亲`）。生产实现需要长 gram 加权、位置连续性约束，
 或与确定性关系过滤组合。
 
-**因此本任务的主路径只剩两个候选**：
+### 四方对照已实测 → **主路径确定为 PGroonga**
 
-1. **PGroonga**——语义最接近 FTS5，但需在目标集群安装扩展（运维前置）；
-2. **Unicode n-gram 倒排表**——无扩展依赖，短查询可用，但排序需自实现且已验证过度召回。
+`scripts/migration-proof/lexical_four_way_compare.py` 在同一语料与真源（子串判据）上
+真实执行四个候选。完整矩阵与结论见 `research/evidence/lexical-decision.md`。
 
-`pg_trgm` 只能作为 `LIKE` 的索引加速层，不能承担排序与召回。
+| 候选 | 短查询 | 精确性（10 查询） | 额外依赖 |
+|---|---|---|---|
+| **PGroonga 4.0.9** | 可用 | **10/10 精确** | 需安装扩展 |
+| Unicode n-gram | 可用 | 3/10（其余**过度召回**，最多多 4 条） | 无 |
+| FTS5 + LIKE 后备 | 可用 | 10/10 但**无排序** | SQLite 内建 |
+| pg_trgm | 不可用 | 0/10 | pg_trgm 扩展 |
+
+**决策：采用 PGroonga**，理由是可测量的精确性：它是唯一在全部 10 个查询上与真源完全
+一致的候选（`叔父` 只返回 1 条，n-gram 返回 4 条）。
+
+**PGroonga 已在隔离环境验证可用**（`groonga/pgroonga:latest-alpine-16`，`CREATE EXTENSION`
+成功，版本 4.0.9）。生产集群的安装方式属运维决策，归 `10-04-postgres-operations-cutover`。
+
+`pg_trgm` 排除；Unicode n-gram 降为后备（若生产不允许安装扩展）。
 
 ### 实施前置
 
