@@ -43,3 +43,24 @@
 - [ ] wakeup/pub-sub 丢失时的行为。
 - [ ] tenant token bucket 与 PostgreSQL counter 的一致性。
 - [ ] circuit hint 不得成为 lease/settle 真源的可测断言。
+
+
+## 覆盖核查（2026-10-06）
+
+**Redis 自身语义已验证可用**（`research/evidence/redis-degradation-probe.md`），
+但本任务的**核心工作是降级策略的实现**，不是更多 Redis 探针。逐条见
+`research/evidence/current-coverage.md`。
+
+### 已覆盖（勿重复）
+
+- `SET NX EX` 单赢家、TTL 生效、`INCR` 原子单调、连接失败 **fail-loud**。
+
+### 剩余工作（实现）
+
+- [ ] **降级矩阵**（可立即写，不需实现）：每个 Redis 用途 × 不可用/超时/数据丢失时的行为。
+- [ ] **降级策略实现**：Redis 不可用时 admission 回退 PostgreSQL 还是有界 fail-closed；
+      依赖 `10-03-postgres-migration` 的 counter 落地。
+- [ ] **缓存不得放宽授权**：miss/过期不得让原本被拒的请求通过（需回归）。
+- [ ] **wakeup 丢失**只导致延迟，不导致漏执行或重复执行。
+- [ ] **与 PostgreSQL counter 的一致性**：不一致时以 PG 为准，且不得「Redis 放行但 PG 超额」。
+- [ ] **circuit hint 不得成为真源**：不得由 Redis 单独裁决上游可用性。
