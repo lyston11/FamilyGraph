@@ -15,7 +15,8 @@
 - [ ] 逐项比较 SQLite/PostgreSQL DDL render，特别是 `sqlite_where`/`postgresql_where`、JSON CHECK、NULL、FK action 和 partial unique index。源码 stable inventory 已生成，方言执行矩阵仍未通过。
 - [x] 三条历史迁移的 SQLite 专属构造已在真实 PostgreSQL 上确认失败（`0042` json_extract / `0022` last_insert_rowid / `0014` FTS5），并含方言感知修复的反证。证据：`research/evidence/migration-replay-blockers.md`（L2）。
 - [x] raw SQL 已结构化并按风险分类（`raw-sql-inventory.json/md`）：6 处 SQLite-only 函数、31 PRAGMA、23 SQLite DDL、3 BEGIN IMMEDIATE、0 字面量 AUTOINCREMENT；方言中立 1475 处仅计数。**已排除两类误报**（`autoincrement=True` 实测可移植、`strftime` 是 Python 方法）。
-- [ ] 其余 raw SQL 在两个数据库真实执行：目前只有 FTS5、2 个触发器、3 条运行期查询实测，PRAGMA 与其余 SQLite DDL 未逐条验证。
+- [x] 方言语义矩阵已在两库真实执行（13 项：NULL 排序/唯一性、JSON 类型、整数除法、布尔、字符串比较）：**11 项一致，2 项差异**（整数与布尔混用、JSON 布尔取值），两项均判定**保留**且满足「PG 侧 fail-loud 或更严格」。证据：`research/evidence/dialect-matrix.md`。
+- [ ] 尚未逐条执行：31 处 PRAGMA、23 处 SQLite DDL（已实测 FTS5 与 2 个触发器）。
 - [ ] 记录排序、时间、JSON 类型、整数/布尔、空值和错误码差异。
 - [ ] 完成 RAG source/revision/scope/visibility/citation 与 lexical/vector index 的边界卡。
 
