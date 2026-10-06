@@ -410,7 +410,13 @@ PGTEST_DSN=... ./backend/.venv/bin/python scripts/migration-proof/import_reconci
 工具位于 `scripts/migration-proof/`（持久位置，任务归档后仍有效）；证据输出目录可用
 `MIGRATION_PROOF_OUT` 覆盖。
 
-**探针的两条纪律**（都是实测踩坑后加的）：
+**探针的四条纪律**（都是实测踩坑后加的）：
+
+0. **PGroonga 的索引不在 PG relation 里**：它写成数据目录下的 `pgrn*` 文件，
+   因此 `pg_relation_size` 返回 0、`pg_class` 看不到、`pg_dump` **不导出索引数据**
+   （但导出 `CREATE INDEX ... USING pgroonga` DDL，恢复时自动重建）。
+   容量规划不能依赖 SQL 侧体积读数。
+
 
 1. **噪声守卫**：时间类探针必须要求效应量达到可观测下界，否则报 FAIL。
    `pg_deadlock_timeout_probe` 曾在隧道抖动下打印 `delta=-0.26s` 仍宣告 PASS。

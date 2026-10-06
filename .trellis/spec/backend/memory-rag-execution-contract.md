@@ -75,3 +75,24 @@ Steward 未接入私有聊天 RAG；词法查询不构成 embedding 或通用语
 错误：从可变 ORM `run.attempt` 重建期望身份，在入口 SELECT 后直接写入；引用只核对 `source_id`；认证后 payload 用来判断原请求幂等；把 failed 事件批次回滚当成可以恢复旧 context 的理由。
 
 正确：签名身份贯穿短 writer/admission；服务端保存精确片段描述符并按当前权限重新读取；指纹在认证/裁剪前计算；同 attempt 失效标记单调保留，事件本身仍保持整批原子性。
+
+
+## 8. 检索索引的授权分层（2026-10-06 实测补充）
+
+PGroonga 与 pgvector 的实测共同确认一条安全关键结论：
+
+> **检索索引不承载授权。** 撤权只改主表状态，索引条目仍存在（PGroonga 实测：
+> 无过滤查询仍能查到已撤权 chunk；pgvector 实测：行与向量都还在）。
+> 可见性**完全**依赖查询层的 `status`/`scope`/`revision` 过滤。
+
+因此：
+
+1. **所有检索路径必须带授权过滤**，不能依赖索引删除生效；
+2. 过滤条件**承重**——去掉它就能查到已撤权内容（已用反证确认）；
+3. 索引是**可重建派生物**：PGroonga 恢复时自动重建、pgvector `REINDEX` 后结果一致；
+4. **ANN 必须 filter-then-ANN**：实测 post-filter 在低选择性下静默返回不足 k
+   （允许 1/10 空间时只剩 1 条），而 RAG 无法区分「无相关内容」与「被授权过滤掉」；
+5. 词法主路径为 **PGroonga**（四方对照 10/10 精确），`pg_trgm` 已实测排除
+   （CJK 相似度全部低于阈值），Unicode n-gram 为后备（短查询可用但过度召回）。
+
+详见 `10-04-lexical-search-migration` 与 `10-03-pgvector-rag` 的 `research/evidence/`。
