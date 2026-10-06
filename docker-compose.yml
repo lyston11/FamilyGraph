@@ -177,14 +177,29 @@ services:
   # V2.1 Agent sidecar（B2）：无业务 DB、无 uploads 卷、不暴露端口、
   # 无外网 egress（backend 网络 internal:true；模型流量经 api 的 Provider
   # 代理转发，api_key 不出服务端）。
-  agent:
+  #
+  # ## AC-5：Assistant 与 Steward **分进程**（默认形态）
+  #
+  # 两个独立服务而不是一个 `role=both`，因为 `both` 时两者共享：
+  #
+  # - Node event loop（一次长 provider 流的同步工作会拖慢另一类）
+  # - HTTP client 与连接池
+  # - heap 与 GC 停顿
+  # - 重试风暴（一类上游故障时的退避会占满共享资源）
+  #
+  # 分进程后每类有自己的上述资源，代价是多一个容器与一份基础内存。
+  # 需要单进程时（本地开发、极小部署）用 profile `combined`：
+  #   docker compose --profile combined up agent-combined
+  #
+  # 共享的公共片段：两者除角色与槽位外完全一致。
+  agent-assistant:
     build: ./agent
     image: familygraph-agent:0.1.0
     restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
-    environment:
+    environment: &agent_env
       # 公开 base 仅用于 /api/health 探针；internal 协议走独立 listener
       FG_API_BASE_URL: http://api:8000
       # internal agent 协议独立端口（api 容器内，不发布宿主端口，仅 backend
@@ -193,20 +208,19 @@ services:
       AGENT_SERVICE_SECRET: ${AGENT_SERVICE_SECRET:?AGENT_SERVICE_SECRET 必须在 .env 中提供强随机值}
       AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-0}
       HEALTH_PORT: "8080"
-      # 09-25 S1 多槽：本实例服务哪些 kind（assistant|steward|both；未知值
-      # fail fast）。S5 起 Steward 模型辅助只经 Pi child run 执行，因此需要
-      # steward 时本实例必须包含该角色（`steward` 或 `both`）。
-      FG_AGENT_ROLE: ${FG_AGENT_ROLE:-assistant}
+      # 分进程：本实例只服务 assistant。只服务一类时不需要 `both` 的槽位共享。
+      FG_AGENT_ROLE: assistant
       # assistant 槽位数：后端每账号最多放行 2 个并发 assistant run，本地更小
       # 只会人为造排队（不改变后端授权，仅影响本地并发）。
       AGENT_MAX_CONCURRENT_RUNS: ${AGENT_MAX_CONCURRENT_RUNS:-2}
-      # steward 槽位数：必须与 api 服务的同名变量同值（见该处注释）。
+      # steward 槽位在本实例不生效（角色不含 steward），但必须仍提供合法值，
+      # 否则 sidecar 的配置校验会 fail fast。
       STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE: ${STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE:-2}
     networks:
       - backend
     # 优雅停机：SIGTERM → worker.stop + health.close；在途 Run 由 FastAPI reaper 回收
     stop_grace_period: 10s
-    healthcheck:
+    healthcheck: &agent_healthcheck
       test:
         [
           "CMD",
@@ -218,6 +232,40 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  agent-steward:
+    build: ./agent
+    image: familygraph-agent:0.1.0
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      <<: *agent_env
+      # 分进程：本实例只服务 steward（Pi child run 的模型辅助）。
+      FG_AGENT_ROLE: steward
+    networks:
+      - backend
+    stop_grace_period: 10s
+    healthcheck: *agent_healthcheck
+
+  # 单进程形态：Assistant + Steward 共用（本地开发/极小部署）。
+  # 默认**不启动**（profile 门禁），因为共享 event loop 是 AC-5 要消除的形态。
+  agent-combined:
+    profiles: ["combined"]
+    build: ./agent
+    image: familygraph-agent:0.1.0
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      <<: *agent_env
+      FG_AGENT_ROLE: both
+    networks:
+      - backend
+    stop_grace_period: 10s
+    healthcheck: *agent_healthcheck
 
 volumes:
   app_data:
