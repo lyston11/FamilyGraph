@@ -37,7 +37,7 @@
 - [x] 建立隔离 control schema prototype 与**四类触发器 plpgsql 等价物**（scope-immutable / append-only / conditional-immutable / sticky-status / revision-counter），含负向用例与反证。证据：`research/evidence/gate-3-baseline-prototype.md`（L2）。**未覆盖**：69 个对象的逐条等价物（60 个 `sri_*` 只验证了一类行为）、`rag_*` 触发器具体语义、列级 `UPDATE OF` 写法。
 - [ ] 验证 schema build、constraints、indexes、refusal guard、重复执行和中断恢复。
 - [ ] 验证多连接租约、续租、取消、settle、recovery、审计 exactly-once。
-- [ ] 验证 process crash/connection loss/deadlock/serialization failure 的 bounded retry 和终态收敛。
+- [x] 故障注入六类：提交前/后断连、重复 settle、cancel vs settle、崩溃租约回收、SERIALIZABLE 冲突，全部按预期收敛（含 counter 恰好归还一次）。证据：`research/evidence/gate-4-fault-injection.md`（**原型 L3**）。**未覆盖**：真实业务 schema、membership revoke、after-upstream-sent、真实进程 kill、deadlock_timeout 延迟。
 
 禁止：RAG 生产检索实现、真实历史导入、writer 切换、开发部署。
 
