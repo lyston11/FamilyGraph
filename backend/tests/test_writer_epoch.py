@@ -169,3 +169,69 @@ def test_database_check_constraints_reject_invalid_state(db_session):
         )
         db_session.commit()
     db_session.rollback()
+
+
+# ---------------------------------------------------------------- 写路径守卫
+
+
+def test_guard_adopts_epoch_on_first_use(db_session):
+    """进程启动后的第一次写入**采纳**当前 epoch，而不是拒绝。
+
+    刚启动的进程持有的 epoch 就是当前值；此时拒绝会让每次启动后的第一个写失败。
+    """
+    writer_epoch.reset_process_epoch_for_tests()
+    _seed_state(db_session, stage="pg_all", epoch=42)
+    writer_epoch.guard(db_session)  # 不应抛出
+
+
+def test_guard_rejects_after_epoch_changes(db_session):
+    """epoch 变化后守卫必须拒绝——这是「切换让旧实例失效」的机制。"""
+    writer_epoch.reset_process_epoch_for_tests()
+    _seed_state(db_session, stage="sqlite", epoch=1)
+    writer_epoch.guard(db_session)  # 采纳 1
+
+    # 模拟另一个实例完成切换：epoch 变为 2
+    _seed_state(db_session, stage="pg_control", epoch=2)
+    with pytest.raises(WriterEpochMismatch):
+        writer_epoch.guard(db_session)
+
+
+def test_advance_updates_this_process_epoch(db_session):
+    """执行切换的实例必须同步采纳新 epoch，否则会把自己锁在门外。"""
+    writer_epoch.reset_process_epoch_for_tests()
+    _seed_state(db_session, stage="sqlite", epoch=0)
+    writer_epoch.guard(db_session)  # 采纳 0
+
+    writer_epoch.advance(db_session, to_stage="shadow", actor="ops")
+    db_session.commit()
+    # 若不采纳新 epoch，这一行会抛 WriterEpochMismatch
+    writer_epoch.guard(db_session)
+
+
+def test_guard_can_be_disabled_for_stable_deployments(db_session, monkeypatch):
+    """迁移完成后可关闭守卫，避免每次写都读状态表。
+
+    默认开启：默认关闭会让「忘了打开」变成静默的双主风险。
+    """
+    writer_epoch.reset_process_epoch_for_tests()
+    _seed_state(db_session, stage="pg_all", epoch=5)
+    writer_epoch.guard(db_session)  # 采纳 5
+    _seed_state(db_session, stage="pg_all", epoch=99)
+
+    monkeypatch.setenv("FG_WRITER_EPOCH_GUARD", "0")
+    writer_epoch.guard(db_session)  # 关闭后不比对
+
+
+def test_command_transaction_calls_the_guard(db_session, monkeypatch):
+    """`command_transaction` 必须在事务起点调用守卫。
+
+    结构性断言：若某次重构去掉这行，切换期间旧实例会继续写——而单测很难用
+    真实双实例复现。因此用「守卫被调用」这一可观测事实守护它。
+    """
+    from app.commands import context as commands_context
+
+    calls: list[str] = []
+    monkeypatch.setattr(commands_context.writer_epoch, "guard", lambda _db: calls.append("guard"))
+    with commands_context.command_transaction(db_session, commit=False):
+        pass
+    assert calls == ["guard"], "command_transaction 未调用 writer epoch 守卫"

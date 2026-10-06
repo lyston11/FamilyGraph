@@ -83,9 +83,11 @@ CHECK (id = 1)              -- 单例：两行状态就是两个真相
 
 ## 未完成（诚实声明）
 
-1. **写路径尚未接入 `check_epoch`**：epoch 基础设施已交付并验证，但真实写路径
-   （agent_queue / steward / settle）尚未在提交前核对 epoch。这是**实现工作**，
-   不是设计未决。
+1. ~~写路径尚未接入 `check_epoch`~~ → **已闭合**：三个事务入口
+   （`command_transaction`、`agent_queue._immediate_tx`、`steward._immediate_tx`）
+   在取写锁**之前**调用 `writer_epoch.guard`。守卫在事务起点，epoch 过期时连写锁
+   都不取——取了就说明已开始参与写入竞争。`steward_pipeline.write_transaction`
+   经 `steward._immediate_tx` 继承守卫，无需单独接线。
 2. **PITR / WAL archive / HA / failover 未实现**：属运维实施，需要真实 PostgreSQL
    集群与归档存储。
 3. **连接预算与 PgBouncer 兼容性未验证**：C3 已实现集群级名额，但 PgBouncer 的
@@ -96,3 +98,29 @@ CHECK (id = 1)              -- 单例：两行状态就是两个真相
 
 writer epoch 与 migration health：**L1**（单测 + 迁移往返 + 变异）。
 真实双实例切换未演练。
+
+
+## 写路径接线（后续更新）
+
+| 入口 | 守卫位置 | 说明 |
+|---|---|---|
+| `commands/context.command_transaction` | 事务起点，`_begin_immediate` 之前 | 覆盖全部领域命令 |
+| `agent_queue._immediate_tx` | `BEGIN IMMEDIATE` 之前 | 覆盖队列/租约/结算 |
+| `steward._immediate_tx` | `BEGIN IMMEDIATE` 之前 | 覆盖 steward 内核 |
+| `steward_pipeline.write_transaction` | 经 `steward._immediate_tx` | 继承，无需单独接线 |
+
+### 首次采纳 vs 之后比对
+
+- **首次**调用采纳数据库当前 epoch（刚启动的进程持有的就是当前值；此时拒绝会让
+  每次启动后的第一个写失败）；
+- **之后**每次比对，不同即拒绝。这是「切换让旧实例失效」的机制。
+
+### `advance` 同步本进程 epoch
+
+执行切换的实例**就是**当前 writer，因此 `advance` 必须同步采纳新 epoch，
+否则它会把自己锁在门外。已用测试守护。
+
+### 可关闭
+
+`FG_WRITER_EPOCH_GUARD=0` 在迁移完成且不再计划变更阶段后关闭守卫（省掉每次写事务
+的一次单行查询）。**默认开启**：默认关闭会让「忘了打开」变成静默的双主风险。

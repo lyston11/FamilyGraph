@@ -72,6 +72,7 @@ from app.services import (
     person_identity,
     recommendation_matrix,
     steward_events,
+    writer_epoch,
 )
 from app.services.action_cards import ACTION_SUPERSEDE
 from app.services.disclosure import disclosed_categories
@@ -162,6 +163,7 @@ def _lease_stale(job: StewardJob, *, worker_id: str | None, now: datetime) -> bo
 @contextmanager
 def _immediate_tx(session: Session) -> Iterator[Session]:
     """立即事务：BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。"""
+    writer_epoch.guard(session)
     sa_conn = session.connection()
     raw = sa_conn.connection.dbapi_connection
     if not isinstance(raw, sqlite3.Connection):  # pragma: no cover - 仅 SQLite 环境

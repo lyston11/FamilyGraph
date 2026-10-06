@@ -41,6 +41,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -160,7 +161,13 @@ def advance(
         ),
         {"stage": to_stage, "now": moment, "actor": actor, "id": _STATE_ID},
     )
-    return read_state(db)
+    state = read_state(db)
+    # 执行切换的实例**就是**当前 writer：必须同步采纳新 epoch，否则它自己的下一次
+    # 写入会被守卫拒绝（把自己锁在门外）。
+    global _process_epoch
+    with _epoch_lock:
+        _process_epoch = state.epoch
+    return state
 
 
 def check_epoch(db: Session, *, held: int) -> None:
@@ -205,3 +212,67 @@ def migration_health(db: Session) -> dict[str, object]:
         "updated_by": state.updated_by,
         "valid_stages": list(WRITER_STAGES),
     }
+
+
+# ---------------------------------------------------------------- 写路径守卫
+#
+# epoch 只有在**写路径真正调用它**时才有价值。否则它只是一张表。
+#
+# ## 成本与开关
+#
+# 守卫每次写事务读一次 `writer_state`（主键单行查询）。SQLite 上亚毫秒，
+# PostgreSQL 上是一次 PK 查找。迁移窗口内这个成本是值得的；迁移**完成且不再
+# 计划变更阶段**后可以用 `FG_WRITER_EPOCH_GUARD=0` 关掉。
+#
+# 默认开启：默认关闭会让「忘了打开」变成静默的双主风险。
+
+#: 本进程认为当前生效的 epoch。`None` = 尚未读过（首次调用时采纳数据库值）。
+_process_epoch: int | None = None
+_epoch_lock = threading.Lock()
+
+
+def guard_enabled() -> bool:
+    return os.environ.get("FG_WRITER_EPOCH_GUARD", "1") not in ("0", "false", "False")
+
+
+def reset_process_epoch_for_tests() -> None:
+    """测试用：清掉进程内缓存的 epoch。"""
+    global _process_epoch
+    with _epoch_lock:
+        _process_epoch = None
+
+
+def adopt_current_epoch(db: Session) -> int:
+    """读取并采纳当前 epoch（进程启动或测试重置后调用）。"""
+    global _process_epoch
+    state = read_state(db)
+    with _epoch_lock:
+        _process_epoch = state.epoch
+    return state.epoch
+
+
+def guard(db: Session) -> None:
+    """写事务的 epoch 守卫；epoch 已变则抛 `WriterEpochMismatch`。
+
+    ## 语义
+
+    - 首次调用（本进程尚无 epoch）**采纳**数据库当前值，而不是拒绝。理由：
+      进程刚启动，它的 epoch 就是当前值；此时拒绝会让每次启动后的第一个写失败。
+    - 之后每次调用比对：不同即拒绝。这是**切换让旧实例失效**的机制。
+
+    ## 为什么不是「尽力而为」
+
+    epoch 过期意味着本实例已被取代。继续写会产生两个真相（双主），而双主**无法**
+    事后对账修复——两边都可能已对外产生结果。因此必须拒绝，且调用方不得重试。
+    """
+    if not guard_enabled():
+        return
+    global _process_epoch
+    state = read_state(db)
+    with _epoch_lock:
+        held = _process_epoch
+        if held is None:
+            _process_epoch = state.epoch
+            return
+    if held != state.epoch:
+        raise WriterEpochMismatch(expected=held, actual=state.epoch)

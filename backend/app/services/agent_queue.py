@@ -51,7 +51,13 @@ from app.models.agent import (
     AgentSession,
 )
 from app.models.space import SpaceMember
-from app.services import agent_events, agent_provider, audit, capacity
+from app.services import (
+    agent_events,
+    agent_provider,
+    audit,
+    capacity,
+    writer_epoch,
+)
 from app.services.agent_execution import (
     Execution,
     ExecutionIdentity,
@@ -65,7 +71,12 @@ _logger = logging.getLogger(__name__)
 
 @contextmanager
 def _immediate_tx(session: Session) -> Iterator[Session]:
-    """立即事务：驱动级 BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。"""
+    """立即事务：驱动级 BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。
+
+    writer epoch 守卫在取写锁**之前**：epoch 过期说明本实例已不是 writer，
+    此时连写锁都不应取——取了就说明已经开始参与写入竞争。
+    """
+    writer_epoch.guard(session)
     sa_conn = session.connection()
     raw = sa_conn.connection.dbapi_connection
     if not isinstance(raw, sqlite3.Connection):  # pragma: no cover - 仅 SQLite 环境
