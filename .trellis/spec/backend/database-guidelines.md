@@ -176,3 +176,204 @@ if not state.memory_enabled:
 ```
 
 家庭端先读取只读状态并隐藏必然失败的操作；平台开关写入只允许独立系统管理员完成。
+
+## Scenario: 局部唯一索引的跨方言可移植性（2026-10-04）
+
+### 1. Scope / Trigger
+
+新增或修改任何 `Index(..., unique=True, ...)` 局部索引、`app/models/indexes.py`，
+或在 PostgreSQL 上建表/导入数据前必读。
+
+### 2. Signatures
+
+- 唯一允许的构造方式：`app/models/indexes.py::partial_unique_index(name, *columns, where="...")`。
+- 它把**同一个**谓词字符串同时用于 `sqlite_where` 与 `postgresql_where`，因此两方言
+  不可能漂移。
+- 回归：`tests/test_partial_index_portability.py`。
+
+### 3. Contracts
+
+- **不得**在模型层手写 `sqlite_where=` 或 `postgresql_where=`。结构性用例会失败。
+- 局部唯一索引的**数量**被钉在 16；增删都必须显式改断言，避免唯一性被无声削弱。
+- 谓词为 `X IS NOT NULL` 的索引是**显式例外**（PostgreSQL 唯一索引默认
+  `NULLS DISTINCT`，含 NULL 行本就可重复，语义与 SQLite 的 `WHERE X IS NOT NULL`
+  等价）。例外集合逐条列出，且用例会断言它们**仍然**是 `IS NOT NULL` 形状——
+  不允许用模式匹配放过其他索引。若将来改为 `NULLS NOT DISTINCT` 或给列加非空默认值，
+  这些索引会立刻变成真缺陷。
+
+### 4. Validation & Error Matrix
+
+| 情况 | SQLite | 退化后的 PostgreSQL | 正确 PostgreSQL |
+|---|---|---|---|
+| 历史终态行 + 当前 active 行（如同一 session 两个 run） | 接受 | **拒绝**（UniqueViolation） | 接受 |
+| 第二条 active 行 | 拒绝 | 拒绝 | 拒绝 |
+| `revoked` 关系 + 新的 `active` 关系 | 接受 | **拒绝** | 接受 |
+
+退化形态下 `UNIQUE(session_id)` 意味着一个 session **一生只能有一行**，历史行会直接
+撞约束；数据导入会在第一条历史行上失败。
+
+### 5. Good/Base/Bad Cases
+
+- Good：用 `partial_unique_index` 声明；两个方言渲染出相同谓词；历史行与 active 行共存。
+- Base：新增局部索引时同步更新数量断言。
+- Bad：手写 `sqlite_where` 只声明一个方言（SQLAlchemy 在另一方言上**静默**丢弃谓词，
+  不报错、不警告）。
+
+### 6. Tests Required
+
+- 结构性：`app/models` 中不存在单方言谓词；局部唯一索引数量 == 16。
+- 渲染性：每个索引在 SQLite 与 PostgreSQL 下都含 `WHERE`，且两方言谓词字符串相同。
+- 语义性（真实 PostgreSQL）：历史 + active 共存；第二条 active 被拒；`revoked` 后重建被允许。
+- 变异验证：删除 `postgresql_where` 必须让用例失败（实测 13 个用例失败）。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# PostgreSQL 上谓词被静默丢弃 -> UNIQUE(session_id) -> 一个 session 一生只能有一个 run
+Index("uq_agent_runs_session_active", "session_id", unique=True,
+      sqlite_where=sa.text("status IN ('queued','leased','running')"))
+```
+
+#### Correct
+
+```python
+partial_unique_index(
+    "uq_agent_runs_session_active", "session_id",
+    where="status IN ('queued','leased','running')",
+)
+```
+
+## Scenario: PostgreSQL 租约的租户并发上限（2026-10-04）
+
+### 1. Scope / Trigger
+
+把 `services/steward_assist.py::lease_attempt`、`services/steward.py::lease_next_steward_job`、
+`services/agent_queue.py::lease_next` 或 `enqueue_run` 迁移到 PostgreSQL 前必读；
+任何涉及「每租户并发上限」的选行逻辑同样适用。
+
+### 2. Contracts
+
+- `FOR UPDATE SKIP LOCKED` **只**保证不同 worker 取到不同**候选行**。它**不**保证
+  每租户配额：实测 READ COMMITTED 下计数子查询读不到彼此未提交的 `in_flight`，
+  上限 2 被放成 5。因此**不能**把 `BEGIN IMMEDIATE` 机械替换为 `SKIP LOCKED`。
+- 配额真相是持久化的 `counters` 行（`scope_kind/scope_id/resource/capacity/active/version`），
+  带 `CHECK (active BETWEEN 0 AND capacity)`。
+- 锁顺序固定：`global → kind → account/space → candidate`。
+- 候选为空时必须归还名额，否则名额永久泄漏、空间永久无法再租。
+
+### 3. Validation & Error Matrix
+
+| 情况 | 期望 |
+|---|---|
+| 并发 worker 数 > 每租户配额 | 实际并发数 == 配额，不越限 |
+| 名额已满 | **跳过该空间看下一个候选**，不得靠捕获异常控流（异常会中止整个事务） |
+| 该空间无到期候选 | 归还名额，`active` 回到原值 |
+
+### 4. Tests Required
+
+- 并发领取：`count(in_flight) <= capacity` 逐租户成立，且 `active == count(in_flight)`。
+- 无候选路径反复调用后 `active` 不变（不泄漏）。
+- 四条归还路径（settle / cancel / 租约过期恢复 / 栅栏退休）各自归还且**不重复**归还。
+- 变异验证：把 counter 换回计数子查询必须让并发用例失败。
+
+### 5. Wrong vs Correct
+
+#### Wrong
+
+```sql
+-- READ COMMITTED 下计数子查询看不到并发事务未提交的 in_flight：上限失效。
+SELECT id FROM attempts
+ WHERE space_id = :space AND status = 'reserved'
+   AND (SELECT count(*) FROM attempts x
+         WHERE x.space_id = attempts.space_id AND x.status = 'in_flight') < :cap
+ FOR UPDATE SKIP LOCKED LIMIT 1;
+```
+
+#### Correct
+
+```sql
+-- 1) 先占持久化名额（行锁保持到提交，同租户领取在此串行）
+SELECT bump_counter('space', :space, 'steward_assist', 1);
+-- 2) 再取候选（SKIP LOCKED 只负责候选行去重）
+WITH picked AS (
+  SELECT id FROM attempts
+   WHERE space_id = :space AND status = 'reserved' AND next_attempt_at <= now()
+   ORDER BY next_attempt_at, id FOR UPDATE SKIP LOCKED LIMIT 1
+) UPDATE attempts a SET status='in_flight', lease_owner=:owner
+    FROM picked WHERE a.id = picked.id RETURNING a.id;
+-- 3) 无候选则归还：SELECT bump_counter('space', :space, 'steward_assist', -1);
+```
+
+## Scenario: 锁顺序（PostgreSQL 迁移新增的约束，2026-10-04）
+
+### 1. Scope / Trigger
+
+引入任何**行锁**（`FOR UPDATE`、no-op `UPDATE ... WHERE id=`、counter 行）或把
+`BEGIN IMMEDIATE` 换成行锁前必读。
+
+### 2. Contracts
+
+SQLite 的 `BEGIN IMMEDIATE` 是**全库**写锁——没有「部分顺序」，因此锁序问题在 SQLite
+上**永远测不出来**。迁移到行锁后，锁序成为必须显式设计的约束。
+
+固定顺序：
+
+```text
+global counter → kind counter → account/space counter → run 行 → attempt 行
+```
+
+**counter 永远先于 run 行**。两条实现要求：
+
+1. 租约路径：先取 counter，再进 fence（fence 内部会取 run 行锁）。
+2. 结算路径：必须在 `fence_*_execution`（或任何取 run 行锁的函数）**之前**归还
+   counter。否则结算是 `run → counter`，与租约相反。
+
+第 2 条最易漏：`record_attempt_outcome` 在调用方事务内运行，而调用方
+（`settle_run` 的 `on_settled`）之前已经过 `fence_execution`。
+
+### 3. Validation & Error Matrix
+
+实测交叉顺序（两事务各持一锁后互等）：
+
+```
+死锁被检测到: ['A']       ← PostgreSQL DeadlockDetected 中止其一
+```
+
+### 4. Verified mechanism
+
+`agent_execution.acquire_run_writer` 的 no-op UPDATE 在 PostgreSQL 上**确实**提供
+行级串行化：
+
+```sql
+UPDATE agent_runs SET updated_at = updated_at WHERE id = :run_id
+```
+
+8 并发事务「取写锁 → 读 max(seq) → 插入」：成功 8、唯一冲突 0、seq 连续 `[0..7]`。
+**反证**：不取写锁时同一并发形状 → 表中仅 1 条、7 次唯一冲突。因此该机制有效且用例
+有判别力。
+
+### 5. Tests Required
+
+- 并发跑「租约」与「结算」路径，断言无 `DeadlockDetected` 且两者都完成。
+- 变异验证：把 counter 归还移到 fence 之后，用例必须暴露交叉顺序。
+- 三把以上锁（global + kind + tenant + run）的顺序仍需独立验证。
+
+### 6. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 结算：先 fence（取 run 行锁），再归还 counter -> 与租约路径锁序相反
+run, _, _ = fence_steward_execution(db, identity)
+steward_assist.record_attempt_outcome(db, ...)   # 内部归还 counter
+```
+
+#### Correct
+
+```python
+# counter 在进入 fence 之前处理；fence 之后只做行内更新
+steward_assist.release_capacity(db, ...)         # 先 counter
+run, _, _ = fence_steward_execution(db, identity)
+```

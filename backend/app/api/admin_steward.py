@@ -451,7 +451,9 @@ def steward_jobs(
 
 def _find_idempotent_rerun(db: Session, space_id: int, idempotency_key: str) -> StewardJob | None:
     """同 (space, Idempotency-Key) 的历史重跑作业：键存 checkpoint_json。"""
-    key_expr = sa.func.json_extract(StewardJob.checkpoint_json, "$.idempotency_key")
+    # 用 SQLAlchemy 的 JSON 索引形式而不是裸 json_extract：前者按方言渲染
+    # （SQLite JSON_EXTRACT / PostgreSQL ->>），后者在 PostgreSQL 上不存在。
+    key_expr = StewardJob.checkpoint_json["idempotency_key"].as_string()
     return db.scalar(
         select(StewardJob)
         .where(StewardJob.space_id == space_id, key_expr == idempotency_key)

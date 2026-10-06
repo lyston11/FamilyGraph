@@ -29,11 +29,11 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 SUGGESTION_ORIGINS = ("deterministic", "model")
 
@@ -64,13 +64,12 @@ class StewardSuggestion(Base):
         CheckConstraint(_KIND_CHECK_SQL, name="ck_ss_kind"),
         CheckConstraint(_STATUS_CHECK_SQL, name="ck_ss_status"),
         # 并发生成收敛：同 (space, dedupe_key, evidence_hash) 至多一条活跃建议
-        Index(
+        partial_unique_index(
             "uq_steward_suggestions_active_dedupe",
             "space_id",
             "dedupe_key",
             "evidence_hash",
-            unique=True,
-            sqlite_where=text(_ACTIVE_STATUS_SQL),
+            where=_ACTIVE_STATUS_SQL,
         ),
         Index("ix_steward_suggestions_space_status", "space_id", "status"),
         Index("ix_steward_suggestions_subject", "subject_user_id"),

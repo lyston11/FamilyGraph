@@ -14,19 +14,39 @@ from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integ
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.checks import DialectCheck
 
 MEMORY_CANDIDATE_STATUSES = ("pending", "dismissed", "confirmed")
 MEMORY_SCOPES = ("private", "household", "lineage")
 MEMORY_STATUSES = ("active", "revoked", "deleted")
 SENSITIVITY_LEVELS = ("normal", "sensitive", "high", "local_required")
 MEMORY_SOURCE_KINDS = ("manual", "agent_message", "rag_chunk", "legacy")
-SOURCE_SNAPSHOT_CHECK = (
+# 前置条件在两方言上完全相同；只有 JSON 部分需要分派。
+_SNAPSHOT_PREFIX = (
     "source_verification = 'unverified' OR (source_kind != 'legacy' "
     "AND source_type IS NOT NULL AND source_id IS NOT NULL "
     "AND source_revision IS NOT NULL AND source_revision > 0 "
-    "AND coalesce(json_extract(source_span_json, '$.version') = 1, 0) "
-    "AND coalesce(json_extract(source_span_json, '$.kind') = source_kind, 0))"
 )
+
+
+# SQLite 的 json_extract 是类型敏感的（数字 1 相等、字符串 "1" 不等），
+# PostgreSQL 用 jsonb 对 jsonb 比较保留同样的类型敏感语义。写成 `->> ... ::int`
+# 会把字符串 "1" 也判为相等，那是**不同**的约束。
+def source_snapshot_check(name: str) -> DialectCheck:
+    """同一判据的两个方言表达式；`name` 由调用方给（两张表各有约束名）。"""
+    return DialectCheck(
+        name=name,
+        sqlite_expr=(
+            _SNAPSHOT_PREFIX
+            + "AND coalesce(json_extract(source_span_json, '$.version') = 1, 0) "
+            + "AND coalesce(json_extract(source_span_json, '$.kind') = source_kind, 0))"
+        ),
+        postgres_expr=(
+            _SNAPSHOT_PREFIX
+            + "AND coalesce((source_span_json::jsonb -> 'version') = '1'::jsonb, false) "
+            + "AND coalesce((source_span_json::jsonb ->> 'kind') = source_kind, false))"
+        ),
+    )
 
 
 def _check_in(column: str, values: tuple[str, ...], name: str) -> CheckConstraint:
@@ -47,7 +67,7 @@ class MemoryCandidate(Base):
             ("verified", "unverified"),
             "ck_memory_candidates_source_verification",
         ),
-        CheckConstraint(SOURCE_SNAPSHOT_CHECK, name="ck_memory_candidates_source"),
+        source_snapshot_check("ck_memory_candidates_source"),
         Index("ix_memory_candidates_author_status", "author_account_id", "status"),
         Index("uq_memory_candidates_request", "author_account_id", "idempotency_key", unique=True),
         Index("ix_memory_candidates_source", "source_type", "source_id", "source_revision"),
@@ -110,7 +130,7 @@ class Memory(Base):
         _check_in(
             "source_verification", ("verified", "unverified"), "ck_memories_source_verification"
         ),
-        CheckConstraint(SOURCE_SNAPSHOT_CHECK, name="ck_memories_source"),
+        source_snapshot_check("ck_memories_source"),
         Index("ix_memories_author_status", "author_account_id", "status"),
         Index("ix_memories_space_status", "space_id", "status"),
         Index("uq_memories_source_candidate", "source_candidate_id", unique=True),

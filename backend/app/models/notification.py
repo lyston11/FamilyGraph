@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 NOTIFICATION_KINDS = ("action_card", "space_membership", "bridge", "relation", "steward_suggestion")
 
@@ -49,13 +50,12 @@ class Notification(Base):
             name="ck_notifications_suggestion_ref",
         ),
         # 每收件人×空间×建议至多一条通知（防重复卡通知）
-        Index(
+        partial_unique_index(
             "uq_notifications_suggestion",
             "recipient_account_id",
             "space_id",
             "suggestion_id",
-            unique=True,
-            sqlite_where=text("suggestion_id IS NOT NULL"),
+            where="suggestion_id IS NOT NULL",
         ),
     )
 

@@ -33,6 +33,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 from app.models.user import DISCLOSURE_KEYS
 
 _CATEGORY_CHECK_SQL = f"category IN ({', '.join(repr(k) for k in DISCLOSURE_KEYS)})"
@@ -133,11 +134,10 @@ class OwnershipTransfer(Base):
         CheckConstraint(
             "status IN ('pending','accepted','cancelled','expired')", name="ck_ot_status"
         ),
-        Index(
+        partial_unique_index(
             "uq_ownership_transfer_active",
             "space_id",
-            unique=True,
-            sqlite_where=sa.text("status = 'pending'"),
+            where="status = 'pending'",
         ),
     )
 

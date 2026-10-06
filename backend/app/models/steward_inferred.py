@@ -35,11 +35,11 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.indexes import partial_unique_index
 
 INFERRED_ORIGINS = ("llm", "rule", "intake")
 
@@ -71,14 +71,13 @@ class StewardInferredEdge(Base):
         CheckConstraint(_STATUS_CHECK_SQL, name="ck_sie_status"),
         CheckConstraint("subject_user_id <> object_user_id", name="ck_sie_distinct_endpoints"),
         # 每三元组至多一条活跃推测（去重 + 冷却 + 幂等投影的兜底约束）
-        Index(
+        partial_unique_index(
             "uq_sie_active_triple",
             "space_id",
             "subject_user_id",
             "object_user_id",
             "relation_kind",
-            unique=True,
-            sqlite_where=text(f"status = '{INFERRED_ACTIVE_STATE}'"),
+            where=f"status = '{INFERRED_ACTIVE_STATE}'",
         ),
         Index("ix_sie_space_status", "space_id", "status"),
         Index("ix_sie_endpoints", "subject_user_id", "object_user_id"),
