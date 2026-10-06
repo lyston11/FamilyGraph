@@ -12,7 +12,7 @@
 | C3 | control-plane fault domain | **partial** | 10-04-control-plane-fault-domain | 集群级名额已交付；AC-5 分进程未做 | `c3-cluster-capacity.md` | AC-5 分进程/分池 |
 | C4 | Provider stream reliability | **partial** | 10-04-provider-reliability-boundaries | 流级名额 + deadline 已交付；circuit/backpressure 未做 | `c4-stream-limits.md` | circuit、backpressure、故障注入 |
 | C5 | Redis coordination | **partial** | 10-03-redis-coordination | 降级层已交付并验证；未接入准入路径 | `c5-redis-degradation.md` | 接入 admission、wakeup、token bucket |
-| C6 | PGroonga lexical + pgvector | todo | 10-04-lexical / 10-03-pgvector-rag | 索引 + 授权过滤 | — | C2 |
+| C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法方言分派已交付；pgvector 未接入 | `c6-lexical-dispatch.md` | pgvector union/rerank、版本切换 |
 | C7 | operations/cutover | todo | 10-04-postgres-operations-cutover | epoch/PITR/backup | — | C2 |
 | C8 | final load acceptance | todo | 10-04-multitenant-load-acceptance | account×space×kind 矩阵 | — | C3–C7 |
 | C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | C8 |

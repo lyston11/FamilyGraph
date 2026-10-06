@@ -38,7 +38,7 @@ from app.models.platform_features import PlatformFeatureConfig
 from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace
 from app.models.user import User
-from app.services import memory_sources, platform_features
+from app.services import memory_sources, platform_features, rag_search_provider
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.services.policy_consumer import is_policy_consumer_kind
@@ -1265,39 +1265,28 @@ def search_rag(
     # Policy rejection refills from the next page instead of exhausting the
     # caller's result limit. The bound counts returned SQL candidates, not the
     # database engine's internal index/table operations.
-    match_values = ([_fts_match(plan.phrase)] if plan.phrase else []) + [
-        _fts_match(term) for term in plan.fts_terms
-    ]
-    if match_values:
-        sql = text(f"""
-            SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
-                   c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version,
-                   c.chunk_index, c.source_revision, bm25(rag_chunks_fts) AS rank
-            FROM rag_chunks_fts
-            JOIN rag_chunks AS c ON c.id = rag_chunks_fts.rowid
-            JOIN rag_documents AS d ON d.id = c.document_id
-            WHERE rag_chunks_fts MATCH :match AND {eligibility}
-            ORDER BY rank ASC, c.id ASC LIMIT :limit OFFSET :offset
-        """)
-        collect(sql, {**params, "match": " OR ".join(match_values)}, rank_by_order=False)
-    if len(hits) < limit and plan.fallback_terms and scanned < _FALLBACK_SCAN_LIMIT:
-        clauses = " OR ".join(
-            f"c.text LIKE :like{idx} ESCAPE '!'" for idx in range(len(plan.fallback_terms))
+    # 词法检索按**方言**分派（`rag_search_provider`）：
+    #   SQLite      -> FTS5 `MATCH` + `bm25`，短词用参数化 LIKE 后备
+    #   PostgreSQL  -> PGroonga `&@~` + `pgroonga_score`（不需要短词后备）
+    #
+    # `eligibility` 原样传入并拼进两种方言的 SQL：授权过滤**不在** provider 层，
+    # 因为检索索引不承载授权（撤权只改主表状态，索引条目仍在）。任何在这里
+    # 放宽过滤的改动都是授权漏洞。
+    dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+    match_terms = ([plan.phrase] if plan.phrase else []) + list(plan.fts_terms)
+    # 循环变量不叫 `query`：那会遮蔽本函数的 `query: str` 参数（mypy 报类型冲突）。
+    for lexical in rag_search_provider.build_lexical(
+        dialect,
+        match_terms=match_terms,
+        fallback_terms=list(plan.fallback_terms),
+        eligibility=eligibility,
+        hit_sql=_HIT_SQL,
+    ):
+        if len(hits) >= limit or scanned >= _FALLBACK_SCAN_LIMIT:
+            break
+        collect(
+            lexical.sql, {**params, **lexical.params}, rank_by_order=lexical.rank_by_order
         )
-        # Parameters prevent SQL injection; LIKE's pattern characters still
-        # need escaping so a literal underscore cannot match unrelated text.
-        escaped_terms = [
-            term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
-            for term in plan.fallback_terms
-        ]
-        fallback_params = {
-            **params,
-            **{f"like{idx}": f"%{term}%" for idx, term in enumerate(escaped_terms)},
-        }
-        sql = text(
-            _HIT_SQL.format(condition=f"({clauses})", eligibility=eligibility, ordering="c.id ASC")
-        )
-        collect(sql, fallback_params, rank_by_order=True)
     if trace is not None:
         trace.update(
             {
