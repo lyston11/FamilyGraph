@@ -96,3 +96,48 @@ READ COMMITTED 下计数子查询读不到并发事务尚未提交的 `in_flight
   本步只交付并证明机制本身。
 - 四类归还路径（settle / cancel / lease 过期恢复 / 栅栏退休）尚未逐一接入并验证恰好一次。
 - `capacity` 的取值来源（配置项）尚未接线。
+
+
+## 迁移链 preflight（本次踩坑，必须记录）
+
+新增 0056 后，**14 个既有迁移拒绝用例失败**。根因不是它们过时，而是本迁移缺少
+其他迁移都有的 `downgrade` preflight：
+
+```python
+planned = { ... iterate_revisions(down_revision, destination) ... }
+for revision in planned:
+    list(iterate_revisions(revision, destination))          # 走位本身
+    parent = get_revision(revision).down_revision
+    if isinstance(parent, str):
+        list(iterate_revisions(parent, destination))        # 迁移自身 preflight 的走位
+```
+
+两条要点，缺任一条都会失败：
+
+1. **`iterate_revisions` 是惰性生成器**：必须显式消费才真正走位，否则守卫形同虚设；
+2. **还必须从每个 planned revision 的 `down_revision` 再走一次**：迁移自身的 preflight
+   正是从**它的父 revision** 开始走位（见 0051/0053 注释），而抛
+   `Ambiguous walk` 的正是那一步。只从 revision 自己走会漏掉它，于是本迁移先 DROP
+   表、再由祖先报错——实测 `ACTUAL_ALEMBIC_DDL_COUNT=2`。
+
+修复后：四个迁移测试文件**在未修改测试的前提下全部通过**（6/7/4/10）。
+这一点很重要——说明这些用例守护的性质（拒绝先于任何 DDL）仍然成立，
+是**新迁移**没有遵守约定，而不是测试需要放宽。
+
+### 为什么不能改测试
+
+我一度把字面量偏移改成「计算值」并调整断言，结果更糟。正确判断是：
+
+- 这些偏移是**承重**的：它们让降级落到 0044/0048 合并分叉，从而触发 ambiguous walk；
+- 但「拒绝先于 DDL」的保证应当由**每个新迁移自己**维护（用 preflight 提前履行祖先拒绝），
+  而不是让测试迁就新迁移；
+- 因此正确做法是给 0056 补 preflight，而不是改测试。测试最终**零改动**。
+
+## 最终验证
+
+```
+backend: 2018 passed, 25 skipped
+四个迁移拒绝用例文件: 6/7/4/10 全通过（测试未修改）
+counter 并发探针: 配额成立 + 反证越限 + 归还恰好一次 + 锁序承重
+双方言迁移: SQLite upgrade/downgrade + refusal；PostgreSQL create_all + 66 触发器
+```

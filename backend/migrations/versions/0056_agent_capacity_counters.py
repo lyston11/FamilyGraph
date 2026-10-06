@@ -106,11 +106,71 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # refusal guard：任何 active > 0 说明仍有在途租约，直接 DROP 会丢失容量真相。
+    # 祖先拒绝合同必须先于本迁移的任何 DDL（与 0051/0053/0055 同一约定）。
+    #
+    # SQLite 的 DDL 不保证事务回滚：若先 DROP 本迁移的表再由祖先拒绝，会留下半降级
+    # schema。更关键的是**深层降级**（相对偏移或绝对目标）：本迁移上方还有多个迁移，
+    # 它们各自的 preflight 会在**它们开始执行时**才抛错，而那时本迁移已经动了 DDL。
+    #
+    # 因此这里逐个复现同一走位，并把祖先的拒绝 helper 提前调用。每个守卫由**其后继**
+    # 唯一镜像表达（0049→0050、0051→0052、0053 内联），沿用该约定而不重写判定。
     if not _table_exists("agent_capacity_counters"):
         return
-    conn = op.get_bind()
-    in_use = conn.execute(
+
+    connection = op.get_bind()
+    context = op.get_context()
+    destination = context.opts.get("destination_rev")
+    if context.script is not None and destination is not None and down_revision is not None:
+        planned = {
+            item.revision
+            for item in context.script.iterate_revisions(
+                down_revision, destination, select_for_downgrade=True
+            )
+        }
+        # 生成器惰性：必须显式消费才会真正走位（否则守卫形同虚设）。
+        #
+        # 同时要从**每个 planned revision 的 down_revision** 再走一次：迁移自身的
+        # preflight 正是从它的父 revision 开始走位（见 0051/0053 的注释），而那一步
+        # 才是真正抛 "Ambiguous walk" 的地方。只从 revision 自己走会漏掉它，
+        # 结果本迁移已 DROP 表后才由祖先报错（实测 DDL_COUNT=2）。
+        for revision in planned:
+            list(
+                context.script.iterate_revisions(
+                    revision, destination, select_for_downgrade=True
+                )
+            )
+            revision_obj = context.script.get_revision(revision)
+            parent = revision_obj.down_revision if revision_obj is not None else None
+            if isinstance(parent, str):
+                list(
+                    context.script.iterate_revisions(
+                        parent, destination, select_for_downgrade=True
+                    )
+                )
+        if "0049_steward_candidate_evidence" in planned or destination != down_revision:
+            candidate_guard = context.script.get_revision("0050_term_alias_spouse_fix")
+            assert candidate_guard is not None
+            candidate_guard.module._refuse_if_candidate_evidence(connection)
+        if "0051_run_event_timing" in planned or destination != down_revision:
+            timing_guard = context.script.get_revision("0052_seed_lineage_membership_boundary")
+            assert timing_guard is not None
+            timing_guard.module._refuse_if_timing_evidence(connection)
+        if "0053_member_approval_and_labels" in planned:
+            if connection.scalar(
+                sa.text("SELECT 1 FROM space_member_approvals LIMIT 1")
+            ) or connection.scalar(sa.text("SELECT 1 FROM member_relation_labels LIMIT 1")):
+                raise RuntimeError(
+                    "owner-approval or relation-label evidence exists; "
+                    "retain data and roll forward"
+                )
+        if "0048_steward_terminology_publication" in planned:
+            merge_guard = context.script.get_revision("0048_steward_terminology_publication")
+            assert merge_guard is not None
+            merge_guard.module._preflight_parent_downgrade(planned=planned)
+
+    # 本迁移自己的 refusal guard：任何 active > 0 说明仍有在途租约，
+    # 直接 DROP 会丢失容量真相。
+    in_use = connection.execute(
         sa.text("SELECT count(*) FROM agent_capacity_counters WHERE active > 0")
     ).scalar()
     if in_use:
