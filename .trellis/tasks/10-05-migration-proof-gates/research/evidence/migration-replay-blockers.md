@@ -46,3 +46,17 @@ PG baseline**——是必需的，而不是风格偏好。
 ## 证据等级
 
 **L2**：真实隔离 PostgreSQL 单连接执行。尚未做多连接、迁移往返或 baseline 对账（L3）。
+
+## 可复跑产物（把 L2 从断言变成证据）
+
+```bash
+PGTEST_DSN=postgresql://postgres:probe@<隔离主机>:5432/familygraph \
+  ./backend/.venv/bin/python research/tools/pg_replay_probe.py
+```
+
+退出码：`0` = 全部符合预期；`1` = 有断言不符；`2` = 缺少 DSN 或驱动（环境阻塞，不算通过）。
+
+覆盖 7 个用例：三条历史迁移阻塞（0042/0022/0014）、**两个 SQLite 触发器**（0009/0045）、
+修复后的方言感知 CHECK（反证）、PostgreSQL 原生触发器形态（对照）。
+
+`PGTEST_DSN` 必须指向隔离实例；脚本不接受默认 DSN，避免误连开发库或线上。

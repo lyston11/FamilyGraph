@@ -82,6 +82,14 @@
 [ ] 代码、证据、worktree、提交一致
 ```
 
-## 当前阻塞
+## 当前状态与阻塞
 
-`10-05-migration-proof-gates` 仍在 planning。完成本计划并获得用户对最终规划摘要的明确批准后，才允许 `task.py start`；在此之前不 dispatch implement/check，不改业务代码。
+任务已 `in_progress`（Gate 0 通过；Gate 1/2 进行中）。当前阻塞：
+
+- **Gate 1 BLOCKED**：raw SQL 与 backup 路径仍只有正则命中，未结构化、未在两种数据库真实执行；index/constraint/trigger 已补 owner/status/evidence，但 raw SQL 尚未。
+- **Gate 2 BLOCKED**：缺静态调用图（当前只覆盖 `_settle`/`settle_attempt` 一条路径）；三把以上锁未实测；mutation 用例待补。
+- **Gate 3-7 未开始**：PostgreSQL baseline prototype、故障注入、导入对账、跨任务接缝、最终矩阵。
+
+已完成并可用：65 个事务入口分类（含强制机制与 mutation 验证）、方言阻塞探针、死锁探针、14 个触发器阻塞证据、环境 manifest。
+
+**不得**据此放行 `postgres-migration` 的业务实现。

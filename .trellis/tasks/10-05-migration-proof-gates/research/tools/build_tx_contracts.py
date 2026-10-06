@@ -40,10 +40,10 @@ C = {
  ("backend/app/services/agent_queue.py","_settle"):("A","终态不可复活","条件 UPDATE(status)","n/a","L0","**内含 fence → run 行锁**；counter 归还须在其前"),
  ("backend/app/services/agent_queue.py","prune_finished"):("A","条件删除","单语句","n/a","L0","无需锁"),
  # ---- 类别 B：lease + counter ----
- ("backend/app/services/agent_queue.py","lease_next"):("B","选 queued job 改 leased","SKIP LOCKED + CAS","candidate","L3","pg-control-proof.md"),
+ ("backend/app/services/agent_queue.py","lease_next"):("B","选 queued job 改 leased","SKIP LOCKED + CAS","candidate","L2","**原型 L3 / 入口 L2**：pg_control_proof.py 证明的是原型形态（proof_* 表），不是该真实入口在 PG 上的行为"),
  ("backend/app/services/agent_queue.py","enqueue_run"):("C","每 session 一个 active + 每账户 N 并发","session 行 + counter","tenant","L0","**含配额**"),
- ("backend/app/services/steward.py","lease_next_steward_job"):("B","**含 active_count 每空间上限**","counter 行 + SKIP LOCKED","tenant","L3","朴素移植实测越限 5/2"),
- ("backend/app/services/steward_assist.py","lease_attempt"):("B","**含 _in_flight_for_space 上限**","counter 行 + SKIP LOCKED","tenant","L3","朴素移植实测越限 5/2"),
+ ("backend/app/services/steward.py","lease_next_steward_job"):("B","**含 active_count 每空间上限**","counter 行 + SKIP LOCKED","tenant","L2","**原型 L3 / 入口 L2**；朴素移植实测越限 5/2，但未在该真实入口上验证"),
+ ("backend/app/services/steward_assist.py","lease_attempt"):("B","**含 _in_flight_for_space 上限**","counter 行 + SKIP LOCKED","tenant","L2","**原型 L3 / 入口 L2**；朴素移植实测越限 5/2，但未在该真实入口上验证"),
  # ---- 类别 C：父行/协调行锁 ----
  ("backend/app/api/action_cards.py","execute_card"):("C","不得并发建两个空间","ActionCard 行","parent","L0","docstring 自述该竞态"),
  ("backend/app/api/admin_steward.py","steward_delivery_retry"):("C","重试意图与审计同事务","intent 行","parent","L0",""),

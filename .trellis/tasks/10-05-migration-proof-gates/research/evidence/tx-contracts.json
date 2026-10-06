@@ -13,7 +13,7 @@
   },
   "by_evidence_level": {
     "L0": 62,
-    "L3": 3
+    "L2": 3
   },
   "cards": [
     {
@@ -237,8 +237,8 @@
       "invariant": "选 queued job 改 leased",
       "lock_object": "SKIP LOCKED + CAS",
       "order_position": "candidate",
-      "evidence_level": "L3",
-      "note": "pg-control-proof.md"
+      "evidence_level": "L2",
+      "note": "**原型 L3 / 入口 L2**：pg_control_proof.py 证明的是原型形态（proof_* 表），不是该真实入口在 PG 上的行为"
     },
     {
       "id": "TX-immediate_tx-backend/app/services/agent_queue.py:349",
@@ -363,8 +363,8 @@
       "invariant": "**含 active_count 每空间上限**",
       "lock_object": "counter 行 + SKIP LOCKED",
       "order_position": "tenant",
-      "evidence_level": "L3",
-      "note": "朴素移植实测越限 5/2"
+      "evidence_level": "L2",
+      "note": "**原型 L3 / 入口 L2**；朴素移植实测越限 5/2，但未在该真实入口上验证"
     },
     {
       "id": "TX-immediate_tx-backend/app/services/steward.py:707",
@@ -433,8 +433,8 @@
       "invariant": "**含 _in_flight_for_space 上限**",
       "lock_object": "counter 行 + SKIP LOCKED",
       "order_position": "tenant",
-      "evidence_level": "L3",
-      "note": "朴素移植实测越限 5/2"
+      "evidence_level": "L2",
+      "note": "**原型 L3 / 入口 L2**；朴素移植实测越限 5/2，但未在该真实入口上验证"
     },
     {
       "id": "TX-immediate_tx-backend/app/services/steward_assist.py:1671",
