@@ -1,44 +1,30 @@
+# Gate 1：方言语义矩阵（两库真实执行，语义比对）
 
-## 差异项逐项结论（Gate 1 要求：保留 / 适配 / 拒绝）
+由 `scripts/migration-proof/dialect_matrix_probe.py` 生成。
+结果已规范化（布尔→0/1，None→NULL），避免把 repr 差异误报为语义差异。
 
-### 1. 整数与布尔混用 —— **保留（可达性为零）**
+| 维度 | SQLite | PostgreSQL | 语义一致 |
+|---|---|---|---|
+| NULL 升序位置 | `1,2` | `1,2` | 是 |
+| NULL 降序位置 | `2,1` | `2,1` | 是 |
+| 整数除法 5/2 | `2` | `2` | 是 |
+| 字符串比较大小写 | `0` | `0` | 是 |
+| 字符串排序大小写 | `B,a,c` | `B,a,c` | 是 |
+| 整数与布尔混用 | `1` | `ERR:UndefinedFunction` | **否** |
+| JSON 数字取值 | `1` | `1` | 是 |
+| JSON 字符串取值 | `1` | `1` | 是 |
+| JSON 布尔取值 | `1` | `true` | **否** |
+| JSON null 取值 | `NULL` | `NULL` | 是 |
+| JSON 数字 = 1 | `JSON 数字 = 1:1` | `JSON 数字 = 1:1` | 是 |
+| JSON 字符串 = 1 | `JSON 字符串 = 1:0` | `JSON 字符串 = 1:0` | 是 |
+| 唯一列多个 NULL | `唯一列多个NULL:接受2` | `唯一列多个NULL:接受2` | 是 |
 
-```
-SQLite    : SELECT 1 = TRUE  ->  1
-PostgreSQL: SELECT 1 = TRUE  ->  UndefinedFunction
-```
+语义一致 11/13。
 
-**依据（可达性，不是「差不多」）**：
+## 差异项（需逐项给出保留/适配/拒绝结论）
 
-- 模型层用 `Boolean` 或 `Integer` 显式声明列类型，不混用；
-- 扫描确认 `app/` 中不存在「整数列与布尔字面量比较」的 SQL（`build_raw_sql_inventory`
-  的 `sqlite_only_function` 类别为 6 项，均为 JSON 相关，无布尔混用）；
-- 该差异只存在于应用不会写出的形状上。
+- 整数与布尔混用
+- JSON 布尔取值
 
-**若将来出现**：PG 会**报错**（而非静默给出不同结果），因此属于 fail-loud，不会造成
-静默数据错误。这正是可以「保留」的理由。
+本探针只负责**发现并记录**；结论由后续 Gate 给出。
 
-### 2. JSON 布尔取值 —— **保留（已由 DialectCheck 处理，且更严格）**
-
-```
-SQLite    : json_extract('{"b":true}','$.b')  ->  1（整数）
-PostgreSQL: '{"b":true}'::jsonb ->> 'b'       ->  'true'（文本）
-```
-
-**依据**：这与 `tests/test_dialect_checks.py` 已记录的已知分歧一致，且当时已判定可接受：
-
-- `source_span_json` 的 `version` 由 Python 整数字面量产生（`{"version": 1, ...}`）；
-- `source_kind` 只取字符串枚举；
-- 真实库中布尔型 `version` 为 **0 行**；
-- 方向是 PG **更严格**（拒绝而非放行）。
-
-`DialectCheck` 用 jsonb 对 jsonb 比较保留了类型敏感语义，且测试断言
-**不得**为消除该分歧而把表达式放松成接受字符串 `"1"`。
-
-## 结论
-
-13 项中 **11 项语义一致**，2 项差异均判定为**保留**，且都满足「PG 侧 fail-loud 或更严格」
-这一条件——不存在「静默给出不同结果」的差异。
-
-**但本矩阵不等于 Gate 1 通过**：它覆盖的是通用语义维度，尚未覆盖
-`build_raw_sql_inventory` 列出的全部 31 处 PRAGMA 与 23 处 SQLite DDL 的逐条执行。

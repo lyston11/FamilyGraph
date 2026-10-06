@@ -144,28 +144,45 @@ def main() -> int:
         print("  OK  违反顺序确实死锁（证明四把锁的顺序是承重的）")
 
     # 3) 多租户并行度：不同 tenant counter 不互相阻塞
+    #
+    # 不能与绝对阈值比较：经 SSH 隧道时连接建立本身就有百毫秒级开销，
+    # 「并行 0.3s」可能测成 2s 而被误判为阻塞（第一版即如此）。
+    # 改为**相对基线**：先测串行两次的耗时，再测并行的耗时，要求并行显著更短。
     with _conn(dsn) as c:
         c.execute("UPDATE tl_counters SET active=0")
         c.commit()
-    t0 = time.perf_counter()
 
-    def tenant_only(tenant: int) -> None:
+    HOLD = 0.5  # 持锁时长，取足够大以盖过连接开销
+
+    def hold(tenant: int) -> None:
         with _conn(dsn) as c, c.transaction():
             c.execute("SELECT active FROM tl_counters WHERE scope_kind='tenant'"
                       " AND scope_id=%s FOR UPDATE", (tenant,))
-            time.sleep(0.3)
+            time.sleep(HOLD)
 
-    ts = [threading.Thread(target=tenant_only, args=(t,)) for t in (1, 2)]
+    t0 = time.perf_counter()
+    hold(1)
+    hold(2)
+    serial = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    ts = [threading.Thread(target=hold, args=(t,)) for t in (1, 2)]
     for t in ts:
         t.start()
     for t in ts:
-        t.join(timeout=10)
-    elapsed = time.perf_counter() - t0
-    print(f"  两个不同 tenant counter 并行耗时 {elapsed:.2f}s（串行则约 0.6s）")
-    if elapsed > 0.5:
-        failures.append(f"不同 tenant counter 互相阻塞（{elapsed:.2f}s）")
+        t.join(timeout=15)
+    parallel = time.perf_counter() - t0
+
+    print(f"  两个不同 tenant counter：串行 {serial:.2f}s / 并行 {parallel:.2f}s"
+          f"（持锁 {HOLD}s，串行下界 {2 * HOLD:.1f}s）")
+    print("    注：经 SSH 隧道时连接建立开销可达秒级，绝对数值不可跨环境比较；"
+          "判定只用相对关系。")
+    # 串行下界 = 2×HOLD；并行若真正重叠，应显著低于该下界。
+    if parallel >= serial * 0.8:
+        failures.append(f"不同 tenant counter 疑似互相阻塞（串行 {serial:.2f}s，"
+                        f"并行 {parallel:.2f}s）")
     else:
-        print("  OK  不同租户 counter 不互相阻塞")
+        print("  OK  不同租户 counter 可并行（并行耗时显著低于串行）")
 
     with _conn(dsn) as c:
         c.execute("DROP TABLE IF EXISTS tl_counters, tl_runs CASCADE")
