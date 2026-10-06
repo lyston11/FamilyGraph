@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check lock, dialect, migration, backup, refusal and rollback compliance after each slice"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check fail-closed error, retry, recovery and rollback semantics after each slice"}
+{"file":".trellis/spec/backend/memory-rag-execution-contract.md","reason":"Check RAG authorization, citation, revision and execution identity safety"}
+{"file":".trellis/spec/backend/rag-index-lifecycle-contract.md","reason":"Check index lifecycle, maintenance lease, failure and rollback behavior"}
+{"file":".trellis/tasks/10-03-postgres-migration/research/evidence/execution-risk-register.md","reason":"Check that known execution failure classes remain covered and honestly classified"}
+{"file":".trellis/tasks/10-03-postgres-migration/research/evidence/solution-decision.md","reason":"Check that measured PostgreSQL lease, lock, dialect and RAG decisions remain enforced"}
+{"file":".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/prd.md","reason":"Check parent acceptance and multi-tenant isolation outcome"}

@@ -28,7 +28,8 @@
     "10-04-postgres-operations-cutover",
     "10-04-lexical-search-migration",
     "10-04-multitenant-load-acceptance",
-    "10-04-rag-lexical-search"
+    "10-04-rag-lexical-search",
+    "10-06-architecture-completion-orchestration"
   ],
   "parent": null,
   "relatedFiles": [],

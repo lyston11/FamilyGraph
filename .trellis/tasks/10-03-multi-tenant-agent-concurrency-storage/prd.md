@@ -169,7 +169,37 @@ postgres-operations-cutover ───────┤
 - 诊断指标、并发压测和故障注入验收矩阵；
 - 分阶段迁移、回滚、备份和开发环境验证。
 
-## Out of Scope
+## Continuous execution orchestration (2026-10-05)
+
+所有后续跨任务执行由 `10-06-architecture-completion-orchestration` 统一编排。该任务不是可选的文档汇总，而是父任务的连续执行协议和最终 release gate。
+
+### 唯一执行顺序
+
+```text
+C0 scope/env/worktree
+→ C1 PostgreSQL baseline/schema/dialect
+→ C2 counter/lease/CAS/settle/recovery
+→ C3 control-plane fault domain
+→ C4 Provider stream reliability
+→ C5 Redis coordination/degradation
+→ C6 PGroonga lexical + pgvector RAG
+→ C7 PostgreSQL operations/cutover
+→ C8 account×space×kind final matrix
+→ C9 dev shadow/writer stages
+→ C10 reconciliation/rollback/archive
+```
+
+### 后续模型的自主执行规则
+
+- 启动后不得因普通技术选择再次询问用户；使用父任务、编排任务和子任务材料中的固定决策。
+- 每个切片必须执行正向、负向、mutation、故障恢复、证据更新和 commit，然后继续下一个切片。
+- 普通测试失败、容器阻塞、依赖未完成、性能不足都必须分类、记录、修复或建立明确 blocker 后继续独立工作，不得停在口头汇报。
+- 只有线上/不可逆数据风险、凭据泄露、产品语义冲突或无法定义测试 oracle 才允许暂停。
+- 任何子任务不能用临时简化实现替代另一个未完成子任务；必须记录依赖并继续无依赖工作。
+- 父任务不得因子任务归档而自动完成；最终必须由多租户矩阵、真实对账、备份恢复和开发灰度共同闭合。
+
+完整执行清单、停止条件、提交顺序和最终命令见：
+`.trellis/tasks/10-06-architecture-completion-orchestration/{prd,design,implement}.md`。
 
 - 本任务直接实现所有业务 API 或重新设计家庭域授权；
 - 把 sidecar 变成可访问数据库的服务；

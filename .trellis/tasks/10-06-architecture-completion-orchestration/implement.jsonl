@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"PostgreSQL dialect, lock order, counter, migration refusal and rollback contracts"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check fail-closed error, retry, recovery and rollback semantics after each slice"}
+{"file":".trellis/spec/backend/memory-rag-execution-contract.md","reason":"RAG scope, revision, citation and authorization boundaries"}
+{"file":".trellis/spec/backend/rag-index-lifecycle-contract.md","reason":"Index version, maintenance lease, rebuild and failure semantics"}
+{"file":".trellis/tasks/10-03-postgres-migration/research/evidence/execution-risk-register.md","reason":"Known migration execution defects, evidence policy and blockers"}
+{"file":".trellis/tasks/10-03-postgres-migration/research/evidence/solution-decision.md","reason":"Measured PostgreSQL lease, lock, dialect and RAG boundary decisions that constrain orchestration"}
+{"file":".trellis/tasks/10-03-multi-tenant-agent-concurrency-storage/prd.md","reason":"Parent multi-tenant outcome, resource isolation and dependency boundaries"}
