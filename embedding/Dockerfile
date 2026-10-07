@@ -20,11 +20,16 @@
 FROM python:3.12-slim-bookworm AS exporter
 
 # 固定版本：导出结果必须可复现，浮动版本会让 ONNX 图随上游变化。
+#
+# 不含 `optimum`：导出脚本直接用 `torch.onnx.export`，不需要 optimum。
+# 曾误加 optimum==1.21.2，它与 transformers==4.44.2 冲突
+# （optimum 1.21.2 要求 transformers<4.43.0），且是**未使用**的依赖。
+#
+# 不含 `sentencepiece`：本模型是 BertTokenizer（vocab.txt/tokenizer.json），
+# 不用 sentencepiece。
 RUN pip install --no-cache-dir \
     torch==2.4.1 \
-    transformers==4.44.2 \
-    optimum==1.21.2 \
-    sentencepiece==0.2.0
+    transformers==4.44.2
 
 WORKDIR /export
 COPY export_model.py /export/export_model.py

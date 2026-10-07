@@ -6,12 +6,18 @@
 
 ## 关键点：`last_hidden_state`，不是 pooled 输出
 
-Optimum 的 `--task feature-extraction` 导出 `last_hidden_state`（`[batch, seq, hidden]`），
-池化在运行期用 numpy 做。这样池化方式（CLS vs mean）由我们显式控制，且与
-`1_Pooling/config.json` 的声明一致（该模型是 CLS）。
+导出 `last_hidden_state`（`[batch, seq, hidden]`），池化在运行期用 numpy 做。
+这样池化方式（CLS vs mean）由我们显式控制，且与 `1_Pooling/config.json` 的声明
+一致（该模型是 CLS）。
 
-若导出时让 transformers 做池化，池化方式会固化在 ONNX 图里，运行时**无法校验**——
+若导出时让模型做池化，池化方式会固化在 ONNX 图里，运行时**无法校验**——
 取错池化不会报错，只会让检索质量静默下降。
+
+## 为什么不用 optimum
+
+`optimum` 的导出封装会引入额外的版本约束（实测 `optimum==1.21.2` 要求
+`transformers<4.43.0`，与 `transformers==4.44.2` 冲突），而 `torch.onnx.export`
+已足够且依赖更少。
 
 ## 为什么固定 opset
 

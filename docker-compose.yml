@@ -130,6 +130,65 @@ services:
       retries: 3
       start_period: 10s
 
+  # Embedding 服务（C6）：本地 CPU 推理，**硬限制**资源。
+  #
+  # ## 为什么独立服务而不是在 api 进程内加载模型
+  #
+  # api 是 4 核机器上承载生产与开发的进程。把模型放进 api 意味着：
+  # 模型内存计入 api、推理线程与请求处理争抢同一进程、OOM 会一起带走 api。
+  # 独立容器让上述三者都被隔离，且能被 cpus/mem_limit 硬限制。
+  #
+  # ## 资源硬限制（本服务的核心保障）
+  #
+  # 模型选得小**不等于**不会拖垮服务器；真正的保障是下面这些限制 + 应用层的
+  # 有界闸门（`embedding/app/gate.py`）。三层：容器 cpus/mem_limit 是兜底，
+  # 进程线程数是第二层，应用层并发/队列是第三层。
+  embedding:
+    build:
+      context: ./embedding
+    image: familygraph-embedding:0.1.0
+    restart: unless-stopped
+    # 不依赖 api：它不需要数据库也不需要 api 启动完成。反向依赖由 api 按需调用。
+    environment:
+      EMBEDDING_MODEL_NAME: bge-small-zh-v1.5
+      EMBEDDING_DIMENSION: "512"
+      EMBEDDING_MAX_TOKENS: "512"
+      # 并发 1：这台机器同时跑生产与开发，embedding 不能与它们抢核。
+      EMBEDDING_MAX_CONCURRENT: "1"
+      # 有界队列：满了立即 429（背压），不无限排队。
+      EMBEDDING_MAX_WAITING: "8"
+      EMBEDDING_WAIT_TIMEOUT_SECONDS: "5"
+      EMBEDDING_MAX_TEXTS_PER_REQUEST: "16"
+      EMBEDDING_MAX_CHARS_PER_TEXT: "8000"
+      EMBEDDING_THREADS: "1"
+    networks:
+      - backend
+    # ---- 硬限制 ----
+    # cpus: 1.0 = 最多 1 核等效算力。不是「给数据库留 3 核」的保证，
+    #   而是「embedding 最多用 1 核」的保证；主服务是否受影响仍需观测。
+    cpus: "1.0"
+    mem_limit: 1g
+    memswap_limit: 1g
+    # 不发布宿主端口：只在 internal 网络内被 api 访问。
+    # 不给日志驱动额外配置：默认 json-file 已有上限（见 x-logging 片段）。
+    healthcheck:
+      # 用 /readyz：它会检查模型是否已加载。用 /healthz 会让「模型加载失败」
+      # 显示为健康。
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/readyz',timeout=3).status==200 else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      # 模型加载需要时间；start_period 覆盖它，避免启动期被判定不健康而重启
+      # （重启会重新加载模型，形成「永远起不来」的循环）。
+      start_period: 120s
+      retries: 3
+    stop_grace_period: 15s
+
   web:
     build: ./frontend
     image: familygraph-web:0.1.0
