@@ -59,13 +59,14 @@ C3-C10 todo 见下表
 
 | # | 未完成项 | Owner | 依赖 | 恢复条件 | 下一命令 |
 |---|---|---|---|---|---|
-| 1 | RAG：词法已接入真实 schema；**pgvector 管线已实测（未接入 `search_rag`）**；**embedding 服务已构建实测（未部署）** | `10-03-pgvector-rag` | — | 服务已可用 | 把 `embed_documents`/`fuse_candidates` 接入 `search_rag` 与 maintenance tick |
+| 1 | ~~RAG 向量路径~~ → **已完成**：分段、索引、`search_rag` union、maintenance tick 全部接线；增益 7/8 vs 词法 0/8 | `10-03-pgvector-rag` | — | — | 剩余：在有 PGroonga 的实例上复跑对照 |
 | 2 | ~~Redis 接入准入路径~~ → **已完成**（负缓存形态） | — | — | — | 剩余：wakeup/pub-sub、token bucket、circuit hint |
 | 3 | ~~control-plane AC-5 分进程~~ → **已完成**（两个独立服务 + profile 门禁的 combined） | — | — | 剩余：真实 `docker compose up` 端到端观察 | 起两个 sidecar 并验证互不干扰 |
 | 4 | ~~Provider circuit breaker~~ 与 ~~backpressure~~ → **均已完成**（背压实测已正确并补了守护断言） | — | — | — | — |
 | 5 | ~~PITR / WAL archive~~ → **已完成**（真实归档 + 恢复到目标 LSN + 负向断言）；HA/failover 仍待做 | `10-04-postgres-operations-cutover` | — | 剩余：HA/failover、RPO/RTO、多时间线 | 见 `c7-pitr.md` |
 | 6 | ~~PgBouncer 兼容性~~ → **已完成**：配额守恒与直连逐项一致；prepared statement 失败模式已量化（部署二选一） | — | — | 剩余：连接预算匹配、重启恢复、多实例 failover | 见 `c7-pgbouncer.md` |
 | 7 | 真实多租户负载 p95/p99 | `10-04-multitenant-load-acceptance` | 需要真实多实例部署 | 部署就绪 | 按 C8 探针的场景在真实部署上重跑 |
+| 10 | **embedding 服务已部署但未被调用**：dev 仍 SQLite，无 `DATABASE_URL`/`EMBEDDING_BASE_URL` | 本任务（C9） | 需要开发环境切换 | C9 operations gate | 见 `c9-dev-cutover.md` 的分阶段步骤 |
 | 8 | 开发环境灰度（C9 shadow → writer） | 本任务 | 需要开发环境部署 | operations Gate 通过 | 按 `FG_WRITER_STAGE` 逐级推进并观察 `/ready` |
 | 9 | ~~真实历史库导入与对账~~ → **已完成**：真实快照 87 表 / 143,134 行导入成功，行数 + 列级摘要双重对账一致 | — | — | 剩余：增量导入、导入期持续写入、线上规模 | 见 `c8-real-snapshot-import.md` |
 
