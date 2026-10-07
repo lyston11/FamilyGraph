@@ -531,6 +531,50 @@ def main() -> int:
             f"有 {invariants['terminal_runs_without_settled_at']} 个终态 run 缺 settled_at"
         )
 
+    # ---- 4b) 修复序列（**导入后必需**）----
+    #
+    # ## 为什么这是必需步骤而不是可选优化
+    #
+    # 导入时显式保留了原 `id`，因此 PostgreSQL 的 sequence 仍停在初始值。
+    # 之后应用插入新行时，sequence 会给出**已被占用**的 id，报
+    # `duplicate key value violates unique constraint`。
+    #
+    # 实测后果：dev 切换后 maintenance tick 每轮失败（`IntegrityError: duplicate key
+    # ... pk_steward_jobs`），steward 作业完全无法创建。这是**静默**的——健康检查
+    # 仍是 200，只有维护日志里能看到。
+    #
+    # 用 `setval(seq, max(id))` 把每个序列对齐到当前最大 id。
+    print("4b) 修复序列（导入后必需）")
+    repaired = 0
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT c.relname AS table_name, a.attname AS column_name,
+                       pg_get_serial_sequence(quote_ident(c.relname), a.attname) AS seq
+                  FROM pg_class AS c
+                  JOIN pg_attribute AS a ON a.attrelid = c.oid
+                 WHERE c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+                 ORDER BY c.relname, a.attnum
+                """
+            )
+        ).fetchall()
+        for table_name, column_name, seq in rows:
+            if not seq:
+                continue
+            # `pg_get_serial_sequence` 对非 serial/identity 列返回 NULL，跳过。
+            max_id = conn.execute(
+                text(f'SELECT COALESCE(MAX("{column_name}"), 0) FROM "{table_name}"')
+            ).scalar()
+            if max_id:
+                conn.execute(
+                    text("SELECT setval(:seq, :value, true)"),
+                    {"seq": seq, "value": int(max_id)},
+                )
+                repaired += 1
+    print(f"   已对齐 {repaired} 个序列")
+    report["sequences_repaired"] = repaired
+
     # ---- 5) refusal：差异不自动修复 ----
     if backfill_failures:
         failures.append(
