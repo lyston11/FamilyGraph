@@ -170,23 +170,52 @@ def resolve_embedder(config: EmbeddingConfig) -> Embedder:
 #: 与 `rag_chunks` 同源：撤权后向量**不会**自动消失（实测），因此检索必须
 #: 按这些列过滤，而不是依赖向量被删除。
 def pgvector_ddl(dimension: int) -> str:
+    """分段向量的 DDL。
+
+    ## 为什么是**分段**而不是「每 chunk 一个向量」
+
+    模型上限 512 tokens，而 RAG 块是 1200 字符固定切分（≈500+ tokens）。
+    一个向量代表整个块意味着**必然截断**——后半段内容不进向量，检索永远命不中它。
+    因此向量按 `embedding_chunking` 的分段存储，检索时取每 chunk 的最佳分段。
+
+    ## 为什么列维度是动态的
+
+    `vector(N)` 的 N 必须与 embedder 维度一致。不一致时插入失败——这是**刻意**的
+    fail-loud：静默截断或补齐会让向量语义错乱且难以发现。
+
+    ## 为什么带 revision / scope / algorithm
+
+    与 `rag_chunks` 同源：撤权后向量**不会**自动消失（实测确认），因此检索必须
+    按这些列过滤，而不是依赖向量被删除。`algorithm` 使换切分算法后能识别旧分段
+    （新算法产生不同 `segment_index` 与偏移）。
+
+    ## 为什么 HNSW 索引不承担授权
+
+    索引只加速距离计算。过滤条件在查询里（见 `build_vector_candidates`），
+    因为索引条目在撤权后仍然存在。
+    """
     if dimension <= 0:
         raise ValueError("dimension 必须为正")
     return f"""
-CREATE TABLE IF NOT EXISTS rag_chunk_embeddings (
+CREATE TABLE IF NOT EXISTS rag_embedding_segments (
   chunk_id int NOT NULL REFERENCES rag_chunks(id) ON DELETE CASCADE,
   model text NOT NULL,
+  segment_index int NOT NULL,
+  algorithm text NOT NULL,
+  char_start int NOT NULL,
+  char_end int NOT NULL,
   revision int NOT NULL,
   scope text NOT NULL,
   embedding vector({dimension}) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (chunk_id, model)
+  PRIMARY KEY (chunk_id, model, segment_index)
 );
--- HNSW 用于 ANN。注意它**不**承担授权：过滤条件在查询里，见 build_vector_candidates。
-CREATE INDEX IF NOT EXISTS ix_rag_chunk_embeddings_hnsw
-  ON rag_chunk_embeddings USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS ix_rag_chunk_embeddings_scope
-  ON rag_chunk_embeddings (model, revision);
+-- ANN 索引：只加速距离计算，**不**承担授权。
+CREATE INDEX IF NOT EXISTS ix_rag_embedding_segments_hnsw
+  ON rag_embedding_segments USING hnsw (embedding vector_cosine_ops);
+-- 过滤列索引：授权过滤是主查询的一部分，需要能走索引。
+CREATE INDEX IF NOT EXISTS ix_rag_embedding_segments_filter
+  ON rag_embedding_segments (model, revision, scope);
 """.strip()
 
 
@@ -196,7 +225,7 @@ def build_vector_candidates(
     eligibility: str,
     over_fetch: int = 8,
 ) -> Any:
-    """构造 **filter-then-ANN** 的向量候选 SQL。
+    """构造 **filter-then-ANN** 的向量候选 SQL（按 chunk 取最佳分段）。
 
     ## 为什么不是 `ORDER BY embedding <=> :q LIMIT k` 然后过滤
 
@@ -207,14 +236,21 @@ def build_vector_candidates(
     ## 形态
 
     ```sql
-    WITH authorized AS (           -- ① 先按授权过滤
-      SELECT ... FROM rag_chunk_embeddings e JOIN rag_chunks c ...
-      WHERE <eligibility>
+    WITH authorized AS (        -- ① 先按授权过滤（承重）
+      SELECT ... FROM rag_embedding_segments s JOIN rag_chunks c JOIN rag_documents d
+       WHERE <eligibility>
+    ),
+    ranked AS (                 -- ② 在授权集合内按距离排序，每 chunk 取最佳分段
+      SELECT ..., row_number() OVER (PARTITION BY chunk_id
+                                     ORDER BY embedding <=> :q, segment_index) AS rn
+        FROM authorized
     )
-    SELECT ... FROM authorized     -- ② 再在授权集合上做 ANN
-    ORDER BY embedding <=> :q
-    LIMIT :limit
+    SELECT ... FROM ranked WHERE rn = 1 ORDER BY distance LIMIT :limit
     ```
+
+    ② 的 `PARTITION BY chunk_id` 是必要的：一个 chunk 有多个分段，同一 chunk 可能
+    多个分段命中。下游以 chunk 为引用单位，因此必须去重，且取**距离最小**的那个
+    （最相关的分段代表该 chunk）。
 
     ## over_fetch
 
@@ -227,19 +263,31 @@ def build_vector_candidates(
         raise ValueError("over_fetch 必须 >= 1")
     return text(f"""
         WITH authorized AS (
-            SELECT e.chunk_id, e.embedding,
+            SELECT s.chunk_id, s.segment_index, s.embedding,
                    c.document_id, c.text, c.index_version, c.chunk_index,
-                   c.source_revision, c.status,
+                   c.source_revision, c.token_estimate, c.status,
                    d.source_type, d.source_id, d.scope, d.sensitivity, d.revision
-              FROM rag_chunk_embeddings e
-              JOIN rag_chunks c ON c.id = e.chunk_id
-              JOIN rag_documents d ON d.id = c.document_id
+              FROM rag_embedding_segments AS s
+              JOIN rag_chunks AS c ON c.id = s.chunk_id
+              JOIN rag_documents AS d ON d.id = c.document_id
              WHERE {eligibility}
+        ),
+        ranked AS (
+            SELECT authorized.*,
+                   (embedding <=> CAST(:query_vector AS vector)) AS distance,
+                   row_number() OVER (
+                       PARTITION BY chunk_id
+                       ORDER BY embedding <=> CAST(:query_vector AS vector), segment_index
+                   ) AS rn
+              FROM authorized
         )
         SELECT chunk_id, document_id, text, index_version, chunk_index, source_revision,
-               source_type, source_id, scope, sensitivity, revision,
-               (embedding <=> CAST(:query_vector AS vector)) AS distance
-          FROM authorized
+               token_estimate, source_type, source_id, scope, sensitivity, revision,
+               -- 别名成 `rank` 使结果可直接交给 `_rows_to_hits`：
+               -- 余弦距离与 bm25 都是「越小越相关」，方向一致，因此不需要反转。
+               distance AS rank
+          FROM ranked
+         WHERE rn = 1
          ORDER BY distance ASC, chunk_id ASC
          LIMIT :limit OFFSET :offset
     """)
@@ -289,3 +337,19 @@ def fuse_candidates(
     # 否则同分候选的相对顺序取决于字典插入顺序，不可复现。
     ordered = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
     return [payload[chunk_id] for chunk_id, _score in ordered[:limit]]
+
+
+#: 部署配置的向量维度。`0` = 未启用向量检索。
+#:
+#: ## 为什么维度必须来自配置而不是从表里推断
+#:
+#: `vector(N)` 的 N 在 DDL 里固定。若查询用错维度，PostgreSQL 会直接报错（好），
+#: 但**应用侧**的 embedder 可能产出不同维度（例如模型换了而配置没改）。
+#: 因此维度是**单一配置来源**，由 `embed()` 的结果与之核对，不一致即跳过向量检索
+#: 并记警告——而不是猜。
+def configured_dimension() -> int:
+    raw = os.environ.get("RAG_EMBEDDING_DIMENSION", "0")
+    try:
+        return int(raw)
+    except ValueError:
+        return 0

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -45,6 +46,8 @@ from app.services.policy_consumer import is_policy_consumer_kind
 from app.services.rag_budget import estimate_tokens
 from app.services.rag_query import QueryPlan, plan_query
 from app.utils.timeutil import utcnow
+
+logger = logging.getLogger(__name__)
 
 # v2: deterministic sentence/paragraph chunking with bounded overlap.  The
 # chunk algorithm version is part of chunk identity; a switch materializes a
@@ -1284,9 +1287,7 @@ def search_rag(
     ):
         if len(hits) >= limit or scanned >= _FALLBACK_SCAN_LIMIT:
             break
-        collect(
-            lexical.sql, {**params, **lexical.params}, rank_by_order=lexical.rank_by_order
-        )
+        collect(lexical.sql, {**params, **lexical.params}, rank_by_order=lexical.rank_by_order)
     if trace is not None:
         trace.update(
             {
@@ -1300,7 +1301,168 @@ def search_rag(
                 else "exhausted",
             }
         )
+
+    # ---- 向量候选：**可选增强**，失败不改变检索结果 ----
+    #
+    # 三条硬性约束（每条都有测试）：
+    #
+    # 1. **只增不减**：向量候选只能**补充**词法结果，不能替换或减少它们。
+    #    若向量路径返回空（embedding 不可用、无向量、低相关性），必须保持词法结果。
+    # 2. **不重排已有命中**：词法命中保持原有顺序。RRF 只用于把**新增**候选
+    #    插到合适位置。原因：词法顺序是既有行为，改变它会让所有历史回归失效，
+    #    而向量质量尚未经中文基准验证。
+    # 3. **复用同一授权过滤**：向量查询用 `_ELIGIBILITY_SQL`（与词法完全相同）。
+    #    检索索引**不承载授权**（撤权只改主表状态，索引条目仍在），因此这里
+    #    少一个条件就是授权漏洞。
+    vector_hits, vector_denied = _vector_candidates(
+        db,
+        actor=actor,
+        account=account,
+        space_id=space_id,
+        agent_kind=agent_kind,
+        query=query,
+        eligibility=eligibility,
+        seen_chunk_ids=seen_chunk_ids,
+        limit=limit,
+    )
+    denied += vector_denied
+    if trace is not None:
+        trace["vector_candidates"] = len(vector_hits)
+    if vector_hits:
+        for hit in vector_hits:
+            if len(hits) >= limit:
+                break
+            seen_chunk_ids.add(hit.chunk_id)
+            hits.append(hit)
+
     return hits
+
+
+def _vector_candidates(
+    db: Session,
+    *,
+    actor: User,
+    account: Account,
+    space_id: int,
+    agent_kind: str,
+    query: str,
+    eligibility: str,
+    seen_chunk_ids: set[int],
+    limit: int,
+) -> tuple[list[RAGHit], int]:
+    """取向量候选（filter-then-ANN），返回 `(命中, 被拒数)`。任何失败返回空。
+
+    ## 为什么必须复用 `_rows_to_hits`
+
+    这是本函数最重要的安全性质。`_rows_to_hits` 会：
+
+    1. 对每个候选**再次**执行 `memory_sources.document_readable(...)` 可见性判定；
+    2. 生成 `citation_handle`、`allowed_scopes`、`content_hash`。
+
+    若向量路径自己构造 `RAGHit`，就会**绕过第 1 条**——而检索索引**不承载授权**
+    （实测：撤权只改主表状态，索引条目仍在）。那意味着向量路径能返回用户已无权
+    看到的文档。因此这里把行交给同一个构造函数，使两条路径的授权与引用投影
+    完全一致。
+
+    ## 为什么失败必须返回空而不是抛错
+
+    Embedding 是**可选加速**。它不可用时检索必须继续用词法路径——否则「向量服务
+    挂了」会升级成「用户问不了问题」。
+
+    ## 为什么用 filter-then-ANN
+
+    实测 post-filter 在低选择性下静默返回不足 k（允许 1/10 空间时只剩 1 条）。
+    而 RAG **无法区分**「无相关内容」与「被授权过滤掉」，因此必须先在授权集合内
+    过滤，再排序。见 `rag_embeddings.build_vector_candidates`。
+    """
+    from app.services import embedding_client, rag_embeddings
+
+    if not embedding_client.enabled():
+        return [], 0
+    if db.bind is None or db.bind.dialect.name != "postgresql":
+        # 向量存储需要 pgvector；SQLite 上没有该类型，直接跳过（不是错误）。
+        return [], 0
+
+    dimension = rag_embeddings.configured_dimension()
+    if dimension <= 0:
+        return [], 0
+
+    try:
+        result = _run_coro_blocking(embedding_client.embed_query(query))
+    except Exception:  # noqa: BLE001 - 任何失败都回退词法
+        return [], 0
+    if not result.usable or not result.vectors:
+        return [], 0
+    if result.dimension != dimension:
+        # 维度不一致说明配置漂移（模型换了但 RAG_EMBEDDING_DIMENSION 未同步）。
+        # 不能猜着用：`vector(N)` 不匹配会让查询直接报错。
+        logger.warning(
+            "embedding 维度 %d 与配置 %d 不一致，跳过向量检索",
+            result.dimension,
+            dimension,
+        )
+        return [], 0
+
+    literal = "[" + ",".join(f"{v:.7f}" for v in result.vectors[0]) + "]"
+    sql = rag_embeddings.build_vector_candidates(dimension=dimension, eligibility=eligibility)
+    try:
+        rows = (
+            db.execute(sql, {"query_vector": literal, "limit": limit * 2, "offset": 0})
+            .mappings()
+            .all()
+        )
+    except Exception:  # noqa: BLE001 - 表不存在/扩展缺失等都回退
+        db.rollback()
+        logger.warning("向量检索查询失败，回退词法结果")
+        return [], 0
+
+    # 交给同一个构造函数：授权复核与引用投影与词法路径完全一致。
+    hits, denied = _rows_to_hits(
+        db,
+        rows,
+        actor=actor,
+        account=account,
+        space_id=space_id,
+        agent_kind=agent_kind,
+        rank_by_order=False,
+    )
+    return [hit for hit in hits if hit.chunk_id not in seen_chunk_ids], denied
+
+
+def _run_coro_blocking(coro: Any) -> Any:
+    """在同步上下文中跑一个协程。
+
+    若当前线程已有运行中的事件循环（例如从 async 端点调用），
+    `asyncio.run` 会抛 `RuntimeError`。此时在**新线程**里跑，避免与现有循环冲突。
+    新线程是必要的：不能阻塞调用方的事件循环。
+    """
+    import asyncio
+    import threading
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # 没有运行中的循环：直接跑（常见路径：请求线程/工具线程）。
+        return asyncio.run(coro)
+
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            box["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001
+            box["error"] = exc
+
+    from app.services import embedding_client
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout=embedding_client.REQUEST_TIMEOUT_SECONDS + 5)
+    if "error" in box:
+        raise box["error"]
+    if "value" not in box:
+        raise TimeoutError("embedding 客户端线程未在超时内结束")
+    return box["value"]
 
 
 def expire_due_memories(

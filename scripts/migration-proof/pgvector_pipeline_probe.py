@@ -77,7 +77,7 @@ def main() -> int:
 
     with engine.begin() as conn:
         conn.execute(
-            text("DROP TABLE IF EXISTS rag_chunk_embeddings, rag_chunks, rag_documents CASCADE")
+            text("DROP TABLE IF EXISTS rag_embedding_segments, rag_chunks, rag_documents CASCADE")
         )
         conn.execute(
             text(
@@ -104,8 +104,18 @@ def main() -> int:
                 "(3,'memory','m3','private','normal',1,'revoked')"
             )
         )
+        # chunk 5 是**长文本**：会产生多个分段，用于验证
+        # `PARTITION BY chunk_id` 去重（每 chunk 取最佳分段）。
+        long_body = "".join(f"第{i}位亲属的关系说明。" for i in range(80))
         for chunk_id, (doc_id, body) in enumerate(
-            [(1, "叔叔和侄子"), (1, "祖父"), (2, "外祖父"), (3, "叔叔")], start=1
+            [
+                (1, "叔叔和侄子"),
+                (1, "祖父"),
+                (2, "外祖父"),
+                (3, "叔叔"),
+                (1, long_body),
+            ],
+            start=1,
         ):
             conn.execute(
                 text(
@@ -126,23 +136,35 @@ def main() -> int:
             )
         )
     print(f"  索引报告: {report.summary()}")
-    if report.indexed != 3:
-        failures.append(f"应索引 3 条（撤权文档被跳过），实际 {report.indexed}")
+    if report.indexed != 4:
+        failures.append(f"应索引 4 个 chunk（撤权文档被跳过），实际 {report.indexed}")
+    # 长文本必须产生**多个**分段——否则等于整段截断。
+    if report.segments_written <= report.indexed:
+        failures.append(
+            f"分段数 {report.segments_written} 未超过 chunk 数 {report.indexed}："
+            "长文本未被切分，向量会因截断丢失后半段"
+        )
+    else:
+        print(f"  OK  长文本被切分：{report.segments_written} 个分段覆盖 {report.indexed} 个 chunk")
     if report.failed:
         failures.append(f"索引失败 {report.failed} 条")
 
     with engine.begin() as conn:
-        stored = conn.execute(text("SELECT count(*) FROM rag_chunk_embeddings")).scalar()
-        print(f"  向量行数 {stored}（期望 3：撤权文档不产生**新**向量）")
-        if stored != 3:
-            failures.append(f"向量行数 {stored}，期望 3")
+        stored = conn.execute(text("SELECT count(*) FROM rag_embedding_segments")).scalar()
+        chunks_indexed = conn.execute(
+            text("SELECT count(DISTINCT chunk_id) FROM rag_embedding_segments")
+        ).scalar()
+        print(f"  分段向量行数 {stored}，覆盖 {chunks_indexed} 个 chunk（期望 4：撤权文档不产生新向量）")
+        if chunks_indexed != 4:
+            failures.append(f"覆盖 {chunks_indexed} 个 chunk，期望 4")
 
         # 撤权**前**已存在的向量不会自动消失。手工插入一个以证明「查询侧过滤承重」。
         # 若只依赖「撤权文档没有向量」，过滤看起来可有可无——那是错的。
         conn.execute(
             text(
-                "INSERT INTO rag_chunk_embeddings (chunk_id, model, revision, scope, embedding)"
-                " SELECT c.id, 'stub', d.revision, d.scope, CAST(:v AS vector)"
+                "INSERT INTO rag_embedding_segments (chunk_id, model, segment_index, algorithm,"
+                " char_start, char_end, revision, scope, embedding)"
+                " SELECT c.id, 'stub', 0, 'probe', 0, 1, d.revision, d.scope, CAST(:v AS vector)"
                 " FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id"
                 " WHERE c.id = 4"
             ),
@@ -157,9 +179,12 @@ def main() -> int:
             dimension=DIM, eligibility="c.status = 'active' AND d.status = 'active'"
         )
         ids = [r[0] for r in conn.execute(filtered, {"query_vector": literal, "limit": 10, "offset": 0}).fetchall()]
-        print(f"  带过滤候选 {ids}（期望不含撤权 chunk 4）")
+        print(f"  带过滤候选 {ids}（期望不含撤权 chunk 4；每 chunk 只出现一次）")
         if 4 in ids:
             failures.append("撤权 chunk 出现在带过滤结果里")
+        # PARTITION BY 去重：多分段 chunk 不得重复出现。
+        if len(ids) != len(set(ids)):
+            failures.append(f"同一 chunk 重复出现（PARTITION BY 未生效）：{ids}")
 
         unfiltered = rag_embeddings.build_vector_candidates(
             dimension=DIM, eligibility="1=1"
@@ -186,7 +211,7 @@ def main() -> int:
 
     with engine.begin() as conn:
         conn.execute(
-            text("DROP TABLE IF EXISTS rag_chunk_embeddings, rag_chunks, rag_documents CASCADE")
+            text("DROP TABLE IF EXISTS rag_embedding_segments, rag_chunks, rag_documents CASCADE")
         )
 
     if failures:

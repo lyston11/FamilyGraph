@@ -79,12 +79,27 @@ def test_filter_then_ann_puts_filter_before_ordering():
         )
     )
     assert "WITH authorized AS" in sql, "缺少先过滤的 CTE"
-    cte_body = sql.split("WITH authorized AS")[1].split(")\n")[0]
-    assert "c.status = 'active'" in cte_body, "过滤条件不在 CTE 内（变成了 post-filter）"
-    # ORDER BY 必须在外层、对 authorized 做
+    # 第二个 CTE 以逗号分隔（`WITH a AS (...), ranked AS (...)`）。
+    assert "ranked AS" in sql, "缺少去重用的 ranked CTE"
+
+    # ① 过滤必须在**第一个** CTE 内：`authorized` 只做过滤，不做排序。
+    authorized = sql.split("WITH authorized AS")[1].split("ranked AS")[0]
+    assert "c.status = 'active'" in authorized, "过滤条件不在 authorized CTE 内（变成 post-filter）"
+    assert "<=>" not in authorized, "authorized CTE 不应包含距离排序（过滤与排序必须分离）"
+
+    # ② 距离运算符必须在 ranked 内（每个分段只算一次），而不是在外层重复计算。
+    ranked = sql.split("ranked AS")[1].split("SELECT chunk_id, document_id")[0]
+    assert "<=>" in ranked, "缺少向量距离运算符"
+    assert (
+        "PARTITION BY chunk_id" in ranked
+    ), "缺少 PARTITION BY：同一 chunk 的多个分段会重复出现在结果里"
+    assert "row_number()" in ranked, "缺少每 chunk 取最佳分段的去重"
+
+    # ③ 外层必须用**已算好**的 distance 排序，不重复计算距离。
     outer = sql.split("SELECT chunk_id, document_id")[1]
     assert "ORDER BY distance ASC" in outer
-    assert "<=>" in outer, "缺少向量距离运算符"
+    assert "<=>" not in outer, "外层重复计算距离（应在 ranked 内算一次）"
+    assert "WHERE rn = 1" in outer, "外层未按每 chunk 最佳分段过滤"
 
 
 def test_vector_query_rejects_bad_parameters():
