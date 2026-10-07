@@ -150,8 +150,11 @@ def main() -> int:
 
     # ---- 1) 建立 PostgreSQL baseline（ORM metadata + 扩展索引）----
     print("1) 建立 baseline")
+    # 用**当前解释器**（`sys.executable`）而不是硬编码的 `backend/.venv/bin/python`：
+    # 后者在开发检出上不含 psycopg（只有探针 venv 有），会以「SKIP: 需要 psycopg 与
+    # sqlalchemy」exit 2 静默失败，表现为「baseline 建立失败」而看不出原因。
     proc = subprocess.run(
-        [str(BACKEND / ".venv/bin/python"), str(ROOT / "scripts/migration-proof/pg_baseline_build.py")],
+        [sys.executable, str(ROOT / "scripts/migration-proof/pg_baseline_build.py")],
         cwd=str(BACKEND), env={**os.environ}, capture_output=True, text=True, timeout=900,
     )
     if proc.returncode != 0:
