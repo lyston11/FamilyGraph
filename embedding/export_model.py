@@ -74,6 +74,11 @@ def main() -> int:
     # tokenizer.json 是运行期唯一需要的分词文件（`tokenizers` 直接读它）。
     tokenizer.save_pretrained(str(OUT_DIR))
 
+    # 模型 config.json 必须单独保存：`tokenizer.save_pretrained` **不会**写它
+    # （实测报 `No such file or directory: '/export/out/config.json'`）。
+    # 运行期用它核对 `hidden_size` 与配置的维度是否一致。
+    model.config.save_pretrained(str(OUT_DIR))
+
     # 池化配置必须一起带走：`model.py` 会读它并校验 CLS 池化，缺失即拒绝就绪。
     from huggingface_hub import hf_hub_download
 
@@ -85,6 +90,10 @@ def main() -> int:
     config = json.loads((OUT_DIR / "config.json").read_text())
     hidden = int(config["hidden_size"])
     print(f"hidden_size={hidden}（运行期维度必须与此一致）")
+    if hidden != 512:
+        # 本服务默认 EMBEDDING_DIMENSION=512。若模型换成不同维度，必须同步改配置，
+        # 否则插入 `vector(N)` 会失败——提前失败比运行期报错清楚。
+        print(f"警告：hidden_size={hidden} 与默认配置 512 不一致，需同步 EMBEDDING_DIMENSION")
     print("导出完成：", sorted(p.name for p in OUT_DIR.iterdir()))
     return 0
 
