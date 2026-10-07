@@ -27,9 +27,14 @@ FROM python:3.12-slim-bookworm AS exporter
 #
 # 不含 `sentencepiece`：本模型是 BertTokenizer（vocab.txt/tokenizer.json），
 # 不用 sentencepiece。
+#
+# `onnx` 是**必需**的：`torch.onnx.export` 在写 protobuf 时需要它
+# （实测缺失时报 `Module onnx is not installed!`）。它只是导出期的序列化依赖，
+# 因此只装在导出阶段，运行阶段用 onnxruntime。
 RUN pip install --no-cache-dir \
     torch==2.4.1 \
-    transformers==4.44.2
+    transformers==4.44.2 \
+    onnx==1.16.2
 
 WORKDIR /export
 COPY export_model.py /export/export_model.py
