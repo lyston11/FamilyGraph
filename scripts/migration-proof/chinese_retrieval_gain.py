@@ -41,8 +41,12 @@ DSN = os.environ.get("PGTEST_DSN")
 if not DSN:
     print("SKIP: 需要 PGTEST_DSN（含 pgvector 与 pgroonga）")
     raise SystemExit(2)
-if not os.environ.get("EMBEDDING_BASE_URL"):
-    print("SKIP: 需要 EMBEDDING_BASE_URL 指向 embedding 服务")
+# `LEXICAL_ONLY=1`：只测词法（用于在没有 pgvector 的 PGroonga 实例上做对照）。
+# 这样「PGroonga 是否会漏掉零字面重合的查询」可以在真实 PGroonga 上直接验证，
+# 而不必依赖推断。
+LEXICAL_ONLY = os.environ.get("LEXICAL_ONLY") == "1"
+if not LEXICAL_ONLY and not os.environ.get("EMBEDDING_BASE_URL"):
+    print("SKIP: 需要 EMBEDDING_BASE_URL 指向 embedding 服务（或设 LEXICAL_ONLY=1）")
     raise SystemExit(2)
 
 from sqlalchemy import create_engine, text  # noqa: E402
@@ -73,6 +77,60 @@ NOISE = [
 ]
 
 
+def _report_lexical(engine, has_pgroonga: bool, docs: list[tuple[str, str, str]]) -> int:
+    """LEXICAL_ONLY：只测词法召回（用于在真实 PGroonga 实例上做对照）。"""
+    eligibility = "c.status = 'active' AND d.status = 'active'"
+    hits = 0
+    rows_out: list[dict[str, object]] = []
+    for idx, (query, _target, label) in enumerate(CORPUS):
+        target_chunk = idx + 1
+        with engine.connect() as conn:
+            if has_pgroonga:
+                found = conn.execute(
+                    text(
+                        "SELECT c.id FROM rag_chunks c JOIN rag_documents d ON d.id=c.document_id"
+                        f" WHERE c.text &@~ :q AND {eligibility} LIMIT 3"
+                    ),
+                    {"q": query},
+                ).fetchall()
+                engine_name = "pgroonga"
+            else:
+                found = conn.execute(
+                    text(
+                        "SELECT c.id FROM rag_chunks c JOIN rag_documents d ON d.id=c.document_id"
+                        f" WHERE c.text LIKE :q AND {eligibility} LIMIT 3"
+                    ),
+                    {"q": f"%{query}%"},
+                ).fetchall()
+                engine_name = "like"
+        ids = [r[0] for r in found]
+        ok = target_chunk in ids
+        hits += int(ok)
+        print(f"  {query:<12s} 目标={target_chunk:>2d} 词法{'命中' if ok else '漏掉'} | {label}")
+        rows_out.append({"query": query, "target": target_chunk, "lexical_hit": ok})
+
+    n = len(CORPUS)
+    print(f"\n词法召回（{engine_name}）：{hits}/{n}")
+    report = {
+        "mode": "lexical_only",
+        "lexical_engine": engine_name,
+        "pgroonga_available": has_pgroonga,
+        "corpus_size": n,
+        "lexical_recall": hits,
+        "rows": rows_out,
+    }
+    out_dir = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof")))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "chinese-retrieval-lexical-only.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            text("DROP TABLE IF EXISTS rag_chunks, rag_documents CASCADE")
+        )
+    return 0
+
+
 def main() -> int:
     engine = create_engine(DSN)
     failures: list[str] = []
@@ -95,9 +153,10 @@ def main() -> int:
                 """
             )
         )
-        for stmt in rag_embeddings.pgvector_ddl(DIM).split(";"):
-            if stmt.strip():
-                conn.execute(text(stmt))
+        if not LEXICAL_ONLY:
+            for stmt in rag_embeddings.pgvector_ddl(DIM).split(";"):
+                if stmt.strip():
+                    conn.execute(text(stmt))
 
     # PGroonga 探测必须用**独立事务**。
     #
@@ -140,6 +199,10 @@ def main() -> int:
                 ),
                 {"i": i, "t": body},
             )
+
+    if LEXICAL_ONLY:
+        print(f"已写入 {len(docs)} 个 chunk（LEXICAL_ONLY：跳过向量索引）\n")
+        return _report_lexical(engine, has_pgroonga, docs)
 
     # 向量索引：用真实 embedding 服务（不是 stub）。
     model = "local:bge-small-zh-v1.5"
