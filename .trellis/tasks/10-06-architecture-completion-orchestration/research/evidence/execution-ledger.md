@@ -59,7 +59,7 @@ C3-C10 todo 见下表
 
 | # | 未完成项 | Owner | 依赖 | 恢复条件 | 下一命令 |
 |---|---|---|---|---|---|
-| 1 | ~~RAG 接入真实 schema（词法）~~ → **已完成**；pgvector union/rerank 仍待做 | `10-03-pgvector-rag` | C1/C2 已完成 | pgvector 已实测可行 | 把 filter-then-ANN 接入 `search_rag` 的 union/rerank |
+| 1 | RAG：词法已接入真实 schema；**pgvector 管线已实测（未接入 `search_rag`）**；**embedding 服务已构建实测（未部署）** | `10-03-pgvector-rag` | — | 服务已可用 | 把 `embed_documents`/`fuse_candidates` 接入 `search_rag` 与 maintenance tick |
 | 2 | ~~Redis 接入准入路径~~ → **已完成**（负缓存形态） | — | — | — | 剩余：wakeup/pub-sub、token bucket、circuit hint |
 | 3 | ~~control-plane AC-5 分进程~~ → **已完成**（两个独立服务 + profile 门禁的 combined） | — | — | 剩余：真实 `docker compose up` 端到端观察 | 起两个 sidecar 并验证互不干扰 |
 | 4 | ~~Provider circuit breaker~~ 与 ~~backpressure~~ → **均已完成**（背压实测已正确并补了守护断言） | — | — | — | — |
