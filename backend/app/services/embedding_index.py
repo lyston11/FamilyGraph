@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 from sqlalchemy import text
@@ -337,3 +338,21 @@ async def run_index_pass(
             break
 
     return report
+
+
+def model_identity() -> str:
+    """当前 embedding 模型的标识，用作向量行的 `model` 列。
+
+    ## 为什么是「provider:model」而不是只有 model 名
+
+    换 provider（本地 ONNX → 远程 API）但模型名相同时，向量**不可互换**
+    （不同实现的分词、池化、精度都可能不同）。把 provider 编进标识使换 provider
+    表现为「所有条目需要重新索引」，而不是「旧向量被当成新 provider 的」。
+
+    未配置时返回空串，调用方（维护循环）应先检查 `embedding_client.enabled()`。
+    """
+    provider = os.environ.get("RAG_EMBEDDING_PROVIDER", "local").strip() or "local"
+    model = os.environ.get("RAG_EMBEDDING_MODEL", "").strip()
+    if not model:
+        return ""
+    return f"{provider}:{model}"
