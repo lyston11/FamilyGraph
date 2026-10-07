@@ -555,6 +555,9 @@ def main() -> int:
                   FROM pg_class AS c
                   JOIN pg_attribute AS a ON a.attrelid = c.oid
                  WHERE c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+                   -- 必须限定 public：不加这个过滤会扫到 information_schema 的
+                   -- 视图（实测报 `relation "sql_features" does not exist`）。
+                   AND c.relnamespace = 'public'::regnamespace
                  ORDER BY c.relname, a.attnum
                 """
             )
