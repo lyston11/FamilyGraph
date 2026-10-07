@@ -36,7 +36,7 @@ from app.errors import (
     AGENT_PROVIDER_UPSTREAM_REJECTED,
 )
 from app.models.agent import AgentRun
-from app.services import agent_provider, audit, policy_guard
+from app.services import agent_provider, audit, policy_guard, provider_circuit
 from app.services.agent_execution import Execution, fence_execution
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,15 @@ _NO_RETRY_HEADERS = {"x-should-retry": "false"}
 #: **次数不变**：可用性证据显示 5 次重试确实会被用满（2 个 run / 11 次出站 / 7 次失败，
 #: 最终都靠重试成功），降次数会让这类轮次直接失败。
 _TRANSIENT_RETRY_HEADERS = {"retry-after-ms": "500"}
+
+
+class StreamDeadlineExceeded(Exception):
+    """流级墙钟超限。
+
+    单独的类型（而非复用 `httpx` 异常）是为了在审计里保留
+    `stream_deadline_exceeded` 这个原因——它表示「服务端主动掐断」，
+    与「上游中断」(`stream_interrupted`) 是不同的运维信号。
+    """
 
 
 @dataclass(frozen=True)
@@ -435,6 +444,28 @@ async def stream_provider_response(
                 connect=float(config.AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS),
             ),
         )
+        # 熔断检查必须在**发送前**：它的全部价值就是避免把明知会失败的请求发出去。
+        # 上游整体不可用时（DERP 丢路由、provider 挂掉），每个 run 各自重试会让
+        # 故障放大为「每租户 × 每 run × 24 次尝试」——实测最坏持续 18.8 小时。
+        #
+        # 被熔断拒绝时**不消耗上游尝试**（零出站），因此审计写 sent=False：
+        # 连接未建立，这是可观测事实，不是「猜测上游没处理」。
+        circuit_key = provider_circuit.circuit_key(provider_id=runtime.provider_id, kind=run.kind)
+        if not provider_circuit.breaker().allow(circuit_key):
+            # 关闭由 `except ProviderProxyError` 统一处理，这里不重复。
+            _audit_egress(
+                db,
+                run=run,
+                provider_id=runtime.provider_id,
+                status="failed",
+                status_code=None,
+                bytes_read=0,
+                error_class="upstream_circuit_open",
+                retryable=True,
+                sent=False,
+            )
+            raise ProviderProxyError(502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问")
+        circuit_allowed = True
         # Atomically admit the request immediately before constructing the
         # upstream POST.  A later cancellation may stop the stream, but cannot
         # retroactively revoke an already-admitted request.
@@ -467,6 +498,8 @@ async def stream_provider_response(
             sent=True,
             header_ms=int(float(config.AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS) * 1000),
         )
+        if circuit_allowed:
+            provider_circuit.breaker().record_failure(circuit_key)
         raise ProviderProxyError(
             502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
         ) from None
@@ -486,10 +519,16 @@ async def stream_provider_response(
             retryable=failure.retryable,
             sent=failure.sent,
         )
+        if circuit_allowed:
+            provider_circuit.breaker().record_failure(circuit_key)
         raise ProviderProxyError(
             502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
         ) from None
     assert client is not None  # construction either returned or raised above
+    # 连接建立且拿到响应头 = 上游可达，记成功（即使状态码是 4xx/5xx：那是应用层
+    # 拒绝，说明网络路径正常，不该触发熔断）。
+    if circuit_allowed:
+        provider_circuit.breaker().record_success(circuit_key)
     if upstream.status_code >= 400:
         await upstream.aclose()
         await client.aclose()
@@ -565,11 +604,17 @@ async def passthrough_with_audit(
     upstream: Any,
     on_finish: Any,
     header_ms: int | None = None,
+    max_duration_seconds: float | None = None,
 ) -> Any:
     """流式透传生成器：逐块回传 sidecar，结束后统计字节数并落用量审计。
 
     客户端中断/生成器关闭时同样关闭上游流（不泄漏连接）；审计提交由
     on_finish（端点注入的 db.commit）负责，错误不回滚已透传内容。
+
+    `max_duration_seconds`：**流级墙钟上限**。没有它，一个永不结束的上游可以把
+    流永久挂住且不产生任何错误——用户看到永远转圈，而资源（名额、连接、审计中的
+    in-flight 记录）一直不释放。超限即中断并归为 `stream_deadline_exceeded`，
+    这是一次**有界失败**，不是成功。
     """
     # Keep a scalar id: the request-scoped SQLAlchemy session may expire or
     # detach the ORM instance between streaming chunks.
@@ -577,8 +622,25 @@ async def passthrough_with_audit(
     bytes_read = 0
     outcome = "succeeded"
     failure: EgressFailure | None = None
+    deadline = (
+        time.monotonic() + max_duration_seconds
+        if max_duration_seconds is not None and max_duration_seconds > 0
+        else None
+    )
     try:
         async for chunk in upstream.aiter_raw():
+            if deadline is not None and time.monotonic() > deadline:
+                # 有界失败：中断并记明确原因。
+                #
+                # 用**专用异常**而不是 `break`：break 会让客户端看到一个「正常结束」
+                # 的截断流，sidecar 无从区分「上游答完了」与「被服务端掐断」。
+                # 专用异常必须排在通用 `except Exception` **之前**，否则会被改写成
+                # `stream_interrupted`，丢失真正的原因。
+                failure = EgressFailure("stream_deadline_exceeded", retryable=False, sent=True)
+                outcome = "failed"
+                raise StreamDeadlineExceeded(
+                    f"stream exceeded {max_duration_seconds}s wall-clock limit"
+                )
             # Re-check between chunks.  If the browser cancels while a relay
             # is streaming, stop forwarding immediately and classify the
             # egress as failed; the sidecar cannot settle this run succeeded.
@@ -600,6 +662,9 @@ async def passthrough_with_audit(
         # 不能标成上游错误或“未处理”。
         outcome = "failed"
         failure = EgressFailure("run_cancelled", retryable=False, sent=True)
+        raise
+    except StreamDeadlineExceeded:
+        # 墙钟超限：分类已在上方设好，这里只负责让它继续向外传播。
         raise
     except httpx.HTTPError:
         # 流中中断/超时：上游可能已处理（部分响应已发出），

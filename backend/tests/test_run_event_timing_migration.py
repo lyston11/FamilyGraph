@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from migration_offsets import deep_downgrade_offset
 from sqlalchemy import create_engine, inspect, text
 
 BACKEND = Path(__file__).parents[1]
@@ -197,7 +198,7 @@ def test_deep_relative_downgrade_does_not_half_drop_before_ancestor_refusal(tmp_
     _migrate(tmp_path, "upgrade", HEAD)
     engine = _engine(tmp_path)
     try:
-        result = _migrate(tmp_path, "downgrade", "-4", expect_success=False)
+        result = _migrate(tmp_path, "downgrade", deep_downgrade_offset(), expect_success=False)
 
         assert result.returncode != 0
         assert "ACTUAL_ALEMBIC_DDL_COUNT=0" in result.stdout

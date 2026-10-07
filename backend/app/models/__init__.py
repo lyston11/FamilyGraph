@@ -4,6 +4,7 @@ from app.models.account import Account
 from app.models.account_binding import AccountBinding
 from app.models.admin_access import AdminAccessAudit, AdminAccessSession
 from app.models.agent import (
+    AgentCapacityCounter,
     AgentJob,
     AgentMessage,
     AgentRun,
@@ -94,6 +95,7 @@ __all__ = [
     "AgentRunEvent",
     "AgentSession",
     "AgentSpaceProviderSetting",
+    "AgentCapacityCounter",
     "AgentToolCall",
     "AuditLog",
     "AuthChallenge",

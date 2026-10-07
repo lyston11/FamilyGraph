@@ -508,3 +508,186 @@ partial_unique_index("uq_agent_runs_session_active", "session_id",
 steward_assist.release_capacity(db, ...)
 run, _, _ = fence_steward_execution(db, identity)
 ```
+
+## Scenario: 持久化容量计数与集群级名额（2026-10-06，C2–C5）
+
+### 1. Scope / Trigger
+
+改动执行准入、租约配额、集群级上限或 Redis 加速层前必读。适用于
+`app/services/capacity.py`、`app/services/redis_accel.py`、
+`app/api/internal_agent.py` 的准入路径、`app/services/{agent_queue,steward,steward_assist}.py`。
+
+### 2. Signatures
+
+```python
+# 租户级（C2）
+capacity.ensure_counter(db, spec, capacity=n)          # 幂等；不重置 active
+capacity.try_acquire(db, specs) -> bool | None         # None = 未登记（不限制）
+capacity.release(db, specs) -> int
+capacity.mark_acquired(db, *, table, row_id, now=None) # 门列写入（Core SQL）
+capacity.release_attempt(db, attempt, *, space_id) -> bool
+capacity.release_job(db, job, *, space_id) -> bool
+
+# 集群级（C3）
+capacity.try_acquire_cluster(db, *, resource_kind) -> bool | None
+capacity.release_cluster(db, *, resource_kind) -> int
+
+# 流级（C4）
+capacity.try_acquire_stream(db, *, tenant_kind, tenant_id, capacity_tenant) -> bool | None
+capacity.release_stream(db, *, tenant_kind, tenant_id) -> int
+
+# Redis 加速与降级（C5）
+redis_accel.accelerator().try_set_if_absent(key, ttl_seconds=n) -> bool | None
+redis_accel.scoped_key(layer=..., scope_kind=..., scope_id=..., resource=..., epoch=...)
+```
+
+迁移：`0056_agent_capacity_counters`（计数表 + 门列）、`0057_steward_capacity_release_gate`。
+
+### 3. Contracts
+
+- **`SKIP LOCKED` 不保证配额**：实测 READ COMMITTED 下计数子查询读不到并发未提交的
+  `in_flight`，每租户上限 2 被放成 **5**。配额真相是持久化计数行。
+- **进程内 limiter 不保证集群配额**：两实例各配 2 时集群实际并发 **4**（实测）。
+  因此执行平面需要**两层**：进程内负责排队与公平，集群级 counter 负责跨实例总量。
+- **三态返回是安全要求**：`None` = 本层无结论 → 走 PostgreSQL；折成 `False` 会让
+  故障时全部拒绝，折成 `True` 会 fail-open（配额失效，比不可用更糟）。
+- **归还恰好一次**：门在**行上**（`capacity_acquired_at` 非空 + `capacity_released_at`
+  为空），不用 `status`——status 是可变业务状态，会被多条路径改写（`in_flight` →
+  `unknown` → `skipped`），用它推断「已归还」会失去依据。
+- **门列不进 ORM 映射**：迁移拒绝用例会在**中间 revision**（如 0048）上用 ORM 写同一
+  张表，那时列还不存在。`deferred=True` 只影响 SELECT、不影响 INSERT，因此无效；
+  门列用 Core SQL 按需读写。
+- **`capacity.release()` 不得 flush**：调用方事务里可能持有与配额无关的脏状态
+  （`_settle` 的陈旧 run 副本）；flush 会把那份脏状态落库并覆盖真实终态，
+  使调用方的状态复核失效（实测 `test_stale_orm_object_cannot_settle_twice` 失败）。
+- **锁序**：`global → kind → tenant → run → attempt`。`_settle` 的 counter 归还**必须
+  早于** `fence_execution`（后者取 run 行锁），否则是 `run → counter` 反向锁序。
+  两者同一事务，fence 失败会整体回滚，因此提前归还是安全的。
+- **流级名额覆盖流的整个生命周期**：建连名额在流开始前归还，而一个 100 秒的流不占
+  工作线程也不占连接，因此没有任何既有名额能限制「同时有多少个上游流在跑」。
+- **流级墙钟上限用专用异常**：`break` 会让客户端看到「正常结束」的截断流；且必须排在
+  通用 `except Exception` 之前，否则原因被改写成 `stream_interrupted`。
+- **Redis 降级策略 = `pg_fallback`**：Redis 是加速层，失效不应改变可用性语义；
+  回退必须**有界**（沿用 counter，而非「Redis 挂了就全放」）。不可用后进入冷却，
+  否则故障会变成每个请求的固定延迟。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| 新增迁移未调用 `run_ancestor_preflight` | 深层降级先 DROP 再被祖先拒绝（实测 DDL=2，半降级 schema） |
+| 迁移拒绝用例的相对偏移写成字面量 | 新增迁移后偏移失准 → 用 `tests/migration_offsets.py` 计算 |
+| 配额状态写入未分类 | `test_quota_state_transitions` 失败（分类表按行号，移动代码需重新确认） |
+| 未登记 counter | 不限制（渐进引入），既有 SQLite 测试行为不变 |
+| Redis 不可用 | 返回 `None`（无结论），**不得** fail-open |
+| 流超过墙钟上限 | 抛 `StreamDeadlineExceeded`，审计记 `stream_deadline_exceeded` |
+
+### 5. 已知未闭合（不得当作通过）
+
+- RAG（PGroonga/pgvector）**未接入真实 schema**：设计决策与基准已完成，实现阻塞于
+  PG 迁移 Phase B。
+- Redis **未接入真实准入路径**：降级层已实现并验证，但准入仍直接走 PostgreSQL。
+- control-plane AC-5（Assistant/Steward 分进程）未做：`FG_AGENT_ROLE=both` 时共享进程。
+- `writer epoch` 与 `migration health` 未设计（归 `10-04-postgres-operations-cutover`）。
+- 多租户 p95/p99 与故障矩阵未执行（归 `10-04-multitenant-load-acceptance`）。
+
+## Scenario: 词法检索方言分派与 writer epoch（2026-10-06，C6–C7）
+
+### 1. Scope / Trigger
+
+改动 RAG 词法检索、PGroonga 索引、检索过滤条件，或改动任何写事务入口、迁移阶段切换前必读。
+适用于 `app/services/rag_search_provider.py`、`app/services/memory_rag.py`、
+`app/services/writer_epoch.py`、`app/commands/context.py`、`migrations/versions/0058_*`。
+
+### 2. Signatures
+
+```python
+# 词法检索分派（C6）
+rag_search_provider.build_lexical(dialect, *, match_terms, fallback_terms,
+                                  eligibility, hit_sql) -> list[LexicalQuery]
+rag_search_provider.PGROONGA_INDEX_DDL   # 必须纳入 PG baseline
+
+# writer epoch（C7）
+writer_epoch.read_state(db) -> WriterState
+writer_epoch.advance(db, *, to_stage, actor) -> WriterState      # 只允许相邻阶段
+writer_epoch.guard(db) -> None                                    # 写事务起点调用
+writer_epoch.check_epoch(db, *, held) -> None
+writer_epoch.migration_health(db) -> dict[str, object]
+```
+
+端点：`GET /api/ready`、`GET /admin-api/ready`（只返回治理元数据）。
+
+### 3. Contracts
+
+- **授权过滤不在检索 provider 层**：`eligibility` 由调用方传入并原样拼进两种方言的
+  SQL。检索索引不承载授权（撤权只改主表状态，索引条目仍在，PGroonga 与 pgvector
+  都实测确认）。可见性**完全**依赖该谓词——在这里放宽就是授权漏洞。
+- **`eligibility` 是裸谓词**：模板为 `WHERE <condition> AND <eligibility>`，
+  **不带**前导 `AND`。带前导 `AND` 会拼出 `AND AND`（语法错误）。
+- **PGroonga 与 FTS5 的三点差异**：PGroonga 无虚拟表、无 `bm25()`，用
+  `&@~` + `pgroonga_score`；且**不需要短词后备**（两字中文词正常匹配），
+  后备词项合并进主查询（另起 LIKE 会失去索引）。
+- **查询语法必须转义**：FTS5 的 `MATCH` 与 Groonga 的 `&@~` 都接受查询语法，
+  用户输入必须按短语处理（整体加引号），否则输入会变成语法。
+- **PGroonga 索引必须在 baseline 显式创建**：它是扩展索引，不在 ORM 元数据里，
+  `create_all` 看不到——与 69 个触发器同类问题。漏建会静默退化为顺序扫描。
+- **未知方言 fail-loud**：静默降级会隐藏「检索没接上」。
+- **writer epoch 用数据库单行而非 env**：改 env 需要逐实例重启，重启期间新旧并存
+  正是双主窗口。一次 `UPDATE` 同时完成切换与旧实例失效。
+- **阶段只能逐级移动**：跳级会让「哪些面已经切过」不可知，无法安全回滚。
+- **epoch 首次采纳、之后比对**：首次采纳避免「每次启动后第一个写失败」；
+  之后不同即拒绝（`WriterEpochMismatch`，**安全**异常，不得重试）。
+- **`advance` 必须同步本进程 epoch**：执行切换的实例就是当前 writer，
+  不同步会把自己锁在门外。
+- **守卫在取写锁之前**：epoch 过期时连 `BEGIN IMMEDIATE` 都不该取。
+- **回滚 = 相邻退一级 + epoch 递增**，只回退**路由**；禁止把 PG 新状态盲写回 SQLite。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| 检索 SQL 缺 `eligibility` | 授权漏洞（实测：去掉过滤能查到撤权内容） |
+| 未知方言 | `ValueError`，不静默降级 |
+| 阶段跳级 | `ValueError`（`abs(delta) != 1`） |
+| epoch 过期后写入 | `WriterEpochMismatch`，拒绝 |
+| `stage != 'sqlite'` 时 DROP `writer_state` | refusal（路由真相会丢失） |
+| SQLite 的 DATETIME 直接 `.isoformat()` | `AttributeError`（SQLite 返回字符串） |
+
+### 5. 已知未闭合（不得当作通过）
+
+- **pgvector 未接入** `search_rag` 的 union/rerank；索引版本切换无回归。
+- **Redis 未接入真实准入路径**（降级层已交付并验证）。
+- **control-plane AC-5 分进程**未做。
+- **Provider circuit breaker / backpressure** 未实现。
+- **PITR / WAL archive / HA / failover / PgBouncer 兼容性**未验证。
+- **真实多租户 p95/p99** 未测；**开发灰度（C9）与最终对账（C10）**未执行
+  （属停止条件：需接触真实环境与不可逆数据）。
+
+### 6. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 检索 SQL 直接写 FTS5 语法：PostgreSQL 上既无虚拟表也无 bm25()
+sql = text("... FROM rag_chunks_fts WHERE rag_chunks_fts MATCH :m ...")
+
+# 用 env 表达切换阶段：改 env 需要逐实例重启，重启期间新旧并存 = 双主窗口
+STAGE = os.environ["FG_WRITER_STAGE"]
+
+# 阶段跳级：sqlite -> pg_all 会让「哪些面已切过」不可知
+advance(db, to_stage="pg_all", actor="ops")
+```
+
+#### Correct
+
+```python
+# 按方言分派；eligibility 原样传入并承重
+for lexical in rag_search_provider.build_lexical(
+    db.bind.dialect.name, match_terms=..., fallback_terms=...,
+    eligibility=eligibility, hit_sql=_HIT_SQL,
+):
+    collect(lexical.sql, {**params, **lexical.params}, rank_by_order=lexical.rank_by_order)
+
+# 阶段存数据库单行：一次 UPDATE 完成切换 + 旧实例失效
+advance(db, to_stage="shadow", actor="ops")   # 相邻，epoch +1
+```

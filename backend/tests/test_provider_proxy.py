@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 from sqlalchemy import select
@@ -1054,3 +1056,153 @@ def test_stream_does_not_pin_a_pool_connection_between_chunks(db_session) -> Non
         f"流期间有 {held_ratio:.0%} 的时间持有连接池连接："
         "请求级 Session 不得跨 chunk 长期持有连接"
     )
+
+
+# ---------------------------------------------------------------- 流级墙钟上限（C4）
+
+
+def test_stream_deadline_interrupts_and_audits_the_reason():
+    """流超过墙钟上限必须**有界失败**，并保留 `stream_deadline_exceeded` 原因。
+
+    没有上限时，一个永不结束的上游可以把流永久挂住且不产生任何错误——用户看到
+    永远转圈，名额/连接/审计中的 in-flight 记录一直不释放。
+
+    本用例用一个「永远产出 chunk」的上游 + 极小上限，断言：
+
+    1. 抛出 `StreamDeadlineExceeded`（而不是正常结束的截断流——那样 sidecar 无从
+       区分「上游答完了」与「被服务端掐断」）；
+    2. 审计里 `error_class` 是 `stream_deadline_exceeded`，**不是**被通用
+       `except Exception` 改写的 `stream_interrupted`（后者会丢失真正原因）；
+    3. `sent=True`（流已开始，上游可能已处理）。
+    """
+    import asyncio as _asyncio
+
+    from app.services.provider_proxy import StreamDeadlineExceeded, passthrough_with_audit
+
+    class _EndlessUpstream:
+        status_code = 200
+
+        async def aiter_raw(self):
+            while True:
+                yield b"chunk"
+                await _asyncio.sleep(0)  # 让出控制权，避免饿死事件循环
+
+        async def aclose(self):
+            return None
+
+    class _Client:
+        async def aclose(self):
+            return None
+
+    audited: list[dict] = []
+
+    async def _run():
+        gen = passthrough_with_audit(
+            None,  # type: ignore[arg-type] - 审计被下面的 monkeypatch 截获
+            run=SimpleNamespace(id=4242),
+            provider_id=7,
+            client=_Client(),
+            upstream=_EndlessUpstream(),
+            on_finish=lambda: None,
+            max_duration_seconds=0.05,
+        )
+        chunks = 0
+        try:
+            async for _chunk in gen:
+                chunks += 1
+                if chunks > 10_000:  # 上限保护：用例自身不得无限跑
+                    break
+        except StreamDeadlineExceeded:
+            return "deadline"
+        return "completed"
+
+    # 本用例只验证墙钟上限，因此把「流中复核」替换成 no-op：它需要真实 run 行，
+    # 而那个路径已有独立用例覆盖（test_proxy_audits_cancellation_during_stream_once）。
+    with (
+        patch.object(provider_proxy, "_audit_egress") as audit,
+        patch.object(provider_proxy, "_gate_check_in_own_session"),
+    ):
+        audit.side_effect = lambda *_a, **kw: audited.append(kw)
+        outcome = _asyncio.run(_asyncio.wait_for(_run(), timeout=10))
+
+    assert outcome == "deadline", "流未按墙钟上限中断"
+    assert audited, "流级超限未落审计"
+    detail = audited[-1]
+    assert detail["status"] == "failed"
+    assert (
+        detail["error_class"] == "stream_deadline_exceeded"
+    ), f"原因被改写：{detail['error_class']}"
+    assert detail["sent"] is True
+
+
+# ---------------------------------------------------------------- 背压（C4）
+
+
+def test_stream_is_pull_based_so_a_slow_consumer_backpressures_the_upstream():
+    """背压靠**拉取式**生成器成立，不需要额外缓冲策略。
+
+    ## 为什么这条断言是「上限」而不是「顺序」
+
+    `async for chunk in upstream.aiter_raw()` 只在消费者请求下一块时才推进上游；
+    httpx 的 `aiter_raw()` 同样按需从 socket 读取。因此消费端慢 → 上游不被推进 →
+    socket 缓冲区填满 → TCP 背压生效。**实现里没有任何无界缓冲**。
+
+    本用例断言「任一时刻上游推进量不超过已消费量 + 1」：若有人把实现改成
+    `[c async for c in ...]`（先收全再 yield）或加一个无界队列，上游会一次跑完，
+    该断言立刻失败。
+
+    ## 为什么这是必须的
+
+    一个「先把上游读完再转发」的实现会把长流的内存占用从常数变成 O(流长度)，
+    且失去 TCP 背压——上游可以把任意大的响应推给一个慢消费端。
+    """
+    import asyncio as _asyncio
+
+    from app.services.provider_proxy import passthrough_with_audit
+
+    total = 30
+    observed: list[tuple[int, int]] = []  # (上游已推进, 已消费)
+
+    class _CountingUpstream:
+        status_code = 200
+
+        def __init__(self) -> None:
+            self.produced = 0
+
+        async def aiter_raw(self):
+            for _ in range(total):
+                self.produced += 1
+                yield b"x" * 10
+
+        async def aclose(self) -> None:
+            return None
+
+    class _Client:
+        async def aclose(self) -> None:
+            return None
+
+    async def _run() -> None:
+        upstream = _CountingUpstream()
+        gen = passthrough_with_audit(
+            None,  # type: ignore[arg-type] - 审计被下面的 patch 截获
+            run=SimpleNamespace(id=1),
+            provider_id=1,
+            client=_Client(),
+            upstream=upstream,
+            on_finish=lambda: None,
+        )
+        consumed = 0
+        async for _chunk in gen:
+            consumed += 1
+            observed.append((upstream.produced, consumed))
+            await _asyncio.sleep(0)  # 让出控制权：若上游会被提前推完，这里就能观测到
+
+    with (
+        patch.object(provider_proxy, "_audit_egress"),
+        patch.object(provider_proxy, "_gate_check_in_own_session"),
+    ):
+        _asyncio.run(_asyncio.wait_for(_run(), timeout=10))
+
+    assert len(observed) == total, "未消费完所有块"
+    worst = max(produced - consumed for produced, consumed in observed)
+    assert worst <= 1, f"上游推进超前消费 {worst} 块——实现存在缓冲，背压失效（内存随流长度增长）"

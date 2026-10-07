@@ -120,6 +120,11 @@ def test_tick_noop_when_worker_disabled(db_session, monkeypatch):
         "rag_index_scanned": 0,
         "rag_index_materialized": 0,
         "rag_index_failed": 0,
+        # C6：向量索引计数器（未配置 embedding 时全为 0）。
+        "embedding_indexed": 0,
+        "embedding_segments": 0,
+        "embedding_skipped": 0,
+        "embedding_failed": 0,
     }
     assert db_session.scalar(select(StewardJob.status)) == "queued"
 
@@ -437,3 +442,92 @@ def test_maintenance_loop_single_instance_across_listeners():
         asyncio.run(scenario())
     finally:
         maintenance._task, maintenance._holders = old_task, old_holders
+
+
+# ---------------------------------------------------------------- 向量索引接线（C6）
+
+
+def test_embedding_index_is_skipped_when_not_configured(monkeypatch):
+    """未配置 embedding 时不进入向量索引分支。
+
+    「未配置」是**合法状态**（部署只用词法检索），因此计数器保持 0，
+    且不应产生任何异常或降级日志。
+    """
+    from app.services import embedding_client
+
+    monkeypatch.setattr(embedding_client, "enabled", lambda: False)
+    counters = maintenance.run_maintenance_tick()
+    assert counters["embedding_indexed"] == 0
+    assert counters["embedding_segments"] == 0
+    assert counters["embedding_skipped"] == 0
+    assert counters["embedding_failed"] == 0
+
+
+def test_embedding_failure_does_not_break_the_tick(monkeypatch):
+    """向量索引失败**不得**影响其他维护工作。
+
+    这是「可选加速」的核心契约：embedding 服务挂掉时，维护循环必须照常完成
+    （reaper、steward、FTS 补建），而不是整个 tick 失败。否则一个可选组件的
+    故障会升级成「维护停止」。
+    """
+    from app.services import embedding_client, embedding_index
+
+    monkeypatch.setattr(embedding_client, "enabled", lambda: True)
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("模拟 embedding 服务不可用")
+
+    monkeypatch.setattr(embedding_index, "run_index_pass", _boom)
+
+    # 不应抛异常
+    counters = maintenance.run_maintenance_tick()
+    assert counters["embedding_indexed"] == 0
+    # 其他维护计数器仍然存在且已执行（core tick 未被跳过）
+    assert "agent_reaped" in counters
+    assert "rag_index_scanned" in counters
+
+
+def test_embedding_report_is_surfaced_in_counters(monkeypatch):
+    """成功的向量索引必须把计数暴露出来（否则运维看不到它在工作）。"""
+    from app.services import embedding_client, embedding_index
+
+    monkeypatch.setattr(embedding_client, "enabled", lambda: True)
+
+    class _Report:
+        indexed = 3
+        segments_written = 7
+        skipped_degraded = 0
+        failed = 0
+        degraded_reason = None
+
+    async def _ok(*_args, **_kwargs):
+        return _Report()
+
+    monkeypatch.setattr(embedding_index, "run_index_pass", _ok)
+
+    counters = maintenance.run_maintenance_tick()
+    assert counters["embedding_indexed"] == 3
+    assert counters["embedding_segments"] == 7
+
+
+def test_degraded_embedding_reports_skipped(monkeypatch):
+    """降级时 `embedding_skipped` 必须如实反映，不能静默当作「没有待索引项」。"""
+    from app.services import embedding_client, embedding_index
+
+    monkeypatch.setattr(embedding_client, "enabled", lambda: True)
+
+    class _Report:
+        indexed = 0
+        segments_written = 0
+        skipped_degraded = 5
+        failed = 0
+        degraded_reason = "queue_full"
+
+    async def _degraded(*_args, **_kwargs):
+        return _Report()
+
+    monkeypatch.setattr(embedding_index, "run_index_pass", _degraded)
+
+    counters = maintenance.run_maintenance_tick()
+    assert counters["embedding_skipped"] == 5
+    assert counters["embedding_indexed"] == 0

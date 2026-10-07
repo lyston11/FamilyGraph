@@ -140,7 +140,15 @@ def test_admin_app_registers_only_admin_api_routes() -> None:
     assert ADMIN_AUTH_ROUTES <= registered
     assert ADMIN_V1_ROUTES <= registered
     framework_routes = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
-    business = registered - ADMIN_AUTH_ROUTES - ADMIN_V1_ROUTES - framework_routes
+    # 迁移就绪探针：管理员需要在不登录家庭面的情况下查看 writer 阶段与 epoch，
+    # 因此它显式挂在 admin listener 上。它是**只读治理元数据**（阶段/epoch/时间），
+    # 不含业务数据、连接串或凭据，所以不构成 admin 与家庭面的隔离破口。
+    # 这里显式列入例外，而不是从路由里去掉——去掉会让迁移期间无人能看到切换状态。
+    operational_probes = {"/admin-api/ready"}
+    business = (
+        registered - ADMIN_AUTH_ROUTES - ADMIN_V1_ROUTES - framework_routes
+        - operational_probes
+    )
     assert not any(
         path.startswith("/api/") or path.startswith("/admin") for path in business
     ), sorted(business)

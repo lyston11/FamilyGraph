@@ -31,6 +31,8 @@ from app.db import SessionLocal
 from app.models.steward import StewardJob
 from app.services import (
     agent_queue,
+    embedding_client,
+    embedding_index,
     rag_maintenance,
     steward,
     steward_assist,
@@ -68,6 +70,11 @@ def run_maintenance_tick() -> dict[str, int]:
         "rag_index_scanned": 0,
         "rag_index_materialized": 0,
         "rag_index_failed": 0,
+        # 向量索引（C6）：独立于 FTS 补建，因为它依赖外部 embedding 服务。
+        "embedding_indexed": 0,
+        "embedding_segments": 0,
+        "embedding_skipped": 0,
+        "embedding_failed": 0,
     }
     db = SessionLocal()
     try:
@@ -117,6 +124,39 @@ def run_maintenance_tick() -> dict[str, int]:
                     rag_db.rollback()
                     logger.warning(
                         "rag index maintenance failed; core tick unaffected (error=%s)",
+                        type(exc).__name__,
+                    )
+
+        # ---- 向量索引（C6）----
+        #
+        # 独立会话 + 独立 try：embedding 服务不可用或 pgvector 缺失时**不得**影响
+        # FTS 补建与 core tick。这是「可选加速」的落点——它的失败只应表现为
+        # 「本轮没做向量索引」，而不是「维护循环失败」。
+        #
+        # 有界批数：`max_batches=1` 使单次 tick 最多处理一批，控制权定期回到维护
+        # 循环，且不会长时间占用那 1 核 embedding 预算。
+        if config.RAG_ENABLED and embedding_client.enabled():
+            with SessionLocal() as emb_db:
+                try:
+                    report = asyncio.run(
+                        embedding_index.run_index_pass(
+                            emb_db, model=embedding_index.model_identity()
+                        )
+                    )
+                    counters["embedding_indexed"] = report.indexed
+                    counters["embedding_segments"] = report.segments_written
+                    counters["embedding_skipped"] = report.skipped_degraded
+                    counters["embedding_failed"] = report.failed
+                    if report.degraded_reason:
+                        logger.warning(
+                            "embedding 索引降级（本轮跳过）reason=%s skipped=%d",
+                            report.degraded_reason,
+                            report.skipped_degraded,
+                        )
+                except Exception as exc:  # noqa: BLE001 — 向量索引失败不影响其他维护
+                    emb_db.rollback()
+                    logger.warning(
+                        "embedding 索引失败；其他维护不受影响 error_class=%s",
                         type(exc).__name__,
                     )
         return counters

@@ -58,10 +58,25 @@ AC-3/AC-4 并完成分进程决策。
 **回归缺失**：没有「两实例同时租赁不重复领取」的测试，也没有「移除单实例 limiter
 后跨实例测试必须失败」的 mutation。
 
-### AC-5：分进程/分池的资源预算与发布顺序 —— **未实现**
+### AC-5：分进程/分池 —— **已实现**（2026-10-06）
 
-当前 Assistant/Steward 可共用同一 sidecar 进程（`FG_AGENT_ROLE=both`），
-共享 event loop、HTTP client、heap 与重试风暴。分进程方案未设计。
+`docker-compose.yml` 现在默认启动**两个独立服务**：
+
+| 服务 | `FG_AGENT_ROLE` | 资源 |
+|---|---|---|
+| `agent-assistant` | `assistant` | 自己的 event loop / HTTP client / heap |
+| `agent-steward` | `steward` | 同上，独立 |
+| `agent-combined` | `both` | **profile 门禁**，默认不启动 |
+
+分进程消除的共享：Node event loop、HTTP client 与连接池、heap 与 GC 停顿、
+重试风暴。
+
+契约由 `agent/test/deployment-split.test.ts` 守护（5 个用例），因为回归是**静默**的
+——改回 `both` 运行时不会报错，只是长流互相拖慢。三组变异均被捕获：默认改回
+`both`、去掉 combined 的 profile、锚点漏掉共享变量。
+
+**未覆盖**：真实双进程部署的端到端验证（需实际 `docker compose up` 并观察
+两类互不干扰），属部署验收。
 
 ## 因此本任务的实际工作
 

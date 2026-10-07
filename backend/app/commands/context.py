@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.errors import AUTH_INVALID_CREDENTIALS, UNIFIED_CREDENTIAL_MESSAGE, raise_api_error
 from app.models.account import Account
 from app.models.user import User
+from app.services import writer_epoch
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,12 @@ def command_transaction(
     ``immediate=True`` 在事务起点取写锁，供"读取判定后再写入"的命令使用
     （如建档去重门禁）：没有它，两个并发请求会各自通过检查然后都插入。
     """
+    # writer epoch 守卫：切换期间必须让旧实例停止写入，否则两个 writer 同时裁决
+    # 会产生两个真相，且无法事后对账修复（两边都可能已对外产生结果）。
+    #
+    # 放在事务起点：epoch 过期时**任何**写入都不应发生，包括 immediate 写锁。
+    # 未配置守卫或表尚未建立时是 no-op（`read_state` 回落到部署默认阶段）。
+    writer_epoch.guard(session)
     if immediate:
         _begin_immediate(session)
     try:

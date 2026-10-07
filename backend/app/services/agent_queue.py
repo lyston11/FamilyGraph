@@ -51,7 +51,13 @@ from app.models.agent import (
     AgentSession,
 )
 from app.models.space import SpaceMember
-from app.services import agent_events, agent_provider, audit
+from app.services import (
+    agent_events,
+    agent_provider,
+    audit,
+    capacity,
+    writer_epoch,
+)
 from app.services.agent_execution import (
     Execution,
     ExecutionIdentity,
@@ -65,7 +71,12 @@ _logger = logging.getLogger(__name__)
 
 @contextmanager
 def _immediate_tx(session: Session) -> Iterator[Session]:
-    """立即事务：驱动级 BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。"""
+    """立即事务：驱动级 BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。
+
+    writer epoch 守卫在取写锁**之前**：epoch 过期说明本实例已不是 writer，
+    此时连写锁都不应取——取了就说明已经开始参与写入竞争。
+    """
+    writer_epoch.guard(session)
     sa_conn = session.connection()
     raw = sa_conn.connection.dbapi_connection
     if not isinstance(raw, sqlite3.Connection):  # pragma: no cover - 仅 SQLite 环境
@@ -248,6 +259,23 @@ def submit_user_message(
     return message, run, False
 
 
+def _account_id_for_run(db: Session, run: AgentRun) -> int | None:
+    """取 run 所属账户；用于归还账户并发名额。
+
+    steward child run 的 `session_id` 为 NULL（它没有 AgentSession），因此返回 None；
+    这类 run 不消耗账户并发，`release_account_run` 对 None 是 no-op。
+    """
+    if run.session_id is None:
+        return None
+    # `no_autoflush` 是必需的：调用方可能持有**脏的** run 对象（例如把内存状态改回
+    # `leased` 的陈旧副本）。若这里触发 autoflush，那个脏状态会先落库，覆盖真实终态，
+    # 于是 `_settle` 的终态复核失效——实测表现为 `test_stale_orm_object_cannot_settle_twice`
+    # 不再抛 AGENT_RUN_TERMINAL。只读查询不得产生写副作用。
+    with db.no_autoflush:
+        session = db.get(AgentSession, run.session_id)
+    return session.account_id if session is not None else None
+
+
 def _check_concurrency(db: Session, *, agent_session: AgentSession, kind: str) -> None:
     """RT-2 并发约束预检（立即事务内，无竞态窗口）。"""
     _validate_kind(kind, session_kind=agent_session.agent_kind)
@@ -259,17 +287,30 @@ def _check_concurrency(db: Session, *, agent_session: AgentSession, kind: str) -
     )
     if same_session:
         raise_api_error(409, AGENT_RUN_SESSION_BUSY, "该会话已有执行中的 Run")
-    used = db.scalar(
-        select(sa.func.count(AgentRun.id))
-        .join(AgentSession, AgentSession.id == AgentRun.session_id)
-        .where(
-            AgentSession.account_id == agent_session.account_id,
-            AgentRun.kind == "assistant",
-            AgentRun.status.in_(active),
-        )
+    # 账户并发上限：counter 已登记时以持久化计数行为准（并发下才正确）；未登记时
+    # 沿用原有计数查询，使既有 SQLite 单测行为不变（渐进引入，与 assist 同策略）。
+    #
+    # 注意 counter 必须按 kind 分桶：steward child run 不消耗 assistant 的账户配额
+    # （它由 assist 的 per-space 配额治理），见 test_quota_state_transitions 的分类表。
+    specs = capacity.assistant_run_specs(
+        account_id=agent_session.account_id,
+        capacity_account=config.AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT,
     )
-    if used is not None and used >= config.AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT:
+    outcome = capacity.try_acquire(db, specs)
+    if outcome is False:
         raise_api_error(409, AGENT_RUN_ACCOUNT_LIMIT, "并发 Assistant Run 已达账户上限")
+    if outcome is None:
+        used = db.scalar(
+            select(sa.func.count(AgentRun.id))
+            .join(AgentSession, AgentSession.id == AgentRun.session_id)
+            .where(
+                AgentSession.account_id == agent_session.account_id,
+                AgentRun.kind == "assistant",
+                AgentRun.status.in_(active),
+            )
+        )
+        if used is not None and used >= config.AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT:
+            raise_api_error(409, AGENT_RUN_ACCOUNT_LIMIT, "并发 Assistant Run 已达账户上限")
 
 
 def _validate_kind(
@@ -431,6 +472,19 @@ def _settle(
 ) -> AgentRun:
     """终态写入 + 对应终态事件追加（同一立即事务；终态不可复活）。"""
     with _immediate_tx(db):
+        # 归还账户并发名额（行级门保证恰好一次）。
+        #
+        # **必须在 `fence_execution` 之前**：fence 内部经 `acquire_run_writer` 取 run
+        # 行锁，而租约路径是 `counter → run`。若在这里之后再归还，结算就是
+        # `run → counter`，与租约相反——已实测在 PostgreSQL 上抛
+        # `DeadlockDetected`（见 spec/database-guidelines.md 的锁序场景）。
+        #
+        # 放在 fence 之前是安全的：两者在**同一事务**内，fence 失败会整体回滚，
+        # 因此不会出现「归还了名额但结算未发生」。`session_id` 不可变，
+        # 用传入的 run 读取账户是可靠的。
+        capacity.release_account_run(
+            db, account_id=_account_id_for_run(db, run), now=timeutil.utcnow()
+        )
         if execution is not None:
             run, _session, _job = fence_execution(db, execution, allow_cancel_requested=True)
         else:
@@ -448,6 +502,14 @@ def _settle(
                 detail={"requested": status, "final": "cancelled", "reason": "cancel_requested"},
             )
         now = timeutil.utcnow()
+        # 归还账户并发名额（行级门保证恰好一次）。
+        #
+        # 锁序：`_settle` 在 `fence_execution` 之前进入（execution 分支在函数开头），
+        # 但 counter 归还**必须早于** fence 取 run 行锁，否则构成 `run → counter`
+        # 的反向锁序并真实死锁。因此这里在写 run 状态**之前**调用——
+        # 此时尚未取 run 行锁（fence 已在上面执行完，但那时是本函数进入时的顺序；
+        # 详见 spec/database-guidelines.md 的锁序场景）。
+        capacity.release_account_run(db, account_id=_account_id_for_run(db, run), now=now)
         run.status = effective
         run.settled_at = now
         run.updated_at = now

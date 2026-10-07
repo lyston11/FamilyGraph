@@ -18,6 +18,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from migration_offsets import deep_downgrade_offset
 from sqlalchemy import create_engine, text
 
 BACKEND = Path(__file__).parents[1]
@@ -319,7 +320,7 @@ def test_deep_relative_downgrade_refuses_before_moving_the_version(tmp_path):
         before = _head(engine)
         assert before == HEAD
 
-        result = _migrate(tmp_path, "downgrade", "-4", expect_success=False)
+        result = _migrate(tmp_path, "downgrade", deep_downgrade_offset(), expect_success=False)
 
         assert result.returncode != 0
         assert "Ambiguous walk" in result.stderr

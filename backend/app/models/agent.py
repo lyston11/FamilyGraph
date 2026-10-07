@@ -309,3 +309,56 @@ class AgentToolCall(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<AgentToolCall {self.id} run={self.run_id} {self.tool_name}@{self.tool_version}>"
+
+
+class AgentCapacityCounter(Base):
+    """持久化容量计数（迁移 0056）。
+
+    ## 为什么需要它
+
+    `FOR UPDATE SKIP LOCKED` 只保证不同 worker 取到不同**候选行**，不保证每租户配额。
+    实测 READ COMMITTED 下计数子查询读不到彼此未提交的 `in_flight` 行，上限 2 被放成 5。
+    SQLite 靠 `BEGIN IMMEDIATE` 的全库写锁掩盖了这一点，因此这是纯 PostgreSQL 阻塞点。
+
+    配额真相是这里的**计数行**：用行锁串行化「检查并占用」，`CHECK (active <= capacity)`
+    作为数据库侧兜底不变量。
+
+    ## 锁序（冻结，见 spec/database-guidelines.md）
+
+        global → agent_kind → account/space → candidate
+
+    counter 永远先于 run/attempt 行锁。结算路径必须在 `fence_*_execution`
+    （取 run 行锁）**之前**归还，否则构成 `run → counter` 的反向锁序并真实死锁。
+    """
+
+    __tablename__ = "agent_capacity_counters"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "active >= 0 AND active <= capacity", name="ck_acc_active_within_capacity"
+        ),
+        sa.CheckConstraint(
+            "scope_kind IN ('global','agent_kind','account','space','provider')",
+            name="ck_acc_scope_kind",
+        ),
+        sa.CheckConstraint(
+            "resource_kind IN ('assistant_run','steward_job','steward_assist','tool',"
+            "'provider_stream')",
+            name="ck_acc_resource_kind",
+        ),
+        sa.CheckConstraint("capacity >= 0", name="ck_acc_capacity_non_negative"),
+        Index("ix_acc_scope", "scope_kind", "scope_id"),
+    )
+
+    scope_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    scope_id: Mapped[int] = mapped_column(Integer, primary_key=True, default=0)
+    resource_kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<AgentCapacityCounter {self.scope_kind}:{self.scope_id} "
+            f"{self.resource_kind} {self.active}/{self.capacity}>"
+        )

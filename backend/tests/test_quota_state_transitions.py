@@ -51,35 +51,35 @@ QUOTA_FILES = (
 # 移动代码时应重新确认分类，而不是让它悄悄沿用旧标签。
 CLASSIFICATION: dict[tuple[str, int], tuple[str, str]] = {
     # ---- StewardModelCall：配额只数 in_flight ----
-    ("services/steward_assist.py", 1427): ("enter", "lease_attempt 取得租约 -> in_flight"),
-    ("services/steward_assist.py", 1395): ("pre_active", "发送门：plan 缺失，reserved 从未计入"),
-    ("services/steward_assist.py", 1406): ("pre_active", "发送门：栅栏拒绝，reserved 从未计入"),
-    ("services/steward_assist.py", 1420): ("pre_active", "发送门：预算不足，reserved 从未计入"),
-    ("services/steward_assist.py", 2338): ("pre_active", "schedule_due_attempt 计划阶段"),
-    ("services/steward_assist.py", 1866): ("leave", "_settle_attempt 成功 -> succeeded"),
-    ("services/steward_assist.py", 1885): ("leave", "_settle_attempt 组上下文失效 -> degraded"),
-    ("services/steward_assist.py", 1900): ("leave", "_settle_attempt 校验未过 -> degraded"),
-    ("services/steward_assist.py", 1943): ("leave", "_settle_attempt_failure 分类结果"),
-    ("services/steward_assist.py", 1946): ("leave", "_settle_attempt_failure -> failed"),
-    ("services/steward_assist.py", 1781): ("leave", "record_attempt_outcome 写回栅栏 -> skipped"),
-    ("services/steward_assist.py", 2238): ("leave", "recover_stuck_attempts 崩溃点③ -> unknown"),
-    ("services/steward_assist.py", 2215): (
+    ("services/steward_assist.py", 1458): ("enter", "lease_attempt 取得租约 -> in_flight"),
+    ("services/steward_assist.py", 1422): ("pre_active", "发送门：plan 缺失，reserved 从未计入"),
+    ("services/steward_assist.py", 1433): ("pre_active", "发送门：栅栏拒绝，reserved 从未计入"),
+    ("services/steward_assist.py", 1447): ("pre_active", "发送门：预算不足，reserved 从未计入"),
+    ("services/steward_assist.py", 2388): ("pre_active", "schedule_due_attempt 计划阶段"),
+    ("services/steward_assist.py", 1906): ("leave", "_settle_attempt 成功 -> succeeded"),
+    ("services/steward_assist.py", 1925): ("leave", "_settle_attempt 组上下文失效 -> degraded"),
+    ("services/steward_assist.py", 1940): ("leave", "_settle_attempt 校验未过 -> degraded"),
+    ("services/steward_assist.py", 1986): ("leave", "_settle_attempt_failure 分类结果"),
+    ("services/steward_assist.py", 1989): ("leave", "_settle_attempt_failure -> failed"),
+    ("services/steward_assist.py", 1818): ("leave", "record_attempt_outcome 写回栅栏 -> skipped"),
+    ("services/steward_assist.py", 2286): ("leave", "recover_stuck_attempts 崩溃点③ -> unknown"),
+    ("services/steward_assist.py", 2260): (
         "post_active",
         "recover_stuck_attempts 崩溃点④：改写已结算行，不重复归还",
     ),
     # ---- AgentRun（steward child run 的收敛也在本文件）----
-    ("services/steward_assist.py", 2286): ("leave", "recover_stuck_child_runs -> expired"),
+    ("services/steward_assist.py", 2336): ("leave", "recover_stuck_child_runs -> expired"),
     # ---- StewardModelCall 的构造点：全部在计划阶段，尚未计入 ----
-    ("services/steward_assist.py", 1086): ("pre_active", "_reserve_attempt 计划期跳过（预算耗尽）"),
-    ("services/steward_assist.py", 1092): (
+    ("services/steward_assist.py", 1087): ("pre_active", "_reserve_attempt 计划期跳过（预算耗尽）"),
+    ("services/steward_assist.py", 1093): (
         "pre_active",
         "_reserve_attempt 计划期跳过（token 不足）",
     ),
-    ("services/steward_assist.py", 1096): (
+    ("services/steward_assist.py", 1097): (
         "pre_active",
         "_reserve_attempt 计划期跳过（prompt 过大）",
     ),
-    ("services/steward_assist.py", 1100): (
+    ("services/steward_assist.py", 1101): (
         "pre_active",
         "_reserve_attempt 预留：reserved 不计入 assist 配额（只数 in_flight）",
     ),
@@ -87,31 +87,31 @@ CLASSIFICATION: dict[tuple[str, int], tuple[str, str]] = {
     # 注意：steward child run 是否消耗「每账户 assistant 并发」取决于 counter 是否按
     # kind 分桶。设计结论是**不消耗**（它由 assist 的 per-space 配额治理），因此迁移时
     # counter 必须按 kind 分桶，否则 steward 会挤占 assistant 的账户配额。
-    ("services/steward_assist.py", 2142): ("enter", "open_child_run 直接建 leased run"),
+    ("services/steward_assist.py", 2187): ("enter", "open_child_run 直接建 leased run"),
     # ---- AgentRun/AgentJob 构造点 ----
-    ("services/agent_queue.py", 138): ("enter", "_create_run_and_job 建 queued run"),
-    ("services/agent_queue.py", 153): ("enter", "_create_run_and_job 建 queued job"),
+    ("services/agent_queue.py", 149): ("enter", "_create_run_and_job 建 queued run"),
+    ("services/agent_queue.py", 164): ("enter", "_create_run_and_job 建 queued job"),
     # ---- StewardJob：配额含 queued，+1 发生在入队 ----
-    ("services/steward.py", 452): ("enter", "事件触发入队，status='queued' 占用配额"),
-    ("services/steward.py", 551): ("enter", "入队（幂等路径），status='queued' 占用配额"),
-    ("services/steward.py", 650): ("internal", "queued -> leased，仍在活跃态"),
-    ("services/steward.py", 758): ("leave", "settle_steward_job 写终态"),
-    ("services/steward.py", 821): ("internal", "reaper 可能回到 queued（未耗尽），不动 counter"),
-    ("services/steward.py", 756): ("not_quota", "StewardGeneration 不是配额承载模型"),
-    ("services/steward.py", 816): ("not_quota", "StewardGeneration 不是配额承载模型"),
+    ("services/steward.py", 455): ("enter", "事件触发入队，status='queued' 占用配额"),
+    ("services/steward.py", 554): ("enter", "入队（幂等路径），status='queued' 占用配额"),
+    ("services/steward.py", 657): ("internal", "queued -> leased，仍在活跃态"),
+    ("services/steward.py", 763): ("leave", "settle_steward_job 写终态"),
+    ("services/steward.py", 830): ("internal", "reaper 可能回到 queued（未耗尽），不动 counter"),
+    ("services/steward.py", 765): ("not_quota", "StewardGeneration 不是配额承载模型"),
+    ("services/steward.py", 825): ("not_quota", "StewardGeneration 不是配额承载模型"),
     # ---- AgentRun / AgentJob ----
-    ("services/agent_queue.py", 318): ("internal", "job queued -> leased"),
-    ("services/agent_queue.py", 326): ("internal", "run queued -> leased"),
-    ("services/agent_queue.py", 451): ("leave", "_settle 写 run 终态"),
-    ("services/agent_queue.py", 458): (
+    ("services/agent_queue.py", 359): ("internal", "job queued -> leased"),
+    ("services/agent_queue.py", 367): ("internal", "run queued -> leased"),
+    ("services/agent_queue.py", 513): ("leave", "_settle 写 run 终态"),
+    ("services/agent_queue.py", 520): (
         "leave",
         "_settle 同步写 job 终态（与 run 同事务，不重复归还）",
     ),
-    ("services/agent_queue.py", 613): (
+    ("services/agent_queue.py", 675): (
         "internal",
         "reaper_pass 可能回到 queued（未耗尽），job 与 run 状态不同步",
     ),
-    ("services/agent_queue.py", 619): ("leave", "reaper_pass 写 run 终态"),
+    ("services/agent_queue.py", 681): ("leave", "reaper_pass 写 run 终态"),
     ("services/agent_events.py", 502): ("internal", "run leased -> running"),
     ("services/agent_events.py", 506): ("internal", "job leased -> running"),
 }

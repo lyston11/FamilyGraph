@@ -15,7 +15,19 @@ BACKUPS_DIR: Path = DATA_DIR / "backups"
 # 部署 bootstrap 凭据文件目录（0600 一次性交付；SF-F3）
 BOOTSTRAP_DIR: Path = DATA_DIR / "bootstrap"
 
-DATABASE_URL: str = f"sqlite:///{DB_PATH}"
+# 主数据库 URL。默认 SQLite（迁移前行为不变）；设置 `DATABASE_URL` 即可切到
+# PostgreSQL，无需改代码——这是 C9 灰度切换的前提。
+#
+# ## 为什么用 psycopg3 驱动前缀
+#
+# 裸 `postgresql://` 会让 SQLAlchemy 选默认驱动（本项目环境里是 psycopg2，未安装）。
+# 显式 `postgresql+psycopg://` 指向已安装的 psycopg3。
+#
+# ## 连接池参数的方言差异在 db.py 处理
+#
+# `check_same_thread` 是 SQLite 专属，PRAGMA 也是。因此本文件只负责 URL，
+# 方言相关的连接配置集中在 `db.py` 的 `IS_SQLITE` 分支。
+DATABASE_URL: str = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
 
 # Token TTL（AD-2：access 2h / refresh 30d）；m0b 认证实现消费
 ACCESS_TOKEN_TTL_SECONDS: int = 2 * 60 * 60
@@ -455,6 +467,45 @@ AGENT_EXECUTION_MAX_WAIT_SECONDS: float = float(
 )
 AGENT_EXECUTION_MAX_QUEUE: int = int(os.environ.get("AGENT_EXECUTION_MAX_QUEUE", "64"))
 
+# ---- Provider 长流的**流级**资源（C4）----
+#
+# 与上面的建连名额不同：建连名额在流开始前归还，因此一个租户可以同时持有多个
+# **已建立**的长流。实测依据（10-05 已确认）：一个 100 秒的流本身不占工作线程、
+# 不占连接，所以它不受任何既有名额约束——没有本层时，租户数量直接决定并发流数。
+#
+# 三层上限，与租户级 counter 同构：
+#   global          全集群并发流总数
+#   kind            按 agent_kind（assistant / steward）分桶，防止一类挤占另一类
+#   tenant          Assistant=account，Steward=space
+#
+# 单位是**流**，不是字节，因此与 `AGENT_EXECUTION_*`（建连/工具）必须分开计。
+AGENT_STREAM_GLOBAL_CAPACITY: int = int(os.environ.get("AGENT_STREAM_GLOBAL_CAPACITY", "16"))
+AGENT_STREAM_PER_KIND_CAPACITY: int = int(os.environ.get("AGENT_STREAM_PER_KIND_CAPACITY", "12"))
+AGENT_STREAM_PER_TENANT_CAPACITY: int = int(os.environ.get("AGENT_STREAM_PER_TENANT_CAPACITY", "2"))
+
+# 单个流的墙钟上限。超过即中断并记 `stream_deadline_exceeded`——这是**有界**失败的
+# 保证：没有它，一个不结束的上游可以把流永久挂住，且不产生任何错误（用户看到永远
+# 转圈）。默认 900s 覆盖 p99（实测最长成功 run 约 804s）并留出余量。
+AGENT_STREAM_MAX_DURATION_SECONDS: float = float(
+    os.environ.get("AGENT_STREAM_MAX_DURATION_SECONDS", "900")
+)
+
+
+def _validate_agent_stream_limits() -> None:
+    """流级上限必须自洽，否则某层永远不生效。"""
+    if not 1 <= AGENT_STREAM_PER_TENANT_CAPACITY <= AGENT_STREAM_PER_KIND_CAPACITY:
+        raise RuntimeError(
+            "AGENT_STREAM_PER_TENANT_CAPACITY 必须 <= AGENT_STREAM_PER_KIND_CAPACITY："
+            "高于时单租户上限永不生效"
+        )
+    if not 1 <= AGENT_STREAM_PER_KIND_CAPACITY <= AGENT_STREAM_GLOBAL_CAPACITY:
+        raise RuntimeError(
+            "AGENT_STREAM_PER_KIND_CAPACITY 必须 <= AGENT_STREAM_GLOBAL_CAPACITY："
+            "高于时单类上限永不生效"
+        )
+    if AGENT_STREAM_MAX_DURATION_SECONDS <= 0:
+        raise RuntimeError("AGENT_STREAM_MAX_DURATION_SECONDS 必须为正")
+
 
 def _validate_agent_execution_admission() -> None:
     """执行面名额必须给控制面留出连接与工作线程余量。
@@ -509,5 +560,6 @@ def ensure_ready() -> None:
     _reject_weak_default_secrets()
     _validate_agent_tool_admission()
     _validate_agent_execution_admission()
+    _validate_agent_stream_limits()
     ensure_admin_ready()
     ensure_data_dirs()
