@@ -14,7 +14,7 @@
 | C5 | Redis coordination | **done（可自主部分）** | 10-03-redis-coordination | 降级层 + **准入负缓存已接入** | `c5-redis-degradation.md` | wakeup、token bucket、circuit hint |
 | C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法已接入真实 schema；pgvector **机制**已交付（filter-then-ANN + RRF） | `c6-lexical-dispatch.md` | 真实 embedding provider + 接入 search_rag |
 | C7 | operations/cutover | **done（可自主部分）** | 10-04-postgres-operations-cutover | epoch + health + 写路径守卫 + PgBouncer + **PITR 演练** | `c7-writer-epoch.md`、`c7-pgbouncer.md`、`c7-pitr.md` | HA/failover、RPO/RTO |
-| C8 | final load acceptance | **partial** | 10-04-multitenant-load-acceptance | 三层配额守恒已验；真实负载未做 | `c8-capacity-acceptance.md` | 真实部署与负载 |
+| C8 | final load acceptance | **partial** | 10-04-multitenant-load-acceptance | 三层配额守恒 + **真实快照导入对账**已验 | `c8-capacity-acceptance.md`、`c8-real-snapshot-import.md` | 真实部署与负载 p95/p99 |
 | C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | 真实部署 |
 | C10 | reconciliation/archive | todo | 本任务 | 对账 + 回滚演练 | — | C9 |
 
@@ -67,7 +67,7 @@ C3-C10 todo 见下表
 | 6 | ~~PgBouncer 兼容性~~ → **已完成**：配额守恒与直连逐项一致；prepared statement 失败模式已量化（部署二选一） | — | — | 剩余：连接预算匹配、重启恢复、多实例 failover | 见 `c7-pgbouncer.md` |
 | 7 | 真实多租户负载 p95/p99 | `10-04-multitenant-load-acceptance` | 需要真实多实例部署 | 部署就绪 | 按 C8 探针的场景在真实部署上重跑 |
 | 8 | 开发环境灰度（C9 shadow → writer） | 本任务 | 需要开发环境部署 | operations Gate 通过 | 按 `FG_WRITER_STAGE` 逐级推进并观察 `/ready` |
-| 9 | 真实历史库导入与对账 | `10-03-postgres-migration` | C1/C2 已完成 | 可开始 | 用 `import_reconcile_probe.py` 的流程对真实快照执行 |
+| 9 | ~~真实历史库导入与对账~~ → **已完成**：真实快照 87 表 / 143,134 行导入成功，行数 + 列级摘要双重对账一致 | — | — | 剩余：增量导入、导入期持续写入、线上规模 | 见 `c8-real-snapshot-import.md` |
 
 **不存在无主 TBD**：以上每项都有 owner、依赖、恢复条件和下一命令。
 
