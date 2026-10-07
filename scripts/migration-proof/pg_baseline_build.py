@@ -131,6 +131,34 @@ def main() -> int:
     #     与 69 个触发器同类问题：漏建不会报错，只会让检索静默退化为顺序扫描。
     #     因此 baseline 必须显式建，且建成后断言索引存在。
     extension_indexes: list[str] = []
+
+    # 1c) pgvector 表：**分段向量表也不在 ORM 元数据里**（它是 DDL 字符串，
+    #     见 `rag_embeddings.pgvector_ddl`）。与 PGroonga 索引同一类问题：
+    #     `create_all` 看不到它，漏建不会报错，只会让向量索引在维护循环里
+    #     静默失败（`relation "rag_embedding_segments" does not exist`）。
+    #     实测：dev 切换后该表不存在，向量索引整条链路不可用。
+    #
+    #     维度取自 `RAG_EMBEDDING_DIMENSION`；未配置（0）时跳过并如实记录。
+    try:
+        from app.services import rag_embeddings
+
+        dimension = rag_embeddings.configured_dimension()
+        if dimension > 0:
+            with engine.begin() as conn:
+                from sqlalchemy import text as sa_text
+
+                conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
+                for statement in rag_embeddings.pgvector_ddl(dimension).split(";"):
+                    if statement.strip():
+                        conn.execute(sa_text(statement))
+            extension_indexes.append(f"rag_embedding_segments(vector({dimension}))")
+            print(f"  [OK ] pgvector 分段向量表已建立 vector({dimension})")
+        else:
+            extension_indexes.append("SKIPPED:dimension_not_configured")
+            print("  [SKIP] RAG_EMBEDDING_DIMENSION 未配置，跳过 pgvector 表")
+    except Exception as exc:  # noqa: BLE001 - 扩展缺失是环境阻塞，如实记录
+        print(f"  [SKIP] pgvector 不可用：{type(exc).__name__}: {str(exc)[:110]}")
+        extension_indexes.append(f"SKIPPED:{type(exc).__name__}")
     if created:
         try:
             from app.services import rag_search_provider
