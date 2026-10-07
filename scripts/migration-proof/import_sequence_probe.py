@@ -32,7 +32,13 @@ CREATE TABLE sq_items (
 
 def _conn(dsn: str):
     import psycopg
-    return psycopg.connect(dsn)
+    # SQLAlchemy 风格的 DSN（`postgresql+psycopg://`）不是合法的 libpq 连接串；
+    # psycopg 直接连时会报 `missing "=" after ...`。剥掉驱动前缀。
+    # 与本目录其他探针一致（见 pg_baseline_build.py 的同名处理）。
+    plain = dsn.replace("postgresql+psycopg://", "postgresql://").replace(
+        "postgresql+psycopg2://", "postgresql://"
+    )
+    return psycopg.connect(plain)
 
 
 def test_sequence_repair(dsn: str, failures: list[str]) -> None:
