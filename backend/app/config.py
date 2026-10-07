@@ -15,7 +15,19 @@ BACKUPS_DIR: Path = DATA_DIR / "backups"
 # 部署 bootstrap 凭据文件目录（0600 一次性交付；SF-F3）
 BOOTSTRAP_DIR: Path = DATA_DIR / "bootstrap"
 
-DATABASE_URL: str = f"sqlite:///{DB_PATH}"
+# 主数据库 URL。默认 SQLite（迁移前行为不变）；设置 `DATABASE_URL` 即可切到
+# PostgreSQL，无需改代码——这是 C9 灰度切换的前提。
+#
+# ## 为什么用 psycopg3 驱动前缀
+#
+# 裸 `postgresql://` 会让 SQLAlchemy 选默认驱动（本项目环境里是 psycopg2，未安装）。
+# 显式 `postgresql+psycopg://` 指向已安装的 psycopg3。
+#
+# ## 连接池参数的方言差异在 db.py 处理
+#
+# `check_same_thread` 是 SQLite 专属，PRAGMA 也是。因此本文件只负责 URL，
+# 方言相关的连接配置集中在 `db.py` 的 `IS_SQLITE` 分支。
+DATABASE_URL: str = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
 
 # Token TTL（AD-2：access 2h / refresh 30d）；m0b 认证实现消费
 ACCESS_TOKEN_TTL_SECONDS: int = 2 * 60 * 60

@@ -26,18 +26,37 @@ POOL_MAX_OVERFLOW = 10
 POOL_TIMEOUT_SECONDS = 30.0
 POOL_MAX_CONNECTIONS = POOL_SIZE + POOL_MAX_OVERFLOW
 
+#: 是否使用 SQLite。**方言判定必须集中在这里**：连接参数、PRAGMA、事务语义都
+#: 依赖它，散落判断会让「加了 PostgreSQL 支持但某处仍按 SQLite 处理」变成静默缺陷。
+IS_SQLITE = config.DATABASE_URL.startswith("sqlite")
+
+#: 连接参数按方言区分。
+#:
+#: `check_same_thread=False` 是 **SQLite 专属**：psycopg 不接受该参数，传了会直接
+#: 报 `ProgrammingError`。因此不能无条件传。
+_connect_args: dict[str, Any] = {"check_same_thread": False} if IS_SQLITE else {}
+
 engine: Engine = create_engine(
     config.DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args=_connect_args,
     pool_size=POOL_SIZE,
     max_overflow=POOL_MAX_OVERFLOW,
     pool_timeout=POOL_TIMEOUT_SECONDS,
+    # 连接健康检查：长连接在 PG 侧可能已被服务器关闭（idle timeout、failover）。
+    # 不检查会在复用时拿到死连接并报错；`pre_ping` 让池自动丢弃并重建。
+    # SQLite 无此问题（进程内文件），因此只在 PG 上启用。
+    pool_pre_ping=not IS_SQLITE,
 )
 
 
 @event.listens_for(engine, "connect")
 def set_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
-    """每个新建连接统一执行 architecture.md §5 的四项 PRAGMA。"""
+    """每个新建连接统一执行 architecture.md §5 的四项 PRAGMA。
+
+    **只在 SQLite 上执行**：PostgreSQL 上 `PRAGMA` 是未知语法，直接报错。
+    """
+    if not IS_SQLITE:
+        return
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
