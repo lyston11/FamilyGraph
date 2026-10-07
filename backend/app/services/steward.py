@@ -72,11 +72,11 @@ from app.services import (
     person_identity,
     recommendation_matrix,
     steward_events,
-    writer_epoch,
 )
 from app.services.action_cards import ACTION_SUPERSEDE
 from app.services.disclosure import disclosed_categories
 from app.services.domain_events import emit as emit_domain_event
+from app.services.immediate_tx import immediate_tx
 from app.services.recommendation_matrix import (
     ACTION_CREATE_HOUSEHOLD,
     ACTION_REQUEST_LINEAGE,
@@ -162,21 +162,13 @@ def _lease_stale(job: StewardJob, *, worker_id: str | None, now: datetime) -> bo
 
 @contextmanager
 def _immediate_tx(session: Session) -> Iterator[Session]:
-    """立即事务：BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。"""
-    writer_epoch.guard(session)
-    sa_conn = session.connection()
-    raw = sa_conn.connection.dbapi_connection
-    if not isinstance(raw, sqlite3.Connection):  # pragma: no cover - 仅 SQLite 环境
-        raise RuntimeError("steward queue requires a sqlite3 connection")
-    if raw.in_transaction:
-        raise RuntimeError("steward queue requires a clean session without pending writes")
-    sa_conn.exec_driver_sql("BEGIN IMMEDIATE")
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
+    """立即事务。SQLite 走 `BEGIN IMMEDIATE`，PostgreSQL 走 counter 行锁。
+
+    方言差异集中在 `app.services.immediate_tx`；本函数只是把本模块的名字接上，
+    避免在 49 个调用点重复方言分支。
+    """
+    with immediate_tx(session, owner="steward queue") as scoped:
+        yield scoped
 
 
 def _require_enabled() -> None:

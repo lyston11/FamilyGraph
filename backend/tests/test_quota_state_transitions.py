@@ -89,29 +89,29 @@ CLASSIFICATION: dict[tuple[str, int], tuple[str, str]] = {
     # counter 必须按 kind 分桶，否则 steward 会挤占 assistant 的账户配额。
     ("services/steward_assist.py", 2187): ("enter", "open_child_run 直接建 leased run"),
     # ---- AgentRun/AgentJob 构造点 ----
-    ("services/agent_queue.py", 149): ("enter", "_create_run_and_job 建 queued run"),
-    ("services/agent_queue.py", 164): ("enter", "_create_run_and_job 建 queued job"),
+    ("services/agent_queue.py", 136): ("enter", "_create_run_and_job 建 queued run"),
+    ("services/agent_queue.py", 151): ("enter", "_create_run_and_job 建 queued job"),
     # ---- StewardJob：配额含 queued，+1 发生在入队 ----
-    ("services/steward.py", 455): ("enter", "事件触发入队，status='queued' 占用配额"),
-    ("services/steward.py", 554): ("enter", "入队（幂等路径），status='queued' 占用配额"),
-    ("services/steward.py", 657): ("internal", "queued -> leased，仍在活跃态"),
-    ("services/steward.py", 763): ("leave", "settle_steward_job 写终态"),
-    ("services/steward.py", 830): ("internal", "reaper 可能回到 queued（未耗尽），不动 counter"),
-    ("services/steward.py", 765): ("not_quota", "StewardGeneration 不是配额承载模型"),
-    ("services/steward.py", 825): ("not_quota", "StewardGeneration 不是配额承载模型"),
+    ("services/steward.py", 447): ("enter", "事件触发入队，status='queued' 占用配额"),
+    ("services/steward.py", 546): ("enter", "入队（幂等路径），status='queued' 占用配额"),
+    ("services/steward.py", 649): ("internal", "queued -> leased，仍在活跃态"),
+    ("services/steward.py", 755): ("leave", "settle_steward_job 写终态"),
+    ("services/steward.py", 822): ("internal", "reaper 可能回到 queued（未耗尽），不动 counter"),
+    ("services/steward.py", 757): ("not_quota", "StewardGeneration 不是配额承载模型"),
+    ("services/steward.py", 817): ("not_quota", "StewardGeneration 不是配额承载模型"),
     # ---- AgentRun / AgentJob ----
-    ("services/agent_queue.py", 359): ("internal", "job queued -> leased"),
-    ("services/agent_queue.py", 367): ("internal", "run queued -> leased"),
-    ("services/agent_queue.py", 513): ("leave", "_settle 写 run 终态"),
-    ("services/agent_queue.py", 520): (
+    ("services/agent_queue.py", 346): ("internal", "job queued -> leased"),
+    ("services/agent_queue.py", 354): ("internal", "run queued -> leased"),
+    ("services/agent_queue.py", 500): ("leave", "_settle 写 run 终态"),
+    ("services/agent_queue.py", 507): (
         "leave",
         "_settle 同步写 job 终态（与 run 同事务，不重复归还）",
     ),
-    ("services/agent_queue.py", 675): (
+    ("services/agent_queue.py", 662): (
         "internal",
         "reaper_pass 可能回到 queued（未耗尽），job 与 run 状态不同步",
     ),
-    ("services/agent_queue.py", 681): ("leave", "reaper_pass 写 run 终态"),
+    ("services/agent_queue.py", 668): ("leave", "reaper_pass 写 run 终态"),
     ("services/agent_events.py", 502): ("internal", "run leased -> running"),
     ("services/agent_events.py", 506): ("internal", "job leased -> running"),
 }

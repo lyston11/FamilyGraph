@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -56,7 +55,6 @@ from app.services import (
     agent_provider,
     audit,
     capacity,
-    writer_epoch,
 )
 from app.services.agent_execution import (
     Execution,
@@ -64,6 +62,7 @@ from app.services.agent_execution import (
     fence_assistant_execution,
     fence_execution,
 )
+from app.services.immediate_tx import immediate_tx
 from app.utils import timeutil
 
 _logger = logging.getLogger(__name__)
@@ -71,25 +70,13 @@ _logger = logging.getLogger(__name__)
 
 @contextmanager
 def _immediate_tx(session: Session) -> Iterator[Session]:
-    """立即事务：驱动级 BEGIN IMMEDIATE 写锁前置，成功提交，异常整体回滚。
+    """立即事务。SQLite 走 `BEGIN IMMEDIATE`，PostgreSQL 走 counter 行锁。
 
-    writer epoch 守卫在取写锁**之前**：epoch 过期说明本实例已不是 writer，
-    此时连写锁都不应取——取了就说明已经开始参与写入竞争。
+    方言差异集中在 `app.services.immediate_tx`；本函数只是把本模块的名字接上，
+    避免在 49 个调用点重复方言分支。
     """
-    writer_epoch.guard(session)
-    sa_conn = session.connection()
-    raw = sa_conn.connection.dbapi_connection
-    if not isinstance(raw, sqlite3.Connection):  # pragma: no cover - 仅 SQLite 环境
-        raise RuntimeError("agent queue requires a sqlite3 connection")
-    if raw.in_transaction:
-        raise RuntimeError("agent queue requires a clean session without pending writes")
-    sa_conn.exec_driver_sql("BEGIN IMMEDIATE")
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
+    with immediate_tx(session, owner="agent queue") as scoped:
+        yield scoped
 
 
 @dataclass(frozen=True)

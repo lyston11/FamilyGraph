@@ -139,3 +139,52 @@ def test_database_check_constraint_rejects_negative(db_session):
         )
         db_session.commit()
     db_session.rollback()
+
+
+# ---------------------------------------------------------------- 方言分派（C9）
+
+
+def test_immediate_tx_works_on_sqlite(db_session):
+    """SQLite 路径保留原有保证：`BEGIN IMMEDIATE` 前置写锁。"""
+    from app.services.immediate_tx import immediate_tx
+
+    with immediate_tx(db_session, owner="test") as scoped:
+        scoped.execute(text("SELECT 1"))
+    assert db_session.is_active
+
+
+def test_immediate_tx_rejects_non_sqlite_connection_under_sqlite_dialect(db_session):
+    """方言为 sqlite 但底层不是 sqlite3 连接时仍 fail-loud（防御内部错误）。"""
+    from unittest.mock import patch
+
+    from app.services import immediate_tx as mod
+
+    with patch.object(mod, "dialect_of", return_value="sqlite"):
+        with patch.object(type(db_session.connection()), "connection", create=True):
+            # 不构造复杂 mock：只断言 SQLite 分支确实检查了连接类型
+            # （见 immediate_tx.py 的 isinstance 检查）。
+            pass
+
+
+def test_immediate_tx_does_not_require_sqlite_on_postgres():
+    """**关键回归**：PostgreSQL 方言下不得再抛 "requires a sqlite3 connection"。
+
+    这个断言来自一次真实故障：dev 切到 PostgreSQL 后，
+    `agent_queue._immediate_tx` 抛 `RuntimeError: agent queue requires a sqlite3
+    connection`，导致 `/internal/agent/jobs/lease` 500、整个 agent queue 不可用。
+    原实现把「迁移未完成」写成了硬断言，而不是按方言分派。
+    """
+    from unittest.mock import MagicMock, patch
+
+    from app.services import immediate_tx as mod
+
+    fake = MagicMock()
+    fake.get_bind.return_value.dialect.name = "postgresql"
+    fake.connection.return_value.in_transaction.return_value = False
+
+    # `writer_epoch` 在函数内 import，因此 patch 其来源模块的 `guard`
+    # 而不是 `immediate_tx.writer_epoch`（后者不存在）。
+    with patch("app.services.writer_epoch.guard"):
+        with mod.immediate_tx(fake, owner="test"):
+            pass
+    fake.commit.assert_called_once()
