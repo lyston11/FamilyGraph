@@ -13,7 +13,7 @@
 | C4 | Provider stream reliability | **done（可自主部分）** | 10-04-provider-reliability-boundaries | 流级名额 + deadline + **circuit + backpressure 守护** | `c4-stream-limits.md` | 真实上游故障注入 |
 | C5 | Redis coordination | **done（可自主部分）** | 10-03-redis-coordination | 降级层 + **准入负缓存已接入** | `c5-redis-degradation.md` | wakeup、token bucket、circuit hint |
 | C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法已接入真实 schema；pgvector **机制**已交付（filter-then-ANN + RRF） | `c6-lexical-dispatch.md` | 真实 embedding provider + 接入 search_rag |
-| C7 | operations/cutover | **done（可自主部分）** | 10-04-postgres-operations-cutover | epoch + health + 写路径守卫 + **PgBouncer 兼容性** | `c7-writer-epoch.md`、`c7-pgbouncer.md` | PITR、HA、备份演练 |
+| C7 | operations/cutover | **done（可自主部分）** | 10-04-postgres-operations-cutover | epoch + health + 写路径守卫 + PgBouncer + **PITR 演练** | `c7-writer-epoch.md`、`c7-pgbouncer.md`、`c7-pitr.md` | HA/failover、RPO/RTO |
 | C8 | final load acceptance | **partial** | 10-04-multitenant-load-acceptance | 三层配额守恒已验；真实负载未做 | `c8-capacity-acceptance.md` | 真实部署与负载 |
 | C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | 真实部署 |
 | C10 | reconciliation/archive | todo | 本任务 | 对账 + 回滚演练 | — | C9 |
@@ -63,7 +63,7 @@ C3-C10 todo 见下表
 | 2 | ~~Redis 接入准入路径~~ → **已完成**（负缓存形态） | — | — | — | 剩余：wakeup/pub-sub、token bucket、circuit hint |
 | 3 | ~~control-plane AC-5 分进程~~ → **已完成**（两个独立服务 + profile 门禁的 combined） | — | — | 剩余：真实 `docker compose up` 端到端观察 | 起两个 sidecar 并验证互不干扰 |
 | 4 | ~~Provider circuit breaker~~ 与 ~~backpressure~~ → **均已完成**（背压实测已正确并补了守护断言） | — | — | — | — |
-| 5 | PITR / WAL archive / HA / failover | `10-04-postgres-operations-cutover` | 需要真实 PG 集群与归档存储 | 环境就绪 | 按 runbook 配置 archive_mode 并演练 PITR |
+| 5 | ~~PITR / WAL archive~~ → **已完成**（真实归档 + 恢复到目标 LSN + 负向断言）；HA/failover 仍待做 | `10-04-postgres-operations-cutover` | — | 剩余：HA/failover、RPO/RTO、多时间线 | 见 `c7-pitr.md` |
 | 6 | ~~PgBouncer 兼容性~~ → **已完成**：配额守恒与直连逐项一致；prepared statement 失败模式已量化（部署二选一） | — | — | 剩余：连接预算匹配、重启恢复、多实例 failover | 见 `c7-pgbouncer.md` |
 | 7 | 真实多租户负载 p95/p99 | `10-04-multitenant-load-acceptance` | 需要真实多实例部署 | 部署就绪 | 按 C8 探针的场景在真实部署上重跑 |
 | 8 | 开发环境灰度（C9 shadow → writer） | 本任务 | 需要开发环境部署 | operations Gate 通过 | 按 `FG_WRITER_STAGE` 逐级推进并观察 `/ready` |
