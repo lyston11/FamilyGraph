@@ -1,0 +1,14 @@
+# Embedding 服务运行期依赖（ARM64 CPU）
+#
+# 刻意**不含** torch：导出在构建阶段完成（见 Dockerfile 两阶段），运行期只需要
+# ONNX 推理与分词。这把运行镜像从约 1GB 降到约 200MB，且避免 torch 的线程策略
+# 与 ONNX 争抢 CPU。
+#
+# 版本固定：运行期行为必须可复现。
+
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+numpy==2.1.1
+onnxruntime==1.19.2
+tokenizers==0.20.0
