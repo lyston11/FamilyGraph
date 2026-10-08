@@ -248,6 +248,42 @@ def main() -> int:
         cluster_in_check = bool(defs) and all(
             "cluster_provider" in d for d in defs
         )
+
+    # 6) alembic 版本标记。
+    #
+    # ## 为什么必须有这一步
+    #
+    # PostgreSQL 的 schema 由**本脚本**（ORM 元数据 + 元数据外对象）建立，而不是由
+    # 历史 Alembic 链重放——那条链在 PG 上根本跑不通（0008 就报
+    # `boolean = integer`，实测）。
+    #
+    # 但容器启动命令是 `alembic upgrade head && python -m app.serve`。若
+    # `alembic_version` 不存在，容器每次启动都会尝试**从头重放整条链**：要么在
+    # 0008 崩掉、要么在已有表上重复建表。因此必须把版本**标记**为当前 head，
+    # 使 `upgrade head` 成为 no-op。
+    #
+    # 实测 dev 上就是缺这一步：PG 库没有 `alembic_version`，只因 dev 用 systemd
+    # 直接跑 `app.serve`（不经 alembic）才没暴露；生产用容器 CMD 就会立刻失败。
+    try:
+        from alembic.config import Config as _AlembicConfig
+        from alembic.script import ScriptDirectory as _ScriptDirectory
+
+        backend_dir = ROOT / "backend"
+        cfg = _AlembicConfig(str(backend_dir / "alembic.ini"))
+        cfg.set_main_option("script_location", str(backend_dir / "migrations"))
+        head = _ScriptDirectory.from_config(cfg).get_current_head()
+        if head is None:
+            failures.append("无法解析 alembic head（script_location 是否正确？）")
+        else:
+            with psycopg.connect(plain) as conn:
+                conn.execute("CREATE TABLE IF NOT EXISTS alembic_version (version_num varchar(32) NOT NULL)")
+                conn.execute("DELETE FROM alembic_version")
+                conn.execute("INSERT INTO alembic_version (version_num) VALUES (%s)", (head,))
+                conn.commit()
+            print(f"  [OK ] alembic_version 标记为 {head}（upgrade head 成为 no-op）")
+            steps["alembic_stamped"] = head
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"alembic 版本标记失败：{type(exc).__name__}: {exc}")
         steps["resource_kind_constraints"] = defs
 
     steps.update(

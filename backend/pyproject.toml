@@ -23,6 +23,13 @@ dependencies = [
     "cryptography==44.0.2",
     # 人物身份去重：姓名匹配键需繁简归一（纯 Python 映射表，无编译依赖）
     "zhconv==1.4.3",
+    # PostgreSQL 驱动（C9 生产切流必需）。
+    #
+    # 必须是**运行时依赖**而不是 dev 依赖：API 容器以 `alembic upgrade head &&
+    # python -m app.serve` 启动，两者都要在 `DATABASE_URL` 指向 PostgreSQL 时
+    # 连库。若只装在开发 venv 里，镜像内 `import psycopg` 直接 ModuleNotFoundError，
+    # 而该错误在发布脚本里表现为「迁移后容器不 healthy」，很难从症状反推到依赖。
+    "psycopg[binary]==3.2.3",
 ]
 
 [project.optional-dependencies]
