@@ -1060,12 +1060,55 @@ def _enqueue_successor(session: Session, job: StewardJob, *, now: datetime) -> N
     )
 
 
+def _lock_quota_counter(session: Session, binding: Binding) -> None:
+    """在取 job 行锁**之前**先锁住本空间的容量计数行。
+
+    ## 为什么必须这样
+
+    租约路径的锁序是 `counter -> job/run`。结算路径若先 `require_generation`
+    （读 job，持其行锁）再取 counter，就是 `job -> counter`——**反向锁序**。
+
+    实测（dev，2026-10-08）：修复「归还缺失」后立刻出现真实死锁。`pg_stat_activity`
+    显示 `UPDATE steward_jobs SET capacity_released_at`（持 counter、等 job 行锁）
+    与 `UPDATE steward_jobs SET status = ...`（持 job 行锁、等 counter）互等，
+    持续时间超过 26 分钟，直到手工 `pg_terminate_backend`。
+
+    ## 为什么用「先取锁」而不是「先归还」
+
+    先归还会在**重试路径**上出错：`record_failure` 的可重试分支把 job 放回 `queued`，
+    而 `queued` 仍占配额，此时已释放的名额就少了。因此这里只取锁、不改变 `active`，
+    归还由各路径在确定终态时自行调用（`release_gate` 的行级门保证恰好一次）。
+
+    未登记 counter（SQLite 或未 bootstrap）时是 no-op。
+    """
+    specs = capacity.steward_job_specs(space_id=binding.space_id)
+    if not capacity.registered(session, specs):
+        return
+    # `SELECT ... FOR UPDATE`：只取锁，不修改。
+    from sqlalchemy import select as _select
+
+    from app.models.agent import AgentCapacityCounter
+
+    for spec in specs:
+        session.execute(
+            _select(AgentCapacityCounter)
+            .where(
+                AgentCapacityCounter.scope_kind == spec.scope_kind,
+                AgentCapacityCounter.scope_id == spec.scope_id,
+                AgentCapacityCounter.resource_kind == spec.resource_kind,
+            )
+            .with_for_update()
+        )
+
+
 def publish(db: Session, binding: Binding, *, summary: dict[str, Any], upper: int) -> None:
     from app.services import steward_events
     from app.services.domain_events import emit
 
     generation_id = int(summary["generation_id"])
     with write_transaction(db.get_bind()) as session:
+        # 先取 counter 行锁**只为锁序**（见 `_lock_quota_counter`），此处不归还。
+        _lock_quota_counter(session, binding)
         generation = require_generation(session, binding, generation_id)
         job = require_binding(session, binding)
         # Counts are maintained in the same transactions as unique result rows.
@@ -1104,17 +1147,19 @@ def publish(db: Session, binding: Binding, *, summary: dict[str, Any], upper: in
             publication.generation_id, publication.updated_at = generation_id, now
         generation.status, generation.published_at, generation.updated_at = "published", now, now
         job.status, job.last_event_cursor = "succeeded", upper
-        # 归还 steward job 名额。
+        job.error_code, job.error_json, job.available_at = None, None, None
+        # 归还 steward job 名额（终态）。
         #
-        # **这里才是真实的终态路径**：`steward_runtime._execute` → `execute_steward_job`
+        # **这里才是真实的成功路径**：`steward_runtime._execute` → `execute_steward_job`
         # → `run_steward_job` → `_publish_success` → 本函数。`steward.settle_steward_job`
         # 里的同名归还是**死代码**（生产不经过它），因此此前每个成功的 job 都泄漏一个
         # 名额——实测 dev 上 40 个 job `acquired` 非空、`released` 全空，counter 停在
-        # `active=1`，之后该 space 再也无法入队（容量被自己占满）。
+        # `active=1`，该 space 之后再也无法入队（容量被自己占满，且无任何错误可见）。
         #
-        # 行级门保证恰好一次，因此与恢复路径重复调用也安全。
+        # counter 行锁已在事务开头由 `_lock_quota_counter` 取得，因此这里是
+        # 「已持锁后再写」，不构成 `job -> counter` 反向锁序。
+        # 行级门保证恰好一次，与恢复路径重复调用也安全。
         capacity.release_job(db, job, space_id=job.space_id)
-        job.error_code, job.error_json, job.available_at = None, None, None
         # Large plans already reside in staging. The settlement record is bounded.
         job.checkpoint_json = {
             "last_event_cursor": upper,
@@ -1184,6 +1229,8 @@ def record_failure(db: Session, binding: Binding, *, error_code: str, retryable:
     from app.services.domain_events import emit
 
     with write_transaction(db.get_bind()) as session:
+        # 先取 counter 行锁**只为锁序**（见 `_lock_quota_counter`），此处不归还。
+        _lock_quota_counter(session, binding)
         job = session.get(StewardJob, binding.job_id, populate_existing=True)
         if (
             job is None
@@ -1228,11 +1275,12 @@ def record_failure(db: Session, binding: Binding, *, error_code: str, retryable:
                 else config.STEWARD_RETRY_BACKOFF_SECOND_SECONDS
             )
             job.leased_by, job.lease_expires_at, job.heartbeat_at = None, None, None
-            # **重试路径不归还**：`queued` 仍是活跃态（配额含 queued），归还会让重试
-            # 期间的名额凭空多出一份。
+            # **重试路径不归还**：`queued` 仍是活跃态（配额含 queued），
+            # 在这里归还会让重试期间的名额凭空多出一份。
         else:
             job.status, job.settled_at = "failed", now
-            # 终态才归还（行级门保证恰好一次）。
+            # 终态才归还（行级门保证恰好一次）。此时 counter 行锁已在事务开头取得，
+            # 因此这里是「已持锁后再写」，不构成反向锁序。
             capacity.release_job(db, job, space_id=job.space_id)
         job.error_code, job.error_json, job.updated_at = (
             "input_changed" if changed else error_code,
