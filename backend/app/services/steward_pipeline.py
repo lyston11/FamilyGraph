@@ -351,6 +351,41 @@ def _edge_for(snapshot: ViewerInput, resolution: RelationshipResolution) -> dict
     }
 
 
+def _json_text_bind(bind: Any, name: str, value: str) -> Any:
+    """把已编码的 JSON **字符串**绑到 `json` 列上，按方言选择正确形式。
+
+    ## 为什么不能统一用 `JSON()` 绑定类型
+
+    `save_target` 的入参是已经 `json.dumps` 过的字符串。用 `JSON()` 绑定会让
+    SQLAlchemy **再编码一次**，列里存的是 JSON 字符串而不是对象（原注释警告的问题）。
+
+    ## 为什么不能统一用 `Text()` 绑定
+
+    PostgreSQL 的 `json` 列拒绝 `character varying` 表达式：
+
+    ```text
+    psycopg.errors.DatatypeMismatch: column "resolution_json" is of type json
+      but expression is of type character varying
+    ```
+
+    实测（生产 2026-10-08）：这个不匹配使空间 1/2 的 job 持续
+    `STEWARD_EXECUTION_FAILED`，而且**只在搜索找到路径时**触发（只有 `found: true`
+    才写 `resolution_json`），因此表现为「少数人查不到」而不是整体故障。
+
+    ## 因此按方言分派
+
+    - **PostgreSQL**：`CAST(:param AS JSON)` —— 服务端把字符串按 json 解析，内容逐字不变。
+      注意**不能**用 SQLite 的 `CAST(x AS JSON)`：SQLite 会把它求值为整数 `0`。
+    - **SQLite**：保持 `Text()` 绑定（它需要这一点来避免双重编码）。
+    """
+    from sqlalchemy import JSON, cast
+
+    param = bindparam(name, value, type_=Text())
+    if bind is not None and getattr(bind.dialect, "name", "sqlite") == "postgresql":
+        return cast(param, JSON)
+    return param
+
+
 def save_target(
     bind: Engine | Connection,
     binding: Binding,
@@ -400,13 +435,28 @@ def save_target(
         # Text binds preserve the already encoded JSON document; the mapped
         # JSON columns still decode to dict/None on reads. Passing these strings
         # through a JSON bind would double-encode them inside the writer.
+        #
+        # **但 PostgreSQL 不接受 Text 绑定写入 `json` 列**：
+        #
+        # ```text
+        # psycopg.errors.DatatypeMismatch: column "resolution_json" is of type json
+        #   but expression is of type character varying
+        # ```
+        #
+        # SQLite 无类型亲和性检查，所以这个写法只在 PostgreSQL 上失败。实测（生产
+        # 2026-10-08）：空间 1/2 的 job 持续 `STEWARD_EXECUTION_FAILED`，根因就是
+        # `save_target`——而且**只在搜索真正找到路径（`found: true`）时**触发，因此
+        # 大部分目标通过、少数带完整路径的目标稳定失败，症状看起来像“某些人查不到”。
+        #
+        # 修法：PG 上显式转成 json（`::json`），字符串内容逐字不变，既不双重编码也不
+        # 依赖隐式转换；SQLite 分支保持原样（它需要 Text 绑定以避免双重编码）。
         session.execute(
             update(StewardViewTarget)
             .where(StewardViewTarget.id == target_id, StewardViewTarget.status == "pending")
             .values(
                 status="ready" if resolution.found else "unavailable",
-                resolution_json=bindparam("resolution_payload", raw_json, type_=Text()),
-                edge_json=bindparam("edge_payload", edge_json, type_=Text()),
+                resolution_json=_json_text_bind(bind, "resolution_payload", raw_json),
+                edge_json=_json_text_bind(bind, "edge_payload", edge_json),
                 reason_code=None if resolution.found else "no_path",
                 updated_at=utcnow(),
             )
