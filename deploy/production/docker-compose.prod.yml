@@ -87,8 +87,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-familygraph}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须在 .env 中提供强随机值}
-    ports: !override
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-55460}:5432"
+    # **不发布宿主端口**。
+    #
+    # 两个原因：
+    #   1) `backend` 网络是 `internal: true`，而 Docker **无法为仅挂在 internal
+    #      网络上的容器发布端口**——`PortBindings` 会被记录但 `NetworkSettings.Ports`
+    #      为 null、也没有 docker-proxy 监听。实测切流时 `connection refused`，
+    #      而 `docker compose config` 显示端口一切正常，很容易误判为「防火墙」。
+    #   2) 即使能发布也不需要：api / agent 经服务名在容器网络内访问；运维脚本
+    #      （baseline、导入、psql）用下面的 `docker run --network` 一行在网内执行，
+    #      比多开一个宿主监听面更安全。
+    #
+    # 运维入口（在 /home/ubuntu/fg-prod 内）：
+    #   docker compose -p familygraph-prod exec postgres     #     psql -U postgres -d familygraph -c "SELECT 1"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
