@@ -75,10 +75,14 @@ def test_filter_then_ann_puts_filter_before_ordering():
     """
     sql = str(
         emb.build_vector_candidates(
-            dimension=8, eligibility="c.status = 'active' AND d.status = 'active'"
+            dimension=8,
+            eligibility="c.status = 'active' AND d.status = 'active'",
+            model="m1",
         )
     )
     assert "WITH authorized AS" in sql, "缺少先过滤的 CTE"
+    # model 过滤必须存在：不同模型的向量空间不可比较，不过滤会返回随机排序。
+    assert "s.model = :model" in sql, "缺少 model 过滤：不同向量空间的向量会被互相比较"
     # 第二个 CTE 以逗号分隔（`WITH a AS (...), ranked AS (...)`）。
     assert "ranked AS" in sql, "缺少去重用的 ranked CTE"
 
@@ -105,11 +109,15 @@ def test_filter_then_ann_puts_filter_before_ordering():
 def test_vector_query_rejects_bad_parameters():
     """参数错误 fail-loud：维度 0 会让 vector(0) 非法，over_fetch<1 会让 LIMIT 失效。"""
     with pytest.raises(ValueError):
-        emb.build_vector_candidates(dimension=0, eligibility="1=1")
+        emb.build_vector_candidates(dimension=0, eligibility="1=1", model="m")
     with pytest.raises(ValueError):
-        emb.build_vector_candidates(dimension=8, eligibility="1=1", over_fetch=0)
+        emb.build_vector_candidates(dimension=8, eligibility="1=1", model="m", over_fetch=0)
     with pytest.raises(ValueError):
         emb.pgvector_ddl(0)
+    # 空 model 必须拒绝：不过滤 model 会让不同向量空间的向量互相比较，
+    # 余弦距离在那里**没有意义**，会返回看似合理但实际随机的排序且不报错。
+    with pytest.raises(ValueError, match="model"):
+        emb.build_vector_candidates(dimension=8, eligibility="1=1", model="")
 
 
 def test_pgvector_ddl_binds_dimension_and_carries_scope_columns():

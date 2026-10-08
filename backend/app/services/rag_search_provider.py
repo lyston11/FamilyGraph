@@ -193,3 +193,32 @@ def build_lexical(
 PGROONGA_INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS ix_rag_chunks_pgroonga " "ON rag_chunks USING pgroonga (text)"
 )
+
+
+#: 词法检索在 PostgreSQL 上**必需**的扩展。
+#:
+#: ## 为什么 readiness 必须检查它
+#:
+#: 缺 PGroonga 时 `&@~` 会直接报 `UndefinedFunction`（fail-loud，好），
+#: 但如果有人把实现改成「捕获异常后退化为 LIKE」，检索会**静默**变成无索引全表
+#: 扫描：结果仍然返回，只是慢且没有相关度排序，而无人发现。
+#:
+#: 实测：有 PGroonga 时中文 golden corpus 10/10；缺它则短查询命中率为 0。
+#: 因此「扩展存在」是部署前提，不是可选优化。
+REQUIRED_EXTENSIONS: tuple[str, ...] = ("pgroonga",)
+
+
+def extension_status(db: Any, dialect_name: str) -> dict[str, bool]:
+    """检查必需扩展是否已安装。
+
+    SQLite 上没有扩展概念，返回空字典（不参与判定）——词法检索走 FTS5，
+    由 SQLite 自身提供，无需扩展检查。
+    """
+    if dialect_name != "postgresql":
+        return {}
+    rows = db.execute(
+        text("SELECT extname FROM pg_extension WHERE extname = ANY(:names)"),
+        {"names": list(REQUIRED_EXTENSIONS)},
+    ).fetchall()
+    installed = {str(r[0]) for r in rows}
+    return {name: (name in installed) for name in REQUIRED_EXTENSIONS}

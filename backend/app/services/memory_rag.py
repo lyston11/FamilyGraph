@@ -1404,10 +1404,22 @@ def _vector_candidates(
         return [], 0
 
     literal = "[" + ",".join(f"{v:.7f}" for v in result.vectors[0]) + "]"
-    sql = rag_embeddings.build_vector_candidates(dimension=dimension, eligibility=eligibility)
+    sql = rag_embeddings.build_vector_candidates(
+        dimension=dimension,
+        eligibility=eligibility,
+        model=rag_embeddings.configured_model(),
+    )
     try:
         rows = (
-            db.execute(sql, {"query_vector": literal, "limit": limit * 2, "offset": 0})
+            db.execute(
+                sql,
+                {
+                    "query_vector": literal,
+                    "model": rag_embeddings.configured_model(),
+                    "limit": limit * 2,
+                    "offset": 0,
+                },
+            )
             .mappings()
             .all()
         )
