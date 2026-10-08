@@ -158,8 +158,17 @@ def read_sqlite_triggers() -> list[dict]:
         if k not in ("DATABASE_URL", "PGTEST_DSN")
     }
     env["DATA_DIR"] = tmp
+    # 用 `sys.executable` 而不是硬编码 `backend/.venv/bin/python`。
+    #
+    # 硬编码在两种场景下都不成立：
+    #   1) **容器内**（生产切流）：仓库挂载进来但 `.venv` 不在镜像里，
+    #      `FileNotFoundError` 让整个触发器步骤失败，症状是「触发器只有 0 个」；
+    #   2) 虚拟环境不在默认路径的检出。
+    #
+    # `sys.executable` 就是当前跑本脚本的解释器，它必然存在，且必然已装了
+    # alembic（否则本脚本自己也跑不起来）。
     proc = subprocess.run(
-        [str(BACKEND / ".venv/bin/python"), "-m", "alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=BACKEND, env=env, capture_output=True, text=True, timeout=900,
     )
     if proc.returncode != 0:
