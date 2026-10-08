@@ -223,3 +223,31 @@ def test_required_extensions_is_not_empty():
     """必需扩展清单不得为空——空清单会让检查恒真。"""
     assert provider.REQUIRED_EXTENSIONS, "必需扩展清单为空，检查形同虚设"
     assert "pgroonga" in provider.REQUIRED_EXTENSIONS
+
+
+# ---------------------------------------------------------------- 方言安全 SQL（C9/P1）
+
+
+def test_index_writer_acquire_uses_boolean_predicate():
+    """`_acquire_index_writer` 必须用 `WHERE false`，不能是 `WHERE 0`。
+
+    ## 为什么这条守护的是真实缺陷
+
+    SQLite 接受 `WHERE 0`（整数当布尔），PostgreSQL 拒绝：
+    `argument of WHERE must be type boolean, not type integer`。
+
+    实测该语句让 RAG 索引维护**每 5 秒失败一次**，而失败被吞成 WARNING
+    （`core index maintenance failed; core tick unaffected`），因此症状只是
+    「RAG 永远不索引」——没有任何可见错误。这是与迁移 0008 的
+    `boolean = integer` 同一类 SQLite→PostgreSQL 类型语义差异。
+    """
+    import inspect
+
+    from app.services import memory_rag
+
+    source = inspect.getsource(memory_rag._acquire_index_writer)
+    # 去掉注释再断言：文档字符串里会提到 `WHERE 0` 作为反例。
+    code = "\n".join(line for line in source.splitlines() if not line.strip().startswith("#"))
+    code = code.split('"""')[0] + code.split('"""')[-1] if '"""' in code else code
+    assert "WHERE false" in code, "未使用方言中立的布尔谓词"
+    assert "WHERE 0" not in code, "仍使用 SQLite 专属的 `WHERE 0`（PostgreSQL 会拒绝）"

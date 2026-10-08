@@ -708,12 +708,22 @@ def _pieces_for_version(value: str, version: str) -> list[str]:
 
 
 def _acquire_index_writer(db: Session) -> None:
-    """Acquire the SQLite writer before refreshing mutable sources or flags.
+    """Acquire the writer before refreshing mutable sources or flags.
 
     A no-op UPDATE also starts a real transaction before any SAVEPOINT on
     SQLite's legacy driver. Callers own the short outer commit/rollback.
+
+    ## `WHERE false` 而不是 `WHERE 0`
+
+    SQLite 接受 `WHERE 0`（整数被当布尔），PostgreSQL 不接受：
+    `argument of WHERE must be type boolean, not type integer`。实测该语句让
+    RAG 索引维护**每 5 秒失败一次**，且失败被吞成 WARNING（`core tick unaffected`），
+    所以症状只是「RAG 永远不索引」，而不是任何可见错误。
+
+    这是与迁移 0008 的 `boolean = integer` 同一类 SQLite→PostgreSQL 类型语义差异。
+    `WHERE false` 在两种方言下都是布尔假，语义一致。
     """
-    db.execute(text("UPDATE rag_documents SET id = id WHERE 0"))
+    db.execute(text("UPDATE rag_documents SET id = id WHERE false"))
 
 
 def _require_fresh_rag_enabled(db: Session) -> None:
