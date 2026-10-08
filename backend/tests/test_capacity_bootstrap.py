@@ -26,6 +26,7 @@ from sqlalchemy import text
 from app.models.agent import AgentCapacityCounter
 from app.services import capacity, capacity_bootstrap
 from app.services.capacity import CapacityNotBootstrapped
+from app.utils import timeutil
 
 
 def _set_stage(db_session, stage: str) -> None:
@@ -38,6 +39,28 @@ def _set_stage(db_session, stage: str) -> None:
         {"stage": stage},
     )
     db_session.commit()
+
+
+def _seed_space(db_session, space_id: int, owner_id: int = 1) -> None:
+    """建一个用户 + 家庭空间（`steward_jobs.space_id` 有 FK）。"""
+    db_session.execute(
+        text(
+            "INSERT INTO users (id, name, gender, privacy_mode, profile_status, created_at)"
+            " VALUES (:id, :name, 'unknown', 'perpetual', 'identity_confirmed',"
+            " CURRENT_TIMESTAMP) ON CONFLICT (id) DO NOTHING"
+        ),
+        {"id": owner_id, "name": f"u{owner_id}"},
+    )
+    db_session.flush()
+    db_session.execute(
+        text(
+            "INSERT INTO family_spaces (id, name, owner_id, kind, created_at)"
+            " VALUES (:id, :name, :owner, 'household', CURRENT_TIMESTAMP)"
+            " ON CONFLICT (id) DO NOTHING"
+        ),
+        {"id": space_id, "name": f"s{space_id}", "owner": owner_id},
+    )
+    db_session.flush()
 
 
 def test_bootstrap_recomputes_active_from_truth(db_session):
@@ -361,3 +384,92 @@ def test_global_counter_mismatch_is_reported(db_session, monkeypatch):
     assert any(
         "计数不一致" in m and "global" in m for m in report.mismatches
     ), f"global 漂移未报：{report.mismatches}"
+
+
+# ---------------------------------------------------------------- 聚合维度（C9）
+
+
+def test_global_aggregate_equals_the_sum_of_tenants(db_session):
+    """global 计数行必须等于其下所有租户之和。
+
+    ## 为什么这是安全要求（实测阻塞生产切流）
+
+    `_active_counts` 只按**租户**维度统计（account/space），因此 global 与
+    agent_kind 的值恒为 0。而 `assert_ready` 的不变量是「global == 租户之和」。
+
+    于是：只要存在活跃工作，bootstrap 之后 `/ready` **立刻失败**，fail-closed
+    阻塞全部写入。实测生产切回时正是
+    `global:0:steward_job 计数行 0 != 真实 17`。
+
+    dev 上没暴露，因为 bootstrap 时恰好没有活跃工作（全 0 才「一致」）——
+    这正是「只在空库上验证」会漏掉的缺陷类型。
+    """
+    from app.models.steward import StewardJob
+    from app.services import capacity
+
+    # 每个 space 只能有一个活跃 job（部分唯一索引），因此用**两个 space**
+    # 来制造「租户之和 > 0」的形状。
+    now = timeutil.utcnow()
+    for space_id in (4242, 4243):
+        _seed_space(db_session, space_id)
+        db_session.add(
+            StewardJob(
+                space_id=space_id,
+                cause="integrity_scan",
+                trigger_cursor=1,
+                status="queued",
+                attempt=0,
+                max_attempts=3,
+                policy_version="p",
+                checkpoint_json={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db_session.commit()
+
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+
+    spec = capacity.CounterSpec("global", 0, capacity.RESOURCE_STEWARD_JOB)
+    row = db_session.get(
+        capacity.AgentCapacityCounter, (spec.scope_kind, spec.scope_id, spec.resource_kind)
+    )
+    assert row is not None, "global 计数行未建立"
+    assert row.active == 2, (
+        f"global.active={row.active}，期望 2（两个活跃 job 之和）——"
+        "global 不聚合会让 assert_ready 永久失败"
+    )
+
+
+def test_ready_passes_after_bootstrap_with_active_work(db_session):
+    """有活跃工作时，bootstrap 后 `assert_ready` 必须通过。
+
+    这条是对上一条的端到端形式：不只看 global 的值，而是看它是否真的让
+    fail-closed 的门放行。
+    """
+    from app.models.steward import StewardJob
+
+    space_id = 4343
+    _seed_space(db_session, space_id)
+    now = timeutil.utcnow()
+    db_session.add(
+        StewardJob(
+            space_id=space_id,
+            cause="integrity_scan",
+            trigger_cursor=1,
+            status="leased",
+            attempt=1,
+            max_attempts=3,
+            policy_version="p",
+            checkpoint_json={},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+    # 不应抛出
+    capacity_bootstrap.assert_ready(db_session, stage="pg_all")

@@ -114,6 +114,14 @@ def _tenant_ids(db: Session) -> tuple[list[int], list[int]]:
     return accounts, spaces
 
 
+#: 资源 -> `agent_kind` 维度的 scope_id（`agent_kind` 用 0=assistant / 1=steward）。
+#:
+#: 只有 provider_stream 有 agent_kind 维度（见 `capacity.stream_specs`）。
+KIND_FOR_RESOURCE: dict[str, int] = {
+    capacity.RESOURCE_PROVIDER_STREAM: 0,
+}
+
+
 def _active_counts(db: Session) -> dict[tuple[str, int, str], int]:
     """从真实状态重算每个维度的活跃占用。"""
     counts: dict[tuple[str, int, str], int] = {}
@@ -270,9 +278,31 @@ def bootstrap(db: Session, *, dry_run: bool = False) -> ReconcileReport:
             )
         )
 
+    # 聚合维度（global / agent_kind）的 active 必须等于**其下所有租户之和**。
+    #
+    # 不能直接从 `_active_counts` 取：它只按租户维度统计（account/space），
+    # 因此 global/kind 的值永远是 0。而 `assert_ready` 的不变量正是
+    # 「global == 所有租户之和」——于是**只要存在活跃工作**，bootstrap 之后
+    # `/ready` 立刻失败，fail-closed 会阻塞全部写入。
+    #
+    # 实测生产切流时正是如此：`global:0:steward_job 计数行 0 != 真实 17`。
+    # dev 上没暴露，是因为 bootstrap 时恰好没有任何活跃工作（全 0 才「一致」）。
+    # 键与 `actual` 同形（scope_kind, scope_id, resource_kind），避免混合元数。
+    aggregate: dict[tuple[str, int, str], int] = {}
+    for (_scope_kind, _scope_id, resource_kind), n in actual.items():
+        gkey = ("global", 0, resource_kind)
+        aggregate[gkey] = aggregate.get(gkey, 0) + n
+        kind = KIND_FOR_RESOURCE.get(resource_kind)
+        if kind is not None:
+            kkey = ("agent_kind", kind, resource_kind)
+            aggregate[kkey] = aggregate.get(kkey, 0) + n
+
     for spec, cap in specs:
         key = (spec.scope_kind, spec.scope_id, spec.resource_kind)
-        active = actual.get(key, 0)
+        if spec.scope_kind in ("global", "agent_kind"):
+            active = aggregate.get(key, 0)
+        else:
+            active = actual.get(key, 0)
         if active > cap:
             # 真实占用超过容量：不能自动「修正」成容量值——那会掩盖真实超额，
             # 也无法判断该拒绝谁。如实报告并要求人工判断。
