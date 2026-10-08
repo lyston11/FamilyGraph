@@ -277,9 +277,15 @@ def main() -> int:
         else:
             with psycopg.connect(plain) as conn:
                 conn.execute("CREATE TABLE IF NOT EXISTS alembic_version (version_num varchar(32) NOT NULL)")
+                # 必须保证**恰好一行**。`alembic_version` 没有主键约束，若表里已有
+                # 多行（例如上一次 apply 中途失败），只 INSERT 会留下多行，而
+                # `alembic upgrade head` 在「多行版本表」上的行为是未定义的。
                 conn.execute("DELETE FROM alembic_version")
                 conn.execute("INSERT INTO alembic_version (version_num) VALUES (%s)", (head,))
                 conn.commit()
+                rows = conn.execute("SELECT count(*) FROM alembic_version").fetchone()[0]
+                if rows != 1:
+                    failures.append(f"alembic_version 有 {rows} 行（必须恰好 1 行）")
             print(f"  [OK ] alembic_version 标记为 {head}（upgrade head 成为 no-op）")
             steps["alembic_stamped"] = head
     except Exception as exc:  # noqa: BLE001

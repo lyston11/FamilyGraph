@@ -46,11 +46,23 @@ BACKEND = ROOT / "backend"
 OUT_DIR = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof")))
 
 #: 对账表。顺序无关（只读行数），但保持稳定输出。
+#: 逐表行数对账的目标。**必须覆盖所有承载业务事实的大表**——只对一小撮表对账
+#: 会让「某张大表整表未导入」完全不可见。
+#:
+#: 实测教训：`steward_jobs` 曾不在本清单里，而它在生产上是 17112 行的大表；
+#: 导入漏掉它时脚本仍报「全部一致」，直到人工比对行数才发现。
 RECONCILE_TABLES = (
     "users", "accounts", "relations", "space_members",
     "agent_sessions", "agent_runs", "agent_run_events", "agent_messages",
     "domain_events", "action_cards", "source_facts", "raw_relation_inputs",
     "memories", "rag_documents", "rag_chunks", "attachments",
+    # steward 事实表（生产上是大表）
+    "steward_jobs", "steward_model_calls", "steward_assist_plans",
+    "steward_generations", "steward_generation_views", "steward_publications",
+    "steward_candidate_evidence_versions", "steward_llm_candidates",
+    "steward_term_projections", "steward_inferred_edges",
+    # 通知与审计
+    "notifications", "audit_logs",
 )
 
 
@@ -97,10 +109,28 @@ def _forward_fk_columns(inspector, table: str, already: set[str]) -> list[str]:
 
 
 def sqlite_counts(path: str) -> dict[str, int]:
+    """快照里**所有**业务表的行数。
+
+    ## 为什么不再用枚举清单
+
+    只对固定清单对账会让「清单外的整表漏导入」完全不可见——实测生产切流就因此
+    漏掉了 `steward_jobs`（17112 行的大表）而脚本仍报「全部一致」。
+
+    改为枚举 `sqlite_master` 的全部表：**新增表自动进入对账范围**，漏掉必然被发现。
+    排除 `sqlite_*` 内部表与 FTS 影子表（它们在 PG 侧由不同机制承载）。
+    """
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     out: dict[str, int] = {}
     try:
-        for table in RECONCILE_TABLES:
+        names = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name NOT LIKE 'sqlite_%'"
+                " AND name NOT LIKE '%_fts%'"
+            )
+        ]
+        for table in names:
             try:
                 out[table] = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
             except sqlite3.Error:
@@ -282,6 +312,19 @@ def main() -> int:
             if table == "writer_state":
                 skipped[table] = "deployment_state_not_data"
                 continue
+            # **`alembic_version` 也不得随数据导入。**
+            #
+            # 它是**部署元数据**，由 baseline 脚本 `DELETE` + `INSERT` 保证恰好一行。
+            # 快照里也有一行，照搬进来就会变成**两行**；而 alembic 假定该表至多一行，
+            # 多行会让 `alembic upgrade head`（容器每次启动都执行）行为未定义——
+            # 实测生产切流时就出现过 `alembic_version` 两行，之后 `steward_jobs`
+            # 从 17112 行掉到 23 行（`n_tup_del` 已随 postgres 重启归零，无法直接
+            # 证明删除路径，但两行版本表是唯一异常状态）。
+            #
+            # 无论删除路径是否确由它触发，**多行版本表都是必须排除的状态**。
+            if table == "alembic_version":
+                skipped[table] = "deployment_metadata_not_data"
+                continue
             try:
                 rows = src.execute(f"SELECT * FROM {table}").fetchall()
             except sqlite3.Error as exc:
@@ -399,6 +442,12 @@ def main() -> int:
                     else "no_deferrable_columns"
                 )
                 skipped[table] = f"insert_failed:{detail}"
+                # **插入失败是硬失败，不是「跳过」。**
+                #
+                # 只记入 `skipped` 会让导入在有表未导入时仍然 PASS——实测生产切流
+                # 就因此漏掉了 `steward_jobs`（17112 行）而没有报错，直到人工核对
+                # 行数才发现。任何一表插入失败都必须让脚本以非零退出。
+                failures.append(f"{table} 插入失败：{detail}")
                 continue
             continue
     # ---- 2b) 阶段 2：回填被延迟的前向 FK 列 ----
@@ -434,9 +483,44 @@ def main() -> int:
 
     src.close()
 
+    # 独立只读连接：主连接已关闭，而覆盖断言需要重新读快照计数。
+    _cov = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
+
+    def src_count(table: str) -> int:
+        return int(_cov.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+
     print(f"   导入成功 {len(imported)} 表；跳过 {len(skipped)} 表")
     for table, reason in skipped.items():
         print(f"     SKIP {table}: {reason}")
+    # **全表覆盖断言**：快照里每张「有数据」的表都必须被导入或被显式解释。
+    #
+    # 这是防止「整表静默漏导入」的根本手段：只靠对账清单是**枚举**，漏一个就看不见；
+    # 而这里要求「有数据的表」全部有归属，漏掉的会直接列出。
+    unexplained: list[str] = []
+    for table in tables:
+        if table in imported:
+            continue
+        reason = skipped.get(table, "")
+        # 这些是**有意的**排除，不是缺陷
+        if reason in ("deployment_state_not_data", "not_in_pg_schema"):
+            continue
+        if reason.startswith("not_in_snapshot"):
+            continue
+        try:
+            n = src_count(table)
+        except Exception:  # noqa: BLE001
+            continue
+        if n > 0:
+            unexplained.append(f"{table}({n} 行): {reason or '未导入且无原因'}")
+    if unexplained:
+        failures.append(
+            "以下有数据的表未被导入且未解释：" + "; ".join(unexplained[:10])
+        )
+        print(f"   未解释的漏导入 {len(unexplained)} 表：")
+        for u in unexplained[:10]:
+            print(f"     MISSING {u}")
+
+    _cov.close()
     report["imported"] = imported
     report["skipped"] = skipped
 
@@ -447,6 +531,12 @@ def main() -> int:
     with engine.connect() as conn:
         for table, want in expected.items():
             if want < 0:
+                continue
+            # **部署状态/元数据不参与数据对账**：它们本就不该相等。
+            #   - `writer_state`：由本次切流写入（stage/epoch），快照里是旧部署的值
+            #   - `alembic_version`：由 baseline stamp 写入恰好一行，快照里也有一行
+            #   - `agent_capacity_counters`：PG 侧独有（SQLite 上无此表）
+            if table in ("writer_state", "alembic_version", "agent_capacity_counters"):
                 continue
             if table not in tables:
                 # 空表在 PG 侧未建**不是**数据差异：0 行 vs 表不存在，语义等价。
