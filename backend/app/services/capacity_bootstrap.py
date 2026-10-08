@@ -237,7 +237,12 @@ def bootstrap(db: Session, *, dry_run: bool = False) -> ReconcileReport:
         )
     )
 
-    # 租户维度
+    # 租户维度。
+    #
+    # 注意 `spaces` 必须来自 `_tenant_ids`（它按**活跃工作**筛选），而不是只从
+    # 某个资源取——否则会出现「steward_job 有活跃行但 space 未建计数行」，
+    # 于是 `assert_ready` 报缺失、`/ready` 503。这正是首次 bootstrap 后实际发生的：
+    # 全局行建好了，但 space:1/space:2 的 steward_job 行没建。
     for account_id in accounts:
         specs.append(
             (

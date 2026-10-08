@@ -310,6 +310,62 @@ class CapacityNotBootstrapped(RuntimeError):
     """
 
 
+def tenant_capacity_for(resource_kind: str) -> int:
+    """该资源在**租户**维度上的容量（来自部署配置）。
+
+    ## 为什么需要它在这里
+
+    租户计数行按需惰性创建（见 `_ensure_registered`），因此创建时必须知道容量。
+    容量来自 config，与 `capacity_bootstrap` 用的是同一组值——两处必须一致，
+    否则 bootstrap 建的与运行时建的行容量不同。
+    """
+    from app import config
+
+    if resource_kind == RESOURCE_ASSISTANT_RUN:
+        return config.AGENT_ACCOUNT_ASSISTANT_RUN_LIMIT
+    if resource_kind == RESOURCE_STEWARD_JOB:
+        # 每空间至多一个活跃 job（partial unique index 兜底）。
+        return 1
+    if resource_kind == RESOURCE_STEWARD_ASSIST:
+        return config.STEWARD_ASSIST_MAX_CONCURRENT_CALLS_PER_SPACE
+    if resource_kind == RESOURCE_PROVIDER_STREAM:
+        return config.AGENT_STREAM_PER_TENANT_CAPACITY
+    return 1
+
+
+#: 租户维度（需要惰性创建）。global/agent_kind 由 bootstrap 无条件创建，
+#: 它们是「bootstrap 已执行」的标记。
+_TENANT_SCOPE_KINDS = frozenset({"account", "space"})
+
+
+def _ensure_registered(db: Session, spec: CounterSpec) -> bool:
+    """确保该维度有计数行；返回是否**已登记**（可直接参与配额）。
+
+    ## 为什么租户行必须惰性创建
+
+    bootstrap 只能给**当时活跃**的租户建行。服务运行后新租户随时变为活跃
+    （新用户注册、新空间创建 steward job），此时它的计数行不存在。若把
+    「行不存在」当作「未登记 → 不限制」，配额对新租户静默失效；若当作
+    「缺失 → 拒绝」，系统会在新租户出现时立刻停摆（实测：首次 bootstrap 后
+    `/ready` 503，因为启动后新建的 steward job 所在 space 没有行）。
+
+    因此：**global/kind 行 = bootstrap 标记**（由 bootstrap 无条件创建），
+    租户行按需创建、容量取自同一配置。这使新租户自动纳入配额，而 bootstrap
+    从未执行的部署仍会被 `_require_bootstrapped` 拦住。
+    """
+    key = (spec.scope_kind, spec.scope_id, spec.resource_kind)
+    if db.get(AgentCapacityCounter, key) is not None:
+        return True
+    if spec.scope_kind not in _TENANT_SCOPE_KINDS:
+        return False
+    # 只在 bootstrap 已执行时惰性建行：否则会把「从未 bootstrap」也变成可用。
+    marker = db.get(AgentCapacityCounter, ("global", 0, spec.resource_kind))
+    if marker is None:
+        return False
+    ensure_counter(db, spec, capacity=tenant_capacity_for(spec.resource_kind))
+    return True
+
+
 def try_acquire(db: Session, specs: Sequence[CounterSpec]) -> bool | None:
     """配额占用，三态返回。
 
@@ -326,11 +382,7 @@ def try_acquire(db: Session, specs: Sequence[CounterSpec]) -> bool | None:
     就绪探针只保护**新启动**的实例；一个在 bootstrap 之前就已运行的实例不会被它
     拦住，因此写路径必须自己拒绝。没有这一层，「迁移完成但配额未启用」会静默通过。
     """
-    active_specs = [
-        s
-        for s in specs
-        if db.get(AgentCapacityCounter, (s.scope_kind, s.scope_id, s.resource_kind)) is not None
-    ]
+    active_specs = [s for s in specs if _ensure_registered(db, s)]
     if not active_specs:
         _require_bootstrapped(db)
         return None
@@ -364,11 +416,7 @@ def _writer_is_pg_all(db: Session) -> bool:
 
 def try_release(db: Session, specs: Sequence[CounterSpec]) -> int:
     """归还已登记的维度；未登记的直接跳过。"""
-    active_specs = [
-        s
-        for s in specs
-        if db.get(AgentCapacityCounter, (s.scope_kind, s.scope_id, s.resource_kind)) is not None
-    ]
+    active_specs = [s for s in specs if _ensure_registered(db, s)]
     if not active_specs:
         return 0
     return release(db, active_specs)

@@ -251,3 +251,59 @@ def test_bootstrap_refuses_to_silently_fix_over_capacity(db_session, monkeypatch
     # 计数行不得被静默改成容量值
     row = db_session.get(AgentCapacityCounter, ("space", 1, "steward_assist"))
     assert row is not None and row.active == 0, "静默修改了计数行"
+
+
+def test_tenant_counter_is_created_lazily_after_bootstrap(db_session):
+    """bootstrap 之后，**新出现**的租户必须自动纳入配额。
+
+    ## 为什么这是必需的
+
+    bootstrap 只能给当时活跃的租户建行。服务运行后新租户随时变为活跃（新用户
+    注册、新空间创建 steward job），此时它的计数行不存在。若把「行不存在」当作
+    「未登记 → 不限制」，配额对新租户**静默失效**；若当作「缺失 → 拒绝」，系统会在
+    新租户出现时立刻停摆。
+
+    实测症状：首次 bootstrap 后 `/ready` 返回 503，报
+    `缺失计数行 space:1:steward_job（真实活跃 1）`——启动后新建的 steward job
+    所在 space 没有行。
+    """
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+
+    # 一个 bootstrap 时不存在的新租户
+    spec = capacity.CounterSpec("space", 4242, capacity.RESOURCE_STEWARD_ASSIST)
+    assert capacity.try_acquire(db_session, [spec]) is True, "新租户未被纳入配额"
+    row = db_session.get(AgentCapacityCounter, ("space", 4242, "steward_assist"))
+    assert row is not None, "新租户的计数行未按需创建"
+    assert row.active == 1
+
+
+def test_lazy_registration_requires_bootstrap_marker(db_session):
+    """未 bootstrap 的部署**不得**靠惰性创建绕过 fail-closed。
+
+    惰性创建只在 global 行（bootstrap 标记）存在时才发生，否则
+    `pg_all` 仍必须拒绝——否则「从未 bootstrap」会变成可用。
+    """
+    _set_stage(db_session, "pg_all")
+    spec = capacity.CounterSpec("space", 5, capacity.RESOURCE_STEWARD_ASSIST)
+    with pytest.raises(CapacityNotBootstrapped):
+        capacity.try_acquire(db_session, [spec])
+
+
+def test_lazy_registration_does_not_create_global_rows(db_session):
+    """global/kind 行不得由惰性创建产生——它们必须来自 bootstrap。
+
+    若惰性创建也建 global 行，`assert_ready` 的「bootstrap 已执行」判据就失效了。
+    """
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+    before = db_session.get(AgentCapacityCounter, ("global", 0, "assistant_run"))
+    assert before is not None
+
+    # 请求一个不存在的 global 维度：不得被创建
+    spec = capacity.CounterSpec("global", 0, capacity.RESOURCE_STEWARD_ASSIST)
+    assert capacity.try_acquire(db_session, [spec]) is True  # bootstrap 已建该行
+
+    # agent_kind 维度只对 provider_stream 由 bootstrap 建；其他不得被惰性创建
+    other = capacity.CounterSpec("agent_kind", 0, capacity.RESOURCE_STEWARD_ASSIST)
+    assert capacity.try_acquire(db_session, [other]) is None, "非租户维度被惰性创建"
