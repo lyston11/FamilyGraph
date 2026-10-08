@@ -303,10 +303,41 @@ def bootstrap(db: Session, *, dry_run: bool = False) -> ReconcileReport:
     return report
 
 
+def _aggregate_expected(actual: dict[tuple[str, int, str], int]) -> dict[tuple[str, int, str], int]:
+    """由租户维度的真实值推导 global / agent_kind 维度的期望值。
+
+    ## 为什么必须推导，而不能只算租户
+
+    配额是**分层**的：`global` 与 `agent_kind` 计数行的活跃值是**所有租户之和**。
+    只计算租户维度会让这两个维度永远没有期望值，于是它们的活跃值一律被报成
+    「孤儿占用」——实测：`孤儿占用 global:0:steward_job 计数行 active=20`，
+    而那是 20 个真实活跃 job 的正确汇总。
+
+    把汇总当成泄漏会让对账永远失败，从而 `assert_ready` 永远 503。
+    """
+    totals: dict[tuple[str, int, str], int] = {}
+    for (scope_kind, _scope_id, resource_kind), value in actual.items():
+        if scope_kind not in _TENANT_SCOPES:
+            continue
+        totals[("global", 0, resource_kind)] = totals.get(("global", 0, resource_kind), 0) + value
+        if resource_kind == capacity.RESOURCE_PROVIDER_STREAM:
+            # 流级有 kind 维度：所有 kind 的汇总等于 global。
+            totals[("agent_kind", 0, resource_kind)] = (
+                totals.get(("agent_kind", 0, resource_kind), 0) + value
+            )
+    return totals
+
+
+#: 参与汇总的租户维度。
+_TENANT_SCOPES = frozenset({"account", "space"})
+
+
 def reconcile(db: Session) -> ReconcileReport:
     """对账：计数行必须存在、必须与真实活跃数一致、不得有孤儿。"""
     report = ReconcileReport()
     actual = _active_counts(db)
+    # global / agent_kind 的期望值来自租户汇总（它们是分层配额，不是独立真相）。
+    expected = {**actual, **_aggregate_expected(actual)}
 
     rows = db.execute(
         sa.text(
@@ -317,7 +348,7 @@ def reconcile(db: Session) -> ReconcileReport:
     present = {(r[0], int(r[1]), r[2]): (int(r[3]), int(r[4])) for r in rows}
 
     # ① 真实有占用但无计数行 → 配额失效
-    for key, active in actual.items():
+    for key, active in expected.items():
         if key not in present:
             report.mismatches.append(f"缺失计数行 {key[0]}:{key[1]}:{key[2]}（真实活跃 {active}）")
         elif present[key][1] != active:
@@ -328,7 +359,7 @@ def reconcile(db: Session) -> ReconcileReport:
 
     # ② 孤儿：计数行有 active 但真实无占用（可能是泄漏）
     for key, (_cap, active) in present.items():
-        if active > 0 and actual.get(key, 0) == 0:
+        if active > 0 and expected.get(key, 0) == 0:
             report.orphaned.append(f"孤儿占用 {key[0]}:{key[1]}:{key[2]} 计数行 active={active}")
 
     return report
