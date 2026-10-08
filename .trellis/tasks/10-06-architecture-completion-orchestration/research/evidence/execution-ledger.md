@@ -15,7 +15,7 @@
 | C6 | PGroonga lexical + pgvector | **partial** | 10-04-lexical / 10-03-pgvector-rag | 词法已接入真实 schema；pgvector **机制**已交付（filter-then-ANN + RRF） | `c6-lexical-dispatch.md` | 真实 embedding provider + 接入 search_rag |
 | C7 | operations/cutover | **done（可自主部分）** | 10-04-postgres-operations-cutover | epoch + health + 写路径守卫 + PgBouncer + **PITR 演练** | `c7-writer-epoch.md`、`c7-pgbouncer.md`、`c7-pitr.md` | HA/failover、RPO/RTO |
 | C8 | final load acceptance | **partial** | 10-04-multitenant-load-acceptance | 三层配额守恒 + **真实快照导入对账**已验 | `c8-capacity-acceptance.md`、`c8-real-snapshot-import.md` | 真实部署与负载 p95/p99 |
-| C9 | dev shadow → writer | todo | 本任务 | 分阶段切换 | — | 真实部署 |
+| C9 | dev shadow → writer | **done（dev 已到 pg_all）** | 本任务 | 分阶段切换已执行；生产待发布 | `c9-p0-p1-execution.md` | 生产发布由用户手动 |
 | C10 | reconciliation/archive | todo | 本任务 | 对账 + 回滚演练 | — | C9 |
 
 ## 执行规则（不得回问用户）
