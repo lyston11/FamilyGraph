@@ -115,6 +115,15 @@ def read_state(db: Session) -> WriterState:
 
     回落是必要的：迁移**之前**表还不存在，而 health 端点必须能回答。
     此时按 `FG_WRITER_STAGE` 判断，使迁移前后的行为一致。
+
+    ## 回落是**有代价**的，必须配 `seed_if_empty`
+
+    实测 dev 上出现过：`FG_WRITER_STAGE=pg_all` 写在 env 里、`writer_state` 表为空，
+    于是 `/ready` 报 `pg_all` 而 `epoch` 恒为 0——**epoch 守卫完全失效**（守卫比较的
+    就是 epoch，而它永远不变）。切换既没有记录、也没有审计，回滚也不会使任何实例失效。
+
+    因此生产启动时必须先调 `seed_if_empty`，把 env 的意图**固化进数据库**；
+    此后数据库行是唯一真相，env 只是首次种子。
     """
     try:
         row = db.execute(
@@ -129,6 +138,61 @@ def read_state(db: Session) -> WriterState:
     if row is None:
         return WriterState(stage=DEFAULT_STAGE, epoch=0, updated_at=None, updated_by=None)
     return WriterState(stage=row[0], epoch=int(row[1]), updated_at=row[2], updated_by=row[3])
+
+
+def seed_if_empty(db: Session, *, actor: str = "startup") -> WriterState:
+    """表存在但为空时，把部署配置的阶段写入数据库（幂等）。
+
+    ## 为什么必须做
+
+    否则 env 里的阶段永远不会变成数据库事实，`epoch` 永远是 0，而 epoch 守卫靠
+    比较 epoch 工作——它因此**永远不会触发**。切换既不落审计，回滚也不失效任何实例。
+
+    ## 为什么只播种、不推进
+
+    播种时 epoch 保持 0（首次记录）。此后**所有**阶段变化必须走 `advance()`，
+    由它递增 epoch。这样「谁在何时切到哪一级」全部可追溯。
+    """
+    try:
+        existing = db.execute(
+            sa.text("SELECT stage, epoch, updated_at, updated_by FROM writer_state WHERE id = :id"),
+            {"id": _STATE_ID},
+        ).first()
+    except Exception:  # noqa: BLE001 - 表不存在：迁移前，无需播种
+        db.rollback()
+        return WriterState(stage=DEFAULT_STAGE, epoch=0, updated_at=None, updated_by=None)
+    if existing is not None:
+        return WriterState(
+            stage=existing[0],
+            epoch=int(existing[1]),
+            updated_at=existing[2],
+            updated_by=existing[3],
+        )
+    db.execute(
+        sa.text(
+            "INSERT INTO writer_state (id, stage, epoch, updated_at, updated_by)"
+            " VALUES (:id, :stage, 0, :now, :actor)"
+        ),
+        {"id": _STATE_ID, "stage": DEFAULT_STAGE, "now": timeutil.utcnow(), "actor": actor},
+    )
+    return WriterState(
+        stage=DEFAULT_STAGE, epoch=0, updated_at=timeutil.utcnow(), updated_by=actor
+    )
+
+
+def env_drift(db: Session) -> str | None:
+    """环境变量与数据库阶段是否不一致；不一致时返回说明。
+
+    数据库是真相，env 只是种子。但两者不一致意味着「有人改了 env 却没走 advance」，
+    必须**大声**报出来——那正是 epoch 守卫失效的入口。
+    """
+    state = read_state(db)
+    if state.stage == DEFAULT_STAGE:
+        return None
+    return (
+        f"FG_WRITER_STAGE={DEFAULT_STAGE!r} 与数据库 writer_state.stage="
+        f"{state.stage!r} 不一致；数据库是真相，请用 writer_epoch.advance() 切换"
+    )
 
 
 def advance(

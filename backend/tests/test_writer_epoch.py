@@ -235,3 +235,107 @@ def test_command_transaction_calls_the_guard(db_session, monkeypatch):
     with commands_context.command_transaction(db_session, commit=False):
         pass
     assert calls == ["guard"], "command_transaction 未调用 writer epoch 守卫"
+
+
+# ---------------------------------------------------------------- 播种与漂移（C9）
+
+
+def test_seed_if_empty_makes_the_env_stage_a_database_fact(db_session):
+    """`seed_if_empty` 必须把 env 阶段写入数据库。
+
+    ## 为什么这是安全要求
+
+    实测 dev 上出现过 `FG_WRITER_STAGE=pg_all` 写在 env 里、而 `writer_state` 表为空：
+    `/ready` 报 `pg_all`，但 `epoch` 恒为 0。epoch 守卫靠**比较 epoch** 工作，
+    epoch 永远不变意味着**守卫永不触发** —— 切换没有记录、回滚也不失效任何实例。
+
+    因此「env 里有值」不能算切换完成；必须是数据库行。
+    """
+    assert writer_epoch.read_state(db_session).updated_by is None, "前置：表应为空"
+    state = writer_epoch.seed_if_empty(db_session, actor="startup")
+    db_session.commit()
+    assert state.stage == writer_epoch.DEFAULT_STAGE
+    assert state.updated_by == "startup", "播种未记录 actor——切换将不可追溯"
+    # 关键：播种后必须**真的**能从数据库读回来（不是仅返回值）
+    assert writer_epoch.read_state(db_session).updated_by == "startup"
+
+
+def test_seed_if_empty_is_idempotent_and_never_overwrites(db_session):
+    """重复播种不得覆盖已有阶段或重置 epoch。
+
+    若播种会覆盖，重启就会把阶段退回 env 值——即「用重启偷偷回滚」，
+    且 epoch 归零后旧实例重新变为合法 writer（双主）。
+    """
+    _seed_state(db_session, stage="pg_all", epoch=7)
+    state = writer_epoch.seed_if_empty(db_session, actor="startup")
+    db_session.commit()
+    assert state.stage == "pg_all", "播种覆盖了已有阶段"
+    assert state.epoch == 7, "播种重置了 epoch（旧实例会重新成为合法 writer）"
+
+
+def test_seed_is_noop_when_table_is_absent(db_session, monkeypatch):
+    """表不存在（迁移前）时播种不得抛异常，且不得尝试写。
+
+    注意：测试结束必须**把表建回来**。conftest 的清理会 `DELETE FROM writer_state`，
+    而表被本用例 DROP 掉后该清理会报 `no such table` —— 那不是产品缺陷，
+    而是测试自己破坏了共享 fixture 的前置条件。
+    """
+    from sqlalchemy import text as _text
+
+    db_session.execute(_text("DROP TABLE writer_state"))
+    db_session.commit()
+    state = writer_epoch.seed_if_empty(db_session)
+    assert state.stage == writer_epoch.DEFAULT_STAGE
+    assert state.epoch == 0
+    # 还原表结构（与 0058 迁移一致），使 conftest 清理与后续用例正常。
+    db_session.execute(
+        _text(
+            "CREATE TABLE writer_state ("
+            "  id INTEGER PRIMARY KEY CHECK (id = 1),"
+            "  stage TEXT NOT NULL CHECK (stage IN ('sqlite','shadow','pg_control','pg_all')),"
+            "  epoch INTEGER NOT NULL DEFAULT 0 CHECK (epoch >= 0),"
+            "  updated_at DATETIME,"
+            "  updated_by TEXT"
+            ")"
+        )
+    )
+    db_session.commit()
+
+
+def test_env_drift_is_reported_when_env_differs_from_database(db_session, monkeypatch):
+    """env 与数据库不一致必须被报出。
+
+    数据库是真相，env 只是种子。两者不一致意味着「有人改了 env 却没走 advance」——
+    那正是守卫失效的入口，必须可见而不是静默。
+    """
+    _seed_state(db_session, stage="pg_control", epoch=2)
+    monkeypatch.setattr(writer_epoch, "DEFAULT_STAGE", "sqlite")
+    drift = writer_epoch.env_drift(db_session)
+    assert drift is not None
+    assert "pg_control" in drift and "advance" in drift
+
+
+def test_env_drift_is_none_when_consistent(db_session, monkeypatch):
+    """一致时不报——否则每次启动都有噪音告警。"""
+    _seed_state(db_session, stage="sqlite", epoch=0)
+    monkeypatch.setattr(writer_epoch, "DEFAULT_STAGE", "sqlite")
+    assert writer_epoch.env_drift(db_session) is None
+
+
+def test_seeded_state_activates_the_epoch_guard(db_session):
+    """播种之后 epoch 守卫才真正可用（这是播种的目的）。
+
+    `advance` 会同步本进程 epoch（执行切换的实例就是当前 writer），
+    因此推进后本进程仍可写；但持有**旧** epoch 的实例必须被拒绝。
+    """
+    writer_epoch.seed_if_empty(db_session, actor="startup")
+    db_session.commit()
+    writer_epoch.reset_process_epoch_for_tests()
+    writer_epoch.guard(db_session)  # 首次采纳（epoch=0）
+    writer_epoch.advance(db_session, to_stage="shadow", actor="ops")
+    db_session.commit()
+    # advance 已同步本进程 → 不抛
+    writer_epoch.guard(db_session)
+    # 持有旧 epoch 的实例必须被拒绝
+    with pytest.raises(WriterEpochMismatch):
+        writer_epoch.check_epoch(db_session, held=0)

@@ -74,10 +74,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # 三个 listener 共享 lifespan，服务内部进程级单例防重复执行。
     from app import dev_seed
     from app.db import SessionLocal
-    from app.services import admin_bootstrap, maintenance
+    from app.services import admin_bootstrap, maintenance, writer_epoch
 
     with SessionLocal() as bootstrap_session:
         admin_bootstrap.run_startup_preflight(bootstrap_session)
+        # writer 阶段：把 env 的意图**固化进数据库**（幂等，只播种不推进）。
+        #
+        # 没有这一步，`FG_WRITER_STAGE=pg_all` 永远只是环境变量：`writer_state`
+        # 表为空、`epoch` 恒为 0，而 epoch 守卫靠比较 epoch 工作——因此**永不触发**。
+        # 实测 dev 上就是这个状态：`/ready` 报 `pg_all` 但切换没有记录、回滚也不失效
+        # 任何实例。播种后数据库行成为唯一真相。
+        writer_epoch.seed_if_empty(bootstrap_session)
+        bootstrap_session.commit()
+        drift = writer_epoch.env_drift(bootstrap_session)
+        if drift:
+            # 大声报出：这是「改了 env 却没走 advance」的入口，也正是守卫失效的原因。
+            logger.warning("writer stage drift: %s", drift)
         # 09-05 dev 演示数据种子：先管理员后演示数据；env 门控 + 进程级单次，
         # 开启时按固定清单 insert-only 收敛补缺（既有数据零改动；默认
         # DEV_SEED_DEMO_DATA=0 时完全跳过）。

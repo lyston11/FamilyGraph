@@ -36,7 +36,7 @@ from app.models.steward import (
     StewardViewTarget,
 )
 from app.models.user import User
-from app.services import steward_runtime, steward_snapshot
+from app.services import capacity, steward_runtime, steward_snapshot
 from app.services.relationship_graph import topology_edges_from_facts
 from app.services.relationship_resolver import (
     PathStep,
@@ -1104,6 +1104,16 @@ def publish(db: Session, binding: Binding, *, summary: dict[str, Any], upper: in
             publication.generation_id, publication.updated_at = generation_id, now
         generation.status, generation.published_at, generation.updated_at = "published", now, now
         job.status, job.last_event_cursor = "succeeded", upper
+        # 归还 steward job 名额。
+        #
+        # **这里才是真实的终态路径**：`steward_runtime._execute` → `execute_steward_job`
+        # → `run_steward_job` → `_publish_success` → 本函数。`steward.settle_steward_job`
+        # 里的同名归还是**死代码**（生产不经过它），因此此前每个成功的 job 都泄漏一个
+        # 名额——实测 dev 上 40 个 job `acquired` 非空、`released` 全空，counter 停在
+        # `active=1`，之后该 space 再也无法入队（容量被自己占满）。
+        #
+        # 行级门保证恰好一次，因此与恢复路径重复调用也安全。
+        capacity.release_job(db, job, space_id=job.space_id)
         job.error_code, job.error_json, job.available_at = None, None, None
         # Large plans already reside in staging. The settlement record is bounded.
         job.checkpoint_json = {
@@ -1218,8 +1228,12 @@ def record_failure(db: Session, binding: Binding, *, error_code: str, retryable:
                 else config.STEWARD_RETRY_BACKOFF_SECOND_SECONDS
             )
             job.leased_by, job.lease_expires_at, job.heartbeat_at = None, None, None
+            # **重试路径不归还**：`queued` 仍是活跃态（配额含 queued），归还会让重试
+            # 期间的名额凭空多出一份。
         else:
             job.status, job.settled_at = "failed", now
+            # 终态才归还（行级门保证恰好一次）。
+            capacity.release_job(db, job, space_id=job.space_id)
         job.error_code, job.error_json, job.updated_at = (
             "input_changed" if changed else error_code,
             {"code": "input_changed" if changed else error_code},
