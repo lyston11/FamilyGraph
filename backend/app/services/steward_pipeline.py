@@ -1159,7 +1159,16 @@ def publish(db: Session, binding: Binding, *, summary: dict[str, Any], upper: in
         # counter 行锁已在事务开头由 `_lock_quota_counter` 取得，因此这里是
         # 「已持锁后再写」，不构成 `job -> counter` 反向锁序。
         # 行级门保证恰好一次，与恢复路径重复调用也安全。
-        capacity.release_job(db, job, space_id=job.space_id)
+        #
+        # **必须传内层 `session`，不能传外层 `db`。** 两者是**不同的连接**：
+        # 内层已持有计数行锁，而外层 `db` 若去取同一行锁就会**等内层**，内层又在等
+        # 本函数返回——同线程跨连接的自我死锁。PostgreSQL 只看到「外层等内层」这一条
+        # 边，看不到环，因此**永不检测、永不超时**。
+        #
+        # 实测（生产 2026-10-08）：4 个 steward 作业冻结 3.5 小时，4 条连接停在
+        # `idle in transaction` 持有 `agent_capacity_counters` 行锁，协调器与
+        # `reaper_pass` 全部阻塞。修复方式就是在这里改用 `session`。
+        capacity.release_job(session, job, space_id=job.space_id)
         # Large plans already reside in staging. The settlement record is bounded.
         job.checkpoint_json = {
             "last_event_cursor": upper,
@@ -1281,7 +1290,8 @@ def record_failure(db: Session, binding: Binding, *, error_code: str, retryable:
             job.status, job.settled_at = "failed", now
             # 终态才归还（行级门保证恰好一次）。此时 counter 行锁已在事务开头取得，
             # 因此这里是「已持锁后再写」，不构成反向锁序。
-            capacity.release_job(db, job, space_id=job.space_id)
+            # **必须传内层 `session`**：见 `publish` 中关于同线程跨连接自我死锁的说明。
+            capacity.release_job(session, job, space_id=job.space_id)
         job.error_code, job.error_json, job.updated_at = (
             "input_changed" if changed else error_code,
             {"code": "input_changed" if changed else error_code},

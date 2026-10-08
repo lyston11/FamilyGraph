@@ -49,6 +49,44 @@ engine: Engine = create_engine(
 )
 
 
+#: PostgreSQL 会话级超时（秒）。**这三条是安全必需，不是调优**。
+#:
+#: ## 为什么必须有界
+#:
+#: 无界等待过锁在生产上表现为**永久冻结且无任何错误**：实测（2026-10-08）4 个
+#: steward 作业卡死 3.5 小时，4 条连接停在 `idle in transaction` 持有
+#: `agent_capacity_counters` 行锁，其余协调器与 `reaper_pass` 全部在等这些锁——
+#: 于是**回收器也无法回收**，整套 steward 永久停摆。没有任何超时、没有任何日志。
+#:
+#: 三条超时分别封住三种无界等待：
+#:
+#: - `idle_in_transaction_session_timeout`：会话开着事务却不发语句（连接泄漏、
+#:   线程在事务中途做非 DB 工作）时由**服务端**终止它并释放锁。这是对「持锁不推进」
+#:   的直接防线，且不依赖应用自己发现泄漏。
+#: - `lock_timeout`：等行锁/表锁超过上限即报 `lock_not_available`。让「等不到锁」
+#:   变成可重试的错误，而不是无限挂起；`reaper_pass` 之后能正常回收。
+#: - `statement_timeout`：单条语句的总上界，兜住前两者之外的情况。
+#:
+#: 取值刻意宽松：正常查询是毫秒级，因此这些上限只会命中真正的异常。
+PG_IDLE_IN_TX_TIMEOUT_MS = 60_000
+PG_LOCK_TIMEOUT_MS = 15_000
+PG_STATEMENT_TIMEOUT_MS = 120_000
+
+
+@event.listens_for(engine, "connect")
+def set_postgres_session_timeouts(dbapi_connection: Any, _connection_record: Any) -> None:
+    """PostgreSQL：设置会话级超时（见上方常量说明）。"""
+    if IS_SQLITE:
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute(f"SET idle_in_transaction_session_timeout = {PG_IDLE_IN_TX_TIMEOUT_MS}")
+        cursor.execute(f"SET lock_timeout = {PG_LOCK_TIMEOUT_MS}")
+        cursor.execute(f"SET statement_timeout = {PG_STATEMENT_TIMEOUT_MS}")
+    finally:
+        cursor.close()
+
+
 @event.listens_for(engine, "connect")
 def set_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
     """每个新建连接统一执行 architecture.md §5 的四项 PRAGMA。
