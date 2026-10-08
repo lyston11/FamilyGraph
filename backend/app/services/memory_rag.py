@@ -839,8 +839,28 @@ def _chunks_match(rows: Sequence[RAGChunk], pieces: list[str], revision: int) ->
     )
 
 
+def _is_sqlite(db: Session) -> bool:
+    """本会话是否运行在 SQLite 上。
+
+    ## 为什么必须有这个判据
+
+    `rag_chunks_fts` 是 **SQLite FTS5 虚拟表**，PostgreSQL 上不存在。
+    无守卫地写它会让**任何记忆索引都失败**：
+
+    ```text
+    psycopg.errors.UndefinedTable: relation "rag_chunks_fts" does not exist
+    ```
+
+    实测（生产，2026-10-08）：RAG 从未有过内容，所以这条路径从未被执行，
+    缺陷一直隐藏；一旦写入第一条记忆就立刻暴露。PostgreSQL 侧的中文词法检索
+    由 PGroonga 承担（见 `rag_search_provider`），不需要 FTS5 投影。
+    """
+    bind = db.get_bind()
+    return bind is None or bind.dialect.name == "sqlite"
+
+
 def _fts_rows(db: Session, rows: Sequence[RAGChunk]) -> dict[int, tuple[Any, str]]:
-    if not rows:
+    if not rows or not _is_sqlite(db):
         return {}
     records = db.execute(
         text("SELECT rowid, chunk_id, text FROM rag_chunks_fts WHERE rowid IN :ids").bindparams(
@@ -852,6 +872,9 @@ def _fts_rows(db: Session, rows: Sequence[RAGChunk]) -> dict[int, tuple[Any, str
 
 
 def _repair_chunk_fts(db: Session, rows: Sequence[RAGChunk]) -> None:
+    # PostgreSQL 上没有 FTS5 投影（见 `_is_sqlite`）；词法检索走 PGroonga。
+    if not _is_sqlite(db):
+        return
     indexed = _fts_rows(db, rows)
     for row in rows:
         if indexed.get(row.id) == (row.id, row.text):
@@ -1837,6 +1860,10 @@ def repair_fts(db: Session) -> int:
     confirmation records or tombstones (D-R5 / D-AC6)."""
     _acquire_index_writer(db)
     db.flush()
+    # PostgreSQL 上没有 FTS5 投影可修：词法检索由 PGroonga 承担，
+    # 而 PGroonga 索引随行写入自动维护，不需要应用侧重建。
+    if not _is_sqlite(db):
+        return 0
     rebuilt = cursor = 0
     with db.begin_nested():
         _require_fresh_rag_enabled(db)
