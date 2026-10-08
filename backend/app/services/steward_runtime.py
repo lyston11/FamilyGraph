@@ -91,7 +91,16 @@ def _execute(job_id: int, attempt: int) -> None:
                 drain_delivery=False,
             )
     except Exception as exc:
-        logger.warning("steward coordinator stopped job=%s error=%s", job_id, type(exc).__name__)
+        # 必须带 `exc_info`：不带时只剩异常**类型名**，而 `RequiredTargetFailed` 的
+        # 根因在 `__cause__`/`__context__` 里（例如 `snapshot_budget`、
+        # `retry_budget_exhausted` 或底层 provider 错误）。实测（生产 2026-10-08）
+        # 日志只有 `error=RequiredTargetFailed`，无法判断是预算耗尽还是真正的目标失败。
+        logger.warning(
+            "steward coordinator stopped job=%s error=%s",
+            job_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
 
 
 def launch_due(*, space_id: int | None = None, limit: int | None = None) -> int:
