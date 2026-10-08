@@ -223,6 +223,7 @@ def build_vector_candidates(
     *,
     dimension: int,
     eligibility: str,
+    model: str,
     over_fetch: int = 8,
 ) -> Any:
     """构造 **filter-then-ANN** 的向量候选 SQL（按 chunk 取最佳分段）。
@@ -261,6 +262,11 @@ def build_vector_candidates(
         raise ValueError("dimension 必须为正")
     if over_fetch < 1:
         raise ValueError("over_fetch 必须 >= 1")
+    if not model:
+        # 没有 model 就无法区分「哪个模型产出的向量」。若不过滤，换模型后旧向量
+        # 会与新查询向量比较——余弦距离在不同向量空间之间**没有意义**，会返回
+        # 看似合理但实际随机的排序，且不会报错。
+        raise ValueError("model 必须非空：不同模型的向量空间不可比较")
     return text(f"""
         WITH authorized AS (
             SELECT s.chunk_id, s.segment_index, s.embedding,
@@ -270,7 +276,7 @@ def build_vector_candidates(
               FROM rag_embedding_segments AS s
               JOIN rag_chunks AS c ON c.id = s.chunk_id
               JOIN rag_documents AS d ON d.id = c.document_id
-             WHERE {eligibility}
+             WHERE s.model = :model AND {eligibility}
         ),
         ranked AS (
             SELECT authorized.*,
@@ -353,3 +359,12 @@ def configured_dimension() -> int:
         return int(raw)
     except ValueError:
         return 0
+
+
+def configured_model() -> str:
+    """部署配置的 embedding 模型标识。
+
+    与 `configured_dimension` 同理：模型标识必须来自**单一配置来源**，因为它是
+    向量空间的标识。不同模型的向量不可比较，因此检索必须按它过滤。
+    """
+    return os.environ.get("RAG_EMBEDDING_MODEL", "").strip()
