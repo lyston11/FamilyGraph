@@ -473,3 +473,39 @@ def test_ready_passes_after_bootstrap_with_active_work(db_session):
     db_session.commit()
     # 不应抛出
     capacity_bootstrap.assert_ready(db_session, stage="pg_all")
+
+
+def test_bootstrap_zeroes_orphaned_rows_without_active_work(db_session):
+    """bootstrap 必须把「无真实活跃但 active>0」的行归零。
+
+    ## 为什么（实测阻塞生产切流）
+
+    `_tenant_ids` 只列出**当前**有活跃工作的租户，因此已存在的计数行若不再有活跃
+    工作，就完全不在 bootstrap 的对齐范围内。若该行因故停在 `active=1`（例如旧代码
+    在切换窗口内没有释放），`reconcile` 判它为**孤儿占用**，`assert_ready` 又把孤儿
+    列为阻塞问题 → `/ready` 永久 503，fail-closed 阻塞全部写入。
+
+    实测生产切流时正是如此：3 个 space 的行停在 active=1，而其 job 早已完成。
+    """
+    space_id = 5151
+    _seed_space(db_session, space_id)
+
+    # 先手工造一个「有行但无活跃工作」的状态
+    spec = capacity.CounterSpec("space", space_id, capacity.RESOURCE_STEWARD_JOB)
+    capacity.ensure_counter(db_session, spec, capacity=1)
+    capacity.set_active(db_session, spec, active=1)
+    db_session.commit()
+
+    # 前置：reconcile 应判为孤儿
+    pre = capacity_bootstrap.reconcile(db_session)
+    assert pre.orphaned, "前置不成立：该行未被判为孤儿"
+
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+
+    row = db_session.get(AgentCapacityCounter, ("space", space_id, "steward_job"))
+    assert row is not None and row.active == 0, (
+        f"孤儿行未被归零（active={row.active if row else None}）——" "/ready 会永久 503"
+    )
+    # 且 bootstrap 后对账通过
+    assert capacity_bootstrap.reconcile(db_session).ok

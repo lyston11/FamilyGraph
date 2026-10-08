@@ -297,6 +297,35 @@ def bootstrap(db: Session, *, dry_run: bool = False) -> ReconcileReport:
             kkey = ("agent_kind", kind, resource_kind)
             aggregate[kkey] = aggregate.get(kkey, 0) + n
 
+    # 已存在的计数行**必须全部纳入对齐范围**，即使当前没有活跃工作。
+    #
+    # 否则：某个租户在 bootstrap 时有活跃 job（于是建了行并置 active=1），之后 job
+    # 正常结束——但若结束路径没有释放（例如旧代码在切换窗口内运行），该行就永久停在
+    # `active=1`。而 `reconcile` 把它判为**孤儿占用**，`assert_ready` 又把孤儿列为
+    # 阻塞问题 → `/ready` 永久 503，fail-closed 阻塞全部写入。
+    #
+    # 实测生产切流时正是如此：3 个 space 的行停在 active=1 而其 job 早已完成。
+    #
+    # bootstrap 的语义就是「把计数行对齐到真相」，因此孤儿行（真实 0）也应被归零。
+    # 这**不**违反「不自动修正超额」的原则：那是「真实 > 容量」的情形，而这里
+    # 真实为 0、远小于容量，归零是唯一正确的对齐。
+    existing_keys = {
+        (r[0], int(r[1]), r[2])
+        for r in db.execute(
+            sa.text(
+                "SELECT scope_kind, scope_id, resource_kind FROM agent_capacity_counters"
+            )
+        ).fetchall()
+    }
+    spec_keys = {(sp.scope_kind, sp.scope_id, sp.resource_kind) for sp, _ in specs}
+    for key in sorted(existing_keys - spec_keys):
+        row = db.get(AgentCapacityCounter, key)
+        if row is None:
+            continue
+        specs.append(
+            (capacity.CounterSpec(key[0], key[1], key[2]), int(row.capacity))
+        )
+
     for spec, cap in specs:
         key = (spec.scope_kind, spec.scope_id, spec.resource_kind)
         if spec.scope_kind in ("global", "agent_kind"):
