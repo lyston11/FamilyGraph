@@ -307,3 +307,57 @@ def test_lazy_registration_does_not_create_global_rows(db_session):
     # agent_kind 维度只对 provider_stream 由 bootstrap 建；其他不得被惰性创建
     other = capacity.CounterSpec("agent_kind", 0, capacity.RESOURCE_STEWARD_ASSIST)
     assert capacity.try_acquire(db_session, [other]) is None, "非租户维度被惰性创建"
+
+
+def test_global_counter_is_sum_of_tenants_not_an_orphan(db_session, monkeypatch):
+    """global/kind 计数行的活跃值必须等于**租户汇总**，不得被报成孤儿。
+
+    ## 为什么这条重要
+
+    配额是分层的：global 与 agent_kind 是**所有租户之和**。若对账只算租户维度，
+    这两个维度永远没有期望值，于是它们的活跃值一律被判为「孤儿占用」——
+    实测症状：`孤儿占用 global:0:steward_job 计数行 active=20`，
+    而 20 正是真实活跃 job 的汇总。把汇总当成泄漏会让 `assert_ready` 永远 503。
+    """
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+
+    # 两个租户各有占用，global 是汇总
+    monkeypatch.setattr(
+        capacity_bootstrap,
+        "_active_counts",
+        lambda _db: {
+            ("space", 1, capacity.RESOURCE_STEWARD_JOB): 1,
+            ("space", 2, capacity.RESOURCE_STEWARD_JOB): 2,
+        },
+    )
+    spec = capacity.CounterSpec("global", 0, capacity.RESOURCE_STEWARD_JOB)
+    capacity.set_active(db_session, spec, active=3)
+    db_session.commit()
+
+    report = capacity_bootstrap.reconcile(db_session)
+    assert not any(
+        "孤儿" in o for o in report.orphaned
+    ), f"global 汇总被误报为孤儿：{report.orphaned}"
+
+
+def test_global_counter_mismatch_is_reported(db_session, monkeypatch):
+    """global 与租户汇总不一致时必须报——那是真的漂移。"""
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+    monkeypatch.setattr(
+        capacity_bootstrap,
+        "_active_counts",
+        lambda _db: {("space", 1, capacity.RESOURCE_STEWARD_JOB): 2},
+    )
+    # global 写 5，而租户汇总只有 2
+    capacity.set_active(
+        db_session,
+        capacity.CounterSpec("global", 0, capacity.RESOURCE_STEWARD_JOB),
+        active=5,
+    )
+    db_session.commit()
+    report = capacity_bootstrap.reconcile(db_session)
+    assert any(
+        "计数不一致" in m and "global" in m for m in report.mismatches
+    ), f"global 漂移未报：{report.mismatches}"
