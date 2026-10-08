@@ -102,6 +102,20 @@ services:
       # 09-13 Memory/RAG：默认关闭；关闭时无候选/检索，工具路径保留
       MEMORY_ENABLED: ${MEMORY_ENABLED:-0}
       RAG_ENABLED: ${RAG_ENABLED:-0}
+      # ---- 存储与检索接线（C9 切流用）----
+      #
+      # 全部用 `${VAR:-}` 形式透传：**空值即回落到 SQLite**
+      # （`config.DATABASE_URL` 是 `os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"`），
+      # 因此未配置的部署行为与改动前逐字一致，而配置了的部署无需再改 compose。
+      #
+      # 必须在基文件里声明：compose 的 `environment` 是白名单，未声明的变量**不会**
+      # 从宿主机 env 传入容器——这正是「改了 .env 但容器看不到」的常见原因。
+      DATABASE_URL: ${DATABASE_URL:-}
+      FG_WRITER_STAGE: ${FG_WRITER_STAGE:-sqlite}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-}
+      RAG_EMBEDDING_DIMENSION: ${RAG_EMBEDDING_DIMENSION:-0}
     volumes:
       # 数据卷：/data/db（SQLite+WAL）、/data/uploads、/data/backups 同卷；
       # /data/bootstrap/admin-credentials（0600 初始凭据）也在此卷

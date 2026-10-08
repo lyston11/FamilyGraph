@@ -23,9 +23,22 @@
 
 name: familygraph-prod
 
+volumes:
+  postgres_data:
+    name: familygraph-prod_postgres_data
+
 services:
   api:
     image: familygraph-prod-api:0.1.0
+    # 等 PostgreSQL healthy 再启动。
+    #
+    # **注意这只保证「库在监听」，不保证「schema 已就绪」**：api 的启动命令是
+    # `alembic upgrade head && python -m app.serve`，而 PostgreSQL 的 schema 由
+    # baseline 脚本建立（历史 Alembic 链在 PG 上跑不通）。因此切流时必须**先**
+    # 起 postgres、**再**应用 baseline、**最后**起 api；顺序错了 api 会 crash-loop。
+    depends_on:
+      postgres:
+        condition: service_healthy
     # 线上 api 不对宿主发布任何端口：家庭流量经 web 容器反代，内部协议
     # 与 admin 协议只在容器网络内可达（绑定见基文件的静态 IP）。
     ports: !override []
@@ -56,3 +69,37 @@ services:
 
   agent-steward:
     image: familygraph-prod-agent:0.1.0
+
+  # ---- PostgreSQL 主存储（C9 生产切流）----
+  #
+  # 与开发环境使用**同一个自建镜像**（pgvector + PGroonga）。选这个镜像而不是
+  # `postgres:16`，是因为检索需要两个扩展：
+  #   - `pgvector`：语义候选（C6）
+  #   - `pgroonga`：中文词法检索。实测 `pg_trgm` 对 CJK 短查询 0/10 命中，
+  #     而 PGroonga 10/10 精确；缺它则中文词法退化为无索引 LIKE。
+  #
+  # 只绑宿主回环：容器网络内 api 用服务名访问，宿主端口仅用于运维与探针。
+  # 密码从 env 读（不写入仓库）；未设置时 compose 直接报错而不是用默认弱口令。
+  postgres:
+    image: familygraph-postgres:pg16-pgvector-pgroonga
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-familygraph}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须在 .env 中提供强随机值}
+    ports: !override
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55460}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    # 与 embedding 同一原则：资源硬上限，避免数据库争抢挤垮同机其他服务。
+    # 4 核 / 23 GiB 的机器上给 PG 2 核、2 GiB；可用 env 覆盖。
+    cpus: "${POSTGRES_CPUS:-2.0}"
+    mem_limit: ${POSTGRES_MEMORY:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-familygraph}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
