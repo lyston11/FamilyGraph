@@ -147,7 +147,17 @@ def _cast_json(expr: str, json_cols: set[str]) -> str:
 def read_sqlite_triggers() -> list[dict]:
     """在隔离 DATA_DIR 跑迁移，读取触发器的真实定义（真源）。"""
     tmp = tempfile.mkdtemp(prefix="fg-trig-")
-    env = {**os.environ, "DATA_DIR": tmp}
+    # **必须清掉 DATABASE_URL**：本函数的目的正是「在 SQLite 上跑迁移、读取
+    # SQLite 触发器的真实定义」。若环境里已有 DATABASE_URL（部署时必然有），
+    # alembic 会转而对着 **PostgreSQL** 跑 SQLite 的建表语句并失败
+    # （实测 `DuplicateTable: relation "users" already exists`）。
+    # 这是环境泄漏导致的误判，不是 SQLite 触发器的问题。
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("DATABASE_URL", "PGTEST_DSN")
+    }
+    env["DATA_DIR"] = tmp
     proc = subprocess.run(
         [str(BACKEND / ".venv/bin/python"), "-m", "alembic", "upgrade", "head"],
         cwd=BACKEND, env=env, capture_output=True, text=True, timeout=900,
@@ -294,6 +304,13 @@ CREATE TRIGGER {name} AFTER {parsed["event"]} ON {parsed["table"]}
     return ddl, converted, substituted
 
 
+#: 从生成的 DDL 里提取 `CREATE TRIGGER <name> ... ON <table>`。
+#: 必须跨行匹配（DDL 是多行字符串），且 `ON` 与表名之间可有换行/缩进。
+_TRIGGER_CREATE_RE = re.compile(
+    r"CREATE TRIGGER\s+(\w+)[^;]*?\bON\s+(\w+)", re.S
+)
+
+
 def main() -> int:
     try:
         import psycopg
@@ -315,8 +332,19 @@ def main() -> int:
 
     failures: list[str] = []
     applied = 0
+    # 幂等：部署会重跑，而 `CREATE TRIGGER` 在已存在时报错、`CREATE OR REPLACE
+    # FUNCTION` 本身是幂等的。因此对每条 DDL 里的 `CREATE TRIGGER <name> ... ON
+    # <table>` 先生成 `DROP TRIGGER IF EXISTS`。用正则精确提取 name/table，
+    # 而不是按行猜测。
+    drop_statements: list[str] = []
+    for stmt in ddl:
+        for name, table in _TRIGGER_CREATE_RE.findall(stmt):
+            drop_statements.append(f"DROP TRIGGER IF EXISTS {name} ON {table}")
+
+    failures: list[str] = []
+    applied = 0
     with psycopg.connect(plain) as conn:
-        for stmt in ddl:
+        for stmt in [*drop_statements, *ddl]:
             try:
                 conn.execute(stmt)
                 conn.commit()
