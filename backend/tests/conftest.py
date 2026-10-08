@@ -96,6 +96,9 @@ _TABLES = (
     # 0056 持久化容量计数：无 FK，但必须在测试间清空，否则 active 残留会让
     # 后续用例的容量断言从脏状态出发（实测表现为「容量 2 但第二次 acquire 失败」）。
     "agent_capacity_counters",
+    # 0058 writer_state：单行治理表。不清空会让阶段/epoch 在用例间泄漏
+    # （实测：某个用例把阶段留在 pg_all 后，后续用例的容量断言全部失败）。
+    "writer_state",
     "agent_runs",
     "agent_sessions",
     "agent_space_provider_settings",

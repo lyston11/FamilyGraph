@@ -341,8 +341,11 @@ class AgentCapacityCounter(Base):
             name="ck_acc_scope_kind",
         ),
         sa.CheckConstraint(
+            # 必须与迁移 0056 的 CHECK 逐字一致。cluster_* 是 C3 的集群级名额，
+            # 漏掉它们会让「从 ORM 元数据重建」的库拒绝集群计数行——而
+            # `create_all` 正是 baseline 的建表路径。
             "resource_kind IN ('assistant_run','steward_job','steward_assist','tool',"
-            "'provider_stream')",
+            "'provider_stream','cluster_provider','cluster_tool')",
             name="ck_acc_resource_kind",
         ),
         sa.CheckConstraint("capacity >= 0", name="ck_acc_capacity_non_negative"),

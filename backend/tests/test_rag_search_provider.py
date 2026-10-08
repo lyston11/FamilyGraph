@@ -177,3 +177,49 @@ def test_pgroonga_index_ddl_is_explicit():
     assert "USING pgroonga" in ddl
     assert "rag_chunks" in ddl
     assert "IF NOT EXISTS" in ddl, "重复执行必须幂等"
+
+
+# ---------------------------------------------------------------- 扩展检查（C9/P1）
+
+
+def test_extension_status_skips_sqlite():
+    """SQLite 没有扩展概念：不参与判定（词法检索走 FTS5，由 SQLite 自身提供）。"""
+    assert provider.extension_status(None, "sqlite") == {}
+
+
+def test_extension_status_reports_missing_pgroonga():
+    """PostgreSQL 上缺 PGroonga 必须报告为缺失。
+
+    缺它时 `&@~` 会 `UndefinedFunction`；若实现改成「捕获后退化为 LIKE」，检索会
+    **静默**变成无索引全表扫描——结果仍返回、只是慢且无排序。因此 readiness 必须
+    检查，而不是让部署带着退化的检索接流量。
+    """
+
+    class _DB:
+        def execute(self, *_a, **_kw):
+            class _R:
+                def fetchall(self):
+                    return []  # 无扩展
+
+            return _R()
+
+    status = provider.extension_status(_DB(), "postgresql")
+    assert status == {"pgroonga": False}
+
+
+def test_extension_status_reports_installed():
+    class _DB:
+        def execute(self, *_a, **_kw):
+            class _R:
+                def fetchall(self):
+                    return [("pgroonga",)]
+
+            return _R()
+
+    assert provider.extension_status(_DB(), "postgresql") == {"pgroonga": True}
+
+
+def test_required_extensions_is_not_empty():
+    """必需扩展清单不得为空——空清单会让检查恒真。"""
+    assert provider.REQUIRED_EXTENSIONS, "必需扩展清单为空，检查形同虚设"
+    assert "pgroonga" in provider.REQUIRED_EXTENSIONS

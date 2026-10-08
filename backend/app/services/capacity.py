@@ -113,6 +113,30 @@ def ensure_counter(
     return row
 
 
+def set_active(db: Session, spec: CounterSpec, *, active: int, now: datetime | None = None) -> None:
+    """把计数行的 `active` 直接设为指定值（**仅 bootstrap 使用**）。
+
+    ## 为什么需要它，以及为什么它不是通用接口
+
+    bootstrap 的语义是「让计数行等于真实状态」，因此必须能写入**非增量**的值。
+    常规路径一律用 `acquire`/`release`（增量 + 行锁），因为增量才有多事务安全性。
+
+    本函数不做 +1/-1，而是赋值，因此**只能在确认没有并发写入时调用**（bootstrap
+    在服务启动前执行）。把它用在常规路径会让并发占用互相覆盖。
+
+    `active > capacity` 由 CHECK 拒绝（fail-loud），不静默截断。
+    """
+    row = _lock(db, spec)
+    if row is None:
+        return
+    moment = now or timeutil.utcnow()
+    if row.active != active:
+        row.active = active
+        row.version += 1
+        row.updated_at = moment
+        db.flush()
+
+
 def _lock(db: Session, spec: CounterSpec) -> AgentCapacityCounter | None:
     """按方言取得计数行锁并返回当前行。
 
@@ -278,6 +302,14 @@ def registered(db: Session, specs: Sequence[CounterSpec]) -> bool:
     )
 
 
+class CapacityNotBootstrapped(RuntimeError):
+    """`pg_all` 阶段计数行缺失：配额未生效，必须拒绝而不是当成「不限制」。
+
+    这是**安全**异常。`try_acquire` 的 `None`（未登记）在迁移期是「沿用旧路径」，
+    在 `pg_all` 是「配额静默失效」——同一个返回值承载两种含义，因此必须按阶段区分。
+    """
+
+
 def try_acquire(db: Session, specs: Sequence[CounterSpec]) -> bool | None:
     """配额占用，三态返回。
 
@@ -287,6 +319,12 @@ def try_acquire(db: Session, specs: Sequence[CounterSpec]) -> bool | None:
 
     只对**已登记**的维度占用：未登记的维度不限制（渐进引入），
     已登记的维度仍然受 ``CHECK (active <= capacity)`` 兜底。
+
+    ## `pg_all` 阶段 fail-closed
+
+    若 writer 阶段已是 `pg_all` 而计数行缺失，抛 `CapacityNotBootstrapped`。
+    就绪探针只保护**新启动**的实例；一个在 bootstrap 之前就已运行的实例不会被它
+    拦住，因此写路径必须自己拒绝。没有这一层，「迁移完成但配额未启用」会静默通过。
     """
     active_specs = [
         s
@@ -294,10 +332,34 @@ def try_acquire(db: Session, specs: Sequence[CounterSpec]) -> bool | None:
         if db.get(AgentCapacityCounter, (s.scope_kind, s.scope_id, s.resource_kind)) is not None
     ]
     if not active_specs:
+        _require_bootstrapped(db)
         return None
     if not acquire(db, active_specs):
         return False
     return True
+
+
+def _require_bootstrapped(db: Session) -> None:
+    """`pg_all` 且计数行缺失时抛异常；其他阶段是 no-op。"""
+    if not _writer_is_pg_all(db):
+        return
+    raise CapacityNotBootstrapped(
+        "writer_stage=pg_all 但容量计数行缺失：配额未生效。"
+        "执行 `python -m app.capacity_bootstrap` 后重试。"
+    )
+
+
+def _writer_is_pg_all(db: Session) -> bool:
+    """本连接观察到的 writer 阶段是否为 `pg_all`。
+
+    直接读表而不用 `writer_epoch.read_state`：后者在表缺失时回落部署默认值，
+    而这里需要**区分**「表不存在」（迁移前 → 不是 pg_all）与「阶段是 pg_all」。
+    """
+    try:
+        row = db.execute(sa_text("SELECT stage FROM writer_state WHERE id = 1")).first()
+    except Exception:  # noqa: BLE001 - 表尚未创建（迁移前）：按非 pg_all 处理
+        return False
+    return bool(row is not None and row[0] == "pg_all")
 
 
 def try_release(db: Session, specs: Sequence[CounterSpec]) -> int:
