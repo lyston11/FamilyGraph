@@ -44,5 +44,15 @@ services:
     ports: !override
       - "127.0.0.1:8101:80"
 
-  agent:
+  # AC-5：Assistant 与 Steward 分进程。基文件已拆为 `agent-assistant` /
+  # `agent-steward`（以及 profile 门控的 `agent-combined`），此处只需覆盖镜像标签。
+  #
+  # 历史遗留：这里曾定义 `agent:` 服务。基文件拆分后，生产 override 仍声明 `agent`
+  # 就会**额外**启一个继承不到任何 environment 的容器（它不匹配基文件的任何服务），
+  # 启动即 `AGENT_SERVICE_SECRET is required` 退出，并使发布脚本的「全部 healthy」
+  # 校验失败。实测 2026-10-08 发布时就撞上这一点。
+  agent-assistant:
+    image: familygraph-prod-agent:0.1.0
+
+  agent-steward:
     image: familygraph-prod-agent:0.1.0
