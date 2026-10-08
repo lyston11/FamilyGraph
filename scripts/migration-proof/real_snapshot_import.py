@@ -548,7 +548,7 @@ def main() -> int:
     repaired = 0
     with engine.begin() as conn:
         rows = conn.execute(
-            text(
+            sa_text(
                 """
                 SELECT c.relname AS table_name, a.attname AS column_name,
                        pg_get_serial_sequence(quote_ident(c.relname), a.attname) AS seq
@@ -567,11 +567,11 @@ def main() -> int:
                 continue
             # `pg_get_serial_sequence` 对非 serial/identity 列返回 NULL，跳过。
             max_id = conn.execute(
-                text(f'SELECT COALESCE(MAX("{column_name}"), 0) FROM "{table_name}"')
+                sa_text(f'SELECT COALESCE(MAX("{column_name}"), 0) FROM "{table_name}"')
             ).scalar()
             if max_id:
                 conn.execute(
-                    text("SELECT setval(:seq, :value, true)"),
+                    sa_text("SELECT setval(:seq, :value, true)"),
                     {"seq": seq, "value": int(max_id)},
                 )
                 repaired += 1
