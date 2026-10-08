@@ -269,6 +269,19 @@ def main() -> int:
             if table not in tables:
                 skipped[table] = "not_in_pg_schema"
                 continue
+            # **部署状态表不得随数据导入搬运。**
+            #
+            # `writer_state` 记录「当前由谁写」（stage + epoch），是**这次部署**的
+            # 状态，不是业务数据。快照里那一行来自旧部署（`stage='sqlite'`，由容器
+            # 启动时播种），若照搬进 PostgreSQL 就会把切流目标覆盖回 `sqlite`——
+            # 实测生产切流时正是这样：PG 里 schema/数据/计数器都就绪，`/ready` 却报
+            # `writer_stage='sqlite'`，看起来像「env 没生效」。
+            #
+            # 正确顺序是：导入**之后**由运维显式 `advance()` 推进阶段（那会递增
+            # epoch，也是唯一被允许的阶段变更入口）。
+            if table == "writer_state":
+                skipped[table] = "deployment_state_not_data"
+                continue
             try:
                 rows = src.execute(f"SELECT * FROM {table}").fetchall()
             except sqlite3.Error as exc:
