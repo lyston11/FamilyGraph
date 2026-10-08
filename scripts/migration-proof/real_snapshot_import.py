@@ -484,7 +484,11 @@ def main() -> int:
                 ).fetchall()
                 pg_digest = _digest_rows([tuple(r) for r in pg_rows])
             except Exception as exc:  # noqa: BLE001
-                digest_mismatches.append({"table": table, "error": type(exc).__name__})
+                # 带**真实消息**：只记异常类型会让「列不存在」「排序键不存在」
+                # 「类型不可比较」全都显示成 OperationalError，无从定位。
+                digest_mismatches.append(
+                    {"table": table, "error": type(exc).__name__, "message": str(exc)[:200]}
+                )
                 continue
             if sqlite_digest != pg_digest:
                 digest_mismatches.append(
