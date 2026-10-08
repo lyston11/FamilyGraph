@@ -232,7 +232,19 @@ STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB: int = int(
 STEWARD_ASSIST_MAX_TOKENS_PER_JOB: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_TOKENS_PER_JOB", "20000")
 )
-STEWARD_ASSIST_MAX_CARDS_PER_JOB: int = int(os.environ.get("STEWARD_ASSIST_MAX_CARDS_PER_JOB", "5"))
+# explanation 每 job 最多覆盖的卡数。
+#
+# ## 为什么从 5 降到 3
+#
+# explanation **按卡逐个**预留（每张卡一个 attempt），因此它单独就能吃掉 5 个名额，
+# 而每 job 预算是 6。实测（生产，2026-10-08）：`explanation 5 + ranking 1 = 6`
+# 之后，terminology 与 candidate 结构上拿不到名额，22 次 terminology 中 16 次
+# `budget_exhausted`。
+#
+# 取 3 使「explanation 3 + 其余三类各 1」恰好 6：四类都能轮到，而 explanation 仍是
+# 单类中占比最大的（3/6）。保底名额（`_MIN_ATTEMPTS_PER_KIND`）负责「每类都能轮到」，
+# 本值负责「没有任何一类能独占预算」。
+STEWARD_ASSIST_MAX_CARDS_PER_JOB: int = int(os.environ.get("STEWARD_ASSIST_MAX_CARDS_PER_JOB", "3"))
 # ---- 09-11 辅助批次执行限制（R5：字节/并发/墙钟均有上界）----
 # prompt 明文字节上界（超限不发送，记 skipped prompt_too_large）
 STEWARD_ASSIST_MAX_PROMPT_BYTES: int = int(

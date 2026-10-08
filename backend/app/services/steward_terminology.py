@@ -1116,14 +1116,39 @@ def validate_model_output(
         payload = json.loads(text)
     except (json.JSONDecodeError, ValueError):
         return None
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != {"version", "context_hash", "items"}
-        or type(payload.get("version")) is not int
-        or payload["version"] != 1
-        or payload.get("context_hash")
-        != json.loads(project_terminology_input(db, group))["context_hash"]
-    ):
+    # ---- 输出合同：只要求 `items` ----
+    #
+    # ## 为什么不再要求模型回显 `context_hash`
+    #
+    # 旧校验要求 `set(payload) == {"version","context_hash","items"}` 且
+    # `context_hash` 与服务端重算值**逐字相等**。这是把 64 位不透明十六进制串当成
+    # 模型的逐字复制任务，而复制长哈希正是语言模型最容易出错的事。
+    #
+    # 实测（生产，2026-10-08）：terminology attempt 82 落 `degraded/invalid_output`，
+    # 诊断显示 `text_chars=104, looks_like_json=true`——紧凑 JSON
+    # `{"version":1,"context_hash":"<64 hex>","items":[]}` 恰好约 105 字符，即模型
+    # **格式正确、items 为空（合法的「无改善」结果）**，只是哈希没逐字对上。
+    # 结果是一次完全有效的调用被判无效。
+    #
+    # ## 为什么去掉它不损失安全性
+    #
+    # `context_hash` 在这里从来不是信任边界：
+    #   - 每个 item 的 `target_ref` 必须在**服务端栅栏**给出的代号集内，且不得重复；
+    #   - 每个 target 的 `semantic_hash` / `concept_code` 都会用
+    #     `current_target_context` 在**当前**数据库状态上重算并比对（下面），
+    #     这才是真正防止「拿旧上下文作答」的栅栏；
+    #   - `term` 必须落在服务端 `allowed_terms` 内，且通过长度/基线/理由码校验。
+    #
+    # 也就是说，回显哈希是**冗余的**：任何被回显的哈希都无法授权任何一个 item。
+    # 保留 `version`（存在则必须为 1）以继续拒绝明显不同协议的输出。
+    if not isinstance(payload, dict):
+        return None
+    # `items` 必需；`version`/`context_hash` 若出现则**忽略**（不校验、不授权任何 item）。
+    # 允许它们出现是刻意的：提示词已不再要求回显，但旧提示词、其它载体或模型自行
+    # 带上时不该被判无效——真正授权 item 的是下面的服务端重算栅栏。
+    if set(payload) - {"version", "context_hash"} != {"items"}:
+        return None
+    if "version" in payload and payload.get("version") != 1:
         return None
     items = payload.get("items")
     if not isinstance(items, list) or len(items) > len(group["targets"]):
