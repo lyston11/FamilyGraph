@@ -1112,9 +1112,22 @@ def validate_model_output(
     group: dict[str, Any],
     space_id: int,
 ) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+    # ---- 用与其它 kind **相同**的宽容提取 -#
+    #
+    # 此前这里用裸 `json.loads(text)`，而 candidate/ranking/explanation 都经
+    # `steward_guard._extract_json`（容忍 ```json 围栏、允许 JSON 前后有解释文字）。
+    # 结果是：模型给出带围栏或带说明的输出时，**只有 terminology 失败**。
+    #
+    # 实测（生产 2026-10-08）：terminology 三次 `degraded/invalid_output`，
+    # 诊断显示 `looks_like_json=false`、`text_chars` 为 546/1456/687——即模型回了
+    # 非 JSON 起始的自由文本，而同一提示词下 candidate 与 ranking 正常。
+    #
+    # 宽容提取**不降低安全性**：真正的授权在下面的服务端重算栅栏（target_ref 集合、
+    # semantic_hash/concept_code 重算、allowed_terms 限定），提取方式不影响它们。
+    from app.services import steward_guard
+
+    payload = steward_guard._extract_json(text)
+    if payload is None:
         return None
     # ---- 输出合同：只要求 `items` ----
     #

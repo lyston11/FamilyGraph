@@ -126,3 +126,41 @@ def test_prompt_no_longer_asks_for_hash_echo() -> None:
     assert "context_hash" not in prompt, (
         "terminology 提示词仍在要求回显 context_hash——要求了却不校验会造成提示词与" "校验器不一致"
     )
+
+
+# ------------------------------------------------- C: 提取方式必须一致
+
+
+def test_terminology_uses_the_same_lenient_extractor() -> None:
+    """terminology 必须与其它 kind 用**同一个** JSON 提取器。
+
+    candidate/ranking/explanation 都经 `steward_guard._extract_json`（容忍 json 围栏、
+    允许 JSON 前后有解释文字），而 terminology 曾用裸 `json.loads`。于是模型给出带围栏或
+    带说明的输出时，**只有 terminology 失败**。生产上三次 `degraded/invalid_output`
+    的诊断均为 `looks_like_json=false`、`text_chars` 546/1456/687，而同一提示词下
+    candidate 与 ranking 正常。
+
+    宽容提取**不降低安全性**：真正的授权是服务端重算栅栏（target_ref 集合、
+    semantic_hash/concept_code 重算、allowed_terms 限定），提取方式不影响它们。
+
+    注意：必须检查**代码**而不是文本。注释里会提到旧写法，用字符串包含判断会误报
+    （这一版就是被注释绊倒后改成 AST 的）。
+    """
+    src = Path(__file__).resolve().parents[1] / "app/services/steward_terminology.py"
+    tree = ast.parse(src.read_text())
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "validate_model_output"):
+            continue
+        calls = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                fn = sub.func
+                calls.add(getattr(fn, "attr", None) or getattr(fn, "id", None))
+        assert (
+            "_extract_json" in calls
+        ), "terminology 未调用与其它 kind 相同的宽容提取器 `_extract_json`"
+        assert (
+            "loads" not in calls
+        ), "terminology 仍直接调用 `json.loads`——带围栏/带说明的输出会独自失败"
+        return
+    raise AssertionError("validate_model_output 不存在")
