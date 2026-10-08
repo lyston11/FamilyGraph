@@ -186,6 +186,45 @@ def main() -> int:
             conn.execute(sa_text(rag_search_provider.PGROONGA_INDEX_DDL))
     print("  [OK ] writer_state / 容量门列 / 容量 CHECK / PGroonga 索引")
 
+    # 3b) pgvector 分段向量表。
+    #
+    # ## 为什么必须在这里建
+    #
+    # 这张表**不在 ORM 元数据里**——它是一段 DDL 字符串
+    # （`rag_embeddings.pgvector_ddl`），因此 `create_all` 看不到它，69 个触发器
+    # 与 PGroonga 索引同理。漏建**不会报错**，只会让向量索引在维护循环里静默失败：
+    #
+    # ```text
+    # embedding 索引失败；其他维护不受影响 error_class=ProgrammingError
+    #   relation "rag_embedding_segments" does not exist
+    # ```
+    #
+    # 实测（生产，2026-10-08）：切流后该表不存在，向量索引整条链路不可用，
+    # 而日志只显示一行 WARNING、健康检查仍 200。
+    #
+    # ## 维度来源
+    #
+    # 取自 `RAG_EMBEDDING_DIMENSION`。未配置（0）时**跳过并如实记录**——
+    # 那是合法的「不用向量检索」部署，不是失败。
+    vector_ddl_status = "SKIPPED:dimension_not_configured"
+    try:
+        from app.services import rag_embeddings
+
+        dimension = rag_embeddings.configured_dimension()
+        if dimension > 0:
+            with engine.begin() as conn:
+                conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
+                for statement in rag_embeddings.pgvector_ddl(dimension).split(";"):
+                    if statement.strip():
+                        conn.execute(sa_text(statement))
+            vector_ddl_status = f"vector({dimension})"
+            print(f"  [OK ] pgvector 分段向量表已建立 vector({dimension})")
+        else:
+            print("  [SKIP] RAG_EMBEDDING_DIMENSION 未配置，跳过 pgvector 表")
+    except Exception as exc:  # noqa: BLE001 - 扩展缺失是环境阻塞，如实记录
+        vector_ddl_status = f"SKIPPED:{type(exc).__name__}"
+        print(f"  [SKIP] pgvector 不可用：{type(exc).__name__}: {str(exc)[:110]}")
+
     # 4) 触发器等价物（复用 C1 的转换脚本）
     try:
         trigger_script = ROOT / "scripts/migration-proof/pg_trigger_equivalents.py"
@@ -234,6 +273,14 @@ def main() -> int:
         pgroonga_ext = scalar(
             "SELECT count(*) FROM pg_extension WHERE extname='pgroonga'"
         )
+        # 向量表必须真的存在：漏建只会在维护循环里静默失败（见 3b 的说明）。
+        vector_table = scalar(
+            "SELECT count(*) FROM information_schema.tables"
+            " WHERE table_schema='public' AND table_name='rag_embedding_segments'"
+        )
+        dimension_configured = vector_ddl_status.startswith("vector(")
+        if dimension_configured and vector_table != 1:
+            failures.append("rag_embedding_segments 未建立（向量索引会静默失败）")
         # 检查**所有** resource_kind 约束都必须含 cluster_*：只要有一条旧约束残留，
         # 集群计数行就会被拒。因此不能只看一条（实测正是漏了带前缀的旧约束）。
         defs = [
@@ -299,6 +346,8 @@ def main() -> int:
             "gate_columns": gate_cols,
             "pgroonga_index": pgroonga_idx,
             "pgroonga_extension": pgroonga_ext,
+            "pgvector_table": vector_table,
+            "pgvector_ddl": vector_ddl_status,
             "cluster_in_check": cluster_in_check,
         }
     )
