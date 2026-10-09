@@ -271,6 +271,26 @@ AGENT_SERVICE_SECRET=x SECRET_KEY=y ADMIN_JWT_AUDIENCE=a ADMIN_JWT_SECRET=b ADMI
 - **child run 必须能自己收敛**：`recover_stuck_child_runs` 不得只置 `cancel_requested` 等别人裁决
   ——`agent_queue.reaper_pass` 选 `AgentJob`，而 steward run 的 `job_id` 恒为 NULL，没有任何一方
   会写终态。它在本函数内写 `expired`（不是 `cancelled`：没人请求过取消）。
+- **临时失败不是终态**：`terminology_target_retryable` 以「该 target 在该 semantic_hash 下
+  是否还有一次机会」为语义，而 `failed` 混着两类完全不同的结果：
+  - **永久失败**（`invalid_output`、`prompt_too_large`、`response_too_large`、策略拒绝）：
+    同一输入重发必然再失败，退休是对的。
+  - **临时失败**（上游 5xx、`PROVIDER_STREAM_ERROR`、`PROVIDER_RETRY_BUDGET_EXHAUSTED`、
+    `timeout`、`network_unknown`）：只说明「这一次没成」，重发可能成功。
+
+  把临时失败归入 `reservations`（而不是直接 `return False`），于是它受同一套
+  「至多两次 + 60s 冷却」限流保护：有界，但不永久。
+
+  判据按**形状**而非枚举：`http_<status>` 且 `status >= 500` 即临时，未来新增的上游状态码
+  不会静默退化成终态。分类函数 `_is_transient_error` 的回归在
+  `tests/test_steward_terminology_retry_classification.py` 与
+  `tests/test_steward_terminology_retry_behavior.py`。
+
+  实测（生产，2026-10-09）：space 2 的 33 个完全合格目标（如 `爸爸 -> 父亲`、`哥哥 -> 兄弟`）
+  全部被 `failed` 拦下，且 33 个都是临时失败（`http_503` 10、`PROVIDER_STREAM_ERROR` 7、
+  `PROVIDER_RETRY_BUDGET_EXHAUSTED` 16），terminology 因此**静默停摆 6 小时**——零 attempt、
+  零错误日志，因为 `collect_model_groups` 只是返回空列表。排查同类「功能无声消失」时，
+  先看规划阶段各过滤门的计数分布，而不是先怀疑模型或载体。
 
 ## 13. Wrong vs Correct
 
