@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "记忆来源/确认/授权/提取钩子的完整合同，任何记忆改动必须遵守"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "run token、ContextBuilder、引用投影与检索授权分层合同"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "索引换版、回填、租约与撤权生命周期合同"}
+{"file": ".trellis/spec/backend/policy-boundary.md", "reason": "工具与模型调用的策略边界，新增记忆工具必须遵守"}
+{"file": ".trellis/tasks/10-09-agent-memory-rag-enhancement/research/current-state-gaps.md", "reason": "现有实现证据与缺口清单，设计与实现增量的输入"}

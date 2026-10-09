@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "核验 prompt 文本归属未被破坏（steward_instructions 必填、prompt_digest 覆盖实际发送文本）、跨层字面量条目已从规范中移除"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验后端质量门禁（ruff/format/mypy/pytest）与改动范围的最小充分检查选择"}

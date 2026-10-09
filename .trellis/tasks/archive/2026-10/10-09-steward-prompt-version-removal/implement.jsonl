@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "steward child run 的 prompt 文本归属、sidecar KindAdapter 合同、internal 协议投影字段定义都在此；§6 与 §8 是本次删除与规范同步的直接依据"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "sidecar 运行时、context 投影消费方式与 provider 解析路径，改动 agent/src/client.ts 与 adapters/kind.ts 时需遵守"}

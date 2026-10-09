@@ -32,7 +32,6 @@ import type { AgentConfig } from "../src/config.js";
 import type { SessionRetryBudget } from "../src/session.js";
 import { createLogger } from "../src/logger.js";
 import { providerWireName } from "../src/tools.js";
-import { STEWARD_PROMPT_VERSION } from "../src/prompts/steward.js";
 import { SidecarWorker } from "../src/worker.js";
 
 // ---------------------------------------------------------------------------
@@ -473,9 +472,7 @@ function contextProjection(job: MockJob): Record<string, unknown> {
     session_id: steward ? null : 700,
     agent_kind: job.agent_kind,
     account_id: steward ? null : 900,
-    ...(steward
-      ? { steward_prompt_version: STEWARD_PROMPT_VERSION, steward_instructions: "steward test instructions" }
-      : {}),
+    ...(steward ? { steward_instructions: "steward test instructions" } : {}),
     space_id: 800,
     status: "leased",
     attempt: job.attempt,

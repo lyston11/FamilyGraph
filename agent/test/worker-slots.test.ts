@@ -358,60 +358,7 @@ describe("tool and prompt isolation between kinds", () => {
     );
     expect(toolNamesFor("assistant").filter((name) => steward.has(name))).toEqual([]);
   });
-
-  it("keeps the cross-layer prompt version literal verbatim", async () => {
-    const { STEWARD_PROMPT_VERSION } = await import("../src/prompts/steward.js");
-    // Cross-side literal, asserted verbatim: the server compares this exact
-    // string, so a rename on one side must fail here rather than silently
-    // reject every steward run at runtime (the typ-drift failure mode).
-    expect(STEWARD_PROMPT_VERSION).toBe("steward-v1");
-    // There is deliberately no local steward system prompt: the server owns the
-    // text and sends it in the projection, so prompt_digest describes what was
-    // actually asked. A local copy would be sent instead of the server's text.
-    const module = await import("../src/prompts/steward.js");
-    expect(Object.keys(module)).toEqual(["STEWARD_PROMPT_VERSION"]);
-  });
-
-  it("rejects a steward context whose prompt version does not match this image", async () => {
-    // The prompt text lives in this image, so a stale image must not run old
-    // prompt text against a newer backend.
-    const { STEWARD_PROMPT_VERSION } = await import("../src/prompts/steward.js");
-    const config: AgentConfig = { ...makeAgentConfig(0), role: "steward" };
-    const client = {
-      leaseJob: async () => leasedJob("steward", "run-p1"),
-      getRunContext: async () => ({
-        run_id: "run-p1",
-        session_id: null,
-        agent_kind: "steward",
-        account_id: null,
-        space_id: "800",
-        status: "leased",
-        attempt: 1,
-        policy_version: "pv",
-        tool_allowlist: [],
-        messages: [],
-        next_event_seq: 0,
-        context_build_id: null,
-        context_blocks: [],
-        provider: null,
-        cancel_requested: false,
-        steward_prompt_version: `${STEWARD_PROMPT_VERSION}-stale`,
-      }),
-    };
-    const worker = new SidecarWorker({ client: client as never, config, logger: createLogger() });
-
-    await worker.leaseIntoSlot("steward");
-    // executeJob converges internally rather than rejecting, so assert on the
-    // absence of a completed run: the mismatch must stop the run before any
-    // model call, leaving it failed rather than succeeded.
-    await waitFor(() => worker.inFlight("steward") === 0);
-    expect(worker.inFlight("steward")).toBe(0);
-  });
 });
-
-
-
-
 
 // ---- run token 续签必须被请求路径按需读取（10-02）----
 

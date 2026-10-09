@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ASSISTANT_SYSTEM_PROMPT } from "../src/prompt.js";
+import { TOOL_VERSIONS } from "../src/tools.js";
 
 describe("assistant system prompt", () => {
   it("declares the single-space read-only family tree assistant identity", () => {
@@ -64,5 +65,19 @@ describe("kinship term behavior clauses (V2.3)", () => {
   it("carves record_term_usage out as the only write exception in the read-only boundary", () => {
     expect(ASSISTANT_SYSTEM_PROMPT).toContain("唯一例外是称谓用词积累");
     expect(ASSISTANT_SYSTEM_PROMPT).toContain("写入、修改或删除任何结构数据");
+  });
+
+  it("names only tools that exist in the registry", () => {
+    // The prompt tells the model which tools to call by their canonical dotted
+    // name, and ``TOOL_VERSIONS`` in tools.ts is the separate list of what this
+    // sidecar may actually register. Nothing else ties the two together: rename a
+    // tool on one side only and the model is instructed to call something that
+    // does not exist, which fails silently — the run still succeeds, it just
+    // stops consulting the structured tree. Asserting membership (rather than
+    // comparing the two sets) is deliberate: the prompt names a subset of the
+    // registry, and the subset is a behavioural choice.
+    const named = new Set(ASSISTANT_SYSTEM_PROMPT.match(/familygraph\.[a-z_]+/g) ?? []);
+    expect(named.size).toBeGreaterThan(0);
+    expect([...named].filter((name) => !(name in TOOL_VERSIONS))).toEqual([]);
   });
 });

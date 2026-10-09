@@ -24,7 +24,6 @@ import { InternalApiError } from "../errors.js";
 import { renderContextAppendix } from "../context.js";
 import type { AgentConfig, AgentKind } from "../config.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "../prompt.js";
-import { STEWARD_PROMPT_VERSION } from "../prompts/steward.js";
 import { toolNamesFor } from "../tools.js";
 
 /** The request that asks the backend for one lease of this kind. */
@@ -190,21 +189,11 @@ const stewardAdapter: KindAdapter = Object.freeze<KindAdapter>({
   // system prompt, which is space-independent.
   cacheKey: (projection) => `fg-steward-${projection.space_id}`,
   verifyProjection: (projection) => {
-    // The steward prompt lives in this image, so the server can no longer hash
-    // it. Verify the version instead of trusting that the deployed image matches
-    // the backend: running stale prompt text against a newer server would
-    // silently change what the model is asked to do, and the evaluation anchor
-    // would point at a prompt nobody is using.
-    const expected = projection.steward_prompt_version;
-    if (expected === undefined) {
-      throw new Error("steward context is missing steward_prompt_version");
-    }
-    if (expected !== STEWARD_PROMPT_VERSION) {
-      throw new Error(
-        `steward prompt version mismatch: server expects ${expected}, ` +
-          `this sidecar has ${STEWARD_PROMPT_VERSION}`,
-      );
-    }
+    // The steward prompt text is server-owned and travels in the projection, so
+    // there is no local copy to compare against: this sidecar sends whatever
+    // text the server sent, and ``prompt_digest`` covers exactly that text. An
+    // image that does not know about this field would send a local prompt
+    // instead, which is why its absence is fatal rather than a fallback.
     if (projection.steward_instructions === undefined) {
       throw new Error("steward context is missing steward_instructions");
     }

@@ -1577,7 +1577,6 @@ def _steward_run_context(
         context_blocks=context_blocks,
         next_event_seq=agent_events.next_seq(db, run.id),
         cancel_requested=bool(run.cancel_requested),
-        steward_prompt_version=steward_assist.STEWARD_PROMPT_VERSION,
         # The in-process carrier sends this as the system message, so the child run
         # must send the same text: it carries the per-kind rules (candidate
         # direction semantics, ranking's strict permutation, terminology's
