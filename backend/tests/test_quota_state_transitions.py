@@ -51,35 +51,35 @@ QUOTA_FILES = (
 # 移动代码时应重新确认分类，而不是让它悄悄沿用旧标签。
 CLASSIFICATION: dict[tuple[str, int], tuple[str, str]] = {
     # ---- StewardModelCall：配额只数 in_flight ----
-    ("services/steward_assist.py", 1549): ("enter", "lease_attempt 取得租约 -> in_flight"),
-    ("services/steward_assist.py", 1513): ("pre_active", "发送门：plan 缺失，reserved 从未计入"),
-    ("services/steward_assist.py", 1524): ("pre_active", "发送门：栅栏拒绝，reserved 从未计入"),
-    ("services/steward_assist.py", 1538): ("pre_active", "发送门：预算不足，reserved 从未计入"),
-    ("services/steward_assist.py", 2479): ("pre_active", "schedule_due_attempt 计划阶段"),
-    ("services/steward_assist.py", 1997): ("leave", "_settle_attempt 成功 -> succeeded"),
-    ("services/steward_assist.py", 2016): ("leave", "_settle_attempt 组上下文失效 -> degraded"),
-    ("services/steward_assist.py", 2031): ("leave", "_settle_attempt 校验未过 -> degraded"),
-    ("services/steward_assist.py", 2077): ("leave", "_settle_attempt_failure 分类结果"),
-    ("services/steward_assist.py", 2080): ("leave", "_settle_attempt_failure -> failed"),
-    ("services/steward_assist.py", 1909): ("leave", "record_attempt_outcome 写回栅栏 -> skipped"),
-    ("services/steward_assist.py", 2377): ("leave", "recover_stuck_attempts 崩溃点③ -> unknown"),
-    ("services/steward_assist.py", 2351): (
+    ("services/steward_assist.py", 1592): ("enter", "lease_attempt 取得租约 -> in_flight"),
+    ("services/steward_assist.py", 1556): ("pre_active", "发送门：plan 缺失，reserved 从未计入"),
+    ("services/steward_assist.py", 1567): ("pre_active", "发送门：栅栏拒绝，reserved 从未计入"),
+    ("services/steward_assist.py", 1581): ("pre_active", "发送门：预算不足，reserved 从未计入"),
+    ("services/steward_assist.py", 2522): ("pre_active", "schedule_due_attempt 计划阶段"),
+    ("services/steward_assist.py", 2040): ("leave", "_settle_attempt 成功 -> succeeded"),
+    ("services/steward_assist.py", 2059): ("leave", "_settle_attempt 组上下文失效 -> degraded"),
+    ("services/steward_assist.py", 2074): ("leave", "_settle_attempt 校验未过 -> degraded"),
+    ("services/steward_assist.py", 2120): ("leave", "_settle_attempt_failure 分类结果"),
+    ("services/steward_assist.py", 2123): ("leave", "_settle_attempt_failure -> failed"),
+    ("services/steward_assist.py", 1952): ("leave", "record_attempt_outcome 写回栅栏 -> skipped"),
+    ("services/steward_assist.py", 2420): ("leave", "recover_stuck_attempts 崩溃点③ -> unknown"),
+    ("services/steward_assist.py", 2394): (
         "post_active",
         "recover_stuck_attempts 崩溃点④：改写已结算行，不重复归还",
     ),
     # ---- AgentRun（steward child run 的收敛也在本文件）----
-    ("services/steward_assist.py", 2427): ("leave", "recover_stuck_child_runs -> expired"),
+    ("services/steward_assist.py", 2470): ("leave", "recover_stuck_child_runs -> expired"),
     # ---- StewardModelCall 的构造点：全部在计划阶段，尚未计入 ----
-    ("services/steward_assist.py", 1142): ("pre_active", "_reserve_attempt 计划期跳过（预算耗尽）"),
-    ("services/steward_assist.py", 1148): (
+    ("services/steward_assist.py", 1187): ("pre_active", "_reserve_attempt 计划期跳过（预算耗尽）"),
+    ("services/steward_assist.py", 1193): (
         "pre_active",
         "_reserve_attempt 计划期跳过（token 不足）",
     ),
-    ("services/steward_assist.py", 1152): (
+    ("services/steward_assist.py", 1197): (
         "pre_active",
         "_reserve_attempt 计划期跳过（prompt 过大）",
     ),
-    ("services/steward_assist.py", 1156): (
+    ("services/steward_assist.py", 1201): (
         "pre_active",
         "_reserve_attempt 预留：reserved 不计入 assist 配额（只数 in_flight）",
     ),
@@ -87,7 +87,7 @@ CLASSIFICATION: dict[tuple[str, int], tuple[str, str]] = {
     # 注意：steward child run 是否消耗「每账户 assistant 并发」取决于 counter 是否按
     # kind 分桶。设计结论是**不消耗**（它由 assist 的 per-space 配额治理），因此迁移时
     # counter 必须按 kind 分桶，否则 steward 会挤占 assistant 的账户配额。
-    ("services/steward_assist.py", 2278): ("enter", "open_child_run 直接建 leased run"),
+    ("services/steward_assist.py", 2321): ("enter", "open_child_run 直接建 leased run"),
     # ---- AgentRun/AgentJob 构造点 ----
     ("services/agent_queue.py", 136): ("enter", "_create_run_and_job 建 queued run"),
     ("services/agent_queue.py", 151): ("enter", "_create_run_and_job 建 queued job"),

@@ -323,6 +323,47 @@ def _enabled_kinds(db: Session, space_id: int) -> list[str]:
     return [kind for kind in ASSIST_KINDS if assist_enabled(db, space_id, kind)]
 
 
+# ---- 临时失败的错误码（可以重试）----
+#
+# `failed` 混着两类完全不同的结果：
+#   - **永久失败**：输出不合规（`invalid_output`）、提示词过大、响应过大、策略拒绝。
+#     同一输入重发必然再失败，所以是终态。
+#   - **临时失败**：上游 5xx、流中断、本 run 的出站重试预算耗尽。重发**可能**成功，
+#     把它当终态就等于让一次上游抖动永久封死一个目标。
+#
+# 实测（生产，2026-10-09）：space 2 的 33 个完全合格目标全部被 `failed` 拦下，
+# 其中 33 个都是临时失败（`http_503` 10、`PROVIDER_STREAM_ERROR` 7、
+# `PROVIDER_RETRY_BUDGET_EXHAUSTED` 16），terminology 因此静默停摆 6 小时。
+#
+# 识别方式是**按形状**而不是枚举：`http_<status>` 且状态码 >= 500 即视为临时，
+# 这样新增的上游状态码不会静默退化成终态。
+_TRANSIENT_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "PROVIDER_STREAM_ERROR",
+        "PROVIDER_RETRY_BUDGET_EXHAUSTED",
+        "PROVIDER_PROXY_UNAVAILABLE",
+        REASON_TIMEOUT,
+        REASON_NETWORK_UNKNOWN,
+        REASON_TRANSPORT_FAILED,
+        REASON_PROVIDER_UNAVAILABLE,
+        REASON_LEASE_LOST,
+    }
+)
+
+
+def _is_transient_error(code: str | None) -> bool:
+    """临时失败判定：重发**可能**成功，不得当作目标终态。"""
+    if not code:
+        return False
+    if code in _TRANSIENT_ERROR_CODES:
+        return True
+    # `http_5xx`（含未知的 5xx）：上游暂时不可用，不是这个目标的错。
+    if code.startswith("http_"):
+        status = code[5:]
+        return status.isdigit() and int(status) >= 500
+    return False
+
+
 def terminology_target_retryable(
     db: Session,
     *,
@@ -365,13 +406,19 @@ def terminology_target_retryable(
                 same_request = target.get("request_hash") == request_hash
                 unsent_failure = call.status == "failed" and call.error_code == "connect_failed"
                 unsent_skip = call.status == "skipped" and call.reserved_input_tokens is not None
+                # 临时失败不是终态：上游 5xx / 流中断 / 本 run 预算耗尽都只说明
+                # 「这一次没成」，重发仍可能成功。把它归入 `reservations` 而不是
+                # `return False`，于是它受同一套「至多两次 + 60s 冷却」的限流保护，
+                # 既不会无限重试，也不会被一次抖动永久封死。
+                transient_failure = call.status == "failed" and _is_transient_error(call.error_code)
                 if (
                     same_request
                     and call.status in ("succeeded", "degraded", "failed")
                     and not unsent_failure
+                    and not transient_failure
                 ):
                     return False
-                if unsent_failure or unsent_skip:
+                if unsent_failure or unsent_skip or transient_failure:
                     reservations.append(call.created_at)
     if len(reservations) >= 2:
         return False
@@ -1025,9 +1072,7 @@ def _ordered_kinds(db: Session, space_id: int, fence: dict[str, Any]) -> list[st
     return [k for k in ordered if k in kinds]
 
 
-def _mark_terminology_reserved(
-    db: Session, *, plan: Any, subject_key: str, now: Any
-) -> None:
+def _mark_terminology_reserved(db: Session, *, plan: Any, subject_key: str, now: Any) -> None:
     """terminology attempt 预留成功后标记其目标投影为 ``reserved``。
 
     ## 为什么必须只在**预留成功**后标记
@@ -1294,9 +1339,7 @@ def _reserve_plan_attempts(
                 )
         elif kind == "explanation":
             ctx = _visible_context(db, plan.space_id)
-            for card in _explanation_targets(
-                db, [int(i) for i in fence.get("explain_ids", [])]
-            ):
+            for card in _explanation_targets(db, [int(i) for i in fence.get("explain_ids", [])]):
                 out.append(
                     (
                         f"card:{int(card.id)}",
