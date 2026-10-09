@@ -187,24 +187,52 @@ def outbound_check(
 
 
 def _extract_json(text: str) -> Any | None:
-    """从模型文本提取 JSON（容忍 ```json 围栏）；失败返回 None。"""
+    """从模型文本提取 JSON（容忍 ```json 围栏与前后解释文字）；失败返回 None。
+
+    ## 为什么按「最先出现的定界符」而不是固定先找数组
+
+    旧实现整体解析失败后**固定先找 `[`/`]`**，找不到才退回 `{`/`}`。对数组输出的
+    kind（candidate/ranking）无害，但对**对象输出的 kind 是致命的**：
+
+    ```text
+    {"items":[{"target_ref":"t001"}]}                 -> dict   （整体解析成功）
+    建议如下：{"items":[{"target_ref":"t001"}]}        -> list   （切出了内层数组）
+    ```
+
+    模型只要在 JSON 前写一句说明（或后置一句总结），对象就会被切成 `items` 的**内层
+    数组**，于是 terminology/explanation 的 `isinstance(payload, dict)` 判定失败、整次
+    调用被判 `degraded/invalid_output`。
+
+    实测（生产，2026-10-08/09）：terminology 11 次 `invalid_output`，诊断一致显示
+    `looks_like_json=false`（原文以说明文字开头）、`text_chars` 数百至上千——即格式
+    正确的对象输出被提取器切错。同一提示词下 candidate/ranking（数组输出）正常。
+
+    ## 修法
+
+    按**最先出现**的 `{` 或 `[` 决定起始位置，并依次尝试各候选，返回第一个能解析的。
+    先出现者即外层容器：`{"items":[...]}` 的 `{` 在 `[` 之前，`[{"a":1}]` 的 `[`
+    在 `{` 之前。依次尝试则同时兜住「说明里先出现无关 `[注]`」这类噪声。
+    """
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`")
         if stripped.startswith("json"):
             stripped = stripped[4:]
+    stripped = stripped.strip()
     try:
-        return json.loads(stripped.strip())
+        return json.loads(stripped)
     except json.JSONDecodeError:
-        start, end = stripped.find("["), stripped.rfind("]")
-        if start < 0 or end <= start:
-            start, end = stripped.find("{"), stripped.rfind("}")
-        if start < 0 or end <= start:
-            return None
+        pass
+    starts = sorted({pos for pos in (stripped.find("{"), stripped.find("[")) if pos >= 0})
+    for start in starts:
+        end = stripped.rfind("}" if stripped[start] == "{" else "]")
+        if end <= start:
+            continue
         try:
             return json.loads(stripped[start : end + 1])
         except json.JSONDecodeError:
-            return None
+            continue
+    return None
 
 
 def _valid_int(value: Any) -> int | None:
