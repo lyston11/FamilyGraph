@@ -508,22 +508,4 @@ def _provider_policy(sources: Iterable[ContextSource]) -> str:
     )
 
 
-def context_hook(
-    prefetched: Iterable[ContextSource], *, token_budget: int = 2000
-) -> list[dict[str, Any]]:
-    """Pure, bounded hot-path hook using the exact same envelope estimator."""
-    if token_budget < 1:
-        raise_api_error(422, POLICY_CONTEXT_INVALID, "token_budget 必须为正数")
-    blocks: list[dict[str, Any]] = []
-    for source in prefetched:
-        candidate = [*blocks, source.as_data_block()]
-        if (
-            source.trust == "untrusted_data"
-            and len(candidate) <= MAX_INCLUDED_SOURCES
-            and estimate_context(candidate) <= token_budget
-        ):
-            blocks = candidate
-    return blocks
-
-
-__all__ = ["BuiltContext", "ContextBuilder", "ContextSource", "context_hook"]
+__all__ = ["BuiltContext", "ContextBuilder", "ContextSource"]

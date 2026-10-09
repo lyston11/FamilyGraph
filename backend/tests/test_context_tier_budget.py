@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from app.models.rag import RAG_SOURCE_TYPES
-from app.services import context_builder, rag_budget
+from app.services import rag_budget
 from app.services.context_builder import ContextBuilder, ContextSource
 from conftest import create_agent_fixture
 
@@ -129,21 +129,3 @@ def test_non_data_trust_still_rejected_first(trust):
     block = _source("memory", 1, 10, trust=trust).as_data_block()
     # `_tier_allocation` 只关心预算；trust 门禁在 `build` 的循环里先判。
     assert _tier_allocation([block], 2000) == [("memory", "memory-1")]
-
-
-def test_context_hook_matches_builder_allocation(db_session):
-    """热路径 hook 与 builder 必须给出同一纳入集合，否则两侧行为不一致。"""
-    owner, space = create_agent_fixture(db_session, name="tier-hook")
-    sources = [_source("memory", index, 60) for index in range(4)]
-    built = ContextBuilder(None).build(
-        actor=owner,
-        space_id=space.id,
-        agent_kind="assistant",
-        query="预算",
-        prefetched=sources,
-        token_budget=2000,
-    )
-    hook_blocks = context_builder.context_hook(sources, token_budget=2000)
-    assert [block["source_id"] for block in hook_blocks] == [
-        source.source_id for source in built.sources
-    ]
