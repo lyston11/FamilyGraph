@@ -470,7 +470,11 @@ def _drop_evidence_trigger(conn: sa.Connection) -> None:
     ("error in trigger trg_scev_immutable: no such column: OLD.source_batch_id"),
     so the trigger comes down first and is rebuilt afterwards.
     """
-    conn.execute(sa.text(f"DROP TRIGGER IF EXISTS {_EVIDENCE_TRIGGER}"))
+    bind = conn.get_bind() if hasattr(conn, "get_bind") else conn
+    if bind.dialect.name == "postgresql":
+        conn.execute(sa.text(f"DROP TRIGGER IF EXISTS {_EVIDENCE_TRIGGER} ON {_EVIDENCE_TABLE}"))
+    else:
+        conn.execute(sa.text(f"DROP TRIGGER IF EXISTS {_EVIDENCE_TRIGGER}"))
 
 
 def _create_evidence_trigger(conn: sa.Connection, *, source_column: str) -> None:
@@ -494,13 +498,37 @@ def _create_evidence_trigger(conn: sa.Connection, *, source_column: str) -> None
         "OR (OLD.projection_job_id IS NOT NEW.projection_job_id "
         "AND NEW.projection_job_id IS NOT NULL)))"
     )
-    conn.execute(
-        sa.text(
-            f"CREATE TRIGGER {_EVIDENCE_TRIGGER} BEFORE UPDATE ON {_EVIDENCE_TABLE} WHEN "
-            + " OR ".join(conditions)
-            + " BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END"
+    bind = conn.get_bind() if hasattr(conn, "get_bind") else conn
+    if bind.dialect.name == "postgresql":
+        conn.execute(
+            sa.text("""
+            CREATE OR REPLACE FUNCTION _scev_immutable_guard()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF OLD.projection_revision IS NOT NULL
+                    AND OLD.projection_job_id IS NOT NULL
+                    AND (NEW.projection_revision IS NULL OR NEW.projection_job_id IS NULL) THEN
+                    RAISE EXCEPTION 'candidate evidence is immutable';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """)
         )
-    )
+        conn.execute(
+            sa.text(
+                f"CREATE TRIGGER {_EVIDENCE_TRIGGER} BEFORE UPDATE ON {_EVIDENCE_TABLE} "
+                "FOR EACH ROW EXECUTE FUNCTION _scev_immutable_guard()"
+            )
+        )
+    else:
+        conn.execute(
+            sa.text(
+                f"CREATE TRIGGER {_EVIDENCE_TRIGGER} BEFORE UPDATE ON {_EVIDENCE_TABLE} WHEN "
+                + " OR ".join(conditions)
+                + " BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END"
+            )
+        )
 
 
 def _narrow_plan_table(conn: sa.Connection) -> None:

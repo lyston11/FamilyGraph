@@ -44,6 +44,19 @@ BEGIN
 END;
 """
 
+_RAW_IMMUTABLE_TRIGGER_PG_SQL = """
+CREATE OR REPLACE FUNCTION _raw_relation_inputs_guard()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'raw_relation_inputs is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_raw_relation_inputs_immutable
+BEFORE UPDATE ON raw_relation_inputs FOR EACH ROW
+EXECUTE FUNCTION _raw_relation_inputs_guard();
+"""
+
 
 def upgrade() -> None:
     # ---- 1. 自由输入原文（append-only，先建供 source_facts 引用）----
@@ -60,7 +73,11 @@ def upgrade() -> None:
         sa.Column("context_json", sa.JSON(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
-    op.execute(sa.text(_RAW_IMMUTABLE_TRIGGER_SQL))
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(sa.text(_RAW_IMMUTABLE_TRIGGER_PG_SQL))
+    else:
+        op.execute(sa.text(_RAW_IMMUTABLE_TRIGGER_SQL))
 
     # ---- 2. SourceFact 原子亲属事实 ----
     op.create_table(
@@ -168,7 +185,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(sa.text("DROP TRIGGER IF EXISTS trg_raw_relation_inputs_immutable"))
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            sa.text(
+                "DROP TRIGGER IF EXISTS trg_raw_relation_inputs_immutable ON raw_relation_inputs"
+            )
+        )
+        op.execute(sa.text("DROP FUNCTION IF EXISTS _raw_relation_inputs_guard()"))
+    else:
+        op.execute(sa.text("DROP TRIGGER IF EXISTS trg_raw_relation_inputs_immutable"))
     op.drop_index("ix_social_relations_user_b", table_name="social_relations")
     op.drop_index("ix_social_relations_user_a", table_name="social_relations")
     op.drop_table("social_relations")

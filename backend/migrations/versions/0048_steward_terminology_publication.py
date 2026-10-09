@@ -99,6 +99,10 @@ def _restore_inferred_setting_triggers() -> None:
     # rebuild of this table drops its existing 0045 triggers. Restore that
     # parent contract after both branches are present, without rewriting either
     # historical migration. Downgrade keeps these 0045-owned triggers intact.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        _restore_inferred_setting_triggers_pg()
+        return
     table = "agent_space_provider_settings"
     for event, prefixes in (
         ("INSERT", ("NEW",)),
@@ -124,12 +128,33 @@ def _restore_inferred_setting_triggers() -> None:
         )
 
 
+def _restore_inferred_setting_triggers_pg() -> None:
+    """PG 等价物：与 0045 的 _install_triggers_pg 共享同一函数。"""
+    table = "agent_space_provider_settings"
+    for event in ("INSERT", "DELETE", "UPDATE"):
+        when = ""
+        if event == "UPDATE":
+            conditions = " OR ".join(
+                f"OLD.{column} IS NOT NEW.{column}"
+                for column in ("space_id", "agent_kind", "inferred_tree")
+            )
+            when = f" WHEN ({conditions})"
+        op.execute(
+            sa.text(
+                f"CREATE TRIGGER IF NOT EXISTS sri_{table}_inferred_{event.lower()} "
+                f"AFTER {event} ON {table}{when} FOR EACH ROW "
+                f"EXECUTE FUNCTION _sri_increment_revision('inferred', 'space_id')"
+            )
+        )
+
+
 def upgrade() -> None:
     # Global maintenance takes the oldest eligible pending intent. The due
     # index orders by available_at before id and otherwise forces a full
     # pending-queue sort (including correlated prerequisite checks).
     op.create_index("ix_sdi_status_id", "steward_delivery_intents", ["status", "id"])
     _restore_inferred_setting_triggers()
+    bind = op.get_bind()
     for table, columns, scope_column, predicate in _SOURCES:
         for event, prefixes in (
             ("INSERT", ("NEW",)),
@@ -146,17 +171,27 @@ def upgrade() -> None:
                     "(" + " OR ".join(predicate.format(prefix=p) for p in prefixes) + ")"
                 )
             when = " WHEN " + " AND ".join(conditions) if conditions else ""
-            scopes = " UNION ".join(_scope_query(p, scope_column) for p in prefixes)
-            op.execute(
-                sa.text(
-                    f"CREATE TRIGGER sri_{table}_presentation_{event.lower()} "
-                    f"AFTER {event} ON {table}{when} BEGIN "
-                    "INSERT INTO steward_input_revisions "
-                    "(scope_id, structural, presentation, inferred) "
-                    f"SELECT scope_id, 0, 1, 0 FROM ({scopes}) WHERE true "
-                    "ON CONFLICT(scope_id) DO UPDATE SET presentation = presentation + 1; END"
+            if bind.dialect.name == "postgresql":
+                op.execute(
+                    sa.text(
+                        f"CREATE TRIGGER sri_{table}_presentation_{event.lower()} "
+                        f"AFTER {event} ON {table}{when} FOR EACH ROW "
+                        f"EXECUTE FUNCTION _sri_increment_revision("
+                        f"'presentation', '{scope_column}')"
+                    )
                 )
-            )
+            else:
+                scopes = " UNION ".join(_scope_query(p, scope_column) for p in prefixes)
+                op.execute(
+                    sa.text(
+                        f"CREATE TRIGGER sri_{table}_presentation_{event.lower()} "
+                        f"AFTER {event} ON {table}{when} BEGIN "
+                        "INSERT INTO steward_input_revisions "
+                        "(scope_id, structural, presentation, inferred) "
+                        f"SELECT scope_id, 0, 1, 0 FROM ({scopes}) WHERE true "
+                        "ON CONFLICT(scope_id) DO UPDATE SET presentation = presentation + 1; END"
+                    )
+                )
     _invalidate_existing_views()
 
 

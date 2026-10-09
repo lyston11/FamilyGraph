@@ -45,6 +45,24 @@ BEGIN
 END;
 """
 
+_SCOPE_TRIGGER_PG_SQL = """
+CREATE OR REPLACE FUNCTION _agent_sessions_scope_guard()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.account_id <> NEW.account_id
+        OR OLD.space_id <> NEW.space_id
+        OR OLD.agent_kind <> NEW.agent_kind THEN
+        RAISE EXCEPTION 'agent_sessions scope is immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_agent_sessions_scope_immutable
+BEFORE UPDATE ON agent_sessions FOR EACH ROW
+EXECUTE FUNCTION _agent_sessions_scope_guard();
+"""
+
 
 def upgrade() -> None:
     # ---- 1. 会话（scope 不可变）----
@@ -73,7 +91,11 @@ def upgrade() -> None:
         ),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
-    op.execute(sa.text(_SCOPE_TRIGGER_SQL))
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(sa.text(_SCOPE_TRIGGER_PG_SQL))
+    else:
+        op.execute(sa.text(_SCOPE_TRIGGER_SQL))
 
     # ---- 2. 消息 ----
     op.create_table(
@@ -298,7 +320,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(sa.text("DROP TRIGGER IF EXISTS trg_agent_sessions_scope_immutable"))
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            sa.text("DROP TRIGGER IF EXISTS trg_agent_sessions_scope_immutable ON agent_sessions")
+        )
+        op.execute(sa.text("DROP FUNCTION IF EXISTS _agent_sessions_scope_guard()"))
+    else:
+        op.execute(sa.text("DROP TRIGGER IF EXISTS trg_agent_sessions_scope_immutable"))
     op.drop_table("agent_space_provider_settings")
     op.drop_table("agent_providers")
     op.drop_table("agent_run_events")

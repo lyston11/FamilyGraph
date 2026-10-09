@@ -85,15 +85,43 @@ def upgrade() -> None:
         unique=True,
     )
     # Equivalent to the model CHECK, without a destructive SQLite table copy.
-    for operation, suffix in (
-        ("INSERT", "insert"),
-        ("UPDATE OF revision, source_revision", "update"),
-    ):
+    # 方言分派：SQLite 用 `BEFORE ... SELECT RAISE(ABORT)`；PostgreSQL 用
+    # `BEFORE ... FOR EACH ROW` + `RAISE EXCEPTION`。语义等价（都是「revision 与
+    # source_revision 不一致时拒绝写入」），但语法不通用——这是
+    # `10-05-migration-proof-gates` 证明过的方言差异之一。
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
         op.execute(
-            f"CREATE TRIGGER rag_documents_revision_{suffix} BEFORE {operation} "
-            "ON rag_documents WHEN NEW.revision != NEW.source_revision BEGIN "
-            "SELECT RAISE(ABORT, 'rag document revision mirror conflict'); END"
+            """
+            CREATE OR REPLACE FUNCTION _rag_revision_guard()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF NEW.revision != NEW.source_revision THEN
+                    RAISE EXCEPTION 'rag document revision mirror conflict';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """
         )
+        for suffix, operation in (
+            ("insert", "BEFORE INSERT ON rag_documents FOR EACH ROW"),
+            ("update", "BEFORE UPDATE OF revision, source_revision ON rag_documents FOR EACH ROW"),
+        ):
+            op.execute(
+                f"CREATE TRIGGER rag_documents_revision_{suffix} {operation} "
+                "EXECUTE FUNCTION _rag_revision_guard()"
+            )
+    else:
+        for operation, suffix in (
+            ("INSERT", "insert"),
+            ("UPDATE OF revision, source_revision", "update"),
+        ):
+            op.execute(
+                f"CREATE TRIGGER rag_documents_revision_{suffix} BEFORE {operation} "
+                "ON rag_documents WHEN NEW.revision != NEW.source_revision BEGIN "
+                "SELECT RAISE(ABORT, 'rag document revision mirror conflict'); END"
+            )
     for column in (
         sa.Column("upper_memory_id", sa.Integer(), nullable=True),
         sa.Column("cursor_document_id", sa.Integer(), nullable=False, server_default="0"),
@@ -128,8 +156,14 @@ def downgrade() -> None:
         raise RuntimeError(
             "Cannot discard RAG integrity evidence/target policy; retain data and roll forward"
         )
-    op.execute("DROP TRIGGER rag_documents_revision_update")
-    op.execute("DROP TRIGGER rag_documents_revision_insert")
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute("DROP TRIGGER IF EXISTS rag_documents_revision_update ON rag_documents")
+        op.execute("DROP TRIGGER IF EXISTS rag_documents_revision_insert ON rag_documents")
+        op.execute("DROP FUNCTION IF EXISTS _rag_revision_guard()")
+    else:
+        op.execute("DROP TRIGGER rag_documents_revision_update")
+        op.execute("DROP TRIGGER rag_documents_revision_insert")
     op.drop_index("ix_rag_documents_source", table_name="rag_documents")
     op.create_index(
         "ix_rag_documents_source", "rag_documents", ["source_type", "source_id", "revision"]

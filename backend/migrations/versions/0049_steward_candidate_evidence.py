@@ -99,21 +99,66 @@ def upgrade() -> None:
         "OR (OLD.projection_job_id IS NOT NEW.projection_job_id "
         "AND NEW.projection_job_id IS NOT NULL)))"
     )
-    op.execute(
-        sa.text(
-            f"CREATE TRIGGER trg_scev_immutable BEFORE UPDATE ON {_TABLE} WHEN "
-            + " OR ".join(conditions)
-            + " BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END"
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            sa.text("""
+            CREATE OR REPLACE FUNCTION _scev_immutable_guard()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF OLD.projection_revision IS NOT NULL
+                    AND OLD.projection_job_id IS NOT NULL
+                    AND (NEW.projection_revision IS NULL OR NEW.projection_job_id IS NULL) THEN
+                    RAISE EXCEPTION 'candidate evidence is immutable';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """)
         )
-    )
-    op.execute(
-        sa.text(
-            "CREATE TRIGGER trg_slc_internal_sticky BEFORE UPDATE OF attribution_status "
-            "ON steward_llm_candidates WHEN OLD.attribution_status = 'versioned' "
-            "AND NEW.attribution_status != 'versioned' "
-            "BEGIN SELECT RAISE(ABORT, 'candidate internal mode is sticky'); END"
+        op.execute(
+            sa.text(
+                f"CREATE TRIGGER trg_scev_immutable BEFORE UPDATE ON {_TABLE} "
+                "FOR EACH ROW EXECUTE FUNCTION _scev_immutable_guard()"
+            )
         )
-    )
+        op.execute(
+            sa.text("""
+            CREATE OR REPLACE FUNCTION _slc_internal_sticky_guard()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF OLD.attribution_status = 'versioned'
+                    AND NEW.attribution_status != 'versioned' THEN
+                    RAISE EXCEPTION 'candidate internal mode is sticky';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """)
+        )
+        op.execute(
+            sa.text(
+                "CREATE TRIGGER trg_slc_internal_sticky BEFORE UPDATE OF attribution_status "
+                "ON steward_llm_candidates FOR EACH ROW "
+                "EXECUTE FUNCTION _slc_internal_sticky_guard()"
+            )
+        )
+    else:
+        op.execute(
+            sa.text(
+                f"CREATE TRIGGER trg_scev_immutable BEFORE UPDATE ON {_TABLE} WHEN "
+                + " OR ".join(conditions)
+                + " BEGIN SELECT RAISE(ABORT, 'candidate evidence is immutable'); END"
+            )
+        )
+        op.execute(
+            sa.text(
+                "CREATE TRIGGER trg_slc_internal_sticky BEFORE UPDATE OF attribution_status "
+                "ON steward_llm_candidates WHEN OLD.attribution_status = 'versioned' "
+                "AND NEW.attribution_status != 'versioned' "
+                "BEGIN SELECT RAISE(ABORT, 'candidate internal mode is sticky'); END"
+            )
+        )
 
 
 def downgrade() -> None:
