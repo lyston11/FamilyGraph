@@ -147,7 +147,10 @@ def test_refill_continues_across_pages_but_stops_at_shared_scan_cap(
         assert [hit.source_id for hit in hits] == ([str(valid)] if expect_hit else [])
         assert trace["scanned"] <= 200
         assert trace["denied"] >= min(copies, 200)
-        assert trace["stop_reason"] == ("limit" if expect_hit else "scan_limit")
+        # `stop_reason` 的语义在 P3-a 后变了：过去 `limit` 表示「命中数已够」，
+        # 现在候选收集不再在 limit 处短路，因此 `limit` 不再是一个可能的停止原因。
+        # 保留的是「扫描上限」与「候选池满」两种真实的资源耗尽，其余为 exhausted。
+        assert trace["stop_reason"] in ({"exhausted", "candidate_budget"} if expect_hit else {"scan_limit"})
 
 
 def test_context_reread_does_not_research_or_absorb_its_new_answer(

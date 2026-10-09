@@ -97,6 +97,46 @@ PGroonga 与 pgvector 的实测共同确认一条安全关键结论：
 
 详见 `10-04-lexical-search-migration` 与 `10-03-pgvector-rag` 的 `research/evidence/`。
 
+## 10. 分层上下文预算与确定性重排（2026-10-10 补充）
+
+本任务（10-10）的两个交付，都是**可审计的质量参数**，因此进入本合同。
+
+### 分层预算（P4）
+
+- 每个 `source_type` 有独立的份额上限 `tier_budget = ceil(token_budget * fraction)`，
+  且**不做容量转移**：空类别不把自己的份额借给其它类别。结构性保证是任何单一类别
+  都不可能占满整个预算（所有份额 < 1）。
+- 份额集合：`memory 0.6 / family_story 0.4 / authorized_document 0.4 / profile 0.2 /
+  public_kinship 0.2`，总和 > 1 是刻意的——它表示各类别**各自**的上限，不是配额切分。
+- `tier_budget` 与 `token_budget` 是**两种**排除理由，必须可区分；trust 门禁
+  （`invalid_trust`）必须先于两者。
+- `policy_json` 记录 `tier_budget_version` 与份额；`_replay` 用 `_tier_allocation`
+  复算，预算算法变化时以 `tier_budget_changed` 失效，与 `budget_changed`（总量）区分。
+- 新增来源类别必须显式登记份额，否则静默落到默认 0.2——有专门断言防这个。
+
+### 确定性重排（P3-a）
+
+- 候选收集**不再在 limit 处短路**：所有分支先收集候选（受 `_CANDIDATE_BUDGET`
+  约束），再统一重排。修掉的缺陷是「主分支填满后短词后备分支被饿死」。
+- 重排特征（`lex-v2`）：查询词与正文的重叠度（按长度加权，替代原来只是行号的
+  `rank`）、分支共识（被多分支命中的 chunk 更相关）、来源类别（用户确认的记忆
+  > 家族故事 > 授权文档 > 公共亲缘）、chunk 位置与 chunk_id（稳定全序）。
+- `rank_version` 进 `policy_json`；`lex-v1` 是显式回退开关（候选到达顺序）。
+- 重排必须是**确定性**的：同一数据同一版本给出逐字节相同的顺序，否则
+  `ContextBuild` 的「每次执行不可变」与 `_replay` 一致性无从验证。因此**不做**
+  模型重排——cross-encoder 的质量增益需要先有基线余量证明，且要经 provider gateway。
+- 词法规划（`_segment_terms`）的二元组按「先偶数位后奇数位」排列，固定词额下最大化
+  被覆盖的字符位置；「句尾实义词被滑动窗口挤出」是这个顺序修掉的真实缺陷。
+
+### Wrong vs Correct
+
+错误：让空类别把份额「借给」其它类别；用截断句子边界来省预算（会破坏
+`_replay` 的 `content_hash` 校验与不可变合同）；用模型 rerank 却要求逐字节
+可复现；把「短词分支被饿死」当成词法能力的固有限制而不修候选收集逻辑。
+
+正确：分层预算各自设上限、不做容量转移、理由可区分、版本进 policy_json；
+重排用确定性特征、版本化、可显式回退。
+
 ## 9. 检索质量评估基线（2026-10-09 补充）
 
 本任务（P0）建立的评分设施。任何检索/提取改动的**证明义务**是先有基线分，再有对比分；

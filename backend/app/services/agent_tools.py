@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, cast
 
+from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import delete, select, text
 from sqlalchemy.engine import CursorResult
@@ -34,7 +35,16 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import RUNTIME_AGENT_KINDS, AgentRun, AgentSession, AgentToolCall
-from app.services import agent_query, audit, controlled_web, intake_extractor, steward_tools, terms
+from app.models.user import User
+from app.services import (
+    agent_query,
+    audit,
+    controlled_web,
+    intake_extractor,
+    platform_features,
+    steward_tools,
+    terms,
+)
 from app.services.agent_execution import (
     ExecutionIdentity,
     StewardExecution,
@@ -89,6 +99,11 @@ TOOL_PROBE_SCOPE = "familygraph.probe_scope"
 TOOL_RESOLVE_FREE_TEXT_RELATION = "familygraph.resolve_free_text_relation"
 TOOL_GET_TERM_ALTERNATIVES = "familygraph.get_term_alternatives"
 TOOL_RECORD_TERM_USAGE = "familygraph.record_term_usage"
+# 受控记忆工具（P2-b）。`search_memory` 只读；`propose_memory` **只写 pending 候选**。
+# 两者都是 `required_kind="assistant"`：记忆是账号级私有事实，Steward 是共享数据
+# 策略消费者，不得触碰（与 private branch 的排除口径一致）。
+TOOL_SEARCH_MEMORY = "familygraph.search_memory"
+TOOL_PROPOSE_MEMORY = "familygraph.propose_memory"
 TOOL_SEARCH_WEB = "familygraph.search_web"
 TOOL_FETCH_APPROVED_PAGE = "familygraph.fetch_approved_page"
 _KINSHIP_INTAKE_TOOLS = frozenset(
@@ -178,6 +193,45 @@ REGISTRY: dict[str, ToolSpec] = {
             output_schema={"type": "object", "properties": {"text": {"type": "string"}}},
             # Assistant 与 Steward 都使用显式 required_kind，避免任一侧
             # 因默认遍历意外继承另一侧工具。
+            required_kind="assistant",
+        ),
+        ToolSpec(
+            name=TOOL_SEARCH_MEMORY,
+            version=1,
+            description=(
+                "在当前会话空间内检索已确认的记忆与授权资料，返回可引用句柄。"
+                "回答前可先用它自查是否已知某件事，避免重复询问用户。只读。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "maxLength": 500},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            required_kind="assistant",
+        ),
+        ToolSpec(
+            name=TOOL_PROPOSE_MEMORY,
+            version=1,
+            description=(
+                "当用户明确要求『记住这件事』时，提议一条待确认记忆。"
+                "只创建待确认候选，**不会**成为可检索记忆；用户仍需在记忆面板确认。"
+                "原文由服务端从本轮用户消息取，不要改写原话。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "maxLength": 2000},
+                    "purpose": {"type": "string", "maxLength": 120},
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
             required_kind="assistant",
         ),
         ToolSpec(
@@ -331,11 +385,22 @@ def default_allowlist(
     _web_tools = {TOOL_SEARCH_WEB, TOOL_FETCH_APPROVED_PAGE}
     # viewer-bound steward tools are only usable when the run carries a viewer claim;
     # advertising them otherwise guarantees a 403 the model cannot recover from.
-    _unusable = (
-        steward_tools.STEWARD_VIEWER_TOOL_NAMES
-        if kind == "steward" and not viewer_scope
-        else frozenset()
+    _unusable = set(
+        steward_tools.STEWARD_VIEWER_TOOL_NAMES if kind == "steward" and not viewer_scope else ()
     )
+    # 记忆工具同理：平台未启用记忆（或未启用检索）时 `search_rag` / `propose_candidate`
+    # 会直接拒绝。广告一个必然被拒的工具只会消耗一轮模型调用并让它误判能力。
+    # 无法判定（无 db 作用域）时**不**广告：宁可少给，不可给出必然失败的调用。
+    # 注意两个工具的门禁条件不同——`propose_memory` 只要求记忆启用，
+    # `search_memory` 还要求 RAG 启用（检索未启用时 search_rag 会拒）。
+    if kind == "assistant":
+        if db is None:
+            _unusable.update({TOOL_SEARCH_MEMORY, TOOL_PROPOSE_MEMORY})
+        else:
+            if not platform_features.is_memory_enabled(db):
+                _unusable.update({TOOL_SEARCH_MEMORY, TOOL_PROPOSE_MEMORY})
+            elif not platform_features.is_rag_enabled(db):
+                _unusable.add(TOOL_SEARCH_MEMORY)
     allowlist = sorted(
         name
         for name, spec in REGISTRY.items()
@@ -724,6 +789,120 @@ def execute(
     return output
 
 
+#: `propose_memory` 的 extractor_version：与规则提取器区分开，使审计能分辨
+#: 「模型提议」与「settle 规则提取」两个来源。
+MEMORY_TOOL_EXTRACTOR_VERSION = "assistant-tool-v1"
+
+
+def _search_memory_tool(
+    db: Session, *, actor: User, space_id: int, query: str, limit: int
+) -> dict[str, Any]:
+    """只读检索：复用 `search_rag`，**不新增检索路径**。
+
+    与 `search_rag` 共用同一 eligibility 过滤与 `_rows_to_hits` 引用投影，
+    因此授权等价性不是靠约定，而是靠同一段代码。输出只含句柄与元数据，
+    不含原始来源的敏感字段。
+    """
+    from app.services import memory_rag
+
+    clean = query.strip()
+    if not clean:
+        raise ToolProtocolError(
+            422, "AGENT_TOOL_SCHEMA_INVALID", "查询不能为空", {"path": "$.query"}
+        )
+    try:
+        hits = memory_rag.search_rag(
+            db,
+            actor=actor,
+            account=actor.account,
+            space_id=space_id,
+            query=clean,
+            agent_kind="assistant",
+            limit=limit,
+            for_model=True,
+        )
+    except HTTPException as exc:
+        # 记忆/检索未启用或来源受限：按既有 API 口径对外，不伪装成空结果。
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
+        code = str(detail.get("code") or "MEMORY_SEARCH_FAILED")
+        raise ToolProtocolError(
+            exc.status_code, code, str(detail.get("message") or "检索不可用")
+        ) from exc
+    return {
+        "query_hash": memory_rag.query_hash(clean),
+        "results": [
+            {
+                "citation": hit.citation_handle,
+                "source_type": hit.source_type,
+                "source_id": hit.source_id,
+                "scope": hit.scope,
+                "sensitivity": hit.sensitivity,
+                "revision": hit.revision,
+                "excerpt": hit.text[:400],
+            }
+            for hit in hits
+        ],
+    }
+
+
+def _propose_memory_tool(
+    db: Session, *, actor: User, run: ToolRunScope, summary: str, purpose: str | None
+) -> dict[str, Any]:
+    """提议一条 **pending** 记忆候选。
+
+    三条刻意的约束：
+
+    1. `source_quote` 取本轮原始 user 消息**全文**，不是模型的转述——
+       `memory_sources` 对 `agent_message` 来源做全等校验，用转述会 422；而且
+       「哪句原话」是审计真源，模型不该改写它。
+    2. `suggested_scope` 固定 `private`：模型不得替用户选择共享范围，
+       最小披露是安全默认。
+    3. **只创建候选**，不调用 `confirm_candidate`。确认是用户对「这条事实进入我的
+       记忆」的明示同意，属于产品语义，不是技术细节。
+    """
+    from app.models.agent import AgentMessage, AgentRun
+    from app.services import memory_rag
+
+    text = summary.strip()
+    if not text:
+        raise ToolProtocolError(
+            422, "AGENT_TOOL_SCHEMA_INVALID", "摘要不能为空", {"path": "$.summary"}
+        )
+    source = db.get(AgentRun, run.id, populate_existing=True)
+    if source is None or source.message_id is None:  # pragma: no cover - 执行门禁保证
+        raise ToolProtocolError(409, "AGENT_TOOL_RUN_INVALID", "本轮 run 没有可引用的用户消息")
+    message = db.get(AgentMessage, source.message_id, populate_existing=True)
+    if message is None or message.role != "user":
+        raise ToolProtocolError(409, "AGENT_TOOL_RUN_INVALID", "本轮 run 没有可引用的用户消息")
+    raw = message.content_json.get("text")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ToolProtocolError(409, "AGENT_TOOL_RUN_INVALID", "本轮用户消息为空")
+    try:
+        candidate = memory_rag.propose_candidate(
+            db,
+            author_account_id=actor.account.id,
+            source={"kind": "agent_message", "message_id": message.id},
+            source_quote=raw,
+            summary=text,
+            suggested_scope="private",
+            purpose=(purpose or "用户在对话中明确要求记住").strip()[:120],
+            extractor_version=MEMORY_TOOL_EXTRACTOR_VERSION,
+        )
+    except HTTPException as exc:
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
+        code = str(detail.get("code") or "MEMORY_PROPOSE_FAILED")
+        raise ToolProtocolError(
+            exc.status_code, code, str(detail.get("message") or "提议失败")
+        ) from exc
+    db.flush()
+    return {
+        "candidate_id": candidate.id,
+        "status": candidate.status,
+        "suggested_scope": candidate.suggested_scope,
+        "requires_user_confirmation": True,
+    }
+
+
 def _dispatch(
     db: Session,
     spec: ToolSpec,
@@ -769,6 +948,33 @@ def _dispatch(
         )
     if agent_session is None:
         raise ToolProtocolError(500, "INTERNAL_ERROR", "Assistant scope 缺少 session")
+    if spec.name == TOOL_SEARCH_MEMORY:
+        actor, space = agent_query._resolve_scope(db, agent_session)
+        limit = input_payload.get("limit")
+        if limit is not None and (isinstance(limit, bool) or not 1 <= limit <= 20):
+            raise ToolProtocolError(
+                422,
+                "AGENT_TOOL_SCHEMA_INVALID",
+                "字段超出允许范围",
+                {"path": "$.limit", "allowed": "1..20"},
+            )
+        return _search_memory_tool(
+            db,
+            actor=actor,
+            space_id=space.id,
+            query=input_payload["query"],
+            limit=5 if limit is None else int(limit),
+        )
+    if spec.name == TOOL_PROPOSE_MEMORY:
+        actor, space = agent_query._resolve_scope(db, agent_session)
+        del space
+        return _propose_memory_tool(
+            db,
+            actor=actor,
+            run=run,
+            summary=input_payload["summary"],
+            purpose=input_payload.get("purpose"),
+        )
     if spec.name == TOOL_RESOLVE_FREE_TEXT_RELATION:
         actor, space = agent_query._resolve_scope(db, agent_session)
         return intake_extractor.parse_free_text_relation(

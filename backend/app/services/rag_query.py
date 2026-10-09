@@ -137,8 +137,21 @@ def normalize_query(raw: str) -> str:
 def _segment_terms(normalized: str) -> list[str]:
     """Split normalized text into candidate terms.
 
-    CJK runs are further split into overlapping 2-character windows plus the
-    full run when short enough; latin/digit runs become lowercase words.
+    CJK runs are split into overlapping 2-character windows plus the full run;
+    latin/digit runs become lowercase words.
+
+    ## 为什么二元组要「先偶数位、后奇数位」
+
+    预算只有 `MAX_TERMS` 个词，而滑动窗口会产生 `len-1` 个**重叠**二元组：
+    「苏州老宅院子里的桂花都用来做什么」会得到 苏州/州老/老宅/宅院/院子/子里/里的…
+    按位置顺序截断，预算全花在重叠噪声上，句尾的实义词（`桂花`）永远进不了候选。
+    实测后果就是「一个问题同时指向两条记忆时只召回前一条」（quality 层
+    `multi-session-story`）。
+
+    偶数位二元组（0-1、2-3、4-5…）是**不重叠**的，因此它们覆盖了整句话的每个字符，
+    且数量约为一半。先排它们再排奇数位，等于在固定预算下最大化被覆盖的字符位置——
+    任何 2 字词即使起点是奇数，也只用在少数几个位置之后。这是纯词法启发式，
+    不做分词猜测。
     """
     terms: list[str] = []
     for token in normalized.split():
@@ -152,7 +165,8 @@ def _segment_terms(normalized: str) -> list[str]:
         if token not in _QUESTION_STOPWORDS:
             terms.append(token)
         if len(token) > 2:
-            for pos in range(len(token) - 1):
+            positions = [*range(0, len(token) - 1, 2), *range(1, len(token) - 1, 2)]
+            for pos in positions:
                 bigram = token[pos : pos + 2]
                 if bigram not in _QUESTION_STOPWORDS:
                     terms.append(bigram)

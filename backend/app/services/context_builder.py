@@ -28,9 +28,15 @@ from app.services.agent_execution import (
     fence_assistant_execution,
     fence_steward_execution,
 )
-from app.services.memory_rag import RAGHit, query_hash, search_rag
+from app.services.memory_rag import RANK_VERSION_DEFAULT, RAGHit, query_hash, search_rag
 from app.services.policy_consumer import is_policy_consumer_kind
-from app.services.rag_budget import ESTIMATOR_VERSION, MAX_INCLUDED_SOURCES, estimate_context
+from app.services.rag_budget import (
+    ESTIMATOR_VERSION,
+    MAX_INCLUDED_SOURCES,
+    estimate_context,
+    tier_budget,
+    tier_budget_policy,
+)
 from app.services.rag_query import QUERY_PLAN_VERSION, plan_query
 from app.utils.timeutil import utcnow
 
@@ -231,6 +237,8 @@ class ContextBuilder:
             "plan_version": QUERY_PLAN_VERSION,
             "query_plan": plan.log_summary(),
             "estimator_version": ESTIMATOR_VERSION,
+            "rank_version": RANK_VERSION_DEFAULT,
+            **tier_budget_policy(token_budget),
         }
         # Anchors are bounded text used to plan this query, never an added
         # source. Hash them with the question; audit metadata contains no text.
@@ -287,6 +295,8 @@ class ContextBuilder:
         estimates: list[int] = []
         reasons: list[str | None] = []
         used = 0
+        # 分层用量：按 `source_type` 累计，与全局 `used` 同时生效。
+        tier_used: dict[str, int] = {}
         for source in sources:
             candidate_blocks = [s.as_data_block() for s in (*included, source)]
             candidate_estimate = estimate_context(candidate_blocks)
@@ -298,11 +308,24 @@ class ContextBuilder:
                 reason = "source_limit"
             elif candidate_estimate > token_budget:
                 reason = "token_budget"
+            elif tier_used.get(source.source_type, 0) + estimate > tier_budget(
+                source.source_type, token_budget
+            ):
+                # 该类别已用满自己的份额。**不做容量转移**：其它类别未使用的份额
+                # 不借给它，否则「长故事挤掉记忆」只是被换成了反方向的挤占。
+                reason = "tier_budget"
             if reason is not None:
-                excluded.append({"source_id": source.source_id, "reason": reason})
+                excluded.append(
+                    {
+                        "source_id": source.source_id,
+                        "reason": reason,
+                        "source_type": source.source_type,
+                    }
+                )
             else:
                 included.append(source)
                 used = candidate_estimate
+                tier_used[source.source_type] = tier_used.get(source.source_type, 0) + estimate
             estimates.append(estimate)
             reasons.append(reason)
         build_id = None
@@ -437,9 +460,44 @@ class ContextBuilder:
             )
         if estimate_context([s.as_data_block() for s in sources]) > token_budget:
             _invalidated(db, build, "budget_changed")
+        # 分层用量是构建时的函数：重放必须复现同一分配，否则同一 build_id 会返回
+        # 不同的纳入集合。这里重算并比对，让「预算算法变了」与「来源变了」区分开。
+        if _tier_allocation([s.as_data_block() for s in sources], token_budget) != [
+            (s.source_type, s.source_id) for s in sources
+        ]:
+            _invalidated(db, build, "tier_budget_changed")
         return BuiltContext(
             build.id, identity, tuple(sources), tuple(excluded), _provider_policy(sources)
         )
+
+
+def _tier_allocation(blocks: Sequence[dict[str, Any]], token_budget: int) -> list[tuple[str, str]]:
+    """Recompute which sources the current tier policy would include.
+
+    Used by `_replay` to detect a policy change: the stored items were chosen by
+    the policy in force at build time, so a different current allocation means the
+    build must be invalidated rather than silently replayed.
+    """
+    used = 0
+    tier_used: dict[str, int] = {}
+    allocation: list[tuple[str, str]] = []
+    included: list[dict[str, Any]] = []
+    for block in blocks:
+        source_type = str(block["source_type"])
+        candidate = [*included, block]
+        candidate_estimate = estimate_context(candidate)
+        estimate = candidate_estimate - used
+        if (
+            len(included) >= MAX_INCLUDED_SOURCES
+            or candidate_estimate > token_budget
+            or tier_used.get(source_type, 0) + estimate > tier_budget(source_type, token_budget)
+        ):
+            continue
+        included = candidate
+        used = candidate_estimate
+        tier_used[source_type] = tier_used.get(source_type, 0) + estimate
+        allocation.append((source_type, str(block["source_id"])))
+    return allocation
 
 
 def _provider_policy(sources: Iterable[ContextSource]) -> str:

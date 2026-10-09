@@ -42,17 +42,19 @@ REPORT_PATH = Path(
 #: **contract 层必须 100%**：取代/有效区间语义、弃答、单跳提取与时序。这些用例
 #: 表达的是**合同**，不是质量目标；允许部分通过等于允许静默退化。
 #:
-#: **quality 层记录基线但不设 100% 门**：多会话聚合（一个问题要同时召回两条记忆）
-#: 当前词法路径做不到——实测 `multi-session-story` 只召回 5 条中的 1 条期望来源。
-#: 把这类用例设成硬门会让门立刻失败，从而被绕过；设成 0 又等于放弃观测。因此它
-#: 记录基线，由 P3 确定性重排提升后再升级为 contract 层。
+#: **quality 层曾记录基线但不设门**：多会话聚合（一个问题要同时召回两条记忆）
+#: 在 P0 时做不到——实测 `multi-session-story` 5 条只召回 1 条期望来源。
 #:
-#: 两层共享的**不可放宽**约束：`forbidden_hits` 必须为 0（取代语义的直接证伪指标）。
+#: **P3 起已提升为硬门**：确定性重排（查询词重叠度 + 分支共识 + 来源类别）把
+#: quality 层提到 3/3、整体 recall 1.000。这正是「先记录基线、再由改进提升为硬门」
+#: 的用法——如果当初把做不到的用例设成硬门，它会立刻失败从而被绕过。
 MIN_CONTRACT_PASS_RATE = 1.0
 MIN_CONTRACT_RECALL = 1.0
 MIN_CONTRACT_ABSTENTION_ACCURACY = 1.0
-#: quality 层的下限取实测基线：只防「比今天更差」，不宣称已经够好。
-MIN_QUALITY_PASS_RATE = 0.0
+#: quality 层现在是硬门（2026-10-10 起）。若某天某条质量用例回归，正确做法是修实现
+#: 或写明为何该期望错了，而不是把它降回「只记录」。
+MIN_QUALITY_PASS_RATE = 1.0
+MIN_QUALITY_RECALL = 1.0
 #: 提取器类别产出：确定性规则，没有理由不全部通过。
 MIN_EXTRACTION_PASS_RATE = 1.0
 #: 取代语义的直接证伪指标：一个都不允许（两层合计）。
@@ -218,8 +220,11 @@ def test_retrieval_baseline_and_regression_gate(db_session, golden):
     assert (
         tiers["contract"]["abstention_accuracy"] >= MIN_CONTRACT_ABSTENTION_ACCURACY
     ), f"弃答失败：{contract_failed}"
-    # quality 层：只防退化。当前基线见报告，P3 重排上线后应提升本阈值。
+    # quality 层：P3 起同为硬门。
     assert tiers["quality"]["pass_rate"] >= MIN_QUALITY_PASS_RATE, f"质量层退化：{failed}"
+    assert tiers["quality"]["retrieval_recall"] >= MIN_QUALITY_RECALL, (
+        f"质量层召回退化：{failed}"
+    )
     assert extraction["pass_rate"] >= MIN_EXTRACTION_PASS_RATE, extraction["failures"]
 
 

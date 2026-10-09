@@ -26,6 +26,7 @@ from app.errors import (
     MEMORY_SCOPE_FORBIDDEN,
     MEMORY_SENSITIVE_SCOPE_FORBIDDEN,
     MEMORY_STATE_CONFLICT,
+    POLICY_CONTEXT_INVALID,
     PROVIDER_LOCAL_REQUIRED_UNAVAILABLE,
     RAG_DISABLED,
     RAG_SOURCE_NOT_ALLOWED,
@@ -1246,6 +1247,98 @@ _HIT_SQL = """
 # SQLite's internal work is separate from the number of returned candidates.
 _FALLBACK_SCAN_LIMIT = 200
 _SCAN_PAGE_SIZE = 32
+#: 候选池上限。必须 >= 调用方 limit，否则「收集候选再重排」会退化成截断。
+#: 定在 100：与 `_HIT_SQL` 的 `limit <= 100` 约束同量级，且一次查询的候选数
+#: 再多也不会改变 top-k（重排是确定性的全序）。
+_CANDIDATE_BUDGET = 100
+
+#: 重排版本。`lex-v1` = 旧顺序（候选到达顺序，显式回退开关）；
+#: `lex-v2` = 分支共识 + 来源类别 + 词法分数的确定性重排。
+RANK_VERSION_LEGACY = "lex-v1"
+RANK_VERSION_DEFAULT = "lex-v2"
+RANK_VERSIONS = (RANK_VERSION_LEGACY, RANK_VERSION_DEFAULT)
+
+#: `lex-v2` 的来源类别权重。用户确认的记忆排在最前：它是「用户说过且明确确认
+#: 要记住」的事实，比从文档里检索到的段落更可能是用户想听的答案。
+_SOURCE_TYPE_RANK_WEIGHT: dict[str, int] = {
+    "memory": 3,
+    "family_story": 2,
+    "profile": 1,
+    "authorized_document": 1,
+    "public_kinship": 0,
+}
+_SOURCE_TYPE_RANK_DEFAULT_WEIGHT = 0
+
+
+def _term_overlap_score(text: str, terms: Sequence[str]) -> int:
+    """查询词与正文的重叠度：命中词的**长度之和**。
+
+    ## 为什么这个信号足够
+
+    它替代的是一个**更差**的现状——LIKE 后备分支的 `rank` 只是行号（`c.id ASC`），
+    与相关度完全无关，因此谁被返回过去完全取决于插入顺序。实测
+    `multi-session-story`（期望 `story-老宅` + `story-桂花`）失败正是因为
+    `story-桂花` 的 id 排在 5 条只命中「苏州」的噪声之后。
+
+    这是**词法**信号，不是语义理解：它不知道 `桂花` 与 `糖藕` 的关系，只知道查询里
+    出现的词在正文里出现了多少。按长度加权给更具体的词更高权重（`苏州老宅` 4 分 >
+    `里的` 2 分）。
+    """
+    score = 0
+    for term in terms:
+        if term and term in text:
+            score += len(term)
+    return score
+
+
+def rank_candidates(
+    candidates: Sequence[RAGHit],
+    *,
+    branch_hits: dict[int, set[str]],
+    rank_version: str,
+    limit: int,
+    query_terms: Sequence[str] = (),
+) -> list[RAGHit]:
+    """Deterministic rerank of the candidate pool.
+
+    ## 为什么是确定性特征而不是模型重排
+
+    评分必须**可复现**：同一份数据、同一版本必须给出同一顺序，否则
+    `ContextBuild` 的「每次执行不可变」与 `_replay` 的一致性都无从验证。
+    模型重排（cross-encoder）的质量增益需要先有基线余量证明，且要经 provider
+    gateway（见 `10-09` 的 P3 决策）。
+
+    ## 特征（全部来自已有数据，零额外查询）
+
+    1. **分支共识**：被两个及以上检索分支命中的 chunk 更可能是真正相关的
+       （`lex-v2` 的主要增益来源——两字词 LIKE 分支过去被主分支饿死）。
+    2. **来源类别**：用户确认的记忆 > 家族故事 > 授权文档 > 公共亲缘。
+    3. **词法分**：`rank`（bm25 / pgroonga 分，越小越相关或越大越相关由分支决定，
+       因此这里只用它做**同权重内**的稳定次级排序，不做跨分支比较）。
+    4. **chunk 位置**：同一文档靠前的片段优先（文档通常先讲重点）。
+
+    `lex-v1` 保留候选到达顺序，作为显式回退。
+    """
+    if rank_version not in RANK_VERSIONS:
+        raise_api_error(
+            422, POLICY_CONTEXT_INVALID, "未知的 rank_version", {"rank_version": rank_version}
+        )
+    if rank_version == RANK_VERSION_LEGACY:
+        return list(candidates[:limit])
+
+    def key(hit: RAGHit) -> tuple[int, int, int, int, int]:
+        branches = branch_hits.get(hit.chunk_id, set())
+        return (
+            # 负号使排序为「大在前」。
+            -_term_overlap_score(hit.text, query_terms),
+            -len(branches),
+            -_SOURCE_TYPE_RANK_WEIGHT.get(hit.source_type, _SOURCE_TYPE_RANK_DEFAULT_WEIGHT),
+            hit.chunk_index if hit.chunk_index is not None else 0,
+            # 最终稳定器：chunk_id 唯一，保证全序（同分时顺序不含随机性）。
+            hit.chunk_id,
+        )
+
+    return sorted(candidates, key=key)[:limit]
 
 
 def _rows_to_hits(
@@ -1331,6 +1424,7 @@ def search_rag(
     recent_messages: Sequence[str] = (),
     query_plan: QueryPlan | None = None,
     trace: dict[str, Any] | None = None,
+    rank_version: str = RANK_VERSION_DEFAULT,
 ) -> list[RAGHit]:
     """Search with SQL scope/confirmation/status predicates before results escape.
 
@@ -1340,6 +1434,10 @@ def search_rag(
     eligibility predicates with a bounded scan budget.
     """
     _require_rag_enabled(db)
+    if rank_version not in RANK_VERSIONS:
+        raise_api_error(
+            422, POLICY_CONTEXT_INVALID, "未知的 rank_version", {"rank_version": rank_version}
+        )
     if not is_policy_consumer_kind(agent_kind):
         raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "policy consumer 不受支持")
     # Steward is a shared-data policy consumer only.  The SQL predicates below
@@ -1382,15 +1480,27 @@ def search_rag(
     }
     eligibility = _ELIGIBILITY_SQL.format(sensitivity=sensitivity_predicate)
 
-    hits: list[RAGHit] = []
+    # ---- 候选收集（不再在 limit 处短路） ----
+    #
+    # 旧实现让 `collect` 在 `len(hits) >= limit` 时立即停止，因此**先运行的分支会
+    # 饿死后面的分支**：主 FTS 分支一旦填满 limit，两字词的 LIKE 后备分支根本不会
+    # 执行。实测表现就是「一个问题同时指向两条记忆时只召回其中一条」（quality 层
+    # `multi-session-story` 失败）。
+    #
+    # 现在改为：所有分支都收集候选（受 `_CANDIDATE_BUDGET` 约束）→ 确定性重排 →
+    # 取 top-k。`candidates` 与 `hits` 的区别是：候选是「找到的」，命中是「返回的」。
+    candidates: list[RAGHit] = []
     seen_chunk_ids: set[int] = set()
+    branch_hits: dict[int, set[str]] = {}
     scanned = 0
     denied = 0
 
-    def collect(sql: Any, branch_params: dict[str, Any], *, rank_by_order: bool) -> None:
+    def collect(
+        sql: Any, branch_params: dict[str, Any], *, rank_by_order: bool, branch: str
+    ) -> None:
         nonlocal scanned, denied
         offset = 0
-        while len(hits) < limit and scanned < _FALLBACK_SCAN_LIMIT:
+        while len(candidates) < _CANDIDATE_BUDGET and scanned < _FALLBACK_SCAN_LIMIT:
             page_size = min(_SCAN_PAGE_SIZE, _FALLBACK_SCAN_LIMIT - scanned)
             rows = (
                 db.execute(
@@ -1413,8 +1523,6 @@ def search_rag(
             )
             denied += rejected
             for hit in page:
-                if hit.chunk_id in seen_chunk_ids:
-                    continue
                 if (
                     for_model
                     and provider_kind != "local"
@@ -1428,9 +1536,14 @@ def search_rag(
                         )
                     denied += 1
                     continue
+                # 同一 chunk 可能被多个分支命中：记录它命中了哪些分支（重排特征），
+                # 但只保留一份候选。
+                branch_hits.setdefault(hit.chunk_id, set()).add(branch)
+                if hit.chunk_id in seen_chunk_ids:
+                    continue
                 seen_chunk_ids.add(hit.chunk_id)
-                hits.append(hit)
-                if len(hits) == limit:
+                candidates.append(hit)
+                if len(candidates) >= _CANDIDATE_BUDGET:
                     break
             if len(rows) < page_size:
                 break
@@ -1457,21 +1570,13 @@ def search_rag(
         eligibility=eligibility,
         hit_sql=_HIT_SQL,
     ):
-        if len(hits) >= limit or scanned >= _FALLBACK_SCAN_LIMIT:
+        if len(candidates) >= _CANDIDATE_BUDGET or scanned >= _FALLBACK_SCAN_LIMIT:
             break
-        collect(lexical.sql, {**params, **lexical.params}, rank_by_order=lexical.rank_by_order)
-    if trace is not None:
-        trace.update(
-            {
-                "scanned": scanned,
-                "denied": denied,
-                "returned": len(hits),
-                "stop_reason": "limit"
-                if len(hits) >= limit
-                else "scan_limit"
-                if scanned >= _FALLBACK_SCAN_LIMIT
-                else "exhausted",
-            }
+        collect(
+            lexical.sql,
+            {**params, **lexical.params},
+            rank_by_order=lexical.rank_by_order,
+            branch=f"lexical:{len(branch_hits)}",
         )
 
     # ---- 向量候选：**可选增强**，失败不改变检索结果 ----
@@ -1500,13 +1605,50 @@ def search_rag(
     denied += vector_denied
     if trace is not None:
         trace["vector_candidates"] = len(vector_hits)
-    if vector_hits:
-        for hit in vector_hits:
-            if len(hits) >= limit:
-                break
-            seen_chunk_ids.add(hit.chunk_id)
-            hits.append(hit)
+    for hit in vector_hits:
+        if len(candidates) >= _CANDIDATE_BUDGET:
+            break
+        if hit.chunk_id in seen_chunk_ids:
+            continue
+        seen_chunk_ids.add(hit.chunk_id)
+        branch_hits.setdefault(hit.chunk_id, set()).add("vector")
+        candidates.append(hit)
 
+    # ---- 确定性重排 ----
+    #
+    # `rank_version` 决定顺序，并进入 `policy_json`（由 ContextBuilder 记录），
+    # 使「同一 build 的重放必须给出同一顺序」可被审计。
+    hits = rank_candidates(
+        candidates,
+        branch_hits=branch_hits,
+        rank_version=rank_version,
+        limit=limit,
+        # 重排用的查询词 = 计划里的全部词（含 phrase）。这是唯一新增的输入，
+        # 且来自调用方已经算好的计划，不引入新的查询或模型调用。
+        query_terms=[
+            *([plan.phrase] if plan.phrase else []),
+            *plan.fts_terms,
+            *plan.fallback_terms,
+        ],
+    )
+    if trace is not None:
+        trace.update(
+            {
+                "scanned": scanned,
+                "denied": denied,
+                "returned": len(hits),
+                "candidates": len(candidates),
+                "multi_branch_candidates": sum(
+                    1 for hit in candidates if len(branch_hits.get(hit.chunk_id, ())) > 1
+                ),
+                "rank_version": rank_version,
+                "stop_reason": "candidate_budget"
+                if len(candidates) >= _CANDIDATE_BUDGET
+                else "scan_limit"
+                if scanned >= _FALLBACK_SCAN_LIMIT
+                else "exhausted",
+            }
+        )
     return hits
 
 
