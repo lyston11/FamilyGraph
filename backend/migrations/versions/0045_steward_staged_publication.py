@@ -171,6 +171,10 @@ def _scope_query(prefix: str, scope_columns: Sequence[str]) -> str:
 
 
 def _install_triggers() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        _install_triggers_pg()
+        return
     for table, columns, layer, scope_columns in _SOURCES:
         for event, prefixes in (
             ("INSERT", ("NEW",)),
@@ -194,6 +198,68 @@ def _install_triggers() -> None:
                     f"{int(layer == 'presentation')}, {int(layer == 'inferred')} "
                     f"FROM ({query}) WHERE true ON CONFLICT(scope_id) "
                     f"DO UPDATE SET {layer} = {layer} + 1; END"
+                )
+            )
+
+
+def _install_triggers_pg() -> None:
+    """PostgreSQL 等价物：共享函数 + 每表触发器。
+
+    SQLite 版本是 `AFTER ... BEGIN INSERT ... ON CONFLICT DO UPDATE`；
+    PG 版本是 `AFTER ... FOR EACH ROW EXECUTE FUNCTION`，函数内部用
+    `INSERT ... ON CONFLICT ... DO UPDATE`（PG 原生语法）。
+    语义等价：都是「该表被修改时，对 steward_input_revisions 的对应层计数 +1」。
+    """
+    op.execute(
+        sa.text("""
+        CREATE OR REPLACE FUNCTION _sri_increment_revision()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            scope_id INTEGER;
+            layer_name TEXT;
+        BEGIN
+            -- 由调用方通过 trigger argument 传递层名（structural/presentation/inferred）
+            -- 与 scope 列名（如 'space_id'）。
+            layer_name := TG_ARGV[0];
+            IF TG_OP = 'DELETE' THEN
+                EXECUTE format('SELECT COALESCE(($1).%s, 0)', TG_ARGV[1])
+                    INTO scope_id USING OLD;
+            ELSE
+                EXECUTE format('SELECT COALESCE(($1).%s, 0)', TG_ARGV[1])
+                    INTO scope_id USING NEW;
+            END IF;
+            IF TG_ARGV[1] IS NULL OR TG_ARGV[1] = '' THEN
+                scope_id := 0;
+            END IF;
+            INSERT INTO steward_input_revisions (scope_id, structural, presentation, inferred)
+            VALUES (scope_id,
+                    CASE WHEN layer_name = 'structural' THEN 1 ELSE 0 END,
+                    CASE WHEN layer_name = 'presentation' THEN 1 ELSE 0 END,
+                    CASE WHEN layer_name = 'inferred' THEN 1 ELSE 0 END)
+            ON CONFLICT (scope_id) DO UPDATE SET
+                structural = steward_input_revisions.structural
+                    + CASE WHEN layer_name = 'structural' THEN 1 ELSE 0 END,
+                presentation = steward_input_revisions.presentation
+                    + CASE WHEN layer_name = 'presentation' THEN 1 ELSE 0 END,
+                inferred = steward_input_revisions.inferred
+                    + CASE WHEN layer_name = 'inferred' THEN 1 ELSE 0 END;
+            RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql;
+        """)
+    )
+    for table, columns, layer, scope_columns in _SOURCES:
+        scope_arg = scope_columns[0] if scope_columns else ""
+        for event in ("INSERT", "DELETE", "UPDATE"):
+            when = ""
+            if event == "UPDATE":
+                conditions = " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in columns)
+                when = f" WHEN ({conditions})"
+            op.execute(
+                sa.text(
+                    f"CREATE TRIGGER sri_{table}_{layer}_{event.lower()} "
+                    f"AFTER {event} ON {table}{when} FOR EACH ROW "
+                    f"EXECUTE FUNCTION _sri_increment_revision('{layer}', '{scope_arg}')"
                 )
             )
 

@@ -1,0 +1,104 @@
+{
+  "version": "trigger-classification-v1",
+  "total": 69,
+  "categories": {
+    "rag_chunks_fts": {
+      "count": 3,
+      "triggers": [
+        "rag_chunks_ad",
+        "rag_chunks_ai",
+        "rag_chunks_au"
+      ],
+      "pg_equivalent": "不需要迁移——rag_chunks_fts 是 SQLite FTS5 虚拟表，PG 用 PGroonga 索引（10-04-lexical-search-migration 已证）",
+      "evidence": "10-04-lexical-search-migration 的 lexical_search_benchmark 实测：PGroonga 在中文上 10/10 精确，FTS5 是 SQLite 专属"
+    },
+    "rag_revision": {
+      "count": 2,
+      "triggers": [
+        "rag_documents_revision_insert",
+        "rag_documents_revision_update"
+      ],
+      "pg_equivalent": "已实现——0047_rag_lifecycle_integrity.py 的 _rag_revision_guard()",
+      "evidence": "PG 触发器 BEFORE INSERT/UPDATE FOR EACH ROW，revision != source_revision 时 RAISE EXCEPTION"
+    },
+    "immutability": {
+      "count": 4,
+      "triggers": [
+        "trg_agent_sessions_scope_immutable",
+        "trg_raw_relation_inputs_immutable",
+        "trg_scev_immutable",
+        "trg_slc_internal_sticky"
+      ],
+      "pg_equivalent": "已实现——0009/0010/0049/0055 各自的 guard 函数",
+      "evidence": "PG 触发器 BEFORE UPDATE FOR EACH ROW，条件满足时 RAISE EXCEPTION"
+    },
+    "steward_revision": {
+      "count": 60,
+      "triggers": [
+        "sri_accounts_structural_delete",
+        "sri_accounts_structural_insert",
+        "sri_accounts_structural_update",
+        "sri_agent_space_provider_settings_inferred_delete",
+        "sri_agent_space_provider_settings_inferred_insert",
+        "sri_agent_space_provider_settings_inferred_update",
+        "sri_agent_space_provider_settings_presentation_delete",
+        "sri_agent_space_provider_settings_presentation_insert",
+        "sri_agent_space_provider_settings_presentation_update",
+        "sri_disclosure_preferences_structural_delete",
+        "sri_disclosure_preferences_structural_insert",
+        "sri_disclosure_preferences_structural_update",
+        "sri_family_spaces_structural_delete",
+        "sri_family_spaces_structural_insert",
+        "sri_family_spaces_structural_update",
+        "sri_personal_family_bridges_structural_delete",
+        "sri_personal_family_bridges_structural_insert",
+        "sri_personal_family_bridges_structural_update",
+        "sri_platform_feature_configs_presentation_delete",
+        "sri_platform_feature_configs_presentation_insert",
+        "sri_platform_feature_configs_presentation_update",
+        "sri_platform_role_assignments_structural_delete",
+        "sri_platform_role_assignments_structural_insert",
+        "sri_platform_role_assignments_structural_update",
+        "sri_relations_structural_delete",
+        "sri_relations_structural_insert",
+        "sri_relations_structural_update",
+        "sri_source_facts_structural_delete",
+        "sri_source_facts_structural_insert",
+        "sri_source_facts_structural_update",
+        "sri_space_members_structural_delete",
+        "sri_space_members_structural_insert",
+        "sri_space_members_structural_update",
+        "sri_space_profile_refs_structural_delete",
+        "sri_space_profile_refs_structural_insert",
+        "sri_space_profile_refs_structural_update",
+        "sri_steward_inferred_edges_inferred_delete",
+        "sri_steward_inferred_edges_inferred_insert",
+        "sri_steward_inferred_edges_inferred_update",
+        "sri_steward_llm_candidates_inferred_delete",
+        "sri_steward_llm_candidates_inferred_insert",
+        "sri_steward_llm_candidates_inferred_update",
+        "sri_steward_term_projections_presentation_delete",
+        "sri_steward_term_projections_presentation_insert",
+        "sri_steward_term_projections_presentation_update",
+        "sri_steward_term_suppressions_presentation_delete",
+        "sri_steward_term_suppressions_presentation_insert",
+        "sri_steward_term_suppressions_presentation_update",
+        "sri_term_entries_presentation_delete",
+        "sri_term_entries_presentation_insert",
+        "sri_term_entries_presentation_update",
+        "sri_term_usages_presentation_delete",
+        "sri_term_usages_presentation_insert",
+        "sri_term_usages_presentation_update",
+        "sri_users_presentation_delete",
+        "sri_users_presentation_insert",
+        "sri_users_presentation_update",
+        "sri_users_structural_delete",
+        "sri_users_structural_insert",
+        "sri_users_structural_update"
+      ],
+      "pg_equivalent": "已实现——0045/0048 的 _sri_increment_revision() 共享函数",
+      "evidence": "PG 触发器 AFTER INSERT/DELETE/UPDATE FOR EACH ROW，EXECUTE FUNCTION _sri_increment_revision(layer, scope_column)"
+    }
+  },
+  "unclassified": 0
+}
