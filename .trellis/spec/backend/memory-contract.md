@@ -93,8 +93,30 @@ summary 最多 20,000 字符，purpose 最多 120 字符。非 manual 的原文�
 ### Contracts
 
 - 提取产物只是 review card；确认、索引仍由用户经既有 `POST /api/memory-candidates/{id}/confirm` 完成。
+- **类别集合与顺序即优先级**（`_CATEGORY_SUMMARIZERS`，P2 起）：
+
+  ```text
+  dietary（安全类）> birthday > anniversary > migration > term
+    > occupation > school > residence > preference
+  ```
+
+  单消息上限 3 条，因此顺序决定「一条消息同时命中多条规则时丢哪条」。排序依据是漏掉
+  这条事实的代价：过敏是安全类，生日/纪念日有提醒价值，迁居与称呼是家族问答的高频
+  事实，好恶排最后。改顺序等于改产品优先级，必须与 fixture 的
+  `x-dietary-priority-over-birthday` 一起验证。
+- 日期两种写法都要认：阿拉伯数字（`3月5日`）与中文数字（`三月五日`、`八月初二`、
+  `十月初一`）。`_cn_number` 只解释 1~31 的中文数字（含 `初X` 日期专用写法），
+  解析失败或月日越界时**不产候选**——宁可漏产，也不产出一个数字错的生日。
+- `school` 与 `occupation` 的判别只看**校名之后、同一子句内**的谓语：出现
+  `教书/任教/上课/工作` 时该句是职业句，不产学校候选。只截取校名之后的部分，
+  因此「妹妹在读浙江大学，爸爸在那教书」仍正确产出 school。
+- `migration`（`从 A 搬到 B`，年份与主语可缺省）与 `residence` 互斥：句子里存在
+  `从…搬到…` 时由 migration 表达（信息更完整），不再产一条只说目的地的 residence。
+- `term`（称呼偏好）要求称谓语境词出现在**动词之前**（在家/家里/我们/平时/都/一般/
+  习惯/称呼），否则「他叫我去吃饭」会被当成称呼偏好。动词按长优先排列
+  （`被称为` 必须早于 `被`，否则称谓被误读）。
 - `source_quote` 必须是完整 user 消息原文（`resolve_source` 对 `agent_message` 做全等校验）；`summary` 承载结构化概括。
-- 类别集合与顺序固定：birthday > anniversary > dietary > occupation > school > residence > preference，单消息上限 3 条。
+- 类别集合与顺序见上方 Contracts（P2 起为 dietary 优先）。
 - `suggested_scope` 固定 `private`；sensitivity 仅 `normal`（dietary 为 `sensitive`），不产 `high`。
 - 否定/习语守卫：命中关键词前 2 字内出现 不/没/别/无/哪 时不产卡；`不吃` 后接 亏/消/准/着/过/喜爱想要会敢能得吃 时不命中。
 - 消息长度超过 `config.AGENT_MESSAGE_MAX_LENGTH` 时整条跳过（不截断），避免截断导致原文失配的静默 no-op。
