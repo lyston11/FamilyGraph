@@ -89,9 +89,10 @@ def test_detector_caps_candidates_and_deterministic():
     second = rule_detector(text)
     assert first == second  # 确定性：逐字节相同
     assert len(first) == MAX_CANDIDATES_PER_MESSAGE
-    # 类别顺序：生日 > 纪念日 > 饮食 > 职业 > 学校（居住/偏好被截断）
-    assert _summaries(first) == ["生日：3月5日", "饮食禁忌：她对海鲜过敏", "职业：老师"]
-    assert first[1].sensitivity == "sensitive"
+    # P2 起顺序即优先级：dietary（安全类）> birthday > anniversary > migration >
+    # term > occupation > ... > preference。上限 3 条，因此居住与偏好被截断。
+    assert _summaries(first) == ["饮食禁忌：她对海鲜过敏", "生日：3月5日", "职业：老师"]
+    assert first[0].sensitivity == "sensitive"
     # 超限丢弃计数可观测（R1）
     items, dropped = rule_detector_with_stats(text)
     assert items == first and dropped == 2
@@ -444,3 +445,49 @@ def test_extractor_seam_uses_item_message_id_for_key(db_session):
         )
     )
     assert keys == [f"extract:{m1.id}:preference:0", f"extract:{m2.id}:preference:0"]
+
+
+# ---------------------------------------------------------------------------
+# P2 提取精炼：中文数字日期与 occupation/school 判别
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # 中文数字日期（P0 基线 gap：此前只认阿拉伯数字）
+        ("外婆生日是农历八月初二，今年要提前订蛋糕。", ["生日：8月2日（农历）"]),
+        ("我生日是三月五日，每年都在家吃长寿面。", ["生日：3月5日"]),
+        ("我爸妈的结婚纪念日是十月初一。", ["纪念日：10月1日"]),
+        ("结婚纪念日是十月十五。", ["纪念日：10月15日"]),
+        ("生日是二十三号那个月的记不清了。", []),
+        # 越界日期必须拒绝：宁可漏产，也不产数字错的生日
+        ("我生日是十三月四十日，开玩笑的。", []),
+        ("我生日是零月零日。", []),
+        # 阿拉伯数字写法仍要工作（回归）
+        ("我生日是3月5日。", ["生日：3月5日"]),
+    ],
+)
+def test_cn_numeral_dates_are_extracted(text, expected):
+    assert [item.summary for item in rule_detector(text)] == expected
+
+
+def test_cn_numeral_dates_require_birthday_context():
+    """中文数字日期不带生日/纪念日语境时不产卡（避免把叙事日期当生日）。"""
+    assert rule_detector("我们是三月五日在苏州认识的。") == []
+
+
+@pytest.mark.parametrize(
+    "text,expected_categories",
+    [
+        # 职业句：校名后同子句有教书/任教/工作 → 不产学校候选
+        ("我舅舅在南京的中学教书，教语文。", []),
+        ("我姐姐在小学工作。", []),
+        # 就学句：同句另一子句有职业谓语，仍必须产学校候选
+        ("我妹妹在读浙江大学，我爸爸在那教书。", ["school"]),
+        # 就读谓语本身足以判定
+        ("我妹妹在读浙江大学。", ["school"]),
+    ],
+)
+def test_school_and_occupation_are_distinguished(text, expected_categories):
+    assert [item.extractor_category for item in rule_detector(text)] == expected_categories

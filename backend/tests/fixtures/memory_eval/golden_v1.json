@@ -299,8 +299,7 @@
       "expect_categories": [
         "birthday"
       ],
-      "tier": "gap",
-      "gap_reason": "`_BIRTHDAY_DATE` 只认阿拉伯数字（`3月5日`），中文数字日期（`三月五日`）不命中"
+      "tier": "contract"
     },
     {
       "id": "x-anniversary",
@@ -308,8 +307,7 @@
       "expect_categories": [
         "anniversary"
       ],
-      "tier": "gap",
-      "gap_reason": "同 birthday：中文数字日期不命中"
+      "tier": "contract"
     },
     {
       "id": "x-dietary",
@@ -378,8 +376,102 @@
         "occupation"
       ],
       "assert_deterministic": true,
-      "tier": "gap",
-      "gap_reason": "`在南京的中学教书` 同时命中 occupation 与 school（school 规则只看`在…中学`，不看谓语是『教书/工作』还是『在读』）"
+      "tier": "contract"
+    },
+    {
+      "id": "x-cn-numeral-lunar",
+      "tier": "contract",
+      "text": "外婆生日是农历八月初二，今年要提前订蛋糕。",
+      "expect_categories": [
+        "birthday"
+      ],
+      "note": "中文数字日期 + 农历前缀：两个都要认。"
+    },
+    {
+      "id": "x-cn-numeral-ten",
+      "tier": "contract",
+      "text": "我爸妈的结婚纪念日是十月初一。",
+      "expect_categories": [
+        "anniversary"
+      ],
+      "note": "以十起头的中文数字（十/十五/二十三）。"
+    },
+    {
+      "id": "x-invalid-date-not-produced",
+      "tier": "contract",
+      "text": "我生日是十三月四十日，开玩笑的。",
+      "expect_categories": [],
+      "note": "越界月日不得产出候选：宁可漏产，也不产数字错的生日。"
+    },
+    {
+      "id": "x-school-and-work-same-message",
+      "tier": "contract",
+      "text": "我妹妹在读浙江大学，我爸爸在那教书。",
+      "expect_categories": [
+        "school"
+      ],
+      "note": "同句里有职业谓语但属于另一个子句：不得因为是整句而拒绝就学候选。"
+    },
+    {
+      "id": "x-school-work-verb",
+      "tier": "contract",
+      "text": "我舅舅在南京的中学教书，教语文。",
+      "expect_categories": [],
+      "note": "职业句：校名后同子句出现教书/任教/工作时不产学校候选。"
+    },
+    {
+      "id": "x-term-custom",
+      "tier": "contract",
+      "text": "奶奶在家里习惯被称为阿婆，外面的人叫她周老师。",
+      "expect_categories": [
+        "term"
+      ],
+      "note": "称呼偏好是独立类别，不得退化成 preference。"
+    },
+    {
+      "id": "x-term-not-calling-someone",
+      "tier": "contract",
+      "text": "他叫我去吃饭。",
+      "expect_categories": [],
+      "note": "「叫」在没有称谓语境词时不得产出称呼候选。"
+    },
+    {
+      "id": "x-migration-with-year",
+      "tier": "contract",
+      "text": "爷爷一九九八年从扬州搬到苏州，在工厂做了二十年。",
+      "expect_categories": [
+        "migration"
+      ],
+      "note": "迁居史：年份 + 两端地点；不得被 residence 抢占。"
+    },
+    {
+      "id": "x-migration-no-year",
+      "tier": "contract",
+      "text": "外公从上海迁到苏州，住了二十年。",
+      "expect_categories": [
+        "migration"
+      ],
+      "note": "无年份时只记两端地点，不猜年份。"
+    },
+    {
+      "id": "x-migration-not-duplicated-as-residence",
+      "tier": "contract",
+      "text": "外婆搬到了苏州工业园区，和舅舅一家住在一起。",
+      "expect_categories": [
+        "residence"
+      ],
+      "note": "「搬到了 B」是居住地而非迁居（没有迁出地），不得双方各产一条。"
+    },
+    {
+      "id": "x-dietary-priority-over-birthday",
+      "tier": "contract",
+      "text": "我妈妈生日是3月5日，她对海鲜过敏，爸爸是老师，我们住在成都，爷爷最喜欢钓鱼。",
+      "expect_categories": [
+        "dietary",
+        "birthday",
+        "occupation"
+      ],
+      "note": "上限 3 条时按「漏掉的代价」排序：饮食禁忌（安全类）必须优先于居住与偏好。"
     }
   ],
   "tier_notes": {
@@ -388,6 +480,6 @@
   },
   "extraction_tier_notes": {
     "contract": "规则应当覆盖的类别与守卫，必须 100% 通过。",
-    "gap": "实测发现的能力缺口，记录在基线里作为 P2 提取精炼的输入清单。刻意不为了让报告变绿而放宽 fixture：这些用例的期望值是产品要求，不是实现的现状。"
+    "gap": "实测发现的能力缺口，记录在基线里作为后续提取精炼的输入清单。刻意不为了让报告变绿而放宽 fixture：这些用例的期望值是产品要求，不是实现的现状。P2 修掉的中文数字日期与 occupation/school 判别已提升到 contract 层。"
   }
 }
