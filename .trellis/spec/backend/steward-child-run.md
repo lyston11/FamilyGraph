@@ -91,7 +91,7 @@ _RUN_REQUIRED_CLAIMS_BY_KIND = {
 | `POST /internal/agent/steward/attempts/lease` | **独立端点**，`STEWARD_ENABLED` **AND** `STEWARD_PI_RUNTIME_ENABLED` 双开关 503；无可租 204。`space_id` **可选**：省略时服务端选一个有容量且有到期工作的空间（sidecar 不知道空间拓扑）——**不回退到全库 1**，预算仍是 per-space 且会跳过已满的空间 |
 | `POST /internal/agent/jobs/lease` | **保持 `kind="assistant"`**，不放开 |
 | `POST /jobs/{id}/heartbeat` | steward 分支**同一立即事务**内同时续 run 与 attempt lease。**`{id}` 取自租约响应的 `job_id`**（= 父 `StewardJob.id`）：sidecar 对两个 kind 都解 `String(raw["job_id"])` 并据此拼心跳 URL，所以 `StewardLeaseOut` **必须**同时携带 `job_id` 与 `steward_job_id`（同值，前者是协议统一字段，后者是授权根命名）。缺 `job_id` 会让 URL 变成 `/jobs/undefined/heartbeat`，被 token-scope 检查 403 拒绝，sidecar 按失租 abort——任何超过一个租约周期的调用都会因此失败（回归：`test_steward_child_run_acceptance.py::test_the_steward_lease_carries_the_job_id_the_sidecar_heartbeats`、`agent/test/client.test.ts`、`agent/test/worker.integration.test.ts`） |
-| `GET /runs/{id}/context` | `session_id`/`account_id` 为 null、`messages: []`、带 `steward_prompt_version` 与 `steward_instructions` |
+| `GET /runs/{id}/context` | `session_id`/`account_id` 为 null、`messages: []`、带 `steward_instructions` |
 | `POST /runs/{id}/events/append` | `run.kind == 'steward'` 时**拒绝消息类事件**（422） |
 | `POST /runs/{id}/provider/*` | **两个 kind 都可达**（唯一 egress）；授权按 token 的 kind 分派，provider 解析带 run 自己的 kind |
 | `POST /runs/{id}/settle` | steward 分支经 `settle_run(on_settled=...)` **同事务**结算 attempt（phase 1）；产物写回是 phase 2，在 run 事务提交后（见 §12） |
@@ -143,7 +143,7 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
   `get_viewer_term`、`get_evidence`、`get_relationship_path` 六个只读投影工具，
   不通过 Assistant 集合做差集，也不继承 echo/probe/Web/写入工具。
 
-## 8. prompt 文本与版本（跨层字面量）
+## 8. prompt 文本归属（服务端拥有）
 
 **prompt 文本由服务端拥有**（E2/E3 修正；S5 后是唯一事实）。sidecar 不持有 steward system prompt：
 
@@ -152,19 +152,28 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
 - `prompt_digest` 是 `sha256(f"{instructions}\n{user_content}")`，覆盖的正是**实际发送**的文本；
 - 只发一段通用的 steward prompt 会让模型被问一个与 digest 描述不同的问题——
   对 candidate 这类是承重的：方向语义与矛盾规则就住在那段文本里，输出校验器是第二道防线而非替代品。
-- 回归：`test_steward_child_run_acceptance.py::test_both_carriers_send_the_same_prompt_text`
+- 回归：`test_steward_child_run_acceptance.py::test_the_sent_prompt_is_the_one_the_digest_describes`
   用投影里拿到的东西**重建 digest**，因此「发送的就是 digest 描述的那段」是可检验的而不是声明。
 - sidecar **不得**保留本地 steward prompt 作 fallback（S1 曾有）：它会被发送**代替**服务端文本，
-  反而掩盖差异。`agent/src/prompts/steward.ts` 只导出 `STEWARD_PROMPT_VERSION`。
-- `steward_assist.STEWARD_PROMPT_VERSION` 是锚点，经 context 投影下发给 sidecar；
-- sidecar `STEWARD_PROMPT_VERSION` 不匹配时 **fail-closed**（不建 session、不发模型请求）；
-- 两侧**逐字断言**该字面量（`test_agent_execution_fence.py` 与 `agent/test/worker-slots.test.ts`），
-  单侧改名必须失败测试，而不是运行时拒绝所有 steward run。
+  反而掩盖差异。投影缺 `steward_instructions` 时 sidecar **fail-closed**（不建 session、不发模型请求），
+  这是唯一需要的防线：旧镜像的 adapter 不读该字段，因此不会“发本地 prompt 而声称是服务端的”。
+- **不再有跨层 prompt 版本字面量**（10-09 删除 `STEWARD_PROMPT_VERSION`）：它保护的前提是“文本住
+  在 sidecar 镜像里、服务端无法哈希”，该前提随本地 prompt 删除而消失。文本既由服务端下发，
+  版本比对也改变不了 sidecar 会发送什么；`prompt_digest` 已是精确标识，`steward_assist.prompt_version()`
+  是评测报告需要的稳定版本号。两个标识足够，不引入第三个。
 - prompt cache key 按 kind 派生：assistant 保持 `fg-${account_id}-${session_id}`；
   steward 用 `fg-steward-${space_id}`（assistant 公式对 steward 会得出 `fg-null-null`，
   让不相关空间共享同一上游缓存前缀）。
 
-## 8.1 sidecar 的 kind 差异只允许住在一个适配器里（E2）
+## 8.1 assistant 与 steward 的 prompt 归属不同（刻意如此）
+
+- assistant 的 system prompt 是 sidecar 本地常量（`agent/src/prompt.ts` 的 `ASSISTANT_SYSTEM_PROMPT`），
+  不下发、不入投影、不算 digest：它是纯静态行为契约，不含每-run 数据，服务端也没有对应的输出校验器
+  需要与它绑定。其稳定性还支撑 `fg-${account_id}-${session_id}` 的缓存前缀复用。
+- 代价是 prompt 里点名的工具名与 `agent/src/tools.ts` 的 `TOOL_VERSIONS` 分居两处，因此
+  `agent/test/prompt.test.ts` 断言 prompt 中出现的每个 `familygraph.*` 工具名都在注册表内。
+
+## 8.2 sidecar 的 kind 差异只允许住在一个适配器里（E2）
 
 `agent/src/adapters/kind.ts` 的 `KindAdapter` 是**唯一**知道两个 kind 差异的地方：
 `systemPrompt` / `modelPrompt` / `toolNames` / `slotBudget` / `cacheKey` / `emptyToolAllowlistIsInvalid` /
@@ -178,7 +187,7 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
 - **产物路由由适配器声明**：`reportsProductOnSettle`。child run 拒绝消息类事件，所以 settle 是产物的
   唯一路径；不携带会让服务端在 `_settle_attempt` 的 `assert text is not None` 处失败。
 
-## 8.2 网关（唯一 egress）对两个 kind 都必须可达（E3）
+## 8.3 网关（唯一 egress）对两个 kind 都必须可达（E3）
 
 `/internal/agent/runs/{id}/provider/*` 是**唯一** egress，因此 steward child run 必须能到达它：
 

@@ -168,18 +168,14 @@ class ContextOut(BaseModel):
     next_event_seq: int = Field(default=1, ge=0)
     # additive：浏览器已请求取消（同 heartbeat）
     cancel_requested: bool = False
-    # Steward only: the prompt version the server expects the sidecar to have
-    # loaded. The prompt text lives in the sidecar, so this constant (not a hash
-    # of server-side text) is the evaluation anchor; a mismatch must fail closed
-    # rather than silently run stale prompt text against a newer backend.
-    steward_prompt_version: str | None = None
-    # Steward only: the per-kind instruction block the server owns. The in-process
-    # carrier sends it as the system message, so a Pi child run must send the same
-    # text or the two carriers ask the model different questions — and
-    # ``prompt_digest``, which is computed over this text plus the projection,
-    # would describe a prompt nobody sent. It is the load-bearing part of the
-    # contract: the candidate kind's direction semantics and conflict rules live
-    # here, and the output validator is a second line rather than a substitute.
+    # Steward only: the per-kind instruction block the server owns. The server
+    # sends it in the projection and hashes it into ``prompt_digest``, so the
+    # text that runs is the text the digest describes. The in-process carrier
+    # sent it as the system message, so a Pi child run must send the same text
+    # or the two carriers ask the model different questions. It is the
+    # load-bearing part of the contract: the candidate kind's direction
+    # semantics and conflict rules live here, and the output validator is a
+    # second line rather than a substitute.
     steward_instructions: str | None = None
 
 

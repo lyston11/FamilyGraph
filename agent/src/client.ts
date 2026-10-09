@@ -130,9 +130,6 @@ export interface RunContextProjection {
   context_blocks?: RunContextBlock[];
   provider: RunContextProvider | null;
   cancel_requested: boolean;
-  /** Steward only: the prompt version the server expects this sidecar to have
-   * loaded. Verified against STEWARD_PROMPT_VERSION before any model call. */
-  steward_prompt_version?: string;
   /** Steward only: the per-kind instruction block the server owns. The server
    * sends this in the projection and hashes it into ``prompt_digest``, so the
    * text that runs is the text the digest describes (the candidate kind's
@@ -322,9 +319,6 @@ function normalizeRunContext(raw: Record<string, unknown>): RunContextProjection
     context_blocks: normalizeContextBlocks(raw["context_blocks"]),
     provider: normalizeProvider(raw["provider"]),
     cancel_requested: cancelRequested,
-    ...(typeof raw["steward_prompt_version"] === "string"
-      ? { steward_prompt_version: raw["steward_prompt_version"] }
-      : {}),
     ...(typeof raw["steward_instructions"] === "string"
       ? { steward_instructions: raw["steward_instructions"] }
       : {}),
