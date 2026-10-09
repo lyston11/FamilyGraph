@@ -49,7 +49,13 @@ user 消息 → settle 钩子 (agent_queue._settle)
 这是家族场景的核心能力：亲属关系、住址、职业、称呼都会变，而「过时的记忆被当成当前事实」
 比「检索不到」更有害。
 
-### G2 提取面过窄
+### G2 提取面过窄 —— **部分解决（P2-a，2026-10-09）**
+
+新增 `migration`（迁居史）与 `term`（称呼偏好）两个类别，并修正中文数字日期与
+occupation/school 判别。提取器 contract 用例 22/22 全绿，已知缺口清零。
+
+仍未覆盖：亲属关系确认、家族事件、家族故事（这些更像 P2-b 的 LLM 精炼目标——
+规则能枚举的类别有上限，而「哪部分值得记住」是语义判断）。
 
 7 类确定性规则（birthday/anniversary/dietary/occupation/school/residence/preference）覆盖不了
 家族场景的主要可记忆内容：亲属关系确认、家族事件、故事、称呼偏好、居住迁移史。
@@ -87,8 +93,8 @@ user 消息 → settle 钩子 (agent_queue._settle)
 
 | 缺口 | 证据 | 归属 |
 |---|---|---|
-| 中文数字日期不命中（`三月五日` vs `3月5日`） | `known_gaps: x-birthday, x-anniversary` | P2 提取精炼 |
-| `在南京的中学教书` 同时命中 occupation 与 school | `known_gaps: x-determinism` | P2 规则判别 |
+| ~~中文数字日期不命中~~ | **已修（P2）**：`_cn_number` 归一化 `初X/十/十五/二十三`，越界拒绝 | 完成 |
+| ~~`在南京的中学教书` 同时命中 occupation 与 school~~ | **已修（P2）**：只看校名后同一子句的谓语 | 完成 |
 | 多会话聚合召回不足（一个问题要同时召回两条记忆） | `quality` 层 2/3，`multi-session-story` 5 条只召回 1 条期望来源 | P3 确定性重排 |
 
 ## 3. 不可动摇的约束（增量必须复用）

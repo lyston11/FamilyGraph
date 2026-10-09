@@ -40,11 +40,26 @@
 
 ## P2 提取精炼与记忆工具
 
-- [ ] `memory_extractor` 规则扩展（亲属关系确认、家族事件、称呼偏好、居住迁移）。
-- [ ] LLM 精炼阶段：只处理规则召回结果，输出仍是 pending candidate，失败回退纯规则。
+### P2-a 规则层 —— 已完成（2026-10-09）
+
+- [x] 中文数字日期（`三月五日`/`八月初二`/`十月初一`）归一化；越界月日拒绝产出。
+- [x] occupation/school 判别：只看校名后同一子句的谓语，「在读浙江大学，爸爸在那教书」
+      不误判。
+- [x] 新增 `migration`（从 A 搬到 B，含年份与迁出地）与 `term`（称呼偏好）两个类别。
+- [x] 类别顺序改为按「漏掉的代价」排序（dietary > birthday > anniversary >
+      migration > term > occupation > school > residence > preference），
+      因为单消息上限 3 条意味着顺序就是优先级。
+- [x] `EXTRACTOR_VERSION` → `memory-extractor-v2`；P0 的三个 gap 用例提升为 contract 层，
+      新增 11 条回归用例（提取器 contract 22/22）。
+- 未做（P2-b，依赖 golden set 之外的成本证据）：LLM 精炼阶段。**刻意不做**：
+  规则召回已覆盖到 contract 全绿，此时引入模型调用只会增加成本与不确定性，
+  没有任何指标能证明它更好。等规则层的 quality 层指标出现天花板时再做。
+
+### P2-b 受控记忆工具（未开始）
+
 - [ ] `memory_propose` / `memory_search` 工具注册（`required_kind="assistant"`），走既有四道门禁。
 - [ ] 成本与超时预算：低优先级、单 run 调用数上界、gateway egress 审计。
-- [ ] 测试：LLM 不可用时提取仍产出规则结果、工具不能写 Memory、`memory_search` 授权等价于 `search_rag`。
+- [ ] 测试：工具不能写 Memory、`memory_search` 授权等价于 `search_rag`。
 
 ## P3 hybrid 确定性重排
 
