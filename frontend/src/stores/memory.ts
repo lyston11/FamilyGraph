@@ -236,6 +236,7 @@ export const useMemoryStore = defineStore('memory', () => {
     candidateId: number,
     scope: MemoryScope,
     retentionDays: number | null = null,
+    supersedes: number[] = [],
   ): Promise<void> {
     const candidate = candidates.value.find((item) => item.id === candidateId)
     if (candidate && (candidate.source_status !== 'available' || !candidate.allowed_scopes.includes(scope))) {
@@ -246,6 +247,7 @@ export const useMemoryStore = defineStore('memory', () => {
       () => memoryApi.confirmMemoryCandidate(candidateId, {
         scope,
         ...(retentionDays === null ? {} : { retention_days: retentionDays }),
+        ...(supersedes.length === 0 ? {} : { supersedes }),
       }),
       () => refreshAfterMutation(spaceId),
       spaceId,
@@ -270,6 +272,28 @@ export const useMemoryStore = defineStore('memory', () => {
   async function dismissCandidate(candidateId: number): Promise<void> {
     const spaceId = selectedSpaceId.value
     await mutateAndRefresh(() => memoryApi.dismissMemoryCandidate(candidateId), () => refreshAfterMutation(spaceId), spaceId)
+  }
+
+  /** 显式取代（P1）：旧记忆保留但不再可检索，可 restore 撤销。 */
+  async function supersede(
+    memoryId: number,
+    byMemoryId: number,
+    spaceId: number | null = null,
+  ): Promise<void> {
+    await mutateAndRefresh(
+      () => memoryApi.supersedeMemory(memoryId, { by_memory_id: byMemoryId }),
+      () => refreshAfterMutation(spaceId),
+      spaceId ?? selectedSpaceId.value,
+    )
+  }
+
+  /** 撤销取代（P1）：旧事实重新进入检索。 */
+  async function restore(memoryId: number, spaceId: number | null = null): Promise<void> {
+    await mutateAndRefresh(
+      () => memoryApi.restoreMemory(memoryId),
+      () => refreshAfterMutation(spaceId),
+      spaceId ?? selectedSpaceId.value,
+    )
   }
 
   async function revoke(memoryId: number, spaceId: number | null = null): Promise<void> {
@@ -356,6 +380,8 @@ export const useMemoryStore = defineStore('memory', () => {
     confirmCandidate,
     createCandidate,
     dismissCandidate,
+    supersede,
+    restore,
     revoke,
     remove,
     search,

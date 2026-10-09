@@ -102,6 +102,8 @@ export interface MemoryCandidate {
   decided_at: string | null
 }
 
+export type MemorySupersedeReason = 'user_replaced' | 'source_revision' | 'expired'
+
 export interface Memory {
   id: number
   source_candidate_id: number | null
@@ -119,6 +121,13 @@ export interface Memory {
   confirmation_status: 'confirmed'
   revision: number
   retention_until: string | null
+  /** 时间有效区间与取代指针（P1）。被取代的记忆仍在管理列表可见，但不再可检索。 */
+  valid_from: string | null
+  valid_to: string | null
+  superseded_by_id: number | null
+  supersede_reason: MemorySupersedeReason | null
+  superseded_at: string | null
+  restored_at: string | null
   status: MemoryStatus
   revoked_at: string | null
   created_at: string

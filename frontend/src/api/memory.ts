@@ -6,6 +6,7 @@ import type {
   MemoryScope,
   MemoryScopeKind,
   MemorySensitivity,
+  MemorySupersedeReason,
   PlatformFeatureFlags,
   RagSearchResult,
 } from '@/types/memory'
@@ -18,6 +19,8 @@ export async function fetchPlatformFeatures(): Promise<PlatformFeatureFlags> {
 export interface ConfirmMemoryCandidatePayload {
   scope: MemoryScope
   retention_days?: number
+  /** 显式取代：确认这条新事实时，点名它取代哪些旧记忆（P1）。 */
+  supersedes?: number[]
 }
 
 /**
@@ -73,6 +76,21 @@ export async function dismissMemoryCandidate(candidateId: number): Promise<Memor
   const { data } = await apiClient.post<MemoryCandidate>(
     `/memory-candidates/${candidateId}/dismiss`,
   )
+  return data
+}
+
+/** 显式取代：把旧记忆标记为由新记忆取代（P1）。旧行保留，可 restore 撤销。 */
+export async function supersedeMemory(
+  memoryId: number,
+  payload: { by_memory_id: number; reason?: MemorySupersedeReason },
+): Promise<Memory> {
+  const { data } = await apiClient.post<Memory>(`/memories/${memoryId}/supersede`, payload)
+  return data
+}
+
+/** 撤销取代：旧事实重新可检索。 */
+export async function restoreMemory(memoryId: number): Promise<Memory> {
+  const { data } = await apiClient.post<Memory>(`/memories/${memoryId}/restore`)
   return data
 }
 

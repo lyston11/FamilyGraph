@@ -254,7 +254,9 @@ def _validate_batch(db: Session, witnesses: list[_ProjectionWitness]) -> None:
     """Recheck all successful sources and effective policy in the writer."""
     memory_rag._require_fresh_rag_enabled(db)
     for witness in witnesses:
-        memory = memory_rag._fresh_materializable_memory(db, witness.memory_id)
+        memory = memory_rag._fresh_materializable_memory(
+            db, witness.memory_id, require_current=False
+        )
         document = db.get(RAGDocument, witness.document_id, populate_existing=True)
         if document is None or (
             document.revision != witness.revision
@@ -315,6 +317,13 @@ def run_maintenance_batch(
                 continue
             memory = db.get(Memory, memory_id, populate_existing=True)
             if memory is None or not memory_sources.memory_materializable(db, memory):
+                counts["skipped_invalid"] += 1
+                _clear_failure(db, memory_id)
+                continue
+            if not memory_rag._memory_is_current(memory):
+                # 被取代或已过期的记忆：投影不可达（检索 eligibility 会排除），
+                # 因此这里既不补建也不记失败。用户撤销取代时 `restore_memory`
+                # 会显式重建它，所以跳过不会永久丢索引。
                 counts["skipped_invalid"] += 1
                 _clear_failure(db, memory_id)
                 continue
@@ -429,7 +438,12 @@ def stage_index_version(
             ):
                 skipped += 1
                 continue
-            memory = memory_rag._fresh_materializable_memory(db, int(document.source_id))
+            # 换版回填允许处理「批次执行期间被取代」的记忆：它的投影仍然要完成
+            # 版本切换，否则游标会停在这一行反复重试。投影完成后仍不可达——检索
+            # eligibility 的取代过滤会排除它。
+            memory = memory_rag._fresh_materializable_memory(
+                db, int(document.source_id), require_current=False
+            )
             memory_rag._check_document_metadata(
                 document, memory_rag._memory_document_metadata(db, memory)
             )
@@ -438,7 +452,7 @@ def stage_index_version(
                 db, document, memory.content, memory.revision, target_version=target_version
             )
             db.flush()
-            memory_rag._fresh_materializable_memory(db, memory.id)
+            memory_rag._fresh_materializable_memory(db, memory.id, require_current=False)
             memory_rag._require_fresh_rag_enabled(db)
             changed = db.execute(
                 update(RAGDocument)

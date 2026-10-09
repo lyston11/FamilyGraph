@@ -75,6 +75,17 @@ class MemoryConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: str = Field(min_length=1, max_length=64)
     retention_days: int | None = Field(default=None, ge=1, le=3650)
+    # 显式取代：确认新事实时点名它取代哪些旧记忆（P1）。默认空 = 不取代任何东西，
+    # 与今日行为一致。取代只影响检索可见性，不删除旧行。
+    supersedes: list[int] = Field(default_factory=list, max_length=20)
+
+
+class MemorySupersedeRequest(BaseModel):
+    """显式取代：把 ``memory_id`` 标记为由 ``by_memory_id`` 取代。"""
+
+    model_config = ConfigDict(extra="forbid")
+    by_memory_id: int = Field(gt=0)
+    reason: Literal["user_replaced", "source_revision", "expired"] = "user_replaced"
 
 
 class MemoryOut(BaseModel):
@@ -97,6 +108,14 @@ class MemoryOut(BaseModel):
     confirmation_status: Literal["confirmed"]
     revision: int
     retention_until: datetime | None
+    # 时间有效区间与取代指针（P1）。被取代的行仍在管理列表可见（历史可审计），
+    # 但不再进入检索结果。
+    valid_from: datetime | None
+    valid_to: datetime | None
+    superseded_by_id: int | None
+    supersede_reason: Literal["user_replaced", "source_revision", "expired"] | None
+    superseded_at: datetime | None
+    restored_at: datetime | None
     status: str
     revoked_at: datetime | None
     created_at: datetime

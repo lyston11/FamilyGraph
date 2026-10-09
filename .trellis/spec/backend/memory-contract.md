@@ -124,3 +124,104 @@ summary 最多 20,000 字符，purpose 最多 120 字符。非 manual 的原文�
 错误：把提取钩子的异常向外抛（会让终态丢失、run 停在 leased）；截断超长原文（原文失配后 422 被吞成静默 no-op）；用调用方参数而非 `item.source_message_id` 构造幂等键；在无否定守卫的情况下把「不喜欢」输出为偏好候选。
 
 正确：savepoint 隔离 + 全量容错；超长直接跳过并记日志；幂等键绑定实际来源消息；产出前做否定守卫。
+
+## 9. 记忆取代与时间有效区间（2026-10-09 补充）
+
+在此之前记忆只有 `retention_until`（到期），没有「被取代」。同一个人的职业、住址、
+称呼变化后，新旧两条都是 `status='active'`，检索会同时命中，模型看到**互相矛盾的
+事实**且无法判断哪个有效。本节是维护该语义的合同。
+
+### Scope / Trigger
+
+修改 `backend/app/models/memory.py`、`memory_rag.supersede_memory/restore_memory`、
+`_ELIGIBILITY_SQL` 的取代/有效区间条件、`confirm_candidate` 的 `supersedes` 参数，
+或前端 `MemoryCardItem` 的取代状态展示时适用。
+
+### 数据模型与语义
+
+```text
+memories
+  valid_from        -- 事实开始有效（可空 = 未知，不猜）
+  valid_to          -- 事实失效（空 = 仍有效）
+  superseded_by_id  -- 取代它的 Memory id（空 = 未被取代）
+  supersede_reason  -- 'user_replaced' | 'source_revision' | 'expired'
+  superseded_at     -- 取代发生时间（审计）
+  restored_at       -- 撤销取代的时间（审计）
+```
+
+被取代的行**不删除**：`status` 保持 `active`，历史可审计、可回溯，取代**可撤销**。
+迁移 `0059_memory_supersede` 只加列，六列全部可空，因此迁移本身**不改变任何检索
+结果**；降级在存在任何 `superseded_by_id IS NOT NULL` 的行时**拒绝**（丢指针等于让
+旧事实静默重新进入检索，那是事实回退而非 schema 回退）。
+
+### 承重的可见性三层（每层都必须独立挡住）
+
+| 层 | 位置 | 作用 |
+|---|---|---|
+| SQL 取代/有效区间 | `_ELIGIBILITY_SQL` 的 `m.superseded_by_id IS NULL AND (m.valid_to IS NULL OR m.valid_to > :now)` | 检索前过滤 |
+| 文档状态 | 取代时写 `invalidated` + `index_superseded`，eligibility 要求 `d.status='active'` | 纵深防御，且不依赖重建索引 |
+| 投影复核 | `_rows_to_hits` 的 `_memory_is_current` | 挡住「SQL 执行后、行读取前被取代」的并发窗口 |
+
+`test_memory_supersede.py::test_supersede_visibility_is_load_bearing_at_every_layer`
+逐层拆除这四道条件（含有效区间），任何一层被删都会让断言失败。
+
+### 关键实现约束
+
+- `:now` 必须在语句上声明 `DateTime`（`_typed_eligibility`）：SQLite 上 datetime 列以
+  字符串存储，未声明类型的参数会把 ISO 串按字符串比较，**静默丢行**。不能把
+  `bindparam(...)` 放进 params 字典——那会把它当值传给 sqlite3。
+- 取代时**只动文档，不动 chunk**：chunk 的 `status` 是投影完整性证据
+  （`_chunks_match` 要求 active），标成 invalidated 会让撤销取代时的 `index_memory`
+  判定「缺少完整正文证据」而拒绝恢复（实测 409 `RAG_SOURCE_NOT_ALLOWED`）。
+- `supersede_memory` 用 `index_superseded` 而不是 `invalidate_source`：后者写
+  `source_invalidated`（永不复活），取代必须可恢复。
+- `index_memory` 对「已被取代」的记忆默认**拒绝**建索引；`allow_superseded=True`
+  只给索引换版回填用（否则游标会停在那一行反复重试）。回填与常规维护在
+  `_memory_is_current` 为假时**跳过**该行且**不记失败**，由 `restore_memory` 显式重建。
+- 取代方向判据只有一条：`new.id > old.id`。刻意**不**要求同一 `source_id`
+  （manual 记忆没有来源身份，而「住上海」与「住苏州」来自不同消息却确实互相取代），
+  也不做相似度自动合并（「住上海」与「住上海浦东」相似但语义不同，自动合并会静默丢事实）。
+- 取代目标参与确认请求的 fingerprint：同一候选配不同取代集是不同请求，否则重试会
+  拿回「部分取代」的结果而不报错。
+
+### Signatures
+
+- `POST /api/memory-candidates/{id}/confirm`：body 增加 `supersedes: int[]`（≤20，默认空）。
+- `POST /api/memories/{id}/supersede`：`{by_memory_id, reason?}`，返回 Memory。
+- `POST /api/memories/{id}/restore`：无 body，返回 Memory。
+- `MemoryOut` 新增 `valid_from/valid_to/superseded_by_id/supersede_reason/superseded_at/restored_at`。
+- 服务层：`memory_rag.supersede_memory(db, *, memory_id, account_id, by_memory_id, reason)`、
+  `memory_rag.restore_memory(db, *, memory_id, account_id)`、`confirm_candidate(..., supersedes=())`。
+
+### Validation & Error Matrix
+
+| 情况 | 行为 |
+|---|---|
+| 取代原因不在枚举内 | 422 `MEMORY_STATE_CONFLICT`，无写入 |
+| 自我取代 | 422「记忆不能取代自己」 |
+| `new.id <= old.id`（反向取代） | 422「取代方必须是更晚创建的记忆」 |
+| 目标不存在或不属于本人 | 404，**不区分**两者（避免存在性枚举） |
+| 目标非 active / 未确认 | 409 |
+| 旧行已被**其它**版本取代 | 409「记忆已被其它版本取代」（不静默改写） |
+| 同一取代重复调用 | 返回同一行，不改写 `superseded_at` |
+| 恢复时未被取代 | 409「记忆当前未被取代」 |
+| 恢复时来源已失效 | 403 `MEMORY_SCOPE_FORBIDDEN` |
+| 确认请求里的取代目标非法 | 整笔拒绝：候选仍 pending、无 Memory、不触碰他人行 |
+
+### Tests Required
+
+- `backend/tests/test_memory_supersede.py`：取代后离开检索但行与投影可审计、撤销取代
+  后重新可检索且投影原地激活、非法 reason / 反向取代 / 自我取代 / 跨账户 / 重复取代
+  冲突、确认时显式取代单事务生效、确认失败无部分写入、有效区间过期排除、
+  ContextBuilder 端到端不再纳入旧事实、四层 mutation。
+- `backend/tests/test_rag_lifecycle_migrations.py`：0059 列存在时 `upgrade head` 保持
+  全部版本、FTS 与真实 saved 依赖不变（该套件从 0054 起建库，需 `_add_supersede_columns`）。
+
+### Wrong vs Correct
+
+错误：用文本相似度自动合并「应该被取代」的记忆；取代时删除旧行或删除其 chunk；
+把 `valid_to` 的 `:now` 作为未声明类型的字符串参数比较；用 `invalidate_source`
+（`source_invalidated`）表达可撤销的取代；让索引换版回填因被取代而反复失败。
+
+正确：取代只写指针与失效区间，行与正文证据全部保留；`index_superseded` 表达可恢复
+失效；`_typed_eligibility` 声明 `DateTime`；回填跳过被取代的行且不记失败，恢复时显式重建。

@@ -19,6 +19,10 @@ from app.models.checks import DialectCheck
 MEMORY_CANDIDATE_STATUSES = ("pending", "dismissed", "confirmed")
 MEMORY_SCOPES = ("private", "household", "lineage")
 MEMORY_STATUSES = ("active", "revoked", "deleted")
+# 取代原因集合。`user_replaced` = 用户在确认新候选时显式取代；`source_revision`
+# = 同一来源产生了新 revision，旧快照不再代表当前事实。`expired` 留给保留期到期
+# 路径，目前不使用（到期仍走 deleted 终态）。
+MEMORY_SUPERSEDE_REASONS = ("user_replaced", "source_revision", "expired")
 SENSITIVITY_LEVELS = ("normal", "sensitive", "high", "local_required")
 MEMORY_SOURCE_KINDS = ("manual", "agent_message", "rag_chunk", "legacy")
 # 前置条件在两方言上完全相同；只有 JSON 部分需要分派。
@@ -173,6 +177,21 @@ class Memory(Base):
     )
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     retention_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ---- 时间有效区间与取代指针（P1 记忆更新语义）----
+    #
+    # 被取代的记忆**不删除**：历史可审计、可回溯，也可撤销取代（清空
+    # `superseded_by_id`）。检索 eligibility 只排除「被取代」的行，因此这个指针
+    # 是**承重**的：清空它就会让旧事实重新进入模型上下文。
+    #
+    # 这六列刻意不带数据库 CHECK：SQLite 上新增 CHECK 需要整表重建（复制全表），
+    # 而判据（不自我指向、reason 枚举、时间区间有序）由服务层在同一事务内校验，
+    # 收益不抵迁移风险。
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    superseded_by_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supersede_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     confirmed_by_account_id: Mapped[int | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
@@ -188,6 +207,7 @@ __all__ = [
     "MEMORY_CANDIDATE_STATUSES",
     "MEMORY_SCOPES",
     "MEMORY_STATUSES",
+    "MEMORY_SUPERSEDE_REASONS",
     "Memory",
     "MemoryCandidate",
     "SENSITIVITY_LEVELS",

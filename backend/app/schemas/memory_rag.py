@@ -10,6 +10,7 @@ from app.schemas.memory import (
     MemoryCandidateOut,
     MemoryConfirmRequest,
     MemoryOut,
+    MemorySupersedeRequest,
     RAGSearchOut,
 )
 
@@ -18,5 +19,6 @@ __all__ = [
     "MemoryCandidateOut",
     "MemoryConfirmRequest",
     "MemoryOut",
+    "MemorySupersedeRequest",
     "RAGSearchOut",
 ]

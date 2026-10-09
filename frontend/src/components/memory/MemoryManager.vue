@@ -175,6 +175,14 @@ function revokeMemory(item: Memory): void {
   })
 }
 
+/** 撤销取代（P1）：旧事实重新进入检索。只对已取代的记忆出现。 */
+function restoreMemory(item: Memory): void {
+  if (!memory.memoryEnabled) return
+  void memory.restore(item.id, item.space_id).catch((reason: unknown) => {
+    showActionError(reason)
+  })
+}
+
 function removeMemory(item: Memory): void {
   if (!memory.memoryEnabled) return
   dialog.warning({
@@ -374,6 +382,7 @@ defineExpose({ load })
               :write-enabled="memory.memoryEnabled"
               @revoke="revokeMemory(item)"
               @remove="removeMemory(item)"
+              @restore="restoreMemory(item)"
             />
           </div>
         </section>
@@ -398,6 +407,7 @@ defineExpose({ load })
               :write-enabled="memory.memoryEnabled"
               @revoke="revokeMemory(item)"
               @remove="removeMemory(item)"
+              @restore="restoreMemory(item)"
             />
           </div>
         </section>
@@ -422,6 +432,7 @@ defineExpose({ load })
               :write-enabled="memory.memoryEnabled"
               @revoke="revokeMemory(item)"
               @remove="removeMemory(item)"
+              @restore="restoreMemory(item)"
             />
           </div>
         </section>

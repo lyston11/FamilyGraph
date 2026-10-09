@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, bindparam, or_, select, text, update
+from sqlalchemy import DateTime, and_, bindparam, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,13 @@ from app.errors import (
 from app.models.account import Account
 from app.models.agent import AgentRun
 from app.models.context import ContextBuild, ContextBuildItem
-from app.models.memory import MEMORY_SCOPES, SENSITIVITY_LEVELS, Memory, MemoryCandidate
+from app.models.memory import (
+    MEMORY_SCOPES,
+    MEMORY_SUPERSEDE_REASONS,
+    SENSITIVITY_LEVELS,
+    Memory,
+    MemoryCandidate,
+)
 from app.models.platform_features import PlatformFeatureConfig
 from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace
@@ -397,6 +403,36 @@ def _active_space_member(db: Session, *, user_id: int, space_id: int) -> bool:
     return memory_sources.active_member(db, user_id, space_id)
 
 
+def _resolve_supersede_targets(
+    db: Session, *, account_id: int, supersedes: Sequence[int]
+) -> list[Memory]:
+    """Load and validate explicit supersede targets before any state change.
+
+    只在**显式**取代时才有目标（P1）。模型提议取代（P2）也会走这条路径，
+    但必须由用户在确认请求里点名；不存在自动取代。
+
+    「无法判定时不静默择一」在这里体现为：只校验目标是否合法，绝不去猜
+    「哪条旧记忆应该被取代」——猜错就是静默丢事实。
+    """
+    targets: list[Memory] = []
+    seen: set[int] = set()
+    for raw in supersedes:
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            raise_api_error(422, MEMORY_STATE_CONFLICT, "取代目标不合法", {"memory_id": raw})
+        if raw in seen:
+            raise_api_error(422, MEMORY_STATE_CONFLICT, "取代目标重复", {"memory_id": raw})
+        seen.add(raw)
+        target = db.get(Memory, raw)
+        if target is None or target.author_account_id != account_id:
+            # 不区分「不存在」与「不属于本人」：两者都是不可取代，
+            # 区分它们会让这个接口变成存在性枚举。
+            raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆不存在")
+        if target.status != "active" or target.confirmation_status != "confirmed":
+            raise_api_error(409, MEMORY_STATE_CONFLICT, "只能取代仍在生效的已确认记忆")
+        targets.append(target)
+    return targets
+
+
 def confirm_candidate(
     db: Session,
     *,
@@ -408,6 +444,7 @@ def confirm_candidate(
     content: str | None = None,
     retention_until: datetime | None = None,
     retention_days: int | None = None,
+    supersedes: Sequence[int] = (),
 ) -> Memory:
     """Confirm a candidate with an explicit, user-selected scope.
 
@@ -435,6 +472,9 @@ def confirm_candidate(
         "content": content,
         "retention_days": retention_days,
         "retention_until": retention_until.isoformat() if retention_until else None,
+        # 取代目标参与 fingerprint：同一个候选配不同取代集是不同请求，
+        # 否则重试会拿回一个「部分取代」的结果而不报错。
+        "supersedes": sorted({int(value) for value in supersedes}),
     }
     fingerprint = _request_fingerprint(request)
     if candidate.status == "confirmed":
@@ -468,6 +508,11 @@ def confirm_candidate(
         raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "确认范围不能超过原来源的授权范围")
     if content is not None and (not content.strip() or len(content) > 20_000):
         raise_api_error(422, MEMORY_STATE_CONFLICT, "记忆正文为空或超长")
+    # 取代目标必须在写锁**之前**解析并校验：失败时不消耗候选状态，也不产生
+    # 任何部分写入。
+    supersede_targets = _resolve_supersede_targets(
+        db, account_id=confirmer_account.id, supersedes=supersedes
+    )
     now = utcnow()
     claimed = db.scalar(
         update(MemoryCandidate)
@@ -501,6 +546,10 @@ def confirm_candidate(
         raise_api_error(403, MEMORY_SCOPE_FORBIDDEN, "当前已无权确认到目标范围")
     db.get(PlatformFeatureConfig, 1, populate_existing=True)
     _require_memory_enabled(db)
+    # 最终读取（writer 已持有）：并发取代/到期必须在这里被观察到，
+    # 否则会确认出一个「取代目标是刚刚被取代的旧行」的矛盾状态。
+    for target in supersede_targets:
+        _require_current_memory(db, target)
     if retention_days is not None:
         retention_until = now + timedelta(days=retention_days)
     memory = Memory(
@@ -532,6 +581,15 @@ def confirm_candidate(
     )
     db.add(memory)
     db.flush()
+    for target in supersede_targets:
+        # 用同一条命令写入取代指针：取代与确认在同一事务内生效，不存在
+        # 「新事实已确认、旧事实仍可检索」的中间窗口。
+        supersede_memory(
+            db,
+            memory_id=target.id,
+            account_id=confirmer_account.id,
+            by_memory_id=memory.id,
+        )
     candidate.status = "confirmed"
     candidate.confirmed_by_account_id = confirmer_account.id
     candidate.confirmed_at = now
@@ -732,13 +790,57 @@ def _require_fresh_rag_enabled(db: Session) -> None:
     _require_rag_enabled(db)
 
 
-def _fresh_materializable_memory(db: Session, memory_id: int) -> Memory:
+def _supersede_guard_sql(alias: str) -> str:
+    """取代/有效区间过滤（P1）。`alias` 是 memories 的别名（各查询不同）。
+
+    这是**承重**条件：去掉它，被取代的旧事实会立刻重新进入模型上下文（mutation
+    测试会失败）。因为被取代的行**不删除**（历史可审计、取代可撤销），可见性完全
+    依赖这条过滤，而不是依赖行是否存在。
+    """
+    return (
+        f"AND {alias}.superseded_by_id IS NULL "
+        f"AND ({alias}.valid_to IS NULL OR {alias}.valid_to > :now)"
+    )
+
+
+def _typed_eligibility(sql: Any) -> Any:
+    """给方言 SQL 上的 `:now` 声明 DateTime 类型。
+
+    不能把 `bindparam(...)` 放进 params 字典——那会把它当成**值**传给 sqlite3
+    （实测 `Error binding parameter: type \'BindParameter\' is not supported`）。
+    类型必须挂在语句上。SQLite 上 datetime 列以字符串存储，未声明类型的参数会把
+    ISO 串按字符串比较（实测会静默丢行）。
+    """
+    return sql.bindparams(bindparam("now", type_=DateTime))
+
+
+def _fresh_materializable_memory(
+    db: Session, memory_id: int, *, require_current: bool = True
+) -> Memory:
+    """Re-read the source under the writer lock and assert it is indexable.
+
+    `require_current=False` is used by the index-version backfill: a memory that
+    was superseded mid-batch is still a legal source for its own projection (the
+    projection simply becomes unreachable through the eligibility filter). Only
+    the source lifecycle and confirmation state must hold.
+    """
     db.flush()
     memory = db.get(Memory, memory_id, populate_existing=True)
     if memory is None or not memory_sources.memory_materializable(db, memory):
         _index_conflict("来源未验证或已失效，不能建立索引")
     assert memory is not None
+    if require_current and not _memory_is_current(memory):
+        _index_conflict("记忆已被取代或已过有效期，不能建立索引")
     return memory
+
+
+def _memory_is_current(memory: Memory) -> bool:
+    """Whether this memory is still eligible for retrieval (same predicate as SQL)."""
+    if memory.superseded_by_id is not None:
+        return False
+    if memory.valid_to is not None and memory.valid_to <= utcnow():
+        return False
+    return True
 
 
 def _memory_document_metadata(db: Session, memory: Memory) -> dict[str, Any]:
@@ -962,13 +1064,24 @@ def _memory_projection_complete(db: Session, memory: Memory) -> bool:
     )
 
 
-def index_memory(db: Session, memory: Memory, *, target_version: str | None = None) -> RAGDocument:
-    """Ensure the canonical projection; existing activity pointers never move here."""
+def index_memory(
+    db: Session,
+    memory: Memory,
+    *,
+    target_version: str | None = None,
+    allow_superseded: bool = False,
+) -> RAGDocument:
+    """Ensure the canonical projection; existing activity pointers never move here.
+
+    `allow_superseded=True` 只由索引换版回填使用：在批次执行期间被取代的记忆仍应
+    完成自己的版本切换（否则游标会停在那里反复重试）。投影虽然完成，但它**不可达**
+    ——检索 eligibility 的取代过滤会把它排除。
+    """
     _acquire_index_writer(db)
     db.flush()
     with db.begin_nested():
         _require_fresh_rag_enabled(db)
-        current = _fresh_materializable_memory(db, memory.id)
+        current = _fresh_materializable_memory(db, memory.id, require_current=not allow_superseded)
         version = target_version or RAG_INDEX_VERSION
         _pieces_for_version(current.content, version)
         metadata = _memory_document_metadata(db, current)
@@ -980,7 +1093,7 @@ def index_memory(db: Session, memory: Memory, *, target_version: str | None = No
         recovering = document.status == "invalidated"
         active_version = document.index_version
         _materialize_chunks(db, document, current.content, current.revision, creating=created)
-        current = _fresh_materializable_memory(db, current.id)
+        current = _fresh_materializable_memory(db, current.id, require_current=not allow_superseded)
         db.refresh(document)
         _check_document_metadata(
             document, _memory_document_metadata(db, current), allow_index_superseded=recovering
@@ -1100,6 +1213,8 @@ _ELIGIBILITY_SQL = """
     SELECT 1 FROM memories m WHERE CAST(m.id AS TEXT) = d.source_id
       AND m.status = 'active' AND m.confirmation_status = 'confirmed'
       AND m.source_verification = 'verified' AND m.revision = d.revision
+      AND m.superseded_by_id IS NULL
+      AND (m.valid_to IS NULL OR m.valid_to > :now)
   ))
   {sensitivity}
   AND (
@@ -1143,12 +1258,28 @@ def _rows_to_hits(
     agent_kind: str,
     rank_by_order: bool,
 ) -> tuple[list[RAGHit], int]:
-    """Project rows through the visibility policy once more; count denials."""
+    """Project rows through the visibility policy once more; count denials.
+
+    这里除了 `document_readable` 之外还要重查记忆的取代/有效期状态：搜索候选可能
+    在 SQL 执行后、本行读取前被取代（并发确认）。只在 SQL 层过滤会留下一个
+    窗口，让刚被取代的旧事实进入模型上下文。
+    """
     hits: list[RAGHit] = []
     denied = 0
+    supersede_cache: dict[int, bool] = {}
     for position, row in enumerate(rows):
         document_id = int(row["document_id"])
         document = db.get(RAGDocument, document_id)
+        if document is not None and str(row["source_type"]) == "memory":
+            source_key = str(row["source_id"])
+            if source_key.isdigit():
+                memory_id = int(source_key)
+                if memory_id not in supersede_cache:
+                    memory = db.get(Memory, memory_id, populate_existing=True)
+                    supersede_cache[memory_id] = memory is not None and _memory_is_current(memory)
+                if not supersede_cache[memory_id]:
+                    denied += 1
+                    continue
         if document is None or not memory_sources.document_readable(
             db,
             document,
@@ -1244,6 +1375,10 @@ def search_rag(
         "user_id": actor.id,
         "space_id": space_id,
         "is_assistant": is_assistant,
+        # 取代/有效区间过滤的比较基准。必须显式绑定 DateTime 类型：
+        # SQLite 上 datetime 列以字符串存储，未绑定类型的参数会把 ISO 串当字符串
+        # 比较（实测会静默丢行）。
+        "now": utcnow(),
     }
     eligibility = _ELIGIBILITY_SQL.format(sensitivity=sensitivity_predicate)
 
@@ -1258,7 +1393,10 @@ def search_rag(
         while len(hits) < limit and scanned < _FALLBACK_SCAN_LIMIT:
             page_size = min(_SCAN_PAGE_SIZE, _FALLBACK_SCAN_LIMIT - scanned)
             rows = (
-                db.execute(sql, {**branch_params, "limit": page_size, "offset": offset})
+                db.execute(
+                    _typed_eligibility(sql),
+                    {**branch_params, "limit": page_size, "offset": offset},
+                )
                 .mappings()
                 .all()
             )
@@ -1311,6 +1449,7 @@ def search_rag(
     dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
     match_terms = ([plan.phrase] if plan.phrase else []) + list(plan.fts_terms)
     # 循环变量不叫 `query`：那会遮蔽本函数的 `query: str` 参数（mypy 报类型冲突）。
+    # `collect` 的每个分支都要带上 `now` 的类型声明。
     for lexical in rag_search_provider.build_lexical(
         dialect,
         match_terms=match_terms,
@@ -1445,7 +1584,7 @@ def _vector_candidates(
     try:
         rows = (
             db.execute(
-                sql,
+                _typed_eligibility(sql),
                 {
                     "query_vector": literal,
                     "model": rag_embeddings.configured_model(),
@@ -1628,6 +1767,166 @@ def invalidate_source(
             synchronize_session=False,
         )
     return len(rows)
+
+
+def _require_current_memory(db: Session, memory: Memory) -> Memory:
+    """Writer-level recheck: a concurrent supersede/expire must be observed.
+
+    在取得写锁后、最终授权校验之前调用（与 `memory_sources.source_access` 的
+    "最终读取" 同一模式），使「确认新事实」与「旧事实仍在检索中」不能同时成立。
+    """
+    db.flush()
+    fresh = db.get(Memory, memory.id, populate_existing=True)
+    if fresh is None or fresh.status != "active" or not _memory_is_current(fresh):
+        raise_api_error(409, MEMORY_STATE_CONFLICT, "记忆已被取代、已失效或已过期")
+    return fresh
+
+
+def supersede_memory(
+    db: Session,
+    *,
+    memory_id: int,
+    account_id: int,
+    by_memory_id: int,
+    reason: str = "user_replaced",
+) -> Memory:
+    """Mark ``memory_id`` as superseded by ``by_memory_id`` (both stay auditable).
+
+    旧行**不删除**：`status` 保持 `active`，只写 `superseded_by_id`。这样：
+    - 历史可审计、可回溯；
+    - 用户可以撤销取代（`restore_memory`）；
+    - 检索 eligibility 只排除被取代的行，不需要重建索引或删除引用。
+
+    取代会失效该 Memory 的 RAG 文档（`index_superseded`，可恢复）：
+    1. 文档级不可见即使在 eligibility 回退后仍然成立（纵深防御）；
+    2. 且**不需要重建索引**——撤销取代时 `index_memory` 会验证完整 chunk 集
+       并原地重新激活。
+    """
+    _require_memory_enabled(db)
+    if reason not in MEMORY_SUPERSEDE_REASONS:
+        raise_api_error(422, MEMORY_STATE_CONFLICT, "取代原因不合法", {"reason": reason})
+    old = db.get(Memory, memory_id)
+    new = db.get(Memory, by_memory_id)
+    if old is None or new is None:
+        raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆不存在")
+    if old.author_account_id != account_id or new.author_account_id != account_id:
+        # 非本人记忆与不存在的记忆返回同一错误，不泄露存在性。
+        raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆不存在")
+    if old.id == new.id:
+        raise_api_error(422, MEMORY_STATE_CONFLICT, "记忆不能取代自己")
+    for row in (old, new):
+        if row.status != "active":
+            raise_api_error(409, MEMORY_STATE_CONFLICT, "只能取代仍在生效的记忆")
+        if row.confirmation_status != "confirmed":
+            raise_api_error(409, MEMORY_STATE_CONFLICT, "只能取代已确认的记忆")
+    # 「谁取代谁」是**用户的语义判断**，本函数不猜。唯一的机械判据是方向：
+    # 不能用更早的事实取代更晚的事实（否则取代会变成静默的事实回退）。
+    # 刻意**不**要求同一 source_id：manual 记忆没有来源身份，而「住上海」与
+    # 「住苏州」通常来自不同消息（不同 source_id）却确实互相取代。要求来源相同
+    # 只会挡住合法用法，不增加任何安全性质——被取代的行仍可审计、可恢复。
+    if new.id <= old.id:
+        raise_api_error(422, MEMORY_STATE_CONFLICT, "取代方必须是更晚创建的记忆")
+    if old.superseded_by_id is not None:
+        if old.superseded_by_id == new.id:
+            return old
+        raise_api_error(409, MEMORY_STATE_CONFLICT, "记忆已被其它版本取代")
+    now = utcnow()
+    if old.valid_to is None or old.valid_to > now:
+        old.valid_to = now
+    old.superseded_by_id = new.id
+    old.supersede_reason = reason
+    old.superseded_at = now
+    old.restored_at = None
+    old.updated_at = now
+    _invalidate_memory_projection(db, old)
+    db.flush()
+    emit_domain_event(
+        db,
+        event_type="memory.superseded",
+        aggregate_type="memory",
+        aggregate_id=old.id,
+        payload={
+            "superseded_by": new.id,
+            "reason": reason,
+            "revision": old.revision,
+        },
+        space_id=old.space_id,
+        actor_account_id=account_id,
+    )
+    db.flush()
+    return old
+
+
+def restore_memory(db: Session, *, memory_id: int, account_id: int) -> Memory:
+    """Undo a supersede: the old fact becomes retrievable again.
+
+    取代是可撤销的（用户改主意）。恢复需要：
+    - 取代方**仍然存在且生效**，或已不存在——否则恢复会把一个指向空洞的指针
+      留在行上，后续审计无法解释；
+    - 与取代方重新确认来源仍然可读（否则旧事实恢复成「可检索」就绕过了来源失效）。
+
+    恢复后重新索引旧 Memory：`index_memory` 会验证完整 chunk 集并把
+    `index_superseded` 的文档原地激活，因此不需要全库重建。
+    """
+    _require_memory_enabled(db)
+    memory = db.get(Memory, memory_id)
+    if memory is None or memory.author_account_id != account_id:
+        raise_api_error(404, MEMORY_CANDIDATE_NOT_FOUND, "记忆不存在")
+    if memory.superseded_by_id is None:
+        raise_api_error(409, MEMORY_STATE_CONFLICT, "记忆当前未被取代")
+    if memory.status != "active":
+        raise_api_error(409, MEMORY_STATE_CONFLICT, "已撤销或已删除的记忆不能恢复")
+    if not memory_sources.memory_materializable(db, memory):
+        raise_api_error(403, MEMORY_SCOPE_FORBIDDEN, "原来源已失效或当前无权读取")
+    now = utcnow()
+    memory.superseded_by_id = None
+    memory.supersede_reason = None
+    memory.superseded_at = None
+    # 恢复不等于「有效区间从未关闭」：把 valid_to 收回，使时间窗口回到「仍有效」。
+    memory.valid_to = None
+    memory.restored_at = now
+    memory.updated_at = now
+    db.flush()
+    if platform_features.is_rag_enabled(db):
+        index_memory(db, memory)
+    emit_domain_event(
+        db,
+        event_type="memory.restored",
+        aggregate_type="memory",
+        aggregate_id=memory.id,
+        payload={"revision": memory.revision},
+        space_id=memory.space_id,
+        actor_account_id=account_id,
+    )
+    db.flush()
+    return memory
+
+
+def _invalidate_memory_projection(db: Session, memory: Memory) -> None:
+    """Tombstone the Memory projection with the recoverable reason.
+
+    不用 `invalidate_source`：那个入口写的是 `source_invalidated`（永不复活），
+    而取代是**可撤销**的，必须留下可恢复的标记。
+
+    刻意**只动文档，不动 chunk**：chunk 的 `status` 属于**投影完整性证据**
+    （`_chunks_match` 要求 active 才算「完整集」），不是授权输入。把 chunk 标成
+    invalidated 会让撤销取代时的 `index_memory` 判定「旧投影缺少完整正文证据」而
+    拒绝恢复（实测 409 `RAG_SOURCE_NOT_ALLOWED`）。可见性由文档状态（`d.status =
+    'active'`）与检索层的取代过滤共同承担，两处都在。
+    """
+    rows = db.scalars(
+        select(RAGDocument).where(
+            RAGDocument.source_type == "memory",
+            RAGDocument.source_id == str(memory.id),
+            RAGDocument.status == "active",
+        )
+    ).all()
+    now = utcnow()
+    for row in rows:
+        row.status = "invalidated"
+        row.invalidation_reason = "index_superseded"
+        row.invalidated_at = now
+        row.updated_at = now
 
 
 def delete_memory(db: Session, *, memory_id: int, account_id: int) -> None:

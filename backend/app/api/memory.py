@@ -17,6 +17,7 @@ from app.schemas.memory import (
     MemoryCandidateOut,
     MemoryConfirmRequest,
     MemoryOut,
+    MemorySupersedeRequest,
     RAGSearchOut,
 )
 from app.services import memory as memory_service
@@ -81,6 +82,12 @@ def _memory_out(
             confirmation_status=row.confirmation_status,
             revision=row.revision,
             retention_until=row.retention_until,
+            valid_from=row.valid_from,
+            valid_to=row.valid_to,
+            superseded_by_id=row.superseded_by_id,
+            supersede_reason=row.supersede_reason,
+            superseded_at=row.superseded_at,
+            restored_at=row.restored_at,
             status=row.status,
             revoked_at=row.revoked_at,
             created_at=row.created_at,
@@ -145,6 +152,7 @@ def confirm_memory_candidate(
         confirmer_account=identity[1],
         scope=body.scope,
         retention_days=body.retention_days,
+        supersedes=tuple(body.supersedes),
     )
     db.flush()
     result = _memory_out(db, row, identity)
@@ -202,6 +210,43 @@ def list_memories(
         ):
             projected.model_dump_json()
             result.append(projected)
+    db.commit()
+    return result
+
+
+@router.post("/memories/{memory_id}/supersede", response_model=MemoryOut)
+def supersede_memory(
+    memory_id: int,
+    body: MemorySupersedeRequest,
+    db: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> MemoryOut:
+    """Explicitly mark an older memory as superseded by a newer one (P1)."""
+    row = memory_service.supersede_memory(
+        db,
+        memory_id=memory_id,
+        account_id=identity[1].id,
+        by_memory_id=body.by_memory_id,
+        reason=body.reason,
+    )
+    db.flush()
+    result = _memory_out(db, row, identity)
+    result.model_dump_json()
+    db.commit()
+    return result
+
+
+@router.post("/memories/{memory_id}/restore", response_model=MemoryOut)
+def restore_memory(
+    memory_id: int,
+    db: Session = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> MemoryOut:
+    """Undo a supersede so the older fact becomes retrievable again (P1)."""
+    row = memory_service.restore_memory(db, memory_id=memory_id, account_id=identity[1].id)
+    db.flush()
+    result = _memory_out(db, row, identity)
+    result.model_dump_json()
     db.commit()
     return result
 

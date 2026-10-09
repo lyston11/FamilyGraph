@@ -120,6 +120,10 @@ def snapshot(engine, *, schema=False):
 
 
 def seed_real_saved_dependency(engine, monkeypatch):
+    # 本套件刻意从 0054 开始建库（它自己的注释说明了为什么），因此这里必须把
+    # 0059 的取代列补上：ORM 的 INSERT 会带上全部模型列，缺列会让 seed 直接
+    # OperationalError，而这与套件要验证的 RAG 生命周期无关。
+    _add_supersede_columns(engine)
     with Session(engine, expire_on_commit=False) as db:
         user, space = create_agent_fixture(db, name="migration-lifecycle")
         features(db, rag=True)
@@ -171,6 +175,25 @@ def seed_real_saved_dependency(engine, monkeypatch):
             "chunk_version": original.index_version,
             "root_id": document.id,
         }
+
+
+SUPERSEDE_COLUMNS = {
+    "valid_from": "DATETIME",
+    "valid_to": "DATETIME",
+    "superseded_by_id": "INTEGER",
+    "supersede_reason": "VARCHAR(16)",
+    "superseded_at": "DATETIME",
+    "restored_at": "DATETIME",
+}
+
+
+def _add_supersede_columns(engine):
+    """Bring a 0054-era database up to the current ORM shape (0059 columns)."""
+    with engine.begin() as conn:
+        present = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info('memories')")}
+        for name, ddl in SUPERSEDE_COLUMNS.items():
+            if name not in present:
+                conn.exec_driver_sql(f"ALTER TABLE memories ADD COLUMN {name} {ddl}")
 
 
 def legacy_database(tmp_path, monkeypatch, *, foreign_keys):

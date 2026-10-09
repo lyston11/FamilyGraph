@@ -13,8 +13,10 @@ from app.services.memory_rag import (
     invalidate_for_domain_event,
     invalidate_source,
     propose_candidate,
+    restore_memory,
     revoke_memory,
     search_rag,
+    supersede_memory,
 )
 
 __all__ = [
@@ -30,6 +32,8 @@ __all__ = [
     "invalidate_for_domain_event",
     "invalidate_source",
     "propose_candidate",
+    "restore_memory",
     "revoke_memory",
     "search_rag",
+    "supersede_memory",
 ]

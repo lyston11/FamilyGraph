@@ -14,7 +14,11 @@ import {
 } from '@/types/memory'
 
 defineProps<{ item: Memory; writeEnabled: boolean }>()
-defineEmits<{ (event: 'revoke'): void; (event: 'remove'): void }>()
+defineEmits<{
+  (event: 'revoke'): void
+  (event: 'remove'): void
+  (event: 'restore'): void
+}>()
 
 function formatRetention(value: string | null): string {
   return value ? `保留至 ${value.replace('T', ' ').slice(0, 16)}` : '长期保留'
@@ -44,7 +48,12 @@ function scopeBadgeClass(item: Memory): string {
     <div class="memory-topline">
       <div class="memory-main">
         <span class="memory-title">{{ memorySourceReadable(item.source_status) ? item.content : MEMORY_SOURCE_STATUS_LABELS[item.source_status] }}</span>
-        <p class="memory-scope">修订 {{ item.revision }} · {{ formatRetention(item.retention_until) }}</p>
+        <p class="memory-scope">
+          修订 {{ item.revision }} · {{ formatRetention(item.retention_until) }}
+          <template v-if="item.superseded_by_id !== null">
+            · <span class="memory-superseded" data-test="memory-superseded">已被修订 #{{ item.superseded_by_id }} 取代，不再可检索</span>
+          </template>
+        </p>
       </div>
       <span class="fg-badge" :class="sensitivityBadge(item.sensitivity)">
         敏感等级：{{ MEMORY_SENSITIVITY_LABELS[item.sensitivity] }}
@@ -64,7 +73,16 @@ function scopeBadgeClass(item: Memory): string {
       <span v-if="memorySourceReadable(item.source_status)">用途：{{ item.purpose }}</span>
     </div>
     <div v-if="writeEnabled" class="memory-actions">
-      <NButton size="small" secondary data-test="revoke-memory" @click="$emit('revoke')">撤销检索</NButton>
+      <NButton
+        v-if="item.superseded_by_id !== null"
+        size="small"
+        secondary
+        data-test="restore-memory"
+        @click="$emit('restore')"
+      >
+        恢复为当前事实
+      </NButton>
+      <NButton v-else size="small" secondary data-test="revoke-memory" @click="$emit('revoke')">撤销检索</NButton>
       <NButton size="small" type="error" secondary data-test="delete-memory" @click="$emit('remove')">删除</NButton>
     </div>
   </article>
