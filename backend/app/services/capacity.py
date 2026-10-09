@@ -208,6 +208,15 @@ def release(
     门（「恰好一次」）在调用方：settle 用 `status` 条件更新，recovery 用
     `applied_at IS NULL`。本函数只保证 `active` 不为负，并在已为 0 时**不递减**——
     那说明调用方重复归还，属于真缺陷，应通过返回 0 暴露而不是静默吸收。
+
+    ## 与 `acquire` 的对称性（这是 Phase B 的承重语义）
+
+    `acquire` 是「任一维度满则全部回滚」（全部或不占）；
+    `release` 因此也必须是「全部或不还」——否则会出现「某些维度已还、某些未还」
+    的半释放状态，与占用时的原子性不对称。调用方的「恰好一次」门（settle 的
+    `status` 条件更新、recovery 的 `applied_at IS NULL`）保证这个函数不会被
+    同一执行路径调用两次，因此「全部不还」与「重复归还」在调用方被排除；
+    本函数只需要保证 `active` 不为负（这是数据库 CHECK 的兜底，不是门）。
     """
     ordered = sorted(specs, key=lambda s: s.order)
     moment = now or timeutil.utcnow()
