@@ -186,10 +186,15 @@ def outbound_check(
 # ---- R2：类型化输出校验器（封闭 schema；失败一律整体拒绝，绝不截断）----
 
 
-def _extract_json(text: str) -> Any | None:
+def _extract_json(text: str, expect: type | None = None) -> Any | None:
     """从模型文本提取 JSON（容忍 ```json 围栏与前后解释文字）；失败返回 None。
 
-    ## 为什么按「最先出现的定界符」而不是固定先找数组
+    ``expect`` 指定期望的**容器类型**（``dict`` 或 ``list``），用来消解歧义：
+    `{"items":[...]}` 同时含对象与数组，只看「最先出现的定界符」会在「模型把数组
+    包进对象」（如 `{"candidates":[...]}`）时选错。两种定界符都会尝试，返回第一个
+    能解析**且类型相符**的结果；类型不符即视为无输出，绝不把错误的容器交付给校验器。
+
+    ## 为什么不能固定先找数组
 
     旧实现整体解析失败后**固定先找 `[`/`]`**，找不到才退回 `{`/`}`。对数组输出的
     kind（candidate/ranking）无害，但对**对象输出的 kind 是致命的**：
@@ -206,12 +211,6 @@ def _extract_json(text: str) -> Any | None:
     实测（生产，2026-10-08/09）：terminology 11 次 `invalid_output`，诊断一致显示
     `looks_like_json=false`（原文以说明文字开头）、`text_chars` 数百至上千——即格式
     正确的对象输出被提取器切错。同一提示词下 candidate/ranking（数组输出）正常。
-
-    ## 修法
-
-    按**最先出现**的 `{` 或 `[` 决定起始位置，并依次尝试各候选，返回第一个能解析的。
-    先出现者即外层容器：`{"items":[...]}` 的 `{` 在 `[` 之前，`[{"a":1}]` 的 `[`
-    在 `{` 之前。依次尝试则同时兜住「说明里先出现无关 `[注]`」这类噪声。
     """
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -220,18 +219,25 @@ def _extract_json(text: str) -> Any | None:
             stripped = stripped[4:]
     stripped = stripped.strip()
     try:
-        return json.loads(stripped)
+        whole = json.loads(stripped)
     except json.JSONDecodeError:
         pass
-    starts = sorted({pos for pos in (stripped.find("{"), stripped.find("[")) if pos >= 0})
-    for start in starts:
-        end = stripped.rfind("}" if stripped[start] == "{" else "]")
+    else:
+        if expect is None or isinstance(whole, expect):
+            return whole
+    for opener in ("{", "["):
+        start = stripped.find(opener)
+        if start < 0:
+            continue
+        end = stripped.rfind("}" if opener == "{" else "]")
         if end <= start:
             continue
         try:
-            return json.loads(stripped[start : end + 1])
+            parsed = json.loads(stripped[start : end + 1])
         except json.JSONDecodeError:
             continue
+        if expect is None or isinstance(parsed, expect):
+            return parsed
     return None
 
 
@@ -254,7 +260,7 @@ def validate_candidate_output(text: str, ctx: ProjectionContext) -> list[dict[st
     不可解析 → None；任一元素被过滤（编造/越权/未成年）→ 整体拒绝（None），
     绝不把被拒输出降格为空成功。
     """
-    parsed = _extract_json(text)
+    parsed = _extract_json(text, list)
     if not isinstance(parsed, list):
         return None
     if not parsed:
@@ -294,7 +300,7 @@ def validate_ranking_output(text: str, card_ids: list[int]) -> list[int] | None:
 
     bool id、重复/遗漏 id、混入其他集合的 id 一律整体拒绝（None），绝不部分采纳。
     """
-    parsed = _extract_json(text)
+    parsed = _extract_json(text, list)
     if not isinstance(parsed, list):
         return None
     ints: list[int] = []
@@ -325,7 +331,7 @@ def validate_explanation_output(
 
     返回结构化 dict（不含渲染文本）；非法返回 None（回退模板）。
     """
-    parsed = _extract_json(text)
+    parsed = _extract_json(text, dict)
     if not isinstance(parsed, dict):
         return None
     if reason_code is None or parsed.get("reason_code") != reason_code:

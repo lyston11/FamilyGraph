@@ -1126,7 +1126,7 @@ def validate_model_output(
     # semantic_hash/concept_code 重算、allowed_terms 限定），提取方式不影响它们。
     from app.services import steward_guard
 
-    payload = steward_guard._extract_json(text)
+    payload = steward_guard._extract_json(text, dict)
     if payload is None:
         return None
     # ---- 输出合同：只要求 `items` ----

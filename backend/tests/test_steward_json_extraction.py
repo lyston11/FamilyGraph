@@ -64,3 +64,25 @@ def test_unparseable_returns_none() -> None:
     """完全无法解析时返回 None（不得伪装成空成功）。"""
     assert _extract_json("完全没有 JSON 的一段话") is None
     assert _extract_json("") is None
+
+
+def test_expect_disambiguates_nested_containers() -> None:
+    """`expect` 必须消解嵌套歧义：`{"items":[...]}` 同时含对象与数组。
+
+    两个方向都要成立，因为模型既可能把对象包起来，也可能把数组包起来：
+      - terminology/explanation 要 dict，不能因内层数组而切错；
+      - candidate/ranking 要 list，模型写 `{"candidates":[...]}` 时仍须取到数组。
+    """
+    nested_obj = '建议如下：\n{"items":[{"target_ref":"t001"}]}'
+    nested_arr = '结果：\n{"candidates":[1,2]}'
+
+    assert isinstance(_extract_json(nested_obj, dict), dict)
+    assert isinstance(_extract_json(nested_obj, list), list)
+    assert isinstance(_extract_json(nested_arr, list), list)
+    assert isinstance(_extract_json(nested_arr, dict), dict)
+
+
+def test_expect_filters_mismatched_type() -> None:
+    """类型不符时必须返回 None（不得把数组当对象交付给校验器）。"""
+    assert _extract_json('建议：\n{"items":[1]}', str) is None
+    assert _extract_json("[1,2]", dict) is None
