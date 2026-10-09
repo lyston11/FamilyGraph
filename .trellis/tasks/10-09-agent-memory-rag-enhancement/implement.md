@@ -3,14 +3,21 @@
 > 除 P0 外，各阶段在 PostgreSQL 迁移与 `10-03-pgvector-rag` 的结论明确前不得进入实现。
 > 每阶段独立可交付、独立可回滚。
 
-## P0 评估基线（可立即开始，其余阶段的前置）
+## P0 评估基线 —— 已完成（2026-10-09）
 
-- [ ] 构造中文 golden set：覆盖信息提取、时序推理、知识更新、多会话推理、弃答五类，
-      含期望的 evidence（source_type/source_id）而不只是期望答案文本。
-- [ ] 在隔离环境（`DATA_DIR` 指向隔离目录 + 部署 env）一条命令跑出：recall@k、
-      citation 正确率、answer 准确率、弃答正确率、p50/p95 延迟。
-- [ ] 把基线分数与代码版本绑定（脚本 + 结果 JSON 落 `research/evidence/`）。
-- [ ] 建立回归门：分数下降超过阈值即失败，且词法-only 路径必须与今日逐字一致。
+- [x] 中文 golden set `backend/tests/fixtures/memory_eval/golden_v1.json`：20 条合成记忆
+      + 15 条检索用例（信息提取 / 时序推理 / 知识更新 / 多会话推理 / 弃答）
+      + 11 条提取用例；取代关系与已结束时间窗在 fixture 里显式声明。
+- [x] 评测器 `backend/app/services/memory_eval.py`（`memory-eval-v1`）：recall@k、
+      citation precision、forbidden hits、弃答正确率、p50/p95 延迟，**不调用任何模型**。
+- [x] 报告落 `artifacts/memory-eval/baseline.json`（gitignore，与 migration-proof 同约定）；
+      结论摘要落 `research/evidence/p0-baseline.md`。
+- [x] 回归门 `backend/tests/test_memory_eval_baseline.py`：contract 层硬门 100%、
+      `forbidden_hits` 必须为 0；quality 层记录基线但只防退化。
+- [x] 端到端一致性测试：`ContextBuilder` 纳入的来源必须与 `search_rag` 命中一致。
+- 基线结论：contract 12/12、quality 2/3；forbidden 0；p50 3.2ms / p95 7.0ms。
+- 未做（刻意）：**answer 准确率**需要真实 provider egress，不在本模块内；本模块只评测
+  检索层，因为检索是回答的必要条件且可完全离线复现。
 
 ## P1 记忆取代语义 —— 已完成（2026-10-09，分支 feat/10-09-agent-memory-rag-enhancement，commit 0951e68c）
 

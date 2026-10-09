@@ -96,3 +96,65 @@ PGroonga 与 pgvector 的实测共同确认一条安全关键结论：
    （CJK 相似度全部低于阈值），Unicode n-gram 为后备（短查询可用但过度召回）。
 
 详见 `10-04-lexical-search-migration` 与 `10-03-pgvector-rag` 的 `research/evidence/`。
+
+## 9. 检索质量评估基线（2026-10-09 补充）
+
+本任务（P0）建立的评分设施。任何检索/提取改动的**证明义务**是先有基线分，再有对比分；
+「感觉更好了」不是证据。这是 `10-05-migration-proof-gates` 的证明门在检索领域的对应物。
+
+### 组件与版本
+
+| 组件 | 路径 | 版本标识 |
+|---|---|---|
+| golden set | `backend/tests/fixtures/memory_eval/golden_v1.json` | `fixture.version` |
+| 评测器 | `backend/app/services/memory_eval.py` | `memory-eval-v1` |
+| 回归门 | `backend/tests/test_memory_eval_baseline.py` | 常量 `MIN_*` / `MAX_FORBIDDEN_HITS` |
+| 报告 | `artifacts/memory-eval/baseline.json`（gitignore） | 含 evaluator/fixture/model 版本 |
+
+指标定义变化必须提升 `EVALUATOR_VERSION`，否则历史报告不可直接比较。
+
+### 三种用例 `mode` 必须互不混同
+
+```text
+answerable     必须召回全部期望来源（recall = 命中/期望）
+abstention     必须返回空（库里没有就说没有）
+forbidden_only 只约束「不得返回某来源」，不要求整条为空
+```
+
+用单个 `expect_empty` 表达「不得把已结束事实当当前事实」是**错的**：问题里的其它词
+（如「舅舅」）本来就合法匹配别的记忆。三种 mode 分别有自己的指标与阈值。
+
+### 两层回归门（取值理由）
+
+```text
+contract 层  pass_rate / recall / abstention_accuracy 必须 100%
+quality 层   只防退化（当前基线见报告）
+两层共享     forbidden_hits 必须为 0
+```
+
+contract 层表达的是**合同**（取代后不返回旧事实、弃答返回空、单跳提取与时序），
+允许部分通过等于允许静默退化，因此不设余量。quality 层（多会话聚合：一个问题同时
+指向两条记忆）当前词法路径做不到——设成硬门会让门立刻失败从而被绕过，设成 0 又等于
+放弃观测，因此记录基线，由 P3 确定性重排提升后再升级为 contract 层。
+
+**放宽 `MIN_*` 阈值或修改 fixture 的期望值，必须在同一次提交里写明为什么是 fixture
+的期望错了**；否则等于把回归伪装成通过。
+
+### 提取器评测
+
+`evaluate_extraction` 同样分 contract（规则应当覆盖的类别与守卫）与 gap（实测能力缺口）
+两层。gap 用例的期望值是**产品要求**，不是实现现状：它们刻意保持失败，作为 P2 提取
+精炼的输入清单。
+
+### 指标边界（不得越界宣称）
+
+本模块**不评测回答准确率**——那需要真实 provider egress与独立的判分协议。它只评测
+检索层与确定性提取器，理由是检索是回答的必要条件，且可完全离线、可复现。
+
+### Wrong vs Correct
+
+错误：为了让报告变绿而放宽 fixture 的期望值；把「不得返回某来源」写成 `expect_empty`；
+把 quality 层失败当作环境问题跳过；用单个总 pass_rate 掩盖某一层的退化。
+
+正确：三层 mode 各自度量、两层阈值各自设置、报告落盘并与 evaluator/fixture 版本绑定、
+fixture 期望值只允许在写明理由时修改。

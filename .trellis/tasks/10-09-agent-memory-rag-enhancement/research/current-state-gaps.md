@@ -35,7 +35,12 @@ user 消息 → settle 钩子 (agent_queue._settle)
 
 ## 2. 缺口（按用户价值排序）
 
-### G1 记忆没有更新语义（最高）
+### G1 记忆没有更新语义（最高）—— **已解决（P1，2026-10-09）**
+
+原缺口：`retention_until` 只表达「到期」，事实变化后新旧两条都 active。
+现已有 `valid_from`/`valid_to`/`superseded_by_id`/`supersede_reason` + 三层承重的
+可见性防护 + 可撤销取代，契约见 `backend/memory-contract.md` §9。
+基线里 `forbidden_hits = 0` 就是这条语义的量化证据。
 
 同一个人的职业、住址、称谓偏好变化后，旧 Memory 仍是 `active`：检索会同时命中新旧，
 模型看到**互相矛盾的事实**，且无法判断哪个有效。`retention_until` 只表达「到期」，
@@ -66,10 +71,25 @@ user 消息 → settle 钩子 (agent_queue._settle)
 `candidate_estimate > token_budget` 即丢弃，且「整块纳入/排除」：一条 800 字符 chunk
 可能顶掉后面所有命中，而命中顺序是候选到达顺序，不是质量顺序。子预算默认 2000。
 
-### G6 没有质量基线
+### G6 没有质量基线 —— **已解决（P0，2026-10-09）**
 
-没有 golden set、没有指标、没有回归门。任何检索/提取改动都无法证伪，也无法回答
-「这次改动到底好没好」。
+原先没有 golden set、没有指标、没有回归门。现已建立：21 条中文合成记忆 + 15 条检索
+用例（LongMemEval 五能力）+ 11 条提取用例 + 两层回归门 + 落盘报告。
+基线见 `evidence/p0-baseline.md`。contract 层 12/12、quality 层 2/3、forbidden 0。
+
+**基线顺带暴露的两个真实缺陷（已修）**：
+
+- `ALIAS_TABLE_V1` 只有单向别名（`过年→春节`），查询说「春节」而正文写「过年」时不召回；
+- 评测本身暴露了「不得返回某来源」与「必须返回空」是两种不同的不变量，原先用同一个
+  `expect_empty` 表达会把两条不变量混在一起。
+
+**基线暴露的、尚未修的缺口（P2/P3 输入）**：
+
+| 缺口 | 证据 | 归属 |
+|---|---|---|
+| 中文数字日期不命中（`三月五日` vs `3月5日`） | `known_gaps: x-birthday, x-anniversary` | P2 提取精炼 |
+| `在南京的中学教书` 同时命中 occupation 与 school | `known_gaps: x-determinism` | P2 规则判别 |
+| 多会话聚合召回不足（一个问题要同时召回两条记忆） | `quality` 层 2/3，`multi-session-story` 5 条只召回 1 条期望来源 | P3 确定性重排 |
 
 ## 3. 不可动摇的约束（增量必须复用）
 
