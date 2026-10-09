@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "记忆来源/确认/取代边界，数据导入必须保持"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "RAG 检索与引用合同，对账必须覆盖"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "索引换版与撤权生命周期，迁移必须保持"}
+{"file": ".trellis/spec/backend/policy-boundary.md", "reason": "egress 一次一审计与 fence，Phase B 必须验证"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "迁移往返、回归、交付说明"}

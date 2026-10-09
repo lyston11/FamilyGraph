@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "核验记忆确认与取代边界未被迁移破坏"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "核验检索授权过滤先于排序、引用由服务端生成"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "核验索引换版无半切换、失败不推进游标"}
+{"file": ".trellis/spec/backend/policy-boundary.md", "reason": "核验 egress 一次一审计、fence、token scope"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验迁移往返、回归、交付说明"}
