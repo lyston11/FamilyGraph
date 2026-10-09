@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "核验记忆来源、确认、作用域与提取钩子未被放宽"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "核验授权过滤先于排序、引用由服务端生成、构建失效单调"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "核验索引换版无半切换、失败不推进游标"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验 lint/type-check/测试与交付说明要求"}
