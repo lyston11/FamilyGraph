@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "记忆来源/确认/取代边界，触发器不得破坏"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "RAG 检索与引用合同，rag_chunks_fts 触发器是关键接缝"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "索引换版与撤权生命周期，rag 触发器必须保持"}
+{"file": ".trellis/spec/backend/policy-boundary.md", "reason": "Steward revision 计数器是 policy 输入的一部分"}

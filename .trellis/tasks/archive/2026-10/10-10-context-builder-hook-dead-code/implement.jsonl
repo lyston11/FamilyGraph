@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "ContextBuilder 与 context 钩子的合同归属，删除前确认 context_hook 不在生产路径"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "最小充分检查与质量门禁约定"}
