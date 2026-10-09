@@ -1,0 +1,393 @@
+{
+  "version": 1,
+  "description": "中文记忆/RAG 检索质量 golden set（P0 评估基线）。全部内容为合成数据，不含任何真实家庭信息。五个能力维度沿用 LongMemEval（ICLR 2025）的定义：信息提取、时序推理、知识更新、多会话推理、弃答。fixture 只表达**期望行为**，不迁就实现：任何一条用例失败都说明检索质量有问题，而不是 fixture 需要放宽。",
+  "k": 5,
+  "memories": [
+    {
+      "label": "res-上海",
+      "text": "外婆住在上海静安区，房子是九十年代的老公房。",
+      "ability": "residence"
+    },
+    {
+      "label": "res-苏州",
+      "text": "外婆搬到了苏州工业园区，和舅舅一家住在一起。",
+      "ability": "residence",
+      "supersedes": "res-上海"
+    },
+    {
+      "label": "job-南京",
+      "text": "舅舅在南京的一家设计院工作，做结构设计。",
+      "ability": "occupation"
+    },
+    {
+      "label": "job-杭州",
+      "text": "舅舅调到杭州工作了，现在在市政设计院。",
+      "ability": "occupation",
+      "supersedes": "job-南京"
+    },
+    {
+      "label": "birth-母亲",
+      "text": "母亲生日是三月五日，往年都是在家吃饭。",
+      "ability": "birthday"
+    },
+    {
+      "label": "birth-外婆",
+      "text": "外婆生日是农历八月初二，今年要提前订蛋糕。",
+      "ability": "birthday"
+    },
+    {
+      "label": "diet-花生",
+      "text": "舅舅对花生过敏，聚餐时不能点带花生的菜。",
+      "ability": "dietary",
+      "sensitivity": "sensitive"
+    },
+    {
+      "label": "pref-龙井",
+      "text": "奶奶最喜欢喝龙井茶，早上一定要泡一杯。",
+      "ability": "preference"
+    },
+    {
+      "label": "pref-普洱",
+      "text": "奶奶现在更喜欢普洱茶，说是养胃。",
+      "ability": "preference",
+      "supersedes": "pref-龙井"
+    },
+    {
+      "label": "school-表姐",
+      "text": "表姐在武汉大学读研究生，专业是生物医学。",
+      "ability": "school"
+    },
+    {
+      "label": "school-表弟",
+      "text": "表弟在合肥读高中，明年要参加高考。",
+      "ability": "school"
+    },
+    {
+      "label": "trad-春节",
+      "text": "过年的时候全家在苏州聚餐，外婆会做八宝饭。",
+      "ability": "tradition"
+    },
+    {
+      "label": "trad-端午",
+      "text": "端午节在苏州住两晚，顺便去看看老宅。",
+      "ability": "tradition"
+    },
+    {
+      "label": "hist-迁居",
+      "text": "外公一九九八年从扬州搬到苏州，在工厂做了二十年。",
+      "ability": "history"
+    },
+    {
+      "label": "hist-扬州",
+      "text": "外公年轻时在扬州的中学教书，教语文。",
+      "ability": "history"
+    },
+    {
+      "label": "story-老宅",
+      "text": "苏州老宅在平江路附近，院子里有一棵很大的桂花树。",
+      "ability": "story"
+    },
+    {
+      "label": "story-桂花",
+      "text": "每年秋天桂花开了，外婆会摘下来做桂花糖藕。",
+      "ability": "story"
+    },
+    {
+      "label": "term-阿婆",
+      "text": "奶奶在家里习惯被称为阿婆，外面的人叫她周老师。",
+      "ability": "term"
+    },
+    {
+      "label": "exp-珠海",
+      "text": "舅舅去年在珠海出差了三个月，住在情侣路附近。",
+      "ability": "expired"
+    },
+    {
+      "label": "noise-无关",
+      "text": "今天下午的会议推迟到了明天上午十点。",
+      "ability": "noise"
+    }
+  ],
+  "cases": [
+    {
+      "id": "update-residence",
+      "ability": "update",
+      "question": "外婆现在住在哪里？",
+      "expected_sources": [
+        "res-苏州"
+      ],
+      "forbidden_sources": [
+        "res-上海"
+      ],
+      "must_contain": [
+        "苏州"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "update-occupation",
+      "ability": "update",
+      "question": "舅舅现在在哪里工作？",
+      "expected_sources": [
+        "job-杭州"
+      ],
+      "forbidden_sources": [
+        "job-南京"
+      ],
+      "must_contain": [
+        "杭州"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "update-preference",
+      "ability": "update",
+      "question": "奶奶现在喜欢喝什么茶？",
+      "expected_sources": [
+        "pref-普洱"
+      ],
+      "forbidden_sources": [
+        "pref-龙井"
+      ],
+      "must_contain": [
+        "普洱"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "extract-birthday",
+      "ability": "extraction",
+      "question": "母亲生日是哪一天？",
+      "expected_sources": [
+        "birth-母亲"
+      ],
+      "must_contain": [
+        "三月五日"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "extract-dietary",
+      "ability": "extraction",
+      "question": "舅舅饮食上有什么要注意的？",
+      "expected_sources": [
+        "diet-花生"
+      ],
+      "must_contain": [
+        "花生"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "extract-term",
+      "ability": "extraction",
+      "question": "家里怎么称呼奶奶？",
+      "expected_sources": [
+        "term-阿婆"
+      ],
+      "must_contain": [
+        "阿婆"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "temporal-history",
+      "ability": "temporal",
+      "question": "外公年轻的时候在扬州做什么？",
+      "expected_sources": [
+        "hist-扬州"
+      ],
+      "must_contain": [
+        "教书"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "temporal-migration",
+      "ability": "temporal",
+      "question": "外公是哪一年从扬州搬到苏州的？",
+      "expected_sources": [
+        "hist-迁居"
+      ],
+      "must_contain": [
+        "一九九八年"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "multi-session-school",
+      "ability": "multi_session",
+      "question": "表姐和表弟分别在哪里读书？",
+      "expected_sources": [
+        "school-表姐",
+        "school-表弟"
+      ],
+      "must_contain": [
+        "武汉大学",
+        "合肥"
+      ],
+      "tier": "quality"
+    },
+    {
+      "id": "multi-session-festival",
+      "ability": "multi_session",
+      "question": "春节和端午节的安排有什么不一样？",
+      "expected_sources": [
+        "trad-春节",
+        "trad-端午"
+      ],
+      "must_contain": [
+        "八宝饭",
+        "住两晚"
+      ],
+      "tier": "quality"
+    },
+    {
+      "id": "multi-session-story",
+      "ability": "multi_session",
+      "question": "苏州老宅院子里的桂花都用来做什么？",
+      "expected_sources": [
+        "story-老宅",
+        "story-桂花"
+      ],
+      "must_contain": [
+        "桂花糖藕"
+      ],
+      "tier": "quality"
+    },
+    {
+      "id": "abstain-unknown-person",
+      "ability": "abstention",
+      "question": "小舅妈的手机号码是多少？",
+      "expect_empty": true,
+      "tier": "contract"
+    },
+    {
+      "id": "abstain-unknown-topic",
+      "ability": "abstention",
+      "question": "房贷还有多少年还完？",
+      "expect_empty": true,
+      "tier": "contract"
+    },
+    {
+      "id": "abstain-unknown-trip",
+      "ability": "abstention",
+      "question": "这次旅行的机票订好了吗？",
+      "expect_empty": true,
+      "note": "库里有字面无关的合成记忆（会议时间）；本条检验检索在没有家庭记忆主题命中时返回空，而不是靠字面噪声凑数。",
+      "tier": "contract"
+    },
+    {
+      "id": "expired-not-current",
+      "ability": "temporal",
+      "question": "舅舅现在在珠海出差吗？",
+      "note": "问『现在』时不得把已结束的出差当作当前事实。刻意**不**用 expect_empty：问题里的『舅舅』本来就合法匹配其它记忆，期望整条返回空是把两条不同的不变量混在一起。",
+      "tier": "contract",
+      "forbidden_sources": [
+        "exp-珠海"
+      ],
+      "expected_sources": []
+    }
+  ],
+  "expired_labels": [
+    "exp-珠海"
+  ],
+  "extraction_cases": [
+    {
+      "id": "x-birthday",
+      "text": "我妈生日是三月五日，每年都在家吃长寿面。",
+      "expect_categories": [
+        "birthday"
+      ],
+      "tier": "gap",
+      "gap_reason": "`_BIRTHDAY_DATE` 只认阿拉伯数字（`3月5日`），中文数字日期（`三月五日`）不命中"
+    },
+    {
+      "id": "x-anniversary",
+      "text": "爸妈的结婚纪念日是十月一日。",
+      "expect_categories": [
+        "anniversary"
+      ],
+      "tier": "gap",
+      "gap_reason": "同 birthday：中文数字日期不命中"
+    },
+    {
+      "id": "x-dietary",
+      "text": "我弟弟对花生过敏，出门吃饭要特别小心。",
+      "expect_categories": [
+        "dietary"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "x-occupation",
+      "text": "我姐姐是护士，在市里的人民医院上班。",
+      "expect_categories": [
+        "occupation"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "x-school",
+      "text": "我妹妹在读浙江大学，学的是计算机。",
+      "expect_categories": [
+        "school"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "x-residence",
+      "text": "我外公住在苏州，老房子在平江路。",
+      "expect_categories": [
+        "residence"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "x-preference",
+      "text": "我奶奶最喜欢喝龙井茶。",
+      "expect_categories": [
+        "preference"
+      ],
+      "tier": "contract"
+    },
+    {
+      "id": "x-negation-guard",
+      "text": "我不喜欢喝咖啡，喝了睡不着。",
+      "expect_categories": [],
+      "note": "否定守卫：『不喜欢』不得产出偏好候选。",
+      "tier": "contract"
+    },
+    {
+      "id": "x-dietary-idiom-guard",
+      "text": "这笔账我可不吃亏，一定要算清楚。",
+      "expect_categories": [],
+      "note": "习语守卫：『不吃亏』不得产出饮食禁忌候选。",
+      "tier": "contract"
+    },
+    {
+      "id": "x-empty",
+      "text": "   ",
+      "expect_categories": [],
+      "tier": "contract"
+    },
+    {
+      "id": "x-determinism",
+      "text": "我舅舅是老师，在南京的中学教书。",
+      "expect_categories": [
+        "occupation"
+      ],
+      "assert_deterministic": true,
+      "tier": "gap",
+      "gap_reason": "`在南京的中学教书` 同时命中 occupation 与 school（school 规则只看`在…中学`，不看谓语是『教书/工作』还是『在读』）"
+    }
+  ],
+  "tier_notes": {
+    "contract": "必须 100% 通过：取代/有效区间语义、弃答、单跳提取与时序。",
+    "quality": "记录基线但不设 100% 门：多会话聚合与排序受限的召回当前词法路径做不到。P3 确定性重排上线后应把这些用例提升到 contract 层。"
+  },
+  "extraction_tier_notes": {
+    "contract": "规则应当覆盖的类别与守卫，必须 100% 通过。",
+    "gap": "实测发现的能力缺口，记录在基线里作为 P2 提取精炼的输入清单。刻意不为了让报告变绿而放宽 fixture：这些用例的期望值是产品要求，不是实现的现状。"
+  }
+}

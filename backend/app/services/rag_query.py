@@ -28,8 +28,12 @@ FTS_MIN_CHARS = 3
 # are additional search terms.  This is a closed, reviewable list — never a
 # model call and never per-fixture hardcoding.
 ALIAS_TABLE_V1: dict[str, tuple[str, ...]] = {
+    # 两个方向都要有：查询与正文可能各用一侧的说法。实测「春节和端午节的安排」
+    # 只召回端午，因为正文写的是「过年」而表里只有 过年→春节 一个方向。
     "过年": ("春节",),
+    "春节": ("过年",),
     "聚会": ("聚餐",),
+    "聚餐": ("聚会",),
 }
 
 # Interrogative / function words that must never be the sole hit basis.
