@@ -173,7 +173,7 @@ def main() -> int:
     for d in diffs:
         print(f"  - {d}")
 
-    out_dir = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof")))
+    out_dir = Path(os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof"))
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         lines = ["# Gate 1：方言语义矩阵（两库真实执行，语义比对）", "",

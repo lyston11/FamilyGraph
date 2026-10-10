@@ -109,7 +109,7 @@ def main() -> int:
         ).fetchone()[0]
         print(f"  当前等待锁的连接数：{waiting}")
 
-    out_dir = os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof"))
+    out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
     try:
         from pathlib import Path
         p = Path(out_dir)

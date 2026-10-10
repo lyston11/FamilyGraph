@@ -167,7 +167,7 @@ def main() -> int:
     for q, f, n in short:
         print(f"  {q:6s} FTS5原生={f}  n-gram={n}")
 
-    out_dir = os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof"))
+    out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
     try:
         from pathlib import Path
         p = Path(out_dir)

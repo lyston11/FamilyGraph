@@ -177,7 +177,7 @@ def main() -> int:
               f"{fmt(r['pg_trgm']):<16s} {fmt(r['ngram']):<16s} "
               f"{fmt(r['pgroonga'], r['pgroonga'] is not None):<16s}")
 
-    out_dir = os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof"))
+    out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
     try:
         from pathlib import Path
         import json
