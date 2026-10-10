@@ -183,7 +183,13 @@ def main() -> int:
             model=MODEL,
             eligibility="c.status = 'active' AND d.status = 'active'",
         )
-        ids = [r[0] for r in conn.execute(filtered, {"query_vector": literal, "limit": 10, "offset": 0}).fetchall()]
+        ids = [
+            r[0]
+            for r in conn.execute(
+                filtered,
+                {"query_vector": literal, "model": MODEL, "limit": 10, "offset": 0},
+            ).fetchall()
+        ]
         print(f"  带过滤候选 {ids}（期望不含撤权 chunk 4；每 chunk 只出现一次）")
         if 4 in ids:
             failures.append("撤权 chunk 出现在带过滤结果里")
@@ -194,7 +200,13 @@ def main() -> int:
         unfiltered = rag_embeddings.build_vector_candidates(
             dimension=DIM, model=MODEL, eligibility="1=1"
         )
-        ids2 = [r[0] for r in conn.execute(unfiltered, {"query_vector": literal, "limit": 10, "offset": 0}).fetchall()]
+        ids2 = [
+            r[0]
+            for r in conn.execute(
+                unfiltered,
+                {"query_vector": literal, "model": MODEL, "limit": 10, "offset": 0},
+            ).fetchall()
+        ]
         print(f"  反证（无过滤）{ids2}")
         if 4 not in ids2:
             failures.append("反证未成立：无过滤时也查不到撤权 chunk，过滤可能不承重")
