@@ -61,9 +61,17 @@ def revision_mismatch(conn: sqlite3.Connection) -> int:
 
 
 def orphan_attempts(conn: sqlite3.Connection) -> int:
+    """尝试指向不存在 run 的行数。
+
+    **必须排除 `run_id IS NULL`**：`steward_model_calls.run_id` 的外键是
+    `ON DELETE SET NULL`，因此 run 被删除后留下 NULL 是**合法**状态，不是孤儿。
+    真实生产库上实测：把 NULL 也算进去会报 75 个「孤儿」，而实际的悬空引用是 0
+    —— 一个把正常数据报成损坏的对账脚本，比没有对账脚本更危险（会掩盖真问题）。
+    """
     return conn.execute(
         "SELECT count(*) FROM steward_model_calls c "
-        "LEFT JOIN agent_runs r ON r.id = c.run_id WHERE r.id IS NULL"
+        "LEFT JOIN agent_runs r ON r.id = c.run_id "
+        "WHERE c.run_id IS NOT NULL AND r.id IS NULL"
     ).fetchone()[0]
 
 
