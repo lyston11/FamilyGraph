@@ -351,9 +351,12 @@ def _admit_upstream_request(
         CursorResult[Any],
         db.execute(
             text(
+                # 与 agent_tools 的工具准入同一条约束：`cancel_requested` 在 PostgreSQL
+                # 上是 boolean，与整数比较会报 `boolean = integer`（SQLite 无严格类型所以
+                # 旧写法在 SQLite 上正常）。见 tests/test_sql_portability.py 的结构性守卫。
                 "UPDATE agent_runs SET updated_at = updated_at "
                 "WHERE id = :run_id AND status IN ('leased','running') "
-                "AND cancel_requested = 0"
+                "AND cancel_requested = FALSE"
             ),
             {"run_id": run_id},
         ),

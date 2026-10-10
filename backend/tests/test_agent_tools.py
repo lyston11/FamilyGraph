@@ -1,5 +1,7 @@
 """Agent 工具协议测试：四类拒绝码 + 合法执行 + running 态门禁（RT-3）。"""
 
+import json
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -219,3 +221,52 @@ def test_echo_and_probe_scope_success(db_session):
     db_session.commit()  # 服务层不提交成功审计，API 层负责；此处等价提交后验证
     executed = db_session.scalars(select(AuditLog).where(AuditLog.action == "agent_tool_executed"))
     assert len(list(executed)) >= 2
+
+
+def test_unexpected_dispatch_failure_is_audited_and_typed(db_session, monkeypatch):
+    """非协议异常必须留下 `agent_tool_failed` 审计，并返回专属错误码。
+
+    这条测试防的是一次真实事故：`cancel_requested = 0` 在 PostgreSQL 上是类型错误
+    （boolean = integer），抛出的是 `ProgrammingError` 而非 `ToolProtocolError`，
+    于是它**绕过全部审计与记录**直接变成通用 500。后果是「所有工具调用恒失败」
+    静默潜伏数天（生产 2324 次/72h），而模型只看到 `INTERNAL_ERROR`。
+
+    这里用 monkeypatch 在分派里注入一个非协议异常，断言三件事：
+    错误码可辨认、审计留痕、detail 不含异常 message（可能含数据）。
+    """
+    user, space = create_agent_fixture(db_session, name="t8")
+    session = create_agent_session(db_session, account_id=user.account.id, space_id=space.id)
+    run = _enqueue(db_session, session)
+    grant = _lease_and_start(db_session, run)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("sensitive detail that must not leak")
+
+    monkeypatch.setattr(agent_tools, "_dispatch", _boom)
+
+    with pytest.raises(HTTPException) as excinfo:
+        agent_tools.execute(
+            db_session,
+            grant.run,
+            session,
+            {"agent_kind": "assistant"},
+            name="familygraph.echo",
+            version=1,
+            input_payload={"text": "hi"},
+        )
+
+    assert excinfo.value.status_code == 500
+    payload = excinfo.value.detail["__api_error__"]
+    assert payload["code"] == "AGENT_TOOL_EXECUTION_FAILED"
+    assert payload["detail"]["error_class"] == "RuntimeError"
+    # 不泄露：message / SQL / 参数都不得出现在错误体里。
+    assert "sensitive detail" not in str(payload)
+
+    row = db_session.scalars(select(AuditLog).where(AuditLog.action == "agent_tool_failed")).one()
+    # detail_json 是 Text 列（存 JSON 字符串），与 test_bindings 同口径解析。
+    detail = json.loads(row.detail_json)
+    assert detail["tool"] == "familygraph.echo"
+    assert detail["error_class"] == "RuntimeError"
+    assert detail["agent_kind"] == "assistant"
+    # detail 只放异常类型名，不放 message。
+    assert "sensitive detail" not in row.detail_json

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, cast
 
@@ -560,6 +561,51 @@ class ToolRunScope:
         )
 
 
+def _record_tool_failure(
+    db: Session,
+    *,
+    run: AgentRun,
+    name: str,
+    version: int,
+    tool_call_id: str | None,
+    execution: ExecutionIdentity | StewardExecution | None,
+    error_class: str,
+) -> None:
+    """把一次**非协议**的工具执行失败写成持久审计行。
+
+    为什么不入 `agent_tool_calls`：那张表是副作用去重台账（同 (run_id, tool_call_id)
+    至多一行，且失败调用没有副作用），而且它在准入 CAS **之后**才写入——CAS 自己
+    抛异常时根本无法插入。因此失败事实进 `audit_log`，与既有的 `agent_tool_denied`
+    同一条路径。
+
+    本函数**不得**影响原异常的传播：写审计失败只记日志。detail 只放异常类型名，
+    不放 message / SQL / 参数（可能含数据）。
+    """
+    try:
+        db.rollback()
+        steward_scope = execution if isinstance(execution, StewardExecution) else None
+        detail: dict[str, object] = {
+            "tool": name,
+            "version": version,
+            "error_class": error_class,
+            "agent_kind": run.kind,
+            "space_id": steward_scope.space_id if steward_scope is not None else None,
+        }
+        if tool_call_id is not None:
+            detail["tool_call_id"] = tool_call_id
+        audit.write_audit(
+            db,
+            action="agent_tool_failed",
+            actor_id=None,
+            target_id=run.id,
+            detail=detail,
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 - 审计失败不得掩盖原异常
+        logger.exception("failed to record tool failure audit tool=%s", name)
+        db.rollback()
+
+
 def execute(
     db: Session,
     run: AgentRun,
@@ -689,8 +735,13 @@ def execute(
             CursorResult[Any],
             db.execute(
                 text(
+                    # `cancel_requested` 在 PostgreSQL 上是 boolean，拿它和整数比会得到
+                    # `UndefinedFunction: operator does not exist: boolean = integer`——
+                    # 而 SQLite 无严格类型（存 0/1），所以旧写法通过了全部 SQLite 测试，
+                    # 切到 PG 当天就让**每一次工具调用**500（生产实测 2324 次/72h）。
+                    # `FALSE` 字面量两方言都正确（SQLite ≥3.23 支持 TRUE/FALSE）。
                     "UPDATE agent_runs SET updated_at = updated_at "
-                    "WHERE id = :run_id AND status = 'running' AND cancel_requested = 0"
+                    "WHERE id = :run_id AND status = 'running' AND cancel_requested = FALSE"
                 ),
                 {"run_id": run.id},
             ),
@@ -772,6 +823,41 @@ def execute(
         )
         db.commit()
         raise_api_error(exc.status_code, exc.code, exc.message, exc.detail)
+    except HTTPException:
+        # `raise_api_error` 就是以 HTTPException 传递**全部**领域错误（404
+        # FG_PROFILE_NOT_AVAILABLE、409 去重冲突、403 scope 不匹配……）。它们已经
+        # 类型化且有错误码，必须原样透传——归入下面的兑底分支会把每一条领域错误
+        # 都变成通用 500（实测：这是引入兑底时踩到的回归）。
+        raise
+    except Exception as exc:  # noqa: BLE001 - 兜底：任何非协议异常都必须留痕
+        # 未处理异常过去直接逃逸到 FastAPI 的 500 处理：模型只收到通用
+        # `INTERNAL_ERROR`，`agent_tool_calls` 与审计都**零行**，于是「所有工具调用
+        # 在 PG 上恒失败」静默潜伏了数天（生产 2324 次/72h）。这里把两件事补齐：
+        # 记下失败事实（可在库里查到），并给模型一个可辨认的错误码。
+        _record_tool_failure(
+            db,
+            run=run,
+            name=name,
+            version=version,
+            tool_call_id=tool_call_id,
+            execution=execution,
+            error_class=type(exc).__name__,
+        )
+        # 不记录异常 message / SQL / 参数：它们可能含数据，只留异常类型名。
+        logger.exception(
+            "tool execution failed tool=%s version=%s error_class=%s",
+            name,
+            version,
+            type(exc).__name__,
+        )
+        # 500 而非 503：sidecar 只把 502/503/504 视为 transient，而这类失败是代码缺陷，
+        # 重试无意义；用专属错误码让模型与日志能区分「工具坏了」与「上游暂时不可用」。
+        raise_api_error(
+            500,
+            "AGENT_TOOL_EXECUTION_FAILED",
+            "工具执行失败",
+            {"error_class": type(exc).__name__, "tool": name},
+        )
     audit_detail: dict[str, object] = {
         "tool": spec.name,
         "version": spec.version,
@@ -805,6 +891,8 @@ def execute(
     )
     return output
 
+
+logger = logging.getLogger(__name__)
 
 #: `propose_memory` 的 extractor_version：与规则提取器区分开，使审计能分辨
 #: 「模型提议」与「settle 规则提取」两个来源。

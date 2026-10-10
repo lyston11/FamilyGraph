@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 
@@ -146,3 +147,78 @@ def test_text_column_helper_rejects_bad_input():
         json_text_field(AuditLog.detail_json, "space_id")  # 缺 $. 前缀
     with pytest.raises(ValueError):
         json_text_field(AuditLog.detail_json, "$.x", as_type="float")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# boolean 列不得与整数比较（2026-10-10 真实事故）
+# ---------------------------------------------------------------------------
+#
+# SQLite 无严格类型，boolean 列存 0/1，所以 `cancel_requested = 0` 在 SQLite 上完全
+# 正常；PostgreSQL 的列是真正的 `boolean`，同一语句直接报
+# `UndefinedFunction: operator does not exist: boolean = integer`。
+#
+# 实测后果：2026-10-08 切到 PostgreSQL 当天，`agent_tools` 与 `provider_proxy` 两处
+# 准入 CAS 同时失效，**每一次 agent 工具调用都 500**（生产 2324 次/72h），而 SQLite
+# 测试全绿。因此与 `json_extract` 同性质，放在同一处守卫。
+
+_MODEL_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "models"
+_SQL_KEYWORDS = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE|WHERE)\b", re.IGNORECASE)
+
+
+def _boolean_column_names() -> set[str]:
+    """从模型声明动态收集 boolean 列名（`Mapped[bool]`），不手写清单。
+
+    手写清单会随模型演化而失效——那正是守卫静默失效的形态。
+    """
+    names: set[str] = set()
+    for path in sorted(_MODEL_DIR.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name):
+                continue
+            if ast.unparse(node.annotation) == "Mapped[bool]":
+                names.add(node.target.id)
+    return names
+
+
+def _string_literals() -> list[tuple[str, int, str]]:
+    """收集 app/ 下所有字符串字面量（raw SQL 以相邻字面量隐式拼接）。"""
+    out: list[tuple[str, int, str]] = []
+    for path in sorted(APP_DIR.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(APP_DIR.parent))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                out.append((rel, node.lineno, node.value))
+    return out
+
+
+def test_no_raw_sql_compares_a_boolean_column_to_an_integer():
+    """raw SQL 不得把 boolean 列与 0/1 比较——PostgreSQL 上直接报类型错误。"""
+    boolean_columns = _boolean_column_names()
+    assert boolean_columns, "未能从模型收集到 boolean 列——守卫已失效，先修收集逻辑"
+    pattern = re.compile(r"\b(" + "|".join(sorted(boolean_columns)) + r")\s*=\s*[01]\b")
+
+    offenders = []
+    for rel, line, value in _string_literals():
+        # 只检查看起来像 SQL 的字面量：文档字符串里也会出现 `active = 0` 这类描述。
+        if not _SQL_KEYWORDS.search(value):
+            continue
+        for match in pattern.finditer(value):
+            offenders.append(f"{rel}:{line}  {match.group(0)}")
+    assert not offenders, (
+        "发现 raw SQL 把 boolean 列与整数比较。SQLite 上正常，PostgreSQL 上会报 "
+        "`operator does not exist: boolean = integer`，且在 SQLite 测试里看不出来。"
+        "改用 `= FALSE` / `= TRUE` 字面量（两方言都支持）或绑定布尔参数：\n"
+        + "\n".join(f"  {o}" for o in offenders)
+    )
