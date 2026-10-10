@@ -198,3 +198,100 @@ contract 层表达的是**合同**（取代后不返回旧事实、弃答返回�
 
 正确：三层 mode 各自度量、两层阈值各自设置、报告落盘并与 evaluator/fixture 版本绑定、
 fixture 期望值只允许在写明理由时修改。
+
+## 10. 向量检索的接线与相似度地板（P3-b，2026-10-10）
+
+### 1. Scope / Trigger
+
+改动 `memory_rag._vector_candidates`、`search_rag` 的向量分支，或更换 embedding
+模型 / chunking 算法。
+
+### 2. Signatures
+
+```python
+def _vector_candidates(
+    db: Session, *, actor: User, account: Account, space_id: int, agent_kind: str,
+    query: str, eligibility: str, seen_chunk_ids: set[int], limit: int,
+    now: Any, is_assistant: int, user_id: int,   # ← eligibility 的绑定参数，必须传
+) -> tuple[list[RAGHit], int]
+```
+
+### 3. Contracts
+
+- **eligibility 的每个命名参数都必须传给向量查询**：向量 SQL 与词法 SQL 共用同一段
+  `_ELIGIBILITY_SQL`，漏传任何一个都会让整条查询抛 `StatementError`、被 `except`
+  吞掉、**静默回退词法**。实测：P1 引入 `:now` 后向量路径**完全死亡**而无人察觉。
+- **失败必须记录 `error_class`**：只写「回退词法结果」从现象看不出原因。
+- **相似度地板 `_VECTOR_MIN_SIMILARITY = 0.50`**：低于它的向量候选丢弃。取值来自
+  真实 `bge-small-zh-v1.5` 上的实测分布（见下）。地板**只作用于向量新增候选**，
+  不作用于词法命中，因此误伤代价为零。
+- **只增不减**：向量候选不得挤掉词法命中。
+- **换模型或换 chunking 算法必须重测地板**：相似度尺度会变，不能沿用。
+
+### 4. Validation & Error Matrix
+
+| 情形 | 后果 |
+|---|---|
+| 漏传 eligibility 绑定参数 | `StatementError` → 静默回退词法（检索看似正常） |
+| 无相似度地板 | 弃答用例被无关向量填满，abstention 1.00 → 0.00 |
+| 地板过高 | 向量补充失效（退化为词法-only，可接受但无收益） |
+
+### 5. Good/Base/Bad Cases
+
+- **Good**：`1.0 - hit.rank >= _VECTOR_MIN_SIMILARITY`（`rank` 是余弦距离）。
+- **Base**：地板保留词法命中不动。
+- **Bad**：用余弦相似度做**重排依据**——实测相关/不相关分布重叠
+  （不相关最高 0.7712 > 相关最低 0.5091）。
+
+### 6. Tests Required
+
+- `test_search_rag_vector.py`：绑定参数齐全、地板丢弃、地板保留（反证）、
+  失败回退并 rollback、只增不减。**接线层此前完全没有测试**，这正是缺陷得以
+  隐藏的原因。
+- mutation：去掉地板 → 必须失败；去掉 `now` → 必须失败。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+db.execute(sql, {"query_vector": literal, "limit": k, "offset": 0})  # 缺 now/is_assistant/...
+except Exception:
+    logger.warning("向量检索查询失败，回退词法结果")   # 无法诊断
+return [h for h in hits if h.chunk_id not in seen]     # 无地板
+```
+
+#### Correct
+
+```python
+db.execute(sql, {
+    "query_vector": literal, "model": ..., "limit": k, "offset": 0,
+    "now": now, "is_assistant": is_assistant, "user_id": user_id,
+    "account_id": account.id, "space_id": space_id,
+})
+except Exception as exc:
+    logger.warning("向量检索查询失败，回退词法结果 error_class=%s detail=%s",
+                   type(exc).__name__, str(exc)[:200])
+return [h for h in hits
+        if h.chunk_id not in seen and (1.0 - float(h.rank)) >= _VECTOR_MIN_SIMILARITY]
+```
+
+## 11. contextual chunking：不实现（有实测负面证据，2026-10-10）
+
+**结论：不实现。** 实测在长文档多分段场景下，来源级前缀**降低**质量：
+
+```text
+plain (现状)        7/8   ← top-1 分段所属文档正确率
+contextual prefix   6/8
+```
+
+原因：来源级前缀对同一来源的所有分段相同，等于给每个向量加常量分量，**稀释**了
+分段自身的内容差异。实测表现：`谁的胃不好？` 从命中「舅舅传」变成「外婆传」。
+
+探针：`scripts/migration-proof/contextual_chunking_probe.py`（含第一轮**无效测量**
+的记录：golden set 的记忆平均 20 字符、每 chunk 只有 1 段，前缀没有可测量空间）。
+
+**何时重新考虑**（4 个条件全部成立）：golden set 里有真实长文档用例；前缀由**每个
+分段单独生成**（LLM）而非来源级常量；该 LLM 调用经 provider gateway 且成本已计入
+预算；在同一份 golden set 上证明增益。
+
