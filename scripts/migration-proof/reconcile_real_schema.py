@@ -84,6 +84,28 @@ def egress_audit_counts(conn: sqlite3.Connection) -> dict:
     )
 
 
+def egress_sent_false_without_error_class(conn: sqlite3.Connection) -> int:
+    """`sent=false` 但缺 `error_class` 的审计行数（应为 0）。
+
+    ## 为什么这才是可检验的 egress 不变量
+
+    egress 的合同是「**每一次真实出站尝试**写恰好一条审计」
+    （`spec/backend/agent-runtime.md`），**不是**「每个 run 一条」——
+    一个失败 run 可以有多达 24 次真实出站尝试（生产实测 p50=p90=p99=24）。
+    因此「每个 run 恰好 1 条」是错误的断言，会把它自己的错误当成数据缺陷。
+
+    真正可从审计自身交叉验证的是：`sent=false` 只能由**连接未建立**的证据得出
+    （`ConnectError`/`ConnectTimeout`），因此它必须同时带 `error_class`。
+    缺 `error_class` 的 `sent=false` 说明发送确定性被无证据地断言了。
+    """
+    return conn.execute(
+        "SELECT count(*) FROM audit_log "
+        "WHERE action = 'agent_provider_egress' "
+        "AND detail_json LIKE '%\"sent\": false%' "
+        "AND detail_json NOT LIKE '%error_class%'"
+    ).fetchone()[0]
+
+
 def reconcile(src_path: Path) -> list[str]:
     """返回差异列表；空列表 = 对账通过。"""
     diffs: list[str] = []
@@ -120,12 +142,20 @@ def reconcile(src_path: Path) -> list[str]:
         diffs.append(f"孤儿 attempt: {orphans}")
     else:
         print("  attempt/run 孤儿: 无")
-    # egress 审计
+    # egress 审计：**不**断言「每个 run 恰好一条」——合同是「每次真实出站尝试一条」，
+    # 失败 run 的尝试数可以远超 1。这里只报可观测的分布，并检验一个真正的不变量。
     counts = egress_audit_counts(src)
-    for target_id, count in counts.items():
-        if count != 1:
-            diffs.append(f"egress 审计不唯一: target_id={target_id} count={count}")
-    print(f"  egress 审计: {len(counts)} 个 target_id，均一次" if not diffs else "")
+    if counts:
+        values = sorted(counts.values())
+        print(
+            f"  egress 审计: {len(counts)} 个 run，尝试数 "
+            f"min={values[0]} p50={values[len(values) // 2]} max={values[-1]}"
+        )
+    unsupported_sent = egress_sent_false_without_error_class(src)
+    if unsupported_sent:
+        diffs.append(f"sent=false 但缺 error_class 的 egress 审计: {unsupported_sent} 行")
+    else:
+        print("  egress sent=false 均带 error_class: 一致")
     src.close()
     return diffs
 
