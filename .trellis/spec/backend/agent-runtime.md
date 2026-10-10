@@ -323,3 +323,71 @@ Correct: 严格校验后才归一化；缺失或类型错误 → 502 invalid_con
 Heartbeat 返回 401/403/409/410 时，sidecar 必须把 lease 视为已失效，立即 abort
 Pi session 并跳过 settle；不能只把 410 当作 lease loss，否则 membership revoke
 或服务端终态竞态会留下继续运行的模型流。
+
+## Provider 连接生命周期（持久 client，2026-10-10）
+
+### 1. Scope / Trigger
+
+改动 `provider_proxy` 的 HTTP client 构造、连接池策略，或为 provider 出站增加新的
+HTTP 调用点。
+
+### 2. Contracts
+
+- **按 `base_url` 分池**，不是单一全局 client：跨上游复用连接会把连接错误复用到
+  别的主机，且无法按上游分别配置连接上限。分池使「同上游复用、跨上游隔离」成为
+  结构性质。
+- **请求路径不得关闭池化 client**：关闭会让连接池失效（收益归零），且下一个请求会
+  拿到已关闭的 client 而**间歇性失败**（取决于哪个分支先跑）。这一条用静态断言锁定。
+- **凭据必须每请求构造**：`Authorization` 来自 `runtime.api_key`，不得设为 client
+  默认头——否则一个上游的凭据会随池复用泄漏给另一个上游。
+- **`sent` 的发送确定性不受池化影响**：`_classify_transport_error` 按**异常类型**
+  判定（`ConnectError`/`ConnectTimeout` → `sent=False`），与「连接是否新建」无关。
+- **池有上界**（`_MAX_POOLED_CLIENTS = 16`）：防 `base_url` 频繁改动导致字典无界增长。
+
+### 3. 成本依据（不得凭感觉优化）
+
+实测（`scripts/migration-proof/client_lifecycle_probe.py`，真实 HTTPS 端点）：
+
+```text
+per-request client   p50 = 61.8ms   p95 = 162.8ms
+pooled client        p50 = 10.7ms   p95 =  20.0ms
+中位差               = 51.1ms/请求
+```
+
+对一次多轮工具调用（可达十余次出站）来说是数百毫秒的用户可见延迟。探针同时断言
+「池化 p95 显著低于 per-request p50」，否则说明连接实际没有被复用。
+
+### 4. Tests Required
+
+`test_provider_client_lifecycle.py` 8 项，覆盖：同上游复用、跨上游隔离、池上界、
+清空、凭据不入池、请求路径不关闭 client（静态）、`sent` 语义不依赖连接新旧、
+**以及端点真的用了池**。
+
+最后一条是必须的：只测 `pooled_client` 本身的话，把端点改回「每请求新建」
+**不会让任何测试失败**（实测确认过）。测试必须覆盖**接线**，否则它守不住改动的
+实际收益。
+
+### 5. Wrong vs Correct
+
+#### Wrong
+
+```python
+client = httpx.AsyncClient(timeout=...)     # 每请求新建，~51ms 白付
+try:
+    ...
+finally:
+    await client.aclose()                   # 若改为池化，这会让池失效并间歇失败
+```
+
+#### Correct
+
+```python
+client = pooled_client(base_url)            # 按上游复用
+try:
+    ...
+except ...:
+    ...                                     # 不关闭 client
+finally:
+    await upstream.aclose()                 # 只关闭响应流
+```
+

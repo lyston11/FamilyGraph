@@ -165,6 +165,75 @@ def _audit_egress(
     )
 
 
+# ---------------------------------------------------- 连接生命周期（持久 client）
+#
+# ## 为什么按 `base_url` 分池
+#
+# 每请求新建 `httpx.AsyncClient` 意味着每次都要重新走 TCP + TLS 握手。实测
+# （`client_lifecycle_probe.py`，真实 HTTPS 端点）：p50 **60.9ms → 10.4ms**，
+# 中位节省 **50.5ms/请求**。对一次多轮工具调用（可达十余次出站）来说这是
+# 数百毫秒的用户可见延迟。
+#
+# 分池键必须是 `base_url` 而不是「一个全局 client」：不同 provider 有不同的
+# 目标主机与 TLS 信任路径，跨 provider 复用连接池会让连接被错误复用，
+# 且无法按上游分别配置连接上限。按 base_url 分池使「同上游复用、跨上游隔离」
+# 成为结构性质，而不是约定。
+#
+# ## 为什么不影响 `sent` 的发送确定性
+#
+# `_classify_transport_error` 按**异常类型**判定（`ConnectError`/`ConnectTimeout`
+# → `sent=False`），与「连接是不是新建的」无关。连接池复用后，握手失败仍抛
+# 同样的异常类型，因此 `sent` 语义不变。这一点有测试锁定。
+#
+# ## 为什么不影响授权
+#
+# `Authorization` 头是**每请求**构造的（来自 `runtime.api_key`），不是 client 上的
+# 默认头。连接池只复用传输层，不复用凭据。
+_POOLED_CLIENTS: dict[str, httpx.AsyncClient] = {}
+
+#: 池内上游上限。见 `pooled_client` 的说明：只是防无界增长，不是容量调优。
+_MAX_POOLED_CLIENTS = 16
+
+
+def pooled_client(base_url: str) -> httpx.AsyncClient:
+    """取（或建）该上游的持久 client。
+
+    上限固定为 16 个上游：真实部署的 provider 数量是个位数，这个上界只是防止
+    「base_url 被频繁改动」导致字典无界增长。超限时按插入顺序淘汰最旧的池
+    （其连接会被关闭），而不是无界累积。
+    """
+    client = _POOLED_CLIENTS.get(base_url)
+    if client is not None:
+        return client
+    if len(_POOLED_CLIENTS) >= _MAX_POOLED_CLIENTS:
+        oldest_key = next(iter(_POOLED_CLIENTS))
+        stale = _POOLED_CLIENTS.pop(oldest_key)
+        # 关闭是异步的，而本函数是同步的。只在**有运行中的事件循环**时调度关闭任务；
+        # 没有循环（同步调用、测试）时直接丢弃引用，让 GC 回收。
+        #
+        # 刻意不用 `asyncio.ensure_future`：它在没有运行循环时会挂到默认循环上
+        # （Python 3.12 已弃用并告警）。淘汰是罕见路径，丢掉引用是可接受的代价。
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.create_task(stale.aclose())
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            float(config.AGENT_PROVIDER_PROXY_TIMEOUT_SECONDS),
+            connect=float(config.AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS),
+        ),
+    )
+    _POOLED_CLIENTS[base_url] = client
+    return client
+
+
+def close_pooled_clients() -> None:
+    """测试与关停用：清空池（不等待异步关闭）。"""
+    _POOLED_CLIENTS.clear()
+
+
 def _classify_transport_error(error: httpx.HTTPError) -> EgressFailure:
     """把**建立连接/读取响应头**阶段的异常映射为安全分类与发送确定性。
 
@@ -438,12 +507,10 @@ async def stream_provider_response(
         headers["User-Agent"] = user_agent
     client: httpx.AsyncClient | None = None
     try:
-        client = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                float(config.AGENT_PROVIDER_PROXY_TIMEOUT_SECONDS),
-                connect=float(config.AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS),
-            ),
-        )
+        # 按上游复用的持久 client：见 `pooled_client` 的成本实测与分池理由。
+        # **不得在请求结束时关闭它**——关闭会让连接池失效，收益归零，且下一个
+        # 请求会拿到一个已关闭的 client 而直接失败。
+        client = pooled_client(base_url)
         # 熔断检查必须在**发送前**：它的全部价值就是避免把明知会失败的请求发出去。
         # 上游整体不可用时（DERP 丢路由、provider 挂掉），每个 run 各自重试会让
         # 故障放大为「每租户 × 每 run × 24 次尝试」——实测最坏持续 18.8 小时。
@@ -478,12 +545,8 @@ async def stream_provider_response(
             header_timeout_seconds=float(config.AGENT_PROVIDER_PROXY_HEADER_TIMEOUT_SECONDS),
         )
     except ProviderProxyError:
-        if client is not None:
-            await client.aclose()
         raise
     except TimeoutError:
-        if client is not None:
-            await client.aclose()
         # 首响应期限到期：请求已发出（连接已建立），上游可能已处理，
         # 不得声称「未发送」；可重试交给请求层预算决定。
         _audit_egress(
@@ -504,8 +567,6 @@ async def stream_provider_response(
             502, AGENT_PROVIDER_PROXY_UNAVAILABLE, "Provider 暂时无法访问"
         ) from None
     except httpx.HTTPError as exc:
-        if client is not None:
-            await client.aclose()
         # 连接异常同样必须留安全终态（E-R2）；分类不读异常原文。
         failure = _classify_transport_error(exc)
         _audit_egress(
@@ -531,7 +592,6 @@ async def stream_provider_response(
         provider_circuit.breaker().record_success(circuit_key)
     if upstream.status_code >= 400:
         await upstream.aclose()
-        await client.aclose()
         # 上游错误体可能携带 secret/PII：只透出脱敏通用错误（redaction 合同）
         failure = _classify_upstream_status(upstream.status_code)
         _audit_egress(
@@ -682,7 +742,6 @@ async def passthrough_with_audit(
         raise
     finally:
         await upstream.aclose()
-        await client.aclose()
         _audit_egress(
             db,
             run=run_id,
