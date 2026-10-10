@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "核验 assistant 检索语义逐字未变、显式允许集与 private reader 绑定正确"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "核验 steward 工具只读合同、prompt_digest/input_hash 稳定性与 context_blocks 一致性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验后端质量门禁与最小充分检查范围"}

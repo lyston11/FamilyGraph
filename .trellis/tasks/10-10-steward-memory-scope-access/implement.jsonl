@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "记忆检索的 eligibility/授权合同、scope 语义与 policy consumer kind 定义；改 _ELIGIBILITY_SQL 与 search_rag 签名必须遵守"}
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "steward 只读工具合同（§6.1）、context 投影字段、tool_allowlist 与 sidecar canonical name 一致性要求"}
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "Memory scope/取代/有效区间语义与可见性三层防线；新增可见级别配置不得破坏这些谓词"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移可空/默认值与降级规则、SQLite 参数类型绑定（:now 必须显式声明 DateTime 类问题）"}
