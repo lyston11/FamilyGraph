@@ -43,6 +43,9 @@ from app.services import embedding_index, rag_embeddings  # noqa: E402
 from app.services.embedding_client import EmbeddingResult  # noqa: E402
 
 DIM = 8
+#: 与 `index_segments` 调用一致：`build_vector_candidates` 必须按同一模型过滤，
+#: 否则换模型后旧向量会与新查询向量比较（不同向量空间的余弦距离没有意义）。
+MODEL = "stub"
 
 
 class StubEmbedder:
@@ -132,7 +135,7 @@ def main() -> int:
     with Session(engine) as db:
         report = asyncio.run(
             embedding_index.run_index_pass(
-                db, model="stub", batch_size=2, max_batches=5, pause_seconds=0
+                db, model=MODEL, batch_size=2, max_batches=5, pause_seconds=0
             )
         )
     print(f"  索引报告: {report.summary()}")
@@ -164,11 +167,11 @@ def main() -> int:
             text(
                 "INSERT INTO rag_embedding_segments (chunk_id, model, segment_index, algorithm,"
                 " char_start, char_end, revision, scope, embedding)"
-                " SELECT c.id, 'stub', 0, 'probe', 0, 1, d.revision, d.scope, CAST(:v AS vector)"
+                " SELECT c.id, :model, 0, 'probe', 0, 1, d.revision, d.scope, CAST(:v AS vector)"
                 " FROM rag_chunks c JOIN rag_documents d ON d.id = c.document_id"
                 " WHERE c.id = 4"
             ),
-            {"v": "[" + ",".join(["0.1"] * DIM) + "]"},
+            {"v": "[" + ",".join(["0.1"] * DIM) + "]", "model": MODEL},
         )
 
     query_vector = asyncio.run(stub.embed_query("叔叔")).vectors[0]
@@ -176,7 +179,9 @@ def main() -> int:
 
     with engine.connect() as conn:
         filtered = rag_embeddings.build_vector_candidates(
-            dimension=DIM, eligibility="c.status = 'active' AND d.status = 'active'"
+            dimension=DIM,
+            model=MODEL,
+            eligibility="c.status = 'active' AND d.status = 'active'",
         )
         ids = [r[0] for r in conn.execute(filtered, {"query_vector": literal, "limit": 10, "offset": 0}).fetchall()]
         print(f"  带过滤候选 {ids}（期望不含撤权 chunk 4；每 chunk 只出现一次）")
@@ -187,7 +192,7 @@ def main() -> int:
             failures.append(f"同一 chunk 重复出现（PARTITION BY 未生效）：{ids}")
 
         unfiltered = rag_embeddings.build_vector_candidates(
-            dimension=DIM, eligibility="1=1"
+            dimension=DIM, model=MODEL, eligibility="1=1"
         )
         ids2 = [r[0] for r in conn.execute(unfiltered, {"query_vector": literal, "limit": 10, "offset": 0}).fetchall()]
         print(f"  反证（无过滤）{ids2}")
