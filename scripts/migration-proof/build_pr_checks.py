@@ -56,7 +56,7 @@ def _repo_root() -> Path:
 
 ROOT = _repo_root()
 BACKEND = ROOT / "backend"
-OUT_DIR = Path(os.environ.get("MIGRATION_PROOF_OUT", "."))
+OUT_DIR = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof")))
 
 # PRAGMA 名 -> PostgreSQL 等价物（None 表示无等价物，必须移除）
 PRAGMA_EQUIVALENT = {
