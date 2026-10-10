@@ -1,12 +1,18 @@
-"""真实 schema 对账（Phase C）：SQLite 快照 → 对账。
+"""真实 schema 对账（Phase C）：SQLite 快照 或 PostgreSQL 库 → 不变量对账。
 
 与 Gate 5 的 `import_reconcile_probe.py` 的区别：**真实业务 schema**（不是合成表）。
 
-**注意**：本脚本只验证**对账逻辑本身**（用 SQLite 快照作为源），
-不验证 PostgreSQL 导入——那需要真实 PG 连接（`FAMILYGRAPH_TEST_PG_DSN`）。
-对账逻辑的正确性由 Gate 5 的探针（合成数据 + 真实 PG）证明；
-本脚本把同样的对账逻辑应用到真实业务 schema 上，作为 Phase C 的
-「SQLite 侧基线」。
+## 两种源
+
+```text
+reconcile_real_schema.py <sqlite_snapshot_path>       # 迁移前：SQLite 快照
+PGTEST_DSN=postgresql://... reconcile_real_schema.py  # 迁移后：生产 PG 库
+```
+
+PostgreSQL 模式是 Phase C 的**真正验收**：迁移后的库必须自己满足全部不变量
+（取代语义、revision 镜像、外键完整性、egress 发送确定性）。它不需要「源 vs 目标」
+比较——迁移的正确性由「目标库是否自洽」与 Gate 5 的行数/摘要对账共同承担，
+后者需要两个库同时在线，属于切换窗口的检查。
 
 覆盖的对账维度（每个都对应一个合同）：
 
@@ -17,8 +23,8 @@
 | 状态分布 | 状态机语义保持 | `GROUP BY status` |
 | 授权 scope | `ck_memories_scope_space` / `ck_rag_documents_scope` | scope 与 space_id 的联合分布 |
 | revision/citation | `rag_documents.revision == source_revision` | 镜像一致性 |
-| egress 审计 | `agent_provider_egress` 一次一审计 | 按 target_id 分组计数 |
-| attempt/run | `steward_model_calls.run_id` 指向存在的 run | 左连接查孤儿 |
+| egress 审计 | `agent_provider_egress` **每次出站尝试**一条 | 尝试数分布 + `sent=false` 必须带 `error_class` |
+| attempt/run | `steward_model_calls.run_id` 指向存在的 run | 左连接查孤儿（排除合法的 NULL FK） |
 
 refusal 语义：检出差异后**不自动修复**，只报告。这与 Gate 5 一致。
 
@@ -29,9 +35,39 @@ refusal 语义：检出差异后**不自动修复**，只报告。这与 Gate 5 
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
+
+
+class PgAdapter:
+    """把 psycopg 连接适配成对账函数使用的 `execute(...).fetchone()` 形状。
+
+    对账查询本身是标准 SQL，两种方言都能跑；差异只在驱动 API（`?` vs `%s`
+    占位符这里用不到——所有查询都是常量字符串，无参数）。
+    """
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str) -> Any:
+        return _PgCursor(self._conn.execute(sql))
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+class _PgCursor:
+    def __init__(self, cur: Any) -> None:
+        self._cur = cur
+
+    def fetchone(self) -> Any:
+        return self._cur.fetchone()
+
+    def fetchall(self) -> list[Any]:
+        return self._cur.fetchall()
 
 
 def row_digest(conn: sqlite3.Connection, table: str) -> str:
@@ -106,12 +142,11 @@ def egress_sent_false_without_error_class(conn: sqlite3.Connection) -> int:
     ).fetchone()[0]
 
 
-def reconcile(src_path: Path) -> list[str]:
+def reconcile(src: Any) -> list[str]:
     """返回差异列表；空列表 = 对账通过。"""
     diffs: list[str] = []
-    src = sqlite3.connect(str(src_path))
     tables = [
-        "accounts", "spaces", "agent_runs", "steward_model_calls",
+        "accounts", "family_spaces", "agent_runs", "steward_model_calls",
         "memories", "rag_documents", "rag_chunks", "audit_log",
     ]
     for table in tables:
@@ -160,16 +195,39 @@ def reconcile(src_path: Path) -> list[str]:
     return diffs
 
 
+def _open_source(argv: list[str]) -> tuple[Any, str] | None:
+    """Open the reconciliation source: PG (env) takes precedence over a path."""
+    dsn = os.environ.get("PGTEST_DSN")
+    if dsn:
+        try:
+            import psycopg  # noqa: PLC0415
+        except ImportError:
+            print("SKIP: PGTEST_DSN 已设置但 psycopg 不可用")
+            return None
+        plain = dsn.replace("postgresql+psycopg://", "postgresql://").replace(
+            "postgresql+psycopg2://", "postgresql://"
+        )
+        return PgAdapter(psycopg.connect(plain)), "PostgreSQL (PGTEST_DSN)"
+    if len(argv) == 2:
+        snapshot = Path(argv[1])
+        if not snapshot.exists():
+            print(f"快照不存在: {snapshot}")
+            return None
+        return sqlite3.connect(str(snapshot)), str(snapshot)
+    print(
+        "用法: reconcile_real_schema.py <sqlite_snapshot_path>\n"
+        "   或: PGTEST_DSN=postgresql://... reconcile_real_schema.py"
+    )
+    return None
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("用法: python3 scripts/migration-proof/reconcile_real_schema.py <sqlite_snapshot_path>")
+    source = _open_source(sys.argv)
+    if source is None:
         return 2
-    snapshot = Path(sys.argv[1])
-    if not snapshot.exists():
-        print(f"快照不存在: {snapshot}")
-        return 2
-    print(f"对账: {snapshot}")
-    diffs = reconcile(snapshot)
+    conn, label = source
+    print(f"对账: {label}")
+    diffs = reconcile(conn)
     if diffs:
         print("\n差异:")
         for d in diffs:
