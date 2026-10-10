@@ -85,9 +85,19 @@ def state_distribution(conn: sqlite3.Connection, table: str, column: str) -> dic
 
 
 def scope_distribution(conn: sqlite3.Connection, table: str) -> dict:
-    return dict(
-        conn.execute(f"SELECT scope, space_id IS NULL, count(*) FROM {table} GROUP BY scope, space_id IS NULL").fetchall()  # noqa: S608
-    )
+    """scope × (space_id 是否为空) 的联合分布。
+
+    这个形状直接对应两个 CHECK 约束：
+    `private` 必须 `space_id IS NULL`，`household`/`lineage` 必须非空。
+    因此只要有任何一行落在「不该出现的组合」上，分布里就会多出一个键。
+    """
+    return {
+        f"{scope}/space_id={'NULL' if is_null else 'set'}": count
+        for scope, is_null, count in conn.execute(
+            f"SELECT scope, space_id IS NULL, count(*) FROM {table} "  # noqa: S608
+            "GROUP BY scope, space_id IS NULL"
+        ).fetchall()
+    }
 
 
 def revision_mismatch(conn: sqlite3.Connection) -> int:
