@@ -45,6 +45,7 @@ from app.models.memory import (
 from app.models.platform_features import PlatformFeatureConfig
 from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace
+from app.models.term_registry import TermEntry
 from app.models.user import User
 from app.services import memory_sources, platform_features, rag_search_provider
 from app.services.agent_provider import ProviderResolution, resolve_for_space
@@ -1193,6 +1194,185 @@ def ingest_authorized_document(
             )
         db.flush()
     return document
+
+
+#: 公共称谓知识的索引参数。语料是**内置称谓包**（`term_entries` 的 system/locale 级），
+#: 不含任何个人数据——这是它可以是 `scope='public'` 的唯一理由。
+#:
+#: 每个 locale 一份文档，`source_revision` 取包内内容的**确定性内容哈希**，而不是
+#: `count(*)` / `max(updated_at)`。理由：后两者在增删一条词条时会给出与内容无关的
+#: 版本号，触发无意义的重建与冲突；内容哈希只在**内容真的变了**时变，与
+#: `_materialize_chunks` 的 `content_sha256` 判据同源。
+PUBLIC_KINSHIP_SOURCE_PREFIX = "term-pack:"
+
+#: 系统层（`locale IS NULL`）在文档里的伪 locale 标签。
+PUBLIC_KINSHIP_SYSTEM_LOCALE = "system"
+
+
+def public_kinship_source_id(locale: str) -> str:
+    return f"{PUBLIC_KINSHIP_SOURCE_PREFIX}{locale}"
+
+
+def public_kinship_revision(entries: Sequence[tuple[str, str]]) -> int:
+    """由**内容**推导的包版本，与存储顺序无关。
+
+    取 31 位正整数（`rag_documents.revision` 是 Integer 且要求 >= 1）。
+    """
+    canonical = "\n".join(f"{code}\t{term}" for code, term in sorted(entries))
+    digest = hashlib.sha256(canonical.encode("utf-8")).digest()
+    return 1 + (int.from_bytes(digest[:4], "big") % (2**31 - 1))
+
+
+def render_public_kinship_text(locale: str, entries: Sequence[tuple[str, str]]) -> str:
+    """把称谓包渲染成可检索正文。
+
+    **只含概念编码与称谓文本**——不写 locale 之外的身份字段，也不引用任何
+    `user_id`/`account_id`。这是 `scope='public'` 的声明能被测试断言的前提
+    （见 `test_rag_public_kinship.py::test_public_document_carries_no_personal_data`）。
+
+    首行是标题句，因此「称谓包」「家谱称谓」这类主题词也可被召回；其余每条
+    「概念编码 表示 称谓」。用「表示」而不是 `=`：正文是自然语言，检索词
+    （`外婆`、`舅妈`）必须直接出现在正文里。
+    """
+    label = PUBLIC_KINSHIP_SYSTEM_LOCALE if locale == PUBLIC_KINSHIP_SYSTEM_LOCALE else locale
+    lines = [f"家谱称谓知识包 {label}：以下概念编码对应的亲属称谓。"]
+    lines.extend(f"{code} 表示 {term}。" for code, term in sorted(entries))
+    return "\n".join(lines)
+
+
+def index_public_kinship(
+    db: Session,
+    *,
+    locale: str,
+    entries: Sequence[tuple[str, str]],
+    target_version: str | None = None,
+) -> RAGDocument:
+    """Ensure the canonical projection of one public kinship pack.
+
+    ## 为什么它走与 `memory` 完全相同的路径
+
+    新 source_type 若自带第二条索引路径，「撤权可见」「revision 冲突」「重建一致」
+    这些合同就必须各自再证一次，且会各自漂移。这里复用 `_canonical_document` /
+    `_materialize_chunks` / `_repair_chunk_fts`，因此可见性仍然**完全**由查询层的
+    `_ELIGIBILITY_SQL` 承担（检索索引不承载授权）。
+
+    ## 为什么不需要像 `index_memory` 那样 `allow_index_superseded`
+
+    `_check_document_metadata` 的 `superseded` 分支在 `allow_index_superseded=False`
+    时**只**对 `source_type == 'memory'` 放行 `index_superseded` 恢复。公共称谓包的
+    真源是内置种子表，重新物化它不需要「恢复历史状态」的语义：内容变了就是新
+    revision、新文档。因此这里不传该开关，且 `test_rag_public_kinship.py` 对
+    「已 `index_superseded` 的公共文档不得被重新激活」做反向断言——与
+    `authorized_document` 的既有行为一致。
+
+    ## 为什么必须在生产执行路径上被调用
+
+    `ingest_authorized_document` 的现状是「只有测试调用」——那等于没有接入。
+    本函数的调用方是 `terms.seed_builtin_packs`（迁移 0012/0041 与启动种子都走它），
+    因此「跑过迁移或种子」就等于「索引已建立」。
+    """
+    _require_rag_enabled(db)
+    if not entries:
+        raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "称谓包为空，不建立公共索引")
+    for code, term in entries:
+        if not code.strip() or not term.strip():
+            raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "称谓条目不得为空")
+    source_id = public_kinship_source_id(locale)
+    revision = public_kinship_revision(entries)
+    text_value = render_public_kinship_text(locale, entries)
+    _acquire_index_writer(db)
+    db.flush()
+    with db.begin_nested():
+        _require_fresh_rag_enabled(db)
+        metadata: dict[str, Any] = {
+            "source_type": "public_kinship",
+            "source_id": source_id,
+            "author_account_id": None,
+            "owner_user_id": None,
+            "space_id": None,
+            "scope": "public",
+            "sensitivity": "normal",
+            "confirmation_status": "authorized",
+            "source_revision": revision,
+            "revision": revision,
+            "visibility_snapshot": {},
+            "visibility_snapshot_key": "public-kinship-v1",
+        }
+        document, created = _canonical_document(
+            db, metadata, target_version=target_version or RAG_INDEX_VERSION
+        )
+        _materialize_chunks(db, document, text_value, revision, creating=created)
+        _require_fresh_rag_enabled(db)
+        if created:
+            emit_domain_event(
+                db,
+                event_type="rag.document.ingested",
+                aggregate_type="rag_document",
+                aggregate_id=document.id,
+                payload={
+                    "source_type": "public_kinship",
+                    "scope": "public",
+                    "revision": revision,
+                    "locale": locale,
+                },
+                space_id=None,
+                actor_account_id=None,
+            )
+        db.flush()
+    return document
+
+
+def index_public_kinship_packs(db: Session) -> int:
+    """把 `term_entries` 的 system/locale 级全部物化成公共索引文档。
+
+    返回**新建立**的文档数（已存在且内容未变的不计入）。调用方负责提交；
+    任何异常都向上抛，不做吞掉——静默失败正是 `ingest_authorized_document` 的
+    现状得以长期隐藏的原因。
+    """
+    rows = db.execute(
+        select(TermEntry.locale, TermEntry.concept_code, TermEntry.term)
+        .where(TermEntry.level.in_(("system", "locale")), TermEntry.status == "active")
+        .order_by(TermEntry.locale, TermEntry.concept_code, TermEntry.term)
+    ).all()
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for locale, code, term in rows:
+        grouped.setdefault(locale or PUBLIC_KINSHIP_SYSTEM_LOCALE, []).append((code, term))
+    created = 0
+    for locale, entries in sorted(grouped.items()):
+        existing = db.scalar(
+            select(RAGDocument.id).where(
+                RAGDocument.source_type == "public_kinship",
+                RAGDocument.source_id == public_kinship_source_id(locale),
+                RAGDocument.revision == public_kinship_revision(entries),
+                RAGDocument.status == "active",
+            )
+        )
+        index_public_kinship(db, locale=locale, entries=entries)
+        if existing is None:
+            created += 1
+    return created
+
+
+def ensure_public_kinship_packs(db: Session) -> int:
+    """后台补建入口：**仅在**公共称谓索引完全不存在时物化，否则不做任何写入。
+
+    ## 为什么迁移路径不够
+
+    `terms.seed_builtin_packs`（迁移 0012/0041 与测试夹具都走它）会在 RAG 开启时
+    顺带建索引。但**既有安装**的迁移早已跑完，种子不会重跑——只靠那条路径，
+    现网永远不会得到公共索引，而那正是「写了代码但没人调用」的另一种形态。
+
+    本函数补的就是这批数据库，同时能自愈被清空的索引。成本是一次
+    `SELECT ... LIMIT 1`，建成后恒为 no-op，因此不是每次 tick 都做全量比对。
+    """
+    existing = db.scalar(
+        select(RAGDocument.id)
+        .where(RAGDocument.source_type == "public_kinship", RAGDocument.status == "active")
+        .limit(1)
+    )
+    if existing is not None:
+        return 0
+    return index_public_kinship_packs(db)
 
 
 def _fts_match(value: str) -> str:
@@ -2528,8 +2708,14 @@ __all__ = [
     "dismiss_candidate",
     "expire_due_memories",
     "index_memory",
+    "ensure_public_kinship_packs",
+    "index_public_kinship",
+    "index_public_kinship_packs",
     "ingest_authorized_document",
     "invalidate_source",
+    "public_kinship_revision",
+    "public_kinship_source_id",
+    "render_public_kinship_text",
     "propose_candidate",
     "revoke_memory",
     "query_hash",

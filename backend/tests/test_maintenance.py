@@ -120,6 +120,8 @@ def test_tick_noop_when_worker_disabled(db_session, monkeypatch):
         "rag_index_scanned": 0,
         "rag_index_materialized": 0,
         "rag_index_failed": 0,
+        # public_kinship 补建计数器（RAG 关闭时不做任何事）。
+        "rag_public_kinship_packs": 0,
         # C6：向量索引计数器（未配置 embedding 时全为 0）。
         "embedding_indexed": 0,
         "embedding_segments": 0,
