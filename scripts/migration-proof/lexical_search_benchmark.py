@@ -165,7 +165,7 @@ def main() -> int:
     print("pg_trgm `%` 命中为 0 的原因：CJK 的 trigram 集合稀疏，相似度低于默认阈值；")
     print("需看「trgm最高相似度」列判断是否值得降阈值，而不是直接判它不可用。")
 
-    out_dir = os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof"))
+    out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
     try:
         from pathlib import Path
         p = Path(out_dir)

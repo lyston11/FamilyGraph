@@ -122,7 +122,7 @@ def main() -> int:
     conn.commit()
     conn.close()
 
-    out_dir = os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof"))
+    out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
     try:
         from pathlib import Path
         p = Path(out_dir)
