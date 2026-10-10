@@ -101,6 +101,50 @@ def test_search_memory_matches_search_rag_exactly(db_session, memory_world):
     assert tool_result["results"][0]["citation"].startswith("rag:")
 
 
+def test_search_memory_does_not_read_other_source_types(db_session, memory_world):
+    """目的限定：记忆工具只读 `memory`，不得把其它语料交给助手。
+
+    这条防的是一个真实缺陷：`_search_memory_tool` 调 `search_rag` 时**没传
+    `source_types`**，而 `search_rag` 的 `source_types=None` 是「读全部类别」。
+    2026-10-10 接入公共称谓语料（`public_kinship`）后，它已经静默进了这个工具的
+    结果——工具名叫「记忆」，返回的却是空间外的公共知识。`authorized_document` /
+    `family_story` 落地时会以同样方式静默继承。
+
+    反证：把 `source_types` 参数去掉，这条断言必须失败（下方同时验证
+    `search_rag(source_types=None)` 确实能召回公共语料，证明差别是承重的）。
+    """
+    from app.services import terms
+
+    owner, space, session_row = memory_world
+    _confirm(db_session, owner, "奶奶最喜欢喝龙井茶，早上一定要泡一杯。")
+    terms.seed_builtin_packs(db_session)
+    db_session.commit()
+    run = _assistant_run(db_session, session_row, [SEARCH])
+
+    query = "外婆 舅舅 称谓"
+    tool_result = _call(db_session, run, session_row, SEARCH, {"query": query})
+    assert [item["source_type"] for item in tool_result["results"]] == [], tool_result["results"]
+
+    # 反证：不限定类别时同一查询确实能召回公共语料——所以「结果为空」不是
+    # 因为语料不存在或查询无效，而是因为目的限定真的生效了。
+    unfiltered = memory_rag.search_rag(
+        db_session,
+        actor=owner,
+        account=owner.account,
+        space_id=space.id,
+        query=query,
+        limit=5,
+        for_model=True,
+    )
+    assert any(
+        hit.source_type == "public_kinship" for hit in unfiltered
+    ), f"公共语料未建立或不匹配，反证无效：{[h.source_type for h in unfiltered]}"
+
+    # 类别元组是显式枚举：新增 source_type 默认对助手也不可读。
+    assert agent_tools.MEMORY_TOOL_SOURCE_TYPES == ("memory",)
+    assert "public_kinship" not in agent_tools.MEMORY_TOOL_SOURCE_TYPES
+
+
 def test_search_memory_rejects_empty_and_out_of_range(db_session, memory_world):
     _owner, _space, session_row = memory_world
     run = _assistant_run(db_session, session_row, [SEARCH])

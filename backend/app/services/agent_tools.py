@@ -106,6 +106,21 @@ TOOL_RECORD_TERM_USAGE = "familygraph.record_term_usage"
 # 策略消费者，不得触碰（与 private branch 的排除口径一致）。
 TOOL_SEARCH_MEMORY = "familygraph.search_memory"
 TOOL_PROPOSE_MEMORY = "familygraph.propose_memory"
+
+#: `search_memory` 可以读的 RAG `source_type`（目的限定的**第二个维度**）。
+#:
+#: ## 为什么必须显式声明
+#:
+#: 这个工具的名字是「记忆」，而 `search_rag` 的 `source_types=None` 是**读全部类别**。
+#: 不声明就等于「把 RAG 里将来出现的每一类语料都交给助手」——2026-10-10 接入
+#: `public_kinship` 时它已经静默进了结果；`authorized_document` / `family_story`
+#: 落地时会以同样方式静默继承。默认方向是**放开**，是错的方向。
+#:
+#: 与 steward 的 `steward_memory.STEWARD_READABLE_SOURCE_TYPES` 对称：两侧各有
+#: 自己的类别元组，新增 source_type 默认对两侧都不可读，要放开必须改这里的代码。
+#: 这不是「助手更宽松」——助手多出的能力来自**工具**（`get_profile_summary` 等
+#: 六个只读领域工具），而不是来自更宽的 RAG 读取面。
+MEMORY_TOOL_SOURCE_TYPES: tuple[str, ...] = ("memory",)
 TOOL_SEARCH_WEB = "familygraph.search_web"
 TOOL_FETCH_APPROVED_PAGE = "familygraph.fetch_approved_page"
 _KINSHIP_INTAKE_TOOLS = frozenset(
@@ -925,6 +940,9 @@ def _search_memory_tool(
             agent_kind="assistant",
             limit=limit,
             for_model=True,
+            # 目的限定的第二个维度：显式枚举，不从 scope 推导，也不靠
+            # `source_types=None` 的「读全部」默认。见 `MEMORY_TOOL_SOURCE_TYPES`。
+            source_types=MEMORY_TOOL_SOURCE_TYPES,
         )
     except HTTPException as exc:
         # 记忆/检索未启用或来源受限：按既有 API 口径对外，不伪装成空结果。

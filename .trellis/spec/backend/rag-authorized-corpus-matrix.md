@@ -18,7 +18,7 @@ Assistant 的执行身份、引用读取与分层预算见 [执行合同](memory
 |---|---|---|---|---|---|
 | `memory` | `memories` | private / household / lineage | 候选确认（`confirm_candidate`） | `Memory.revision`、`superseded_by_id`、`valid_to`、`status` | 活跃（既有） |
 | `public_kinship` | `term_entries` 的 `system`/`locale` 级 | public | 内置称谓包 seed / 维护循环补建 | 包内容的 sha256 派生正整数 | 活跃（2026-10-10） |
-| `authorized_document` | `attachments` + 授权记录 | private / household / lineage | 用户对某附件显式授权 | 附件 revision + 授权记录 revision | **仅登记** |
+| `authorized_document` | `attachments` + 授权记录 | private / household / lineage | 用户对某附件显式授权 | 附件 revision + 授权记录 revision | **仅登记**（附件当前不可索引，见 §6.1） |
 | `family_story` | 尚不存在 | household / lineage | 待产品定义 | 待定 | **仅登记** |
 | `profile` | `users` 档案字段 | ——（不索引） | —— | —— | **明确排除** |
 
@@ -111,6 +111,27 @@ UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "authorized_document": "<�
 这条约束直接决定 `authorized_document` 的合同形状：附件授权若只能整篇授权，等价于把原文
 交给该空间的所有 active 成员。因此它需要**段落级授权记录**，那是独立任务。
 
+### 6.1 附件（`attachments`）为什么不索引
+
+`authorized_document` 的真源候选是附件。2026-10-10 逐项核实后确认它**当前不可索引**，
+且阻塞点是递进的（前一个不解决，后一个无从谈起）：
+
+| # | 事实 | 位置 |
+|---|---|---|
+| 1 | 附件**没有空间归属**：只有 `user_id`（所有者）与 `uploaded_by`，**无 `space_id` 列** | `models/attachment.py` |
+| 2 | 没有资源级授权记录：「附件 × 空间 × 段落范围 × 授权人」这张表不存在；`disclosure_preferences` 是**类别级**的（health/address/photos…），不是资源级 | `models/v2_foundation.py` |
+| 3 | 没有可索引正文：只有 `title`（≤200）+ `description`（≤2000），且无 OCR / PDF 解析依赖 | `models/attachment.py`、`pyproject.toml` |
+
+而 `household` / `lineage` 两个 scope 分支都要求 `d.space_id = :space_id AND EXISTS(active
+SpaceMember)`，所以**第 1 条是承重的**：附件挂到哪个空间目前是**领域建模缺口**，不是实现缺口。
+
+因此结论是：**整篇授权 = 交给该空间的所有 active 成员**，且当前没有任何机制能把它收窄。
+在资源级授权模型（附件挂空间 + 段落范围 + 授权人 + 撤销）落地前，附件不进 RAG。
+
+**用户想索引的文档正文走 `memory`**：逐条用户确认的授权语义比空间级共享干净，且已具备
+完整的生命周期与撤权路径。第 3 条也说明附件的索引价值上限只是用户手写的那 2000 字描述，
+而这段文字本来就可以直接作为一条记忆被确认。
+
 ## 7. 分层预算的预留位
 
 `SOURCE_TIER_FRACTIONS` 保留五类份额，但**未索引类别的份额是预留位**，不是已实现能力。
@@ -120,7 +141,9 @@ UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "authorized_document": "<�
 份额集合的结构性保证（任何单一类别不可能占满预算、空类别不借出份额）**不由活跃类别数决定**，
 因此不需要随 `INDEXED_SOURCE_TYPES` 调整。
 
-## 8. steward 可读集是二维的，且新增类别默认不可读
+## 8. 两侧的可读集都是二维的，且新增类别对两侧都默认不可读
+
+### 8.1 steward
 
 `steward_memory.STEWARD_READABLE_SOURCE_TYPES` 是显式枚举（当前 `("memory",)`）。
 **不从 `scope` 推导**：放开一个 scope 时静默放开该 scope 下的全部类别，默认方向是
@@ -135,11 +158,29 @@ UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "authorized_document": "<�
 `public` 分支继续不对 steward 开放（无限制公开材料不对管家开放）。要求 steward 读公共
 称谓知识是一次**独立的边界变更**，必须重新论证这个门，不得顺手放宽。
 
-## 9. Required validation
+### 8.2 assistant（`search_memory` 工具）
 
+`agent_tools.MEMORY_TOOL_SOURCE_TYPES` 同样是显式枚举（当前 `("memory",)`）。
+
+这一侧曾经**没有**这个维度，后果是实测到的：`_search_memory_tool` 调 `search_rag` 时未传
+`source_types`，而 `source_types=None` 的语义是「读全部类别」，于是 2026-10-10 接入
+`public_kinship` 后，名为「记忆」的工具开始返回空间外的公共称谓语料
+（实测 citation：`rag:term-pack:zh-CN:r247349778:c5`）。`authorized_document` /
+`family_story` 落地时会以同样方式静默继承。
+
+**助手多出的能力来自工具，不是来自更宽的 RAG 读取面。** 助手另有六个只读领域工具
+（`get_profile_summary` 等）与两个受控 Web 工具，但 RAG 类别维度上与 steward 一样窄。
+新增 `source_type` 要放开给任一侧，都必须改该侧的类别元组——一次显式、可评审的代码
+改动，而不是一次配置写入。
+
+反证：`tests/test_memory_tools.py::test_search_memory_does_not_read_other_source_types`
+同时断言「限定后结果为空」与「不限定则确实召回公共语料」，证明差别承重而非同义反复。
+
+## 9. Required validation
 ```bash
 cd backend && pytest tests/test_rag_source_type_registry.py tests/test_rag_public_kinship.py \
     tests/test_steward_memory_tool.py tests/test_steward_memory_scopes.py \
+    tests/test_memory_tools.py \
     tests/test_rag_lifecycle_acceptance.py tests/test_context_tier_budget.py \
     tests/test_memory_eval_baseline.py
 ```
@@ -152,6 +193,7 @@ cd backend && pytest tests/test_rag_source_type_registry.py tests/test_rag_publi
 | 撤权后查询不可见、行仍在 | 按 id 直读证明 `status='invalidated'` |
 | 已 `index_superseded` 的公共文档不重新激活 | 手工置该状态后重跑写入方 |
 | steward 读不到 `public_kinship` | 只放类别维度、scope 用合法值域 |
+| assistant 的 `search_memory` 也读不到 `public_kinship` | 去掉 `source_types` 参数（实测会返回 `rag:term-pack:zh-CN:...`） |
 | 公共索引在**生产路径**上被建立 | 删掉 `terms.seed_builtin_packs` 的调用 |
 
 ## 10. Wrong vs Correct
@@ -174,6 +216,9 @@ revision = db.scalar(select(func.count()).select_from(TermEntry)) # 增删一条
 
 # 5. 用 scope 推导 steward 可读类别
 source_types = ("memory", "family_story") if "household" in scopes else ("memory",)
+
+# 6. 靠 `source_types=None` 的「读全部」默认（名为「记忆」的工具读到了公共语料）
+hits = search_rag(db, ..., query=clean, agent_kind="assistant")  # 读全部类别
 ```
 
 ### Correct
@@ -191,6 +236,11 @@ revision = 1 + int.from_bytes(sha256(canonical_entries).digest()[:4], "big") % (
 
 # 4. 接在生产路径上（seed / 维护循环），并断言它真的建了文档
 
-# 5. 类别是显式枚举，新增类别默认不可读
+# 5. 两侧的类别都是显式枚举，新增类别对两侧默认不可读
 STEWARD_READABLE_SOURCE_TYPES: tuple[str, ...] = ("memory",)
+MEMORY_TOOL_SOURCE_TYPES: tuple[str, ...] = ("memory",)
+
+# 6. 助手的能力来自工具，不来自更宽的读取面
+hits = search_rag(db, ..., query=clean, agent_kind="assistant",
+                  source_types=MEMORY_TOOL_SOURCE_TYPES)
 ```
