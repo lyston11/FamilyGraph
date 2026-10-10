@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "RAG 检索授权、引用投影、上下文构建与评估基线的完整合同"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "索引换版、回填、租约与撤权生命周期合同"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "run/lease/cancel/settle 与 provider egress 的运行时合同"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "跨方言约束、触发器等价物与探针纪律"}

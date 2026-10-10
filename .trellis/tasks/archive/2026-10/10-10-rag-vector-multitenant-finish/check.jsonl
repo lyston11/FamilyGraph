@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "核验授权过滤先于排序、引用由服务端生成、评估基线不退化"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "核验索引换版无半切换、失败不推进游标"}
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "核验 lease/settle/cancel 语义与 egress 审计不被放宽"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验 lint/type-check/测试与交付说明要求"}
