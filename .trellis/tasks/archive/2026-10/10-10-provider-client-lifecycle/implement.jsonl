@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "provider gateway 的 egress 审计、错误分类与 stream 生命周期合同"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "探针纪律与「必须在真实环境执行才算验证」的约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/type-check/测试与交付说明要求"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "核验 egress 审计语义、sent 确定性与错误分类未被放宽"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验 lint/type-check/测试与交付说明要求"}
