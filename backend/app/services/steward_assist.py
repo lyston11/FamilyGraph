@@ -2328,8 +2328,13 @@ def open_child_run(
             policy_version=attempt.policy_version,
             # 只有带 viewer claim 的 attempt 才拿到 viewer 绑定工具；否则模型会
             # 看到并调用一个必然被 403 拒绝的工具（实测 476 次拒绝 / 60 个 run）。
+            # `db`/`space_id` 必须传入：记忆工具的可读集来自平台列 ∩ 空间列，
+            # 不传就无法判定，会把一个可用工具静默漏掉（与 Web 工具同理）。
             tool_allowlist_json=agent_tools.default_allowlist(
-                "steward", viewer_scope=attempt.viewer_account_id is not None
+                "steward",
+                db,
+                space_id=attempt.space_id,
+                viewer_scope=attempt.viewer_account_id is not None,
             ),
             runtime_snapshot_json=agent_provider.snapshot_for_space(
                 db, attempt.space_id, agent_provider.AGENT_KIND_STEWARD

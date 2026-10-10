@@ -225,6 +225,11 @@ STEWARD_ASSIST_TERMINOLOGY: bool = os.environ.get("STEWARD_ASSIST_TERMINOLOGY", 
     "1",
     "true",
 )
+# 管家可读的记忆级别：部署级**上界**（规范化编码，逗号分隔，值域 MEMORY_SCOPES）。
+# 空 = 部署级关闭（沿用 STEWARD_ASSIST_* 的 kill-switch 语义）。
+# 有效值 = 本项 ∩ 平台列 ∩ 空间列，三层都取交集；任一层为空即整体为空。
+# 默认空：管家读不到任何记忆，与引入该能力之前的行为一致。
+STEWARD_MEMORY_SCOPES: str = os.environ.get("STEWARD_MEMORY_SCOPES", "")
 # 每 job 预算与上限（超限 skip 并留审计行，绝不拖垮确定性流水线）
 STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB: int = int(
     os.environ.get("STEWARD_ASSIST_MAX_MODEL_CALLS_PER_JOB", "6")

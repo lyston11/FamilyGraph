@@ -150,16 +150,31 @@ def test_vector_query_receives_every_eligibility_binding(db_session, monkeypatch
         space_id=space.id,
         agent_kind="assistant",
         query="外婆住在哪里",
-        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity=""),
+        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity="", source_types=""),
         seen_chunk_ids=set(),
         limit=5,
         now=utcnow(),
         is_assistant=1,
         user_id=owner.id,
+        allow_private=1,
+        allow_household=1,
+        allow_lineage=1,
+        private_reader_account_id=owner.account.id,
     )
     params = fake.captured or {}
     # `_ELIGIBILITY_SQL` 用到的每个命名参数都必须在场。
-    for name in ("now", "is_assistant", "user_id", "account_id", "space_id"):
+    # 每个 scope 开关与 private 读者都必须绑定：漏传任何一个都会让整条查询抛
+    # StatementError 并静默回退词法（这正是这条测试存在的理由）。
+    for name in (
+        "now",
+        "is_assistant",
+        "user_id",
+        "space_id",
+        "allow_private",
+        "allow_household",
+        "allow_lineage",
+        "private_reader_account_id",
+    ):
         assert name in params, f"向量查询缺少 eligibility 绑定参数 {name}"
     assert params["model"] == "test-model"
     assert params["query_vector"].startswith("[")
@@ -185,12 +200,16 @@ def test_similarity_floor_drops_weak_vector_candidates(db_session, monkeypatch):
         space_id=space.id,
         agent_kind="assistant",
         query="外婆住在哪里",
-        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity=""),
+        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity="", source_types=""),
         seen_chunk_ids=set(),
         limit=5,
         now=utcnow(),
         is_assistant=1,
         user_id=owner.id,
+        allow_private=1,
+        allow_household=1,
+        allow_lineage=1,
+        private_reader_account_id=owner.account.id,
     )
     assert hits == [], "低于相似度地板的向量候选必须被丢弃"
     del memory
@@ -217,12 +236,16 @@ def test_similarity_floor_keeps_strong_vector_candidates(db_session, monkeypatch
         space_id=space.id,
         agent_kind="assistant",
         query="外婆住在哪里",
-        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity=""),
+        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity="", source_types=""),
         seen_chunk_ids=set(),
         limit=5,
         now=utcnow(),
         is_assistant=1,
         user_id=owner.id,
+        allow_private=1,
+        allow_household=1,
+        allow_lineage=1,
+        private_reader_account_id=owner.account.id,
     )
     assert len(hits) == 1 and hits[0].chunk_id == 1
 
@@ -242,12 +265,16 @@ def test_vector_failure_falls_back_to_lexical(db_session, monkeypatch):
         space_id=space.id,
         agent_kind="assistant",
         query="外婆住在哪里",
-        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity=""),
+        eligibility=memory_rag._ELIGIBILITY_SQL.format(sensitivity="", source_types=""),
         seen_chunk_ids=set(),
         limit=5,
         now=utcnow(),
         is_assistant=1,
         user_id=owner.id,
+        allow_private=1,
+        allow_household=1,
+        allow_lineage=1,
+        private_reader_account_id=owner.account.id,
     )
     assert hits == [] and denied == 0
     assert fake.rolled_back, "查询失败后必须 rollback，否则会话停留在失败事务里"

@@ -55,20 +55,20 @@ CLASSIFICATION: dict[tuple[str, int], tuple[str, str]] = {
     ("services/steward_assist.py", 1552): ("pre_active", "发送门：plan 缺失，reserved 从未计入"),
     ("services/steward_assist.py", 1563): ("pre_active", "发送门：栅栏拒绝，reserved 从未计入"),
     ("services/steward_assist.py", 1577): ("pre_active", "发送门：预算不足，reserved 从未计入"),
-    ("services/steward_assist.py", 2518): ("pre_active", "schedule_due_attempt 计划阶段"),
+    ("services/steward_assist.py", 2523): ("pre_active", "schedule_due_attempt 计划阶段"),
     ("services/steward_assist.py", 2036): ("leave", "_settle_attempt 成功 -> succeeded"),
     ("services/steward_assist.py", 2055): ("leave", "_settle_attempt 组上下文失效 -> degraded"),
     ("services/steward_assist.py", 2070): ("leave", "_settle_attempt 校验未过 -> degraded"),
     ("services/steward_assist.py", 2116): ("leave", "_settle_attempt_failure 分类结果"),
     ("services/steward_assist.py", 2119): ("leave", "_settle_attempt_failure -> failed"),
     ("services/steward_assist.py", 1948): ("leave", "record_attempt_outcome 写回栅栏 -> skipped"),
-    ("services/steward_assist.py", 2416): ("leave", "recover_stuck_attempts 崩溃点③ -> unknown"),
-    ("services/steward_assist.py", 2390): (
+    ("services/steward_assist.py", 2421): ("leave", "recover_stuck_attempts 崩溃点③ -> unknown"),
+    ("services/steward_assist.py", 2395): (
         "post_active",
         "recover_stuck_attempts 崩溃点④：改写已结算行，不重复归还",
     ),
     # ---- AgentRun（steward child run 的收敛也在本文件）----
-    ("services/steward_assist.py", 2466): ("leave", "recover_stuck_child_runs -> expired"),
+    ("services/steward_assist.py", 2471): ("leave", "recover_stuck_child_runs -> expired"),
     # ---- StewardModelCall 的构造点：全部在计划阶段，尚未计入 ----
     ("services/steward_assist.py", 1183): ("pre_active", "_reserve_attempt 计划期跳过（预算耗尽）"),
     ("services/steward_assist.py", 1189): (

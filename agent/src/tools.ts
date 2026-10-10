@@ -49,6 +49,7 @@ export const TOOL_VERSIONS = {
   "familygraph.steward.get_viewer_term": 1,
   "familygraph.steward.get_evidence": 1,
   "familygraph.steward.get_relationship_path": 1,
+  "familygraph.steward.search_memory": 1,
 } as const;
 
 export type DomainToolName = keyof typeof TOOL_VERSIONS;
@@ -248,6 +249,15 @@ const StewardRelationshipSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+// 输入只含查询本身：space 来自 run claims、viewer 来自 attempt。身份字段一律不在
+// schema 里，否则它就变成了一个跨 viewer 的读取通道。
+const StewardSearchMemorySchema = Type.Object(
+  {
+    query: Type.String({ maxLength: 500 }),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
+  },
+  { additionalProperties: false },
+);
 
 const STEWARD_TOOL_NAMES = [
   "familygraph.steward.get_space_snapshot",
@@ -256,6 +266,7 @@ const STEWARD_TOOL_NAMES = [
   "familygraph.steward.get_viewer_term",
   "familygraph.steward.get_evidence",
   "familygraph.steward.get_relationship_path",
+  "familygraph.steward.search_memory",
 ] as const;
 
 function textResult(text: string): {
@@ -564,6 +575,20 @@ export function createDomainTools(
         compactInput(params as Static<typeof StewardRelationshipSchema>),
       ),
   } as unknown as ToolDefinition;
+  const stewardSearchMemory: ToolDefinition = {
+    name: "familygraph.steward.search_memory",
+    label: "Steward memory search",
+    description:
+      "只读检索当前空间配置允许级别内的已确认记忆，返回可引用句柄与摘要；不返回原文，不写入。",
+    parameters: StewardSearchMemorySchema,
+    execute: async (toolCallId: string, params: unknown) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.steward.search_memory",
+        toolCallId,
+        compactInput(params as Static<typeof StewardSearchMemorySchema>),
+      ),
+  } as unknown as ToolDefinition;
 
   const tools = [
     echo,
@@ -585,6 +610,7 @@ export function createDomainTools(
     stewardViewerTerm,
     stewardEvidence,
     stewardRelationshipPath,
+    stewardSearchMemory,
   ] as unknown as ToolDefinition[];
 
   if (!options.providerWireNames) return tools;

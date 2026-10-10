@@ -28,6 +28,7 @@ def test_steward_registry_is_read_only_and_closed() -> None:
         steward_tools.TOOL_GET_VIEWER_TERM,
         steward_tools.TOOL_GET_EVIDENCE,
         steward_tools.TOOL_GET_RELATIONSHIP_PATH,
+        steward_tools.TOOL_SEARCH_MEMORY,
     }
     assert all(
         agent_tools.REGISTRY[name].required_kind == "steward"
@@ -137,10 +138,20 @@ def test_default_allowlist_omits_viewer_tools_without_a_viewer_claim() -> None:
     for name in steward_tools.STEWARD_VIEWER_TOOL_NAMES:
         assert name in with_viewer, f"有 viewer claim 时应授予 {name}"
 
-    # 非 viewer 工具两种情况下都必须在，否则会误伤空间级工具。
-    for name in steward_tools.STEWARD_TOOL_NAMES - steward_tools.STEWARD_VIEWER_TOOL_NAMES:
+    # 非 viewer 工具两种情况下都必须在，否则会误伤空间级工具。记忆工具除外：
+    # 它的可用性取决于配置（平台列 ∩ 空间列 ∩ env），无 db 作用域时无法判定，
+    # 按「宁可少给，不可给出必然失败的调用」一律不广告（与 Web 工具同口径）。
+    always_on = (
+        steward_tools.STEWARD_TOOL_NAMES
+        - steward_tools.STEWARD_VIEWER_TOOL_NAMES
+        - {steward_tools.TOOL_SEARCH_MEMORY}
+    )
+    for name in always_on:
         assert name in without
         assert name in with_viewer
+
+    assert steward_tools.TOOL_SEARCH_MEMORY not in without
+    assert steward_tools.TOOL_SEARCH_MEMORY not in with_viewer
 
 
 def test_assistant_allowlist_is_unaffected_by_viewer_scope() -> None:

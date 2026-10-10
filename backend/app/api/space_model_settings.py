@@ -41,7 +41,14 @@ from app.schemas.agent import (
     SpaceModelSettingsKindsOut,
     SpaceModelSettingsOut,
 )
-from app.services import agent_provider, audit, space_fsm, steward_assist, steward_inferred
+from app.services import (
+    agent_provider,
+    audit,
+    space_fsm,
+    steward_assist,
+    steward_inferred,
+    steward_memory,
+)
 
 router = APIRouter(tags=["space-model-settings"])
 
@@ -78,6 +85,7 @@ def _setting_out(
     *,
     inferred_effective: bool = False,
     assist_effective: dict[str, bool] | None = None,
+    steward_memory_scopes_effective: str = "",
 ) -> SpaceAgentSettingOut | None:
     if row is None:
         return None
@@ -101,6 +109,9 @@ def _setting_out(
         inferred_tree=bool(row.inferred_tree),
         # 生效 = 平台 AND 空间；空间开而平台关 → 前端据 False 显示可解释提示
         inferred_effective=inferred_effective,
+        steward_memory_scopes=row.steward_memory_scopes or "",
+        # 生效 = env ∩ 平台 ∩ 空间；与行的原始值分开，让「设了但不生效」可解释
+        steward_memory_scopes_effective=steward_memory_scopes_effective,
     )
 
 
@@ -178,6 +189,9 @@ def get_space_model_settings(
                     kind: steward_assist.assist_enabled(session, space_id, kind)
                     for kind in ("candidate", "ranking", "explanation", "terminology")
                 },
+                steward_memory_scopes_effective=steward_memory.encode_scopes(
+                    steward_memory.effective_scopes(session, space_id=space_id)
+                ),
             ),
         ),
         catalog=_catalog_out(session),
@@ -208,14 +222,32 @@ def put_space_model_settings(
         body.assist_terminology,
     )
     if body.agent_kind != "steward" and (
-        any(v is not None for v in assist_values) or body.inferred_tree is not None
+        any(v is not None for v in assist_values)
+        or body.inferred_tree is not None
+        or body.steward_memory_scopes is not None
     ):
         raise_api_error(
             422,
             VALIDATION_ERROR,
-            "assist_* / inferred_tree 开关仅对 steward 维度有意义",
+            "assist_* / inferred_tree / steward_memory_scopes 仅对 steward 维度有意义",
             {"agent_kind": body.agent_kind},
         )
+
+    # 记忆级别：严格解析。未知 scope 必须 422——静默丢弃会让「关掉某个级别」看起来
+    # 生效了，而实际仍开着。
+    new_memory_scopes: str | None = None
+    if body.steward_memory_scopes is not None:
+        try:
+            new_memory_scopes = steward_memory.encode_scopes(
+                steward_memory.parse_scopes_strict(body.steward_memory_scopes)
+            )
+        except ValueError as exc:
+            raise_api_error(
+                422,
+                VALIDATION_ERROR,
+                "未知的记忆可见级别",
+                {"steward_memory_scopes": body.steward_memory_scopes, "reason": str(exc)},
+            )
 
     if body.enabled:
         if body.provider_id is None or not body.model:
@@ -254,6 +286,8 @@ def put_space_model_settings(
             row.assist_terminology = body.assist_terminology
         if body.inferred_tree is not None:
             row.inferred_tree = body.inferred_tree
+        if new_memory_scopes is not None:
+            row.steward_memory_scopes = new_memory_scopes
     session.commit()
     audit.write_audit(
         session,

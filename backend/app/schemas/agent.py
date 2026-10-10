@@ -507,6 +507,10 @@ class SpaceAgentSettingOut(BaseModel):
     # 据此显示可解释提示，不暴露 env 细节）
     inferred_tree: bool = False
     inferred_effective: bool = False
+    # 管家可读的记忆级别（空间级上界，规范化编码；空串 = 空集）。
+    steward_memory_scopes: str = ""
+    # 生效值 = env ∩ 平台列 ∩ 本列；空间开而平台/env 关 → 前端据空值显示可解释提示。
+    steward_memory_scopes_effective: str = ""
 
 
 class SpaceModelSettingsKindsOut(BaseModel):
@@ -597,3 +601,6 @@ class AgentSpaceModelSettingsRequest(_Strict):
     assist_terminology: bool | None = None
     # 推测层空间级开关（仅 steward 维度；assistant 维度非 None → 422）
     inferred_tree: bool | None = None
+    # 管家可读的记忆级别（仅 steward 维度；assistant 维度非 None → 422）。
+    # None = 保留现值；非 None 时值域是 MEMORY_SCOPES 的子集，未知 scope → 422。
+    steward_memory_scopes: str | None = None

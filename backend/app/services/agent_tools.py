@@ -42,6 +42,7 @@ from app.services import (
     controlled_web,
     intake_extractor,
     platform_features,
+    steward_memory,
     steward_tools,
     terms,
 )
@@ -161,6 +162,10 @@ def _steward_tool_specs() -> tuple[ToolSpec, ...]:
         steward_tools.TOOL_GET_VIEWER_TERM: "读取当前 viewer 的已发布称谓投影",
         steward_tools.TOOL_GET_EVIDENCE: "读取当前发布视图允许引用的结构化证据",
         steward_tools.TOOL_GET_RELATIONSHIP_PATH: "读取当前空间已发布的关系路径",
+        steward_tools.TOOL_SEARCH_MEMORY: (
+            "在当前空间**配置允许的级别**内检索已确认的记忆（只读，句柄 + 摘要；"
+            "不含原文；private 仅在带 viewer 的 attempt 上可见）"
+        ),
     }
     return tuple(
         ToolSpec(
@@ -401,6 +406,18 @@ def default_allowlist(
                 _unusable.update({TOOL_SEARCH_MEMORY, TOOL_PROPOSE_MEMORY})
             elif not platform_features.is_rag_enabled(db):
                 _unusable.add(TOOL_SEARCH_MEMORY)
+    elif kind == "steward":
+        # 管家记忆工具同理：可读集为空（或检索未启用）时 `_search_memory` 必然拒绝。
+        # 可读集 = env ∩ 平台列 ∩ 空间列，且**无 viewer 时去掉 private**，所以
+        # `viewer_scope` 参与判定：只配了 private 的 run 拿不到它。
+        if db is None or space_id is None or not platform_features.is_rag_enabled(db):
+            _unusable.add(steward_tools.TOOL_SEARCH_MEMORY)
+        else:
+            scopes = steward_memory.effective_scopes(db, space_id=space_id)
+            if not viewer_scope:
+                scopes = tuple(scope for scope in scopes if scope != "private")
+            if not scopes:
+                _unusable.add(steward_tools.TOOL_SEARCH_MEMORY)
     allowlist = sorted(
         name
         for name, spec in REGISTRY.items()

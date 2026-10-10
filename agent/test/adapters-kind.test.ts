@@ -114,6 +114,7 @@ describe("adapterFor", () => {
       "familygraph.steward.get_viewer_term",
       "familygraph.steward.get_evidence",
       "familygraph.steward.get_relationship_path",
+      "familygraph.steward.search_memory",
     ]);
     expect(adapterFor("assistant").toolNames()).not.toContain(
       "familygraph.steward.get_space_snapshot",

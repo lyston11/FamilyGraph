@@ -295,3 +295,61 @@ contextual prefix   6/8
 分段单独生成**（LLM）而非来源级常量；该 LLM 调用经 provider gateway 且成本已计入
 预算；在同一份 golden set 上证明增益。
 
+
+## 11. 记忆可见级别：显式允许集与 `private` 的读者（2026-10-10 补充）
+
+本任务（10-10）给管家加了受控的记忆读取。它同时改动了 §8 所说的**授权过滤**，因此进入本合同。
+
+### 允许集是集合，不是布尔
+
+`search_rag` 新增两个关键字参数，都是**额外**的门，不替代 fenced 身份与 space 成员判据：
+
+- `scope_allowlist: Sequence[str] | None`（`None` = 全部，即既有行为）；
+- `private_reader_account_id: int | None | _UnsetReader`（未传 = 调用方自己的 `account.id`，
+  即 assistant 语义；显式 `None` = 无私有读者，恒不可读）。
+
+`_ELIGIBILITY_SQL` 里每个 scope 分支都有自己的开关（`:allow_private` / `:allow_household` /
+`:allow_lineage`）。**不能用布尔**：管家按配置可能只允许 `household` 而不允许 `lineage`，
+布尔会把「读哪些级别」退化成「全开或全关」。
+
+哨兵用专属类型 `_UnsetReader` 而不是 `object()`：`object()` 会让类型检查器把参数类型退化成
+`object`，`is` 判断无法收窄。
+
+### `private` 的判据是读者，不是 kind
+
+private 分支由 `:is_assistant = 1` 改为 `d.author_account_id = :private_reader_account_id`。
+旧写法的缺陷是真实的：管家的空间级 kind（`candidate`/`ranking`/`explanation`）没有 viewer，
+身份回落到 **space admin**，因此一旦为管家打开 private 就会读到管理员本人的私事。
+改成显式读者后，无法提供读者（NULL）即恒不可读。
+
+`public` 分支**继续保留** `:is_assistant = 1`。
+
+### 两层必须各自独立挡住
+
+`private` 的读者约束在两处实现，两处都不得回退：
+
+1. `memory_rag._ELIGIBILITY_SQL`（SQL 层，filter-then-ANN 的 `authorized` CTE 也走它）；
+2. `memory_sources._can_read_document`（投影复核层；`_rows_to_hits`、精确片段重读、来源访问
+   检查都走它）。
+
+只改一层的后果都已实测：只改 SQL 会让 `document_readable` 把已授权命中全部拒掉（表现为
+「检索不到」——`_vector_candidates` 复用 `_rows_to_hits` 正是为了避免这种不一致）；只改复核层
+则会让未授权行进入投影。
+
+`_rows_to_hits` / `_vector_candidates` 都必须把解析后的读者一并传给向量 SQL 与复核层：
+漏传任何一个绑定参数都会让整条查询抛 `StatementError` 并**静默回退词法**（§8 已记录过这个
+失败形态）。
+
+### 配置语义
+
+有效可读集 = 部署 env ∩ 平台列 ∩ 空间列，**交集**且任一为空即整体为空（默认全空 = 管家读不到
+记忆，与引入该能力之前逐字等价）。未知 scope 在读取时忽略并告警、在写入时 422：静默丢弃会让
+「关掉某级别」看起来生效了。
+
+**Wrong vs Correct**
+
+错误：用「哪些 kind 能读 private」当判据；用布尔代替 scope 允许集；只改 SQL 层或只改复核层；
+把「配置不允许」返回成空列表（它会把授权拒绝伪装成「没有相关内容」）；让 `private` 读者回落到
+回落身份（space admin）。
+
+正确：显式允许集 + 显式读者；两层各自独立挡住；空可读集直接 403；写入时严格校验。

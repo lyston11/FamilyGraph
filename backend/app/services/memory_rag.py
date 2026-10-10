@@ -1201,8 +1201,41 @@ def _fts_match(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+# `private_reader_account_id` 未传时的哨兵与 `memory_sources` 共用（同一类型，
+# 否则类型检查器会认为是两个不同的类型）。语义见 memory_sources._UnsetReader。
+_UNSET_READER = memory_sources._UNSET_READER
+_UnsetReader = memory_sources._UnsetReader
+
+
+def _validated_source_types(source_types: Sequence[str]) -> tuple[str, ...]:
+    """只允许 `RAG_SOURCE_TYPES` 内的值。
+
+    这些值会被拼进 SQL 片段，因此必须是**枚举白名单**而不是任意字符串；
+    未知值直接 422，不静默丢弃。
+    """
+    unknown = sorted({value for value in source_types if value not in RAG_SOURCE_TYPES})
+    if unknown:
+        raise_api_error(
+            422, POLICY_CONTEXT_INVALID, "未知的 RAG source_type", {"source_types": unknown}
+        )
+    return tuple(value for value in RAG_SOURCE_TYPES if value in set(source_types))
+
+
 # SQL eligibility predicates shared by the FTS path and the short-word fallback
 # so a two-character query can never reach raw rows the FTS path cannot.
+#
+# 每个 scope 分支都有自己的允许开关（`:allow_private` / `:allow_household` /
+# `:allow_lineage`），因为「调用方可以读哪些级别」是**集合**而非布尔：管家按配置
+# 可能只允许 `household` 而不允许 `lineage`。开关与身份判据是两道独立的门，
+# 两者都必须过：开关来自调用方声明的允许集，身份来自 fenced 身份。
+#
+# private 分支**不再用** `:is_assistant = 1`，而是显式要求
+# `d.author_account_id = :private_reader_account_id`。旧写法把「能否读私有」与
+# 「调用方是什么 kind」绑定，而管家的空间级 kind 会回落到 space admin 作为身份，
+# 一旦为管家打开 private 就会读到管理员本人的私事。改成显式读者后，私有记忆
+# 的语义是「只能被它的作者账号读」，而管家只在带 viewer 时才能提供这个账号，
+# 空间级 kind 传 NULL 而 `author_account_id = NULL` 恒假。
+# `:is_assistant` 仍保留在 public 分支：无限制公开材料不对管家开放。
 _ELIGIBILITY_SQL = """
   c.status = 'active'
   AND d.status = 'active'
@@ -1218,10 +1251,14 @@ _ELIGIBILITY_SQL = """
       AND (m.valid_to IS NULL OR m.valid_to > :now)
   ))
   {sensitivity}
+  {source_types}
   AND (
-    (d.scope = 'private' AND d.author_account_id = :account_id AND :is_assistant = 1)
+    (d.scope = 'private' AND :allow_private = 1
+     AND d.author_account_id = :private_reader_account_id)
     OR
     (d.scope IN ('household', 'lineage') AND d.space_id = :space_id
+     AND ((d.scope = 'household' AND :allow_household = 1)
+          OR (d.scope = 'lineage' AND :allow_lineage = 1))
      AND EXISTS (
        SELECT 1 FROM space_members sm
        WHERE sm.space_id = d.space_id AND sm.user_id = :user_id AND sm.status = 'active'
@@ -1382,6 +1419,7 @@ def _rows_to_hits(
     space_id: int,
     agent_kind: str,
     rank_by_order: bool,
+    private_reader_account_id: int | None | _UnsetReader = _UNSET_READER,
 ) -> tuple[list[RAGHit], int]:
     """Project rows through the visibility policy once more; count denials.
 
@@ -1412,6 +1450,8 @@ def _rows_to_hits(
             account=account,
             space_id=space_id,
             agent_kind=agent_kind,
+            # 同一层的独立把关：SQL 已经按允许集/读者过滤过，这里再按读者过滤一次。
+            private_reader_account_id=private_reader_account_id,
         ):
             denied += 1
             continue
@@ -1457,6 +1497,9 @@ def search_rag(
     query_plan: QueryPlan | None = None,
     trace: dict[str, Any] | None = None,
     rank_version: str = RANK_VERSION_DEFAULT,
+    scope_allowlist: Sequence[str] | None = None,
+    private_reader_account_id: int | None | _UnsetReader = _UNSET_READER,
+    source_types: Sequence[str] | None = None,
 ) -> list[RAGHit]:
     """Search with SQL scope/confirmation/status predicates before results escape.
 
@@ -1464,6 +1507,15 @@ def search_rag(
     exact phrase and bounded terms; two-character Chinese terms that cannot
     trigram-match take a parameterized LIKE fallback restricted to the same
     eligibility predicates with a bounded scan budget.
+
+    ``scope_allowlist`` 声明调用方可以读哪些 scope（``None`` = 全部，即既有行为）；
+    ``private_reader_account_id`` 声明 private 分支的读者账号（未传 = 调用方自己的
+    ``account.id``，即 assistant 语义；显式传 ``None`` = 无私有读者，恒不可读）。
+    两者都是**额外**的门，不替代 fenced 身份与 space 成员判据。
+
+    ``source_types`` 限定来源类别（``None`` = 全部）。只接受 ``RAG_SOURCE_TYPES``
+    内的值（枚举白名单，不是拼 SQL 的借口）：它服务**目的限定**，不是授权——
+    授权仍由 eligibility 承担。
     """
     _require_rag_enabled(db)
     if rank_version not in RANK_VERSIONS:
@@ -1472,9 +1524,21 @@ def search_rag(
         )
     if not is_policy_consumer_kind(agent_kind):
         raise_api_error(422, MEMORY_SCOPE_FORBIDDEN, "policy consumer 不受支持")
-    # Steward is a shared-data policy consumer only.  The SQL predicates below
-    # intentionally use is_assistant for private/public branches, so it can
-    # never read private memory or unrestricted public material.
+    # 按调用方声明的允许集生成 per-scope 开关。None = 既有行为（三个 scope 全开）；
+    # assistant 与管家都显式传值，因此“默认全开”只会出现在未改造的调用点上。
+    allow = set(MEMORY_SCOPES) if scope_allowlist is None else set(scope_allowlist)
+    unknown_allow = allow - set(MEMORY_SCOPES)
+    if unknown_allow:
+        raise_api_error(
+            422, MEMORY_SCOPE_FORBIDDEN, "未知的 memory scope", {"scopes": sorted(unknown_allow)}
+        )
+    # private 的读者：未传 = 调用方自己的账号（assistant 语义）；显式 None = 无读者。
+    reader_account_id: int | None = (
+        account.id
+        if isinstance(private_reader_account_id, _UnsetReader)
+        else private_reader_account_id
+    )
+    # public 仍由 kind 决定：无限制公开材料不对管家开放。
     is_assistant = int(agent_kind == "assistant")
     plan = query_plan or plan_query(query, recent_messages=recent_messages)
     if trace is not None:
@@ -1501,16 +1565,31 @@ def search_rag(
         else ""
     )
     params: dict[str, Any] = {
-        "account_id": account.id,
         "user_id": actor.id,
         "space_id": space_id,
         "is_assistant": is_assistant,
+        # 每个 scope 分支的允许开关 + private 的读者账号。由调用方声明的
+        # `scope_allowlist` / `private_reader_account_id` 派生，是 fenced 身份
+        # 之外的额外一道门。
+        "allow_private": int("private" in allow),
+        "allow_household": int("household" in allow),
+        "allow_lineage": int("lineage" in allow),
+        "private_reader_account_id": reader_account_id,
         # 取代/有效区间过滤的比较基准。必须显式绑定 DateTime 类型：
         # SQLite 上 datetime 列以字符串存储，未绑定类型的参数会把 ISO 串当字符串
         # 比较（实测会静默丢行）。
         "now": utcnow(),
     }
-    eligibility = _ELIGIBILITY_SQL.format(sensitivity=sensitivity_predicate)
+    eligibility = _ELIGIBILITY_SQL.format(
+        sensitivity=sensitivity_predicate,
+        source_types=(
+            ""
+            if source_types is None
+            else "AND d.source_type IN ("
+            + ",".join(f"'{value}'" for value in _validated_source_types(source_types))
+            + ")"
+        ),
+    )
 
     # ---- 候选收集（不再在 limit 处短路） ----
     #
@@ -1552,6 +1631,7 @@ def search_rag(
                 space_id=space_id,
                 agent_kind=agent_kind,
                 rank_by_order=rank_by_order,
+                private_reader_account_id=reader_account_id,
             )
             denied += rejected
             for hit in page:
@@ -1640,6 +1720,10 @@ def search_rag(
         now=params["now"],
         is_assistant=params["is_assistant"],
         user_id=params["user_id"],
+        allow_private=params["allow_private"],
+        allow_household=params["allow_household"],
+        allow_lineage=params["allow_lineage"],
+        private_reader_account_id=params["private_reader_account_id"],
     )
     denied += vector_denied
     if trace is not None:
@@ -1705,6 +1789,10 @@ def _vector_candidates(
     now: Any,
     is_assistant: int,
     user_id: int,
+    allow_private: int,
+    allow_household: int,
+    allow_lineage: int,
+    private_reader_account_id: int | None,
 ) -> tuple[list[RAGHit], int]:
     """取向量候选（filter-then-ANN），返回 `(命中, 被拒数)`。任何失败返回空。
 
@@ -1778,8 +1866,11 @@ def _vector_candidates(
                     "now": now,
                     "is_assistant": is_assistant,
                     "user_id": user_id,
-                    "account_id": account.id,
                     "space_id": space_id,
+                    "allow_private": allow_private,
+                    "allow_household": allow_household,
+                    "allow_lineage": allow_lineage,
+                    "private_reader_account_id": private_reader_account_id,
                 },
             )
             .mappings()
@@ -1806,14 +1897,14 @@ def _vector_candidates(
         space_id=space_id,
         agent_kind=agent_kind,
         rank_by_order=False,
+        private_reader_account_id=private_reader_account_id,
     )
     # 相似度地板：`rank` 是**余弦距离**（`<=>`，0 = 完全相同），因此相似度 = 1 - rank。
     # 没有这个地板，向量候选会填满 limit，把「库里没有」变成「随便返回几条」。
     kept = [
         hit
         for hit in hits
-        if hit.chunk_id not in seen_chunk_ids
-        and (1.0 - float(hit.rank)) >= _VECTOR_MIN_SIMILARITY
+        if hit.chunk_id not in seen_chunk_ids and (1.0 - float(hit.rank)) >= _VECTOR_MIN_SIMILARITY
     ]
     return kept, denied
 
@@ -2320,6 +2411,9 @@ def _replay_context_build(
             account=account,
             space_id=space_id,
             agent_kind=build.agent_kind,
+            # 重放没有记录 viewer 身份，因此无法为 steward build 证明私有读者 →
+            # 传 NULL（fail-closed）。assistant build 的读者就是它的 account。
+            private_reader_account_id=account.id if build.agent_kind == "assistant" else None,
         ):
             from app.errors import AGENT_CONTEXT_INVALIDATED
 

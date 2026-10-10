@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import AdminPrincipal, require_admin_ready
 from app.api.deps import get_db
+from app.errors import VALIDATION_ERROR, raise_api_error
 from app.schemas.platform_features import (
     PlatformFeatureAdminOut,
     PlatformFeatureUpdateRequest,
@@ -39,6 +40,9 @@ def _out(db: Session) -> PlatformFeatureAdminOut:
         memory_source=state.memory_source,
         rag_source=state.rag_source,
         steward_assist=_assist_out(state),
+        steward_memory_scopes=state.steward_memory_scopes,
+        steward_memory_scopes_effective=state.steward_memory_scopes_effective,
+        steward_memory_scopes_source=state.steward_memory_scopes_source,
         updated_at=state.updated_at,
     )
 
@@ -75,16 +79,27 @@ def update_platform_features(
     identity: AdminPrincipal = Depends(require_admin_ready),
 ) -> PlatformFeatureAdminOut:
     admin, _account = identity
-    state = platform_features.set_platform_feature_state(
-        db,
-        memory_enabled=body.memory_enabled,
-        rag_enabled=body.rag_enabled,
-        steward_assist_candidate=body.steward_assist_candidate,
-        steward_assist_ranking=body.steward_assist_ranking,
-        steward_assist_explanation=body.steward_assist_explanation,
-        steward_assist_terminology=body.steward_assist_terminology,
-        system_admin_id=admin.id,
-    )
+    try:
+        state = platform_features.set_platform_feature_state(
+            db,
+            memory_enabled=body.memory_enabled,
+            rag_enabled=body.rag_enabled,
+            steward_assist_candidate=body.steward_assist_candidate,
+            steward_assist_ranking=body.steward_assist_ranking,
+            steward_assist_explanation=body.steward_assist_explanation,
+            steward_assist_terminology=body.steward_assist_terminology,
+            steward_memory_scopes=body.steward_memory_scopes,
+            system_admin_id=admin.id,
+        )
+    except ValueError as exc:
+        # 未知记忆级别 → 422（与空间级 PUT 同口径）。静默丢弃会让「关掉某级别」
+        # 看起来生效了，而实际仍开着。
+        raise_api_error(
+            422,
+            VALIDATION_ERROR,
+            "未知的记忆可见级别",
+            {"steward_memory_scopes": body.steward_memory_scopes, "reason": str(exc)},
+        )
     admin_audit.record_access(
         db,
         action="platform_features.update",
@@ -97,6 +112,7 @@ def update_platform_features(
             "steward_assist_ranking": body.steward_assist_ranking,
             "steward_assist_explanation": body.steward_assist_explanation,
             "steward_assist_terminology": body.steward_assist_terminology,
+            "steward_memory_scopes": body.steward_memory_scopes,
         },
         result_count=1,
         ip=_ip(request),
@@ -108,5 +124,8 @@ def update_platform_features(
         memory_source=state.memory_source,
         rag_source=state.rag_source,
         steward_assist=_assist_out(state),
+        steward_memory_scopes=state.steward_memory_scopes,
+        steward_memory_scopes_effective=state.steward_memory_scopes_effective,
+        steward_memory_scopes_source=state.steward_memory_scopes_source,
         updated_at=state.updated_at,
     )

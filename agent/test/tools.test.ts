@@ -57,6 +57,10 @@ const STEWARD_CONTRACT: Record<string, { properties: string[]; required: string[
     properties: ["from_user_id", "to_user_id"],
     required: ["from_user_id", "to_user_id"],
   },
+  "familygraph.steward.search_memory": {
+    properties: ["limit", "query"],
+    required: ["query"],
+  },
 };
 
 const V2_2_TOOL_NAMES = Object.keys(SHARED_CONTRACT);

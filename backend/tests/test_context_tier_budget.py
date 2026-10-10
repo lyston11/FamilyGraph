@@ -129,3 +129,41 @@ def test_non_data_trust_still_rejected_first(trust):
     block = _source("memory", 1, 10, trust=trust).as_data_block()
     # `_tier_allocation` 只关心预算；trust 门禁在 `build` 的循环里先判。
     assert _tier_allocation([block], 2000) == [("memory", "memory-1")]
+
+
+def test_unbudgeted_build_never_drops_a_source_for_budget_reasons(db_session):
+    """`budgeted=False` 时检索预算不得丢弃来源。
+
+    这条测试防的是一次真实回归：steward 的投影原本只是被塞进 `prefetched`，于是
+    落到了默认分层份额（0.2）而被**整块排除**——模型收到空上下文，而
+    `ContextBuildItem` 却如实记录了「被排除」，没有任何异常。
+
+    steward 的输入大小已由 `STEWARD_ASSIST_MAX_PROMPT_BYTES` 在预留时把关（超限是
+    显式的 `prompt_too_large`），所以这里再套一层预算只是冗余，而冗余预算的失败
+    形态是静默丢输入。因此该开关是承重的，不是优化。
+    """
+    owner, space = create_agent_fixture(db_session, name="unbudgeted")
+    # 远大于 token_budget（2000）与任何分层份额。
+    big = _source("steward_projection", 1, 60_000)
+
+    built = ContextBuilder(db_session).build(
+        actor=owner,
+        space_id=space.id,
+        agent_kind="assistant",
+        query="q",
+        prefetched=(big,),
+        budgeted=False,
+    )
+    assert [s.source_id for s in built.sources] == [big.source_id]
+    assert built.excluded == ()
+
+    # 对照：同样大小的来源在默认（budgeted=True）下会被排除，证明这个开关是承重的。
+    budgeted = ContextBuilder(db_session).build(
+        actor=owner,
+        space_id=space.id,
+        agent_kind="assistant",
+        query="q2",
+        prefetched=(big,),
+    )
+    assert budgeted.sources == ()
+    assert budgeted.excluded and budgeted.excluded[0]["reason"] == "token_budget"

@@ -185,6 +185,7 @@ class ContextBuilder:
         execution: Execution | None = None,
         provider_decision: dict[str, Any] | None = None,
         recent_messages: Sequence[str] = (),
+        budgeted: bool = True,
     ) -> BuiltContext:
         if token_budget < 1 or token_budget > 32_000:
             raise_api_error(422, POLICY_CONTEXT_INVALID, "token_budget 超出范围")
@@ -304,6 +305,14 @@ class ContextBuilder:
             reason = None
             if source.trust != "untrusted_data":
                 reason = "invalid_trust"
+            elif not budgeted:
+                # `budgeted=False` 的调用方自己已经限定了输入大小，这里的检索预算
+                # 对它只是冗余；而冗余预算的失败形态是**静默丢掉整个输入**。
+                # steward 的投影就是这样：它的大小由 `STEWARD_ASSIST_MAX_PROMPT_BYTES`
+                # 在预留时把关，超限是显式的 `prompt_too_large` 终态。
+                # 实测：不加这个开关，投影会落到默认分层份额（0.2）而被整块排除，
+                # 模型收到空上下文。
+                reason = None
             elif len(included) >= MAX_INCLUDED_SOURCES:
                 reason = "source_limit"
             elif candidate_estimate > token_budget:
@@ -342,7 +351,7 @@ class ContextBuilder:
                 policy_version=policy_version,
                 token_budget=token_budget,
                 created_at=utcnow(),
-                policy_json={**policy, "rag_enabled": rag_enabled},
+                policy_json={**policy, "rag_enabled": rag_enabled, "budgeted": budgeted},
                 # New builds persist descriptors only. Legacy snapshots remain
                 # preserved in the database but cannot be replayed as evidence.
                 blocks_json=None,

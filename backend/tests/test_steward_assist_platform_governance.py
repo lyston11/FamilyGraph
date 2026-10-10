@@ -235,3 +235,104 @@ def test_family_model_settings_expose_assist_effective(db_session, client, monke
     )
     steward = resp.json()["settings"]["steward"]
     assert steward["assist_candidate_effective"] is True
+
+
+def test_family_model_settings_expose_steward_memory_scopes_effective(
+    db_session, client, monkeypatch
+):
+    """空间设置必须同时给出「设了什么」与「生效了什么」。
+
+    这两者分开是刻意的：有效集 = env ∩ 平台列 ∩ 空间列，所以空间可以设了
+    `household` 却因为平台或部署层没开而不生效。只回显原始值会让管理员以为
+    管家已经在读记忆，而实际上一条都读不到。
+    """
+    monkeypatch.setattr(config, "STEWARD_MEMORY_SCOPES", "private,household")
+    row = _row(db_session)
+    row.steward_memory_scopes = "household"
+    manager, space = create_agent_fixture(db_session, name="mem-scopes-eff")
+    db_session.add(
+        AgentSpaceProviderSetting(
+            space_id=space.id,
+            agent_kind="steward",
+            steward_memory_scopes="household,lineage",
+            enabled=True,
+        )
+    )
+    db_session.commit()
+
+    login_resp = client.post("/api/auth/login", json={"name": manager.name, "pin": "123456"})
+    assert login_resp.status_code == 200
+    headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    def _steward() -> dict:
+        resp = client.get(f"/api/spaces/{space.id}/model-settings", headers=headers)
+        assert resp.status_code == 200, resp.text
+        return resp.json()["settings"]["steward"]
+
+    steward = _steward()
+    assert steward["steward_memory_scopes"] == "household,lineage"  # 空间设的
+    # 生效 = env(private,household) ∩ 平台(household) ∩ 空间(household,lineage)
+    assert steward["steward_memory_scopes_effective"] == "household"
+
+    # 平台关掉 → 生效变空，但空间原始值不变（可解释：设了但不生效）
+    db_session.get(PlatformFeatureConfig, 1).steward_memory_scopes = ""
+    db_session.commit()
+    steward = _steward()
+    assert steward["steward_memory_scopes"] == "household,lineage"
+    assert steward["steward_memory_scopes_effective"] == ""
+
+
+def test_space_put_rejects_unknown_memory_scope(db_session, client, monkeypatch):
+    """未知级别必须 422：静默丢弃会让「关掉某级别」看起来生效了。"""
+    monkeypatch.setattr(config, "STEWARD_MEMORY_SCOPES", "private")
+    manager, space = create_agent_fixture(db_session, name="mem-scopes-put")
+    db_session.commit()
+
+    login_resp = client.post("/api/auth/login", json={"name": manager.name, "pin": "123456"})
+    assert login_resp.status_code == 200
+    headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+
+    bad = client.put(
+        f"/api/spaces/{space.id}/model-settings",
+        headers=headers,
+        json={
+            "agent_kind": "steward",
+            "enabled": False,
+            "steward_memory_scopes": "private,public",
+        },
+    )
+    assert bad.status_code == 422, bad.text
+
+    # `enabled=False` = 仅改开关、不动模型选择（enabled=true 时 provider/model 必填）。
+    good = client.put(
+        f"/api/spaces/{space.id}/model-settings",
+        headers=headers,
+        json={
+            "agent_kind": "steward",
+            "enabled": False,
+            "steward_memory_scopes": "household,private",
+        },
+    )
+    assert good.status_code == 200, good.text
+    # 规范化：按 MEMORY_SCOPES 声明顺序，而不是输入顺序
+    assert good.json()["steward_memory_scopes"] == "private,household"
+
+
+def test_assistant_dimension_cannot_set_memory_scopes(db_session, client, monkeypatch):
+    """记忆级别只对 steward 维度有意义，assistant 维度传它必须 422。"""
+    monkeypatch.setattr(config, "STEWARD_MEMORY_SCOPES", "private")
+    manager, space = create_agent_fixture(db_session, name="mem-scopes-assistant")
+    db_session.commit()
+
+    login_resp = client.post("/api/auth/login", json={"name": manager.name, "pin": "123456"})
+    headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+    resp = client.put(
+        f"/api/spaces/{space.id}/model-settings",
+        headers=headers,
+        json={
+            "agent_kind": "assistant",
+            "enabled": False,
+            "steward_memory_scopes": "household",
+        },
+    )
+    assert resp.status_code == 422, resp.text

@@ -352,6 +352,7 @@ describe("tool and prompt isolation between kinds", () => {
       "familygraph.steward.get_viewer_term",
       "familygraph.steward.get_evidence",
       "familygraph.steward.get_relationship_path",
+      "familygraph.steward.search_memory",
     ]);
     expect(new Set(toolNamesFor("assistant"))).toEqual(
       new Set(Object.keys(TOOL_VERSIONS).filter((name) => !steward.has(name))),

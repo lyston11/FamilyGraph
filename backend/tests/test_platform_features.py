@@ -94,6 +94,9 @@ def test_admin_can_update_both_switches_and_response_contains_metadata_only(
         "memory_source",
         "rag_source",
         "steward_assist",
+        "steward_memory_scopes",
+        "steward_memory_scopes_effective",
+        "steward_memory_scopes_source",
         "updated_at",
     }
 
@@ -114,6 +117,9 @@ def test_admin_can_update_both_switches_and_response_contains_metadata_only(
         "memory_source",
         "rag_source",
         "steward_assist",
+        "steward_memory_scopes",
+        "steward_memory_scopes_effective",
+        "steward_memory_scopes_source",
         "updated_at",
     }
 
@@ -151,3 +157,42 @@ def test_family_and_invalid_admin_requests_cannot_update_switches(client, admin_
     )
     assert extra.status_code == 422
     assert get_platform_feature_state(db_session).memory_source == "environment"
+
+
+def test_admin_put_rejects_unknown_memory_scope(admin_client, db_session, monkeypatch):
+    """未知记忆级别必须 422（与空间级 PUT 同口径）。
+
+    静默丢弃的后果是把「关掉某级别」显示成已生效：管理员以为管家读不到了，
+    而实际配置里那一项仍在。因此这里选择拒绝整次写入。
+    """
+    monkeypatch.setattr(config, "STEWARD_MEMORY_SCOPES", "private")
+    create_system_admin(db_session)
+    db_session.commit()
+    headers = admin_session_headers(admin_client)
+
+    bad = admin_client.put(
+        "/admin-api/v1/platform-features",
+        headers=headers,
+        json={
+            "memory_enabled": True,
+            "rag_enabled": True,
+            "steward_memory_scopes": "household,secrets",
+        },
+    )
+    assert bad.status_code == 422, bad.text
+
+    ok = admin_client.put(
+        "/admin-api/v1/platform-features",
+        headers=headers,
+        json={
+            "memory_enabled": True,
+            "rag_enabled": True,
+            "steward_memory_scopes": "household,private",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    # 规范化（按 MEMORY_SCOPES 声明顺序）。设了什么与生效什么是两个值：
+    # env 被 monkeypatch 成 "private"，因此生效值只剩 private。
+    assert ok.json()["steward_memory_scopes"] == "private,household"
+    assert ok.json()["steward_memory_scopes_effective"] == "private"
+    assert ok.json()["steward_memory_scopes_source"] == "platform"

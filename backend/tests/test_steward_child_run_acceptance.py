@@ -1081,3 +1081,91 @@ def test_heartbeat_reissues_the_run_token(db_session, monkeypatch):
     for key in ("run_id", "job_id", "attempt", "agent_kind", "space_id", "tool_allowlist"):
         assert new_claims[key] == old_claims[key], key
     assert new_claims["steward_attempt_id"] == old_claims["steward_attempt_id"]
+
+
+def test_steward_context_does_not_run_a_discarded_rag_search(db_session, monkeypatch):
+    """steward 上下文路径不得再跑一次注定被丢弃的 RAG 检索。
+
+    这条测试防的是一个**双重**缺陷：旧实现先跑完整检索（候选收集 + 评分 + 写
+    `ContextBuild`/`ContextBuildItem`），随后用投影块覆盖 `context_blocks`，把检索
+    结果整体丢掉。于是：
+
+    1. 每次 run 白跑一次检索（成本 + 写放大）；
+    2. `ContextBuildItem.included=True` 声称纳入了模型从未收到的内容——审计与事实
+       不符，而这正是「context 是可核验证据」这条合同最不能容忍的形态。
+
+    因此断言两件事：`search_rag` 一次都没被调用，且写入的 item 与发送的块一致。
+    """
+    from app.main import internal_app
+    from app.models.context import ContextBuild, ContextBuildItem
+    from app.services import memory_rag
+
+    world, plan = _planned(db_session)
+    attempt = db_session.scalar(select(StewardModelCall).where(StewardModelCall.plan_id == plan.id))
+    assert attempt is not None
+    db_session.commit()
+
+    calls: list[str] = []
+    real_search = memory_rag.search_rag
+
+    def _spy(*args, **kwargs):
+        calls.append(str(kwargs.get("query", "")))
+        return real_search(*args, **kwargs)
+
+    monkeypatch.setattr(memory_rag, "search_rag", _spy)
+
+    grant = steward_assist.lease_attempt(
+        db_session, space_id=plan.space_id, worker_id="carrier", carrier=CARRIER_PI
+    )
+    assert grant is not None
+    run = steward_assist.open_child_run(
+        db_session, attempt_id=grant["attempt_id"], lease_owner="carrier"
+    )
+    assert run is not None
+    run_token = agent_tokens.issue_run_token(
+        run_id=run.id,
+        job_id=grant["steward_job_id"],
+        attempt=run.attempt,
+        agent_kind="steward",
+        space_id=grant["space_id"],
+        tool_allowlist=list(run.tool_allowlist_json or []),
+        steward_attempt_id=grant["attempt_id"],
+        viewer_account_id=grant["viewer_account_id"],
+    )
+    db_session.commit()
+
+    from fastapi.testclient import TestClient
+
+    response = TestClient(internal_app).get(
+        f"/internal/agent/runs/{run.id}/context",
+        headers={"Authorization": f"Bearer {run_token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert calls == [], "steward 上下文路径不得检索 RAG：它的结果从来没有被发送过"
+
+    # 审计必须描述实际发送的东西：唯一纳入项就是 steward 投影本身。
+    items = list(
+        db_session.scalars(
+            select(ContextBuildItem).where(ContextBuildItem.build_id == body["context_build_id"])
+        )
+    )
+    assert len(items) == 1
+    item = items[0]
+    assert item.included is True
+    assert item.source_type == "steward_projection"
+    assert item.source_id == f"attempt:{attempt.id}"
+    # 投影必须**不受检索预算约束**：它的分层份额默认只有 0.2，一旦被套上检索预算
+    # 就会被整块排除（模型收到空上下文）。构建时的策略必须记录这一点。
+    build = db_session.get(ContextBuild, body["context_build_id"])
+    assert build is not None
+    assert build.policy_json is not None
+    assert build.policy_json.get("budgeted") is False
+
+    blocks = body["context_blocks"]
+    assert len(blocks) == len(items)
+    assert blocks[0]["source_type"] == item.source_type
+    assert blocks[0]["source_id"] == item.source_id
+    # 发送的内容与投影一致（digest 契约由上面的测试独立钉住）。
+    assert blocks[0]["content"] == steward_assist._user_content_for(db_session, attempt)

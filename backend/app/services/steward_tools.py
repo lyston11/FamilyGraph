@@ -32,6 +32,7 @@ TOOL_GET_VIEWER_TARGET = "familygraph.steward.get_viewer_target"
 TOOL_GET_VIEWER_TERM = "familygraph.steward.get_viewer_term"
 TOOL_GET_EVIDENCE = "familygraph.steward.get_evidence"
 TOOL_GET_RELATIONSHIP_PATH = "familygraph.steward.get_relationship_path"
+TOOL_SEARCH_MEMORY = "familygraph.steward.search_memory"
 
 STEWARD_TOOL_NAMES = frozenset(
     {
@@ -41,6 +42,7 @@ STEWARD_TOOL_NAMES = frozenset(
         TOOL_GET_VIEWER_TERM,
         TOOL_GET_EVIDENCE,
         TOOL_GET_RELATIONSHIP_PATH,
+        TOOL_SEARCH_MEMORY,
     }
 )
 
@@ -103,6 +105,17 @@ STEWARD_TOOL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["from_user_id", "to_user_id"],
         "additionalProperties": False,
     },
+    # 输入只含查询本身：space 来自 claims、viewer 来自 attempt，两者都不得由模型提供。
+    # 显式拒绝身份字段（additionalProperties=false），否则它就变成了一个跨 viewer 的读取通道。
+    TOOL_SEARCH_MEMORY: {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "maxLength": 500},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
 }
 
 
@@ -142,6 +155,8 @@ def execute_steward_tool(
             from_user_id=int(input_payload["from_user_id"]),
             to_user_id=int(input_payload["to_user_id"]),
         )
+    if name == TOOL_SEARCH_MEMORY:
+        return _search_memory(db, execution, input_payload)
     raise_api_error(404, "AGENT_TOOL_UNKNOWN", "未知 Steward 工具")
 
 
@@ -477,4 +492,86 @@ def _relationship_path(
         "path": edge.get("path", []),
         "alternative_paths": edge.get("alternative_paths", []),
         "algorithm_revision": view.topology_revision,
+    }
+
+
+#: 单条命中的摘要上限（与 assistant 的 `search_memory` 同口径）。工具返回的是
+#: **句柄 + 摘要**，不是原文：管家的用途是判断"这个空间知道什么"，而不是复述原文。
+_MEMORY_EXCERPT_CHARS = 400
+
+
+def _search_memory(
+    db: Session, execution: StewardExecution, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """只读检索本空间在**配置允许的级别**内的已确认记忆。
+
+    这是 steward 唯一的记忆入口。三条约束缺一不可：
+
+    1. **可读集来自配置**（`steward_memory.readable_scopes` = 部署 env ∩ 平台列 ∩
+       空间列），并且**没有 viewer 的 run 拿不到 private**。空集时直接拒绝，不返回
+       空列表——空列表会把"配置不允许"伪装成"没有相关内容"。
+    2. **不新增检索路径**：复用 `memory_rag.search_rag` 与同一段 eligibility 谓词、
+       同一个 `_rows_to_hits` 引用投影，因此授权等价性靠同一段代码而不是靠约定。
+    3. **目的限定**：只读 `source_type='memory'`。配置说的是"记忆级别"，不是"把这个
+       级别的所有 RAG 材料都交给管家"；放开到故事/授权文档是另一个决定。
+    """
+    from app.services import memory_rag, steward_memory
+
+    scopes = steward_memory.readable_scopes(
+        db, space_id=execution.space_id, viewer_account_id=execution.viewer_account_id
+    )
+    if not scopes:
+        raise_api_error(
+            403,
+            "STEWARD_MEMORY_SCOPE_DENIED",
+            "当前空间未向管家开放任何记忆级别",
+            {"tool": TOOL_SEARCH_MEMORY},
+        )
+    clean = str(payload.get("query") or "").strip()
+    if not clean:
+        raise_api_error(422, "AGENT_TOOL_SCHEMA_INVALID", "查询不能为空", {"path": "$.query"})
+    reader = steward_memory.resolve_reader(
+        db, space_id=execution.space_id, viewer_account_id=execution.viewer_account_id
+    )
+    if reader is None:
+        # 既无 viewer 又无 active space_admin：无法证明任何成员资格 → fail closed。
+        raise_api_error(
+            403,
+            "STEWARD_MEMORY_SCOPE_DENIED",
+            "无法为该 run 解析可用的读取身份",
+            {"tool": TOOL_SEARCH_MEMORY},
+        )
+    actor, account = reader
+    limit = payload.get("limit")
+    limit = 5 if limit is None else int(limit)
+    hits = memory_rag.search_rag(
+        db,
+        actor=actor,
+        account=account,
+        space_id=execution.space_id,
+        query=clean,
+        agent_kind="steward",
+        limit=limit,
+        for_model=True,
+        # private 的读者只能是该 run 的 viewer（无 viewer 时为 NULL → 恒不可读），
+        # 绝不是回落到 space admin 的 account。
+        private_reader_account_id=execution.viewer_account_id,
+        scope_allowlist=scopes,
+        source_types=("memory",),
+    )
+    return {
+        "query_hash": memory_rag.query_hash(clean),
+        "scopes": list(scopes),
+        "results": [
+            {
+                "citation": hit.citation_handle,
+                "source_type": hit.source_type,
+                "source_id": hit.source_id,
+                "scope": hit.scope,
+                "sensitivity": hit.sensitivity,
+                "revision": hit.revision,
+                "excerpt": hit.text[:_MEMORY_EXCERPT_CHARS],
+            }
+            for hit in hits
+        ],
     }

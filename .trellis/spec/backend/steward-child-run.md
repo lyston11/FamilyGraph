@@ -120,12 +120,51 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
 - `familygraph.steward.get_viewer_term`：带 viewer 且 root 与 token viewer 一致时读取 term projection。
 - `familygraph.steward.get_evidence`：attempt 仍为 `in_flight` 且 target 属于已发布 view 时读取结构化证据 ID。
 - `familygraph.steward.get_relationship_path`：读取当前空间已发布且已确认的路径；带 viewer 时 root 必须是该 viewer。
+- `familygraph.steward.search_memory`：在**配置允许的级别**内检索当前空间已确认的记忆，只接受
+  `query` / `limit`，返回句柄 + 摘要（非原文）。可用性由 `steward_memory.effective_scopes`（部署 env ∩
+  平台列 ∩ 空间列）决定：可读集为空时**不广告**该工具（与 Web/记忆工具同口径），直接调用返回
+  403 `STEWARD_MEMORY_SCOPE_DENIED` 而不是空列表（空列表会把「配置不允许」伪装成「没有相关内容」）。
+  `private` 只在带 viewer 的 attempt 上可见，且读者必须是该 viewer（见 §8.1）。
 
 除业务查询字段外，schema 使用 `additionalProperties=false`，拒绝 `space_id`、`account_id`、
-`viewer_account_id`、`run_id`、`attempt_id`、provider 和任意权限字段。viewer 缺失、撤权、未发布、
+`viewer_account_id`、`run_id`、`attempt_id`、`provider` 和任意权限字段。viewer 缺失、撤权、未发布、
 跨空间、revision/attempt 绑定无法证明时统一 fail closed；不可见目标不得返回目标身份、状态或路径规模。
-工具只读现有 Steward publication/view/term/evidence projection，不读取 prompt、provider、Memory/RAG
-原文，也不产生领域写入；结果经统一 JSON 上限和 output policy guard，审计不含原始输入。
+工具只读现有 Steward publication/view/term/evidence projection 与（仅限 `search_memory`）当前空间在
+**允许级别**内的已确认记忆；不读取 prompt、provider 或未授权记忆，也不产生领域写入；结果经统一 JSON
+上限和 output policy guard，审计不含原始输入。
+
+## 6.2 记忆可见级别与 `private` 的读者语义（10-10）
+
+管家能读哪些级别的记忆由**三层交集**决定：部署 `STEWARD_MEMORY_SCOPES` ∩ 平台列 ∩ 空间列，
+任一为空即整体为空（默认全空 = 管家读不到任何记忆）。`steward_memory.readable_scopes` 再施加一条
+不可由配置放宽的约束：**没有 viewer 的 kind 一律去掉 `private`**。
+
+为什么不能用「哪些 kind 能读 private」当判据：`viewer_account_id` 只写在 terminology attempt 上；
+`candidate`/`ranking`/`explanation` 是空间级 kind，其身份回落到 space admin。若把 private 绑到 kind 上，
+一旦为管家打开 private 就会读到**管理员本人**的私事。因此 private 的语义是「只能被它的作者账号读」，
+判据是显式的 `private_reader_account_id`；无法提供读者（NULL）即恒不可读。
+
+这条约束必须在**两层各自独立**成立，两层都已实现且都不得回退：
+
+1. `memory_rag._ELIGIBILITY_SQL` 的 private 分支（SQL 层，每个 scope 一个允许开关）；
+2. `memory_sources._can_read_document` 的 private 分支（投影复核层，`_rows_to_hits` 与精确片段重读都走它）。
+
+只改一层的后果是真实的：只改 SQL 会让 `document_readable` 把已授权命中全部拒掉（表现为「检索不到」）；
+只改复核层则会让未授权行进入投影。
+
+`public` 分支继续保留 `:is_assistant = 1`：无限制公开材料不对管家开放。
+
+## 6.3 steward 上下文不得套用检索预算（10-10）
+
+steward 的上下文**就是**投影本身（roster + 已确认事实），不是检索结果，因此构建时传
+`budgeted=False`：它的输入大小已由 `STEWARD_ASSIST_MAX_PROMPT_BYTES` 在预留时把关，超限是显式的
+`prompt_too_large` 终态。再套一层检索预算只是冗余，而冗余预算的失败形态是**静默丢掉整个输入**——
+实测：投影落到默认分层份额（0.2）后被整块排除，模型收到空上下文，而 `ContextBuildItem` 如实记录了
+「被排除」，没有任何异常。
+
+同一路径还不得再执行一次注定被丢弃的 RAG 检索：投影以 `prefetched` 传入，`context_blocks` 由
+`built.as_data_blocks()` 派生，与 `ContextBuildItem` 同源。否则 `ContextBuildItem.included=True` 会声称
+纳入了模型从未收到的内容，而「context 是可核验证据」这条合同不容许这种形态。
 
 ## 7. sidecar 槽位模型
 
@@ -140,7 +179,7 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
   而非新增容器的唯一价值证明）。
 - `toolNamesFor(kind)`：Assistant 与 Steward 使用两个显式、互斥的集合；Steward 只注册
   `familygraph.steward.get_space_snapshot`、`list_space_nodes`、`get_viewer_target`、
-  `get_viewer_term`、`get_evidence`、`get_relationship_path` 六个只读投影工具，
+  `get_viewer_term`、`get_evidence`、`get_relationship_path`、`search_memory` 七个只读投影/记忆工具，
   不通过 Assistant 集合做差集，也不继承 echo/probe/Web/写入工具。
 
 ## 8. prompt 文本归属（服务端拥有）
@@ -559,11 +598,14 @@ attempt 带该 claim，于是 candidate/ranking run 的模型看到并调用一�
   **必须保留**：白名单是能力协商，403 是纵深防御，两者都要有；
 - 四个非 viewer 工具（`get_space_snapshot`/`list_space_nodes`/`get_evidence`/
   `get_relationship_path`）在两种情况下都必须在；assistant 白名单不受影响；
-- **不得向模型广告它无法使用的能力**——这条适用于任何按 kind/scope 变化的工具。
+- `search_memory` 是**配置门控**的第三种：可读集（env ∩ 平台列 ∩ 空间列，无 viewer 时再去 private）
+  为空时不广告。无 `db` 作用域时无法判定 → 一律不广告（与 Web/记忆工具同口径）；
+- **不得向模型广告它无法使用的能力**——这条适用于任何按 kind/scope/配置变化的工具。
 
 **回归**：`tests/test_steward_tools.py::test_default_allowlist_omits_viewer_tools_without_a_viewer_claim`、
 `test_assistant_allowlist_is_unaffected_by_viewer_scope`、
-`tests/test_agent_query_tools.py::test_registry_required_kind_gating`。
+`tests/test_agent_query_tools.py::test_registry_required_kind_gating`、
+`tests/test_steward_memory_tool.py::test_tool_is_not_advertised_when_scopes_are_empty`。
 变异验证：移除 `viewer_scope` 门 → 用例失败。
 
 **排查陷阱**：统计访问日志里的状态码时，JSON 里的引号是**转义**的

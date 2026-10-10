@@ -1522,12 +1522,25 @@ def _steward_run_context(
                 )
         actor_account = db.get(Account, actor_account_id) if actor_account_id else None
         if actor_account is not None:
+            # steward 的上下文**就是**投影本身（roster + 已确认事实）。过去这里先跑一次
+            # 完整 RAG 检索、再整体丢弃它的结果（只留 build_id），造成两个问题：
+            #   1. 每次 run 白跑一次检索（候选收集 + 评分 + 写 build/items）；
+            #   2. `ContextBuildItem.included=True` 声称纳入了模型从未收到的内容，
+            #      审计与实际发送不符。
+            # 现在改为显式 `prefetched`：builder 不再检索，纳入项就是投影块本身，
+            # 且 `context_blocks` 由同一个 `built.as_data_blocks()` 派生，两处不再各自构造。
+            projection = _steward_projection_source(db, attempt)
             built = context_builder.ContextBuilder(db).build(
                 actor=actor_account.user,
                 space_id=claims["space_id"],
                 agent_kind="steward",
                 query=attempt.prompt_digest,
                 run_id=run.id,
+                prefetched=(projection,),
+                # steward 的输入不是检索结果，而是一份已由
+                # `STEWARD_ASSIST_MAX_PROMPT_BYTES` 限定的确定性投影。再套一层检索预算
+                # 只会把它静默整块丢掉（实测：落到默认分层份额 0.2 而全排除）。
+                budgeted=False,
                 provider_kind=resolution.kind,
                 policy_version=run.policy_version,
                 attempt=identity.expected_attempt,
@@ -1539,11 +1552,9 @@ def _steward_run_context(
                 },
             )
             context_build_id = built.build_id
+            # 与 `ContextBuildItem` 同源：不再单独构造一次块列表。
             context_blocks = (
-                policy_guard.enforce(
-                    policy_guard.context_hook(_steward_projection_blocks(db, attempt))
-                )
-                or []
+                policy_guard.enforce(policy_guard.context_hook(built.as_data_blocks())) or []
             )
     response = ContextOut(
         run_id=run.id,
@@ -1589,27 +1600,30 @@ def _steward_run_context(
     return response
 
 
-def _steward_projection_blocks(db: Session, attempt: StewardModelCall) -> list[dict[str, object]]:
-    """Build the steward context blocks from the reserved attempt's projection.
+def _steward_projection_source(
+    db: Session, attempt: StewardModelCall
+) -> context_builder.ContextSource:
+    """把 reserved attempt 的投影包成 `ContextSource`。
 
-    The prompt text itself never leaves the server: the sidecar re-derives it from
-    this projection plus its own system prompt, which is why the blocks carry the
-    structured input rather than a ready-made prompt.
+    提示词文本本身不离开服务端：sidecar 从这份投影加自己的 system prompt 重建它，
+    所以块里装的是结构化输入而不是成品 prompt。
+
+    它取代了旧的 `_steward_projection_blocks`：后者返回 dict，而 builder 只接受
+    `ContextSource`，于是「纳入项」（对象）与「发送块」（dict）成了两个真源——
+    正是审计与实际发送不符的成因。现在块由 `built.as_data_blocks()` 派生，
+    只有一条路径。
     """
     user_content = steward_assist._user_content_for(db, attempt)
-    return [
-        {
-            "kind": "data",
-            "trust": "untrusted_data",
-            "source_type": "steward_projection",
-            "source_id": f"attempt:{attempt.id}",
-            "scope": "space",
-            "sensitivity": "normal",
-            "revision": attempt.attempt_no,
-            "citation": attempt.prompt_digest,
-            "content": user_content,
-        }
-    ]
+    return context_builder.ContextSource(
+        source_type="steward_projection",
+        source_id=f"attempt:{attempt.id}",
+        text=user_content,
+        scope="space",
+        sensitivity="normal",
+        revision=attempt.attempt_no,
+        citation_handle=attempt.prompt_digest,
+        trust="untrusted_data",
+    )
 
 
 def _lease_owner_for(db: Session, attempt_id: int) -> str:

@@ -383,9 +383,16 @@ def _can_read_document(
     account: Account,
     space_id: int | None,
     agent_kind: str,
+    private_reader_account_id: int | None,
 ) -> bool:
     if document.scope == "private":
-        if document.author_account_id != account.id or agent_kind != "assistant":
+        # private 的语义是「**只能被它的作者账号读**」，不是「哪些 kind 能读」。
+        # 旧写法把两者绑在一起（`agent_kind != "assistant"`），而管家的空间级 kind
+        # 会回落到 space admin 作为身份——一旦为管家打开 private，它就会读到管理员
+        # 本人的私事。改成显式读者后，无法提供读者（NULL）就是恒不可读。
+        # 这一层与 `_ELIGIBILITY_SQL` 的 private 分支必须**各自独立**挡住：
+        # 任何一层单独失效都不得让私有记忆漏出。
+        if document.author_account_id != private_reader_account_id:
             return False
     elif document.scope in ("household", "lineage"):
         if document.space_id is None or (space_id is not None and document.space_id != space_id):
@@ -397,6 +404,16 @@ def _can_read_document(
     return _author_visible(db, actor, document.author_account_id, space_id or document.space_id)
 
 
+#: `private_reader_account_id` 未传时的哨兵：区分「调用方没表态」（→ 用调用方自己的
+#: `account.id`，即 assistant 语义）与「显式表态没有私有读者」（→ NULL，恒不可读）。
+#: 用专属类型而不是 `object()` 是为了让类型检查器能通过 isinstance 收窄。
+class _UnsetReader:
+    __slots__ = ()
+
+
+_UNSET_READER = _UnsetReader()
+
+
 def document_readable(
     db: Session,
     document: RAGDocument,
@@ -405,7 +422,13 @@ def document_readable(
     account: Account,
     space_id: int,
     agent_kind: str = "assistant",
+    private_reader_account_id: int | None | _UnsetReader = _UNSET_READER,
 ) -> bool:
+    reader = (
+        account.id
+        if isinstance(private_reader_account_id, _UnsetReader)
+        else private_reader_account_id
+    )
     db.flush()
     documents = _document_chain(db, document)
     return (
@@ -413,7 +436,8 @@ def document_readable(
         and active_member(db, actor.id, space_id)
         and documents is not None
         and all(
-            _can_read_document(db, doc, actor, account, space_id, agent_kind) for doc in documents
+            _can_read_document(db, doc, actor, account, space_id, agent_kind, reader)
+            for doc in documents
         )
     )
 
@@ -479,7 +503,8 @@ def source_access(
         value = row.source_span_json.get("access_space_id")
         context = value if isinstance(value, int) else row.source_space_id
     if any(
-        not _can_read_document(db, doc, actor, account, context, "assistant") for doc in documents
+        not _can_read_document(db, doc, actor, account, context, "assistant", account.id)
+        for doc in documents
     ):
         return SourceAccess("unavailable")
     if row.source_kind == "rag_chunk" and (

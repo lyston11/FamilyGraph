@@ -34,6 +34,14 @@ class PlatformFeatureState:
     steward_assist_ranking_source: FeatureSource
     steward_assist_explanation_source: FeatureSource
     steward_assist_terminology_source: FeatureSource
+    # 管家可读的记忆级别。这里给出两个值，因为它们**不是**同一件事：
+    #   - `steward_memory_scopes`：平台列的值（管理员设了什么）
+    #   - `steward_memory_scopes_effective`：env ∩ 平台列（实际生效什么）
+    # 空间还要再交集一次（见 steward_memory.effective_scopes）。只回显生效值会
+    # 丢掉“设了什么”，只回显原始值会让“设了但不生效”看起来已生效。
+    steward_memory_scopes: str
+    steward_memory_scopes_effective: str
+    steward_memory_scopes_source: FeatureSource
     updated_at: datetime | None
 
 
@@ -41,7 +49,29 @@ def _steward_assist_env(kind: str) -> bool:
     return bool(getattr(config, f"STEWARD_ASSIST_{kind.upper()}"))
 
 
+def _steward_memory_scopes_effective(db_row_value: str | None) -> tuple[str, FeatureSource]:
+    """平台级生效的记忆级别 = env ∩ 平台列。
+
+    env 为空 = 部署级关闭（沿用 assist 开关的 kill-switch 语义：env 关就一律关）。
+    """
+    from app.services import steward_memory
+
+    env = steward_memory.env_scopes()
+    if not env:
+        return "", "deployment"
+    platform = steward_memory.parse_scopes(db_row_value)
+    return steward_memory.encode_scopes(set(env) & set(platform)), "platform"
+
+
+def _normalized_platform_scopes(db_row_value: str | None) -> str:
+    """平台列的规范化编码（读取时忽略未知项，不因脏值放开任何东西）。"""
+    from app.services import steward_memory
+
+    return steward_memory.encode_scopes(steward_memory.parse_scopes(db_row_value))
+
+
 def _environment_state() -> PlatformFeatureState:
+    memory_scopes, memory_scopes_source = _steward_memory_scopes_effective(None)
     return PlatformFeatureState(
         memory_enabled=config.MEMORY_ENABLED,
         rag_enabled=config.RAG_ENABLED,
@@ -55,6 +85,10 @@ def _environment_state() -> PlatformFeatureState:
         steward_assist_ranking_source="environment",
         steward_assist_explanation_source="environment",
         steward_assist_terminology_source="environment",
+        # 行缺失 = 没有任何平台级设置（不是“生效了空集”）。
+        steward_memory_scopes="",
+        steward_memory_scopes_effective=memory_scopes,
+        steward_memory_scopes_source=memory_scopes_source,
         updated_at=None,
     )
 
@@ -83,6 +117,9 @@ def get_platform_feature_state(db: Session) -> PlatformFeatureState:
     terminology = _steward_assist_effective(
         bool(row.steward_assist_terminology), _steward_assist_env("terminology")
     )
+    memory_scopes, memory_scopes_source = _steward_memory_scopes_effective(
+        row.steward_memory_scopes
+    )
     return PlatformFeatureState(
         memory_enabled=bool(row.memory_enabled) and config.MEMORY_ENABLED,
         rag_enabled=bool(row.rag_enabled) and config.RAG_ENABLED,
@@ -96,6 +133,9 @@ def get_platform_feature_state(db: Session) -> PlatformFeatureState:
         steward_assist_ranking_source=ranking[1],
         steward_assist_explanation_source=explanation[1],
         steward_assist_terminology_source=terminology[1],
+        steward_memory_scopes=_normalized_platform_scopes(row.steward_memory_scopes),
+        steward_memory_scopes_effective=memory_scopes,
+        steward_memory_scopes_source=memory_scopes_source,
         updated_at=row.updated_at,
     )
 
@@ -117,13 +157,17 @@ def set_platform_feature_state(
     steward_assist_ranking: bool | None,
     steward_assist_explanation: bool | None,
     steward_assist_terminology: bool | None,
+    steward_memory_scopes: str | None,
     system_admin_id: int,
 ) -> PlatformFeatureState:
     """Persist both explicit platform values in the singleton row.
 
     Steward 三开关缺省 None = 保留现值（行缺失时以 env 初始化），避免旧客户端
-    只写 memory/rag 时静默重置辅助开关（09-13 治理语义）。
+    只写 memory/rag 时静默重置辅助开关（09-13 治理语义）。记忆级别同理：None =
+    保留现值，非 None 走严格校验（未知 scope 直接报错，不静默丢弃）。
     """
+    from app.services import steward_memory
+
     row = db.get(PlatformFeatureConfig, 1)
     now = utcnow()
 
@@ -138,6 +182,11 @@ def set_platform_feature_state(
     resolved_ranking = _resolve("ranking", steward_assist_ranking)
     resolved_explanation = _resolve("explanation", steward_assist_explanation)
     resolved_terminology = _resolve("terminology", steward_assist_terminology)
+    resolved_memory_scopes = (
+        steward_memory.encode_scopes(steward_memory.parse_scopes_strict(steward_memory_scopes))
+        if steward_memory_scopes is not None
+        else (row.steward_memory_scopes if row is not None else "")
+    )
     if row is None:
         row = PlatformFeatureConfig(
             id=1,
@@ -147,6 +196,7 @@ def set_platform_feature_state(
             steward_assist_ranking=resolved_ranking,
             steward_assist_explanation=resolved_explanation,
             steward_assist_terminology=resolved_terminology,
+            steward_memory_scopes=resolved_memory_scopes,
             updated_at=now,
             updated_by_system_admin_id=system_admin_id,
         )
@@ -158,6 +208,7 @@ def set_platform_feature_state(
         row.steward_assist_ranking = resolved_ranking
         row.steward_assist_explanation = resolved_explanation
         row.steward_assist_terminology = resolved_terminology
+        row.steward_memory_scopes = resolved_memory_scopes
         row.updated_at = now
         row.updated_by_system_admin_id = system_admin_id
     db.flush()
@@ -165,6 +216,7 @@ def set_platform_feature_state(
     steward_assist_ranking = resolved_ranking
     steward_assist_explanation = resolved_explanation
     steward_assist_terminology = resolved_terminology
+    memory_scopes, memory_scopes_source = _steward_memory_scopes_effective(resolved_memory_scopes)
     candidate = _steward_assist_effective(
         steward_assist_candidate, _steward_assist_env("candidate")
     )
@@ -188,6 +240,9 @@ def set_platform_feature_state(
         steward_assist_ranking_source=ranking[1],
         steward_assist_explanation_source=explanation[1],
         steward_assist_terminology_source=terminology[1],
+        steward_memory_scopes=resolved_memory_scopes,
+        steward_memory_scopes_effective=memory_scopes,
+        steward_memory_scopes_source=memory_scopes_source,
         updated_at=now,
     )
 

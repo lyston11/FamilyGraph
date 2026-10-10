@@ -124,6 +124,7 @@ def seed_real_saved_dependency(engine, monkeypatch):
     # 0059 的取代列补上：ORM 的 INSERT 会带上全部模型列，缺列会让 seed 直接
     # OperationalError，而这与套件要验证的 RAG 生命周期无关。
     _add_supersede_columns(engine)
+    _add_steward_memory_scope_columns(engine)
     with Session(engine, expire_on_commit=False) as db:
         user, space = create_agent_fixture(db, name="migration-lifecycle")
         features(db, rag=True)
@@ -194,6 +195,22 @@ def _add_supersede_columns(engine):
         for name, ddl in SUPERSEDE_COLUMNS.items():
             if name not in present:
                 conn.exec_driver_sql(f"ALTER TABLE memories ADD COLUMN {name} {ddl}")
+
+
+#: 0060 给两张配置表加的列（默认空串 = 管家读不到任何记忆）。
+STEWARD_MEMORY_SCOPE_TABLES = ("platform_feature_configs", "agent_space_provider_settings")
+
+
+def _add_steward_memory_scope_columns(engine):
+    """补齐 0060 的配置列（本套件从 0054 起建库，ORM 查询会带上该列）。"""
+    with engine.begin() as conn:
+        for table in STEWARD_MEMORY_SCOPE_TABLES:
+            present = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info('{table}')")}
+            if "steward_memory_scopes" not in present:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN "
+                    "steward_memory_scopes VARCHAR(64) NOT NULL DEFAULT ''"
+                )
 
 
 def legacy_database(tmp_path, monkeypatch, *, foreign_keys):

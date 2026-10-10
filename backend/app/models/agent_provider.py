@@ -107,6 +107,11 @@ class AgentSpaceProviderSetting(Base):
     # 09-13 Steward 推测层空间级开关（有效开关 = 平台 config 开关 AND 本列，
     # 默认关 → 无推测投影、PFV 无推测区块）
     inferred_tree: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 管家可读的记忆级别（本空间允许的上界；有效值 = env ∩ 平台列 ∩ 本列）。
+    # 默认空串 = 空集 → 本空间不向管家开放任何记忆。
+    steward_memory_scopes: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
