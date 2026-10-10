@@ -65,7 +65,7 @@
   - 把 `public_kinship` 加入可读集后，`public` 分支仍因 `:is_assistant = 0` 不可读（边界不得被二维配置绕过）；
   - 平台配置加入、空间配置未加入 → 有效集为空、工具不广告；
   - 未知 `scope` / 未知 `source_type`：写入 422、读取忽略并告警。
-- [x] E6 `test_steward_memory_tool.py`、`test_steward_memory_scopes.py`、`test_steward_tools.py` 全绿；全量套件 2397 passed 覆盖 steward 与 digest 稳定性。
+- [x] E6 `test_steward_memory_tool.py`、`test_steward_memory_scopes.py`、`test_steward_tools.py` 全绿；全量套件覆盖 steward 与 digest 稳定性。
 
 > 需要 attempt / fence / 身份拆分的接线依据时，按需读 `.trellis/spec/backend/steward-child-run.md`（44KB，超出注入上限，不进 `implement.jsonl`）。
 
@@ -73,7 +73,7 @@
 
 ## Phase F：回归与收尾
 
-- [x] F1 `mypy app` → Success（228 files）；`pytest` → **2397 passed, 38 skipped**。
+- [x] F1 `mypy app` → Success（228 files）；`pytest` → **2398 passed, 38 skipped**。
 - [x] F2 重点回归全绿（含 `test_rag_lifecycle_acceptance.py`、`test_memory_eval_baseline.py`、`test_context_tier_budget.py`、`test_memory_supersede.py`、`test_terms.py`）。`test_rag_acceptance_contract.py`、`test_rag_acceptance_bindings.py`、`test_rag_lifecycle_acceptance.py`、`test_memory_rag_service.py`、`test_context_tier_budget.py`、`test_memory_eval_baseline.py`、`test_steward_memory_tool.py`、`test_memory_source_migration.py`。
 - [x] F3 `agent/` 无改动（未触碰 sidecar 工具声明——steward 记忆工具的输入 schema 未变），故未运行。
 - [x] F4 已落盘并对比，见 C3。
@@ -146,3 +146,14 @@
   `TOOL_VERSIONS` 均未变）。
 - `scripts/frontend-api-smoke.sh`：需要真实 listener 环境；本任务改动是后端服务层与
   spec，未改 API 契约或前端消费形状。
+
+## 质量检查阶段发现并修复的自有缺陷
+
+`ensure_public_kinship_packs` 的初版判据是「有没有 `status='active'` 的公共文档」。
+后果：**运维主动撤权**后，每个维护 tick 都会重试一次 `index_public_kinship`，而
+`_check_document_metadata` 对 `invalidated` 的公共文档恒抛 409（公共来源不借用 memory 的
+`index_superseded` 恢复语义）→ 每 5 秒一条 WARNING 永久刷屏，**掩盖真实告警**。
+
+判据改为「该 locale 有没有**任何**投影」：撤权持久（与 `index_superseded` 的既有语义
+一致）、从未建过索引的既有安装仍自愈、行被清空仍自愈。新增
+`test_maintenance_does_not_resurrect_revoked_public_kinship` 断言这一点。
