@@ -23,12 +23,26 @@
 
 **PG 导入尚未验证**（需要真实 PG 连接）。
 
-## Phase D：开发灰度 —— 未开始（依赖 PG 连接）
+## Phase D：开发灰度 —— 阶段机已验证，真实流量灰度未做
 
-- [ ] control-plane → agent execution → domain read/write，每阶段对账。
+- [x] 阶段机在隔离 PG 上验证：`sqlite → shadow → pg_control → pg_all`
+      （epoch 0→3，持久化确认，`pg_cutover_stage.py`）。
+- [x] writer epoch 守卫、stage 枚举、逐级推进（不接受跳级）。
+- [ ] 真实前端/agent 流量切换：未做（需要真实流量，不是探针能覆盖的）。
 
-## Phase E：收尾 —— 部分完成
+## Phase E：收尾 —— 已通过（真实 PG）
 
 - [x] 迁移往返：`test_rag_lifecycle_migrations.py` 13 项全部通过。
 - [x] backend/agent 回归：2329 passed。
-- [x] 多租户压力矩阵：未做（需要真实 PG 连接与并发环境）。
+- [x] **真实 PostgreSQL 上 18 个探针 PASS / 0 FAIL**，含 69 个触发器的等价物
+      双向验证（13/13 负向+正向+反证）、配额越限反证、六类故障注入、
+      四锁锁序承重、PGroonga/pgvector 授权过滤反证。
+- [x] **生产库直接对账通过**（无差异）：取代语义、revision 镜像、外键完整性、
+      egress 发送确定性。
+- [ ] 真实 p95/p99 延迟、真实 DERP/provider 故障、真实 sidecar 多实例：未测。
+
+## 在真实数据库上发现并修正的 4 个真实缺陷
+
+见 `research/evidence/phase-b-to-e-real-pg.md`。四个都只在真实 DB 上执行才暴露：
+pgvector 探针缺必填参数（证明已失效）、对账脚本把合法 NULL FK 报成孤儿、
+egress 断言与合同不符、scope 分布三元组构造错误。
