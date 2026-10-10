@@ -177,6 +177,78 @@ if not state.memory_enabled:
 
 家庭端先读取只读状态并隐藏必然失败的操作；平台开关写入只允许独立系统管理员完成。
 
+## Scenario: boolean 列不得与整数比较（2026-10-10）
+
+### 1. Scope / Trigger
+
+改动任何**手写 SQL**（`sa.text(...)`）、或在 SQLite/PostgreSQL 之间迁移运行时时必读。
+适用于 `backend/app/**` 中的 raw SQL 字符串。
+
+### 2. Signatures
+
+```python
+# ❌ SQLite 上正常，PostgreSQL 上执行时报错
+"UPDATE agent_runs SET updated_at = updated_at WHERE id = :run_id AND cancel_requested = 0"
+
+# ✅ 两方言都正确（SQLite ≥3.23 支持 TRUE/FALSE 字面量）
+"UPDATE agent_runs SET updated_at = updated_at WHERE id = :run_id AND cancel_requested = FALSE"
+```
+
+### 3. Contracts
+
+- **boolean 列必须与 `TRUE`/`FALSE` 比较，不得与 `0`/`1` 比较**：PostgreSQL 的列是真正的
+  `boolean`，`= 0` 报 `UndefinedFunction: operator does not exist: boolean = integer`；
+  SQLite 无严格类型（存 0/1）所以**通过全部 SQLite 测试**。
+- 结构性守卫在 `backend/tests/test_sql_portability.py`：从 `app/models/*.py` 的
+  `Mapped[bool]` **动态收集**列名（不手写清单，避免守卫随模型演化静默失效），
+  再扫描 raw SQL 字面量里的 `列 = 0|1`。只检查含 `SELECT/UPDATE/INSERT/DELETE/WHERE`
+  的字面量，以免文档字符串里的说明触发误报。
+
+### 4. Validation & Error Matrix
+
+| 写法 | SQLite | PostgreSQL | 可移植 |
+|---|---|---|---|
+| `col = 0` / `col = 1`（boolean 列） | ✅ | ❌ `boolean = integer` | ❌ |
+| `col = FALSE` / `col = TRUE` | ✅ | ✅ | ✅ |
+| 绑定 Python `bool` 参数 | ✅ | ✅ | ✅ |
+
+### 5. Good/Base/Bad Cases
+
+- Good：`cancel_requested = FALSE`。
+- Base：SQL 参数（`:is_assistant`）与**字面量**比较（`= 1`）不涉及 boolean 列，可移植。
+- Bad：把 boolean 列当 0/1 整数列使用；依赖 SQLite 的类型宽松。
+
+### 6. Tests / Assertions
+
+- `test_no_raw_sql_compares_a_boolean_column_to_an_integer`：结构性守卫。
+  **mutation 验证**：把 `= FALSE` 改回 `= 0` 必须失败并指出文件与行号。
+- `test_unexpected_dispatch_failure_is_audited_and_typed`：工具执行的**非协议**异常必须
+  写 `audit_log(action="agent_tool_failed")` 并返回 `AGENT_TOOL_EXECUTION_FAILED`。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+用 `= 0` 比较 boolean 列；只在 SQLite 上验证 raw SQL；把「SQLite 测试全绿」当作方言可移植
+的证据。
+
+#### Correct
+
+boolean 列用 `FALSE`/`TRUE` 字面量或绑定布尔参数；新增/修改 raw SQL 后依赖
+`test_sql_portability.py` 的结构性守卫，并在**真实 PostgreSQL** 上跑一次该语句
+（SQLite 测试无法发现此类缺陷）。
+
+### 8. 事故记录（为什么这条合同存在）
+
+`agent_tools` 与 `provider_proxy` 两处准入 CAS 用 `cancel_requested = 0`。2026-10-08
+切到 PostgreSQL 当天起，**每一次 agent 工具调用都 500**（生产实测 2324 次/72h，
+最后成功的 steward 工具调用停在 2026-10-07）。
+
+它之所以能潜伏数天，是**失败不可观测**叠加的结果：非 `ToolProtocolError` 的异常直接
+逃逸到 FastAPI 的 500 处理，`agent_tool_calls`（在准入 CAS 之后才写）与审计**都零行**，
+模型只收到通用 `INTERNAL_ERROR`，run 仍 `succeeded`。因此本次同时补了
+`agent_tool_failed` 审计与专属错误码——**新增任何静默失败面之前，先确认它留下痕迹**。
+
 ## Scenario: 局部唯一索引的跨方言可移植性（2026-10-04）
 
 ### 1. Scope / Trigger

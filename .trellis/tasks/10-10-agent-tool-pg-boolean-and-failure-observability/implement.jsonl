@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "跨方言可移植性规则与既有守卫约定（局部唯一索引、JSON CHECK 方言渲染、raw SQL 风险分类）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "统一错误响应外壳与错误码约定；本次把未处理异常改为结构化错误码需符合该合同"}
