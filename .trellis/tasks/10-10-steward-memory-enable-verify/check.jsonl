@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "管家只读工具集与 allowlist 广告规则；本次验收核对的正是该合同的运行态（工具已广告、模型未调用）"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "记忆可见级别（三层交集、显式允许集、private 读者）的授权合同；本次验收以变异验证了交集语义"}
