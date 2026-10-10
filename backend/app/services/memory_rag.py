@@ -1258,6 +1258,38 @@ RANK_VERSION_LEGACY = "lex-v1"
 RANK_VERSION_DEFAULT = "lex-v2"
 RANK_VERSIONS = (RANK_VERSION_LEGACY, RANK_VERSION_DEFAULT)
 
+#: 向量候选的**相似度地板**（余弦相似度，非距离）。低于它的向量候选一律丢弃。
+#:
+#: ## 取值是实测出来的，不是拍的
+#:
+#: 在真实 PostgreSQL + 真实 `bge-small-zh-v1.5` 上测得 golden set 的 top-1 相似度：
+#:
+#: ```text
+#: 相关命中     min = 0.5091   p50 = 0.6580   max = 0.7716
+#: 不相关命中   min = 0.3634   p50 = 0.5000   max = 0.7712   ← 重叠！
+#: 三个弃答用例的虚假 top-1：0.4859 / 0.3811 / 0.3634
+#: ```
+#:
+#: 两个分布**重叠**（不相关的最高 0.7712 高于相关的最低 0.5091），因此余弦相似度
+#: **不能**作为相关性判据——这是「不把向量当重排依据」的实测根据。
+#:
+#: 但存在一个可用区间：弃答用例的虚假命中最高 **0.4859**，相关命中最低 **0.5091**。
+#: 地板取 0.50 落在这个 0.023 宽的间隙里。它只做一件事：**丢掉明显无关的向量补充**，
+#: 从而让「库里没有」仍然表现为空结果（否则向量候选会填满 limit，弃答正确率从
+#: 1.00 掉到 0.00——实测过）。
+#:
+#: ## 为什么地板窄是可以接受的
+#:
+#: 地板**只作用于向量新增的候选**，不作用于词法命中。因此它误伤一个「弱相关」
+#: 向量候选的代价是零——词法路径本来就已经提供了那条命中。它换来的是弃答语义。
+#:
+#: ## 换 embedding 模型必须重新测量
+#:
+#: 0.50 是**这个模型在这个语料上**的值。换模型（或换 chunking 算法）后相似度
+#: 尺度会变，这个地板必须重新用 `scripts/migration-proof/vector_similarity_distribution.py`
+#: 测量后再定，不能沿用。
+_VECTOR_MIN_SIMILARITY = 0.50
+
 #: `lex-v2` 的来源类别权重。用户确认的记忆排在最前：它是「用户说过且明确确认
 #: 要记住」的事实，比从文档里检索到的段落更可能是用户想听的答案。
 _SOURCE_TYPE_RANK_WEIGHT: dict[str, int] = {
@@ -1601,6 +1633,13 @@ def search_rag(
         eligibility=eligibility,
         seen_chunk_ids=seen_chunk_ids,
         limit=limit,
+        # eligibility 里的 `:now` / `:is_assistant` / `:user_id` 必须一并传入：
+        # 向量 SQL 与词法 SQL 共用同一段 eligibility，漏传任何一个绑定参数都会让
+        # 整条查询抛 StatementError 并**静默回退词法**（实测 P1 引入 `:now` 后
+        # 向量路径就一直是死的，而日志只说「回退词法结果」）。
+        now=params["now"],
+        is_assistant=params["is_assistant"],
+        user_id=params["user_id"],
     )
     denied += vector_denied
     if trace is not None:
@@ -1663,6 +1702,9 @@ def _vector_candidates(
     eligibility: str,
     seen_chunk_ids: set[int],
     limit: int,
+    now: Any,
+    is_assistant: int,
+    user_id: int,
 ) -> tuple[list[RAGHit], int]:
     """取向量候选（filter-then-ANN），返回 `(命中, 被拒数)`。任何失败返回空。
 
@@ -1732,14 +1774,27 @@ def _vector_candidates(
                     "model": rag_embeddings.configured_model(),
                     "limit": limit * 2,
                     "offset": 0,
+                    # eligibility 的绑定参数（与词法路径同源）。
+                    "now": now,
+                    "is_assistant": is_assistant,
+                    "user_id": user_id,
+                    "account_id": account.id,
+                    "space_id": space_id,
                 },
             )
             .mappings()
             .all()
         )
-    except Exception:  # noqa: BLE001 - 表不存在/扩展缺失等都回退
+    except Exception as exc:  # noqa: BLE001 - 表不存在/扩展缺失等都回退
         db.rollback()
-        logger.warning("向量检索查询失败，回退词法结果")
+        # 必须记录 error_class：否则「向量路径静默回退」这件事无法诊断——
+        # 实测在 PostgreSQL 上 `:is_assistant = 1` 触发 `boolean = integer`
+        # 类型错误，而原日志只有一句「回退词法结果」，从现象看不出原因。
+        logger.warning(
+            "向量检索查询失败，回退词法结果 error_class=%s detail=%s",
+            type(exc).__name__,
+            str(exc)[:200],
+        )
         return [], 0
 
     # 交给同一个构造函数：授权复核与引用投影与词法路径完全一致。
@@ -1752,7 +1807,15 @@ def _vector_candidates(
         agent_kind=agent_kind,
         rank_by_order=False,
     )
-    return [hit for hit in hits if hit.chunk_id not in seen_chunk_ids], denied
+    # 相似度地板：`rank` 是**余弦距离**（`<=>`，0 = 完全相同），因此相似度 = 1 - rank。
+    # 没有这个地板，向量候选会填满 limit，把「库里没有」变成「随便返回几条」。
+    kept = [
+        hit
+        for hit in hits
+        if hit.chunk_id not in seen_chunk_ids
+        and (1.0 - float(hit.rank)) >= _VECTOR_MIN_SIMILARITY
+    ]
+    return kept, denied
 
 
 def _run_coro_blocking(coro: Any) -> Any:
