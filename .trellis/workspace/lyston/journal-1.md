@@ -1339,3 +1339,25 @@ E1/E3 通用化，换 kind 只改一个配置值，这正是 E1 重构的目的�
 ### Status
 
 [OK] **Completed**（已合并 main、归档、worktree 与 feat 分支已清理；E5 明确未执行并记录理由）
+
+
+## Session 37: 附件读取空间与类型权限修复
+<!-- trellis-session: v=2 fp=7a9044627a3a500b -->
+
+**Date**: 2026-10-11
+**Task**: 附件读取空间与类型权限修复
+**Branch**: `main`
+
+### Summary
+
+完成已批准附件设计的第一阶段：列表/原图按当前空间授权，photos 与 attachments 分开控制，前端切换上下文清理并拒绝迟到响应。后端52条、前端21条相关回归通过，mypy/vue-tsc与修改文件lint通过。已合入main、归档任务、删除任务worktree和本地/远端分支；未部署。后续资料内容版本与Agent使用授权尚未实现。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `82a32c3f` | fix(attachments): enforce scoped media disclosure and discard stale responses |
+
+### Status
+
+[OK] **Completed**

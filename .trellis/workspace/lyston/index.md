@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
-- **Last Active**: 2026-09-15
+- **Total Sessions**: 37
+- **Last Active**: 2026-10-11
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1179 | Active |
+| `journal-1.md` | ~1363 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-10-11 | 附件读取空间与类型权限修复 | `82a32c3f` | `main` |
 | 33 | 2026-09-15 | 修复家族树分支布局 | `902e471` | `main` |
 | 32 | 2026-09-15 | Steward 证据版本与行为投影修复 | `cff6f8e`, `b43602d` | `main` |
 | 31 | 2026-09-14 | Steward 短事务与渐进家谱：集成验收及归档清理 | `f7fbd387`, `6162cede`, `dddc6b77`, `ce085fb`, `3cb4550`, `84660c8`, `c021921`, `dee91a14` | `main` |
