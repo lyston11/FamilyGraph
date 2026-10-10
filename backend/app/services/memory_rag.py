@@ -1354,7 +1354,7 @@ def index_public_kinship_packs(db: Session) -> int:
 
 
 def ensure_public_kinship_packs(db: Session) -> int:
-    """后台补建入口：**仅在**公共称谓索引完全不存在时物化，否则不做任何写入。
+    """后台补建入口：只为**完全没有投影**的 locale 建索引，绝不重写已有投影。
 
     ## 为什么迁移路径不够
 
@@ -1362,17 +1362,45 @@ def ensure_public_kinship_packs(db: Session) -> int:
     顺带建索引。但**既有安装**的迁移早已跑完，种子不会重跑——只靠那条路径，
     现网永远不会得到公共索引，而那正是「写了代码但没人调用」的另一种形态。
 
-    本函数补的就是这批数据库，同时能自愈被清空的索引。成本是一次
-    `SELECT ... LIMIT 1`，建成后恒为 no-op，因此不是每次 tick 都做全量比对。
+    ## 为什么判据是「任何状态的投影」而不是「active 的投影」
+
+    只看 `active` 会让**运维主动撤权**的公共语料在每个维护 tick 上重试一次：
+    `_check_document_metadata` 对 `invalidated` 的公共文档恒抛 409（公共来源不借用
+    memory 的 `index_superseded` 恢复语义），于是每 5 秒一条 WARNING 永久刷屏，
+    掩盖真实告警。
+
+    判据改成「该 locale 有没有任何投影」之后：
+
+    - 撤权是**持久**的（维护循环不复活它），与 `index_superseded` 的既有语义一致；
+    - 从未建过索引的既有安装仍然自愈（无任何投影 → 建）；
+    - 行被整体清空（如测试清表）也仍然自愈。
+
+    换包内容（新 revision）由 seed 路径的 `index_public_kinship_packs` 负责——那是
+    迁移/部署事件，不是每 tick 的补建职责。
     """
-    existing = db.scalar(
-        select(RAGDocument.id)
-        .where(RAGDocument.source_type == "public_kinship", RAGDocument.status == "active")
-        .limit(1)
-    )
-    if existing is not None:
-        return 0
-    return index_public_kinship_packs(db)
+    rows = db.execute(
+        select(TermEntry.locale, TermEntry.concept_code, TermEntry.term)
+        .where(TermEntry.level.in_(("system", "locale")), TermEntry.status == "active")
+        .order_by(TermEntry.locale, TermEntry.concept_code, TermEntry.term)
+    ).all()
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for locale, code, term in rows:
+        grouped.setdefault(locale or PUBLIC_KINSHIP_SYSTEM_LOCALE, []).append((code, term))
+    created = 0
+    for locale, entries in sorted(grouped.items()):
+        projected = db.scalar(
+            select(RAGDocument.id)
+            .where(
+                RAGDocument.source_type == "public_kinship",
+                RAGDocument.source_id == public_kinship_source_id(locale),
+            )
+            .limit(1)
+        )
+        if projected is not None:
+            continue
+        index_public_kinship(db, locale=locale, entries=entries)
+        created += 1
+    return created
 
 
 def _fts_match(value: str) -> str:

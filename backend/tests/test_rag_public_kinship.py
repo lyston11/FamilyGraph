@@ -290,6 +290,34 @@ def test_maintenance_backfills_public_kinship_exactly_once(db_session, monkeypat
     assert second["rag_public_kinship_packs"] == 0, "建成后必须恒为 no-op"
 
 
+def test_maintenance_does_not_resurrect_revoked_public_kinship(db_session, monkeypatch):
+    """运维撤权必须是**持久**的：维护补建不得每个 tick 重试并刷 409 告警。
+
+    这条防的是一个真实的失败形态：补建判据若只看 `status='active'`，撤权后的每个
+    维护 tick 都会重试一次 `index_public_kinship`，而它对该状态恒抛 409 →
+    每 5 秒一条 WARNING 永久刷屏，掩盖真实告警。判据改成「有没有任何投影」后，
+    撤权与 `index_superseded` 的既有语义一致：不可由维护循环复活。
+    """
+    from app.services import maintenance
+
+    terms.seed_builtin_packs(db_session)
+    db_session.commit()
+    _enable_rag(db_session)
+    for document in _documents(db_session):
+        memory_rag.invalidate_source(
+            db_session, source_type="public_kinship", source_id=document.source_id
+        )
+    db_session.commit()
+    revoked = {document.source_id: document.status for document in _documents(db_session)}
+    assert revoked and set(revoked.values()) == {"invalidated"}
+
+    monkeypatch.setattr(maintenance.config, "RAG_ENABLED", True)
+    counters = maintenance.run_maintenance_tick()
+
+    assert counters["rag_public_kinship_packs"] == 0, "撤权的语料不得被补建复活"
+    assert {document.source_id: document.status for document in _documents(db_session)} == revoked
+
+
 def test_fts_repair_keeps_public_kinship_consistent(rag_on):
     """`repair_fts` 不改内容、不改变检索结果（索引是可重建派生物）。"""
     user, space = create_agent_fixture(rag_on, name="public-kinship-repair")
