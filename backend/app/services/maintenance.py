@@ -33,6 +33,7 @@ from app.services import (
     agent_queue,
     embedding_client,
     embedding_index,
+    memory_rag,
     rag_maintenance,
     steward,
     steward_assist,
@@ -70,6 +71,8 @@ def run_maintenance_tick() -> dict[str, int]:
         "rag_index_scanned": 0,
         "rag_index_materialized": 0,
         "rag_index_failed": 0,
+        # 公共称谓索引补建（`public_kinship`）：一次性，建成后每 tick 恒为 0。
+        "rag_public_kinship_packs": 0,
         # 向量索引（C6）：独立于 FTS 补建，因为它依赖外部 embedding 服务。
         "embedding_indexed": 0,
         "embedding_segments": 0,
@@ -110,6 +113,22 @@ def run_maintenance_tick() -> dict[str, int]:
         db.commit()
         if config.RAG_ENABLED:
             with SessionLocal() as rag_db:
+                # ---- 公共称谓索引（`public_kinship`，唯一 `scope='public'` 来源）----
+                # 独立 try：它失败不得影响记忆补建。既有安装的迁移早已跑完，
+                # `terms.seed_builtin_packs` 不会重跑，因此这里做一次性补建；
+                # 建成后每次 tick 只是一条 SELECT，恒为 no-op。
+                try:
+                    counters["rag_public_kinship_packs"] = memory_rag.ensure_public_kinship_packs(
+                        rag_db
+                    )
+                    rag_db.commit()
+                except Exception as exc:  # noqa: BLE001 — 公共索引失败不影响记忆补建
+                    rag_db.rollback()
+                    counters["rag_public_kinship_packs"] = 0
+                    logger.warning(
+                        "public kinship index failed; memory backfill unaffected (error=%s)",
+                        type(exc).__name__,
+                    )
                 try:
                     rag_counters = rag_maintenance.run_maintenance_batch(
                         rag_db, worker_id="inproc-rag-maintenance"

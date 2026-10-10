@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/memory-rag-execution-contract.md","reason":"授权过滤分层与 scope/读者语义、向量接线与相似度地板、分层预算与确定性重排——本任务新增 source_type 与二维可读集的直接合同"}
+{"file":".trellis/spec/backend/rag-index-lifecycle-contract.md","reason":"索引写入幂等、换版、撤权与维护事务的可执行合同——public_kinship 必须走同一条路径"}
+{"file":".trellis/spec/backend/memory-contract.md","reason":"Memory/Candidate 生命周期与取代语义——矩阵中 memory 类别的冻结基线"}
+{"file":".trellis/spec/architecture/6--6-visibility-py.md","reason":"visibility 授权矩阵与披露开关——D1 排除 profile、D2 public 定义的依据"}

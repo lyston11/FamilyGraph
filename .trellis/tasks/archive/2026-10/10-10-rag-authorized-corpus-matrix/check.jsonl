@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "核对新 source_type 是否复用同一授权过滤、是否引入第二份 _ELIGIBILITY_SQL 副本"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "核对 public_kinship 的幂等/revision 冲突/撤权/rebuild 是否与 memory 同路径"}
+{"file": ".trellis/spec/architecture/6--6-visibility-py.md", "reason": "核对 public 文档不含个人数据、未放宽四级阶梯与 purpose 上限"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁与证明义务（基线先于对比、阈值放宽需写明理由）"}

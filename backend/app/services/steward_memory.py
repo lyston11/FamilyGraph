@@ -50,6 +50,26 @@ logger = logging.getLogger(__name__)
 # （`steward_assist` 只在 terminology 上写 `viewer_account_id`）。
 VIEWER_SCOPED_KINDS: frozenset[str] = frozenset({"terminology"})
 
+#: steward 可以读的 RAG `source_type`（可读集的**第二个维度**）。
+#:
+#: ## 为什么是显式枚举，而不是从 scope 推导
+#:
+#: 「允许 `household`」不能推出「`household` 下的所有类别都可以给管家」。
+#: 用户确认的记忆、家族故事、附件授权文档、公共称谓知识的**授权强度不同**：
+#: 记忆是用户逐条确认过的事实，公共知识虽无个人数据但语义上是空间外的语料。
+#: 把「读哪些级别」和「读哪些类别」压成一个维度，会让放开一个 scope 时静默
+#: 放开该 scope 下的全部类别——默认方向是**放开**，这是错的方向。
+#:
+#: ## 新增 source_type 默认不可读
+#:
+#: 新类别不会出现在这个元组里，也不会因为某个 scope 被放开而获得访问。要让 steward
+#: 读到新类别，必须改这一行——即一次显式的、可评审的代码改动，而不是一次配置写入。
+#: 这是刻意的：放宽管家的读取面应当是**部署 + 评审**，不是管理员界面上的一次点击。
+#:
+#: `tests/test_steward_memory_scopes.py` 用 `public_kinship`（2026-10-10 新增的
+#: 第一个新类别）做反向断言，证明「新增类别不会自动进入管家可读集」。
+STEWARD_READABLE_SOURCE_TYPES: tuple[str, ...] = ("memory",)
+
 
 def parse_scopes(raw: str | None) -> tuple[str, ...]:
     """宽松解析：忽略未知项并告警，返回按 `MEMORY_SCOPES` 顺序的规范化元组。"""
@@ -171,6 +191,7 @@ def resolve_reader(
 
 
 __all__ = [
+    "STEWARD_READABLE_SOURCE_TYPES",
     "VIEWER_SCOPED_KINDS",
     "effective_scopes",
     "encode_scopes",

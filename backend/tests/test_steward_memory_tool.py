@@ -342,3 +342,77 @@ def test_output_carries_scopes_and_handles_not_raw_text(db_session):
     assert entry["excerpt"].startswith("The household recipe")
     # 句柄 + 摘要，不是原文全集。
     assert "summary" not in entry
+
+
+# ---- 5. 可读集的第二个维度：source_type ----
+
+
+def test_public_kinship_does_not_enter_the_steward_readable_set(db_session):
+    """新增 source_type 默认不可读（反证：只放 scope 不够）。"""
+    user, space = create_agent_fixture(db_session, name="memtool-source-dimension")
+    # 三层配置把**所有** scope 都放开——最宽的配置。
+    _configure(
+        db_session,
+        space_id=space.id,
+        platform="private,household,lineage",
+        space="private,household,lineage",
+        env="private,household,lineage",
+    )
+    assert steward_memory.readable_scopes(
+        db_session, space_id=space.id, viewer_account_id=user.account.id
+    ) == ("private", "household", "lineage")
+    # 但类别维度上 steward 只能读 memory。`public_kinship` 是 2026-10-10 新增的
+    # 第一个新类别，它不在这份元组里——新增类别必须改代码才能被读到。
+    assert steward_memory.STEWARD_READABLE_SOURCE_TYPES == ("memory",)
+    assert "public_kinship" not in steward_memory.STEWARD_READABLE_SOURCE_TYPES
+
+
+def test_public_scope_is_not_even_nameable_for_a_steward_run(db_session):
+    """把 public_kinship 加入可读集也不够——两层独立挡住。
+
+    第一层（更强）：steward 的 scope_allowlist 值域是 MEMORY_SCOPES
+    （private/household/lineage），public **根本无法被表达**——写进去就 422。
+    第二层：即使只放开类别维度，public_kinship 文档是 scope='public'，
+    没有任何 scope 分支能匹配到它（`:is_assistant = 1` 的边界）。
+    """
+    from app.models.rag import RAGDocument
+    from app.services import terms
+
+    admin, space = create_agent_fixture(db_session, name="memtool-public-kind")
+    _configure(
+        db_session,
+        space_id=space.id,
+        platform="private,household,lineage",
+        space="private,household,lineage",
+        env="private,household,lineage",
+    )
+    terms.seed_builtin_packs(db_session)
+    db_session.commit()
+    assert db_session.query(RAGDocument).filter_by(source_type="public_kinship").count() > 0
+
+    # 第一层：public 不在可读集的允许值域里，配置层面就写不进去。
+    with pytest.raises(HTTPException) as exc_info:
+        memory_rag.search_rag(
+            db_session,
+            actor=admin,
+            account=admin.account,
+            space_id=space.id,
+            query="外婆",
+            agent_kind="steward",
+            scope_allowlist=("private", "household", "lineage", "public"),
+        )
+    assert exc_info.value.status_code == 422
+
+    # 第二层：只放开类别维度、scope 用合法值域 → 仍无命中（public 分支恒假）。
+    hits = memory_rag.search_rag(
+        db_session,
+        actor=admin,
+        account=admin.account,
+        space_id=space.id,
+        query="外婆 舅舅 称谓",
+        agent_kind="steward",
+        for_model=False,
+        scope_allowlist=("private", "household", "lineage"),
+        source_types=("public_kinship",),
+    )
+    assert hits == []

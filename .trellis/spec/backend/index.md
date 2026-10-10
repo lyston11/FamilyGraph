@@ -10,6 +10,7 @@
 - 数据库、迁移、事务、备份或约束：读取 [database-guidelines.md](database-guidelines.md)。
 - 错误、日志、质量门禁：按需读取对应叶文件。
 - Agent、Memory/RAG、Steward、Controlled Web 或关系智能：只读取对应领域叶文件。
+- 新增/删除 RAG `source_type`、改变某类别的 `scope` 值域、给某类别接写入方，或调整 steward 可读的记忆类别：读 [rag-authorized-corpus-matrix.md](rag-authorized-corpus-matrix.md)。
 - Steward 模型辅助的执行单元、发送门、并发作用域或 Pi child run（`steward_model_calls`、`/internal/agent/steward/*`、sidecar 槽位）：读 [steward-child-run.md](steward-child-run.md)。
 - 涉及全局身份、授权、空间状态或数据权利：从 [全局架构规范路由](../architecture/index.md) 选择具体叶文件。
 
@@ -26,6 +27,8 @@
 - [memory-contract.md](memory-contract.md)
 - [memory-rag-execution-contract.md](memory-rag-execution-contract.md)
 - [rag-index-lifecycle-contract.md](rag-index-lifecycle-contract.md)
+- [rag-authorized-corpus-matrix.md](rag-authorized-corpus-matrix.md) — (source_type × scope) 授权语料矩阵、`public` 的「不含个人数据」定义、`profile` 排除理由、声明集/活跃集分离、steward 二维可读集
+
 - [relationship-intelligence.md](relationship-intelligence.md)
 - [steward-action-card.md](steward-action-card.md)
 - [steward-behavior-rebuild.md](steward-behavior-rebuild.md)

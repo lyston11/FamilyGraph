@@ -181,7 +181,27 @@ def seed_builtin_packs(session: Session) -> int:
 
     生产环境由迁移 0012 写入；测试的清表夹具会连带清掉种子行，用本函数
     在测试内恢复。只补缺失行，不碰用户/空间层词条。返回新增行数。
+
+    ## 顺带物化公共称谓索引（`public_kinship`）
+
+    内置称谓包是**唯一**可以 `scope='public'` 的 RAG 来源：它不含任何个人数据。
+    把它接在生产路径上的落点就是这里——迁移 0012/0041 与启动种子都经过本函数，
+    因此「跑过迁移或种子」就等于「公共索引已建立」。
+
+    没有第二个调用点、也没有后台补建，是刻意的：`public_kinship` 的写入方本来就
+    只有内置种子表，而 `ingest_authorized_document` 的现状（只有测试调用）正是
+    「接了但没接上」的反面教材。
+
+    RAG 未开启时不物化：`index_public_kinship` 会抛 503，而那会让**种子**失败。
+    种子本身是数据准备，不应由 RAG 开关决定成败；RAG 打开后重新 seed 或跑迁移即可。
     """
+    from app.services import memory_rag, platform_features
+
+    def _index_public_kinship() -> None:
+        if not platform_features.is_rag_enabled(session):
+            return
+        memory_rag.index_public_kinship_packs(session)
+
     existing = {
         (row.level, row.locale, row.concept_code, row.term)
         for row in session.scalars(
@@ -210,6 +230,7 @@ def seed_builtin_packs(session: Session) -> int:
         added += 1
     if added:
         session.flush()
+    _index_public_kinship()
     return added
 
 

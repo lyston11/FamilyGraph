@@ -512,8 +512,10 @@ def _search_memory(
        空列表——空列表会把"配置不允许"伪装成"没有相关内容"。
     2. **不新增检索路径**：复用 `memory_rag.search_rag` 与同一段 eligibility 谓词、
        同一个 `_rows_to_hits` 引用投影，因此授权等价性靠同一段代码而不是靠约定。
-    3. **目的限定**：只读 `source_type='memory'`。配置说的是"记忆级别"，不是"把这个
-       级别的所有 RAG 材料都交给管家"；放开到故事/授权文档是另一个决定。
+    3. **目的限定**：只读 `steward_memory.STEWARD_READABLE_SOURCE_TYPES`（当前为
+       `("memory",)`）。配置说的是"记忆级别"，不是"把这个级别的所有 RAG 材料都交给
+       管家"；放开到故事/授权文档/公共知识是**第二个维度**上的显式代码改动，
+       不会因为某个 scope 被放开而自动发生。
     """
     from app.services import memory_rag, steward_memory
 
@@ -557,7 +559,8 @@ def _search_memory(
         # 绝不是回落到 space admin 的 account。
         private_reader_account_id=execution.viewer_account_id,
         scope_allowlist=scopes,
-        source_types=("memory",),
+        # 可读集的第二个维度：显式枚举，不从 `scopes` 推导。
+        source_types=steward_memory.STEWARD_READABLE_SOURCE_TYPES,
     )
     return {
         "query_hash": memory_rag.query_hash(clean),

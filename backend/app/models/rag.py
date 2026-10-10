@@ -11,6 +11,27 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 RAG_SOURCE_TYPES = ("memory", "family_story", "authorized_document", "profile", "public_kinship")
+
+#: 有**真实写入方**的 source_type：在生产执行路径上会被创建。
+#:
+#: 与 `RAG_SOURCE_TYPES` 分开登记的理由是这两件事曾经被混为一谈：声明了五类，实际
+#: 只有一类有写入方，而「所有 `RAG_SOURCE_TYPES` 都已登记 tier 份额」的断言照样通过
+#: ——它只检查份额存在，不检查写入方存在。空转因此既无文档也无测试保护。
+#:
+#: 差集必须在 `UNINDEXED_SOURCE_TYPES` 里逐条给出理由。新增或删除 `RAG_SOURCE_TYPES`
+#: 而不更新两侧时，`tests/test_rag_source_type_registry.py` 会失败。
+INDEXED_SOURCE_TYPES: tuple[str, ...] = ("memory", "public_kinship")
+
+#: 声明但无写入方的类别 → 理由。「声明了但没人写」是**显式决定**，不是偶然状态。
+#:
+#: 不删这些枚举值：`RAG_SOURCE_TYPES` 参与 `ck_rag_documents_source_type` 的 CHECK
+#: 约束，删除需要 SQLite 整表重建（复制全表），收益不抵迁移风险，且会让历史数据的
+#: source_type 变成不可读的值。
+UNINDEXED_SOURCE_TYPES: dict[str, str] = {
+    "family_story": "依赖尚不存在的家族故事写入功能；本任务只登记合同",
+    "authorized_document": "附件授权缺段落级粒度，整篇授权等于交给空间全体成员；待独立任务",
+    "profile": "逐 viewer 求值（visibility.evaluate 依赖读者），走 get_profile_summary 结构化投影",
+}
 RAG_DOCUMENT_STATUSES = ("active", "revoked", "deleted", "invalidated")
 RAG_SENSITIVITIES = ("normal", "sensitive", "high", "local_required")
 
@@ -178,6 +199,7 @@ class RAGIndexMaintenanceFailure(Base):
 
 
 __all__ = [
+    "INDEXED_SOURCE_TYPES",
     "RAGChunk",
     "RAGDocument",
     "RAGIndexMaintenanceFailure",
@@ -185,4 +207,5 @@ __all__ = [
     "RAG_DOCUMENT_STATUSES",
     "RAG_SENSITIVITIES",
     "RAG_SOURCE_TYPES",
+    "UNINDEXED_SOURCE_TYPES",
 ]
