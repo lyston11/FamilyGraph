@@ -115,6 +115,7 @@ class VisibilityDecision:
     level: str
     fields: dict[str, str]
     purpose: str
+    source: str = ""
 
     @property
     def visible(self) -> bool:
@@ -341,7 +342,7 @@ def evaluate(
     for field in CONTENT_FIELDS:
         if field not in cleared:
             fields[field] = FIELD_MASKED
-    return VisibilityDecision(level, fields, purpose)
+    return VisibilityDecision(level, fields, purpose, source=source)
 
 
 def payload_from_decision(decision: VisibilityDecision, target: User) -> dict[str, Any]:

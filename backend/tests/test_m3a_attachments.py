@@ -124,3 +124,148 @@ def test_delete_removes_record_and_file(db_session, client: TestClient, pair):
     dele = client.delete(f"/api/attachments/{att_id}", headers=h)
     assert dele.status_code == 204
     assert client.get(f"/api/attachments/{att_id}/raw", headers=h).status_code == 404
+
+
+@pytest.fixture()
+def scoped_attachments(db_session, client, pair):
+    from app.models.space import FamilySpace, SpaceMember
+    from app.utils.timeutil import utcnow
+
+    owner, viewer = pair
+    spaces = []
+    for name in ("A", "B"):
+        space = FamilySpace(name=name, owner_id=owner.id, kind="lineage", created_at=utcnow())
+        db_session.add(space)
+        db_session.flush()
+        for user, role in ((owner, "space_admin"), (viewer, "member")):
+            db_session.add(
+                SpaceMember(
+                    space_id=space.id,
+                    user_id=user.id,
+                    added_by=owner.id,
+                    role=role,
+                    status="active",
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+            )
+        spaces.append(space.id)
+    db_session.commit()
+    owner_headers = _login(client, "主人", "111111")
+    image = client.post(
+        f"/api/users/{owner.id}/attachments/image",
+        files={"file": ("p.png", _png_bytes(), "image/png")},
+        headers=owner_headers,
+    )
+    link = client.post(
+        f"/api/users/{owner.id}/attachments/link",
+        json={"url": "https://example.com/family"},
+        headers=owner_headers,
+    )
+    assert image.status_code == link.status_code == 201
+    return owner, viewer, spaces, image.json()["id"], link.json()["id"], owner_headers
+
+
+@pytest.mark.parametrize(
+    "photos,links", [(False, False), (False, True), (True, False), (True, True)]
+)
+def test_scoped_disclosure_controls_types_and_raw(client, scoped_attachments, photos, links):
+    owner, _viewer, spaces, image_id, link_id, owner_headers = scoped_attachments
+    for space_id, photo_flag, link_flag in (
+        (None, True, True),
+        (spaces[0], photos, links),
+        (spaces[1], not photos, not links),
+    ):
+        payload = {
+            "avatar": False,
+            "photos": photo_flag,
+            "dates": False,
+            "bio": False,
+            "attachments": link_flag,
+        }
+        if space_id is not None:
+            payload["space_id"] = space_id
+        response = client.put(
+            f"/api/users/{owner.id}/disclosure", json=payload, headers=owner_headers
+        )
+        assert response.status_code == 200, response.text
+
+    headers = _login(client, "外人", "999999")
+    for space_id, photo_flag, link_flag in (
+        (spaces[0], photos, links),
+        (spaces[1], not photos, not links),
+    ):
+        params = {"space_id": space_id}
+        response = client.get(f"/api/users/{owner.id}/attachments", params=params, headers=headers)
+        expected = ({image_id} if photo_flag else set()) | ({link_id} if link_flag else set())
+        if expected:
+            assert response.status_code == 200, response.text
+            assert {row["id"] for row in response.json()} == expected
+        else:
+            assert response.status_code == 404
+        raw = client.get(f"/api/attachments/{image_id}/raw", params=params, headers=headers)
+        assert raw.status_code == (200 if photo_flag else 404)
+        if photo_flag:
+            assert raw.headers["cache-control"] == "private, no-store"
+        assert (
+            client.get(
+                f"/api/attachments/{link_id}/raw", params=params, headers=headers
+            ).status_code
+            == 404
+        )
+    # 省略上下文不得借全局开放设置绕过逐空间关闭。
+    assert client.get(f"/api/users/{owner.id}/attachments", headers=headers).status_code == 404
+    assert client.get(f"/api/attachments/{image_id}/raw", headers=headers).status_code == 404
+
+
+@pytest.mark.parametrize("status", ["pending", "removed"])
+def test_non_active_reader_cannot_use_space(client, db_session, scoped_attachments, status):
+    from sqlalchemy import select
+
+    from app.models.space import SpaceMember
+
+    owner, viewer, spaces, image_id, _link_id, _headers = scoped_attachments
+    membership = db_session.scalar(
+        select(SpaceMember).where(
+            SpaceMember.space_id == spaces[0], SpaceMember.user_id == viewer.id
+        )
+    )
+    membership.status = status
+    db_session.commit()
+    headers = _login(client, "外人", "999999")
+    for space_id in (spaces[0], 999999):
+        for path in (f"/api/users/{owner.id}/attachments", f"/api/attachments/{image_id}/raw"):
+            assert (
+                client.get(path, params={"space_id": space_id}, headers=headers).status_code == 404
+            )
+
+
+def test_pending_target_does_not_gain_media_from_disclosure(client, db_session, scoped_attachments):
+    from sqlalchemy import select
+
+    from app.models.space import SpaceMember
+
+    owner, _viewer, spaces, image_id, _link_id, owner_headers = scoped_attachments
+    response = client.put(
+        f"/api/users/{owner.id}/disclosure",
+        headers=owner_headers,
+        json={
+            "avatar": False,
+            "photos": True,
+            "dates": False,
+            "bio": False,
+            "attachments": True,
+            "space_id": spaces[0],
+        },
+    )
+    assert response.status_code == 200
+    membership = db_session.scalar(
+        select(SpaceMember).where(
+            SpaceMember.space_id == spaces[0], SpaceMember.user_id == owner.id
+        )
+    )
+    membership.status = "pending"
+    db_session.commit()
+    headers = _login(client, "外人", "999999")
+    for path in (f"/api/users/{owner.id}/attachments", f"/api/attachments/{image_id}/raw"):
+        assert client.get(path, params={"space_id": spaces[0]}, headers=headers).status_code == 404

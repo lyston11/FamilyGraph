@@ -19,6 +19,7 @@ from app.models.account import Account
 from app.models.attachment import Attachment
 from app.models.user import User
 from app.services import attachments as att_service
+from app.services import custody, family_projection
 from app.services.disclosure import disclosed_categories
 from app.services.visibility import (
     LEVEL_HOUSEHOLD_DETAIL,
@@ -46,13 +47,34 @@ def _attachment_out(row: Attachment) -> dict[str, Any]:
     }
 
 
-def _require_view(session: Session, viewer: User, owner_id: int) -> tuple[str, User]:
-    """目标可见性门禁：none → 404（防枚举）。custodian 由 evaluate 内部覆盖。"""
-    target = session.get(User, owner_id)
-    if target is None:
-        raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    decision = evaluate(session, viewer, target)
-    return decision.level, target
+def _readable_types(
+    session: Session,
+    viewer: User,
+    account: Account,
+    target: User,
+    space_id: int | None,
+) -> frozenset[str]:
+    """列表与原图共用空间、档案层级及类型披露门禁。"""
+    if space_id is not None:
+        family_projection.authorized_space_or_404(session, account=account, space_id=space_id)
+    elif not custody.resolve_relation(viewer, target).edit:
+        # 无空间仅供本人/代管管理，不能回退到跨空间关系聚合。
+        return frozenset()
+    decision = evaluate(session, viewer, target, space_context=space_id)
+    if decision.level == LEVEL_SELF_PRIVATE:
+        return frozenset({"image", "link"})
+    if target.profile_status == "provisional" or decision.source == "pending":
+        return frozenset()
+    if decision.level == LEVEL_HOUSEHOLD_DETAIL:
+        return frozenset({"image", "link"})
+    if decision.level == LEVEL_LINEAGE_SUMMARY:
+        categories = disclosed_categories(session, target, space_id)
+        return frozenset(
+            kind
+            for kind, category in (("image", "photos"), ("link", "attachments"))
+            if category in categories
+        )
+    return frozenset()
 
 
 @router.post("/users/{user_id}/attachments/image", status_code=201)
@@ -113,47 +135,42 @@ def add_link(
 @router.get("/users/{user_id}/attachments")
 def list_attachments(
     user_id: int,
+    space_id: int | None = None,
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> list[dict[str, Any]]:
-    """可见性：household_detail 及以上 → 元数据；lineage_summary 需归属者开放
-    attachments 披露；否则 404 语义空。"""
-    actor, _account = identity
+    """按当前空间与类别返回可读附件元数据。"""
+    actor, account = identity
     target = session.get(User, user_id)
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
-    decision = evaluate(session, actor, target)
-    allowed = decision.level in (LEVEL_HOUSEHOLD_DETAIL, LEVEL_SELF_PRIVATE)
-    if not allowed and decision.level == LEVEL_LINEAGE_SUMMARY:
-        allowed = "attachments" in disclosed_categories(session, target)
+    allowed = _readable_types(session, actor, account, target, space_id)
     if not allowed:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
 
-    rows = session.scalars(select(Attachment).where(Attachment.user_id == user_id)).all()
+    rows = session.scalars(
+        select(Attachment).where(Attachment.user_id == user_id, Attachment.type.in_(allowed))
+    ).all()
     return [_attachment_out(r) for r in rows]
 
 
 @router.get("/attachments/{attachment_id}/raw")
 def download_attachment(
     attachment_id: int,
+    space_id: int | None = None,
     session: OrmSession = Depends(get_db),
     identity: tuple[User, Account] = Depends(require_authenticated_user),
 ) -> FileResponse:
-    """授权流式下载：household_detail/self 可下；lineage_summary 仅当归属者开放
-    attachments 披露。"""
-    actor, _account = identity
+    """原图独立复核同一空间的 photos 权限，禁止其它类型走文件路径。"""
+    actor, account = identity
     row = session.get(Attachment, attachment_id)
-    if row is None:
+    if row is None or row.type != "image":
         raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
     target = session.get(User, row.user_id)
     if target is None:
         raise_api_error(404, USER_NOT_FOUND, "档案不存在")
 
-    decision = evaluate(session, actor, target)
-    allowed = decision.level in (LEVEL_HOUSEHOLD_DETAIL, LEVEL_SELF_PRIVATE)
-    if not allowed and decision.level == LEVEL_LINEAGE_SUMMARY:
-        allowed = "attachments" in disclosed_categories(session, target)
-    if not allowed:
+    if "image" not in _readable_types(session, actor, account, target, space_id):
         raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
 
     from app.config import UPLOADS_DIR
@@ -167,6 +184,7 @@ def download_attachment(
         headers={
             "Content-Disposition": f'inline; filename="{path.name}"',
             "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
         },
     )
 

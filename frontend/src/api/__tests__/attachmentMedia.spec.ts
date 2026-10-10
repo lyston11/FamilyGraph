@@ -5,6 +5,7 @@ import { ApiError } from '@/api/errors'
 import {
   MEDIA_UNAVAILABLE_MESSAGE,
   fetchAttachmentBlob,
+  fetchAttachments,
 } from '@/api/attachments'
 
 // 媒体认证合同（R1，09-11 整改）：
@@ -39,6 +40,19 @@ describe('fetchAttachmentBlob 媒体认证合同', () => {
     expect(String(url)).not.toContain('Bearer')
     // Bearer 由 apiClient 请求拦截器统一注入内存 token，而非 URL
     expect((config as { responseType?: string }).responseType).toBe('blob')
+  })
+
+  it('列表与原图携带同一 space_id，保留取消信号', async () => {
+    mockedGet.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: imageBlob() })
+    const signal = new AbortController().signal
+    await fetchAttachments(1, 7)
+    await fetchAttachmentBlob(42, signal, 7)
+    expect(mockedGet).toHaveBeenNthCalledWith(1, '/users/1/attachments', {
+      params: { space_id: 7 },
+    })
+    expect(mockedGet).toHaveBeenNthCalledWith(2, '/attachments/42/raw', expect.objectContaining({
+      params: { space_id: 7 }, signal,
+    }))
   })
 
   it('只接受安全图片 MIME；HTML/SVG 等响应 fail-closed', async () => {

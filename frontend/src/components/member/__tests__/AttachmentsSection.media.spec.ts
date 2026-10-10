@@ -1,9 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { h } from 'vue'
 import { NMessageProvider } from 'naive-ui'
 
+import { useSpacesStore } from '@/stores/spaces'
 import AttachmentsSection from '@/components/member/AttachmentsSection.vue'
 import { fetchAttachmentBlob, fetchAttachments, type AttachmentOut } from '@/api/attachments'
 
@@ -48,12 +49,12 @@ function makeBlob(): Blob {
   return { type: 'image/png', size: 100 } as unknown as Blob
 }
 
-async function mountAttachments() {
+async function mountAttachments(pinia = createPinia()) {
   // useMessage 需要 NMessageProvider 上下文（spec 组件约定）
   const wrapper = mount(NMessageProvider, {
     props: {},
     slots: { default: () => h(AttachmentsSection, { userId: 1, canEdit: false }) },
-    global: { plugins: [createPinia()] },
+    global: { plugins: [pinia] },
   })
   await vi.waitFor(() => expect(mockedFetchAttachments).toHaveBeenCalled())
   return wrapper
@@ -84,6 +85,52 @@ describe('AttachmentsSection 媒体 object URL 生命周期', () => {
     expect(src.startsWith('blob:')).toBe(true)
     expect(src).not.toContain('/raw')
     wrapper.unmount()
+  })
+
+  it('切换空间立即释放旧媒体，迟到图片不回写', async () => {
+    const pinia = createPinia()
+    const spaces = useSpacesStore(pinia)
+    spaces.currentSpaceId = 10
+    let resolveOld!: (value: Blob) => void
+    const oldBlob = new Promise<Blob>((resolve) => { resolveOld = resolve })
+    mockedFetchAttachments.mockResolvedValueOnce([makeImage(1), makeImage(2)]).mockResolvedValueOnce([])
+    mockedFetchBlob.mockResolvedValueOnce(makeBlob()).mockReturnValueOnce(oldBlob)
+    const wrapper = await mountAttachments(pinia)
+    await vi.waitFor(() => expect(wrapper.findAll('[data-test="photo-thumb"]')).toHaveLength(1))
+    expect(mockedFetchAttachments).toHaveBeenCalledWith(1, 10)
+    expect(mockedFetchBlob).toHaveBeenCalledWith(2, undefined, 10)
+    const oldUrl = wrapper.find('[data-test="photo-thumb"]').attributes('src')
+    spaces.currentSpaceId = 20
+    await flushPromises()
+    expect(revokeObjectURL).toHaveBeenCalledWith(oldUrl)
+    expect(mockedFetchAttachments).toHaveBeenLastCalledWith(1, 20)
+    resolveOld(makeBlob())
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="photo-thumb"]')).toHaveLength(0)
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('旧空间列表晚到时不会触发图片读取；卸载后的图片不创建 URL', async () => {
+    const pinia = createPinia()
+    const spaces = useSpacesStore(pinia)
+    spaces.currentSpaceId = 10
+    let resolveList!: (value: AttachmentOut[]) => void
+    let resolveBlob!: (value: Blob) => void
+    mockedFetchAttachments.mockReturnValueOnce(new Promise((resolve) => { resolveList = resolve }))
+      .mockResolvedValueOnce([makeImage(2)])
+    mockedFetchBlob.mockReturnValueOnce(new Promise((resolve) => { resolveBlob = resolve }))
+    const wrapper = await mountAttachments(pinia)
+    spaces.currentSpaceId = 20
+    await flushPromises()
+    expect(mockedFetchBlob).toHaveBeenCalledWith(2, undefined, 20)
+    resolveList([makeImage(1)])
+    await flushPromises()
+    expect(mockedFetchBlob).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    resolveBlob(makeBlob())
+    await flushPromises()
+    expect(createObjectURL).not.toHaveBeenCalled()
   })
 
   it('组件卸载时 revoke 全部 object URL', async () => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onUnmounted, ref, watch } from 'vue'
 import { NButton, NSpin, useMessage } from 'naive-ui'
 
 import {
@@ -11,6 +11,7 @@ import {
   uploadImage,
   type AttachmentOut,
 } from '@/api/attachments'
+import { useSpacesStore } from '@/stores/spaces'
 
 /**
  * 档案附件区（m3a）：相册网格（上传/预览/删除）+ 链接卡片列表。
@@ -23,6 +24,8 @@ import {
 const props = defineProps<{ userId: number; canEdit: boolean }>()
 
 const message = useMessage()
+const spaces = useSpacesStore()
+let loadGeneration = 0
 
 const items = ref<AttachmentOut[]>([])
 const loading = ref(false)
@@ -43,38 +46,46 @@ function revokeAll(): void {
   previewSrc.value = null
 }
 
-onUnmounted(revokeAll)
+onUnmounted(() => {
+  loadGeneration += 1
+  revokeAll()
+})
 
 async function load(): Promise<void> {
+  const generation = ++loadGeneration
+  const userId = props.userId
+  const spaceId = spaces.currentSpaceId
+  revokeAll()
+  items.value = []
   loading.value = true
   try {
-    items.value = await fetchAttachments(props.userId)
+    const result = await fetchAttachments(userId, spaceId)
+    if (generation !== loadGeneration) return
+    items.value = result
   } catch {
+    if (generation !== loadGeneration) return
     items.value = []
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
-  await loadThumbnails()
+  if (generation === loadGeneration) await loadThumbnails(generation, spaceId)
 }
 
-/** 只对 image 类型逐张取 blob；单张失败只影响该格，不影响整体列表 */
-async function loadThumbnails(): Promise<void> {
-  const previous = objectUrls.value
-  objectUrls.value = new Map()
-  failedIds.value = new Set()
+/** 只对当前加载代际创建 URL；迟到响应及卸载后的结果直接丢弃。 */
+async function loadThumbnails(generation: number, spaceId: number | null): Promise<void> {
   const images = items.value.filter((item) => item.type === 'image')
   await Promise.all(
     images.map(async (item) => {
       try {
-        const blob = await fetchAttachmentBlob(item.id)
+        const blob = await fetchAttachmentBlob(item.id, undefined, spaceId)
+        if (generation !== loadGeneration) return
         const url = URL.createObjectURL(blob)
         objectUrls.value.set(item.id, url)
       } catch {
-        failedIds.value.add(item.id)
+        if (generation === loadGeneration) failedIds.value.add(item.id)
       }
     }),
   )
-  for (const url of previous.values()) URL.revokeObjectURL(url)
 }
 
 function thumbUrl(id: number): string | null {
@@ -94,7 +105,7 @@ function closePreview(): void {
   previewSrc.value = null
 }
 
-onMounted(load)
+watch(() => [props.userId, spaces.currentSpaceId], load, { immediate: true, flush: 'sync' })
 
 function pickFile() {
   fileInput.value?.click()

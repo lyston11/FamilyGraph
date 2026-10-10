@@ -11,8 +11,13 @@ export interface AttachmentOut {
   created_at: string
 }
 
-export async function fetchAttachments(userId: number): Promise<AttachmentOut[]> {
-  const { data } = await apiClient.get<AttachmentOut[]>(`/users/${userId}/attachments`)
+export async function fetchAttachments(
+  userId: number,
+  spaceId?: number | null,
+): Promise<AttachmentOut[]> {
+  const { data } = await apiClient.get<AttachmentOut[]>(`/users/${userId}/attachments`, {
+    params: { space_id: spaceId ?? undefined },
+  })
   return data
 }
 
@@ -50,10 +55,15 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 export const MEDIA_UNAVAILABLE_MESSAGE = '照片暂时无法加载'
 
-export async function fetchAttachmentBlob(attachmentId: number, signal?: AbortSignal): Promise<Blob> {
+export async function fetchAttachmentBlob(
+  attachmentId: number,
+  signal?: AbortSignal,
+  spaceId?: number | null,
+): Promise<Blob> {
   try {
     const response = await apiClient.get<Blob>(`/attachments/${attachmentId}/raw`, {
       responseType: 'blob',
+      params: { space_id: spaceId ?? undefined },
       signal,
       timeout: 30_000,
     })
