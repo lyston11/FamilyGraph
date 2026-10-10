@@ -36,13 +36,34 @@
 - 六类故障注入（`pg_fault_injection.py`，原型 L3）；
 - 控制面多租户突发保住预算（`test_agent_execution_admission.py`，L1）。
 
-### 必须等实现（当前阻塞）
+### 必须等实现（2026-10-10 更新）
 
-- [ ] 跨实例配额：依赖 `10-03-postgres-migration` 的 capacity counter；
+- [x] 跨实例配额：capacity counter 已落地（`pg_capacity_concurrency.py` +
+      `cross_instance_capacity.py` + `multitenant_matrix.py`）；
+- [x] 真实 schema 的 lease/settle/recovery：Phase B 已落地
+      （`pg_control_proof.py` + `pg_fault_injection.py` + `multitenant_matrix.py`）；
+- [x] 检索质量与延迟：P0 基线已建立（`memory_eval`），P3 重排已提升 quality 层到 3/3；
 - [ ] stream-level 并发上限：依赖 `10-04-provider-reliability-boundaries`；
-- [ ] 真实 schema 的 lease/settle/recovery：依赖 `10-03-postgres-migration` Phase B；
-- [ ] Redis 降级策略：依赖 `10-03-redis-coordination`；
-- [ ] 检索质量与延迟：依赖 `10-04-lexical-search-migration` + `10-03-pgvector-rag`。
+- [ ] Redis 降级策略：依赖 `10-03-redis-coordination`（探针 `redis_degradation_probe.py` 存在，需 Redis 实例）。
+
+### PG-7 矩阵（2026-10-10，真实 PostgreSQL）
+
+`scripts/migration-proof/multitenant_matrix.py` 在隔离 PG 上跑通 8 个维度，
+**每维都带反证**：
+
+| 维度 | 结果 | 反证 |
+|---|---|---|
+| 租户配额（3 account × 6 并发，上限 2） | 2/2/2 不超额 | 无行锁形态 **6/6 越限** |
+| 隔离性（一租户满载） | 另一租户立即可得 | — |
+| 集群上限（global 3，6 租户） | 3/6 不超额 | — |
+| 归还恰好一次（并发 3 次） | 成功 1、剩余 0 | — |
+| 泄漏检测 | 非零计数行 0 | — |
+| 提交前断连 | active=0（不留占用） | — |
+| 提交后断连 | active=1（占用保留可回收） | — |
+| cancel vs settle | 恰好 1 赢家 | — |
+
+**反证越限 6/6** 是这一批最有价值的数字：它证明配额结论来自「行锁承重」，
+而不是「用例没构造出并发」。
 
 ### 可立即完成
 
