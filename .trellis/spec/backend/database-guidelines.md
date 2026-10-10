@@ -691,3 +691,134 @@ for lexical in rag_search_provider.build_lexical(
 # 阶段存数据库单行：一次 UPDATE 完成切换 + 旧实例失效
 advance(db, to_stage="shadow", actor="ops")   # 相邻，epoch +1
 ```
+
+## Scenario: 触发器的 PostgreSQL 等价物（2026-10-10，Phase A 尾项）
+
+### 1. Scope / Trigger
+
+改动任何 SQLite 触发器，或在 PostgreSQL 上部署（`pg_schema_apply.py`）。
+69 个触发器**只存在于 Alembic 迁移里**，ORM 元数据没有任何对应声明——
+因此 `create_all` 路径看不到它们，走 PG 而不显式重写时**数据库不再拒绝非法写入**。
+
+### 2. Signatures
+
+```python
+# 方言分派：SQLite 用 WHEN + RAISE(ABORT)，PostgreSQL 用 FOR EACH ROW + 函数
+bind = op.get_bind()
+if bind.dialect.name == "postgresql":
+    op.execute(sa.text(_SCOPE_TRIGGER_PG_SQL))
+else:
+    op.execute(sa.text(_SCOPE_TRIGGER_SQL))
+```
+
+四类等价物（`0045`/`0047`/`0049`/`0055` 已实现）：
+
+| 类别 | 数量 | PostgreSQL 形态 |
+|---|---|---|
+| `rag_documents_revision_*` | 2 | `BEFORE INSERT/UPDATE FOR EACH ROW EXECUTE FUNCTION _rag_revision_guard()` |
+| scope-immutable / append-only / conditional / sticky | 4 | `BEFORE UPDATE FOR EACH ROW` + `RAISE EXCEPTION` |
+| Steward revision 计数器（`sri_*`） | 60 | `AFTER INSERT/DELETE/UPDATE FOR EACH ROW EXECUTE FUNCTION _sri_increment_revision(layer, scope)` |
+| `rag_chunks_ai/au/ad` | 3 | **不需要迁移**：FTS5 虚拟表是 SQLite 专属，PG 用 PGroonga 索引 |
+
+### 3. Contracts
+
+- **方言分派必须在迁移里，不能靠部署脚本补**：漏掉任何一类，对应不变量在 PG 上静默消失。
+- `DROP TRIGGER` 在 PG 上需要 `ON <table>`，`DROP FUNCTION` 需要单独执行；
+  SQLite 语法在 PG 上直接 SyntaxError（已由 `pg_replay_probe` 反证）。
+- 等价物必须经**负向 + 正向 + 反证**三重验证（`pg_trigger_negative_tests` 13/13）：
+  只测「合法操作被接受」无法证明触发器承重。
+
+### 4. Validation & Error Matrix
+
+| 情形 | SQLite | PostgreSQL |
+|---|---|---|
+| 违反保护条件 | `RAISE(ABORT, msg)` | `RAISE EXCEPTION 'msg'` |
+| 列级触发 | `BEFORE UPDATE OF c1, c2 ON t` | 同语法可用；等价物里用函数内判断亦可 |
+| 降级顺序 | 先 `DROP TRIGGER`（无 `ON`） | 先 `DROP TRIGGER ... ON t` 再 `DROP FUNCTION` |
+
+### 5. Good/Base/Bad Cases
+
+- **Good**：`0047` 的 `_rag_revision_guard()`，SQLite 与 PG 共享同一语义、各自语法。
+- **Base**：`0009`/`0010` 的 immutability 守护，PG 侧用独立 guard 函数。
+- **Bad**：只写 SQLite 触发器就宣布「schema 已可移植」——PG 上保护静默消失。
+
+### 6. Tests Required
+
+- `pg_trigger_negative_tests`：每类的负向（应拒绝）、正向（应接受）、反证（删触发器后行为改变）。
+- `pg_replay_probe`：SQLite 触发器语法在 PG 上确实阻塞（证明方言分派是必需的）。
+- `test_rag_lifecycle_migrations.py`：SQLite 侧迁移往返不回归。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 只写 SQLite 形态
+op.execute(sa.text("CREATE TRIGGER t BEFORE UPDATE ON x BEGIN SELECT RAISE(ABORT, 'no'); END"))
+
+# 降级时不带 ON（PG 上 SyntaxError）
+op.execute(sa.text("DROP TRIGGER IF EXISTS t"))
+```
+
+#### Correct
+
+```python
+if op.get_bind().dialect.name == "postgresql":
+    op.execute(sa.text("DROP TRIGGER IF EXISTS t ON x"))
+    op.execute(sa.text("DROP FUNCTION IF EXISTS _x_guard()"))
+else:
+    op.execute(sa.text("DROP TRIGGER IF EXISTS t"))
+```
+
+## Scenario: 迁移证明探针的输出路径（2026-10-10）
+
+### 1. Scope / Trigger
+
+新增或修改 `scripts/migration-proof/` 下的探针。
+
+### 2. Signatures
+
+```python
+out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
+```
+
+### 3. Contracts
+
+- 默认输出目录必须是 `artifacts/migration-proof/`（已 gitignore），**不能是 `.`**。
+- 根因不是「忘了 gitignore」：仓库根从来没有被 gitignore，是默认路径把运行产物
+  放到了不该放的地方。修默认值才修掉根因。
+- 探针必须在**真实数据库上执行**才算验证。纯静态检查与无 `PGTEST_DSN` 的 CI
+  看不到绑定参数缺失、SQL 形状错误、断言与合同不符这三类缺陷
+  （实测一次改动暴露 4 个）。
+
+### 4. Validation & Error Matrix
+
+| 情形 | 后果 |
+|---|---|
+| 默认 `.` + 服务器 code-sync 定时器 | 证据 .md 被自动提交进仓库（实测 6 个） |
+| 引用未定义的 `ROOT` | `test_script_has_no_undefined_global_names` 失败 |
+
+### 5. Good/Base/Bad Cases
+
+- **Good**：`out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")`。
+- **Bad**：`os.environ.get("MIGRATION_PROOF_OUT", ".")`。
+- **Bad**：为了让路径「更稳」而在没定义 `ROOT` 的脚本里引用 `ROOT`。
+
+### 6. Tests Required
+
+- `test_migration_proof_scripts.py::test_script_has_no_undefined_global_names`（49 项）。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 由 systemd 定时器调用时 CWD 是仓库根 -> 证据落到仓库根 -> 被自动提交
+out_dir = os.environ.get("MIGRATION_PROOF_OUT", ".")
+```
+
+#### Correct
+
+```python
+out_dir = os.environ.get("MIGRATION_PROOF_OUT", "artifacts/migration-proof")
+```
