@@ -61,8 +61,9 @@ MIN_EXTRACTION_PASS_RATE = 1.0
 MAX_FORBIDDEN_HITS = 0
 
 
-def _enable(db):
+def _enable(db, *, with_public_corpus: bool = True):
     from app.models.platform_features import PlatformFeatureConfig
+    from app.services import terms
     from app.utils import timeutil as tu
 
     row = db.get(PlatformFeatureConfig, 1)
@@ -72,6 +73,12 @@ def _enable(db):
     row.memory_enabled = True
     row.rag_enabled = True
     db.commit()
+    if with_public_corpus:
+        # 公共称谓语料（`public_kinship`）必须和记忆一起进评估，否则 golden set
+        # 测的就不是生产实际的检索面。它的字面词（外婆/舅舅/舅妈…）与弃答用例
+        # 的问题词重叠，因此这一步是**必须**在评估里出现的，不能只在别的测试里建。
+        terms.seed_builtin_packs(db)
+        db.commit()
 
 
 def _confirm(db, owner, *, summary, scope="private", space_id=None, sensitivity="normal"):
@@ -123,8 +130,30 @@ def _seed(db, owner, space, golden) -> dict[str, int]:
     return labels
 
 
-def _retriever(db, owner, space, labels):
-    """Return ``question -> [label]`` using the real ``search_rag`` path."""
+def _retriever(db, owner, space, labels, *, source_types=("memory",)):
+    """Return ``question -> [label]`` using the real ``search_rag`` path.
+
+    ## 为什么默认限定 `source_types=("memory",)`
+
+    这份 golden set 的 15 条用例全部是关于**个人记忆**的（`res-苏州`、`birth-母亲`…），
+    弃答用例的不变量是「库里没有这条个人事实就说没有」。
+
+    2026-10-10 引入公共称谓语料后，`abstain-unknown-person`（「小舅妈的手机号码是多少？」）
+    会命中 `term-pack:zh-CN`，因为「舅妈」**确实**是公共语料里的一个词条。这不是
+    缺陷——任何关于亲属的问题都含称谓词，因此公共语料必然与弃答用例的字面重叠。
+    把这条算作弃答失败，等于要求「公共知识库不得包含任何亲属称谓」。
+
+    正确做法是把两种语料**分开度量**（而不是放宽弃答语义）：
+
+    - 本函数默认限定 `memory`，因此弃答门的 `expect_empty` 保持绝对语义不变；
+    - 公共语料有自己的用例与门（`test_public_kinship_retrieval_baseline`）。
+
+    副作用是**更强**的断言：公共语料在场的情况下记忆路径仍必须逐字等价，
+    因此「公共语料污染了个人记忆检索」这件事现在是被测试的。
+
+    记忆命中的 `source_id` 是 memory id，需要映射回 fixture 标签；公共语料的
+    `source_id` 本身就是稳定标签（`term-pack:<locale>`），因此直接采用。
+    """
     reverse = {str(memory_id): label for label, memory_id in labels.items()}
 
     def retrieve(question: str) -> list[str]:
@@ -136,8 +165,15 @@ def _retriever(db, owner, space, labels):
             query=question,
             limit=memory_eval.load_golden_set()["k"],
             for_model=False,
+            source_types=source_types,
         )
-        return [reverse[hit.source_id] for hit in hits if hit.source_id in reverse]
+        resolved: list[str] = []
+        for hit in hits:
+            if hit.source_id in reverse:
+                resolved.append(reverse[hit.source_id])
+            elif hit.source_type == "public_kinship":
+                resolved.append(hit.source_id)
+        return resolved
 
     return retrieve
 
@@ -262,3 +298,80 @@ def test_context_builder_uses_the_same_retrieval_result(db_session, golden):
             assert (
                 str(labels[label]) not in included
             ), f"{case['id']}: 被取代/已失效的来源 {label} 进入了上下文"
+
+
+#: 公共称谓语料（`public_kinship`）的用例。**与记忆用例分开度量**，理由见 `_retriever`
+#: 的 docstring：任何关于亲属的问题都含称谓词，因此公共语料必然与记忆弃答用例的字面
+#: 重叠；把它们混在一起会把「公共知识库不得包含亲属称谓」当成不变量。
+#:
+#: `mode` 语义沿用 `memory_eval.evaluate_case`（answerable / abstention）。
+PUBLIC_CORPUS_CASES = (
+    {
+        "id": "public-kinship-topic",
+        "ability": "public_corpus",
+        "mode": "answerable",
+        "question": "家谱称谓知识包里有什么？",
+        "expected": ["term-pack:zh-CN"],
+        "note": "主题查询：标题句里的「家谱称谓知识包」必须可召回。",
+    },
+    {
+        "id": "public-kinship-encoding",
+        "ability": "public_corpus",
+        "mode": "answerable",
+        "question": "亲属称谓里 Uf-Bm 表示什么？",
+        "expected": ["term-pack:zh-CN"],
+        "note": "编码查询：正文里的概念编码必须可召回。",
+    },
+    {
+        "id": "public-kinship-abstention",
+        "ability": "public_corpus",
+        "mode": "abstention",
+        "question": "附近哪里可以修自行车？",
+        "expected": [],
+        "note": "与称谓无关的问题不得被公共语料凑数命中。",
+    },
+)
+
+
+def test_public_kinship_retrieval_baseline(db_session):
+    """公共称谓语料自己的基线：主题/编码可召回，无关问题弃答。
+
+    这条测试是「`scope='public'` 不再恒空」的可执行证据，也是 `public_kinship` 的
+    tier 份额（0.2）第一次被真实使用的地方。
+    """
+    _enable(db_session, with_public_corpus=True)
+    owner, space = create_agent_fixture(db_session, name="memory-eval-public")
+    retrieve = _retriever(db_session, owner, space, {}, source_types=("public_kinship",))
+
+    results = [memory_eval.evaluate_case(case, retrieve) for case in PUBLIC_CORPUS_CASES]
+    failed = [r for r in results if not r.passed]
+    assert not failed, [
+        {"id": r.case_id, "mode": r.mode, "returned": r.returned, "missing": r.missing}
+        for r in failed
+    ]
+
+
+def test_public_corpus_does_not_pollute_memory_retrieval(db_session, golden):
+    """公共语料在场时，记忆检索必须与语料不存在时逐字等价。
+
+    这条是**更强**的断言：公共语料与个人记忆共用同一个 FTS 表、同一个重排，
+    因此「新增语料污染了个人记忆检索」是完全可能的失败形态，且在没有公共语料时
+    无法被观测。
+    """
+    owner, space = create_agent_fixture(db_session, name="memory-eval-pollution")
+    # 先开记忆（确认候选需要 memory_enabled），但**不建**公共语料。
+    _enable(db_session, with_public_corpus=False)
+    labels = _seed(db_session, owner, space, golden)
+    retrieve = _retriever(db_session, owner, space, labels)
+
+    without = {case["id"]: retrieve(case["question"]) for case in golden["cases"]}
+
+    # 有公共语料
+    _enable(db_session, with_public_corpus=True)
+    with_public = {case["id"]: retrieve(case["question"]) for case in golden["cases"]}
+
+    assert with_public == without, {
+        case_id: (without[case_id], with_public[case_id])
+        for case_id in without
+        if without[case_id] != with_public[case_id]
+    }
