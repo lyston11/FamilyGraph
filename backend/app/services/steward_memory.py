@@ -40,6 +40,7 @@ from app.models.account import Account
 from app.models.agent_provider import AgentSpaceProviderSetting
 from app.models.memory import MEMORY_SCOPES
 from app.models.platform_features import PlatformFeatureConfig
+from app.models.rag import RAG_CONSUMER_SOURCE_TYPES
 from app.models.space import SpaceMember
 from app.models.user import User
 from app.services import agent_provider
@@ -68,7 +69,7 @@ VIEWER_SCOPED_KINDS: frozenset[str] = frozenset({"terminology"})
 #:
 #: `tests/test_steward_memory_scopes.py` 用 `public_kinship`（2026-10-10 新增的
 #: 第一个新类别）做反向断言，证明「新增类别不会自动进入管家可读集」。
-STEWARD_READABLE_SOURCE_TYPES: tuple[str, ...] = ("memory",)
+STEWARD_READABLE_SOURCE_TYPES: tuple[str, ...] = RAG_CONSUMER_SOURCE_TYPES["steward_memory_tool"]
 
 
 def parse_scopes(raw: str | None) -> tuple[str, ...]:

@@ -18,6 +18,7 @@ from app.errors import (
 )
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.platform_features import PlatformFeatureConfig
+from app.models.rag import context_source_types as rag_context_source_types
 from app.models.steward import StewardModelCall
 from app.models.user import User
 from app.services import knowledge_retrieval, memory_sources, platform_features
@@ -280,8 +281,10 @@ class ContextBuilder:
                             actor=actor,
                             account=actor.account,
                             space_id=space_id,
-                            # 既有行为：上下文读全部已声明来源。
-                            source_types=knowledge_retrieval.CONTEXT_SOURCE_TYPES,
+                            # 按 agent_kind 取来源集，不共用一份「全部」。
+                            # steward 的上下文来源集等于 steward 工具的来源集（`("memory",)`），
+                            # 不再宽于它。
+                            source_types=rag_context_source_types(agent_kind),
                         ),
                         query,
                         provider_kind=provider_kind,

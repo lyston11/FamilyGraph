@@ -226,37 +226,81 @@ Steward 仍为 `("memory",)`。
 新增 `source_type` 要放开给任一侧，都必须改该侧的类别元组——一次显式、可评审的代码
 改动，而不是一次配置写入。扩大助手可读类别的**唯一**正当理由是「有对应的显式授权
 真源」：`authorized_document` 有 `agent_content_grants`，`public_kinship` 没有，
-所以后者至今对两侧都不可读。
+所以后者对 `search_memory` 与 steward 都不可读。
+
+**2026-10-12 起两侧的类别元组都是 §8.3 策略表的别名**；那一节说明为什么必须有这张表、
+以及它修掉了一个 steward 上下文比 steward 工具读得更宽的真实缺陷。
 
 反证：`tests/test_memory_tools.py::test_search_memory_does_not_read_other_source_types`
 同时断言「限定后结果为空」与「不限定则确实召回公共语料」，证明差别承重而非同义反复。
 
-### 8.3 已知张力：`CONTEXT_SOURCE_TYPES = None`（待决，不是结论）
+### 8.3 消费者来源策略：唯一真源 + 按 kind 派生（2026-10-12 已解决）
 
-`knowledge_retrieval.CONTEXT_SOURCE_TYPES`（2026-10-11 由统一授权检索入口任务引入）当前是
-`None`，注释写作「既有行为是读全部已声明来源，显式写出来是为了让它成为一个声明而不是
-一个缺省」。它服务于 `build_context`，即 assistant 自己的 run 上下文。
+**唯一真源是 `app/models/rag.py` 的 `RAG_CONSUMER_SOURCE_TYPES`。** 每个消费者显式列出
+自己读哪些类别，**不从 `INDEXED_SOURCE_TYPES` 推导**：
 
-**这与 §8 的原则方向相反。** `None` 是「读全部已声明类别」，因此任何新增 `source_type`
-都会**自动**进入 assistant 的上下文构建；而 §8 要求新增类别默认不可读、放开必须改代码。
+| key | 值 | 消费者 |
+|---|---|---|
+| `assistant_context` | memory, authorized_document, public_kinship | assistant run 的 `ContextBuilder` |
+| `steward_context` | memory | steward run 的上下文构建 |
+| `assistant_memory_tool` | memory, authorized_document | `familygraph.search_memory` |
+| `steward_memory_tool` | memory | `familygraph.steward.search_memory` |
+| `browser_search` | memory, authorized_document, public_kinship | `GET /rag/search` |
 
-今天没有可观测差异：`authorized_document` 由 grant 分支真正把关（`CONTEXT_SOURCE_TYPES`
-放宽不到它），`family_story` / `profile` 没有写入方。差异只会在**下一个**新增类别出现时
-显形——那时它会静默进入 assistant 上下文。
+`agent_tools.MEMORY_TOOL_SOURCE_TYPES` 与 `steward_memory.STEWARD_READABLE_SOURCE_TYPES`
+是这张表的**别名**（名字保留给既有调用点与文档，值是单一真源）。
 
-两种改法都成立，但必须显式选一个：
+#### 被修掉的真实缺陷（不只是「缺一个显式声明」）
 
-| 方案 | 含义 |
-|---|---|
-| 保持 `None` | 承认「assistant 的 run 上下文读全部已声明类别」是一条**独立**于工具面的合同，并把 §8 的「默认不可读」限定在工具面与 steward 面 |
-| 改为显式元组 | 与 §8 一致；新增类别必须同时改这一行才能进上下文 |
+`CONTEXT_SOURCE_TYPES = None` 的语义是「全部已声明类别」，而它被**三个不同消费者复用**。
+其中 `ContextBuilder.build()` 同时服务 assistant 与 steward（它有显式的 steward 分支），
+却无论哪种 kind 都拿到同一份「全部」。于是 **steward 的上下文能读到 `authorized_document`**
+——该类别的检索门是 grant 存在性，**没有** `:is_assistant` 门——比 steward 自己的工具策略
+`("memory",)` 更宽。
 
-**本轮不改**：它是另一个任务的已提交决定，改动它属于跨任务边界变更。此处只记录张力，
-避免下一个人在不知情的情况下依赖 `None` 的「自动放开」语义。
+这是**收窄**修正（越界内容消失），不是放宽。`tests/test_rag_context_consumer_sources.py`
+同时断言 assistant 侧仍读得到，以证明「steward 读不到」不是「授权文档整体坏了」。
+
+#### 为什么删除常量，而不是改成具体元组
+
+`CONTEXT_SOURCE_TYPES` 这个名字描述单一消费者，却被三个消费者复用。保留一个语义含糊的
+共享常量，等于把「复用错常量」这条路留着。删除后每个调用点必须写出自己是谁；上下文路径
+改为 `context_source_types(agent_kind)`，未知 kind **fail closed**（不回退到最宽集合）。
+
+#### 为什么 `browser_search` 是独立的键
+
+它与 `assistant_context` 今天取值相同，但**消费者不同**：将来调整 agent 上下文的来源面
+不应连带改变用户自己看到的搜索结果。跨消费者复用同一常量正是本节要消除的形态。
+
+#### 入口层 fail closed
+
+`RetrievalIdentity.source_types` 是**必填** `tuple[str, ...]`（无默认值、无 `| None`），
+`retrieve()` 对运行时传入的 `None` 仍显式 422。理由：类型标注不约束运行时（未类型化的
+调用点、`**kwargs` 组装、反射都能绕过），而这个默认值的失效后果是「静默读全部」。
+
+#### 反证义务
+
+`validate_consumer_source_types(policy)` 是对**数据字面量**的校验器；没有反证它只是同义
+反复。`tests/test_rag_consumer_source_policy.py` 提供四条：
+
+1. 伪造策略含 `family_story`（已声明但**未索引**）→ 必须失败；
+2. 伪造策略含 `public_kin`（拼写错误/未声明）→ 必须失败；
+3. 空 key / 空值 → 必须失败；
+4. **承重**：把 `family_story` 加进 `INDEXED_SOURCE_TYPES` 后，所有消费者取值逐项不变
+   ——直接证明「加进索引集不会放宽任何消费者」。若有人把策略表改成索引集的派生值，这条
+   会立刻失败。
+
+### 8.4 刻意的非对称：`public_kinship` 在上下文里、不在 `search_memory` 里
+
+`search_memory` 的名字是「记忆」；返回空间外的通用称谓知识会误导模型把语料当成用户记忆
+（2026-10-10 实测到 `term-pack:zh-CN` 出现在该工具结果里）。上下文构建是拼装材料，通用
+知识作为背景是合理的。该非对称由 `test_rag_consumer_source_policy.py` 钉住。
 
 ## 9. Required validation
 ```bash
-cd backend && pytest tests/test_rag_source_type_registry.py tests/test_rag_public_kinship.py \
+cd backend && pytest tests/test_rag_consumer_source_policy.py \
+    tests/test_rag_context_consumer_sources.py tests/test_knowledge_retrieval_entry.py \
+    tests/test_rag_source_type_registry.py tests/test_rag_public_kinship.py \
     tests/test_steward_memory_tool.py tests/test_steward_memory_scopes.py \
     tests/test_memory_tools.py \
     tests/test_rag_lifecycle_acceptance.py tests/test_context_tier_budget.py \
@@ -271,6 +315,10 @@ cd backend && pytest tests/test_rag_source_type_registry.py tests/test_rag_publi
 | 撤权后查询不可见、行仍在 | 按 id 直读证明 `status='invalidated'` |
 | 已 `index_superseded` 的公共文档不重新激活 | 手工置该状态后重跑写入方 |
 | steward 读不到 `public_kinship` | 只放类别维度、scope 用合法值域 |
+| 消费者来源策略自洽（值 ⊆ 活跃索引集） | 伪造含 `family_story` 的策略 |
+| 加进 `INDEXED_SOURCE_TYPES` 不放宽任何消费者 | 扩展索引集后断言取值逐项不变 |
+| steward 上下文读不到 `authorized_document` | 同一文档在 assistant 上下文里必须读得到 |
+| `CONTEXT_SOURCE_TYPES` 不存在 | 断言 `not hasattr(knowledge_retrieval, ...)` |
 | assistant 的 `search_memory` 也读不到 `public_kinship` | 去掉 `source_types` 参数（实测会返回 `rag:term-pack:zh-CN:...`） |
 | 公共索引在**生产路径**上被建立 | 删掉 `terms.seed_builtin_packs` 的调用 |
 | 附件授权文档：无 grant 不可召回、撤销后立即不可见、行仍在 | 直读 `status='invalidated'` 证明是查询层挡住而非删除 |
@@ -300,6 +348,11 @@ source_types = ("memory", "family_story") if "household" in scopes else ("memory
 
 # 6. 靠 `source_types=None` 的「读全部」默认（名为「记忆」的工具读到了公共语料）
 hits = search_rag(db, ..., query=clean, agent_kind="assistant")  # 读全部类别
+
+# 7. 一个消费者常量被别的消费者复用
+CONTEXT_SOURCE_TYPES = None                       # 名字属于「上下文」
+... = build(agent_kind="steward", source_types=CONTEXT_SOURCE_TYPES)   # 却按 assistant 的语义读全部
+... = rag_search(source_types=CONTEXT_SOURCE_TYPES)                    # 浏览器端点也来复用
 ```
 
 ### Correct
@@ -317,11 +370,15 @@ revision = 1 + int.from_bytes(sha256(canonical_entries).digest()[:4], "big") % (
 
 # 4. 接在生产路径上（seed / 维护循环），并断言它真的建了文档
 
-# 5. 两侧的类别都是显式枚举，新增类别对两侧默认不可读
-STEWARD_READABLE_SOURCE_TYPES: tuple[str, ...] = ("memory",)
-MEMORY_TOOL_SOURCE_TYPES: tuple[str, ...] = ("memory",)
+# 5. 类别是策略表的别名，新增类别对两侧默认不可读
+STEWARD_READABLE_SOURCE_TYPES = RAG_CONSUMER_SOURCE_TYPES["steward_memory_tool"]
+MEMORY_TOOL_SOURCE_TYPES = RAG_CONSUMER_SOURCE_TYPES["assistant_memory_tool"]
 
 # 6. 助手的能力来自工具，不来自更宽的读取面
 hits = search_rag(db, ..., query=clean, agent_kind="assistant",
                   source_types=MEMORY_TOOL_SOURCE_TYPES)
+
+# 7. 每个消费者从策略表取自己那一行；上下文按 kind 派生
+source_types = RAG_CONSUMER_SOURCE_TYPES["browser_search"]
+source_types = context_source_types(agent_kind)    # assistant → 宽；steward → ("memory",)
 ```

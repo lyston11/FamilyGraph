@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/rag-authorized-corpus-matrix.md","reason":"核对来源策略表、新增类别默认不可读、以及 assistant/steward 两侧非对称"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端质量门与验证要求"}

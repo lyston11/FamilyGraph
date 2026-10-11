@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/rag-authorized-corpus-matrix.md","reason":"RAG 来源类别策略的权威合同：声明集/活跃集分离、消费者可读集、public 语义"}
+{"file":".trellis/spec/backend/policy-boundary.md","reason":"授权边界、fail-closed 与身份派生的既有合同"}
+{"file":".trellis/spec/backend/memory-contract.md","reason":"记忆/RAG 检索的授权与生命周期合同"}

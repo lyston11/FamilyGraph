@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,6 +32,102 @@ UNINDEXED_SOURCE_TYPES: dict[str, str] = {
     "family_story": "依赖尚不存在的家族故事写入功能；本任务只登记合同",
     "profile": "逐 viewer 求值（visibility.evaluate 依赖读者），走 get_profile_summary 结构化投影",
 }
+
+#: **谁可以读哪些来源类别**——唯一真源。
+#:
+#: ## 为什么必须有这张表
+#:
+#: 在它之前，三个消费者共用 `knowledge_retrieval.CONTEXT_SOURCE_TYPES`，而那个常量的值是
+#: `None`，语义是「全部已声明类别」。后果有两层：
+#:
+#: 1. **默认方向是放开**——新增 `source_type` 会静默进入每一个复用了该常量的消费者；
+#: 2. **常量名描述单一消费者却被多处复用**——`ContextBuilder.build()` 同时服务 assistant
+#:    与 steward（它按 `agent_kind` 分支），却无论哪种 kind 都拿到同一份「全部」来源集。
+#:    于是 steward 的上下文能读到 `authorized_document`（该类别的检索门是 grant 存在性，
+#:    **没有** `:is_assistant` 门），比 steward 自己的工具策略 `("memory",)` 更宽。
+#:
+#: 现在每个消费者显式列出自己读什么。新增类别**不会**自动进入任何一行——这是刻意的：
+#: 放宽一个读取面必须是可评审的代码改动，而不是一次枚举值新增。
+#:
+#: ## 为什么按 (agent_kind, 面) 命名，而不是按模块名
+#:
+#: `assistant_context` / `steward_context` 是两个不同的键，因为它们的**授权强度不同**，
+#: 而不是因为它们恰好在不同文件里。同理 `browser_search`（`GET /rag/search`）与
+#: `assistant_context` 今天取值相同，但消费者不同：将来调整 agent 上下文的来源面不应连带
+#: 改变用户自己看到的搜索结果。跨消费者复用同一常量正是本表要消除的形态。
+#:
+#: ## 刻意的非对称
+#:
+#: `public_kinship` 在 `*_context` 与 `browser_search` 中，但**不在** `assistant_memory_tool`
+#: 中。`search_memory` 的名字是「记忆」，返回空间外的通用称谓知识会误导模型把语料当成
+#: 用户记忆（2026-10-10 实测到 `term-pack:zh-CN` 出现在该工具结果里）。上下文构建是拼装
+#: 材料，通用知识作为背景是合理的。
+RAG_CONSUMER_SOURCE_TYPES: dict[str, tuple[str, ...]] = {
+    "assistant_context": ("memory", "authorized_document", "public_kinship"),
+    "steward_context": ("memory",),
+    "assistant_memory_tool": ("memory", "authorized_document"),
+    "steward_memory_tool": ("memory",),
+    "browser_search": ("memory", "authorized_document", "public_kinship"),
+}
+
+#: agent kind → 上下文构建的消费者键。
+_CONTEXT_CONSUMER_BY_KIND: dict[str, str] = {
+    "assistant": "assistant_context",
+    "steward": "steward_context",
+}
+
+
+def context_source_types(agent_kind: str) -> tuple[str, ...]:
+    """按 agent kind 取上下文来源集。未知 kind **fail closed**，不回退到最宽集合。
+
+    与 `knowledge_retrieval.resolve_authorization` 对未知 kind 抛 422 的行为一致：
+    一个我们认不出的身份，不应该拿到任何一种可读集。
+    """
+    key = _CONTEXT_CONSUMER_BY_KIND.get(agent_kind)
+    if key is None:
+        raise ValueError(f"unknown agent_kind for RAG context: {agent_kind!r}")
+    return RAG_CONSUMER_SOURCE_TYPES[key]
+
+
+def validate_consumer_source_types(
+    policy: Mapping[str, Sequence[str]],
+) -> list[str]:
+    """校验一张消费者来源策略表，返回错误列表（空 = 通过）。
+
+    纯函数，因此可以用**伪造的策略**做反证：没有反证，这个校验器就只是同义反复。
+
+    四条判据，每条都对应一种真实笔误：
+
+    - key 非空：空 key 让「谁在读」不可追溯；
+    - 值非空：空集意味着该消费者读不到任何东西——那是 `resolve_authorization` 的
+      授权结论，不该由来源策略表达（两者混在一起会看不出是配置错还是授权拒绝）；
+    - 值 ⊆ `RAG_SOURCE_TYPES`：防拼写错误（`public_kinship` 写成 `public_kin`）；
+    - 值 ⊆ `INDEXED_SOURCE_TYPES` 且 ∩ `UNINDEXED_SOURCE_TYPES` = ∅：
+      防把**没有写入方**的类别写进策略——那会让该消费者以为自己能读到一类永不存在的语料。
+    """
+    errors: list[str] = []
+    declared = set(RAG_SOURCE_TYPES)
+    indexed = set(INDEXED_SOURCE_TYPES)
+    unindexed = set(UNINDEXED_SOURCE_TYPES)
+    for key, values in policy.items():
+        if not str(key).strip():
+            errors.append("consumer key must be a non-empty name")
+            continue
+        if not values:
+            errors.append(f"{key}: consumer must declare at least one source type")
+            continue
+        unknown = sorted(set(values) - declared)
+        if unknown:
+            errors.append(f"{key}: undeclared source types {unknown}")
+        not_indexed = sorted(set(values) & unindexed)
+        if not_indexed:
+            errors.append(f"{key}: source types have no writer and are not indexed {not_indexed}")
+        missing = sorted(set(values) - indexed - unindexed)
+        if missing:
+            errors.append(f"{key}: source types are neither indexed nor explained {missing}")
+    return errors
+
+
 RAG_DOCUMENT_STATUSES = ("active", "revoked", "deleted", "invalidated")
 RAG_SENSITIVITIES = ("normal", "sensitive", "high", "local_required")
 
@@ -199,6 +296,7 @@ class RAGIndexMaintenanceFailure(Base):
 
 __all__ = [
     "INDEXED_SOURCE_TYPES",
+    "RAG_CONSUMER_SOURCE_TYPES",
     "RAGChunk",
     "RAGDocument",
     "RAGIndexMaintenanceFailure",
@@ -207,4 +305,6 @@ __all__ = [
     "RAG_SENSITIVITIES",
     "RAG_SOURCE_TYPES",
     "UNINDEXED_SOURCE_TYPES",
+    "context_source_types",
+    "validate_consumer_source_types",
 ]

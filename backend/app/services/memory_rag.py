@@ -45,7 +45,12 @@ from app.models.memory import (
     MemoryCandidate,
 )
 from app.models.platform_features import PlatformFeatureConfig
-from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
+from app.models.rag import (
+    RAG_SOURCE_TYPES,
+    RAGChunk,
+    RAGDocument,
+    context_source_types,
+)
 from app.models.space import FamilySpace
 from app.models.term_registry import TermEntry
 from app.models.user import User
@@ -2706,7 +2711,8 @@ def build_context(
             account=account,
             space_id=space_id,
             viewer_account_id=getattr(run, "viewer_account_id", None),
-            source_types=knowledge_retrieval.CONTEXT_SOURCE_TYPES,
+            # run 的上下文来源集按 run.kind 派生，不再共用一份「全部」。
+            source_types=context_source_types(run.kind),
         ),
         plan.normalized_query or query,
         provider_kind=provider.kind,
