@@ -20,7 +20,7 @@ from app.models.context import ContextBuild, ContextBuildItem
 from app.models.platform_features import PlatformFeatureConfig
 from app.models.steward import StewardModelCall
 from app.models.user import User
-from app.services import memory_sources, platform_features
+from app.services import knowledge_retrieval, memory_sources, platform_features
 from app.services.agent_execution import (
     Execution,
     StewardExecution,
@@ -28,7 +28,7 @@ from app.services.agent_execution import (
     fence_assistant_execution,
     fence_steward_execution,
 )
-from app.services.memory_rag import RANK_VERSION_DEFAULT, RAGHit, query_hash, search_rag
+from app.services.memory_rag import RANK_VERSION_DEFAULT, RAGHit, query_hash
 from app.services.policy_consumer import is_policy_consumer_kind
 from app.services.rag_budget import (
     ESTIMATOR_VERSION,
@@ -269,17 +269,21 @@ class ContextBuilder:
             sources = (
                 tuple(
                     ContextSource.from_hit(hit)
-                    for hit in search_rag(
+                    for hit in knowledge_retrieval.retrieve(
                         self.db,
-                        actor=actor,
-                        account=actor.account,
-                        space_id=space_id,
-                        query=query,
-                        agent_kind=agent_kind,
+                        knowledge_retrieval.RetrievalIdentity(
+                            agent_kind=agent_kind,
+                            actor=actor,
+                            account=actor.account,
+                            space_id=space_id,
+                            # 既有行为：上下文读全部已声明来源。
+                            source_types=knowledge_retrieval.CONTEXT_SOURCE_TYPES,
+                        ),
+                        query,
                         provider_kind=provider_kind,
                         raise_on_restricted=True,
                         query_plan=plan,
-                    )
+                    ).hits
                 )
                 if rag_enabled
                 else ()

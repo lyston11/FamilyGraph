@@ -449,6 +449,10 @@ def _can_read_document(
             return False
     elif document.scope != "public" or agent_kind != "assistant":
         return False
+    # 附件授权文档的第三重交集（grant × 内容版本 × 当前附件可见性）。
+    # 与下面的 `_profile_clearance_ok` 是**两道独立的门**：前者管「这份内容是否被
+    # 明示授权给这个 Agent」，后者管「这份内容的档案清空要求是否满足」。两者都通过
+    # 才可读。
     if document.source_type == "authorized_document" and (
         space_id is None
         or not _authorized_document_readable(
@@ -461,7 +465,48 @@ def _can_read_document(
         )
     ):
         return False
+    if not _profile_clearance_ok(db, document, actor, space_id):
+        return False
     return _author_visible(db, actor, document.author_account_id, space_id or document.space_id)
+
+
+def _profile_clearance_ok(
+    db: Session, document: RAGDocument, actor: User, space_id: int | None
+) -> bool:
+    """声明了档案清空要求的内容，由**主体的四级阶梯**裁决。
+
+    `visibility_snapshot` 为空时直接放行：`memory` / `public_kinship` 走旧的 scope
+    裁决，行为逐字不变（scope 是主体选过的可见性，不叠加掩码）。
+
+    非空时用 `visibility.evaluate` 重算当前读者的 decision，再要求它清空声明的类别。
+    这里**不复制**阶梯、`HIGH_RISK_CATEGORIES` 或未成年人 overlay —— 判据全在
+    `visibility.py`，本层只负责调用。
+
+    `visibility_snapshot_key` 与声明里的 key 不符 → 不可读（fail closed）：
+    判据含义变过之后，旧声明不能被新语义重新解释。
+    """
+    snapshot = document.visibility_snapshot or {}
+    subject_user_id = snapshot.get("subject_user_id")
+    if subject_user_id is None:
+        return True
+    if snapshot.get("key") != visibility.PROFILE_CLEARANCE_KEY:
+        return False
+    if document.visibility_snapshot_key != visibility.PROFILE_CLEARANCE_KEY:
+        return False
+    subject = db.get(User, int(subject_user_id))
+    if subject is None:
+        return False
+    decision = visibility.evaluate(
+        db,
+        actor,
+        subject,
+        space_context=space_id or document.space_id,
+        purpose=visibility.PURPOSE_RAG,
+    )
+    required = snapshot.get("required_categories") or []
+    if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
+        return False
+    return visibility.required_clearance_satisfied(decision, required)
 
 
 #: `private_reader_account_id` 未传时的哨兵：区分「调用方没表态」（→ 用调用方自己的

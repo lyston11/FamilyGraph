@@ -127,6 +127,10 @@ def test_tick_noop_when_worker_disabled(db_session, monkeypatch):
         "embedding_segments": 0,
         "embedding_skipped": 0,
         "embedding_failed": 0,
+        # U4 后台片段抽取计数器。
+        "memory_segment_sessions": 0,
+        "memory_segment_candidates": 0,
+        "memory_segment_skipped": 0,
     }
     assert db_session.scalar(select(StewardJob.status)) == "queued"
 

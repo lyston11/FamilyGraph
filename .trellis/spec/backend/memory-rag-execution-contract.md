@@ -353,3 +353,133 @@ private 分支由 `:is_assistant = 1` 改为 `d.author_account_id = :private_rea
 回落身份（space admin）。
 
 正确：显式允许集 + 显式读者；两层各自独立挡住；空可读集直接 403；写入时严格校验。
+
+## 12. 档案清空声明：字段级掩码落到语料文本（2026-10-11 补充）
+
+任务 `10-11-rag-authorization-model-unification` 把 `visibility.py` 的四级阶梯接到 RAG
+语料上。此前 `_author_visible` 只把 `evaluate` 当「作者可见/不可见」一道门，读取路径用
+`RAGDocument.scope` + 空间成员，**字段级掩码与未成年人 overlay 到不了 chunk 文本**。
+
+### 声明的位置与形状
+
+复用既有但此前恒为 `{}` 的 `RAGDocument.visibility_snapshot`（JSON）+ `visibility_snapshot_key`：
+
+```json
+{"subject_user_id": 42, "required_categories": ["dates"], "key": "profile-v1"}
+```
+
+含义是「**读我至少需要哪些类别是清的**」，不是「写入时的可见性快照」。`key` 与
+`visibility_snapshot_key` 必须同时等于 `visibility.PROFILE_CLEARANCE_KEY`；不符即不可读
+（fail closed），旧声明不会被新语义重新解释。
+
+`_check_document_metadata` 对 metadata 的**每个键**做等值比较，因此同
+`(source_type, source_id, revision)` 但声明不同 → `_index_conflict()`，不会静默覆盖。
+
+### `subject_user_id` 是 opt-in 标记
+
+| 值 | 语义 | 行为 |
+|---|---|---|
+| `NULL` | 内容不是「关于某个具体人的档案派生」 | **scope 裁决**（`memory` / `public_kinship` 保持逐字不变） |
+| 非 `NULL` | 内容派生自该主体档案 | **主体阶梯裁决**（字段掩码 + 未成年人 overlay + HIGH_RISK 自限） |
+
+**为什么 `memory` 不叠加掩码**：scope 是主体在确认候选时**显式选过的**可见性，再叠加字段掩码
+等于推翻主体的选择。掩码管的是主体**没有选择过**的可见性，即他人档案派生的内容。
+
+### 判据（`visibility.required_clearance_satisfied`，单一真源）
+
+1. `HIGH_RISK_CATEGORIES`（health/address/school/contact/private_notes）**只有主体本人**
+   （`self_private`）可读。它们的 `CATEGORY_FIELD_MAP` 条目当前是空占位，无法用「字段是否
+   清空」表达；这条与 `HIGH_RISK_CATEGORIES` 的既有注释一致。
+2. 其余类别要求其映射字段全部 `FIELD_CLEAR`。
+3. 未知类别按 HIGH_RISK 处理（fail closed）：分类不了的内容只有主体可读。
+
+**RAG 的字段清空实际来自披露，不是来自成员身份。** `_PURPOSE_LEVEL_CAP[PURPOSE_RAG]` 把层级
+封在 `lineage_summary`，而该层只清 `disclosed_categories` 映射到的字段。这是刻意的：空间成员
+身份本身不足以读别人档案派生的内容，必须主体已披露该类别。
+
+未成年人 overlay **不需要在 RAG 层复制**：`evaluate` 已在最后移除 birth/death/bio，
+`required_clearance_satisfied` 只是要求它们为 clear。
+
+### 施加点：投影复核层，不是 SQL 层
+
+判据落在 `memory_sources._profile_clearance_ok`（复核层），因为 `evaluate` 需要读关系、成员与
+披露记录。SQL 层继续做**粗筛**（scope 允许集、来源类型、取代/有效区间），复核层做**细判**。
+两层各自独立挡住的设计不变——把 `evaluate` 塞进 SQL 会把细判降级成粗筛，反而更弱。
+
+### 写入侧
+
+`ingest_authorized_document(..., subject_user_id=..., required_categories=(...))`：
+- 写入侧对未知类别 **422**；读取侧对未知类别保守（只有主体可读）。两侧口径不同是刻意的。
+- 声明了档案类别时 `scope` 不得为 `public`：`public` 的定义是「不含个人数据」。
+
+**Wrong vs Correct**
+
+错误：把 `memory` 也加上清空声明（推翻主体选过的 scope）；在 RAG 层复制四级阶梯 /
+`HIGH_RISK_CATEGORIES` / overlay 字段；把判据放进 `_ELIGIBILITY_SQL`；用 household 成员身份
+当作字段清空依据；声明 key 不符时按新语义重解释。
+
+正确：`subject_user_id` 作为 opt-in；判据只在 `visibility.py` 一处；复核层施加；RAG 清空来自
+披露；key 不符即不可读。
+
+## 13. 统一授权检索入口（2026-10-11 补充）
+
+任务 `10-11-unified-authorized-retrieval-entry` 把「谁在读、被允许读什么」从每个调用点的
+参数列表收拢到一处。
+
+### 问题
+
+`memory_rag.search_rag` 的三个授权参数在多数调用点上**靠默认值**：
+
+| 参数 | 默认值语义 |
+|---|---|
+| `scope_allowlist=None` | **三个 scope 全开**（assistant 语义） |
+| `private_reader_account_id` 未传 | 回落到调用方自己的 `account.id` |
+| `source_types=None` | **全部来源类别** |
+
+因此**新增一个消费者时，最省事的写法恰好是最宽的授权**。改造前 5 个调用点里有 3 个
+（`context_builder`、`build_run_context`、`rag.search`）依赖默认全开；其中
+`build_run_context` 对 steward run 也会拿到 assistant 的允许集。
+
+### 形状
+
+`services/knowledge_retrieval.py`：
+
+```python
+identity = knowledge_retrieval.RetrievalIdentity(
+    agent_kind=..., actor=..., account=..., space_id=...,
+    viewer_account_id=..., source_types=...,
+)
+outcome = knowledge_retrieval.retrieve(db, identity, query, ...)
+```
+
+- `resolve_authorization(db, identity)` 派生允许集：assistant → `MEMORY_SCOPES`；
+  steward → `steward_memory.readable_scopes(...)`（env ∩ 平台 ∩ 空间，无 viewer 时去掉
+  private）。**未知 kind → 422（fail closed）**。
+- `private_reader_account_id` 由身份派生：assistant → 自己的 account；steward → **该 run 的
+  viewer**，空间级 kind 为 `None`（恒不可读）。
+- **可读集为空是授权结论，不是「读全部」**：直接返回空 `RetrievalOutcome`，不调 `search_rag`。
+- `RetrievalOutcome.filtered_out` 把「没有相关内容」与「被授权过滤掉」分开——RAG 之前无法
+  区分这两者，而它们在产品上是完全不同的事。
+
+本模块**不复制**任何授权判据：阶梯、`HIGH_RISK_CATEGORIES`、档案清空声明、未成年人 overlay
+仍全在 `visibility.py` 与 `memory_sources.py`。它只把身份翻译成参数。
+
+### 结构性守卫
+
+`tests/test_knowledge_retrieval_entry.py::test_search_rag_is_only_called_from_the_unified_entry`
+用 AST 扫描 `app/**/*.py`：`search_rag(` 只允许出现在 `memory_rag.py`（定义处）与
+`knowledge_retrieval.py`（唯一调用方）。新增消费者绕过统一入口会**直接失败**。
+
+### 循环导入
+
+`knowledge_retrieval` 在模块级导入 `memory_rag`（它是上层入口），因此 `memory_rag` 只能
+在函数内惰性导入 `knowledge_retrieval`。反过来会在 `memory_rag` 初始化完成前触发
+`AttributeError: partially initialized module`。
+
+**Wrong vs Correct**
+
+错误：新增消费者时直接调 `search_rag` 并只传部分参数（其余吃默认全开）；把「可读集为空」
+当作「无内容」或退回全开；在 `knowledge_retrieval` 里再定义一份来源类别常量（与
+`MEMORY_TOOL_SOURCE_TYPES` / `STEWARD_READABLE_SOURCE_TYPES` 同义并会漂移）。
+
+正确：以 `RetrievalIdentity` 声明身份；用既有常量作目的限定；空可读集直接返回空结果。

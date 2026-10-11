@@ -9,7 +9,7 @@ from test_rag_acceptance_contract import _confirm, _context, _enable, _start_run
 from app.models.agent import AgentMessage
 from app.models.context import ContextBuild
 from app.models.rag import RAGChunk, RAGDocument
-from app.services import context_builder, memory_rag
+from app.services import knowledge_retrieval, memory_rag
 from app.services.rag_query import MAX_TERMS, plan_query
 from conftest import create_agent_fixture, create_agent_message, create_agent_session
 
@@ -39,13 +39,14 @@ def test_same_question_uses_only_unique_same_session_anchor(
 ):
     world, ids = _anchor_world(db_session, internal_client, f"b-unique-{index}", history)
     seen = []
-    original = context_builder.search_rag
+    # 打桩点在统一检索入口（`context_builder` 不再直接持有 `search_rag`）。
+    original = knowledge_retrieval.retrieve
 
-    def capture(*args, **kwargs):
+    def capture(db, identity, query, **kwargs):
         seen.append(kwargs["query_plan"])
-        return original(*args, **kwargs)
+        return original(db, identity, query, **kwargs)
 
-    monkeypatch.setattr(context_builder, "search_rag", capture)
+    monkeypatch.setattr(knowledge_retrieval, "retrieve", capture)
     response = _context(internal_client, world)
     assert response.status_code == 200, response.text
     blocks = response.json()["context_blocks"]
@@ -150,7 +151,9 @@ def test_refill_continues_across_pages_but_stops_at_shared_scan_cap(
         # `stop_reason` 的语义在 P3-a 后变了：过去 `limit` 表示「命中数已够」，
         # 现在候选收集不再在 limit 处短路，因此 `limit` 不再是一个可能的停止原因。
         # 保留的是「扫描上限」与「候选池满」两种真实的资源耗尽，其余为 exhausted。
-        assert trace["stop_reason"] in ({"exhausted", "candidate_budget"} if expect_hit else {"scan_limit"})
+        assert trace["stop_reason"] in (
+            {"exhausted", "candidate_budget"} if expect_hit else {"scan_limit"}
+        )
 
 
 def test_context_reread_does_not_research_or_absorb_its_new_answer(
@@ -161,7 +164,9 @@ def test_context_reread_does_not_research_or_absorb_its_new_answer(
     assert first.status_code == 200
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
-            context_builder, "search_rag", lambda *a, **k: pytest.fail("replay must not search")
+            knowledge_retrieval,
+            "retrieve",
+            lambda *a, **k: pytest.fail("replay must not search"),
         )
         # An appended reply does not change the query's preceding history.
         with_context = world["context"]

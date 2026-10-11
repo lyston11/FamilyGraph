@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import replace
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import config
 from app.services import platform_features
+from app.utils.timeutil import utcnow
 
 if TYPE_CHECKING:
     from app.models.agent import AgentRun
@@ -34,6 +38,25 @@ EXTRACTOR_VERSION = "memory-extractor-v2"
 MAX_CANDIDATES_PER_MESSAGE = 3
 # 与消息长度上限对齐；防御超长输入拖慢正则。
 _INPUT_MAX_CHARS = config.AGENT_MESSAGE_MAX_LENGTH
+
+# ---- 后台片段抽取（U4）----
+#
+# settle 路径只看**当前这一条**用户消息，因此一条事实若分散在多条消息里（先说
+# 「我妈住在杭州」、下一轮才说「是西湖区」），单条匹配永远拼不出它。这不是正则
+# 不够好，而是**观察窗口**太窄。
+#
+# 片段 pass 读一段会话而不是一条消息。它仍然只用确定性规则（不引入模型幻觉），
+# 产物仍然是 **pending 候选**（确认门不变）。
+SEGMENT_EXTRACTOR_VERSION = "memory-segment-extractor-v1"
+#: 一次读多少条**用户**消息。有界：不读整段历史。
+SEGMENT_WINDOW_MESSAGES = 20
+#: 片段文本总长上限（拼接后）。
+SEGMENT_MAX_CHARS = 12_000
+#: 一个 tick 最多处理多少个会话。
+SEGMENT_MAX_SESSIONS_PER_TICK = 20
+#: 只处理最近活跃过的会话（分钟）。重复扫描同一窗口是幂等的（见去重），
+#: 所以这个窗口只是工作量的上界，不是正确性依赖。
+SEGMENT_ACTIVITY_MINUTES = 180
 
 # 否定/习语守卫：命中关键词前出现这些字时不产卡（避免「不喜欢」被判为偏好、
 # 「哪怕」被判为「怕」）。
@@ -445,10 +468,209 @@ def extract_after_settle(db: Session, run: AgentRun) -> int:
         return 0
 
 
+def extract_session_segments(db: Session, *, limit: int | None = None) -> dict[str, int]:
+    """后台按**会话片段**抽取候选。返回计数，永不抛错。
+
+    ## 与 settle 路径的关系
+
+    settle 路径（`extract_after_settle`）在 run 终态时对**当轮那条用户消息**跑规则，
+    它快、与终态同事务、失败不影响 run。片段 pass 是**补充**：它读一段会话，因此能
+    看到需要跨消息上下文的事实。两者共存，不互相替代。
+
+    ## 为什么不引入模型
+
+    现有抽取器的价值在于「同输入逐字节同输出」——可审计、不幻觉。片段 pass 扩大的是
+    **观察窗口**，不是判断能力；换成模型会让同一条事实的抽取结果不可复现，而 RAG
+    语料的错误后果是持久的。模型驱动的抽取应由独立的验证机制配套（U5），不在本切片。
+
+    ## 幂等
+
+    去重不看「从哪条消息来的」，而看**事实本身**：同 `(author_account_id, summary)`
+    的 pending/confirmed 候选或记忆已存在就跳过。因此：
+
+    - 重复跑同一窗口不产生重复候选（第二次全是 no-op）；
+    - settle 路径已提过的同一事实不会被片段 pass 再提一遍。
+
+    ## 确认门不变
+
+    产物是 `status="pending"` 的 `MemoryCandidate`，用户仍需在记忆面板确认。
+    """
+    from app.models.agent import AgentMessage
+
+    counters = {"sessions_scanned": 0, "candidates_proposed": 0, "candidates_skipped": 0}
+    try:
+        if not platform_features.is_memory_enabled(db):
+            return counters
+        since = utcnow() - timedelta(minutes=SEGMENT_ACTIVITY_MINUTES)
+        session_ids = list(
+            db.scalars(
+                select(AgentMessage.session_id)
+                .where(AgentMessage.created_at >= since, AgentMessage.role == "user")
+                .group_by(AgentMessage.session_id)
+                .order_by(func.max(AgentMessage.id).desc())
+                .limit(limit or SEGMENT_MAX_SESSIONS_PER_TICK)
+            ).all()
+        )
+        for session_id in session_ids:
+            counters["sessions_scanned"] += 1
+            try:
+                proposed, skipped = _extract_one_session(db, session_id)
+            except Exception:  # noqa: BLE001 — 单个会话失败不影响其余
+                logger.warning(
+                    "segment extraction failed session=%s error swallowed",
+                    session_id,
+                    exc_info=True,
+                )
+                db.rollback()
+                continue
+            counters["candidates_proposed"] += proposed
+            counters["candidates_skipped"] += skipped
+        db.commit()
+    except Exception:  # noqa: BLE001 — 后台 pass 不得影响 tick 其余部分
+        logger.warning("segment extraction pass failed error swallowed", exc_info=True)
+        db.rollback()
+    return counters
+
+
+def _extract_one_session(db: Session, session_id: int) -> tuple[int, int]:
+    """处理一个会话，返回 `(新提候选数, 因已存在而跳过数)`。"""
+    from app.models.agent import AgentMessage, AgentSession
+    from app.models.memory import Memory, MemoryCandidate
+    from app.services.memory_rag import MemoryCandidateExtractor
+
+    session = db.get(AgentSession, session_id, populate_existing=True)
+    if session is None or session.account_id is None:
+        return 0, 0
+    # 只取**用户**消息：assistant 的回复不是用户的事实来源（它可能是模型的猜测，
+    # 也可能是它自己的复述）——把模型输出当事实来源等于让幻觉进入记忆候选。
+    messages = list(
+        db.scalars(
+            select(AgentMessage)
+            .where(AgentMessage.session_id == session_id, AgentMessage.role == "user")
+            .order_by(AgentMessage.id.desc())
+            .limit(SEGMENT_WINDOW_MESSAGES)
+        ).all()
+    )
+    if not messages:
+        return 0, 0
+    texts = [
+        text
+        for text in (m.content_json.get("text") for m in reversed(messages))
+        if isinstance(text, str) and text.strip()
+    ]
+    if not texts:
+        return 0, 0
+    segment = "\n".join(texts)[:SEGMENT_MAX_CHARS]
+    inputs, _dropped = rule_detector_with_stats(segment)
+    if not inputs:
+        return 0, 0
+
+    # ---- 把每条 input 归回**一条真实消息**，并把原文换成该消息全文 ----
+    #
+    # 片段用来**扩大观察窗口**，不用来当来源。`propose_candidate` 对
+    # `agent_message` 来源做**全等校验**（`source_quote` 必须等于该消息原文），所以：
+    #
+    # 1. 某条消息包含 quote → 归给它（单消息事实，与 settle 路径同形）；
+    # 2. quote 跨多条消息（片段才拼得出的事实）→ 归给**被 quote 完整包含的最长那条
+    #    消息**。证据确实来自它，只是判断时借了窗口里其它消息的上下文；
+    # 3. 两者都不满足 → **丢弃**。无来源的记忆候选比没有候选更糟。
+    ordered = [(m.id, m.content_json.get("text") or "") for m in reversed(messages)]
+    by_message: dict[int, list[MemoryCandidateInput]] = {}
+    unattributed = 0
+    for item in inputs:
+        quote = (item.source_quote or "").strip()
+        if not quote:
+            unattributed += 1
+            continue
+        containing = [(message_id, text) for message_id, text in ordered if quote in text.strip()]
+        if containing:
+            owner_id, owner_text = containing[0]
+        else:
+            covered = [
+                (message_id, text)
+                for message_id, text in ordered
+                if text.strip() and text.strip() in quote
+            ]
+            if not covered:
+                unattributed += 1
+                continue
+            owner_id, owner_text = max(covered, key=lambda pair: len(pair[1]))
+        by_message.setdefault(owner_id, []).append(
+            replace(item, source_quote=owner_text.strip(), source_message_id=owner_id)
+        )
+    if unattributed:
+        logger.info(
+            "segment extraction unattributed candidates session=%s count=%s",
+            session_id,
+            unattributed,
+        )
+    if not by_message:
+        return 0, 0
+
+    # 事实级去重：同账号下已经有同样 summary 的候选或记忆就跳过。
+    summaries = [
+        item.summary.strip()
+        for group in by_message.values()
+        for item in group
+        if item.summary.strip()
+    ]
+    known: set[str] = set()
+    if summaries:
+        known.update(
+            db.scalars(
+                select(MemoryCandidate.summary).where(
+                    MemoryCandidate.author_account_id == session.account_id,
+                    MemoryCandidate.summary.in_(summaries),
+                )
+            ).all()
+        )
+        known.update(
+            db.scalars(
+                # `Memory` 的正文列叫 `content`（候选叫 `summary`）；两者是同一份文本
+                # 在确认前后的不同列名。
+                select(Memory.content).where(
+                    Memory.author_account_id == session.account_id,
+                    Memory.content.in_(summaries),
+                )
+            ).all()
+        )
+
+    proposed_total = 0
+    skipped = 0
+    for message_id, group in by_message.items():
+        fresh = [item for item in group if item.summary.strip() not in known]
+        skipped += len(group) - len(fresh)
+        if not fresh:
+            continue
+        # 同一批次里也可能重复（同一事实在窗口内被说了两次）。
+        known.update(item.summary.strip() for item in fresh)
+
+        def _fixed_detector(
+            _text: str, _group: list[MemoryCandidateInput] = fresh
+        ) -> list[MemoryCandidateInput]:
+            return _group
+
+        with db.begin_nested():
+            extractor = MemoryCandidateExtractor(detector=_fixed_detector)
+            extractor.version = SEGMENT_EXTRACTOR_VERSION
+            proposed = extractor.extract(
+                db,
+                author_account_id=session.account_id,
+                conversation_text=segment,
+                source_message_id=message_id,
+            )
+        proposed_total += len(proposed)
+    return proposed_total, skipped
+
+
 __all__ = [
     "EXTRACTOR_VERSION",
     "MAX_CANDIDATES_PER_MESSAGE",
+    "SEGMENT_EXTRACTOR_VERSION",
+    "SEGMENT_MAX_SESSIONS_PER_TICK",
+    "SEGMENT_WINDOW_MESSAGES",
     "extract_after_settle",
+    "extract_session_segments",
     "rule_detector",
     "rule_detector_with_stats",
 ]
