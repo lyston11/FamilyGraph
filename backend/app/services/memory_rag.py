@@ -47,7 +47,7 @@ from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace
 from app.models.term_registry import TermEntry
 from app.models.user import User
-from app.services import memory_sources, platform_features, rag_search_provider
+from app.services import memory_sources, platform_features, rag_search_provider, visibility
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.services.policy_consumer import is_policy_consumer_kind
@@ -1145,14 +1145,35 @@ def ingest_authorized_document(
     sensitivity: str = "normal",
     revision: int = 1,
     visibility_snapshot_key: str = "authorized-v1",
+    subject_user_id: int | None = None,
+    required_categories: Sequence[str] = (),
 ) -> RAGDocument:
-    """Ingest only an explicitly authorized non-chat source."""
+    """Ingest only an explicitly authorized non-chat source.
+
+    `subject_user_id` 非空时，这份内容派生自该主体的档案：写 `visibility_snapshot`
+    声明「读我需要哪些类别是清的」，读取时由主体的四级阶梯裁决（见
+    `memory_sources._profile_clearance_ok`）。为空时保持旧的 scope 裁决。
+
+    `required_categories` 在**写入侧**严格校验（未知类别 422）；读取侧对未知类别
+    保守处理（只有主体可读）。两侧口径不同是刻意的：写入时能报错就报错。
+    """
     if source_type not in RAG_SOURCE_TYPES or source_type == "memory":
         raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "该来源类型不能通过文档入口索引")
     if not text_value.strip():
         raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "可索引文档不能为空")
     _validate_rag_scope(scope, space_id)
     _validate_sensitivity(sensitivity)
+    unknown_categories = sorted(set(required_categories) - set(visibility.CATEGORY_FIELD_MAP))
+    if unknown_categories:
+        raise_api_error(
+            422,
+            RAG_SOURCE_NOT_ALLOWED,
+            "未知的档案披露类别",
+            {"categories": unknown_categories},
+        )
+    if subject_user_id is not None and required_categories and scope == "public":
+        # `public` 的定义是「**不含个人数据**」；声明了档案类别就不可能不含。
+        raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "含个人档案类别的文档不能公开到全局")
     if scope == "public" and sensitivity in ("high", "local_required"):
         raise_api_error(422, MEMORY_SENSITIVE_SCOPE_FORBIDDEN, "高敏感文档不能公开到全局")
     if type(revision) is not int or revision < 1:
@@ -1176,8 +1197,14 @@ def ingest_authorized_document(
             "confirmation_status": "authorized",
             "source_revision": revision,
             "revision": revision,
-            "visibility_snapshot": {},
-            "visibility_snapshot_key": visibility_snapshot_key,
+            "visibility_snapshot": visibility.profile_clearance_snapshot(
+                subject_user_id, required_categories
+            ),
+            "visibility_snapshot_key": (
+                visibility.PROFILE_CLEARANCE_KEY
+                if subject_user_id is not None
+                else visibility_snapshot_key
+            ),
         }
         document, created = _canonical_document(db, metadata, target_version=RAG_INDEX_VERSION)
         _materialize_chunks(db, document, text_value, revision, creating=created)

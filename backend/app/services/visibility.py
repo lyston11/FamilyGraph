@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -343,6 +344,66 @@ def evaluate(
         if field not in cleared:
             fields[field] = FIELD_MASKED
     return VisibilityDecision(level, fields, purpose, source=source)
+
+
+# ---- 语料读取的声明式要求（RAG 侧的字段级掩码）----
+#
+# `evaluate` 判的是**档案字段**（gender/birth/death/bio/avatar_path），而 RAG 语料是
+# **自由文本**。两者不能逐字映射，但可以靠**声明**打通：内容在写入时声明
+# 「读我至少需要哪些类别是清的」，读取时由主体的四级阶梯裁决。
+#
+# 只在内容**派生自某主体档案**时使用（`subject_user_id` 非空）。主体自己确认过的
+# 记忆由 scope 裁决，不叠加掩码——scope 是主体选过的可见性。
+
+#: `visibility_snapshot` 的语义版本。判据含义一变就换 key：旧文档因 key 不符而
+#: **不可读**（fail closed），而不是按新语义重新解释。
+PROFILE_CLEARANCE_KEY = "profile-v1"
+
+
+def required_clearance_satisfied(
+    decision: VisibilityDecision, required_categories: Sequence[str]
+) -> bool:
+    """读一条声明了 required_categories 的内容，该 decision 是否允许。
+
+    两条规则，都刻意保守：
+
+    1. `HIGH_RISK_CATEGORIES` **只有主体本人**（self_private）可读。它们的
+       `CATEGORY_FIELD_MAP` 条目当前是空占位，所以不能用「字段是否清空」表达；
+       这条与 `HIGH_RISK_CATEGORIES` 的既有注释一致（不因 lineage/household/
+       Agent/operator 身份自动开放）。
+    2. 其余类别要求其映射字段全部 `FIELD_CLEAR`。未成年人 overlay 已在
+       `evaluate` 内移除 birth/death/bio，因此这里自动生效，不需要第二处判断。
+
+    未知类别按 HIGH_RISK 处理（fail closed）：分类不了的内容只有主体可读。
+    """
+    if not decision.visible:
+        return False
+    for category in required_categories:
+        if category in HIGH_RISK_CATEGORIES or category not in CATEGORY_FIELD_MAP:
+            if decision.level != LEVEL_SELF_PRIVATE:
+                return False
+            continue
+        for field in CATEGORY_FIELD_MAP[category]:
+            if decision.fields.get(field) != FIELD_CLEAR:
+                return False
+    return True
+
+
+def profile_clearance_snapshot(
+    subject_user_id: int | None, required_categories: Sequence[str]
+) -> dict[str, Any]:
+    """构造 `RAGDocument.visibility_snapshot` 的档案清空声明。
+
+    `subject_user_id` 为空时返回 `{}`：调用方走旧的 scope 裁决（`memory` /
+    `public_kinship` 保持逐字不变）。
+    """
+    if subject_user_id is None:
+        return {}
+    return {
+        "subject_user_id": subject_user_id,
+        "required_categories": list(dict.fromkeys(required_categories)),
+        "key": PROFILE_CLEARANCE_KEY,
+    }
 
 
 def payload_from_decision(decision: VisibilityDecision, target: User) -> dict[str, Any]:
