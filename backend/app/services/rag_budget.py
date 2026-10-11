@@ -38,26 +38,62 @@ SOURCE_TIER_FRACTIONS: dict[str, float] = {
 }
 DEFAULT_TIER_FRACTION = 0.2
 
+#: 消费方维度的份额覆盖：`{consumer_kind: {source_type: fraction}}`。
+#:
+#: ## 为什么需要第二个维度
+#:
+#: 同一批语料在不同消费方下的**恰当配比不同**，而原因不是调参：
+#:
+#: - assistant 是**账号级**消费者，记忆是它的主料（当前 0.6）；
+#: - steward 是**空间级**消费者，它的输入是空间投影（家族故事 / 授权文档 / 公共亲缘），
+#:   而记忆对它是一个**受控附加项**（默认关闭，且无 viewer 时读不到 private）。
+#:   用 assistant 的 0.6 记忆份额，会让空间级来源在管家侧被记忆挤掉。
+#:
+#: 这是**判断**，不是实测结论：它来自两个消费方的数据归属差异。因此它的作用域被限制
+#: 在 steward 一个消费方，assistant 的取值与引入本维度之前**逐字相同**。
+#:
+#: 未登记的 `(consumer_kind, source_type)` 组合回落到 `SOURCE_TIER_FRACTIONS`，
+#: 因此新增消费方不需要先登记就能工作，不会静默变成 0。
+CONSUMER_TIER_OVERRIDES: dict[str, dict[str, float]] = {
+    "steward": {
+        # 空间级消费者：压低记忆，把预算留给空间投影来源。
+        "memory": 0.3,
+        "family_story": 0.5,
+        "authorized_document": 0.5,
+    },
+}
 
-def tier_fraction(source_type: str) -> float:
+
+def tier_fraction(source_type: str, consumer_kind: str | None = None) -> float:
+    """该类别的份额；`consumer_kind` 给定时先查消费方覆盖。"""
+    if consumer_kind is not None:
+        override = CONSUMER_TIER_OVERRIDES.get(consumer_kind)
+        if override is not None and source_type in override:
+            return override[source_type]
     return SOURCE_TIER_FRACTIONS.get(source_type, DEFAULT_TIER_FRACTION)
 
 
-def tier_budget(source_type: str, token_budget: int) -> int:
+def tier_budget(source_type: str, token_budget: int, consumer_kind: str | None = None) -> int:
     """该类别的 token 上限。
 
     `max(1, ...)` 保证即使预算极小也不会算出 0——那会让该类别的来源永远无法进入，
     而「预算太小」应当表现为整体排除，而不是某一类静默消失。
     """
-    return max(1, int(token_budget * tier_fraction(source_type)))
+    return max(1, int(token_budget * tier_fraction(source_type, consumer_kind)))
 
 
-def tier_budget_policy(token_budget: int) -> dict[str, object]:
-    """Audit shape recorded in `policy_json`: version, shape, no source text."""
+def tier_budget_policy(token_budget: int, consumer_kind: str | None = None) -> dict[str, object]:
+    """Audit shape recorded in `policy_json`: version, shape, no source text.
+
+    `consumer_kind` 与 `consumer_overrides` 必须一起记录：份额是**消费方相关**的，
+    只记 `tier_fractions` 会让事后审计看不出实际用哪一套。
+    """
     return {
         "tier_budget_version": TIER_BUDGET_VERSION,
         "tier_fractions": dict(SOURCE_TIER_FRACTIONS),
         "tier_default_fraction": DEFAULT_TIER_FRACTION,
+        "consumer_kind": consumer_kind,
+        "consumer_overrides": dict(CONSUMER_TIER_OVERRIDES.get(consumer_kind or "", {})),
     }
 
 

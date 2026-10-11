@@ -483,3 +483,58 @@ outcome = knowledge_retrieval.retrieve(db, identity, query, ...)
 `MEMORY_TOOL_SOURCE_TYPES` / `STEWARD_READABLE_SOURCE_TYPES` 同义并会漂移）。
 
 正确：以 `RetrievalIdentity` 声明身份；用既有常量作目的限定；空可读集直接返回空结果。
+
+## 14. 预算的消费方维度与新鲜度衰减（U3，2026-10-11 补充）
+
+### 份额是消费方相关的
+
+`rag_budget.tier_fraction(source_type, consumer_kind)` 增加第二个维度，覆盖表为
+`CONSUMER_TIER_OVERRIDES = {consumer_kind: {source_type: fraction}}`。
+
+**为什么需要它**：同一批语料在不同消费方下的恰当配比不同，而原因不是调参——
+assistant 是**账号级**消费者（记忆是主料），steward 是**空间级**消费者（输入是空间投影，
+记忆是受控附加项，默认关闭）。用 assistant 的 0.6 记忆份额会让空间级来源在管家侧被挤掉。
+
+**作用域被刻意限制**：只登记 `steward`，assistant 的取值与引入该维度之前**逐字相同**
+（有测试钉住）。未登记的 `(consumer_kind, source_type)` 回落到 `SOURCE_TIER_FRACTIONS`，
+因此新增消费方不需要先登记就能工作，不会静默变成 0。
+
+`tier_budget_policy(token_budget, consumer_kind)` 必须同时记录 `consumer_kind` 与
+`consumer_overrides`——份额是消费方相关的，只记 `tier_fractions` 会让事后审计看不出
+实际用了哪一套。
+
+### `budgeted` 必须进入被比较的 policy
+
+`build()` 把 `budgeted` 写进 `policy`（因此进 `policy_json` 并被 `_replay` 比对）：
+从「按预算」切到「不按预算」是一个真实的政策变化，重放时应当失效而不是静默沿用旧分配。
+
+**并且 `_replay` 在不按预算时不得重算分层分配**：`budgeted=False` 的构建（steward 的
+确定性投影）没有经过分层预算，投影整块大于默认份额，重算必然不同，会让每次 steward
+重放都误报 `tier_budget_changed`。`_tier_allocation` 也相应接受 `consumer_kind`。
+
+### 新鲜度是独立的排序特征（`lex-v3`）
+
+`RANK_VERSION_RECENCY = "lex-v3"` 在 v2 的特征序列里插入**新鲜度**，位置在**来源类别之后**：
+
+```
+词法重叠 → 分支共识 → 来源类别 → 新鲜度 → chunk 位置 → chunk_id
+```
+
+- **为什么在类别之后**：类别优先是既有语义（确认过的记忆 > 家族故事 > 授权文档 > 公共亲缘）。
+  把新鲜度放到最前面会直接推翻类别优先级——那不是「加上衰减」，是「换掉排序」。
+- **为什么分桶而不是连续**：连续衰减让排序对任意时间差敏感，同一批数据隔一天就可能换序，
+  测试与审计都不可复现。桶边界见 `RECENCY_BUCKETS`（7/30/180 天）。
+- **缺失时间戳按最旧处理**，时钟偏差不越过最高桶分值。
+- **`lex-v3` 不是默认**：排序是历史回归与评测基线的基准，换默认值要先有评测证据。
+
+数据来源是 `rag_documents.updated_at`（词法 SQL 与向量 SQL 都必须选这一列；`RAGHit` 用
+`.get` 容错，使漏选表现为「新鲜度缺失」而不是整条检索 500）。
+
+**Wrong vs Correct**
+
+错误：把衰减直接混进 `_SOURCE_TYPE_RANK_WEIGHT`；把新鲜度放到排序首位；用连续衰减函数；
+新增消费方时不登记覆盖就假设它会生效；`budgeted=False` 的构建仍走分层比对；只给词法 SQL
+加 `updated_at` 而漏掉向量 SQL（那会让向量候选静默失去新鲜度）。
+
+正确：份额按 `(consumer_kind, source_type)` 查；新鲜度是独立特征且排在类别之后；
+分桶；未登记即回落；`_replay` 尊重 `budgeted`。

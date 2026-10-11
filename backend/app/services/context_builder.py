@@ -239,7 +239,10 @@ class ContextBuilder:
             "query_plan": plan.log_summary(),
             "estimator_version": ESTIMATOR_VERSION,
             "rank_version": RANK_VERSION_DEFAULT,
-            **tier_budget_policy(token_budget),
+            # `budgeted` 必须进被比较的 policy：从「按预算」切到「不按预算」是一个
+            # 真实的政策变化，重放时应当失效而不是静默沿用旧分配。
+            "budgeted": budgeted,
+            **tier_budget_policy(token_budget, agent_kind),
         }
         # Anchors are bounded text used to plan this query, never an added
         # source. Hash them with the question; audit metadata contains no text.
@@ -262,6 +265,7 @@ class ContextBuilder:
                     rag_enabled=rag_enabled,
                     provider_kind=provider_kind,
                     identity=identity,
+                    budgeted=budgeted,
                 )
         if prefetched is None:
             if self.db is None:
@@ -322,7 +326,7 @@ class ContextBuilder:
             elif candidate_estimate > token_budget:
                 reason = "token_budget"
             elif tier_used.get(source.source_type, 0) + estimate > tier_budget(
-                source.source_type, token_budget
+                source.source_type, token_budget, agent_kind
             ):
                 # 该类别已用满自己的份额。**不做容量转移**：其它类别未使用的份额
                 # 不借给它，否则「长故事挤掉记忆」只是被换成了反方向的挤占。
@@ -355,7 +359,7 @@ class ContextBuilder:
                 policy_version=policy_version,
                 token_budget=token_budget,
                 created_at=utcnow(),
-                policy_json={**policy, "rag_enabled": rag_enabled, "budgeted": budgeted},
+                policy_json={**policy, "rag_enabled": rag_enabled},
                 # New builds persist descriptors only. Legacy snapshots remain
                 # preserved in the database but cannot be replayed as evidence.
                 blocks_json=None,
@@ -403,6 +407,7 @@ class ContextBuilder:
         rag_enabled: bool,
         provider_kind: str | None,
         identity: dict[str, Any],
+        budgeted: bool = True,
     ) -> BuiltContext:
         db = self.db
         assert db is not None
@@ -475,16 +480,22 @@ class ContextBuilder:
             _invalidated(db, build, "budget_changed")
         # 分层用量是构建时的函数：重放必须复现同一分配，否则同一 build_id 会返回
         # 不同的纳入集合。这里重算并比对，让「预算算法变了」与「来源变了」区分开。
-        if _tier_allocation([s.as_data_block() for s in sources], token_budget) != [
-            (s.source_type, s.source_id) for s in sources
-        ]:
+        #
+        # `budgeted=False` 的构建（steward 的确定性投影）**没有**经过分层预算，因此
+        # 不能拿它来比对：投影整块大于默认份额，重算必然不同，会让每次 steward 重放
+        # 都误报 `tier_budget_changed`。
+        if budgeted and _tier_allocation(
+            [s.as_data_block() for s in sources], token_budget, agent_kind
+        ) != [(s.source_type, s.source_id) for s in sources]:
             _invalidated(db, build, "tier_budget_changed")
         return BuiltContext(
             build.id, identity, tuple(sources), tuple(excluded), _provider_policy(sources)
         )
 
 
-def _tier_allocation(blocks: Sequence[dict[str, Any]], token_budget: int) -> list[tuple[str, str]]:
+def _tier_allocation(
+    blocks: Sequence[dict[str, Any]], token_budget: int, consumer_kind: str | None = None
+) -> list[tuple[str, str]]:
     """Recompute which sources the current tier policy would include.
 
     Used by `_replay` to detect a policy change: the stored items were chosen by
@@ -503,7 +514,8 @@ def _tier_allocation(blocks: Sequence[dict[str, Any]], token_budget: int) -> lis
         if (
             len(included) >= MAX_INCLUDED_SOURCES
             or candidate_estimate > token_budget
-            or tier_used.get(source_type, 0) + estimate > tier_budget(source_type, token_budget)
+            or tier_used.get(source_type, 0) + estimate
+            > tier_budget(source_type, token_budget, consumer_kind)
         ):
             continue
         included = candidate
