@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "统一授权检索的合同：显式允许集、private 读者、两层独立挡住、filter-then-ANN、档案清空声明"}
+{"file": ".trellis/spec/backend/rag-authorized-corpus-matrix.md", "reason": "(source_type × scope) 的写入方、允许值域、读取判据与生命周期锚点"}
+{"file": ".trellis/spec/backend/policy-boundary.md", "reason": "FastAPI 拥有最终授权的边界"}
