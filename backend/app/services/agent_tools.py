@@ -923,7 +923,7 @@ def _search_memory_tool(
     因此授权等价性不是靠约定，而是靠同一段代码。输出只含句柄与元数据，
     不含原始来源的敏感字段。
     """
-    from app.services import memory_rag
+    from app.services import knowledge_retrieval, memory_rag
 
     clean = query.strip()
     if not clean:
@@ -931,18 +931,20 @@ def _search_memory_tool(
             422, "AGENT_TOOL_SCHEMA_INVALID", "查询不能为空", {"path": "$.query"}
         )
     try:
-        hits = memory_rag.search_rag(
+        # 统一授权检索入口：授权参数由**身份**派生，不从调用点的默认值来。
+        # 目的限定用既有的 `MEMORY_TOOL_SOURCE_TYPES`（不在这里再写一份同义常量）。
+        outcome = knowledge_retrieval.retrieve(
             db,
-            actor=actor,
-            account=actor.account,
-            space_id=space_id,
-            query=clean,
-            agent_kind="assistant",
+            knowledge_retrieval.RetrievalIdentity(
+                agent_kind="assistant",
+                actor=actor,
+                account=actor.account,
+                space_id=space_id,
+                source_types=MEMORY_TOOL_SOURCE_TYPES,
+            ),
+            clean,
             limit=limit,
             for_model=True,
-            # 目的限定的第二个维度：显式枚举，不从 scope 推导，也不靠
-            # `source_types=None` 的「读全部」默认。见 `MEMORY_TOOL_SOURCE_TYPES`。
-            source_types=MEMORY_TOOL_SOURCE_TYPES,
         )
     except HTTPException as exc:
         # 记忆/检索未启用或来源受限：按既有 API 口径对外，不伪装成空结果。
@@ -963,7 +965,7 @@ def _search_memory_tool(
                 "revision": hit.revision,
                 "excerpt": hit.text[:400],
             }
-            for hit in hits
+            for hit in outcome.hits
         ],
     }
 

@@ -24,6 +24,7 @@ from app.models.steward import (
     StewardTermProjection,
     StewardViewTarget,
 )
+from app.services import knowledge_retrieval
 from app.services.agent_execution import StewardExecution
 
 TOOL_GET_SPACE_SNAPSHOT = "familygraph.steward.get_space_snapshot"
@@ -546,22 +547,25 @@ def _search_memory(
     actor, account = reader
     limit = payload.get("limit")
     limit = 5 if limit is None else int(limit)
-    hits = memory_rag.search_rag(
+    # 统一授权检索入口：允许集与 private 读者都由身份派生。
+    # private 的读者只能是该 run 的 viewer（无 viewer 时为 NULL → 恒不可读），
+    # 绝不是回落到 space admin 的 account。
+    outcome = knowledge_retrieval.retrieve(
         db,
-        actor=actor,
-        account=account,
-        space_id=execution.space_id,
-        query=clean,
-        agent_kind="steward",
+        knowledge_retrieval.RetrievalIdentity(
+            agent_kind="steward",
+            actor=actor,
+            account=account,
+            space_id=execution.space_id,
+            viewer_account_id=execution.viewer_account_id,
+            # 可读集的第二个维度：用既有的显式枚举，不从 `scopes` 推导。
+            source_types=steward_memory.STEWARD_READABLE_SOURCE_TYPES,
+        ),
+        clean,
         limit=limit,
         for_model=True,
-        # private 的读者只能是该 run 的 viewer（无 viewer 时为 NULL → 恒不可读），
-        # 绝不是回落到 space admin 的 account。
-        private_reader_account_id=execution.viewer_account_id,
-        scope_allowlist=scopes,
-        # 可读集的第二个维度：显式枚举，不从 `scopes` 推导。
-        source_types=steward_memory.STEWARD_READABLE_SOURCE_TYPES,
     )
+    hits = outcome.hits
     return {
         "query_hash": memory_rag.query_hash(clean),
         "scopes": list(scopes),

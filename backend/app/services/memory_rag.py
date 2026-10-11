@@ -47,7 +47,12 @@ from app.models.rag import RAG_SOURCE_TYPES, RAGChunk, RAGDocument
 from app.models.space import FamilySpace
 from app.models.term_registry import TermEntry
 from app.models.user import User
-from app.services import memory_sources, platform_features, rag_search_provider, visibility
+from app.services import (
+    memory_sources,
+    platform_features,
+    rag_search_provider,
+    visibility,
+)
 from app.services.agent_provider import ProviderResolution, resolve_for_space
 from app.services.domain_events import emit as emit_domain_event
 from app.services.policy_consumer import is_policy_consumer_kind
@@ -2544,17 +2549,29 @@ def build_context(
     )
     if existing is not None:
         return _replay_context_build(db, existing, actor=actor, account=account, space_id=space_id)
+    # 惰性导入：`knowledge_retrieval` 在模块级导入 `memory_rag`（它是上层入口），
+    # 这里再模块级反向导入会形成循环。
+    from app.services import knowledge_retrieval
+
     plan = plan_query(query)
-    hits = search_rag(
+    # 统一授权检索入口。run context 的 kind 就是 run 自己的 kind（assistant 或
+    # steward），授权参数由它派生 —— 之前这里靠 `scope_allowlist=None` 的默认全开，
+    # 即 steward run 也曾拿到 assistant 的允许集。
+    outcome = knowledge_retrieval.retrieve(
         db,
-        actor=actor,
-        account=account,
-        space_id=space_id,
-        query=plan.normalized_query or query,
-        agent_kind=run.kind,
+        knowledge_retrieval.RetrievalIdentity(
+            agent_kind=run.kind,
+            actor=actor,
+            account=account,
+            space_id=space_id,
+            viewer_account_id=getattr(run, "viewer_account_id", None),
+            source_types=knowledge_retrieval.CONTEXT_SOURCE_TYPES,
+        ),
+        plan.normalized_query or query,
         provider_kind=provider.kind,
         raise_on_restricted=True,
     )
+    hits = list(outcome.hits)
     local_required = any(hit.sensitivity in ("high", "local_required") for hit in hits)
     if local_required and (provider.policy_result != "allowed" or provider.kind != "local"):
         raise_api_error(

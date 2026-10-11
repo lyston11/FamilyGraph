@@ -420,3 +420,66 @@ private 分支由 `:is_assistant = 1` 改为 `d.author_account_id = :private_rea
 
 正确：`subject_user_id` 作为 opt-in；判据只在 `visibility.py` 一处；复核层施加；RAG 清空来自
 披露；key 不符即不可读。
+
+## 13. 统一授权检索入口（2026-10-11 补充）
+
+任务 `10-11-unified-authorized-retrieval-entry` 把「谁在读、被允许读什么」从每个调用点的
+参数列表收拢到一处。
+
+### 问题
+
+`memory_rag.search_rag` 的三个授权参数在多数调用点上**靠默认值**：
+
+| 参数 | 默认值语义 |
+|---|---|
+| `scope_allowlist=None` | **三个 scope 全开**（assistant 语义） |
+| `private_reader_account_id` 未传 | 回落到调用方自己的 `account.id` |
+| `source_types=None` | **全部来源类别** |
+
+因此**新增一个消费者时，最省事的写法恰好是最宽的授权**。改造前 5 个调用点里有 3 个
+（`context_builder`、`build_run_context`、`rag.search`）依赖默认全开；其中
+`build_run_context` 对 steward run 也会拿到 assistant 的允许集。
+
+### 形状
+
+`services/knowledge_retrieval.py`：
+
+```python
+identity = knowledge_retrieval.RetrievalIdentity(
+    agent_kind=..., actor=..., account=..., space_id=...,
+    viewer_account_id=..., source_types=...,
+)
+outcome = knowledge_retrieval.retrieve(db, identity, query, ...)
+```
+
+- `resolve_authorization(db, identity)` 派生允许集：assistant → `MEMORY_SCOPES`；
+  steward → `steward_memory.readable_scopes(...)`（env ∩ 平台 ∩ 空间，无 viewer 时去掉
+  private）。**未知 kind → 422（fail closed）**。
+- `private_reader_account_id` 由身份派生：assistant → 自己的 account；steward → **该 run 的
+  viewer**，空间级 kind 为 `None`（恒不可读）。
+- **可读集为空是授权结论，不是「读全部」**：直接返回空 `RetrievalOutcome`，不调 `search_rag`。
+- `RetrievalOutcome.filtered_out` 把「没有相关内容」与「被授权过滤掉」分开——RAG 之前无法
+  区分这两者，而它们在产品上是完全不同的事。
+
+本模块**不复制**任何授权判据：阶梯、`HIGH_RISK_CATEGORIES`、档案清空声明、未成年人 overlay
+仍全在 `visibility.py` 与 `memory_sources.py`。它只把身份翻译成参数。
+
+### 结构性守卫
+
+`tests/test_knowledge_retrieval_entry.py::test_search_rag_is_only_called_from_the_unified_entry`
+用 AST 扫描 `app/**/*.py`：`search_rag(` 只允许出现在 `memory_rag.py`（定义处）与
+`knowledge_retrieval.py`（唯一调用方）。新增消费者绕过统一入口会**直接失败**。
+
+### 循环导入
+
+`knowledge_retrieval` 在模块级导入 `memory_rag`（它是上层入口），因此 `memory_rag` 只能
+在函数内惰性导入 `knowledge_retrieval`。反过来会在 `memory_rag` 初始化完成前触发
+`AttributeError: partially initialized module`。
+
+**Wrong vs Correct**
+
+错误：新增消费者时直接调 `search_rag` 并只传部分参数（其余吃默认全开）；把「可读集为空」
+当作「无内容」或退回全开；在 `knowledge_retrieval` 里再定义一份来源类别常量（与
+`MEMORY_TOOL_SOURCE_TYPES` / `STEWARD_READABLE_SOURCE_TYPES` 同义并会漂移）。
+
+正确：以 `RetrievalIdentity` 声明身份；用既有常量作目的限定；空可读集直接返回空结果。

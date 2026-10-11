@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.models.account import Account
 from app.models.user import User
+from app.services import knowledge_retrieval
 from app.services.memory_rag import (
     RAGHit,
     invalidate_source,
     rebuild_index,
-    search_rag,
 )
 from app.services.memory_rag import (
     index_memory as ingest_memory,
@@ -31,15 +31,20 @@ def search(
     account = db.scalar(select(Account).where(Account.user_id == actor.id))
     if account is None:
         return []
-    return search_rag(
-        db,
-        actor=actor,
-        account=account,
-        space_id=space_id,
-        query=query,
-        agent_kind=agent_kind,
-        limit=limit,
-        for_model=False,
+    return list(
+        knowledge_retrieval.retrieve(
+            db,
+            knowledge_retrieval.RetrievalIdentity(
+                agent_kind=agent_kind,
+                actor=actor,
+                account=account,
+                space_id=space_id,
+                source_types=knowledge_retrieval.CONTEXT_SOURCE_TYPES,
+            ),
+            query,
+            limit=limit,
+            for_model=False,
+        ).hits
     )
 
 
