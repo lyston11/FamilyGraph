@@ -7,22 +7,30 @@ and progress either all survive or all roll back. No network/model work.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Integer, cast, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.errors import RAG_DISABLED, RAG_SOURCE_NOT_ALLOWED, raise_api_error
 from app.models.memory import Memory
 from app.models.platform_features import PlatformFeatureConfig
-from app.models.rag import RAGDocument, RAGIndexMaintenanceFailure, RAGIndexMaintenanceState
+from app.models.rag import (
+    RAGChunk,
+    RAGDocument,
+    RAGIndexMaintenanceFailure,
+    RAGIndexMaintenanceState,
+)
 from app.services import memory_rag, memory_sources, platform_features
 from app.utils.timeutil import utcnow
+
+logger = logging.getLogger(__name__)
 
 MAINTENANCE_POLICY_VERSION = "rag-index-maint-v2"
 DEFAULT_BATCH_SIZE = 100
@@ -303,6 +311,8 @@ def run_maintenance_batch(
             "already_current": 0,
             "skipped_invalid": 0,
             "failed": 0,
+            # 退役计数（U5）：真源已不可达的派生文档。
+            "retired": 0,
         }
         witnesses: list[_ProjectionWitness] = []
         cursor = lease.cursor_memory_id
@@ -350,9 +360,89 @@ def run_maintenance_batch(
                 _record_failure(db, memory_id, "RAG_INDEX_MATERIALIZE_FAILED", utcnow())
         lease = _renew_lease(db, lease, expected_attempt=lease.attempt, now=utcnow())
         _validate_batch(db, witnesses)
+        # ---- 退役扫描（U5）----
+        # 与物化共用一个租约：两者都写派生层，分开持锁会互相抢写者。
+        # 它不碰真源，也不动本批的游标（自排空，不需要游标）。
+        counts["retired"] = retire_unreachable_documents(db, limit=size)["retired"]
         lease = _finish_round(db, lease, cursor=cursor, stage=False)
         db.flush()
         return {**counts, "round": lease.round}
+
+
+def retire_unreachable_documents(db: Session, *, limit: int = DEFAULT_BATCH_SIZE) -> dict[str, int]:
+    """退役派生文档：真源已不可达（被取代 / 过期 / 已撤销 / 已删除）。
+
+    ## 为什么需要它
+
+    `_ELIGIBILITY_SQL` 在查询时按取代/有效区间排除，所以这些文档**已经不可读**。
+    但它们仍是 `status='active'` 的派生数据：占存储、被 embedding 索引、并且如果
+    eligibility 谓词将来变动（或有人写出不经过它的查询）就会**复活**。
+
+    ## 为什么不需要游标
+
+    退役后文档不再是 `active`，自动从选择集里消失 —— 这个扫描是**自排空**的。
+    `limit` 只是单批工作量上界，下一批接着做剩下的。因此不需要新状态列，
+    也就不需要迁移。
+
+    ## 为什么只看派生层
+
+    它**不修改任何真源**（`Memory` 一行不动）：退役是“这份派生数据不再有真源支撑”，
+    不是“删掉这个事实”。用户撤销取代时 `restore_memory` 会显式重建。
+    """
+    from sqlalchemy import and_, or_
+
+    now = utcnow()
+    # 直接选出**需要**退役的文档，而不是扫描 active 再逐个判断：后者在前 N 条都
+    # 不需要退役时永远推进不下去（无游标时它会卡在同一个窗口）。
+    needs_retirement = or_(
+        Memory.id.is_(None),
+        Memory.status != "active",
+        Memory.superseded_by_id.is_not(None),
+        and_(Memory.valid_to.is_not(None), Memory.valid_to <= now),
+    )
+    rows = db.execute(
+        select(RAGDocument.id, RAGDocument.source_id, Memory.id, Memory.status)
+        .outerjoin(Memory, Memory.id == cast(RAGDocument.source_id, Integer))
+        .where(
+            RAGDocument.source_type == "memory",
+            RAGDocument.status == "active",
+            needs_retirement,
+        )
+        .order_by(RAGDocument.id)
+        .limit(limit)
+    ).all()
+
+    counts = {"scanned": 0, "retired": 0}
+    for document_id, source_id, memory_id, memory_status in rows:
+        counts["scanned"] += 1
+        if memory_id is None:
+            reason = "memory_missing"
+        elif memory_status != "active":
+            reason = "memory_inactive"
+        else:
+            reason = "memory_not_current"
+        document = db.get(RAGDocument, int(document_id), populate_existing=True)
+        if document is None or document.status != "active":
+            # 并发已退役：幂等，不重复计数。
+            continue
+        document.status = "invalidated"
+        document.invalidation_reason = f"source_retired:{reason}"
+        document.invalidated_at = now
+        document.updated_at = now
+        db.query(RAGChunk).filter(
+            RAGChunk.document_id == document.id, RAGChunk.status == "active"
+        ).update(
+            {RAGChunk.status: "invalidated", RAGChunk.updated_at: now},
+            synchronize_session=False,
+        )
+        counts["retired"] += 1
+        logger.info(
+            "retired rag document id=%s memory=%s reason=%s", document_id, source_id, reason
+        )
+    # 显式 flush：调用方可能只 `expire_all()` 后重读（测试与观察者都会），未 flush 的
+    # 变更会被丢弃，表现为「计数说退役了、状态仍是 active」。
+    db.flush()
+    return counts
 
 
 def maintenance_status(db: Session) -> dict[str, Any]:
@@ -493,5 +583,6 @@ __all__ = [
     "MaintenanceLeaseLost",
     "maintenance_status",
     "run_maintenance_batch",
+    "retire_unreachable_documents",
     "stage_index_version",
 ]

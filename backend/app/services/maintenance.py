@@ -72,6 +72,8 @@ def run_maintenance_tick() -> dict[str, int]:
         "rag_index_scanned": 0,
         "rag_index_materialized": 0,
         "rag_index_failed": 0,
+        # 退役：真源已不可达的派生文档（U5）。
+        "rag_index_retired": 0,
         # 公共称谓索引补建（`public_kinship`）：一次性，建成后每 tick 恒为 0。
         "rag_public_kinship_packs": 0,
         # 向量索引（C6）：独立于 FTS 补建，因为它依赖外部 embedding 服务。
@@ -159,6 +161,7 @@ def run_maintenance_tick() -> dict[str, int]:
                         rag_counters.get("materialized", 0) or 0
                     )
                     counters["rag_index_failed"] = int(rag_counters.get("failed", 0) or 0)
+                    counters["rag_index_retired"] = int(rag_counters.get("retired", 0) or 0)
                 except Exception as exc:  # noqa: BLE001 — 补建失败不影响 core tick
                     rag_db.rollback()
                     logger.warning(

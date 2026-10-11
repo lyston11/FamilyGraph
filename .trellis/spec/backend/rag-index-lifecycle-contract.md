@@ -84,3 +84,58 @@ RAG 部署 hard-off 与平台开关继续共同约束。部署允许 RAG 时维�
 错误：`active document` 查不到就把旧行设回 active；重建时删旧块；对 v2 切块仅标上 v3；用动态 ORM attempt 自比；捕获失租后继续提交整个 tick。
 
 正确：以规范唯一键取得原文档并检查来源/内容证据，只允许已知的 Memory 索引替换状态恢复；已有块不可变；目标名对应真实算法；不可变 lease 进入条件 UPDATE；RAG 自有完整事务边界，最终失败零残留。
+
+## 退役扫描：真源不可达的派生文档（U5，2026-10-11 补充）
+
+### 缺的是什么
+
+`_ELIGIBILITY_SQL` 在**查询时**按取代/有效区间排除，所以真源已不可达的记忆本来就检索不到。
+但它们的派生文档仍是 `status='active'`：占存储、被 embedding 索引，并且如果 eligibility
+谓词将来变动（或有人写出不经过它的查询）就会**复活**。
+
+既有物化批（`run_maintenance_batch`）对这些记忆是**跳过**（`skipped_invalid`），
+只清失败台账 —— 它不退役已存在的文档。`retire_unreachable_documents` 补上这一层。
+
+### 只动派生层
+
+退役是「这份派生数据不再有真源支撑」，**不是**「删掉这个事实」：`Memory` 一行不改。
+用户撤销取代时 `restore_memory` 会显式重建索引。
+
+四种理由（写进 `invalidation_reason`，便于排查）：
+
+| 条件 | 理由 |
+|---|---|
+| 真源行不存在 | `source_retired:memory_missing` |
+| `Memory.status != 'active'` | `source_retired:memory_inactive` |
+| `superseded_by_id` 非空，或 `valid_to` 已过 | `source_retired:memory_not_current` |
+
+文档与它的 `RAGChunk` 一起置 `invalidated`。
+
+### 为什么不需要游标（因而不需要迁移）
+
+退役后文档不再是 `active`，**自动从选择集里消失** —— 扫描是**自排空**的。`limit` 只是单批
+工作量上界，下一批接着做剩下的。因此不需要新的状态列。
+
+这也是查询必须**直接选出需要退役的文档**（`LEFT JOIN memories` + 不可达条件）而不是
+「扫描 active 再逐个判断」的原因：后者在前 N 条都不需要退役时会永远卡在同一个窗口。
+
+### 与物化的关系
+
+- 共用同一把租约（两者都写派生层，分开持锁会互相抢写者），但**不碰本批游标**。
+- 退役计数是 `run_maintenance_batch` 返回值的一部分，并由 tick 记入 `rag_index_retired`。
+- **顺序**：物化 → 校验 witnesses → 退役。先物化后退役使「同一轮内刚被取代的记忆」
+  不会留下 active 文档。
+
+### 显式 flush
+
+函数末尾 `db.flush()` 是必需的：调用方可能只 `expire_all()` 后重读（测试与观察者都会），
+未 flush 的变更会被丢弃，表现为「计数说退役了、状态仍是 active」。
+
+**Wrong vs Correct**
+
+错误：用「扫描 active 再判断」+ 游标（会卡窗口，且需要迁移）；退役时连带删除或修改
+`Memory`；把退役混进查询时的过滤（查询过滤不清理派生数据，且谓词一变就复活）；
+漏掉 chunk 的状态；漏掉 flush。
+
+正确：查询直接选出需要退役的文档；只置 `invalidated` + 理由；文档与 chunk 一起；
+自排空 + `limit` 有界；显式 flush。
