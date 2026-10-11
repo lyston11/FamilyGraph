@@ -106,31 +106,39 @@ UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "authorized_document": "<�
 把可读 scope 收紧到 `private`，不是遮蔽字段。
 
 > **含敏感字段的数据不得以未遮蔽的自由文本进入 RAG。** 若某类来源的正文可能含敏感字段，
-> 其写入方必须在**写入时**完成遮蔽，或在授权时提供段落/字段级粒度。
+> 其写入方必须在**写入时**完成遮蔽，或通过明确的用途、空间和授权边界限制读取；
+> 自由文本不能假装成字段级 mask。
 
-这条约束直接决定 `authorized_document` 的合同形状：附件授权若只能整篇授权，等价于把原文
-交给该空间的所有 active 成员。因此它需要**段落级授权记录**，那是独立任务。
+`authorized_document` 不要求所有授权都先做段落级。MVP 可以授权一份**已确认的整份内容版本**；
+如果产品需要隐藏同一资料的部分内容，再新增不可变片段/选段授权。整份授权的效果必须如实理解为：
+该空间的 active 成员在满足当前附件可见性与 Agent grant 的交集条件时可以使用整份正文，
+而不是悄悄开放给空间之外的人。
 
-### 6.1 附件（`attachments`）为什么不索引
+### 6.1 附件（`attachments`）的当前状态与下一步模型
 
-`authorized_document` 的真源候选是附件。2026-10-10 逐项核实后确认它**当前不可索引**，
-且阻塞点是递进的（前一个不解决，后一个无从谈起）：
+`authorized_document` 的真源候选是附件。2026-10-10 逐项核实后确认它当前**没有内容版本与 Agent 使用授权生产路径**，
+但这不是要求给附件添加 `space_id`：附件仍是个人档案资源，空间是 Agent grant 的适用范围。
 
-| # | 事实 | 位置 |
-|---|---|---|
-| 1 | 附件**没有空间归属**：只有 `user_id`（所有者）与 `uploaded_by`，**无 `space_id` 列** | `models/attachment.py` |
-| 2 | 没有资源级授权记录：「附件 × 空间 × 段落范围 × 授权人」这张表不存在；`disclosure_preferences` 是**类别级**的（health/address/photos…），不是资源级 | `models/v2_foundation.py` |
-| 3 | 没有可索引正文：只有 `title`（≤200）+ `description`（≤2000），且无 OCR / PDF 解析依赖 | `models/attachment.py`、`pyproject.toml` |
+| # | 事实 | 位置 | 处理 |
+|---|---|---|---|
+| 1 | 附件只有 `user_id`/`uploaded_by`，无 `space_id` | `models/attachment.py` | 保持个人归属；grant 单独绑定 household space |
+| 2 | 没有附件内容版本与资源级 Agent grant | `models/attachment.py`、模型目录 | 新增不可变 `AttachmentContentVersion` 与 `AgentContentGrant` |
+| 3 | 没有自动正文提取；当前只有标题/描述 | `models/attachment.py`、`pyproject.toml` | MVP 只支持用户确认的手工文字；不自动 OCR/抓链 |
 
-而 `household` / `lineage` 两个 scope 分支都要求 `d.space_id = :space_id AND EXISTS(active
-SpaceMember)`，所以**第 1 条是承重的**：附件挂到哪个空间目前是**领域建模缺口**，不是实现缺口。
+附件的浏览器查看权限已经由当前 viewer + 当前 `space_id` + `photos`/`attachments` 披露决定；
+Agent 使用权是额外交集，不反向提升浏览器可见性：
 
-因此结论是：**整篇授权 = 交给该空间的所有 active 成员**，且当前没有任何机制能把它收窄。
-在资源级授权模型（附件挂空间 + 段落范围 + 授权人 + 撤销）落地前，附件不进 RAG。
+```text
+Agent 可使用 = 当前 viewer 可查看附件
+             ∩ content_version.confirmed
+             ∩ grant.active（household + assistant + rag）
+```
 
-**用户想索引的文档正文走 `memory`**：逐条用户确认的授权语义比空间级共享干净，且已具备
-完整的生命周期与撤权路径。第 3 条也说明附件的索引价值上限只是用户手写的那 2000 字描述，
-而这段文字本来就可以直接作为一条记忆被确认。
+MVP 先支持**整份已确认内容版本**，不强制段落级授权；选段是后续独立扩展，必须绑定不可变内容片段，
+不能保存会随文本变化的字符范围。
+
+在内容版本、grant、撤销与检索回查落地前，附件不进 RAG。用户要沉淀长期事实时仍可使用 `memory`，
+但 Memory 不替代附件正文、版本和来源引用。
 
 ## 7. 分层预算的预留位
 
