@@ -272,7 +272,8 @@ def build_vector_candidates(
             SELECT s.chunk_id, s.segment_index, s.embedding,
                    c.document_id, c.text, c.index_version, c.chunk_index,
                    c.source_revision, c.token_estimate, c.status,
-                   d.source_type, d.source_id, d.scope, d.sensitivity, d.revision
+                   d.source_type, d.source_id, d.scope, d.sensitivity, d.revision,
+                   d.updated_at AS source_updated_at
               FROM rag_embedding_segments AS s
               JOIN rag_chunks AS c ON c.id = s.chunk_id
               JOIN rag_documents AS d ON d.id = c.document_id

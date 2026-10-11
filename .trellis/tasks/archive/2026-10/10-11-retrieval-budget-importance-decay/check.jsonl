@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "统一授权检索入口、分层预算与重排版本合同"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "索引版本与重建合同"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "评测基线与回归口径"}

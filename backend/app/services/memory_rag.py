@@ -116,6 +116,8 @@ class RAGHit:
     chunk_index: int | None = None
     source_revision: int | None = None
     content_hash: str | None = None
+    #: 来源文档上次更新的时间（用于 `lex-v3` 的新鲜度特征）。
+    source_updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -1599,7 +1601,7 @@ _ELIGIBILITY_SQL = """
 _HIT_SQL = """
     SELECT c.id AS chunk_id, d.id AS document_id, d.source_type, d.source_id, c.text,
            c.token_estimate, d.scope, d.sensitivity, d.revision, c.index_version,
-           c.chunk_index, c.source_revision
+           c.chunk_index, c.source_revision, d.updated_at AS source_updated_at
     FROM rag_chunks AS c
     JOIN rag_documents AS d ON d.id = c.document_id
     WHERE {condition}
@@ -1618,10 +1620,45 @@ _SCAN_PAGE_SIZE = 32
 _CANDIDATE_BUDGET = 100
 
 #: 重排版本。`lex-v1` = 旧顺序（候选到达顺序，显式回退开关）；
-#: `lex-v2` = 分支共识 + 来源类别 + 词法分数的确定性重排。
+#: `lex-v2` = 分支共识 + 来源类别 + 词法分数的确定性重排；
+#: `lex-v3` = v2 + 新鲜度（年龄衰减）。
+#:
+#: `lex-v3` **不是默认**：新鲜度会改变排序，而排序是历史回归与评测基线的基准。
+#: 默认值只在评测证明不退化后才改——这与 `lex-v1`/`lex-v2` 的处理方式一致。
 RANK_VERSION_LEGACY = "lex-v1"
 RANK_VERSION_DEFAULT = "lex-v2"
-RANK_VERSIONS = (RANK_VERSION_LEGACY, RANK_VERSION_DEFAULT)
+RANK_VERSION_RECENCY = "lex-v3"
+RANK_VERSIONS = (RANK_VERSION_LEGACY, RANK_VERSION_DEFAULT, RANK_VERSION_RECENCY)
+
+#: 年龄衰减桶的边界（天）与对应分值。**桶化而不是连续函数**：连续衰减会让排序对
+#: 任意时间差敏感，测试与审计都变得不可复现（同一批数据隔一天可能换序）。
+#:
+#: 语义是「同等相关度下，新近更新的语料优先」。它是**排序特征**，不是授权或可见性。
+RECENCY_BUCKETS: tuple[tuple[int, int], ...] = (
+    (7, 3),
+    (30, 2),
+    (180, 1),
+)
+RECENCY_WEIGHT_STALE = 0
+
+
+def _recency_weight(source_updated_at: datetime | None, now: datetime) -> int:
+    """把「文档上次更新距今多久」映射到一个有序小整数（大 = 更新）。
+
+    缺失时间戳取 `RECENCY_WEIGHT_STALE`（与「很旧」同权）：不因为拿不到时间就
+    把它抬到新近一档。
+    """
+    if source_updated_at is None:
+        return RECENCY_WEIGHT_STALE
+    age_days = (now - source_updated_at).total_seconds() / 86400
+    if age_days < 0:
+        # 时钟偏差/未来时间：按最新处理，但不越过最高桶的分值。
+        age_days = 0
+    for limit_days, weight in RECENCY_BUCKETS:
+        if age_days <= limit_days:
+            return weight
+    return RECENCY_WEIGHT_STALE
+
 
 #: 向量候选的**相似度地板**（余弦相似度，非距离）。低于它的向量候选一律丢弃。
 #:
@@ -1695,6 +1732,7 @@ def rank_candidates(
     rank_version: str,
     limit: int,
     query_terms: Sequence[str] = (),
+    ranking_now: datetime | None = None,
 ) -> list[RAGHit]:
     """Deterministic rerank of the candidate pool.
 
@@ -1713,6 +1751,9 @@ def rank_candidates(
     3. **词法分**：`rank`（bm25 / pgroonga 分，越小越相关或越大越相关由分支决定，
        因此这里只用它做**同权重内**的稳定次级排序，不做跨分支比较）。
     4. **chunk 位置**：同一文档靠前的片段优先（文档通常先讲重点）。
+    5. **新鲜度**（仅 `lex-v3`）：同类别内新近更新的语料优先，按天**分桶**
+       （`RECENCY_BUCKETS`）。桶化是为了可复现：连续衰减会让排序对任意时间差
+       敏感，同一批数据隔一天就可能换序。
 
     `lex-v1` 保留候选到达顺序，作为显式回退。
     """
@@ -1722,14 +1763,21 @@ def rank_candidates(
         )
     if rank_version == RANK_VERSION_LEGACY:
         return list(candidates[:limit])
+    with_recency = rank_version == RANK_VERSION_RECENCY
+    ranking_now = ranking_now or utcnow()
 
-    def key(hit: RAGHit) -> tuple[int, int, int, int, int]:
+    def key(hit: RAGHit) -> tuple[int, ...]:
         branches = branch_hits.get(hit.chunk_id, set())
         return (
             # 负号使排序为「大在前」。
             -_term_overlap_score(hit.text, query_terms),
             -len(branches),
             -_SOURCE_TYPE_RANK_WEIGHT.get(hit.source_type, _SOURCE_TYPE_RANK_DEFAULT_WEIGHT),
+            # 新鲜度（`lex-v3`）。放在来源类别**之后**：类别优先是既有语义
+            # （确认过的记忆 > 家族故事 > 授权文档 > 公共亲缘），新鲜度是同一
+            # 类别内部的次级信号。放在最前面会直接推翻既有类别优先级，那不是
+            # 「加上衰减」，那是「换掉排序」。
+            -_recency_weight(hit.source_updated_at, ranking_now) if with_recency else 0,
             hit.chunk_index if hit.chunk_index is not None else 0,
             # 最终稳定器：chunk_id 唯一，保证全序（同分时顺序不含随机性）。
             hit.chunk_id,
@@ -1804,6 +1852,9 @@ def _rows_to_hits(
                 chunk_index=int(row["chunk_index"]),
                 source_revision=int(row["source_revision"]),
                 content_hash=memory_sources.quote_hash(str(row["text"])),
+                # 向量 SQL 与词法 SQL 都会选这一列；用 `.get` 容错是为了让漏选
+                # 表现为「新鲜度缺失」（降为最旧一档）而不是整条检索 500。
+                source_updated_at=row.get("source_updated_at"),
             )
         )
     return hits, denied

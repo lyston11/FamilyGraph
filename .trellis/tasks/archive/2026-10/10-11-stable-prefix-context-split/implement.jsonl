@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/steward-child-run.md", "reason": "管家 prompt 归属、投影按字节预算取确定前缀子集、digest 契约"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "统一检索入口与管家记忆读取的可配置可见级别"}
