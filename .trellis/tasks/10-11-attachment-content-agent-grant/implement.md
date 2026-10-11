@@ -103,3 +103,10 @@
 
 - 未做 OCR / 外链抓取 / PDF 解析 / 选段授权 / lineage / Steward（均为 MVP 明确排除）。
 - 未部署到运行环境；未跑前端 smoke（需真实 listener，本任务未改 API 契约之外的东西）。
+
+### 已知张力（记录，未改）
+
+`knowledge_retrieval.CONTEXT_SOURCE_TYPES` 当前是 `None`（读全部已声明类别），由统一授权
+检索入口任务引入。它与本任务 spec §8 的「新增类别默认不可读」方向相反，但今天无可观测
+差异（`authorized_document` 由 grant 分支真正把关；`family_story`/`profile` 无写入方）。
+已写入 spec §8.3，标明是另一个任务的已提交决定，未在本任务改动。

@@ -231,6 +231,29 @@ Steward 仍为 `("memory",)`。
 反证：`tests/test_memory_tools.py::test_search_memory_does_not_read_other_source_types`
 同时断言「限定后结果为空」与「不限定则确实召回公共语料」，证明差别承重而非同义反复。
 
+### 8.3 已知张力：`CONTEXT_SOURCE_TYPES = None`（待决，不是结论）
+
+`knowledge_retrieval.CONTEXT_SOURCE_TYPES`（2026-10-11 由统一授权检索入口任务引入）当前是
+`None`，注释写作「既有行为是读全部已声明来源，显式写出来是为了让它成为一个声明而不是
+一个缺省」。它服务于 `build_context`，即 assistant 自己的 run 上下文。
+
+**这与 §8 的原则方向相反。** `None` 是「读全部已声明类别」，因此任何新增 `source_type`
+都会**自动**进入 assistant 的上下文构建；而 §8 要求新增类别默认不可读、放开必须改代码。
+
+今天没有可观测差异：`authorized_document` 由 grant 分支真正把关（`CONTEXT_SOURCE_TYPES`
+放宽不到它），`family_story` / `profile` 没有写入方。差异只会在**下一个**新增类别出现时
+显形——那时它会静默进入 assistant 上下文。
+
+两种改法都成立，但必须显式选一个：
+
+| 方案 | 含义 |
+|---|---|
+| 保持 `None` | 承认「assistant 的 run 上下文读全部已声明类别」是一条**独立**于工具面的合同，并把 §8 的「默认不可读」限定在工具面与 steward 面 |
+| 改为显式元组 | 与 §8 一致；新增类别必须同时改这一行才能进上下文 |
+
+**本轮不改**：它是另一个任务的已提交决定，改动它属于跨任务边界变更。此处只记录张力，
+避免下一个人在不知情的情况下依赖 `None` 的「自动放开」语义。
+
 ## 9. Required validation
 ```bash
 cd backend && pytest tests/test_rag_source_type_registry.py tests/test_rag_public_kinship.py \
@@ -250,6 +273,9 @@ cd backend && pytest tests/test_rag_source_type_registry.py tests/test_rag_publi
 | steward 读不到 `public_kinship` | 只放类别维度、scope 用合法值域 |
 | assistant 的 `search_memory` 也读不到 `public_kinship` | 去掉 `source_types` 参数（实测会返回 `rag:term-pack:zh-CN:...`） |
 | 公共索引在**生产路径**上被建立 | 删掉 `terms.seed_builtin_packs` 的调用 |
+| 附件授权文档：无 grant 不可召回、撤销后立即不可见、行仍在 | 直读 `status='invalidated'` 证明是查询层挡住而非删除 |
+| 附件授权文档：管家读不到（grant 的 `agent_kind` CHECK 只允许 assistant） | 以 assistant 身份反证同一查询能召回 |
+| `attachment:%:version:%:grant:%` 判别式精确（非前缀） | `attachment:1:dates`（档案派生形状）必须判为**非** grant 形状 |
 
 ## 10. Wrong vs Correct
 
