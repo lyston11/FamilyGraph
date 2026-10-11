@@ -12,21 +12,28 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import Session as OrmSession
 
 from app.api.deps import get_db, require_authenticated_user
+from app.commands import attachment_content as content_commands
 from app.commands import attachments as att_commands
 from app.commands.context import ActorContext
-from app.errors import ATTACHMENT_NOT_FOUND, USER_NOT_FOUND, raise_api_error
+from app.errors import (
+    ATTACHMENT_NOT_FOUND,
+    USER_NOT_FOUND,
+    raise_api_error,
+)
 from app.models.account import Account
 from app.models.attachment import Attachment
+from app.models.attachment_content import AgentContentGrant, AttachmentContentVersion
 from app.models.user import User
-from app.services import attachments as att_service
-from app.services import custody, family_projection
-from app.services.disclosure import disclosed_categories
-from app.services.visibility import (
-    LEVEL_HOUSEHOLD_DETAIL,
-    LEVEL_LINEAGE_SUMMARY,
-    LEVEL_SELF_PRIVATE,
-    evaluate,
+from app.schemas.attachment_content import (
+    ContentVersionConfirmOut,
+    ContentVersionCreate,
+    ContentVersionOut,
+    GrantCreate,
+    GrantOut,
+    GrantRevokeRequest,
 )
+from app.services import attachment_access, custody, family_projection
+from app.services import attachments as att_service
 
 router = APIRouter(tags=["attachments"])
 
@@ -54,27 +61,15 @@ def _readable_types(
     target: User,
     space_id: int | None,
 ) -> frozenset[str]:
-    """列表与原图共用空间、档案层级及类型披露门禁。"""
     if space_id is not None:
         family_projection.authorized_space_or_404(session, account=account, space_id=space_id)
-    elif not custody.resolve_relation(viewer, target).edit:
-        # 无空间仅供本人/代管管理，不能回退到跨空间关系聚合。
-        return frozenset()
-    decision = evaluate(session, viewer, target, space_context=space_id)
-    if decision.level == LEVEL_SELF_PRIVATE:
-        return frozenset({"image", "link"})
-    if target.profile_status == "provisional" or decision.source == "pending":
-        return frozenset()
-    if decision.level == LEVEL_HOUSEHOLD_DETAIL:
-        return frozenset({"image", "link"})
-    if decision.level == LEVEL_LINEAGE_SUMMARY:
-        categories = disclosed_categories(session, target, space_id)
-        return frozenset(
-            kind
-            for kind, category in (("image", "photos"), ("link", "attachments"))
-            if category in categories
-        )
-    return frozenset()
+    return attachment_access.readable_attachment_types(
+        session,
+        viewer=viewer,
+        account=account,
+        target=target,
+        space_id=space_id,
+    )
 
 
 @router.post("/users/{user_id}/attachments/image", status_code=201)
@@ -130,6 +125,144 @@ def add_link(
     )
     session.refresh(row)
     return _attachment_out(row)
+
+
+@router.post(
+    "/attachments/{attachment_id}/content-versions",
+    status_code=201,
+    response_model=ContentVersionOut,
+)
+def create_content_version(
+    attachment_id: int,
+    body: ContentVersionCreate,
+    request: Request,
+    session: OrmSession = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> ContentVersionOut:
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = content_commands.create_content_version(
+        session,
+        ctx,
+        attachment_id=attachment_id,
+        text=body.text,
+        content_kind=body.content_kind,
+    )
+    session.refresh(row)
+    return ContentVersionOut.model_validate(row)
+
+
+@router.get(
+    "/attachments/{attachment_id}/content-versions",
+    response_model=list[ContentVersionOut],
+)
+def list_content_versions(
+    attachment_id: int,
+    session: OrmSession = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[ContentVersionOut]:
+    actor, _account = identity
+    attachment = session.get(Attachment, attachment_id)
+    if attachment is None:
+        raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
+    target = session.get(User, attachment.user_id)
+    if target is None:
+        raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
+    custody.assert_can_edit(actor, target)
+    rows = session.scalars(
+        select(AttachmentContentVersion)
+        .where(AttachmentContentVersion.attachment_id == attachment_id)
+        .order_by(AttachmentContentVersion.revision.desc())
+    ).all()
+    return [ContentVersionOut.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/attachment-content-versions/{version_id}/confirm",
+    response_model=ContentVersionConfirmOut,
+)
+def confirm_content_version(
+    version_id: int,
+    request: Request,
+    session: OrmSession = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> ContentVersionConfirmOut:
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = content_commands.confirm_content_version(session, ctx, version_id=version_id)
+    session.refresh(row)
+    return ContentVersionConfirmOut.model_validate(row)
+
+
+@router.post(
+    "/attachment-content-versions/{version_id}/grants",
+    status_code=201,
+    response_model=GrantOut,
+)
+def create_content_grant(
+    version_id: int,
+    body: GrantCreate,
+    request: Request,
+    session: OrmSession = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> GrantOut:
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = content_commands.create_grant(
+        session,
+        ctx,
+        version_id=version_id,
+        space_id=body.space_id,
+        agent_kind=body.agent_kind,
+        purpose=body.purpose,
+        grant_scope=body.grant_scope,
+    )
+    session.refresh(row)
+    return GrantOut.model_validate(row)
+
+
+@router.post("/attachment-grants/{grant_id}/revoke", response_model=GrantOut)
+def revoke_content_grant(
+    grant_id: int,
+    body: GrantRevokeRequest,
+    request: Request,
+    session: OrmSession = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> GrantOut:
+    actor, account = identity
+    ctx = ActorContext.from_identity(actor, account, ip=_client_ip(request))
+    row = content_commands.revoke_grant(session, ctx, grant_id=grant_id, reason=body.reason)
+    session.refresh(row)
+    return GrantOut.model_validate(row)
+
+
+@router.get(
+    "/attachments/{attachment_id}/grants",
+    response_model=list[GrantOut],
+)
+def list_content_grants(
+    attachment_id: int,
+    session: OrmSession = Depends(get_db),
+    identity: tuple[User, Account] = Depends(require_authenticated_user),
+) -> list[GrantOut]:
+    actor, _account = identity
+    attachment = session.get(Attachment, attachment_id)
+    if attachment is None:
+        raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
+    target = session.get(User, attachment.user_id)
+    if target is None:
+        raise_api_error(404, ATTACHMENT_NOT_FOUND, "附件不存在")
+    custody.assert_can_edit(actor, target)
+    rows = session.scalars(
+        select(AgentContentGrant)
+        .join(
+            AttachmentContentVersion,
+            AgentContentGrant.content_version_id == AttachmentContentVersion.id,
+        )
+        .where(AttachmentContentVersion.attachment_id == attachment_id)
+        .order_by(AgentContentGrant.id.desc())
+    ).all()
+    return [GrantOut.model_validate(row) for row in rows]
 
 
 @router.get("/users/{user_id}/attachments")

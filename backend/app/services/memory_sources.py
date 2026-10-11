@@ -24,11 +24,13 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import AgentMessage, AgentSession
+from app.models.attachment import Attachment
+from app.models.attachment_content import AgentContentGrant, AttachmentContentVersion
 from app.models.memory import Memory, MemoryCandidate
 from app.models.rag import RAGChunk, RAGDocument
 from app.models.space import FamilySpace, SpaceMember
 from app.models.user import User
-from app.services import platform_roles, visibility
+from app.services import attachment_access, platform_roles, visibility
 from app.utils.timeutil import utcnow
 
 MemoryRecord = Memory | MemoryCandidate
@@ -38,6 +40,11 @@ MAX_SOURCE_DEPTH = 8
 SENSITIVITY_ORDER = {"normal": 0, "sensitive": 1, "local_required": 2, "high": 3}
 _RAG_REF = re.compile(
     r"^rag-chunk:([1-9]\d*):([1-9]\d*):([1-9]\d*):([A-Za-z0-9_.-]{1,32}):([1-9]\d*)$"
+)
+
+
+_AUTHORIZED_DOCUMENT_SOURCE = re.compile(
+    r"^attachment:(?P<attachment>[1-9]\d*):version:(?P<version>[1-9]\d*):grant:(?P<grant>[1-9]\d*)$"
 )
 
 
@@ -106,6 +113,47 @@ class ExactChunkRef:
 class AuthorizedChunk:
     document: RAGDocument
     chunk: RAGChunk
+
+
+def _authorized_document_readable(
+    db: Session,
+    document: RAGDocument,
+    *,
+    actor: User,
+    account: Account,
+    space_id: int,
+    agent_kind: str,
+) -> bool:
+    """Recheck the grant and the current attachment visibility projection."""
+    match = _AUTHORIZED_DOCUMENT_SOURCE.fullmatch(document.source_id)
+    if match is None:
+        return False
+    grant = db.get(AgentContentGrant, int(match["grant"]))
+    version = db.get(AttachmentContentVersion, int(match["version"]))
+    attachment = db.get(Attachment, int(match["attachment"]))
+    target = db.get(User, attachment.user_id) if attachment is not None else None
+    if (
+        grant is None
+        or version is None
+        or attachment is None
+        or target is None
+        or grant.status != "active"
+        or grant.agent_kind != agent_kind
+        or grant.purpose != "rag"
+        or grant.space_id != space_id
+        or grant.content_version_id != version.id
+        or version.attachment_id != attachment.id
+        or version.status != "confirmed"
+        or attachment.user_id != document.owner_user_id
+    ):
+        return False
+    return attachment.type in attachment_access.readable_attachment_types(
+        db,
+        viewer=actor,
+        account=account,
+        target=target,
+        space_id=space_id,
+    )
 
 
 def read_exact_chunk(
@@ -400,6 +448,18 @@ def _can_read_document(
         if not active_member(db, actor.id, document.space_id):
             return False
     elif document.scope != "public" or agent_kind != "assistant":
+        return False
+    if document.source_type == "authorized_document" and (
+        space_id is None
+        or not _authorized_document_readable(
+            db,
+            document,
+            actor=actor,
+            account=account,
+            space_id=space_id,
+            agent_kind=agent_kind,
+        )
+    ):
         return False
     return _author_visible(db, actor, document.author_account_id, space_id or document.space_id)
 

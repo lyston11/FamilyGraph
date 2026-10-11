@@ -17,6 +17,8 @@ from app.models.agent_provider import (
     AgentProvider,
     AgentSpaceProviderSetting,
 )
+from app.models.attachment import Attachment
+from app.models.attachment_content import AgentContentGrant, AttachmentContentVersion
 from app.models.audit_log import AuditLog
 from app.models.auth_challenge import AuthChallenge
 from app.models.base import Base
@@ -98,6 +100,9 @@ __all__ = [
     "AgentCapacityCounter",
     "AgentToolCall",
     "AuditLog",
+    "AgentContentGrant",
+    "AttachmentContentVersion",
+    "Attachment",
     "AuthChallenge",
     "Base",
     "BehaviorProjection",

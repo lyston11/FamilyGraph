@@ -20,7 +20,7 @@ RAG_SOURCE_TYPES = ("memory", "family_story", "authorized_document", "profile", 
 #:
 #: 差集必须在 `UNINDEXED_SOURCE_TYPES` 里逐条给出理由。新增或删除 `RAG_SOURCE_TYPES`
 #: 而不更新两侧时，`tests/test_rag_source_type_registry.py` 会失败。
-INDEXED_SOURCE_TYPES: tuple[str, ...] = ("memory", "public_kinship")
+INDEXED_SOURCE_TYPES: tuple[str, ...] = ("memory", "authorized_document", "public_kinship")
 
 #: 声明但无写入方的类别 → 理由。「声明了但没人写」是**显式决定**，不是偶然状态。
 #:
@@ -29,7 +29,6 @@ INDEXED_SOURCE_TYPES: tuple[str, ...] = ("memory", "public_kinship")
 #: source_type 变成不可读的值。
 UNINDEXED_SOURCE_TYPES: dict[str, str] = {
     "family_story": "依赖尚不存在的家族故事写入功能；本任务只登记合同",
-    "authorized_document": "附件授权缺段落级粒度，整篇授权等于交给空间全体成员；待独立任务",
     "profile": "逐 viewer 求值（visibility.evaluate 依赖读者），走 get_profile_summary 结构化投影",
 }
 RAG_DOCUMENT_STATUSES = ("active", "revoked", "deleted", "invalidated")

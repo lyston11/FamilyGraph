@@ -11,6 +11,7 @@ import {
   uploadImage,
   type AttachmentOut,
 } from '@/api/attachments'
+import AttachmentAgentGrant from '@/components/member/AttachmentAgentGrant.vue'
 import { useSpacesStore } from '@/stores/spaces'
 
 /**
@@ -213,6 +214,17 @@ async function remove(id: number) {
       <input v-model="linkTitle" placeholder="标题（选填）" maxlength="200" aria-label="链接标题" />
       <button type="submit">添加链接</button>
     </form>
+
+    <!-- 供助手使用：内容确认 → 空间授权 → 撤销，三者互不蕴含。
+         只有编辑者可见；每个附件各自独立授权，不提供批量入口。 -->
+    <div v-if="canEdit" class="agent-grant-block">
+      <AttachmentAgentGrant
+        v-for="item in items"
+        :key="`grant-${item.id}`"
+        :attachment-id="item.id"
+        :can-edit="canEdit"
+      />
+    </div>
 
     <!-- 放大预览：object URL 复用缩略图 blob；点击遮罩关闭，Escape 可关 -->
     <teleport to="body">

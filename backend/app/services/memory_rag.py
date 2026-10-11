@@ -34,6 +34,8 @@ from app.errors import (
 )
 from app.models.account import Account
 from app.models.agent import AgentRun
+from app.models.attachment import Attachment
+from app.models.attachment_content import AgentContentGrant, AttachmentContentVersion
 from app.models.context import ContextBuild, ContextBuildItem
 from app.models.memory import (
     MEMORY_SCOPES,
@@ -1152,6 +1154,18 @@ def ingest_authorized_document(
     if not text_value.strip():
         raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "可索引文档不能为空")
     _validate_rag_scope(scope, space_id)
+    if source_type == "authorized_document" and scope == "public":
+        # 附件授权文档的内容总是来自某人的附件，而 `public` 的语义是「不含个人数据」
+        # （spec §3.1），两者不相容。在**写入时**就拒绝，而不是靠检索期「没有匹配
+        # grant 所以不可达」——后者会让一份文档静静躺在表里、永远检索不到，
+        # 看起来像「索引没建好」。
+        #
+        # 只拒 `public`，不限制 private/household/lineage：
+        # `ingest_authorized_document` 是**通用**的低层物化入口，索引换版、staging、
+        # 失效这些生命周期测试需要用它造非 memory 文档。真正的业务合同
+        # （household + 有效 grant）由 `create_grant` 与
+        # `ingest_attachment_content_grant` 强制，并由 eligibility 的 grant 分支兜底。
+        raise_api_error(422, RAG_SOURCE_NOT_ALLOWED, "附件授权文档不能以 public scope 入索引")
     _validate_sensitivity(sensitivity)
     if scope == "public" and sensitivity in ("high", "local_required"):
         raise_api_error(422, MEMORY_SENSITIVE_SCOPE_FORBIDDEN, "高敏感文档不能公开到全局")
@@ -1196,7 +1210,49 @@ def ingest_authorized_document(
     return document
 
 
-#: 公共称谓知识的索引参数。语料是**内置称谓包**（`term_entries` 的 system/locale 级），
+def ingest_attachment_content_grant(db: Session, grant_id: int) -> RAGDocument:
+    """Materialize one active, confirmed household grant through the common RAG path."""
+    grant = db.get(AgentContentGrant, grant_id, populate_existing=True)
+    version = (
+        db.get(AttachmentContentVersion, grant.content_version_id, populate_existing=True)
+        if grant is not None
+        else None
+    )
+    attachment = (
+        db.get(Attachment, version.attachment_id, populate_existing=True)
+        if version is not None
+        else None
+    )
+    if (
+        grant is None
+        or version is None
+        or attachment is None
+        or grant.status != "active"
+        or grant.agent_kind != "assistant"
+        or grant.purpose != "rag"
+        or grant.grant_scope != "whole"
+        or version.status != "confirmed"
+        or grant.space_id is None
+    ):
+        raise_api_error(409, MEMORY_STATE_CONFLICT, "授权内容当前不可入库")
+    owner_account_id = db.scalar(select(Account.id).where(Account.user_id == attachment.user_id))
+    if owner_account_id is None:
+        raise_api_error(409, MEMORY_STATE_CONFLICT, "附件所有者没有可用账号")
+    source_id = f"attachment:{attachment.id}:version:{version.id}:grant:{grant.id}"
+    return ingest_authorized_document(
+        db,
+        source_type="authorized_document",
+        source_id=source_id,
+        text_value=version.text,
+        author_account_id=owner_account_id,
+        scope="household",
+        space_id=grant.space_id,
+        sensitivity="normal",
+        revision=version.revision,
+        visibility_snapshot_key=f"attachment-grant:{grant.id}:v{grant.authorization_revision}",
+    )
+
+
 #: 不含任何个人数据——这是它可以是 `scope='public'` 的唯一理由。
 #:
 #: 每个 locale 一份文档，`source_revision` 取包内内容的**确定性内容哈希**，而不是
@@ -1457,6 +1513,20 @@ _ELIGIBILITY_SQL = """
       AND m.source_verification = 'verified' AND m.revision = d.revision
       AND m.superseded_by_id IS NULL
       AND (m.valid_to IS NULL OR m.valid_to > :now)
+  ))
+  AND (d.source_type != 'authorized_document' OR EXISTS (
+    SELECT 1
+    FROM agent_content_grants g
+    JOIN attachment_content_versions v ON v.id = g.content_version_id
+    JOIN attachments a ON a.id = v.attachment_id
+    WHERE g.status = 'active'
+      AND g.agent_kind = :agent_kind
+      AND g.purpose = 'rag'
+      AND g.space_id = d.space_id
+      AND v.status = 'confirmed'
+      AND d.source_id = 'attachment:' || CAST(a.id AS TEXT)
+        || ':version:' || CAST(v.id AS TEXT)
+        || ':grant:' || CAST(g.id AS TEXT)
   ))
   {sensitivity}
   {source_types}
@@ -1775,6 +1845,7 @@ def search_rag(
     params: dict[str, Any] = {
         "user_id": actor.id,
         "space_id": space_id,
+        "agent_kind": agent_kind,
         "is_assistant": is_assistant,
         # 每个 scope 分支的允许开关 + private 的读者账号。由调用方声明的
         # `scope_allowlist` / `private_reader_account_id` 派生，是 fenced 身份
@@ -2072,6 +2143,7 @@ def _vector_candidates(
                     "offset": 0,
                     # eligibility 的绑定参数（与词法路径同源）。
                     "now": now,
+                    "agent_kind": agent_kind,
                     "is_assistant": is_assistant,
                     "user_id": user_id,
                     "space_id": space_id,
@@ -2739,6 +2811,7 @@ __all__ = [
     "ensure_public_kinship_packs",
     "index_public_kinship",
     "index_public_kinship_packs",
+    "ingest_attachment_content_grant",
     "ingest_authorized_document",
     "invalidate_source",
     "public_kinship_revision",

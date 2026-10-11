@@ -66,8 +66,8 @@ def test_every_partial_unique_index_exists():
     或删掉了谓词。两者都是并发保证的削弱，必须显式修改本断言。
     """
     found = list(_partial_unique_indexes())
-    assert len(found) == 16, (
-        f"局部唯一索引数量从 16 变为 {len(found)}：" f"{sorted(i.name for _t, i in found)}"
+    assert len(found) == 17, (
+        f"局部唯一索引数量从 17 变为 {len(found)}：" f"{sorted(i.name for _t, i in found)}"
     )
 
 

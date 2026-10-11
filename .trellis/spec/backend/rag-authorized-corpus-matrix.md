@@ -18,7 +18,7 @@ Assistant 的执行身份、引用读取与分层预算见 [执行合同](memory
 |---|---|---|---|---|---|
 | `memory` | `memories` | private / household / lineage | 候选确认（`confirm_candidate`） | `Memory.revision`、`superseded_by_id`、`valid_to`、`status` | 活跃（既有） |
 | `public_kinship` | `term_entries` 的 `system`/`locale` 级 | public | 内置称谓包 seed / 维护循环补建 | 包内容的 sha256 派生正整数 | 活跃（2026-10-10） |
-| `authorized_document` | `attachments` + 授权记录 | private / household / lineage | 用户对某附件显式授权 | 附件 revision + 授权记录 revision | **仅登记**（附件当前不可索引，见 §6.1） |
+| `authorized_document` | `attachment_content_versions` + `agent_content_grants` | household | 附件本人在某家庭空间显式授权 | 内容版本 `revision` + 授权 `authorization_revision` | 活跃（2026-10-11，见 §6.1） |
 | `family_story` | 尚不存在 | household / lineage | 待产品定义 | 待定 | **仅登记** |
 | `profile` | `users` 档案字段 | ——（不索引） | —— | —— | **明确排除** |
 
@@ -68,8 +68,8 @@ Assistant 的执行身份、引用读取与分层预算见 [执行合同](memory
 ```python
 # app/models/rag.py
 RAG_SOURCE_TYPES       = ("memory", "family_story", "authorized_document", "profile", "public_kinship")
-INDEXED_SOURCE_TYPES   = ("memory", "public_kinship")          # 有真实写入方
-UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "authorized_document": "<理由>", "profile": "<理由>"}
+INDEXED_SOURCE_TYPES   = ("memory", "authorized_document", "public_kinship")   # 有真实写入方
+UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "profile": "<理由>"}
 ```
 
 为什么需要这份重复登记：`SOURCE_TIER_FRACTIONS` 的既有断言（「所有 `RAG_SOURCE_TYPES`
@@ -108,29 +108,77 @@ UNINDEXED_SOURCE_TYPES = {"family_story": "<理由>", "authorized_document": "<�
 > **含敏感字段的数据不得以未遮蔽的自由文本进入 RAG。** 若某类来源的正文可能含敏感字段，
 > 其写入方必须在**写入时**完成遮蔽，或在授权时提供段落/字段级粒度。
 
-这条约束直接决定 `authorized_document` 的合同形状：附件授权若只能整篇授权，等价于把原文
-交给该空间的所有 active 成员。因此它需要**段落级授权记录**，那是独立任务。
+这条约束对 `authorized_document` 的推论有两半，**不要只记一半**：
 
-### 6.1 附件（`attachments`）为什么不索引
+1. **授权粒度必须由用户明示，不能由系统推断**——所以真源不是附件本身，而是一张独立的
+   授权记录（`agent_content_grants`）。用户授权的是**某一份已确认的内容版本**，不是「这张
+   照片」这个模糊对象。
+2. **整份授权是合法的 MVP 形态，不是缺陷**。早期本文把「段落级授权」写成所有文档的强制
+   前置，那是错的：它会让功能不可用，而用户对一份自己刚预览过的文字选择「整份允许」是
+   完全明示的决定。段落级是**后续扩展**，且一旦支持就必须绑定不可变片段（见 §6.2）。
 
-`authorized_document` 的真源候选是附件。2026-10-10 逐项核实后确认它**当前不可索引**，
-且阻塞点是递进的（前一个不解决，后一个无从谈起）：
+代价必须如实说明：整份授权 = 该内容对该空间所有 active 成员可检索。因此 MVP 只允许
+`household`（不允许 `lineage`），因为 `household_detail` 的可见性形状与 RAG 的空间成员
+过滤同构；`lineage` 还要叠加披露类别、直系结构边、pending 最小互见与未成年人 overlay，
+把它转成检索前可执行的 SQL 授权集合是独立工作量。
 
-| # | 事实 | 位置 |
+### 6.1 附件（`attachments`）如何进入 RAG（2026-10-11 起）
+
+早期结论是「附件不进 RAG」。2026-10-11 逐项核实后**修正**为：附件**不直接**进 RAG，
+而是通过「内容版本 + 显式授权」两个真源进入。当初登记的三条阻塞点，处理方式各不相同：
+
+| # | 当初的事实 | 现在的处理 |
 |---|---|---|
-| 1 | 附件**没有空间归属**：只有 `user_id`（所有者）与 `uploaded_by`，**无 `space_id` 列** | `models/attachment.py` |
-| 2 | 没有资源级授权记录：「附件 × 空间 × 段落范围 × 授权人」这张表不存在；`disclosure_preferences` 是**类别级**的（health/address/photos…），不是资源级 | `models/v2_foundation.py` |
-| 3 | 没有可索引正文：只有 `title`（≤200）+ `description`（≤2000），且无 OCR / PDF 解析依赖 | `models/attachment.py`、`pyproject.toml` |
+| 1 | 附件没有 `space_id` 列 | **不加**。空间属于**授权**，不属于附件：同一张照片可以在空间 A 被授权、在空间 B 不被授权，照片仍然只有一份 |
+| 2 | 没有资源级授权记录 | 新增 `agent_content_grants`（内容版本 × 空间 × Agent × 用途 × 授权人 × 撤销） |
+| 3 | 没有可索引正文 | 新增不可变的 `attachment_content_versions`；MVP 只收**用户明确提交并确认的手工文字** |
 
-而 `household` / `lineage` 两个 scope 分支都要求 `d.space_id = :space_id AND EXISTS(active
-SpaceMember)`，所以**第 1 条是承重的**：附件挂到哪个空间目前是**领域建模缺口**，不是实现缺口。
+**为什么不能把附件直接投成 `RAGDocument`**：附件的读取判据是
+`visibility.evaluate(viewer, target)`——它依赖**谁在问**（层级 + 归属者披露开关 + 未成年人
+overlay）。一份共享 chunk 不能承载逐 viewer 求值的授权。这与 `profile` 是同一个问题，
+而解法也一致：真源保存**已确认文本**，授权在检索时逐请求复核（见 §6.3）。
 
-因此结论是：**整篇授权 = 交给该空间的所有 active 成员**，且当前没有任何机制能把它收窄。
-在资源级授权模型（附件挂空间 + 段落范围 + 授权人 + 撤销）落地前，附件不进 RAG。
+**MVP 边界（刻意收窄）**：`household` 空间 / `assistant` / 整份内容 / 已认领档案本人授权。
+不支持：`lineage`、Steward、PDF、自动 OCR、外链抓取、选段。
 
-**用户想索引的文档正文走 `memory`**：逐条用户确认的授权语义比空间级共享干净，且已具备
-完整的生命周期与撤权路径。第 3 条也说明附件的索引价值上限只是用户手写的那 2000 字描述，
-而这段文字本来就可以直接作为一条记忆被确认。
+### 6.2 内容版本不可变，且授权不自动继承
+
+`attachment_content_versions` 的正文**一旦产生就不可原地修改**：改文字产生新 `revision`，
+旧版本标 `superseded`。理由是 citation 指向 `(attachment, version, grant)` 三元组，原地改写
+会让旧引用指向新内容。
+
+**旧版本的授权不自动转移到新版本**：新版本可能包含更多内容，也可能把用户刚删掉的敏感
+文字带回来。因此流程固定为「生成 → 预览 → 确认 → 另行授权」，三段互不蕴含。
+
+将来支持选段时，必须绑定**不可变片段**（`start_offset`/`end_offset` + 该片段文本的哈希），
+不能只存「第 3～5 段」这种会随正文漂移的范围。
+
+### 6.3 检索期的授权是三重交集，且撤销先于清理
+
+```text
+可被 Agent 检索
+= 当前 viewer 在当前空间可查看该附件（复用 attachment_access 投影）
+∩ 内容版本 status = confirmed
+∩ grant 仍 active 且 (agent_kind, purpose, space_id) 匹配
+```
+
+三条同时成立，缺一不可。实现上：
+
+- **SQL 层**：`_ELIGIBILITY_SQL` 增加 `authorized_document` 的 `EXISTS(grants ...)` 分支，
+  与 `memory` 分支并列。因此**候选收集阶段**就已经排除未授权文档——不是先全库召回再在
+  应用层隐藏（后者会让候选数、排序与 RAG 预算受未授权内容影响）。
+- **投影层**：`memory_sources._authorized_document_readable` 再复核一次 grant、内容版本、
+  附件与当前 viewer 的附件可见性。两层各自独立挡住，任何一层失效都不得放行。
+- **撤销**：`revoke_grant` / 内容被取代 / 附件删除都先 `invalidate_source` 打墓碑
+  （查询立即不再匹配），再等维护循环物理清理。**不能等清理完成才生效。**
+
+已经进入模型上下文的内容无法收回，产品不得承诺「撤销后模型从未看到过」。
+
+### 6.4 为什么 `MEMORY_TOOL_SOURCE_TYPES` 必须显式扩大
+
+助手工具默认只读 `memory`。接入 `authorized_document` 是一次**显式的代码改动**
+（`("memory", "authorized_document")`），不是让 `source_types=None` 的「读全部」默认生效。
+Steward 仍为 `("memory",)`。
 
 ## 7. 分层预算的预留位
 
@@ -158,9 +206,14 @@ SpaceMember)`，所以**第 1 条是承重的**：附件挂到哪个空间目前
 `public` 分支继续不对 steward 开放（无限制公开材料不对管家开放）。要求 steward 读公共
 称谓知识是一次**独立的边界变更**，必须重新论证这个门，不得顺手放宽。
 
+`authorized_document` 同样不在 steward 的元组里：**Steward 不读附件授权文档**。这不是
+遗漏——附件授权的授权人明确选择的是「助手」，把同一份内容同时交给第二个 Agent 会让
+「我授权给谁」这个问题失去意义。
+
 ### 8.2 assistant（`search_memory` 工具）
 
-`agent_tools.MEMORY_TOOL_SOURCE_TYPES` 同样是显式枚举（当前 `("memory",)`）。
+`agent_tools.MEMORY_TOOL_SOURCE_TYPES` 同样是显式枚举，当前为
+`("memory", "authorized_document")`——2026-10-11 接入附件授权文档时**显式**扩大了这一行。
 
 这一侧曾经**没有**这个维度，后果是实测到的：`_search_memory_tool` 调 `search_rag` 时未传
 `source_types`，而 `source_types=None` 的语义是「读全部类别」，于是 2026-10-10 接入
@@ -169,9 +222,11 @@ SpaceMember)`，所以**第 1 条是承重的**：附件挂到哪个空间目前
 `family_story` 落地时会以同样方式静默继承。
 
 **助手多出的能力来自工具，不是来自更宽的 RAG 读取面。** 助手另有六个只读领域工具
-（`get_profile_summary` 等）与两个受控 Web 工具，但 RAG 类别维度上与 steward 一样窄。
+（`get_profile_summary` 等）与两个受控 Web 工具，但 RAG 类别维度上仍是逐类枚举。
 新增 `source_type` 要放开给任一侧，都必须改该侧的类别元组——一次显式、可评审的代码
-改动，而不是一次配置写入。
+改动，而不是一次配置写入。扩大助手可读类别的**唯一**正当理由是「有对应的显式授权
+真源」：`authorized_document` 有 `agent_content_grants`，`public_kinship` 没有，
+所以后者至今对两侧都不可读。
 
 反证：`tests/test_memory_tools.py::test_search_memory_does_not_read_other_source_types`
 同时断言「限定后结果为空」与「不限定则确实召回公共语料」，证明差别承重而非同义反复。
