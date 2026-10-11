@@ -538,3 +538,37 @@ assistant 是**账号级**消费者（记忆是主料），steward 是**空间�
 
 正确：份额按 `(consumer_kind, source_type)` 查；新鲜度是独立特征且排在类别之后；
 分桶；未登记即回落；`_replay` 尊重 `budgeted`。
+
+## 15. 稳定前缀与易变增量（U6，2026-10-11 补充）
+
+### 约定
+
+| 部分 | 载体 | 性质 |
+|---|---|---|
+| 冻结基线 | `steward_assist._user_content_for` 投影（digest 覆盖它） | **必须**与知识写入无关 |
+| 易变增量 | `familygraph.steward.search_memory` 工具结果 | 不进静态 prompt |
+
+`prompt_digest = sha256(f"{system}\n{user_content}")`，发送前 fence 核对它。记忆是易变的
+（取代、有效区间、新确认），内联进投影会让 digest 随知识写入抖动，表现为「管家 run 开始
+随机被拒」而**没有错误码指向根因**。因此易变部分必须走工具。
+
+### 两条守卫（`tests/test_stable_prefix_context.py`）
+
+1. **投影与 digest 不随记忆变化**：新增并确认一条记忆后，同一 attempt 的
+   `_user_content_for` 与 `prompt_digest` 逐字节不变。
+2. **结构性守卫（AST）**：`steward_assist.py` 内不得出现对 `retrieve` / `search_rag` 的
+   **调用**。
+
+第 1 条证明**当前**实现没抖动；第 2 条挡住**将来**的内联——只有两条一起才构成可维持的
+约定。mutation 验证：在 `_user_content_for` 里插入 `knowledge_retrieval.retrieve(...)`
+后守卫失败并指出 `steward_assist.py:1725 retrieve()`。
+
+（守卫匹配的是 `ast.Call`，因此单纯的属性引用不会触发——它防的是「真的去检索了」。）
+
+**Wrong vs Correct**
+
+错误：把记忆/检索结果拼进 `_user_content_for`；把「投影现在恰好稳定」当作契约（没有守卫
+时它随时会被改掉）；让 digest 覆盖易变内容再指望 fence 宽容。
+
+正确：投影只依赖不被知识写入改变的状态；易变部分走工具；用测试 + AST 守卫同时钉住
+现状与未来。
