@@ -48,6 +48,26 @@ _AUTHORIZED_DOCUMENT_SOURCE = re.compile(
 )
 
 
+def is_attachment_grant_source(source_id: str) -> bool:
+    """source_id 是否是**附件授权**形状（而不是档案派生内容的形状）。
+
+    `authorized_document` 同时承载两种来源，它们的授权机制不同：
+
+    1. 附件授权（本任务）：`attachment:<a>:version:<v>:grant:<g>`，真源是
+       `agent_content_grants`——由 `_authorized_document_readable` 复核；
+    2. 档案派生内容：`attachment:<subject>:<categories>`，真源是主体的四级阶梯，
+       由 `_profile_clearance_ok` 复核。
+
+    两者不能混用同一道门：对第 2 类施加 grant 要求会让 profile 清空用例全部
+    不可读（实测），对第 1 类跳过 grant 要求则是授权漏洞。因此判别条件精确到
+    完整形状，而**不是**笼统的 `attachment:` 前缀。
+
+    与 `_ELIGIBILITY_SQL` 里的 `NOT LIKE 'attachment:%:version:%:grant:%'` 是同
+    一个判别式，两处必须一致。
+    """
+    return _AUTHORIZED_DOCUMENT_SOURCE.fullmatch(source_id) is not None
+
+
 @dataclass(frozen=True)
 class SourceAccess:
     status: SourceStatus
@@ -450,21 +470,22 @@ def _can_read_document(
     elif document.scope != "public" or agent_kind != "assistant":
         return False
     # 附件授权文档的第三重交集（grant × 内容版本 × 当前附件可见性）。
-    # 与下面的 `_profile_clearance_ok` 是**两道独立的门**：前者管「这份内容是否被
-    # 明示授权给这个 Agent」，后者管「这份内容的档案清空要求是否满足」。两者都通过
-    # 才可读。
-    if document.source_type == "authorized_document" and (
-        space_id is None
-        or not _authorized_document_readable(
+    #
+    # 只对**附件授权形状**的 source_id 施加：档案派生内容（main 的
+    # visibility_snapshot 清空声明）由下面的 `_profile_clearance_ok` 裁决，两者是
+    # 同一 `source_type` 下的两种授权机制，不能混用同一道门。
+    if document.source_type == "authorized_document" and is_attachment_grant_source(
+        document.source_id
+    ):
+        if space_id is None or not _authorized_document_readable(
             db,
             document,
             actor=actor,
             account=account,
             space_id=space_id,
             agent_kind=agent_kind,
-        )
-    ):
-        return False
+        ):
+            return False
     if not _profile_clearance_ok(db, document, actor, space_id):
         return False
     return _author_visible(db, actor, document.author_account_id, space_id or document.space_id)

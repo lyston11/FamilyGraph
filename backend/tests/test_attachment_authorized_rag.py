@@ -91,3 +91,31 @@ def test_authorized_document_requires_explicit_source_type_filter_for_memory_too
     from app.services import agent_tools
 
     assert agent_tools.MEMORY_TOOL_SOURCE_TYPES == ("memory", "authorized_document")
+
+
+def test_grant_source_shape_is_discriminated_from_profile_derived_documents():
+    """`authorized_document` 下两种授权机制必须靠**完整形状**区分，不能靠前缀。
+
+    背景（实测冲突）：`authorized_document` 同时承载两种来源——
+
+    - 附件授权（本任务）：`attachment:<a>:version:<v>:grant:<g>`，由
+      `agent_content_grants` 授权；
+    - 档案派生内容（visibility_snapshot 清空声明）：`attachment:<subject>:<categories>`，
+      由主体的四级阶梯授权，**没有** grant。
+
+    若用笼统的 `attachment:` 前缀判别，第 2 类会被一并卡死（实测：profile 清空用例
+    全部不可读）；若干脆不判别，第 1 类就绕过 grant，成为授权漏洞。
+    """
+    from app.services.memory_sources import is_attachment_grant_source
+
+    # 附件授权形状 → 需要 grant 复核
+    assert is_attachment_grant_source("attachment:7:version:2:grant:3") is True
+    # 档案派生形状 → 不施加 grant 要求（由 _profile_clearance_ok 裁决）
+    assert is_attachment_grant_source("attachment:1:dates") is False
+    assert is_attachment_grant_source("attachment:1:dates,school") is False
+    assert is_attachment_grant_source("public-with-profile") is False
+    # 形状不完整一律 fail closed（当作非 grant 形状 → 由另一道门裁决；真正的
+    # 附件文档永远由 ingest_attachment_content_grant 生成完整形状）
+    assert is_attachment_grant_source("attachment:7:version:2") is False
+    assert is_attachment_grant_source("attachment:7:version:2:grant:") is False
+    assert is_attachment_grant_source("attachment:0:version:2:grant:3") is False

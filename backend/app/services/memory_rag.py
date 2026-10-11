@@ -1546,20 +1546,38 @@ _ELIGIBILITY_SQL = """
       AND m.superseded_by_id IS NULL
       AND (m.valid_to IS NULL OR m.valid_to > :now)
   ))
-  AND (d.source_type != 'authorized_document' OR EXISTS (
-    SELECT 1
-    FROM agent_content_grants g
-    JOIN attachment_content_versions v ON v.id = g.content_version_id
-    JOIN attachments a ON a.id = v.attachment_id
-    WHERE g.status = 'active'
-      AND g.agent_kind = :agent_kind
-      AND g.purpose = 'rag'
-      AND g.space_id = d.space_id
-      AND v.status = 'confirmed'
-      AND d.source_id = 'attachment:' || CAST(a.id AS TEXT)
-        || ':version:' || CAST(v.id AS TEXT)
-        || ':grant:' || CAST(g.id AS TEXT)
-  ))
+  -- 附件授权文档**必须**有匹配的有效 grant。
+  --
+  -- 判别条件精确到 `:version:...:grant:...` 的完整形状，**不是**笼统的
+  -- `attachment:%` 前缀：`authorized_document` 同时承载两种来源，它们的授权
+  -- 机制不同：
+  --
+  --   1. 附件授权（本任务）：source_id = attachment:<id>:version:<id>:grant:<id>，
+  --      授权真源是 `agent_content_grants`——由本分支强制；
+  --   2. 档案派生内容（visibility_snapshot 清空声明）：source_id 形如
+  --      attachment:<subject>:<categories>，授权真源是主体的四级阶梯，由投影层
+  --      `memory_sources._profile_clearance_ok` 裁决。
+  --
+  -- 用前缀判别会把第 2 类一并卡死（它没有 grant），实测表现为 profile 清空
+  -- 用例全部不可读。用完整形状则两类各自走自己的门，且形状不对的附件文档
+  -- fail closed（匹配不上 → 不可读）。
+  AND (
+    d.source_type != 'authorized_document'
+    OR d.source_id NOT LIKE 'attachment:%:version:%:grant:%'
+    OR EXISTS (
+      SELECT 1
+      FROM agent_content_grants g2
+      JOIN attachment_content_versions v2 ON v2.id = g2.content_version_id
+      WHERE g2.status = 'active'
+        AND g2.agent_kind = :agent_kind
+        AND g2.purpose = 'rag'
+        AND g2.space_id = d.space_id
+        AND v2.status = 'confirmed'
+        AND d.source_id = 'attachment:' || CAST(v2.attachment_id AS TEXT)
+          || ':version:' || CAST(v2.id AS TEXT)
+          || ':grant:' || CAST(g2.id AS TEXT)
+    )
+  )
   {sensitivity}
   {source_types}
   AND (
