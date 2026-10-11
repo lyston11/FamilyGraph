@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.commands.context import ActorContext, command_transaction, load_actor
 from app.errors import ATTACHMENT_NOT_FOUND, USER_NOT_FOUND, raise_api_error
 from app.models.attachment import Attachment
+from app.models.attachment_content import AgentContentGrant, AttachmentContentVersion
 from app.models.user import User
 from app.services import attachments as att_service
 from app.services import audit, custody
@@ -120,6 +122,27 @@ def delete_attachment(
 
         path_name = row.url_or_path if row.type == "image" else None
         owner_id = row.user_id
+        from app.services import memory_rag
+
+        grants = session.scalars(
+            select(AgentContentGrant)
+            .join(
+                AttachmentContentVersion,
+                AgentContentGrant.content_version_id == AttachmentContentVersion.id,
+            )
+            .where(
+                AttachmentContentVersion.attachment_id == attachment_id,
+                AgentContentGrant.status == "active",
+            )
+        ).all()
+        for grant in grants:
+            memory_rag.invalidate_source(
+                session,
+                source_type="authorized_document",
+                source_id=(
+                    f"attachment:{attachment_id}:version:{grant.content_version_id}:grant:{grant.id}"
+                ),
+            )
         session.delete(row)
         emit(
             session,

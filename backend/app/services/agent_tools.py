@@ -120,7 +120,7 @@ TOOL_PROPOSE_MEMORY = "familygraph.propose_memory"
 #: 自己的类别元组，新增 source_type 默认对两侧都不可读，要放开必须改这里的代码。
 #: 这不是「助手更宽松」——助手多出的能力来自**工具**（`get_profile_summary` 等
 #: 六个只读领域工具），而不是来自更宽的 RAG 读取面。
-MEMORY_TOOL_SOURCE_TYPES: tuple[str, ...] = ("memory",)
+MEMORY_TOOL_SOURCE_TYPES: tuple[str, ...] = ("memory", "authorized_document")
 TOOL_SEARCH_WEB = "familygraph.search_web"
 TOOL_FETCH_APPROVED_PAGE = "familygraph.fetch_approved_page"
 _KINSHIP_INTAKE_TOOLS = frozenset(

@@ -5,6 +5,14 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app import config
+from app.commands.attachment_content import (
+    confirm_content_version,
+    create_content_version,
+    create_grant,
+)
+from app.commands.context import ActorContext
+from app.models.attachment import Attachment
+from app.models.platform_features import PlatformFeatureConfig
 from app.models.rag import RAGChunk
 from app.models.space import FamilySpace
 from app.models.steward import StewardJob
@@ -18,6 +26,7 @@ from app.services.memory_rag import (
     revoke_memory,
     search_rag,
 )
+from app.utils.timeutil import utcnow
 from conftest import create_agent_fixture, create_space_member, create_user_with_pin
 
 
@@ -134,56 +143,74 @@ def test_shared_memory_scope_matches_space_kind(db_session):
     assert error.value.status_code == 422
 
 
-def test_steward_cannot_retrieve_public_rag_documents(db_session):
-    owner, space = create_agent_fixture(db_session, name="memory-steward-public")
+def test_steward_cannot_retrieve_authorized_documents(db_session):
+    """管家不得读附件授权文档——即使它已确认、scope 正确、本人是 active 成员。
+
+    2026-10-11 起 `authorized_document` 的真实合同是「附件本人把某份已确认内容版本
+    授权给某空间里的**助手**」。因此两个独立理由都让管家读不到：
+
+    1. `agent_content_grants.agent_kind` 的 CHECK 只允许 `assistant`；
+    2. `_ELIGIBILITY_SQL` 的 grant 分支要求 `g.agent_kind = :agent_kind`。
+
+    本测试取代了旧的 `test_steward_can_retrieve_current_space_shared_rag_only`。
+    旧断言（管家能读 `authorized_document`）编码的是**未实现时**的占位行为：
+    当时该来源没有任何授权真源，所以「空间成员即可读」看起来是对的。现在它错了——
+    用户授权时选择的是「助手」，把同一份内容同时交给第二个 Agent 会让「我授权给谁」
+    失去意义。管家能读的是 `memory`，那有自己的确认流程与可读集。
+    """
+    owner, space = create_agent_fixture(db_session, name="memory-steward-shared")
     create_space_member(db_session, space.id, owner.id, role="owner")
-    ingest_authorized_document(
-        db_session,
-        source_type="authorized_document",
-        source_id="steward-public-1",
-        text_value="A public document for assistant use only.",
-        author_account_id=None,
-        scope="public",
-        space_id=None,
-    )
+    row = db_session.get(PlatformFeatureConfig, 1)
+    if row is None:
+        row = PlatformFeatureConfig(id=1, updated_at=utcnow())
+        db_session.add(row)
+    row.memory_enabled = True
+    row.rag_enabled = True
     db_session.commit()
 
+    attachment = Attachment(
+        user_id=owner.id,
+        type="link",
+        url_or_path="https://example.com/steward-shared",
+        title="资料",
+        description="说明",
+        uploaded_by=owner.id,
+        created_at=utcnow(),
+    )
+    db_session.add(attachment)
+    db_session.commit()
+    ctx = ActorContext.from_identity(owner, owner.account)
+    draft = create_content_version(
+        db_session, ctx, attachment_id=attachment.id, text="A confirmed shared family fact."
+    )
+    version = confirm_content_version(db_session, ctx, version_id=draft.id)
+    grant = create_grant(db_session, ctx, version_id=version.id, space_id=space.id)
+    db_session.commit()
+
+    # 管家：即使是同一空间的 active 成员，也不得读到这份附件授权文档。
     assert (
         search_rag(
             db_session,
             actor=owner,
             account=owner.account,
             space_id=space.id,
-            query="assistant use only",
+            query="confirmed shared family fact",
             agent_kind="steward",
         )
         == []
     )
-
-
-def test_steward_can_retrieve_current_space_shared_rag_only(db_session):
-    owner, space = create_agent_fixture(db_session, name="memory-steward-shared")
-    create_space_member(db_session, space.id, owner.id, role="owner")
-    ingest_authorized_document(
-        db_session,
-        source_type="authorized_document",
-        source_id="steward-shared-1",
-        text_value="A confirmed shared family fact.",
-        author_account_id=owner.account.id,
-        scope="household",
-        space_id=space.id,
-    )
-    db_session.commit()
-
-    hits = search_rag(
-        db_session,
-        actor=owner,
-        account=owner.account,
-        space_id=space.id,
-        query="confirmed shared family fact",
-        agent_kind="steward",
-    )
-    assert [hit.source_id for hit in hits] == ["steward-shared-1"]
+    # 反证：同一查询在 assistant 身份下能召回——所以「空结果」不是语料不存在。
+    assert [
+        hit.source_id
+        for hit in search_rag(
+            db_session,
+            actor=owner,
+            account=owner.account,
+            space_id=space.id,
+            query="confirmed shared family fact",
+            agent_kind="assistant",
+        )
+    ] == [f"attachment:{attachment.id}:version:{version.id}:grant:{grant.id}"]
 
 
 def test_private_memory_event_does_not_enqueue_steward_job(db_session, monkeypatch):
@@ -213,6 +240,17 @@ def test_private_memory_event_does_not_enqueue_steward_job(db_session, monkeypat
 
 
 def test_public_rag_requires_active_space_membership(db_session):
+    """`search_rag` 要求调用者是该空间的 active 成员，且平台角色不得进入。
+
+    载体用 `public_kinship`（内置称谓包）而不是 `authorized_document`：
+    后者自 2026-10-11 起只能以 `household` scope 入索引（见下方
+    `test_authorized_document_rejects_non_household_scope`），拿它当 `public` 的
+    载体已不成立。改用真正合法的 `scope='public'` 来源反而让本测试更强——
+    它现在测的是生产语料，而不是一个人造的越权文档。
+    """
+    from app.models.platform_features import PlatformFeatureConfig
+    from app.services import terms
+
     owner, space = create_agent_fixture(db_session, name="memory-public-owner")
     create_space_member(db_session, space.id, owner.id, role="owner")
     member = create_user_with_pin(db_session, "memory-public-member", "234567")
@@ -222,30 +260,30 @@ def test_public_rag_requires_active_space_membership(db_session):
     outsider = create_user_with_pin(db_session, "memory-public-outsider", "123456")
     db_session.commit()
 
-    ingest_authorized_document(
-        db_session,
-        source_type="authorized_document",
-        source_id="public-rag-1",
-        text_value="This public document is visible only through an authorized space.",
-        author_account_id=None,
-        scope="public",
-        space_id=None,
-    )
+    row = db_session.get(PlatformFeatureConfig, 1)
+    if row is None:
+        row = PlatformFeatureConfig(id=1, updated_at=utcnow())
+        db_session.add(row)
+    row.memory_enabled = True
+    row.rag_enabled = True
+    db_session.commit()
+    terms.seed_builtin_packs(db_session)
     db_session.commit()
 
+    query = "家谱称谓知识包 外婆"
     assert search_rag(
         db_session,
         actor=owner,
         account=owner.account,
         space_id=space.id,
-        query="public document",
+        query=query,
     )
     assert search_rag(
         db_session,
         actor=member,
         account=member.account,
         space_id=space.id,
-        query="public document",
+        query=query,
     )
     # A platform operator can satisfy the SQL active-membership predicate, but
     # the server-side platform role still fails the RAG visibility check.
@@ -255,7 +293,7 @@ def test_public_rag_requires_active_space_membership(db_session):
             actor=operator,
             account=operator.account,
             space_id=space.id,
-            query="public document",
+            query=query,
         )
         == []
     )
@@ -265,10 +303,33 @@ def test_public_rag_requires_active_space_membership(db_session):
             actor=outsider,
             account=outsider.account,
             space_id=space.id,
-            query="public document",
+            query=query,
         )
         == []
     )
+
+
+def test_authorized_document_rejects_non_household_scope(db_session):
+    """附件授权文档只能以 household scope 入索引：写入时就拒绝，不留静默不可达。
+
+    本测试取代旧的 `test_steward_cannot_retrieve_public_rag_documents`：那条断言
+    以一个 `scope='public'` 的 `authorized_document` 为反例，而这种文档现在
+    已经不可能存在（入索引即 422）。管家读不到公共语料的边界改由
+    `test_rag_public_kinship.py::test_steward_cannot_read_public_kinship` 守护。
+    """
+    owner, space = create_agent_fixture(db_session, name="memory-authdoc-scope")
+    create_space_member(db_session, space.id, owner.id, role="owner")
+    with pytest.raises(HTTPException) as error:
+        ingest_authorized_document(
+            db_session,
+            source_type="authorized_document",
+            source_id="authdoc-public-1",
+            text_value="must not be indexed",
+            author_account_id=None,
+            scope="public",
+            space_id=None,
+        )
+    assert error.value.status_code == 422
 
 
 def test_high_public_document_is_rejected(db_session):

@@ -140,8 +140,9 @@ def test_search_memory_does_not_read_other_source_types(db_session, memory_world
         hit.source_type == "public_kinship" for hit in unfiltered
     ), f"公共语料未建立或不匹配，反证无效：{[h.source_type for h in unfiltered]}"
 
-    # 类别元组是显式枚举：新增 source_type 默认对助手也不可读。
-    assert agent_tools.MEMORY_TOOL_SOURCE_TYPES == ("memory",)
+    # 类别元组是显式枚举：Assistant 只允许 memory 与已确认授权的附件文档，
+    # 不会因为 source_types=None 而读取其它声明类别。
+    assert agent_tools.MEMORY_TOOL_SOURCE_TYPES == ("memory", "authorized_document")
     assert "public_kinship" not in agent_tools.MEMORY_TOOL_SOURCE_TYPES
 
 

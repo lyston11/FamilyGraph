@@ -740,7 +740,7 @@ def test_stage_keeps_non_memory_old_active_projection_searchable(db_session, wor
     monkeypatch.setattr(memory_rag, "RAG_INDEX_VERSION", "fts5-trigram-v1")
     document = memory_rag.ingest_authorized_document(
         db_session,
-        source_type="authorized_document",
+        source_type="family_story",
         source_id="retained-raw-input-unavailable",
         author_account_id=user.account.id,
         scope="private",
@@ -816,7 +816,7 @@ def test_fts_repair_filters_verification_retention_and_root_lifecycle_without_re
     expired = confirm(db_session, user, "orchidgrove expired")
     root = memory_rag.ingest_authorized_document(
         db_session,
-        source_type="authorized_document",
+        source_type="family_story",
         source_id="root-authorization",
         author_account_id=user.account.id,
         scope="private",
