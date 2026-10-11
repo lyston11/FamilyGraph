@@ -33,6 +33,7 @@ from app.services import (
     agent_queue,
     embedding_client,
     embedding_index,
+    memory_extractor,
     memory_rag,
     rag_maintenance,
     steward,
@@ -78,6 +79,11 @@ def run_maintenance_tick() -> dict[str, int]:
         "embedding_segments": 0,
         "embedding_skipped": 0,
         "embedding_failed": 0,
+        # 后台片段抽取（U4）：读一段会话而不是单条消息。它不替代 settle 路径，
+        # 而是补上「事实分散在多条消息里」这个 settle 看不到的缺口。
+        "memory_segment_sessions": 0,
+        "memory_segment_candidates": 0,
+        "memory_segment_skipped": 0,
     }
     db = SessionLocal()
     try:
@@ -111,6 +117,20 @@ def run_maintenance_tick() -> dict[str, int]:
         # Session so its final fence rejection cannot commit partial index work
         # or roll back completed core work.
         db.commit()
+        # ---- 后台片段抽取（U4）----
+        # 独立会话与独立 try：它失败不得影响 core 泵与 RAG 索引。
+        if config.MEMORY_ENABLED:
+            try:
+                with SessionLocal() as memory_db:
+                    segments = memory_extractor.extract_session_segments(memory_db)
+                counters["memory_segment_sessions"] = segments["sessions_scanned"]
+                counters["memory_segment_candidates"] = segments["candidates_proposed"]
+                counters["memory_segment_skipped"] = segments["candidates_skipped"]
+            except Exception as exc:  # noqa: BLE001 — 片段抽取失败不影响 tick
+                logger.warning(
+                    "memory segment extraction failed; tick unaffected (error=%s)",
+                    type(exc).__name__,
+                )
         if config.RAG_ENABLED:
             with SessionLocal() as rag_db:
                 # ---- 公共称谓索引（`public_kinship`，唯一 `scope='public'` 来源）----

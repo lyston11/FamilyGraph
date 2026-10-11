@@ -247,3 +247,51 @@ memories
 
 正确：取代只写指针与失效区间，行与正文证据全部保留；`index_superseded` 表达可恢复
 失效；`_typed_eligibility` 声明 `DateTime`；回填跳过被取代的行且不记失败，恢复时显式重建。
+
+## 后台片段抽取（U4，2026-10-11 补充）
+
+settle 路径（`memory_extractor.extract_after_settle`）只看**当轮那一条**用户消息。一条事实
+若分散在多条消息里（「我妈住在杭州」+ 下一轮「是西湖区」），单条匹配永远拼不出它——这不是
+正则不够好，而是**观察窗口**太窄。
+
+`memory_extractor.extract_session_segments(db)` 补上这个窗口，由维护 tick 调用
+（`maintenance.run_maintenance_tick`，计数键 `memory_segment_*`）。
+
+### 四条性质
+
+1. **只用确定性规则**。扩大的是观察窗口，不是判断能力。换成模型会让同一事实的抽取结果
+   不可复现，而错误语料的后果是持久的；模型驱动的抽取必须配套验证机制（U5），不在此处。
+2. **产物仍是 pending 候选**。确认门不变：`MemoryCandidateExtractor` → `propose_candidate`
+   → `status="pending"`，用户仍需在记忆面板确认。
+3. **幂等**。去重看**事实本身**（同 `author_account_id` + 同 summary 的候选或 `Memory.content`
+   已存在则跳过），不看「从哪条消息来的」。因此重复跑同一窗口是 no-op，settle 已提过的
+   同一事实也不会被再提一遍。
+4. **只看用户消息**。assistant 的回复可能是模型猜测或复述，把模型输出当事实来源等于让
+   幻觉进入记忆候选。
+
+### 来源归因（关键实现细节）
+
+片段用来**扩大观察窗口**，不用来当来源。`propose_candidate` 对 `agent_message` 来源做
+**全等校验**（`source_quote` 必须等于该消息原文），所以：
+
+| 情形 | 处置 |
+|---|---|
+| 某条消息包含 `source_quote` | 归给它（单消息事实，与 settle 路径同形） |
+| `source_quote` 跨多条消息 | 归给**被 quote 完整包含的最长那条**消息，并把 `source_quote` 换成该消息全文 |
+| 两者都不满足 | **丢弃**（无来源的记忆候选比没有候选更糟） |
+
+第 2 种正是跨消息事实的形态：证据确实来自那条消息，只是判断时借了窗口里其它消息的上下文。
+
+### 有界性
+
+`SEGMENT_WINDOW_MESSAGES = 20`（只看最近 20 条用户消息）、`SEGMENT_MAX_CHARS = 12000`、
+`SEGMENT_MAX_SESSIONS_PER_TICK = 20`、只处理 `SEGMENT_ACTIVITY_MINUTES = 180` 内活跃过的
+会话。这些是**工作量上界**，不是正确性依赖——正确性由事实级去重保证。
+
+**Wrong vs Correct**
+
+错误：把片段当来源（quote 跨消息时无法通过全等校验）；把 assistant 回复也纳入；用模型替代
+确定性规则（不可复现）；把「无来源」的候选也写库；按消息 id 去重（同一句话经两条路径会
+产生两张卡）。
+
+正确：检测用片段、来源用真实消息；只读用户消息；事实级去重；无来源即丢弃。
