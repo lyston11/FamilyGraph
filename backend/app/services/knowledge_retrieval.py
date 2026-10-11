@@ -37,7 +37,7 @@ SQL 层是可索引的粗筛（scope 允许集、来源类型、取代/有效区
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -50,15 +50,18 @@ from app.models.user import User
 from app.services import memory_rag
 from app.services.rag_query import QueryPlan
 
-#: assistant 的上下文构建：既有行为是读全部已声明来源。
-#: 显式写出来是为了让它成为一个**声明**而不是一个缺省。
-CONTEXT_SOURCE_TYPES: tuple[str, ...] | None = None
-
-
-# 注：本模块**不**定义来源类别常量。`MEMORY_TOOL_SOURCE_TYPES`
-# （`agent_tools`）与 `STEWARD_READABLE_SOURCE_TYPES`（`steward_memory`）
-# 已是各自目的的真源；在这里再写一份就会有两个同义常量，而它们会漂移——
-# 那正是本任务要消除的东西。
+# 注：本模块**不**定义来源类别常量。来源策略的唯一真源是
+# `app.models.rag.RAG_CONSUMER_SOURCE_TYPES`；`agent_tools` 与 `steward_memory` 的类别元组
+# 是它的别名。
+#
+# 此前这里有一个 `CONTEXT_SOURCE_TYPES = None`（语义是「全部已声明类别」），被三个不同
+# 消费者复用；其中 `ContextBuilder.build()` 同时服务 assistant 与 steward（它按 agent_kind
+# 分支），却无论哪种 kind 都拿到同一份「全部」——于是 steward 的上下文能读到
+# `authorized_document`（该类别由 grant 存在性把关，**没有** `:is_assistant` 门），
+# 比 steward 自己的工具策略 `("memory",)` 更宽。
+#
+# 该常量已删除而不是改成某个具体元组：它的**名字**描述单一消费者，保留它就会继续被
+# 其他消费者复用。现在每个调用点必须写出自己是谁。
 
 
 @dataclass(frozen=True)
@@ -69,10 +72,12 @@ class RetrievalIdentity:
     actor: User
     account: Account
     space_id: int
+    #: 来源目的限定。**必填**：`None` 的语义是「全部已声明来源」，那是最宽的授权，
+    #: 不该是默认值。忘记声明应在构造期或入口期失败，而不是静默读全部。
+    #: 放在带默认值的字段之前，因为 dataclass 不允许必填字段跟在默认字段后面。
+    source_types: tuple[str, ...]
     #: steward 的 per-viewer 身份；空间级 kind 为 None（此时 private 不可读）。
     viewer_account_id: int | None = None
-    #: 来源目的限定。`None` 表示「全部已声明来源」，必须是显式声明。
-    source_types: tuple[str, ...] | None = field(default=None)
 
     @property
     def private_reader_account_id(self) -> int | None:
@@ -101,7 +106,7 @@ class RetrievalOutcome:
     denied: int
     scanned: int
     scope_allowlist: tuple[str, ...]
-    source_types: tuple[str, ...] | None
+    source_types: tuple[str, ...]
 
     @property
     def filtered_out(self) -> bool:
@@ -153,6 +158,15 @@ def retrieve(
     传进来的可变字典旁路拿到内部计数。
     """
     scope_allowlist = resolve_authorization(db, identity)
+    # 类型标注不约束运行时（未类型化的调用点、`**kwargs` 组装、反射都能绕过），而这个
+    # 默认值的失效后果是「静默读全部」。宁可多一层 422。
+    if identity.source_types is None:
+        raise_api_error(
+            422,
+            MEMORY_SCOPE_FORBIDDEN,
+            "检索身份必须显式声明来源类别",
+            {"source_types": None},
+        )
     if not scope_allowlist:
         # 可读集为空 = 这个身份此刻读不到任何语料。**不要**退化成「读全部」，
         # 也不要把空集当作「无内容」——它是授权结论。

@@ -87,6 +87,35 @@ def test_unknown_kind_fails_closed(db_session):
     assert excinfo.value.status_code == 422
 
 
+def test_context_source_types_constant_is_gone():
+    """`CONTEXT_SOURCE_TYPES` 必须**不存在**，而不只是被改成具体元组。
+
+    它的名字描述单一消费者（"context"），却被 `context_builder` /
+    `memory_rag.build_context` / `rag.py` 三个不同消费者复用；其中
+    `ContextBuilder.build()` 同时服务 assistant 与 steward。保留一个语义含糊的共享常量，
+    等于把「复用错常量」这条路留着。消费者必须各自写出自己是谁。
+    """
+    assert not hasattr(
+        knowledge_retrieval, "CONTEXT_SOURCE_TYPES"
+    ), "来源集必须按消费者显式声明，不得再有共享常量"
+
+
+def test_retrieve_rejects_an_undeclared_source_set(db_session):
+    """运行时传 `None` 必须 422，不得静默读全部。
+
+    类型标注已经收窄成必填 `tuple[str, ...]`，但标注不约束运行时（未类型化的调用点、
+    `**kwargs` 组装、反射都能绕过），而这个默认值的失效后果是「静默读全部」。
+    """
+    owner, space = create_agent_fixture(db_session, name="u2-none-source")
+    _features(db_session)
+    identity = _identity(db_session, agent_kind="assistant", user=owner, space=space)
+    object.__setattr__(identity, "source_types", None)
+    with pytest.raises(HTTPException) as excinfo:
+        knowledge_retrieval.retrieve(db_session, identity, "anything")
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.detail["__api_error__"]["code"] == "MEMORY_SCOPE_FORBIDDEN"
+
+
 def test_empty_readable_set_is_an_authorization_conclusion_not_read_all(db_session):
     """可读集为空时返回空结果，且**不**退化成「读全部」。
 
