@@ -30,7 +30,8 @@
     "10-04-multitenant-load-acceptance",
     "10-04-rag-lexical-search",
     "10-06-architecture-completion-orchestration",
-    "10-10-rag-authorized-corpus-matrix"
+    "10-10-rag-authorized-corpus-matrix",
+    "10-11-attachment-content-agent-grant"
   ],
   "parent": null,
   "relatedFiles": [],

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/rag-authorized-corpus-matrix.md", "reason": "授权语料矩阵与 scope↔可见性阶梯映射：U1 的合同基础"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "检索授权两层独立挡住、显式允许集与 private 读者、filter-then-ANN"}
+{"file": ".trellis/spec/backend/memory-contract.md", "reason": "记忆真源与 RAG 派生的分层、生命周期字段"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "索引版本与重建合同"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查迁移 refusal guard、FK/CHECK、隔离 proof 与 downgrade"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "检查检索候选前授权过滤、source_types 白名单与 citation recheck"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "检查 grant/version/revocation 与 RAG 派生物生命周期一致"}
+{"file": ".trellis/spec/architecture/9--9-ad-7.md", "reason": "检查附件删除、读取权限、原始资源与内容授权边界"}

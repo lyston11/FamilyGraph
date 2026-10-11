@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新表、CHECK/FK/索引、迁移 refusal guard、隔离数据库与 downgrade 约束"}
+{"file": ".trellis/spec/backend/memory-rag-execution-contract.md", "reason": "RAG eligibility、filter-then-ANN、source_types 目的限定、citation 与授权边界"}
+{"file": ".trellis/spec/backend/rag-index-lifecycle-contract.md", "reason": "authorized_document 物化、revision、幂等、撤权/失效/rebuild 生命周期"}
+{"file": ".trellis/spec/backend/rag-authorized-corpus-matrix.md", "reason": "authorized_document 的 source_type/scope 合同与 profile/敏感自由文本边界"}
+{"file": ".trellis/spec/architecture/9--9-ad-7.md", "reason": "附件上传、读取、删除与 attachments.invalidated 安全合同"}
+{"file": ".trellis/spec/architecture/6--6-visibility-py.md", "reason": "附件当前 viewer/space 可见性不可被 Agent grant 绕过"}
