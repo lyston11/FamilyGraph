@@ -423,12 +423,13 @@ def _schema_contract_view(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return schema
     view = {
-        key: value for key, value in schema.items() if key not in ("description", "additionalProperties")
+        key: value
+        for key, value in schema.items()
+        if key not in ("description", "additionalProperties")
     }
     if "properties" in view and isinstance(view["properties"], dict):
         view["properties"] = {
-            key: _schema_contract_view(value)
-            for key, value in sorted(view["properties"].items())
+            key: _schema_contract_view(value) for key, value in sorted(view["properties"].items())
         }
     if view.get("type") == "object":
         view.setdefault("required", [])

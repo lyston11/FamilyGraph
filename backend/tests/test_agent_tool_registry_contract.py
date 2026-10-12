@@ -33,9 +33,7 @@ def _snapshot() -> dict:
 
 
 def test_snapshot_exists() -> None:
-    assert SNAPSHOT.exists(), (
-        f"缺少 {SNAPSHOT}；运行 python3 scripts/export-agent-tool-contract.py"
-    )
+    assert SNAPSHOT.exists(), f"缺少 {SNAPSHOT}；运行 python3 scripts/export-agent-tool-contract.py"
 
 
 def test_snapshot_is_fresh() -> None:
@@ -44,10 +42,9 @@ def test_snapshot_is_fresh() -> None:
     反证：改任一 `input_schema` 的边界值（如 `maxLength`）后不重生成，此用例必须失败。
     """
     body = _snapshot()
-    assert body["schema_version"] == agent_tools.CONTRACT_SCHEMA_VERSION, (
-        "快照格式版本与 CONTRACT_SCHEMA_VERSION 不一致；"
-        "改变规范化规则时须升版本并重生成"
-    )
+    assert (
+        body["schema_version"] == agent_tools.CONTRACT_SCHEMA_VERSION
+    ), "快照格式版本与 CONTRACT_SCHEMA_VERSION 不一致（改变规范化规则须升版本并重生成）"
     expected = agent_tools.canonical_contract()
     actual = body["tools"]
     assert set(actual) == set(expected), (
@@ -91,10 +88,9 @@ def test_contract_records_boundaries_and_additional_properties() -> None:
     tools = _snapshot()["tools"]
     assert tools["familygraph.echo"]["schema"]["properties"]["text"]["maxLength"] == 1000
     text = json.dumps(tools, ensure_ascii=False)
-    assert "additionalProperties" not in text, (
-        "additionalProperties 两侧刻意不同，不属于跨语言契约；"
-        "它必须由两侧各自的断言钉住"
-    )
+    assert (
+        "additionalProperties" not in text
+    ), "additionalProperties 两侧刻意不同，不属于跨语言契约（由两侧各自断言钉住）"
     for name, entry in tools.items():
         schema = entry["schema"]
         assert schema["type"] == "object", name
@@ -144,7 +140,7 @@ def test_every_registered_schema_rejects_extra_fields() -> None:
 
 def test_every_registered_schema_uses_only_known_keywords() -> None:
     """全量自检：现有注册表没有用集合外的关键字（新增检查不得误伤既有 schema）。"""
-    for name, spec in agent_tools.REGISTRY.items():
+    for spec in agent_tools.REGISTRY.values():
         agent_tools.validate_input(spec, _minimal_valid_payload(spec))
 
 
