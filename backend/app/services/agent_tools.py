@@ -59,6 +59,34 @@ from app.utils import timeutil
 # JSON schema 子集校验支持的标量类型
 _SUPPORTED_TYPES = {"string", "integer", "boolean", "array", "object"}
 
+#: 校验器认识的 schema 关键字全集。**集合外即配置错误**（见 `_validate_value`）。
+#:
+#: 加这条检查的理由是一个真实缺陷：`_validate_value` 原来只读它认识的键，其余静默
+#: 忽略，于是 `maxLength` 拼成 `maxLenght` 不报错、只是约束失效。同一机制让
+#: `agent/src/tools.ts` 与 `REGISTRY` 的边界约束可以长期不一致而无人发现——两侧都
+#: "没有报错"。
+_SCHEMA_ALLOWED_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "enum",
+        "description",
+    }
+)
+
+#: 跨语言契约快照的格式版本。改变 `_schema_contract_view` 的规范化规则时必须同时
+#: 升它——否则旧快照会被按新规则解读，差异看起来像工具漂移。
+CONTRACT_SCHEMA_VERSION = 1
+
 
 class ToolProtocolError(Exception):
     """工具协议拒绝（携带 HTTP 语义）；由 execute() 统一转审计 + API 错误。"""
@@ -227,8 +255,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "maxLength": 500},
-                    "limit": {"type": "integer"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -247,8 +275,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "maxLength": 2000},
-                    "purpose": {"type": "string", "maxLength": 120},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "purpose": {"type": "string", "minLength": 1, "maxLength": 120},
                 },
                 "required": ["summary"],
                 "additionalProperties": False,
@@ -278,7 +306,7 @@ REGISTRY: dict[str, ToolSpec] = {
             ),
             input_schema={
                 "type": "object",
-                "properties": {"text": {"type": "string", "maxLength": 80}},
+                "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 80}},
                 "required": ["text"],
                 "additionalProperties": False,
             },
@@ -292,8 +320,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "concept_code": {"type": "string", "maxLength": 128},
-                    "limit": {"type": "integer"},
+                    "concept_code": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["concept_code"],
                 "additionalProperties": False,
@@ -311,8 +339,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "concept_code": {"type": "string", "maxLength": 128},
-                    "term": {"type": "string", "maxLength": 64},
+                    "concept_code": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "term": {"type": "string", "minLength": 1, "maxLength": 64},
                     "consent_confirmed": {"type": "boolean"},
                 },
                 "required": ["concept_code", "term", "consent_confirmed"],
@@ -328,9 +356,9 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "maxLength": 500},
-                    "use_case": {"type": "string", "maxLength": 32},
-                    "limit": {"type": "integer"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "use_case": {"type": "string", "minLength": 1, "maxLength": 32},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                 },
                 "required": ["query", "use_case"],
                 "additionalProperties": False,
@@ -346,7 +374,7 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "approved_token": {"type": "string", "maxLength": 256},
+                    "approved_token": {"type": "string", "minLength": 20, "maxLength": 256},
                 },
                 "required": ["approved_token"],
                 "additionalProperties": False,
@@ -357,6 +385,80 @@ REGISTRY: dict[str, ToolSpec] = {
         ),
     )
 }
+
+
+def _schema_contract_view(schema: Any) -> Any:
+    """schema → 跨语言可比对的规范视图（与 `agent/test/tool-contract-parity.test.ts` 逐条对应）。
+
+    规范化四条：
+
+    - **递归去掉 `description`**：它只面向模型，TS 拥有全部中文描述文本，后端描述用于
+      审计与管理面。两侧文案必然不同，不属于契约。
+    - **`required` 缺省补 `[]`**：TypeBox 在无可选字段时不输出该键。
+    - **`properties` 按 key 排序**：两侧字面量顺序不同，不是差异。
+    - **保留边界关键字**（`minLength`/`maxLength`/`minimum`/`maximum`/`minItems`/
+      `maxItems`/`enum`）：它们是真正的受理边界，而**当前两侧并不一致**（见任务
+      prd.md 的差异表），必须进契约才能被门禁钉住。
+    - **去掉 `additionalProperties`**：两侧刻意不同，见下。
+
+    ## 为什么 `additionalProperties` 不进契约（安全相关，不得"顺手对齐"）
+
+    后端每个 schema 都声明 `additionalProperties: false`，**sidecar 的 assistant 工具
+    不得声明它**。两者不是同一件事：
+
+    - 后端那一条是**强制**：多余字段→ 422 `AGENT_TOOL_SCHEMA_INVALID`；
+    - sidecar 那一条会被 SDK 的 `validateToolArguments` 用来在调用前**剥掉**多余字段
+      （`Value.Convert` + 严格 schema 校验，实测 `{text, space_id}` → `{text}`）。
+
+    而 policy guard 的 scope-override 硬阻断读的是**校验后**的 `args`。于是 sidecar
+    声明该关键字会让一次真实的越权尝试**静默消失**：guard 不再报
+    `POLICY_TOOL_BLOCKED`、审计无记录、run 反而成功（实测：
+    `test/worker.integration.test.ts::reports the detected class, not a secret leak`
+    从 `POLICY_TOOL_BLOCKED` 变成 undefined）。
+
+    因此：后端保留该关键字，assistant 的 TS 声明不带它；steward 的 7 个声明带它
+    （既有行为，本次不改），这条非对称由
+    `agent/test/tool-contract-parity.test.ts` 的两条断言分别钉住。
+    """
+    if not isinstance(schema, dict):
+        return schema
+    view = {
+        key: value
+        for key, value in schema.items()
+        if key not in ("description", "additionalProperties")
+    }
+    if "properties" in view and isinstance(view["properties"], dict):
+        view["properties"] = {
+            key: _schema_contract_view(value) for key, value in sorted(view["properties"].items())
+        }
+    if view.get("type") == "object":
+        view.setdefault("required", [])
+    if "items" in view:
+        view["items"] = _schema_contract_view(view["items"])
+    return view
+
+
+def canonical_contract() -> dict[str, dict[str, Any]]:
+    """跨语言工具契约：工具名 → {version, supported_versions, required_kind, schema}。
+
+    这是 `scripts/export-agent-tool-contract.py` 的输入，也是后端快照新鲜度测试的
+    比对对象。**真源方向是单向的**：`REGISTRY` 是权威，快照与 sidecar 声明都是派生。
+
+    为什么含 `supported_versions`：sidecar 发送的是 `TOOL_VERSIONS` 里的版本，而它
+    **可以合法地落后于**后端当前版本——`get_relationship_path` 与
+    `explain_structural_path` 已升 `@2`，但 sidecar 仍以 `@1` 调用，因为切换版本是
+    一个独立的发布决定。这个"可以落后"的关系只有兼容集能表达：断言
+    `TOOL_VERSIONS[name] ∈ supported_versions`，而不是等值。
+    """
+    return {
+        name: {
+            "version": spec.version,
+            "supported_versions": list(spec.supported_versions or (spec.version,)),
+            "required_kind": spec.required_kind,
+            "schema": _schema_contract_view(spec.input_schema),
+        }
+        for name, spec in sorted(REGISTRY.items())
+    }
 
 
 def resolve_tool(name: str, version: int) -> ToolSpec:
@@ -463,6 +565,17 @@ def _deny(status_code: int, code: str, message: str, detail: dict[str, object] |
 
 
 def _validate_value(schema: dict[str, Any], value: Any, *, path: str) -> None:
+    # 未知关键字是注册表自身配置错误，不是调用方问题——因此 500 而不是 422，与
+    # `_SUPPORTED_TYPES` 未知时的既有口径一致。没有这条检查时，`maxLenght` 这类
+    # 拼写错误会让约束静默失效，两侧声明可以长期不一致而都不报错。
+    unknown_keywords = sorted(set(schema) - _SCHEMA_ALLOWED_KEYWORDS)
+    if unknown_keywords:
+        _deny(
+            500,
+            "INTERNAL_ERROR",
+            "工具 schema 含不受支持的关键字",
+            {"path": path, "unknown": unknown_keywords},
+        )
     expected = schema.get("type")
     if expected == "object":
         if not isinstance(value, dict):

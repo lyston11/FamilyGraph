@@ -41,6 +41,8 @@ export const TOOL_VERSIONS = {
   "familygraph.resolve_free_text_relation": 1,
   "familygraph.get_term_alternatives": 1,
   "familygraph.record_term_usage": 1,
+  "familygraph.search_memory": 1,
+  "familygraph.propose_memory": 1,
   "familygraph.search_web": 1,
   "familygraph.fetch_approved_page": 1,
   "familygraph.steward.get_space_snapshot": 1,
@@ -118,99 +120,150 @@ function toErrorMessage(error: unknown): string {
 }
 
 const EchoSchema = Type.Object({
-  text: Type.String({ description: "Text echoed back unchanged." }),
+  text: Type.String({ maxLength: 1000, description: "Text echoed back unchanged." }),
 });
 
 const ProbeScopeSchema = Type.Object({});
 
 const GetSelfContextSchema = Type.Object({});
 
-const ListVisiblePeopleSchema = Type.Object({
-  query: Type.Optional(Type.String({ description: "可选的姓名关键词，用于过滤可见人物列表。" })),
-  limit: Type.Optional(Type.Integer({ description: "可选的单次返回数量上限。" })),
-  cursor: Type.Optional(
-    Type.Integer({
-      description: "可选的分页游标（offset 语义），取自上一次结果返回的 next_cursor。",
+const ListVisiblePeopleSchema = Type.Object(
+  {
+    query: Type.Optional(
+      Type.String({ maxLength: 50, description: "可选的姓名关键词，用于过滤可见人物列表。" }),
+    ),
+    limit: Type.Optional(Type.Integer({ description: "可选的单次返回数量上限。" })),
+    cursor: Type.Optional(
+      Type.Integer({
+        description: "可选的分页游标（offset 语义），取自上一次结果返回的 next_cursor。",
+      }),
+    ),
+  },
+);
+
+const GetProfileSummarySchema = Type.Object(
+  {
+    user_id: Type.Integer({
+      description: "目标人物的用户 ID（必须是当前空间内可能可见的人物）。",
     }),
-  ),
-});
+  },
+);
 
-const GetProfileSummarySchema = Type.Object({
-  user_id: Type.Integer({
-    description: "目标人物的用户 ID（必须是当前空间内可能可见的人物）。",
-  }),
-});
+const SearchSpaceSchema = Type.Object(
+  {
+    query: Type.String({ maxLength: 64, description: "搜索关键词（人物姓名等）。" }),
+    limit: Type.Optional(Type.Integer({ description: "可选的单次返回数量上限。" })),
+  },
+);
 
-const SearchSpaceSchema = Type.Object({
-  query: Type.String({ description: "搜索关键词（人物姓名等）。" }),
-  limit: Type.Optional(Type.Integer({ description: "可选的单次返回数量上限。" })),
-});
+const RelationshipPathSchema = Type.Object(
+  {
+    to_user_id: Type.Integer({ description: "目标人物的用户 ID。" }),
+    from_user_id: Type.Optional(
+      Type.Integer({ description: "可选的起点用户 ID；省略时以当前用户为起点。" }),
+    ),
+  },
+);
 
-const RelationshipPathSchema = Type.Object({
-  to_user_id: Type.Integer({ description: "目标人物的用户 ID。" }),
-  from_user_id: Type.Optional(
-    Type.Integer({ description: "可选的起点用户 ID；省略时以当前用户为起点。" }),
-  ),
-});
+const ResolveFreeTextRelationSchema = Type.Object(
+  {
+    text: Type.String({
+      minLength: 1,
+      maxLength: 80,
+      description: "用户原话中的称谓自由文本，例如「妈妈」「舅爷爷」。",
+    }),
+  },
+);
 
-const ResolveFreeTextRelationSchema = Type.Object({
-  text: Type.String({
-    minLength: 1,
-    maxLength: 80,
-    description: "用户原话中的称谓自由文本，例如「妈妈」「舅爷爷」。",
-  }),
-});
+const GetTermAlternativesSchema = Type.Object(
+  {
+    concept_code: Type.String({
+      minLength: 1,
+      maxLength: 128,
+      description: "标准亲属概念码（来自路径解析结果或既有对话上下文）。",
+    }),
+    limit: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 10, description: "可选的备选称谓数量上限。" }),
+    ),
+  },
+);
 
-const GetTermAlternativesSchema = Type.Object({
-  concept_code: Type.String({
-    minLength: 1,
-    maxLength: 128,
-    description: "标准亲属概念码（来自路径解析结果或既有对话上下文）。",
-  }),
-  limit: Type.Optional(
-    Type.Integer({ minimum: 1, maximum: 10, description: "可选的备选称谓数量上限。" }),
-  ),
-});
+const RecordTermUsageSchema = Type.Object(
+  {
+    concept_code: Type.String({
+      minLength: 1,
+      maxLength: 128,
+      description: "标准亲属概念码。",
+    }),
+    term: Type.String({
+      minLength: 1,
+      maxLength: 64,
+      description: "用户希望使用的称谓原文。",
+    }),
+    consent_confirmed: Type.Boolean({
+      description: "仅当用户在当前会话明确确认记录该称谓时为 true。",
+    }),
+  },
+);
 
-const RecordTermUsageSchema = Type.Object({
-  concept_code: Type.String({
-    minLength: 1,
-    maxLength: 128,
-    description: "标准亲属概念码。",
-  }),
-  term: Type.String({
-    minLength: 1,
-    maxLength: 64,
-    description: "用户希望使用的称谓原文。",
-  }),
-  consent_confirmed: Type.Boolean({
-    description: "仅当用户在当前会话明确确认记录该称谓时为 true。",
-  }),
-});
+const SearchWebSchema = Type.Object(
+  {
+    query: Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description: "搜索词。不得包含姓名、生日、住址、联系方式、密钥或遮蔽数据。",
+    }),
+    use_case: Type.String({
+      minLength: 1,
+      maxLength: 32,
+      description: "联网用途：research / fact_check / citation（须已获空间授权）。",
+    }),
+    limit: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 50, description: "可选的单次返回结果数量上限。" }),
+    ),
+  },
+);
 
-const SearchWebSchema = Type.Object({
-  query: Type.String({
-    minLength: 1,
-    maxLength: 500,
-    description: "搜索词。不得包含姓名、生日、住址、联系方式、密钥或遮蔽数据。",
-  }),
-  use_case: Type.String({
-    minLength: 1,
-    maxLength: 32,
-    description: "联网用途：research / fact_check / citation（须已获空间授权）。",
-  }),
-  limit: Type.Optional(
-    Type.Integer({ minimum: 1, maximum: 50, description: "可选的单次返回结果数量上限。" }),
-  ),
-});
+const FetchApprovedPageSchema = Type.Object(
+  {
+    approved_token: Type.String({
+      minLength: 20,
+      maxLength: 256,
+      description: "search_web 结果中签发的一次性批准凭据；不接受任意网址。",
+    }),
+  },
+);
 
-const FetchApprovedPageSchema = Type.Object({
-  approved_token: Type.String({
-    minLength: 20,
-    maxLength: 256,
-    description: "search_web 结果中签发的一次性批准凭据；不接受任意网址。",
-  }),
-});
+// 受控记忆工具（P2-b）。它们的后端声明先于本侧存在，于是平台记忆开启时每次
+// assistant run 都会在 buildRunSession 的 allowlist 校验处失败——服务端把工具放进
+// allowlist，本侧却没有声明。两侧的一致性由
+// `test/tool-contract-parity.test.ts` 钉住（后端侧是
+// `tests/test_agent_tool_registry_contract.py`）。
+const SearchMemorySchema = Type.Object(
+  {
+    query: Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description: "检索关键词。",
+    }),
+    limit: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 20, description: "可选的单次返回数量上限。" }),
+    ),
+  },
+);
+
+const ProposeMemorySchema = Type.Object(
+  {
+    summary: Type.String({
+      minLength: 1,
+      maxLength: 2000,
+      description: "这条记忆的摘要（用户仍需在记忆面板确认后才生效）。",
+    }),
+    purpose: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 120, description: "可选的用途说明。" }),
+    ),
+  },
+);
 
 const StewardEmptySchema = Type.Object({}, { additionalProperties: false });
 const StewardListSpaceNodesSchema = Type.Object(
@@ -480,6 +533,36 @@ export function createDomainTools(
       }),
   };
 
+  const searchMemory: ToolDefinition<typeof SearchMemorySchema> = {
+    name: "familygraph.search_memory",
+    label: "Search memory",
+    description:
+      "在当前会话空间内检索已确认的记忆与授权资料，返回可引用句柄。回答前可先用它自查是否已知某件事，避免重复询问用户。只读。",
+    parameters: SearchMemorySchema,
+    execute: async (toolCallId, params: Static<typeof SearchMemorySchema>) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.search_memory",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
+  };
+
+  const proposeMemory: ToolDefinition<typeof ProposeMemorySchema> = {
+    name: "familygraph.propose_memory",
+    label: "Propose memory",
+    description:
+      "当用户明确要求『记住这件事』时，提议一条待确认记忆。只创建待确认候选，**不会**成为可检索记忆；用户仍需在记忆面板确认。原文由服务端从本轮用户消息取，不要改写原话。",
+    parameters: ProposeMemorySchema,
+    execute: async (toolCallId, params: Static<typeof ProposeMemorySchema>) =>
+      queryViaExecutor(
+        executor,
+        "familygraph.propose_memory",
+        toolCallId,
+        compactInput({ ...params }),
+      ),
+  };
+
   const searchWeb: ToolDefinition<typeof SearchWebSchema> = {
     name: "familygraph.search_web",
     label: "Search web",
@@ -602,6 +685,8 @@ export function createDomainTools(
     resolveFreeTextRelation,
     getTermAlternatives,
     recordTermUsage,
+    searchMemory,
+    proposeMemory,
     searchWeb,
     fetchApprovedPage,
     stewardSpaceSnapshot,
