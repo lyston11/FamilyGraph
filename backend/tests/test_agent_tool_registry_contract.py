@@ -79,20 +79,25 @@ def test_contract_carries_no_description() -> None:
 
 
 def test_contract_records_boundaries_and_additional_properties() -> None:
-    """边界关键字与 `additionalProperties` 必须在契约里。
+    """边界关键字必须在契约里；`additionalProperties` 必须在契约**外**。
 
-    前者是真正的受理边界（当前两侧并不一致，必须被钉住）；后者是
-    "模型不能发送 space_id/account_id 等任意权限字段"这条边界在 schema 层的表达。
+    前者是真正的受理边界（当前两侧并不一致，必须被钉住）。后者两侧刻意不同：
+    后端用它拒绝多余字段，sidecar 的 assistant 声明**不得**用它，否则 SDK 会在调用前
+    剥掉多余字段，policy guard 的 scope-override 硬阻断就读不到原始参数，
+    越权尝试会静默变成「run 成功且无审计」。见
+    `agent/test/tool-contract-parity.test.ts` 的对应断言与
+    `agent_tools._schema_contract_view` 的说明。
     """
     tools = _snapshot()["tools"]
     assert tools["familygraph.echo"]["schema"]["properties"]["text"]["maxLength"] == 1000
+    text = json.dumps(tools, ensure_ascii=False)
+    assert "additionalProperties" not in text, (
+        "additionalProperties 两侧刻意不同，不属于跨语言契约；"
+        "它必须由两侧各自的断言钉住"
+    )
     for name, entry in tools.items():
         schema = entry["schema"]
         assert schema["type"] == "object", name
-        assert schema.get("additionalProperties") is False, (
-            f"{name} 的 schema 必须显式 additionalProperties=false："
-            "未声明不等于允许，两侧表达同一个边界"
-        )
         assert "required" in schema, f"{name} 缺少 required（规范化应补空列表）"
 
 
@@ -123,6 +128,20 @@ def test_unknown_schema_keyword_is_rejected() -> None:
     assert excinfo.value.detail["unknown"] == ["maxLenght"]
 
 
+def test_every_registered_schema_rejects_extra_fields() -> None:
+    """后端侧强制：所有 schema 都拒绝多余字段（与 sidecar 的非对称见上一用例）。
+
+    这是后端那一半边界：`space_id`/`account_id`/任意权限字段在这里被 422 拒绝。
+    """
+    for name, spec in agent_tools.REGISTRY.items():
+        assert spec.input_schema.get("additionalProperties") is False, name
+        payload = _minimal_valid_payload(spec)
+        payload["space_id"] = 1
+        with pytest.raises(agent_tools.ToolProtocolError) as excinfo:
+            agent_tools.validate_input(spec, payload)
+        assert excinfo.value.code == "AGENT_TOOL_SCHEMA_INVALID", name
+
+
 def test_every_registered_schema_uses_only_known_keywords() -> None:
     """全量自检：现有注册表没有用集合外的关键字（新增检查不得误伤既有 schema）。"""
     for name, spec in agent_tools.REGISTRY.items():
@@ -130,15 +149,19 @@ def test_every_registered_schema_uses_only_known_keywords() -> None:
 
 
 def _minimal_valid_payload(spec: agent_tools.ToolSpec) -> dict:
-    """构造一个只含必填字段的最小合法输入，用于触发全量 schema 自检。"""
+    """构造一个只含必填字段的最小合法输入，用于触发全量 schema 自检。
+
+    必须尊重 `minLength`/`minimum`：自检的目的是发现未知关键字，不该因为造不出
+    合法值而失败（那会把门禁变成噪声）。
+    """
     payload: dict = {}
     for key in spec.input_schema.get("required", []):
         sub = spec.input_schema["properties"][key]
         kind = sub.get("type")
         if kind == "string":
-            payload[key] = "x"
+            payload[key] = "x" * max(int(sub.get("minLength", 1)), 1)
         elif kind == "integer":
-            payload[key] = sub.get("minimum", 1)
+            payload[key] = int(sub.get("minimum", 1))
         elif kind == "boolean":
             payload[key] = True
         elif kind == "array":

@@ -5,7 +5,6 @@
   "familygraph.echo": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "text": {
       "maxLength": 1000,
@@ -17,12 +16,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.explain_structural_path": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "from_user_id": {
       "type": "integer"
@@ -36,15 +37,19 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1,
+    2
+   ],
    "version": 2
   },
   "familygraph.fetch_approved_page": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "approved_token": {
       "maxLength": 256,
+      "minLength": 20,
       "type": "string"
      }
     },
@@ -53,12 +58,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.get_profile_summary": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "user_id": {
       "type": "integer"
@@ -69,12 +76,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.get_relationship_path": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "from_user_id": {
       "type": "integer"
@@ -88,28 +97,36 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1,
+    2
+   ],
    "version": 2
   },
   "familygraph.get_self_context": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {},
     "required": [],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.get_term_alternatives": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "concept_code": {
       "maxLength": 128,
+      "minLength": 1,
       "type": "string"
      },
      "limit": {
+      "maximum": 10,
+      "minimum": 1,
       "type": "integer"
      }
     },
@@ -118,12 +135,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.list_visible_people": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "cursor": {
       "type": "integer"
@@ -139,29 +158,35 @@
     "required": [],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.probe_scope": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {},
     "required": [],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.propose_memory": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "purpose": {
       "maxLength": 120,
+      "minLength": 1,
       "type": "string"
      },
      "summary": {
       "maxLength": 2000,
+      "minLength": 1,
       "type": "string"
      }
     },
@@ -170,15 +195,18 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.record_term_usage": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "concept_code": {
       "maxLength": 128,
+      "minLength": 1,
       "type": "string"
      },
      "consent_confirmed": {
@@ -186,6 +214,7 @@
      },
      "term": {
       "maxLength": 64,
+      "minLength": 1,
       "type": "string"
      }
     },
@@ -196,15 +225,18 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.resolve_free_text_relation": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "text": {
       "maxLength": 80,
+      "minLength": 1,
       "type": "string"
      }
     },
@@ -213,18 +245,23 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.search_memory": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "limit": {
+      "maximum": 20,
+      "minimum": 1,
       "type": "integer"
      },
      "query": {
       "maxLength": 500,
+      "minLength": 1,
       "type": "string"
      }
     },
@@ -233,12 +270,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.search_space": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "limit": {
       "type": "integer"
@@ -253,22 +292,28 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.search_web": {
    "required_kind": "assistant",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "limit": {
+      "maximum": 50,
+      "minimum": 1,
       "type": "integer"
      },
      "query": {
       "maxLength": 500,
+      "minLength": 1,
       "type": "string"
      },
      "use_case": {
       "maxLength": 32,
+      "minLength": 1,
       "type": "string"
      }
     },
@@ -278,12 +323,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.get_evidence": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "evidence_ids": {
       "items": {
@@ -303,12 +350,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.get_relationship_path": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "from_user_id": {
       "minimum": 1,
@@ -325,22 +374,26 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.get_space_snapshot": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {},
     "required": [],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.get_viewer_target": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "target_user_id": {
       "minimum": 1,
@@ -352,12 +405,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.get_viewer_term": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "root_user_id": {
       "minimum": 1,
@@ -374,12 +429,14 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.list_space_nodes": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "cursor": {
       "maxLength": 32,
@@ -394,12 +451,14 @@
     "required": [],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   },
   "familygraph.steward.search_memory": {
    "required_kind": "steward",
    "schema": {
-    "additionalProperties": false,
     "properties": {
      "limit": {
       "maximum": 10,
@@ -416,6 +475,9 @@
     ],
     "type": "object"
    },
+   "supported_versions": [
+    1
+   ],
    "version": 1
   }
  }

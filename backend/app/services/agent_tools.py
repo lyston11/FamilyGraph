@@ -255,8 +255,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "maxLength": 500},
-                    "limit": {"type": "integer"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -275,8 +275,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "maxLength": 2000},
-                    "purpose": {"type": "string", "maxLength": 120},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "purpose": {"type": "string", "minLength": 1, "maxLength": 120},
                 },
                 "required": ["summary"],
                 "additionalProperties": False,
@@ -306,7 +306,7 @@ REGISTRY: dict[str, ToolSpec] = {
             ),
             input_schema={
                 "type": "object",
-                "properties": {"text": {"type": "string", "maxLength": 80}},
+                "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 80}},
                 "required": ["text"],
                 "additionalProperties": False,
             },
@@ -320,8 +320,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "concept_code": {"type": "string", "maxLength": 128},
-                    "limit": {"type": "integer"},
+                    "concept_code": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["concept_code"],
                 "additionalProperties": False,
@@ -339,8 +339,8 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "concept_code": {"type": "string", "maxLength": 128},
-                    "term": {"type": "string", "maxLength": 64},
+                    "concept_code": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "term": {"type": "string", "minLength": 1, "maxLength": 64},
                     "consent_confirmed": {"type": "boolean"},
                 },
                 "required": ["concept_code", "term", "consent_confirmed"],
@@ -356,9 +356,9 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "maxLength": 500},
-                    "use_case": {"type": "string", "maxLength": 32},
-                    "limit": {"type": "integer"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "use_case": {"type": "string", "minLength": 1, "maxLength": 32},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                 },
                 "required": ["query", "use_case"],
                 "additionalProperties": False,
@@ -374,7 +374,7 @@ REGISTRY: dict[str, ToolSpec] = {
             input_schema={
                 "type": "object",
                 "properties": {
-                    "approved_token": {"type": "string", "maxLength": 256},
+                    "approved_token": {"type": "string", "minLength": 20, "maxLength": 256},
                 },
                 "required": ["approved_token"],
                 "additionalProperties": False,
@@ -397,12 +397,34 @@ def _schema_contract_view(schema: Any) -> Any:
     - **`required` 缺省补 `[]`**：TypeBox 在无可选字段时不输出该键。
     - **`properties` 按 key 排序**：两侧字面量顺序不同，不是差异。
     - **保留边界关键字**（`minLength`/`maxLength`/`minimum`/`maximum`/`minItems`/
-      `maxItems`/`enum`/`additionalProperties`）：它们是真正的受理边界，而**当前两侧
-      并不一致**（见任务 prd.md 的差异表），必须进契约才能被门禁钉住。
+      `maxItems`/`enum`）：它们是真正的受理边界，而**当前两侧并不一致**（见任务
+      prd.md 的差异表），必须进契约才能被门禁钉住。
+    - **去掉 `additionalProperties`**：两侧刻意不同，见下。
+
+    ## 为什么 `additionalProperties` 不进契约（安全相关，不得"顺手对齐"）
+
+    后端每个 schema 都声明 `additionalProperties: false`，**sidecar 的 assistant 工具
+    不得声明它**。两者不是同一件事：
+
+    - 后端那一条是**强制**：多余字段→ 422 `AGENT_TOOL_SCHEMA_INVALID`；
+    - sidecar 那一条会被 SDK 的 `validateToolArguments` 用来在调用前**剥掉**多余字段
+      （`Value.Convert` + 严格 schema 校验，实测 `{text, space_id}` → `{text}`）。
+
+    而 policy guard 的 scope-override 硬阻断读的是**校验后**的 `args`。于是 sidecar
+    声明该关键字会让一次真实的越权尝试**静默消失**：guard 不再报
+    `POLICY_TOOL_BLOCKED`、审计无记录、run 反而成功（实测：
+    `test/worker.integration.test.ts::reports the detected class, not a secret leak`
+    从 `POLICY_TOOL_BLOCKED` 变成 undefined）。
+
+    因此：后端保留该关键字，assistant 的 TS 声明不带它；steward 的 7 个声明带它
+    （既有行为，本次不改），这条非对称由
+    `agent/test/tool-contract-parity.test.ts` 的两条断言分别钉住。
     """
     if not isinstance(schema, dict):
         return schema
-    view = {key: value for key, value in schema.items() if key != "description"}
+    view = {
+        key: value for key, value in schema.items() if key not in ("description", "additionalProperties")
+    }
     if "properties" in view and isinstance(view["properties"], dict):
         view["properties"] = {
             key: _schema_contract_view(value)
@@ -416,18 +438,21 @@ def _schema_contract_view(schema: Any) -> Any:
 
 
 def canonical_contract() -> dict[str, dict[str, Any]]:
-    """跨语言工具契约：工具名 → {version, required_kind, schema}。
+    """跨语言工具契约：工具名 → {version, supported_versions, required_kind, schema}。
 
     这是 `scripts/export-agent-tool-contract.py` 的输入，也是后端快照新鲜度测试的
     比对对象。**真源方向是单向的**：`REGISTRY` 是权威，快照与 sidecar 声明都是派生。
 
-    不含 `supported_versions`：它是后端单侧的版本兼容声明（`@1`/`@2` 并存），
-    sidecar 只发送 `TOOL_VERSIONS` 里的当前版本，没有对应概念；放进契约会要求 TS
-    凭空声明一个它不使用的字段。
+    为什么含 `supported_versions`：sidecar 发送的是 `TOOL_VERSIONS` 里的版本，而它
+    **可以合法地落后于**后端当前版本——`get_relationship_path` 与
+    `explain_structural_path` 已升 `@2`，但 sidecar 仍以 `@1` 调用，因为切换版本是
+    一个独立的发布决定。这个"可以落后"的关系只有兼容集能表达：断言
+    `TOOL_VERSIONS[name] ∈ supported_versions`，而不是等值。
     """
     return {
         name: {
             "version": spec.version,
+            "supported_versions": list(spec.supported_versions or (spec.version,)),
             "required_kind": spec.required_kind,
             "schema": _schema_contract_view(spec.input_schema),
         }

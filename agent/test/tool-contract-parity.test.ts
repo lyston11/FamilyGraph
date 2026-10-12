@@ -26,6 +26,7 @@ import { createDomainTools, TOOL_VERSIONS, type DomainToolExecutor } from "../sr
 
 interface ContractEntry {
   version: number;
+  supported_versions: number[];
   required_kind: string | null;
   schema: Record<string, unknown>;
 }
@@ -49,14 +50,23 @@ const stubExecutor: DomainToolExecutor = async () => ({ ok: true, result: {} });
  *  - `required` defaults to `[]` because TypeBox omits it when nothing is required;
  *  - `properties` is sorted because literal order is not a contract;
  *  - boundary keywords are kept: they are the real admission limits and the two
- *    sides did not agree on them before this task.
+ *    sides did not agree on them before this task;
+ *  - `additionalProperties` is dropped **on purpose** — see the note below.
+ *
+ * Why `additionalProperties` is not part of the compared contract: the two sides
+ * mean different things by it. On the backend it only *rejects* extra fields. On
+ * this side the SDK's `validateToolArguments` uses it to *strip* them before the
+ * tool runs, and the policy guard's scope-override hard block reads the
+ * post-validation arguments — so declaring it here makes a real privilege
+ * attempt invisible (no `POLICY_TOOL_BLOCKED`, no audit row, run succeeds).
+ * The asymmetry is asserted explicitly below instead of being aligned away.
  */
 function contractView(schema: unknown): unknown {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return schema;
   const source = schema as Record<string, unknown>;
   const view: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(source)) {
-    if (key === "description") continue;
+    if (key === "description" || key === "additionalProperties") continue;
     view[key] = value;
   }
   if (view["properties"] && typeof view["properties"] === "object") {
@@ -91,9 +101,16 @@ describe("cross-language tool contract", () => {
     expect(Object.keys(declaredSchemas()).sort()).toEqual(Object.keys(contract).sort());
   });
 
-  it("agrees on every tool version", () => {
+  it("sends a version the backend still accepts", () => {
+    // Not equality: the sidecar may legitimately lag the backend's current
+    // version. `get_relationship_path` / `explain_structural_path` are @2 with
+    // @1 kept accepted, and the sidecar still calls @1 because switching is a
+    // separate release decision. What must hold is that the version we send is
+    // in the accepted set — otherwise every call fails AGENT_TOOL_VERSION_UNSUPPORTED.
     for (const [name, entry] of Object.entries(contract)) {
-      expect(TOOL_VERSIONS[name as keyof typeof TOOL_VERSIONS], name).toBe(entry.version);
+      const sent = TOOL_VERSIONS[name as keyof typeof TOOL_VERSIONS];
+      expect(entry.supported_versions, name).toContain(sent);
+      expect(sent, name).toBeLessThanOrEqual(entry.version);
     }
   });
 
@@ -104,15 +121,22 @@ describe("cross-language tool contract", () => {
     }
   });
 
-  it("declares additionalProperties=false on every object schema", () => {
-    // The schema-level expression of "the model may not send space_id /
-    // account_id / arbitrary permission fields". Leaving it unstated is not
-    // "allowed" and must not be read as such.
+  it("keeps the additionalProperties asymmetry that the policy guard depends on", () => {
+    // Backend rejects extra fields; this side must NOT declare the keyword for
+    // assistant tools, because the SDK would then strip them before the policy
+    // guard inspects the arguments — turning a hard block into silence.
+    // Regression: test/worker.integration.test.ts
+    // "reports the detected class, not a secret leak, when a block aborts the run".
+    const declared = declaredSchemas();
     for (const [name, entry] of Object.entries(contract)) {
-      expect(entry.schema["additionalProperties"], name).toBe(false);
+      if (entry.required_kind === "steward") continue;
+      expect(declared[name]!["additionalProperties"], name).toBeUndefined();
     }
-    for (const [name, schema] of Object.entries(declaredSchemas())) {
-      expect(schema["additionalProperties"], name).toBe(false);
+    // The steward declarations predate this task and keep the keyword; changing
+    // that is a separate decision, so pin the current state rather than assume.
+    for (const [name, entry] of Object.entries(contract)) {
+      if (entry.required_kind !== "steward") continue;
+      expect(declared[name]!["additionalProperties"], name).toBe(false);
     }
   });
 
