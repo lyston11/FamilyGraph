@@ -133,6 +133,22 @@ Steward child run 的 `tool_allowlist` 由后端 `agent_tools.REGISTRY` 按
 **允许级别**内的已确认记忆；不读取 prompt、provider 或未授权记忆，也不产生领域写入；结果经统一 JSON
 上限和 output policy guard，审计不含原始输入。
 
+### 6.1.1 工具集与 prompt 的关系：被广告，但不被提及（10-12 写成显式合同）
+
+`default_allowlist("steward", ...)` 确实向 steward run 广告这七个工具，
+`agent/src/session.ts` 用 `adapterFor("steward").toolNames()` 校验通过。但 `_PROMPTS` 的四个 kind
+**刻意不提任何工具**，因为四个 kind 的完整输入都在 user content 里（roster+已确认事实 / 推荐卡 /
+术语目标 / 卡片证据），输出是封闭 JSON schema，服务端重算栅栏才是授权边界。
+
+给 `_PROMPTS` 加工具说明的代价是可核验的：`prompt_digest = sha256(f"{instructions}\n{user_content}")`、
+`prompt_version() = sha256(json.dumps(_PROMPTS))`，而后者是评测报告字段与 `input_hash` /
+发送前 fence 的稳定依据。在输入已完整的前提下加说明只会移动 `prompt_version()` 与全部 digest 基线，
+不改变模型能产生的输出。因此那是独立决定，不是重构顺手项。
+
+合同由 `tests/test_steward_tool_prompt_alignment.py` 钉住：prompt 若提到工具，必须是
+`required_kind="steward"` 的已注册工具；且当前四个 kind 都不提工具（显式状态，改它必须同时迁移
+`prompt_version` 基线）。背景：历史上向 run 广告了它拿不到的能力，实测 476 次 403 / 60 个 run。
+
 ## 6.2 记忆可见级别与 `private` 的读者语义（10-10）
 
 管家能读哪些级别的记忆由**三层交集**决定：部署 `STEWARD_MEMORY_SCOPES` ∩ 平台列 ∩ 空间列，
@@ -221,6 +237,10 @@ steward 的上下文**就是**投影本身（roster + 已确认事实），不�
 
 - **结构性断言**：`agent/test/adapters-kind.test.ts` 读 `worker.ts`/`session.ts`/`client.ts`/`events.ts`，
   出现新的 `kind === "assistant"|"steward"` 比较即失败（变异测试验证）。
+- **`emptyToolAllowlistIsInvalid` 的真实语义**（10-12 修正注释漂移）：steward 的 allowlist **可以**为空，
+  因为四个 kind 的输入都在 user content 里、不依赖工具调用——**不是**因为工具集为空（它有七个，见 §6.1）。
+  此前的注释声称 "the steward's tool set is empty by design"，与 `toolNamesFor("steward")` 直接矛盾，
+  是让人误以为两个 kind 是两套架构的典型来源。`adapters-kind.test.ts` 已加断言防止再次分叉。
 - **租约路由由适配器给出**：steward 打 `/internal/agent/steward/attempts/lease`，且 body **不含** `space_id`
   ——sidecar 不知道空间拓扑，由服务端选一个有容量且有到期工作的空间（见 §6）。
 - **产物路由由适配器声明**：`reportsProductOnSettle`。child run 拒绝消息类事件，所以 settle 是产物的

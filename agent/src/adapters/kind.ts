@@ -54,9 +54,18 @@ export interface KindAdapter {
   modelPrompt(projection: RunContextProjection, userText: string): string;
 
   /** Whether an empty tool allowlist is a protocol error for this kind.
-   *  The assistant always carries read-only query tools; the steward's set is
-   *  empty by design (its output is a structured product, not tool calls), so
-   *  only the membership half of the allowlist check applies to it. */
+   *
+   *  The assistant always carries read-only query tools, so an empty allowlist
+   *  means the server sent a projection it cannot have intended.
+   *
+   *  For the steward an empty allowlist is legitimate, but **not** because its
+   *  tool set is empty — `toolNamesFor("steward")` returns seven read-only
+   *  projection tools and `default_allowlist("steward", ...)` does advertise
+   *  them. It is legitimate because all four assist kinds carry their complete
+   *  input in the user content (roster + confirmed facts, ranking cards,
+   *  terminology targets, card evidence) and produce a closed structured product,
+   *  so a run that never calls a tool is a valid run. The membership half of the
+   *  check still rejects any tool the steward does not own. */
   readonly emptyToolAllowlistIsInvalid: boolean;
 
   /** Tools this kind may register. Explicit per kind rather than "assistant
@@ -157,8 +166,11 @@ const stewardAdapter: KindAdapter = Object.freeze<KindAdapter>({
     // appendix would add instructions the server never sent, so the prompt would
     // no longer match the digest the server recorded for it.
     (projection.context_blocks ?? []).map((block) => block.content).join("\n"),
-  // The steward's tool set is empty by design, so "must be non-empty" cannot
-  // apply; the membership half still rejects any tool it does not own.
+  // An empty allowlist is valid for the steward because its four assist kinds
+  // carry their whole input in the user content and answer with a closed
+  // structured product — not because the tool set is empty (it has seven tools).
+  // "must be non-empty" therefore cannot apply; the membership half still
+  // rejects any tool the steward does not own.
   emptyToolAllowlistIsInvalid: false,
   toolNames: () => toolNamesFor("steward"),
   slotBudget: (config) => config.stewardMaxConcurrentCallsPerSpace,

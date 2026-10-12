@@ -104,6 +104,12 @@ describe("adapterFor", () => {
   it("only rejects an empty tool allowlist for the assistant", () => {
     expect(adapterFor("assistant").emptyToolAllowlistIsInvalid).toBe(true);
     expect(adapterFor("steward").emptyToolAllowlistIsInvalid).toBe(false);
+    // The steward's tolerance is NOT because it has no tools — it has seven, and
+    // the server advertises them. The comment in kind.ts used to claim the set was
+    // empty, which is exactly the kind of drift that makes the two kinds look
+    // like separate architectures. Pin the fact so the comment cannot go stale
+    // in the other direction either.
+    expect(adapterFor("steward").toolNames().length).toBeGreaterThan(0);
   });
 
   it("registers the dedicated read-only tools for the steward", () => {

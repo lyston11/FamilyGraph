@@ -280,7 +280,37 @@ unavailable 或固定 scope 拒绝，不返回目标身份、原始个人字段�
 - **投影口径**：`get_profile_summary` 复用 `visibility.evaluate(purpose=PURPOSE_AGENT) + payload_from_decision`，与 users 路由同一对原语；purpose=agent 上限 lineage_summary ≤ profile API，只紧不松。禁止在工具内重写可见性规则或返回 ORM 对象。
 - **防枚举**：不存在与不可见同码 `FG_PROFILE_NOT_AVAILABLE`；关系路径 BFS 对不可见途经节点剪枝，不泄露存在性。
 - **零写入**：查询工具纯 SELECT；新增写类工具前必须先落地 (run_id, tool_call_id) 去重表（见 §4 红线）。
-- **双侧 schema 同步**：TypeBox 声明与后端 input_schema 必须逐字段同类型同名——实际发生过 cursor string vs integer 漂移；新增字段时两侧同改并加快照测试。
+- **双侧 schema 同步：由可执行门禁把住，不靠记忆**（10-12 建立）。`backend/app/services/agent_tools.py`
+  的 `REGISTRY` 是**唯一真源**（它是真正校验与执行的一侧）；
+  `scripts/export-agent-tool-contract.py` 把它导出到 `shared/agent-tool-contract.json`，
+  两半门禁各自独立失败：`backend/tests/test_agent_tool_registry_contract.py`（快照新鲜度，
+  改了注册表没重生成 → 红）与 `agent/test/tool-contract-parity.test.ts`（sidecar 声明与快照
+  逐项相等）。为什么两半都要：只有前者时快照与 TS 可以一起漂移，只有后者时比对的是陈旧快照。
+
+  漂移的代价不是理论上的：`familygraph.propose_memory` 曾只存在于后端，于是平台记忆开启时
+  服务端把它放进每个 assistant run 的 allowlist，而 sidecar 的 `buildRunSession` 校验不过，
+  **每次 run 都在首个模型请求之前失败**（`2f758594` 引入，10-12 修复）。
+
+  比对视图的规则（`agent_tools._schema_contract_view`，TS 侧 `contractView` 逐条对应）：
+  递归去 `description`、补 `required: []`、`properties` 排序、**保留**
+  `minLength/maxLength/minimum/maximum/minItems/maxItems/enum`。新增字段时两侧同改并重生成快照；
+  版本用**兼容集**断言（`TOOL_VERSIONS[name] ∈ supported_versions`），因为 sidecar 可以
+  合法地落后于后端当前版本。
+
+- **`additionalProperties` 刻意两侧不同，不得"顺手对齐"**（10-12 实测）。后端每个 schema 都必须
+  声明 `additionalProperties: false`（多余字段 → 422，含 `space_id`/`account_id` 等权限字段）；
+  **sidecar 的 assistant 声明不得声明它**。原因是 SDK 的 `validateToolArguments` 会用它
+  **剥掉**多余字段，而 `policy.ts` 的 scope-override 硬阻断读的是**校验后**的参数——
+  声明它会让一次真实的越权尝试静默消失：无 `POLICY_TOOL_BLOCKED`、无审计行、run 反而
+  `succeeded`（实测 `agent/test/worker.integration.test.ts` 的该用例从
+  `POLICY_TOOL_BLOCKED` 变成 `undefined`）。因此该关键字被排除在跨语言契约视图外，
+  两侧的非对称由各自断言钉住（后端：全量 schema 拒绝多余字段；TS：assistant 声明不带该关键字，
+  steward 的七个既有声明保留它）。
+
+- **未知 schema 关键字是 500，不是静默忽略**（10-12）。`_validate_value` 拒绝任何不在
+  `_SCHEMA_ALLOWED_KEYWORDS` 里的键。没有这条时 `maxLenght` 这类拼写错误会让约束静默失效，
+  同一机制也让两侧边界长期不一致而都不报错。
+
 - **Provider wire tool names**：后端 registry、run token allowlist、内部执行路径和公开审计事件始终使用规范 `familygraph.*` 名称；由于部分 OpenAI-compatible relay 拒绝函数名中的 `.`, sidecar 仅在 Pi/pi-ai 的 provider 出站声明中将其映射为 `familygraph_*`（例如 `familygraph.list_visible_people` → `familygraph_list_visible_people`）。收到 Pi 的 tool hook/event 后必须反向映射回规范名再做 allowlist 校验、执行和事件投影；未知名称 fail-closed。该 wire 适配不得改变后端 schema 或审计合同。
 - **前端 SSE**：EventSource 无法带 Authorization header，必须 fetch+ReadableStream 手工分帧解析；Last-Event-ID 续传、401→refresh→重连一次收口、终态事件后不再重连。错误码→文案映射表须覆盖后端可能返回的全部 agent 错误码（含 run.failed 载荷中的 POLICY_*/PROVIDER_*/SIDECAR_ERROR）。
 
