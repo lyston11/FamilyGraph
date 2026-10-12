@@ -102,16 +102,38 @@ class RedisAccelerator:
             return None
         if self._client is not None:
             return self._client
-        import redis
+        # `import redis` **必须在 try 内**。
+        #
+        # 缺依赖（镜像里未安装）时它会抛 `ModuleNotFoundError`。放在 try 之外时
+        # 该异常**不会**被「任何后端错误都按不可用降级」的 except 捕获，而
+        # `available()` 此时仍返回 True（它只看 url 非空），于是调用方以为加速层
+        # 健康、随后在读写路径上抛异常。
+        #
+        # 实测：生产镜像内 `import redis` 直接 ModuleNotFoundError，而本机 venv
+        # 因历史上手工装过而正常——正是「本地过、镜像崩」的形态。
+        try:
+            import redis
+        except ImportError as exc:  # pragma: no cover - 依赖缺失的部署错误
+            self._mark_unavailable(exc)
+            logger.error(
+                "redis accelerator unavailable: client library missing; "
+                "policy=%s (install the `redis` runtime dependency)",
+                REDIS_DEGRADATION_POLICY,
+            )
+            return None
 
         assert self._url is not None
         timeout = _operation_timeout()
-        self._client = redis.Redis.from_url(
-            self._url,
-            socket_timeout=timeout,
-            socket_connect_timeout=timeout,
-            decode_responses=True,
-        )
+        try:
+            self._client = redis.Redis.from_url(
+                self._url,
+                socket_timeout=timeout,
+                socket_connect_timeout=timeout,
+                decode_responses=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - 建客户端失败也按不可用降级
+            self._mark_unavailable(exc)
+            return None
         return self._client
 
     def available(self) -> bool:
@@ -337,9 +359,7 @@ async def is_marked_over_quota_async(*, tenant: str, resource: str) -> bool:
     """`is_marked_over_quota` 的事件循环安全版本。"""
     import asyncio
 
-    return await asyncio.to_thread(
-        is_marked_over_quota, tenant=tenant, resource=resource
-    )
+    return await asyncio.to_thread(is_marked_over_quota, tenant=tenant, resource=resource)
 
 
 async def mark_over_quota_async(*, tenant: str, resource: str) -> bool:

@@ -86,7 +86,12 @@ def main() -> int:
             text(
                 """
                 CREATE TABLE rag_documents (id serial primary key, source_type text,
-                  source_id text, scope text, sensitivity text, revision int, status text);
+                  source_id text, scope text, sensitivity text, revision int, status text,
+                  -- `updated_at` 是**查询必需**列：`build_vector_candidates` 会选
+                  -- `d.updated_at AS source_updated_at`。这里漏掉它会让探针在
+                  -- 「表结构不完整」上失败，而不是在它真正要验证的管线上失败——
+                  -- 那会把探针缺陷误报成产品缺陷。
+                  updated_at timestamptz not null default now());
                 CREATE TABLE rag_chunks (id serial primary key,
                   document_id int references rag_documents(id), text text,
                   token_estimate int, index_version text, chunk_index int,
@@ -102,9 +107,9 @@ def main() -> int:
         conn.execute(
             text(
                 "INSERT INTO rag_documents (id,source_type,source_id,scope,sensitivity,"
-                "revision,status) VALUES (1,'memory','m1','private','normal',1,'active'),"
-                "(2,'memory','m2','private','normal',1,'active'),"
-                "(3,'memory','m3','private','normal',1,'revoked')"
+                "revision,status,updated_at) VALUES (1,'memory','m1','private','normal',1,'active',now()),"
+                "(2,'memory','m2','private','normal',1,'active',now()),"
+                "(3,'memory','m3','private','normal',1,'revoked',now())"
             )
         )
         # chunk 5 是**长文本**：会产生多个分段，用于验证

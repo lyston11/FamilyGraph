@@ -30,6 +30,19 @@ dependencies = [
     # 连库。若只装在开发 venv 里，镜像内 `import psycopg` 直接 ModuleNotFoundError，
     # 而该错误在发布脚本里表现为「迁移后容器不 healthy」，很难从症状反推到依赖。
     "psycopg[binary]==3.2.3",
+    # Redis 加速层客户端（C5）。
+    #
+    # 与上面的 psycopg 同类：`redis_accel` 是**生产代码**，且它在 `REDIS_URL`
+    # 已配置时会 `import redis`。不声明为运行时依赖的后果不是「功能缺失」而是
+    # **崩溃**：`_client_or_none()` 里的 `import redis` 在 try 块之外，因此
+    # `ModuleNotFoundError` 不会被「任何后端错误都按不可用降级」的 except 捕获，
+    # 而 `available()` 此时仍返回 True（它只看 url 非空），于是调用方以为加速层
+    # 健康、随后在读写路径上抛异常。
+    #
+    # 实测：生产镜像 `familygraph-prod-api-1` 内 `import redis` 直接
+    # ModuleNotFoundError（`pip install .` 不含未声明依赖），而本机 venv 因
+    # 历史上手工装过而正常——正是「本地过、镜像崩」的形态。
+    "redis==8.1.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门与验证要求"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移、事务与约束合同"}

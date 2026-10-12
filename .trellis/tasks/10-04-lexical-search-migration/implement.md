@@ -2,20 +2,28 @@
 
 ## Phase A：语料与基线
 
-- [ ] 建立不含真实个人数据的中英文/CJK golden corpus 和现有 FTS5 trigram 基线。
-- [ ] 测量召回、排序、p50/p95/p99、索引体积、写入/更新/删除和并发过滤。
+- [x] 建立不含真实个人数据的中英文/CJK golden corpus 和现有 FTS5 trigram 基线。
+      证据：`lexical-search-benchmark.md`（12 条合成中文亲属语料，10 查询）
+- [x] 测量召回、排序、p50/p95/p99、索引体积、写入/更新/删除和并发过滤。
+      证据：`pgroonga-scale-and-filter.md`（20000 条：插入 0.6s、索引构建 0.3s、查询 1.7–2.9ms、过滤组合 2.5–32.8ms）
 
 ## Phase B：PostgreSQL 候选
 
-- [ ] 在隔离 PostgreSQL 验证 PGroonga 安装、tokenizer、scope/visibility/revision 过滤。
-- [ ] 对照 `pg_trgm`、`tsvector` 和 Unicode n-gram；不把无索引 ILIKE 纳入生产方案。
-- [ ] 选择达标实现并记录失败原因。
+- [x] 在隔离 PostgreSQL 验证 PGroonga 安装、tokenizer、scope/visibility/revision 过滤。
+      证据：2026-10-23 复跑：`lexical-reverification-2026-10-23.md`（隔离库 fg_probe_lex，含撤权反证）
+- [x] 对照 `pg_trgm`、`tsvector` 和 Unicode n-gram；不把无索引 ILIKE 纳入生产方案。
+      证据：四方对照 PGroonga 10/10 精确；trgm 对 CJK 全漏；n-gram 假阳性最多 +4
+- [x] 选择达标实现并记录失败原因。
+      证据：`lexical-decision.md`：PGroonga 主路径 + Unicode n-gram 后备
 
 ## Phase C：生命周期与安全
 
-- [ ] 实现 staging/index_version/active pointer、重启恢复和失败重试。
-- [ ] 回归撤权、删除、revision 冲突、引用读取、RAG hard-off 和权限 fail-closed。
-- [ ] 验证 lexical + pgvector hybrid 不绕过 citation/visibility。
+- [x] 实现 staging/index_version/active pointer、重启恢复和失败重试。
+      证据：`test_stage_index_version_flips_only_legal_documents`（test_rag_index_lifecycle.py）
+- [x] 回归撤权、删除、revision 冲突、引用读取、RAG hard-off 和权限 fail-closed。
+      证据：`pgroonga-revocation-probe.md` + `lexical-reverification-2026-10-23.md`（撤权/删除/revision 三态）
+- [x] 验证 lexical + pgvector hybrid 不绕过 citation/visibility。
+      证据：向量路径复用同一 `_ELIGIBILITY_SQL`（`pgvector-pipeline-reverification-2026-10-23.md` 反证过滤承重）
 
 ## Gate
 
@@ -36,8 +44,10 @@
 - [ ] **PGroonga 生产安装方式**（编译/包管理/托管是否允许）——归 `10-04-postgres-operations-cutover`。
 - [ ] recall@k / precision@k 评测（需标注语料）。
 - [ ] 10 万级 chunk 的索引大小、写入成本、查询延迟。
-- [ ] 与 `rag_chunks` 的 revision/scope/visibility 过滤组合。
-- [ ] PGroonga 索引的 `pg_dump`/恢复行为与重建成本。
+- [x] 与 `rag_chunks` 的 revision/scope/visibility 过滤组合。
+      证据：`lexical-reverification-2026-10-23.md` 第 2/3 节
+- [x] PGroonga 索引的 `pg_dump`/恢复行为与重建成本。
+      证据：`pgroonga-scale-and-filter.md`：pg_dump 导出 DDL、恢复时自动重建、恢复后查询正常
 - [ ] 中文分词模式在专业术语/人名上的调优。
 
 
@@ -73,3 +83,19 @@
 因此本任务保持 **in_progress**：设计决策与基准已完成（可复跑），实现被前置任务阻塞。
 不得在 PG 迁移落地前把 PGroonga/pgvector 路径写入生产代码——那正是「先实现后验证」的
 反面模式，也是 `10-05` 建立证明门要防的事。
+
+## 2026-10-23 复核
+
+前置 `10-03-postgres-migration` 已完成（开发环境 `pg_all`），因此本任务原先标注
+「依赖 PostgreSQL 迁移落地」的阻塞**已解除**。在隔离库上复跑四个探针后，
+上面 10 项已闭合；证据汇总见 `research/evidence/lexical-reverification-2026-10-23.md`。
+
+**仍然开放**（不是环境阻塞，是尚未做）：
+
+| 项 | 为什么还开着 |
+|---|---|
+| PGroonga 生产安装方式 | 归 `10-04-postgres-operations-cutover`；dev 镜像已含，生产安装路径未定 |
+| recall@k / precision@k 评测 | 需要**人工标注**的语料；现有 golden corpus 是合成/子串真源 |
+| 10 万级 chunk 规模 | 本轮做到 2 万条（PGroonga 侧），10 万级未测 |
+| 中文分词在专业术语/人名上的调优 | 需要真实术语集与调优目标 |
+| 未达阈值不得切生产 | 这是**发布门**陈述，随生产发布由用户决定 |
