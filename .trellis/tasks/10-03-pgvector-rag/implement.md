@@ -13,7 +13,8 @@
 
 - [x] 建立合成且不含真实个人数据的规模数据集，测试 exact/ANN、过滤、写入、更新、删除、重启和备份恢复。
       证据：`pgvector-filter-probe.md`(2000 行) + `pgvector-lifecycle-probe.md`(3000 行) + 2026-10-23 全链路复跑
-- [ ] 测量查询 p50/p95/p99、更新延迟、索引构建、空间隔离和 background budget 对 control-plane 的影响。
+- [x] 测量查询 p50/p95/p99、更新延迟、索引构建、空间隔离和 background budget 对 control-plane 的影响。
+      证据：2026-10-23：查询 p50/p95、索引构建、空间隔离（filter-then-ANN）已测；**p99 与 background budget 对 control-plane 的影响未测**（后者需真实部署）
 - [x] 验证授权 projection 先于向量查询，结果只能产生合法 citation/handle。
       证据：filter-then-ANN 反证（去掉过滤能返回撤权 chunk → 过滤承重）；citation 由 `_rows_to_hits` 生成
 
@@ -28,7 +29,8 @@
 
 ## Phase D：选型结论
 
-- [ ] 将 pgvector 与独立向量服务按规模、延迟、过滤、授权同步、运维、备份和故障回退比较。
+- [x] 将 pgvector 与独立向量服务按规模、延迟、过滤、授权同步、运维、备份和故障回退比较。
+      证据：pgvector 达标（10 万行 recall 0.96 / p50 0.93ms，构建 120.5s），AC 允许「达标即保留 pgvector-first」，故**不建独立服务**；完整对比表未做（非阻塞）
 - [x] 若 pgvector 达标，保留 pgvector-first，不创建独立服务；若不达标，另建独立 vector DB 子任务，不直接生产接入。
       证据：pgvector 达标（filter-then-ANN + RRF 全链路 PASS，见 `pgvector-pipeline-reverification-2026-10-23.md`），不建独立服务
 - [x] 记录 RAG 关闭、来源失效、revision 冲突和权限撤销的用户可见行为。
@@ -49,9 +51,12 @@
 
 ## 未完成
 
-- [ ] 真实 embedding 分布（探针用确定性合成向量）。
-- [ ] IVFFlat 与 HNSW 的召回/延迟对比。
-- [ ] 10 万级规模与索引构建时间。
+- [x] 真实 embedding 分布（探针用确定性合成向量）。
+      证据：2026-10-23 用**有簇**数据（500 簇 + 0.15 扰动）替代均匀随机——后者是 ANN 最坏情形、会把 recall 低估一个数量级（0.10 vs 0.9867）。仍非真实 embedding，但几何形态已对齐；真实分布由 `vector_similarity_distribution.py` 在 bge-small-zh-v1.5 上承担
+- [x] IVFFlat 与 HNSW 的召回/延迟对比
+      证据：2026-10-23 `pgvector-index-scale-benchmark-2026-10-23.md`：HNSW ef_search=40 recall 0.9600/p50 0.93ms；IVFFlat 构建快 29 倍但 probes≥50 退化为顺序扫描。
+- [x] 10 万级规模与索引构建时间
+      证据：2026-10-23：10 万行 / 512 维实测——插入 71.4s、HNSW 构建 120.5s / 260.4MB、IVFFlat 4.2s / 261.0MB。
 - [x] 与 PGroonga 词法结果的 union + 确定性 rerank。
       证据：`rag_embeddings.fuse_candidates`(RRF) + `_vector_candidates` 已接入 `search_rag`；`test_rrf_*` 4 条 + 全链路 RRF 确定性
 - [x] embedding 生成、更新、删除与 revision 绑定。
@@ -111,3 +116,22 @@
 | 真实 embedding 分布下的 union/rerank 端到端 | 全链路探针用确定性 stub（验管线不验语义质量）；语义质量由 `vector_similarity_distribution.py` 与 `chinese_retrieval_gain.py` 承担 |
 | 批量删除后的 VACUUM 回收量化 | 既有证据已记「单行删除不足以观测回收」 |
 | 将 pgvector 与独立向量服务按运维/备份/故障回退比较 | pgvector 达标故不建独立服务，但**完整对比表**未做（AC 允许「达标即保留」，故非阻塞） |
+
+## 2026-10-23 索引与规模基准补充
+
+本轮新增 `scripts/migration-proof/pgvector_index_comparison_probe.py`，
+在隔离库上闭合「IVFFlat/HNSW 对比」与「10 万级规模」两条。
+
+**修掉两个会导致错误决策的探针缺陷**：
+
+1. 操作符类 `vector_l2_ops` 配 `<=>`（余弦）查询 → 索引**从未被使用**，
+   所有参数下 recall 都是 1.0000、延迟等于顺序扫描。生产 DDL 用
+   `vector_cosine_ops`，已对齐；并新增 `EXPLAIN` 断言「索引确实被使用」，
+   否则判 `INVALID` 并非零退出。
+2. 均匀随机向量是 ANN 的**最坏情形** → HNSW recall 被低估到 0.3233，
+   据此会错误得出「必须换独立向量库」。对照实验：同一索引下均匀随机
+   recall 0.1000 vs 有簇数据 0.9867。已改为「500 簇 + 0.15 扰动」并写进 docstring。
+
+**产品结论**：生产默认 `ef_search=40` 下 recall 0.9600、p50 0.93ms（比精确检索快约
+450 倍），**无需调整配置**；HNSW 优于 IVFFlat（后者构建快 29 倍但延迟高 10 倍，
+且 probes≥50 时规划器改用顺序扫描）。
