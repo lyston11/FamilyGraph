@@ -59,6 +59,34 @@ from app.utils import timeutil
 # JSON schema 子集校验支持的标量类型
 _SUPPORTED_TYPES = {"string", "integer", "boolean", "array", "object"}
 
+#: 校验器认识的 schema 关键字全集。**集合外即配置错误**（见 `_validate_value`）。
+#:
+#: 加这条检查的理由是一个真实缺陷：`_validate_value` 原来只读它认识的键，其余静默
+#: 忽略，于是 `maxLength` 拼成 `maxLenght` 不报错、只是约束失效。同一机制让
+#: `agent/src/tools.ts` 与 `REGISTRY` 的边界约束可以长期不一致而无人发现——两侧都
+#: "没有报错"。
+_SCHEMA_ALLOWED_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "enum",
+        "description",
+    }
+)
+
+#: 跨语言契约快照的格式版本。改变 `_schema_contract_view` 的规范化规则时必须同时
+#: 升它——否则旧快照会被按新规则解读，差异看起来像工具漂移。
+CONTRACT_SCHEMA_VERSION = 1
+
 
 class ToolProtocolError(Exception):
     """工具协议拒绝（携带 HTTP 语义）；由 execute() 统一转审计 + API 错误。"""
@@ -359,6 +387,54 @@ REGISTRY: dict[str, ToolSpec] = {
 }
 
 
+def _schema_contract_view(schema: Any) -> Any:
+    """schema → 跨语言可比对的规范视图（与 `agent/test/tool-contract-parity.test.ts` 逐条对应）。
+
+    规范化四条：
+
+    - **递归去掉 `description`**：它只面向模型，TS 拥有全部中文描述文本，后端描述用于
+      审计与管理面。两侧文案必然不同，不属于契约。
+    - **`required` 缺省补 `[]`**：TypeBox 在无可选字段时不输出该键。
+    - **`properties` 按 key 排序**：两侧字面量顺序不同，不是差异。
+    - **保留边界关键字**（`minLength`/`maxLength`/`minimum`/`maximum`/`minItems`/
+      `maxItems`/`enum`/`additionalProperties`）：它们是真正的受理边界，而**当前两侧
+      并不一致**（见任务 prd.md 的差异表），必须进契约才能被门禁钉住。
+    """
+    if not isinstance(schema, dict):
+        return schema
+    view = {key: value for key, value in schema.items() if key != "description"}
+    if "properties" in view and isinstance(view["properties"], dict):
+        view["properties"] = {
+            key: _schema_contract_view(value)
+            for key, value in sorted(view["properties"].items())
+        }
+    if view.get("type") == "object":
+        view.setdefault("required", [])
+    if "items" in view:
+        view["items"] = _schema_contract_view(view["items"])
+    return view
+
+
+def canonical_contract() -> dict[str, dict[str, Any]]:
+    """跨语言工具契约：工具名 → {version, required_kind, schema}。
+
+    这是 `scripts/export-agent-tool-contract.py` 的输入，也是后端快照新鲜度测试的
+    比对对象。**真源方向是单向的**：`REGISTRY` 是权威，快照与 sidecar 声明都是派生。
+
+    不含 `supported_versions`：它是后端单侧的版本兼容声明（`@1`/`@2` 并存），
+    sidecar 只发送 `TOOL_VERSIONS` 里的当前版本，没有对应概念；放进契约会要求 TS
+    凭空声明一个它不使用的字段。
+    """
+    return {
+        name: {
+            "version": spec.version,
+            "required_kind": spec.required_kind,
+            "schema": _schema_contract_view(spec.input_schema),
+        }
+        for name, spec in sorted(REGISTRY.items())
+    }
+
+
 def resolve_tool(name: str, version: int) -> ToolSpec:
     """未知工具/版本一律拒绝（RT-3：版本化发现合同；兼容集见 ToolSpec）。"""
     spec = REGISTRY.get(name)
@@ -463,6 +539,17 @@ def _deny(status_code: int, code: str, message: str, detail: dict[str, object] |
 
 
 def _validate_value(schema: dict[str, Any], value: Any, *, path: str) -> None:
+    # 未知关键字是注册表自身配置错误，不是调用方问题——因此 500 而不是 422，与
+    # `_SUPPORTED_TYPES` 未知时的既有口径一致。没有这条检查时，`maxLenght` 这类
+    # 拼写错误会让约束静默失效，两侧声明可以长期不一致而都不报错。
+    unknown_keywords = sorted(set(schema) - _SCHEMA_ALLOWED_KEYWORDS)
+    if unknown_keywords:
+        _deny(
+            500,
+            "INTERNAL_ERROR",
+            "工具 schema 含不受支持的关键字",
+            {"path": path, "unknown": unknown_keywords},
+        )
     expected = schema.get("type")
     if expected == "object":
         if not isinstance(value, dict):

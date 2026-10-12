@@ -1,0 +1,422 @@
+{
+ "schema_version": 1,
+ "source": "backend/app/services/agent_tools.py::REGISTRY",
+ "tools": {
+  "familygraph.echo": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "text": {
+      "maxLength": 1000,
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.explain_structural_path": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "from_user_id": {
+      "type": "integer"
+     },
+     "to_user_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "to_user_id"
+    ],
+    "type": "object"
+   },
+   "version": 2
+  },
+  "familygraph.fetch_approved_page": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "approved_token": {
+      "maxLength": 256,
+      "type": "string"
+     }
+    },
+    "required": [
+     "approved_token"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.get_profile_summary": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "user_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "user_id"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.get_relationship_path": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "from_user_id": {
+      "type": "integer"
+     },
+     "to_user_id": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "to_user_id"
+    ],
+    "type": "object"
+   },
+   "version": 2
+  },
+  "familygraph.get_self_context": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.get_term_alternatives": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "concept_code": {
+      "maxLength": 128,
+      "type": "string"
+     },
+     "limit": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "concept_code"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.list_visible_people": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "cursor": {
+      "type": "integer"
+     },
+     "limit": {
+      "type": "integer"
+     },
+     "query": {
+      "maxLength": 50,
+      "type": "string"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.probe_scope": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.propose_memory": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "purpose": {
+      "maxLength": 120,
+      "type": "string"
+     },
+     "summary": {
+      "maxLength": 2000,
+      "type": "string"
+     }
+    },
+    "required": [
+     "summary"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.record_term_usage": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "concept_code": {
+      "maxLength": 128,
+      "type": "string"
+     },
+     "consent_confirmed": {
+      "type": "boolean"
+     },
+     "term": {
+      "maxLength": 64,
+      "type": "string"
+     }
+    },
+    "required": [
+     "concept_code",
+     "term",
+     "consent_confirmed"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.resolve_free_text_relation": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "text": {
+      "maxLength": 80,
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.search_memory": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "type": "integer"
+     },
+     "query": {
+      "maxLength": 500,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.search_space": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "type": "integer"
+     },
+     "query": {
+      "maxLength": 64,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.search_web": {
+   "required_kind": "assistant",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "type": "integer"
+     },
+     "query": {
+      "maxLength": 500,
+      "type": "string"
+     },
+     "use_case": {
+      "maxLength": 32,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "use_case"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.get_evidence": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence_ids": {
+      "items": {
+       "minimum": 1,
+       "type": "integer"
+      },
+      "maxItems": 32,
+      "type": "array"
+     },
+     "target_user_id": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "target_user_id"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.get_relationship_path": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "from_user_id": {
+      "minimum": 1,
+      "type": "integer"
+     },
+     "to_user_id": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "from_user_id",
+     "to_user_id"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.get_space_snapshot": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.get_viewer_target": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "target_user_id": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "target_user_id"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.get_viewer_term": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "root_user_id": {
+      "minimum": 1,
+      "type": "integer"
+     },
+     "target_user_id": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "root_user_id",
+     "target_user_id"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.list_space_nodes": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "cursor": {
+      "maxLength": 32,
+      "type": "string"
+     },
+     "limit": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "version": 1
+  },
+  "familygraph.steward.search_memory": {
+   "required_kind": "steward",
+   "schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "maximum": 10,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "query": {
+      "maxLength": 500,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "version": 1
+  }
+ }
+}
