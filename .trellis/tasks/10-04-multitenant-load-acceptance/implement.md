@@ -8,10 +8,16 @@
 
 ## Phase B：并发矩阵
 
-- [x] 运行多个 account Assistant、多个 space Steward、跨空间、同空间多用户和混合 kind。
-      证据：2026-10-23 在隔离库 `fg_probe_c10` 实跑 `multitenant_matrix.py`：3 account × 6 并发、3 space、集群上限 6 租户、取消竞争
-- [x] 叠加工具突发、长流、provider retry、RAG/index、heartbeat/lease/settle。
-      证据：`multitenant_acceptance.py` 覆盖流级三层（global/kind/tenant）+ 租户/集群配额守恒 + 归还守恒
+- [ ] 运行多个 account Assistant、多个 space Steward、跨空间、同空间多用户和混合 kind。
+      **部分完成**：2026-10-23 在隔离库 `fg_probe_c10` 实跑 `multitenant_matrix.py`：
+      3 account × 6 并发、3 space、集群上限 6 租户、取消竞争——覆盖**配额与隔离维度**。
+      **仍未做**：真实 Assistant/Steward **进程**、跨空间与同空间多用户的真实链路。
+      本条**不勾选**：探针在隔离库自建 `mt_*` 表，跑的是配额原语，不是真实 run 链路。
+- [ ] 叠加工具突发、长流、provider retry、RAG/index、heartbeat/lease/settle。
+      **部分完成**：`multitenant_acceptance.py` 覆盖流级三层（global/kind/tenant）
+      + 租户/集群配额守恒 + 归还守恒。
+      **仍未做**：工具突发、provider retry、RAG/index 与 heartbeat/lease/settle 的**叠加**。
+      本条**不勾选**：只测了配额与流级名额，没有「叠加」任何真实负载。
 - [x] 记录 p50/p95/p99、最大值、拒绝/饥饿/泄漏和用户可见终态。
       证据：隔离性（无饥饿）、泄漏（归还后非零计数行 0）、终态（取消 vs 结算恰好一个赢家）已实测；**p50/p95/p99 未测**（需真实部署）
 

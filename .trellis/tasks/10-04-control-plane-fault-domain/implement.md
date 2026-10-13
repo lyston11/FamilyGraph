@@ -16,8 +16,13 @@
 
 ## Phase C：多实例与 sidecar
 
-- [x] 用 PostgreSQL lease/capacity 在两个实例上做 duplicate lease、crash recovery、重复 settle 测试。
-      证据：2026-10-23：`cross_instance_capacity.py`（隔离库，含 limiter 越限反证）+ `multitenant_matrix.py` 的故障恢复/取消竞争两项
+- [ ] 用 PostgreSQL lease/capacity 在两个实例上做 duplicate lease、crash recovery、重复 settle 测试。
+      **部分完成**：2026-10-23 `cross_instance_capacity.py` 证明进程内 limiter 在多实例下会把配额
+      翻倍（2 实例 → 观测 4 > 上限 2），持久化 counter 形态未越限；`multitenant_matrix.py`
+      覆盖提交前/后断连与取消竞争。
+      **仍未做**：两个**真实进程**（非同进程模拟）、真实 crash（kill -9）、真实重复 settle。
+      本条**不勾选**：探针 docstring 自述「在同一进程内模拟两个独立 limiter 实例」，
+      模拟不是 AC 要求的「两个实例」。
 - [x] 评估并原型化 Assistant/Steward 分进程或独立 worker；定义部署、优雅停机和回滚顺序。
       证据：`docker-compose.yml` 的 `agent-assistant`/`agent-steward` 两个独立服务（`FG_AGENT_ROLE` 各一），`agent-combined` 藏在 profile 后；`agent/test/deployment-split.test.ts` 5 条断言
 

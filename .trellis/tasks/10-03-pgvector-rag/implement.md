@@ -13,8 +13,10 @@
 
 - [x] 建立合成且不含真实个人数据的规模数据集，测试 exact/ANN、过滤、写入、更新、删除、重启和备份恢复。
       证据：`pgvector-filter-probe.md`(2000 行) + `pgvector-lifecycle-probe.md`(3000 行) + 2026-10-23 全链路复跑
-- [x] 测量查询 p50/p95/p99、更新延迟、索引构建、空间隔离和 background budget 对 control-plane 的影响。
-      证据：2026-10-23：查询 p50/p95、索引构建、空间隔离（filter-then-ANN）已测；**p99 与 background budget 对 control-plane 的影响未测**（后者需真实部署）
+- [ ] 测量查询 p50/p95/p99、更新延迟、索引构建、空间隔离和 background budget 对 control-plane 的影响。
+      **部分完成**：2026-10-23 已测查询 p50/p95、索引构建时间与体积、空间隔离（filter-then-ANN）。
+      **仍未测**：p99、更新延迟、background budget 对 control-plane 的影响（后者需真实部署）。
+      本条**不勾选**：勾选会把「测了一半」记成「已测」。
 - [x] 验证授权 projection 先于向量查询，结果只能产生合法 citation/handle。
       证据：filter-then-ANN 反证（去掉过滤能返回撤权 chunk → 过滤承重）；citation 由 `_rows_to_hits` 生成
 
@@ -51,8 +53,12 @@
 
 ## 未完成
 
-- [x] 真实 embedding 分布（探针用确定性合成向量）。
-      证据：2026-10-23 用**有簇**数据（500 簇 + 0.15 扰动）替代均匀随机——后者是 ANN 最坏情形、会把 recall 低估一个数量级（0.10 vs 0.9867）。仍非真实 embedding，但几何形态已对齐；真实分布由 `vector_similarity_distribution.py` 在 bge-small-zh-v1.5 上承担
+- [ ] 真实 embedding 分布（探针用确定性合成向量）。
+      **部分完成**：2026-10-23 把探针数据从均匀随机改为**有簇**（500 簇 + 0.15 扰动），
+      因为均匀随机是 ANN 最坏情形、会把 recall 低估一个数量级（0.10 vs 0.9867）。
+      **但这仍不是真实 embedding**——几何形态对齐了，分布没有。
+      真实分布由 `vector_similarity_distribution.py` 在 bge-small-zh-v1.5 上承担（其结论已落盘）。
+      本条**不勾选**：AC 问的是真实分布，合成簇不是。
 - [x] IVFFlat 与 HNSW 的召回/延迟对比
       证据：2026-10-23 `pgvector-index-scale-benchmark-2026-10-23.md`：HNSW ef_search=40 recall 0.9600/p50 0.93ms；IVFFlat 构建快 29 倍但 probes≥50 退化为顺序扫描。
 - [x] 10 万级规模与索引构建时间
@@ -135,3 +141,6 @@
 **产品结论**：生产默认 `ef_search=40` 下 recall 0.9600、p50 0.93ms（比精确检索快约
 450 倍），**无需调整配置**；HNSW 优于 IVFFlat（后者构建快 29 倍但延迟高 10 倍，
 且 probes≥50 时规划器改用顺序扫描）。
+
+**证据强度声明**：本任务多数结论来自**隔离库探针（L3）**，不是真实部署。
+需要真实多实例/尾延迟/线上发布的项一律**未勾选**，见各条后的「仍未测」。

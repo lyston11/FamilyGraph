@@ -4,8 +4,11 @@
 
 - [x] 计算每个 backend/worker/sidecar 实例的 control/execution/background/admin 连接预算。
       证据：`pg_connection_budget_probe.py` + `research/evidence/pg-connection-budget.md`；启动期由 `config._validate_agent_execution_admission` 强制 `AGENT_EXECUTION_GLOBAL_CAPACITY ≤ POOL_MAX_CONNECTIONS-1`
-- [x] 在隔离 PostgreSQL 注入 pool exhaustion、长事务、断线、重启和 failover。
-      证据：pool exhaustion / 长事务 / 断线 / 重启已在隔离 PG 注入（`pg_connection_budget_probe.py`）；**failover 未做**
+- [ ] 在隔离 PostgreSQL 注入 pool exhaustion、长事务、断线、重启和 failover。
+      **部分完成**：pool exhaustion / 长事务 / 断线 / 重启已在隔离 PG 注入
+      （`pg_connection_budget_probe.py`）。
+      **仍未做**：failover——它需要真实主备与切换控制，不是单实例探针能覆盖的。
+      本条**不勾选**：原文列了五项，只做了四项。
 - [x] 决定是否需要 PgBouncer，并验证 session state/prepare/notify 兼容性。
       证据：`pgbouncer_compat_probe.py` PASS：transaction pooling 下配额守恒、prepared statement 正常；失败模式已量化（部署二选一）
 

@@ -53,9 +53,12 @@
 - [x] **发现并记录锁序死锁**：租约（counter→run）与结算（run→counter）交叉会真实死锁。
       固定顺序 `global → kind → tenant counter → run → attempt`；结算必须在 fence 前
       归还 counter。证据 `research/evidence/lock-order-deadlock.md`。
-- [x] 建立完整 agent/RAG schema prototype 的**其余部分**：约束/索引/触发器逐条语义审查
-      证据：`pg_baseline_build.py` + `pg_trigger_equivalents.py`；开发库实测 91 表、pgroonga 可用
-      （`10-05` 已完成四类触发器等价物与 69 个触发器盘点；剩余为逐表核对）。
+- [ ] 建立完整 agent/RAG schema prototype 的**其余部分**：约束/索引/触发器逐条语义审查
+      **部分完成**：`pg_baseline_build.py` + `pg_trigger_equivalents.py`；开发库实测 91 表、
+      pgroonga 可用；`10-05` 已交付四类触发器 plpgsql 等价物与 69 个触发器盘点。
+      **仍未做**：逐表核对——`10-05` 自述「**Phase 3 仍有两项未勾选**」，且证据等级为
+      L2 / 原型 L3，不是真实业务入口。
+      本条**不勾选**：条目要求的是「完整…逐条审查」，已完成的是工具与盘点。
 
 ## Phase B：控制层 schema
 

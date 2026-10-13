@@ -6,8 +6,11 @@
       证据：`redis_accel.scoped_key` 强制 `scope_kind ∈ {global,account,space,agent_kind}` + epoch，未知即 ValueError；2026-10-23 在隔离实例 `fg-probe-redis` 复跑探针
 - [x] 实现 token bucket/admission/cache/wakeup 最小接口，所有持久结果仍写 PostgreSQL/测试真源。
       证据：**刻意改为负缓存而非 token bucket**：令牌由 Redis 持有并授权就等于把 Redis 变成配额真源，与冻结的 `pg_fallback` 策略矛盾。`is_marked_over_quota`/`mark_over_quota`/`clear_over_quota` 只能拒绝、永不授权
-- [x] 建立 Redis unavailable、timeout、restart、eviction 和网络分区注入。
-      证据：`redis_degradation_probe.py` 四项（基线原子语义 / 不可用 / 超时 / 重启丢 key）2026-10-23 在隔离实例复跑 PASS
+- [ ] 建立 Redis unavailable、timeout、restart、eviction 和网络分区注入。
+      **部分完成**：2026-10-23 在隔离实例复跑 `redis_degradation_probe.py` 四项
+      （基线原子语义 / 不可用 / 超时 / 重启丢 key）PASS。
+      **仍未做**：eviction（需内存压力配置）与网络分区（需真实网络控制）。
+      本条**不勾选**：原文列了五种故障，只做了三种。
 
 ## Phase B：Admission 接入
 
