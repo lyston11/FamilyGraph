@@ -281,3 +281,56 @@ def test_provisional_prose_reaches_the_browser_wire_unchanged(client, db_session
     # 权威消息仍然携带完整答案，临时分片不改变它。
     authoritative = next(event for event in events if event["event"] == "message.assistant_added")
     assert json.loads(authoritative["data"])["payload"]["text"] == "重试后的正文"
+
+
+def test_cross_process_append_reaches_the_stream_via_polling_fallback(
+    client, db_session, monkeypatch
+):
+    """**不调用 `notifier.publish`** 时，追加仍必须送达——这是跨进程场景。
+
+    ## 为什么需要这条
+
+    `agent_events.notifier` 是**进程内**注册表（见 `RunEventNotifier` 的 docstring：
+    「跨进程部署时其他进程的追加不在本注册表内——SSE handler 以可配间隔轮询 DB 兑底」）。
+
+    但既有测试的 `_append` 辅助函数**总是**调用 `notifier.publish(run.id)`，
+    因此全部走的是进程内快路径。**轮询兜底从未被测试覆盖**——而那正是
+    多进程部署（生产是 assistant/steward 两个 sidecar + 独立 API）下唯一的送达机制。
+
+    若轮询兜底被改坏（例如把 `wait_for(timeout=...)` 的超时分支改成 `continue`
+    而跳过 DB 查询，或把轮询间隔误设为极大），既有测试全绿，而跨进程事件会
+    **永久卡在流里**。
+
+    本测试刻意**只写 DB、不 publish**，验证纯轮询路径能送达并正常收口。
+    """
+    monkeypatch.setattr(config, "AGENT_SSE_POLL_SECONDS", 0.05)
+    _user, _space, _agent_session, run = _seed_run(db_session, "ssecross")
+    headers = auth_header(login(client, "ssecross", "123456").json())
+
+    sink: list = []
+    thread = _drain_stream(
+        client, f"/api/agent/runs/{run.id}/events?after_event_id=0", headers, sink
+    )
+    try:
+        time.sleep(0.3)
+        # 只写 DB，**不**调用 notifier.publish —— 模拟另一个进程的追加。
+        accepted, duplicates = agent_events.append_events(
+            db_session,
+            run,
+            [
+                EventEntry(seq=1, type="turn.started", public_payload={}),
+                EventEntry(seq=2, type="run.failed", public_payload={"error_code": "DONE"}),
+            ],
+        )
+        assert len(accepted) == 2 and not duplicates
+        db_session.commit()
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "轮询兜底未送达跨进程事件"
+    finally:
+        if thread.is_alive():
+            pass  # daemon 线程随测试进程退出
+
+    lines = [item for item in sink if isinstance(item, str)]
+    events = _parse_sse(lines)
+    assert [e["id"] for e in events] == [1, 2], events
+    assert events[-1]["event"] == "run.failed"

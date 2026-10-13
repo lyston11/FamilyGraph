@@ -25,6 +25,18 @@
 ## Phase C：Wakeup/cache/circuit hint
 
 - [ ] 使用 pub/sub 或短消息做唤醒，但保留周期扫描补偿丢消息。
+      **核心语义已满足，跨进程优化未做**：唤醒机制是**进程内** `RunEventNotifier`，
+      跨进程追加靠 **0.5s DB 轮询兜底**（`config.AGENT_SSE_POLL_SECONDS`），
+      注释明确写了这是跨进程场景的唯一来源。
+      **2026-10-23 补齐了该兜底的测试**：既有测试的 `_append` 总是调用
+      `notifier.publish`，因此**轮询兜底从未被覆盖**——而那正是生产多进程部署
+      （两个 sidecar + 独立 API）下唯一的送达机制。新增
+      `test_cross_process_append_reaches_the_stream_via_polling_fallback`
+      刻意只写 DB、不 publish。
+      **mutation 验证**：去掉 DB 轮询后该测试**永久挂起**（90s 未收口），
+      改动前不会有任何测试失败。
+      **仍未做**：Redis pub/sub 唤醒本身（它是延迟优化，不是正确性缺口——
+      丢消息由轮询补偿，符合「wakeup 只是提示、持久扫描是真相」的既定设计）。
 - [ ] RAG/Provider cache 必须带 revision/scope/visibility/upstream key，并测试失效。
 - [ ] circuit hint 只影响同一 upstream/kind/tenant，不得全局熔断。
 
