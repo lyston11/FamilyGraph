@@ -5,6 +5,10 @@
 - [x] 计算每个 backend/worker/sidecar 实例的 control/execution/background/admin 连接预算。
       证据：`pg_connection_budget_probe.py` + `research/evidence/pg-connection-budget.md`；启动期由 `config._validate_agent_execution_admission` 强制 `AGENT_EXECUTION_GLOBAL_CAPACITY ≤ POOL_MAX_CONNECTIONS-1`
 - [x] 在隔离 PostgreSQL 注入 pool exhaustion、长事务、断线、重启和 failover。
+      2026-10-23 追加：**真实 PG 重启**（`docker restart fg-acc-pg`）与 **Redis 中断**
+      已在专用验收实例上注入——重启期间恰好 1 次 500（连接中途断开），恢复后 60/60 全 200；
+      Redis 停时控制面 60 次全 200、无挂死。见
+      `research/evidence/restart-and-redis-2026-10-23.md`。
       证据：2026-10-23 在**专用验收实例**（`fg-acc-pg` 55460 + 第二 API 进程 8010）上
       实测（`pool_exhaustion_probe.py`，含端口白名单护栏）：
       - pool exhaustion：占住 **81/100** 条连接（`total=92`）→ `/api/ready`

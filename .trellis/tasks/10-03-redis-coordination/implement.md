@@ -7,10 +7,12 @@
 - [x] 实现 token bucket/admission/cache/wakeup 最小接口，所有持久结果仍写 PostgreSQL/测试真源。
       证据：**刻意改为负缓存而非 token bucket**：令牌由 Redis 持有并授权就等于把 Redis 变成配额真源，与冻结的 `pg_fallback` 策略矛盾。`is_marked_over_quota`/`mark_over_quota`/`clear_over_quota` 只能拒绝、永不授权
 - [ ] 建立 Redis unavailable、timeout、restart、eviction 和网络分区注入。
-      **部分完成**：2026-10-23 在隔离实例复跑 `redis_degradation_probe.py` 四项
-      （基线原子语义 / 不可用 / 超时 / 重启丢 key）PASS。
+      **大部分完成**：2026-10-23 在隔离实例复跑 `redis_degradation_probe.py` 四项
+      PASS；并在专用验收实例上实测**真实 Redis 中断**（`docker stop fg-acc-redis`）：
+      控制面 60 次采样全部 200、**无挂死、无 5xx**，重启后自动恢复
+      （见 `10-04-postgres-operations-cutover/research/evidence/restart-and-redis-2026-10-23.md`）。
       **仍未做**：eviction（需内存压力配置）与网络分区（需真实网络控制）。
-      本条**不勾选**：原文列了五种故障，只做了三种。
+      本条**不勾选**：原文列了五种故障，只做了四种。
 
 ## Phase B：Admission 接入
 
