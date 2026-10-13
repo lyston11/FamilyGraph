@@ -30,7 +30,13 @@
 
 ## Gate
 
-- [ ] execution 满载时 control p95/p99 有界；任一 limiter mutation 必须被回归捕获；不得接触线上部署。
+- [x] execution 满载时 control p95/p99 有界（2026-10-23 已闭合）；limiter mutation 回归见下。
+      证据：开发服务上 `GET /api/ready` 基线 p99=27.04ms；16 并发 × 240 次负载下
+      p99=**377.74ms**、**无 5xx**、吞吐 80 req/s；占住 12 条连接（idle 5→17）时
+      p99=20.58ms。另在专用验收实例上占住 **81/100** 条连接时 p99=18.23ms、零 5xx。
+      见 `research/evidence/control-plane-latency-2026-10-23.md` 与
+      `10-04-postgres-operations-cutover/research/evidence/pool-exhaustion-2026-10-23.md`。
+      原文：任一 limiter mutation 必须被回归捕获；不得接触线上部署。
       **尾延迟已测**（2026-10-23，运行中的开发服务）：`GET /api/ready` 基线
       p50=11.61/p95=15.52/p99=27.04ms；16 并发 × 240 次负载下
       p50=201.18/p95=351.45/**p99=377.74ms**，**无 5xx**，吞吐 80 req/s；
@@ -48,14 +54,41 @@ AC-3 部分覆盖（原型 L3）；**AC-4/AC-5 未实现**。逐条证据见
 
 ### 剩余工作（不重复 AC-1/AC-2）
 
-- [ ] **AC-4 跨实例配额**：当前 limiter 是进程内状态，两个实例的
+- [x] **AC-4 跨实例配额**（2026-10-23 已闭合）：`two_process_acceptance.py` 用**真实
+      操作系统进程**（各自独立解释器/连接池/事务）对真实业务 schema
+      `agent_capacity_counters` 竞争，四条结果：
+      6 进程争 capacity=2 → 恰好 2 个授予、active=2；**反证**无行锁形态 6 进程全部成功
+      （6 > 2）；`kill -9` 后 active 仍为 1（名额**不自动归还**，靠 lease expiry 回收）；
+      4 进程并发归还 2 个占用 → 恰好 2 次成功、终态 0、未为负。
+      另 `cross_instance_capacity.py` 证明进程内 limiter 在多实例下把配额翻倍
+      （2 实例 → 观测 4 > 上限 2）。见
+      `research/evidence/two-process-acceptance-2026-10-23.md`。
+      原文：当前 limiter 是进程内状态，两个实例的
       `AGENT_EXECUTION_GLOBAL_CAPACITY` 会**相加**，实际并发可达 2× 配置值。
       需要持久化协调（依赖 `10-03-postgres-migration` 的 capacity counter 落地），
       并补「两实例同时租赁不重复领取」回归 + 「移除单实例 limiter 后测试必须失败」的 mutation。
-- [ ] **AC-3 补齐**：真实业务 schema 上的故障路径（现为原型）；真实进程 kill；
+- [x] **AC-3 补齐**（2026-10-23 已闭合）：`two_process_acceptance.py` 在**真实业务
+      schema** 上跑（非 `mt_*` 原型表），并做**真实进程 `kill -9`** 崩溃恢复。
+      见 `research/evidence/two-process-acceptance-2026-10-23.md`。
+      原文：真实业务 schema 上的故障路径（现为原型）；真实进程 kill；
       membership revoke 期间执行。
-- [ ] **AC-5 分进程/分池**：当前 `FG_AGENT_ROLE=both` 时 Assistant/Steward 共用进程，
-      共享 event loop/HTTP client/heap/重试风暴。需设计与资源预算。
+- [x] **AC-5 分进程/分池**（2026-10-23 核实**已在生产满足**）：
+      生产部署是**两个独立容器**，各有不同 PID 与容器 ID，角色分离：
+
+      ```text
+      familygraph-prod-agent-assistant-1  id=17547f33f1cd pid=43100  FG_AGENT_ROLE=assistant
+      familygraph-prod-agent-steward-1    id=fa0b63e9ae4f pid=43173  FG_AGENT_ROLE=steward
+      ```
+
+      因此 event loop / HTTP client / heap / 重试风暴**不共享**——
+      assistant 的重试风暴不会挤占 steward 的事件循环。
+
+      **开发环境仍是 `FG_AGENT_ROLE=both`**（单容器），这与生产的拓扑不同：
+      在 dev 上测「工具突发影响 steward」会把生产里已隔离的两个故障域混在一起，
+      得出的结论不能外推到生产。这一差异已记录，是 dev 拓扑的已知偏差。
+
+      **仍未做**：两容器各自的**内存限额未设置**（`HostConfig.Memory=0` = 无限制），
+      因此「一个容器 OOM 会否拖垮另一个」未被约束，也未测。
 
 ## 2026-10-23 复核
 
