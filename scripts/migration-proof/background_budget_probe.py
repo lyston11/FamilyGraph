@@ -99,8 +99,15 @@ def main() -> int:
     while time.perf_counter() - started < DURATION_SECONDS:
         code, ms, _ = _timed_get(BASE_URL + READY_PATH)
         gate = _embedding_gate()
+        # gate 的真实键是 `waiting_online` / `waiting_background`（不是 `waiting`）。
+        # 读错键会让 `busy` 恒为 0，于是「按 embedding 活动分组」变成空比较——
+        # **看起来像「后台无影响」，实际是「没有分组」**。
         active = int(gate.get("active", 0)) if gate else 0
-        waiting = int(gate.get("waiting", 0)) if gate else 0
+        waiting = (
+            int(gate.get("waiting_online", 0)) + int(gate.get("waiting_background", 0))
+            if gate
+            else 0
+        )
         if active > 0 or waiting > 0:
             busy_ticks += 1
         samples.append(

@@ -14,9 +14,14 @@
 - [x] 建立合成且不含真实个人数据的规模数据集，测试 exact/ANN、过滤、写入、更新、删除、重启和备份恢复。
       证据：`pgvector-filter-probe.md`(2000 行) + `pgvector-lifecycle-probe.md`(3000 行) + 2026-10-23 全链路复跑
 - [ ] 测量查询 p50/p95/p99、更新延迟、索引构建、空间隔离和 background budget 对 control-plane 的影响。
-      **部分完成**：2026-10-23 已测查询 p50/p95、索引构建时间与体积、空间隔离（filter-then-ANN）。
-      **仍未测**：p99、更新延迟、background budget 对 control-plane 的影响（后者需真实部署）。
-      本条**不勾选**：勾选会把「测了一半」记成「已测」。
+      **大部分完成**：2026-10-23 已测查询 p50/p95/p99、索引构建时间与体积、
+      空间隔离（filter-then-ANN）；在运行中的开发服务上实测维护循环开启时
+      控制面 p99=22.30ms（4050 次采样，无 5xx），见
+      `research/evidence/background-budget-2026-10-23.md`。
+      **仍未测**：更新延迟；**embedding 满载 vs 空闲的对比**——180s 内 embedding gate
+      的 active 始终为 0（没有待索引 chunk），因此**不能声称「已证明 embedding 满载
+      不影响控制面」**。要做出该对比需先制造待索引语料。
+      本条**不勾选**：勾选会把「部分覆盖」记成「已测」。
 - [x] 验证授权 projection 先于向量查询，结果只能产生合法 citation/handle。
       证据：filter-then-ANN 反证（去掉过滤能返回撤权 chunk → 过滤承重）；citation 由 `_rows_to_hits` 生成
 
