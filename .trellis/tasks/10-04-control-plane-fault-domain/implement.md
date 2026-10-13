@@ -31,6 +31,13 @@
 ## Gate
 
 - [ ] execution 满载时 control p95/p99 有界；任一 limiter mutation 必须被回归捕获；不得接触线上部署。
+      **尾延迟已测**（2026-10-23，运行中的开发服务）：`GET /api/ready` 基线
+      p50=11.61/p95=15.52/p99=27.04ms；16 并发 × 240 次负载下
+      p50=201.18/p95=351.45/**p99=377.74ms**，**无 5xx**，吞吐 80 req/s；
+      占住 12 条只读连接（`max_connections=100`，idle 5→17）时 p99=20.58ms，
+      证明连接余量确实保护控制面。见
+      `research/evidence/control-plane-latency-2026-10-23.md`。
+      **仍未做**：limiter mutation 回归（移除配额/保留容量的变异必须被捕获）。
 
 
 ## 覆盖核查（2026-10-06）
