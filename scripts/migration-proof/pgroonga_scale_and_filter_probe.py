@@ -22,8 +22,10 @@ import os
 import sys
 import time
 
-N_ROWS = 20000
-N_SPACES = 20
+# 规模可参数化：`PGTEST_GROONGA_ROWS` 用于 10 万级验证。
+# 默认 20000 保持既有证据可复现。
+N_ROWS = int(os.environ.get("PGTEST_GROONGA_ROWS", "20000"))
+N_SPACES = int(os.environ.get("PGTEST_GROONGA_SPACES", "20"))
 K = 10
 
 # 合成中文语料模板（亲属/关系领域，不含真实人名）

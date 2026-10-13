@@ -97,3 +97,35 @@ fg_probe_lex：已 DROP（pg_database 中无 %probe% 残留）
 开发库 familygraph：未受影响（agent_runs 1510 行不变）
 线上：未接触
 ```
+
+
+## 附：10 万级规模复跑（2026-10-23，专用验收实例）
+
+把 `pgroonga_scale_and_filter_probe.py` 参数化（`PGTEST_GROONGA_ROWS`）后，
+在专用验收实例（`fg-acc-pg` 55460）上跑 **100000 条 / 20 space**：
+
+```text
+网络基线（SELECT 1 往返，取最小值）：0.12ms
+
+=== 查询延迟（无过滤，k=10）===
+  爷爷   命中 10   69.33ms
+  叔父   命中 10    7.36ms
+  家族树 命中 10   13.18ms
+  亲属   命中 10   12.11ms
+  外祖父 命中 10    7.29ms
+  爷     命中 10    7.00ms
+
+=== 授权过滤组合（关键 AC）===
+  filter-then-search (1/20 space)  命中 0   候选  2857    8.81ms
+  filter-then-search (5/20)        命中 10  候选 14286   41.56ms
+  filter-then-search (20/20)       命中 10  候选 57142  163.21ms
+```
+
+**结论**：延迟随候选集近似线性增长（2857 → 57142 候选对应 8.81 → 163.21ms），
+因此**过滤必须在索引层完成**（filter-then-search），不能全库召回后再在应用层过滤。
+
+`1/20 space` 时命中 0 是**该空间内确实没有匹配文本**，不是查询缺陷——
+但实现层必须区分「候选被授权过滤光」与「语料里没有」（`RetrievalOutcome.filtered_out`）。
+
+注：输出里「延迟含 SSH 隧道往返（约 180ms 基线）」那行是探针的旧文案，
+与本次实测的 0.12ms 网络基线不一致，已按实测值记录。

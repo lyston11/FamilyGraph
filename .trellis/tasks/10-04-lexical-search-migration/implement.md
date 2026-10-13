@@ -41,9 +41,21 @@
 
 ## 未完成（实现前置）
 
-- [ ] **PGroonga 生产安装方式**（编译/包管理/托管是否允许）——归 `10-04-postgres-operations-cutover`。
+- [x] **PGroonga 生产安装方式**（2026-10-23 核实已解决）：
+      采用**自建镜像** `familygraph-postgres:pg16-pgvector-pgroonga`，
+      开发与生产**共用同一镜像**（`deploy/production/docker-compose.prod.yml:84`）。
+      生产实测已装：`pgroonga 4.0.6` + `vector 0.8.7`（PostgreSQL 16.15 / aarch64）。
+      因此不存在「编译/包管理/托管是否允许」的悬置问题——镜像自带扩展，
+      compose 注释也记明了选它的理由（`pg_trgm` 对 CJK 短查询 0/10 命中，
+      PGroonga 10/10 精确）。
 - [ ] recall@k / precision@k 评测（需标注语料）。
-- [ ] 10 万级 chunk 的索引大小、写入成本、查询延迟。
+- [x] 10 万级 chunk 的索引大小、写入成本、查询延迟（2026-10-23 完成）：
+      把 `pgroonga_scale_and_filter_probe.py` 参数化（`PGTEST_GROONGA_ROWS`）后在
+      专用验收实例上跑 **100000 条 / 20 space**：
+      无过滤查询 7.00–69.33ms（k=10）；授权过滤组合
+      1/20 space 8.81ms（候选 2857）/ 5/20 41.56ms（14286）/ 20/20 **163.21ms**（57142）。
+      延迟随候选集近似线性，证明**过滤必须在索引层完成**（filter-then-search），
+      不能全库召回后再过滤。详见 `research/evidence/lexical-reverification-2026-10-23.md`。
 - [x] 与 `rag_chunks` 的 revision/scope/visibility 过滤组合。
       证据：`lexical-reverification-2026-10-23.md` 第 2/3 节
 - [x] PGroonga 索引的 `pg_dump`/恢复行为与重建成本。
