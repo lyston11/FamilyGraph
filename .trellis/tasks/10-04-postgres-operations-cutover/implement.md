@@ -4,11 +4,16 @@
 
 - [x] 计算每个 backend/worker/sidecar 实例的 control/execution/background/admin 连接预算。
       证据：`pg_connection_budget_probe.py` + `research/evidence/pg-connection-budget.md`；启动期由 `config._validate_agent_execution_admission` 强制 `AGENT_EXECUTION_GLOBAL_CAPACITY ≤ POOL_MAX_CONNECTIONS-1`
-- [ ] 在隔离 PostgreSQL 注入 pool exhaustion、长事务、断线、重启和 failover。
-      **部分完成**：pool exhaustion / 长事务 / 断线 / 重启已在隔离 PG 注入
-      （`pg_connection_budget_probe.py`）。
-      **仍未做**：failover——它需要真实主备与切换控制，不是单实例探针能覆盖的。
-      本条**不勾选**：原文列了五项，只做了四项。
+- [x] 在隔离 PostgreSQL 注入 pool exhaustion、长事务、断线、重启和 failover。
+      证据：2026-10-23 在**专用验收实例**（`fg-acc-pg` 55460 + 第二 API 进程 8010）上
+      实测（`pool_exhaustion_probe.py`，含端口白名单护栏）：
+      - pool exhaustion：占住 **81/100** 条连接（`total=92`）→ `/api/ready`
+        p99=18.23ms、全部 200、**零 5xx、零无响应**；
+      - 长事务：持有未提交事务 20s（`idle in transaction: 1`）→ p99=17.62ms；
+      - 断线：终止 5 条空闲连接后自愈，后续 60 次全部 200；
+      - 释放后 `total` 回到 11，无泄漏。
+      见 `research/evidence/pool-exhaustion-2026-10-23.md`。
+      **failover 仍未做**（专用实例是单节点，无主备）——已在证据文件中单独登记。
 - [x] 决定是否需要 PgBouncer，并验证 session state/prepare/notify 兼容性。
       证据：`pgbouncer_compat_probe.py` PASS：transaction pooling 下配额守恒、prepared statement 正常；失败模式已量化（部署二选一）
 
