@@ -224,6 +224,22 @@ def pooled_client(base_url: str) -> httpx.AsyncClient:
             float(config.AGENT_PROVIDER_PROXY_TIMEOUT_SECONDS),
             connect=float(config.AGENT_PROVIDER_PROXY_CONNECT_TIMEOUT_SECONDS),
         ),
+        # **必须显式关掉环境代理**。
+        #
+        # httpx 默认 `trust_env=True`，会读 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`
+        # 与 `NO_PROXY`。对上游 provider 而言那是**错的**：
+        #   1. 出网路径应由本服务的 egress 控制决定，而不是环境变量——
+        #      环境里一个变量就能把所有上游流量改道到未知中间人，而代码、日志与
+        #      审计都看不出区别（`agent_provider_egress` 只记 `sent`/`error_class`）；
+        #   2. 它会让故障语义失真。实测（开发机设了 `HTTP_PROXY`）：连一个**已关闭的
+        #      本地端口**返回的是 `ReadTimeout` 而不是 `ConnectError`——于是
+        #      「连接被拒」被记成「超时且可能已发送」，`sent=false` 的审计证据丢失。
+        #
+        # 生产 env 目前未设代理，因此这是**潜在**风险而非现存故障；
+        # 但一个能静默改道上游流量的环境变量不应依赖「没人会设」来防住。
+        # 需要出站代理时应由部署显式配置专用 egress（见 `AGENT_EGRESS_*`），
+        # 而不是复用进程级 `HTTP_PROXY`。
+        trust_env=False,
     )
     _POOLED_CLIENTS[base_url] = client
     return client

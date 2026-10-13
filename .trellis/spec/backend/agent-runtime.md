@@ -421,3 +421,21 @@ finally:
     await upstream.aclose()                 # 只关闭响应流
 ```
 
+## 上游 egress 不得读进程代理环境变量（2026-10-23）
+
+`provider_proxy.pooled_client` **必须**显式 `trust_env=False`。
+
+httpx 默认 `trust_env=True`，会读 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 与
+`NO_PROXY`。对上游 provider 而言这是错的，两个理由：
+
+1. **出网路径应由本服务的 egress 控制决定，而不是环境变量。** 环境里一个变量
+   就能把所有 provider 流量改道到未知中间人，而代码、日志与
+   `agent_provider_egress` 审计**看不出区别**（审计只记
+   `sent`/`error_class`/`bytes_read`，不含目标地址）。
+2. **它会让故障语义失真。** 实测：设了 `HTTP_PROXY` 后，连一个**已关闭的本地端口**
+   返回的是 `ReadTimeout` 而不是 `ConnectError`——于是「连接被拒」被记成
+   「超时且可能已发送」，`sent=false` 这条审计证据丢失。
+
+本节的合同：需要出站代理时应**显式配置专用 egress**，不得复用进程级 `HTTP_PROXY`。
+`test_provider_transport_faults_real_socket.py` 钉住该行为（设置三个代理变量后断言
+`client.trust_env is False`）。

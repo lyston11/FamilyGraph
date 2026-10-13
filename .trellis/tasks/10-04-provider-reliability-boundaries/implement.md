@@ -28,6 +28,23 @@
       **mutation 验证**：把 `RemoteProtocolError` 改成 `retryable=True` →
       1 项失败；把 `TimeoutException` 的 `sent` 改成 `False` → 3 项失败。
       两者在改动前都不会让任何测试失败。
+
+      **2026-10-23 追加：用真实 socket 产生真实故障**（`test_provider_transport_faults_real_socket.py`）。
+      上面两条用的是**构造的异常实例**，只验证「给定类型 → 返回什么分类」，
+      不验证「真实网络故障确实抛出该类型」（httpx 的异常映射可能随版本变化）。
+      新文件起真实本地 TCP 服务，用真实 `httpx.AsyncClient` 发请求，覆盖：
+      连接被拒（`ConnectError`, sent=False）、DNS 失败（同样映射为 `ConnectError`,
+      sent=False）、响应头超时（`TimeoutException`, sent=True）、
+      响应头前 RST 与响应体中途 RST（`sent=True`，**这是 `sent` 语义的承重断言**）。
+
+      **并修掉一个潜在风险**：`pooled_client` 此前未显式设置 `trust_env`，
+      即 httpx 默认的 `True` → 会读 `HTTP_PROXY`/`HTTPS_PROXY`。
+      实测后果：设了 `HTTP_PROXY` 后连一个**已关闭的本地端口**返回 `ReadTimeout`
+      而非 `ConnectError`，于是「连接被拒」被记成「超时且可能已发送」，
+      `sent=false` 的审计证据丢失。已显式 `trust_env=False`。
+      生产 env 目前无代理，因此这是**潜在**风险；但一个能静默改道上游流量的
+      环境变量不应依赖「没人会设」来防住（spec 明确 api 容器是唯一 egress，
+      全仓无出站代理配置）。**mutation**：移除该行 → 1 项失败。
 - [x] 验证不同 provider/kind/tenant 不互相熔断，egress/sent/settle 合同不变。
       证据：`circuit_key(provider_id=..., kind=...)` 按 provider+kind 分区；`test_provider_circuit.py` 覆盖隔离性
 
