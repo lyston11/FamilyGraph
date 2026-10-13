@@ -53,12 +53,13 @@
 
 ## 未完成
 
-- [ ] 真实 embedding 分布（探针用确定性合成向量）。
-      **部分完成**：2026-10-23 把探针数据从均匀随机改为**有簇**（500 簇 + 0.15 扰动），
-      因为均匀随机是 ANN 最坏情形、会把 recall 低估一个数量级（0.10 vs 0.9867）。
-      **但这仍不是真实 embedding**——几何形态对齐了，分布没有。
-      真实分布由 `vector_similarity_distribution.py` 在 bge-small-zh-v1.5 上承担（其结论已落盘）。
-      本条**不勾选**：AC 问的是真实分布，合成簇不是。
+- [x] 真实 embedding 分布（探针用确定性合成向量）。
+      证据：2026-10-23 在**隔离 PG + 真实 embedding 服务**（`bge-small-zh-v1.5`，512 维）上重跑
+      `vector_similarity_distribution.py`，结果与 2026-10-10 结论**逐位一致**：
+      相关 top-1 min=0.5091 / p50=0.6580 / max=0.7716；不相关 min=0.3634 / p50=0.5000 / max=0.7712；
+      弃答虚假 top-1 max=0.4859 → 地板 0.50 落在 0.4859–0.5091 的间隙内。
+      前置由新增 `scripts/migration-proof/seed_golden_embeddings.py` 建立
+      （golden set 17 文档 / 20 chunk / 17 分段向量）。
 - [x] IVFFlat 与 HNSW 的召回/延迟对比
       证据：2026-10-23 `pgvector-index-scale-benchmark-2026-10-23.md`：HNSW ef_search=40 recall 0.9600/p50 0.93ms；IVFFlat 构建快 29 倍但 probes≥50 退化为顺序扫描。
 - [x] 10 万级规模与索引构建时间
