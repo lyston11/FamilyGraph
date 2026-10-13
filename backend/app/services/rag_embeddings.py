@@ -363,9 +363,27 @@ def configured_dimension() -> int:
 
 
 def configured_model() -> str:
-    """部署配置的 embedding 模型标识。
+    """当前 embedding 模型的**向量空间标识**，用于读写 `rag_embedding_segments.model`。
 
-    与 `configured_dimension` 同理：模型标识必须来自**单一配置来源**，因为它是
-    向量空间的标识。不同模型的向量不可比较，因此检索必须按它过滤。
+    ## 为什么必须与写入侧同名（2026-10-23 修复）
+
+    写入侧是 `embedding_index.model_identity()`，返回 **`"provider:model"`**
+    （例如 `"local:bge-small-zh-v1.5"`），理由是「换 provider 但模型名相同时向量
+    不可互换」。
+
+    而本函数此前只返回 **裸模型名**（`"bge-small-zh-v1.5"`）。两者是**两个不同的键**：
+    索引写入 `local:bge-small-zh-v1.5`，检索却按 `bge-small-zh-v1.5` 过滤，
+    于是 `WHERE s.model = :model` **永远匹配不到任何行**——向量检索静默返回零候选。
+
+    实测（隔离库，`RAG_EMBEDDING_MODEL=bge-small-zh-v1.5`）：
+    按写键可查到 500 条、按读键 217 条（那 217 条来自另一条不带前缀的路径）。
+    开发库 `rag_embedding_segments` 的 model 值全部是 `local:bge-small-zh-v1.5`。
+
+    这个缺陷的形态很隐蔽：没有异常、没有警告，只是向量席位永远空转，
+    而 RRF 会让词法结果照常返回，因此**表面看不出退化**。
+
+    实现上直接委托 `model_identity()`，使两个键**不可能**再次分叉。
     """
-    return os.environ.get("RAG_EMBEDDING_MODEL", "").strip()
+    from app.services import embedding_index
+
+    return embedding_index.model_identity()

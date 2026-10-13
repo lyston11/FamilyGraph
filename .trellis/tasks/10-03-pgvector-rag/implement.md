@@ -13,6 +13,19 @@
 
 - [x] 建立合成且不含真实个人数据的规模数据集，测试 exact/ANN、过滤、写入、更新、删除、重启和备份恢复。
       证据：`pgvector-filter-probe.md`(2000 行) + `pgvector-lifecycle-probe.md`(3000 行) + 2026-10-23 全链路复跑
+- [x] **修复：向量写入键与读取键不一致导致检索静默返回零候选**（2026-10-23）
+      写入侧 `embedding_index.model_identity()` 返回 `"provider:model"`
+      （换 provider 时向量不可互换，故编进标识）；读取侧
+      `rag_embeddings.configured_model()` 曾只返回**裸模型名**。
+      两者分叉后 `WHERE s.model = :model` 永远匹配不到——向量检索静默返回零候选，
+      无异常、无警告，且 RRF 让词法结果照常返回，**表面看不出退化**。
+      实测（隔离库）：按写键查到 500 条、按读键 217 条；开发库全部行的 model 值是
+      `local:bge-small-zh-v1.5`。
+      修法：`configured_model()` 直接委托 `model_identity()`，使两键**不可能**再分叉。
+      回归：`test_search_rag_vector.py` 此前把 `configured_model` monkeypatch 成常量
+      `"test-model"`，两边同常量、永远一致，因此**不可能发现**该分叉；已改为走真实实现
+      并新增 `test_vector_write_and_read_keys_are_identical`。
+      **mutation**：还原成裸模型名 → 2 项失败。
 - [ ] 测量查询 p50/p95/p99、更新延迟、索引构建、空间隔离和 background budget 对 control-plane 的影响。
       **大部分完成**：2026-10-23 已测查询 p50/p95/p99、索引构建时间与体积、
       空间隔离（filter-then-ANN）；在运行中的开发服务上实测维护循环开启时

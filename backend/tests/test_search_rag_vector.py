@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.models.platform_features import PlatformFeatureConfig
 from app.services import embedding_client, memory_rag
 from app.utils.timeutil import utcnow
@@ -93,6 +95,46 @@ class _FakeEmbeddingResult:
         self.usable = True
 
 
+#: 测试用模型名。真正的键由 `embedding_index.model_identity()` 加 provider 前缀。
+_TEST_MODEL = "test-model"
+
+
+def test_vector_write_and_read_keys_are_identical():
+    """写入键与读取键必须**逐字符相同**。
+
+    ## 这个缺陷的形态
+
+    写入侧 `embedding_index.model_identity()` 返回 `"provider:model"`
+    （换 provider 时向量不可互换，故编进标识）；读取侧 `rag_embeddings.configured_model()`
+    曾只返回裸模型名。两者分叉后 `WHERE s.model = :model` **永远匹配不到**，
+    向量检索静默返回零候选——没有异常、没有警告，且 RRF 让词法结果照常返回，
+    因此**表面看不出退化**。
+
+    实测（隔离库，`RAG_EMBEDDING_MODEL=bge-small-zh-v1.5`）：
+    按写键可查到 500 条、按读键 217 条；开发库全部行的 model 值是
+    `local:bge-small-zh-v1.5`。
+
+    本测试直接比较两个键，不需要数据库——任何一侧改动都会立刻失败。
+    """
+    from app.services import embedding_index, rag_embeddings
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("RAG_EMBEDDING_MODEL", _TEST_MODEL)
+        monkeypatch.delenv("RAG_EMBEDDING_PROVIDER", raising=False)
+        write_key = embedding_index.model_identity()
+        read_key = rag_embeddings.configured_model()
+        assert write_key == read_key, (
+            f"写入键 {write_key!r} != 读取键 {read_key!r}——" "向量检索会静默返回零候选"
+        )
+        # provider 前缀必须体现在键里（换 provider 时向量不可互换）。
+        monkeypatch.setenv("RAG_EMBEDDING_PROVIDER", "remote")
+        assert embedding_index.model_identity() == rag_embeddings.configured_model()
+        assert rag_embeddings.configured_model().startswith("remote:")
+    finally:
+        monkeypatch.undo()
+
+
 def _stub_embedding(monkeypatch, *, vector: list[float], dimension: int = 8):
     """把 embedding 客户端替换成可控返回，使测试不依赖真实服务。"""
     monkeypatch.setattr(embedding_client, "enabled", lambda: True)
@@ -104,7 +146,13 @@ def _stub_embedding(monkeypatch, *, vector: list[float], dimension: int = 8):
     from app.services import rag_embeddings
 
     monkeypatch.setattr(rag_embeddings, "configured_dimension", lambda: dimension)
-    monkeypatch.setattr(rag_embeddings, "configured_model", lambda: "test-model")
+    # `configured_model` **不**在这里 stub。
+    #
+    # 此前它被替换成常量 `"test-model"`，于是测试在同一常量下写向量、同一常量下读，
+    # 永远两边一致——**无法发现**「写入侧用 `provider:model`、读取侧用裸模型名」
+    # 的分叉（实测该分叉让向量检索静默返回零候选）。
+    # 现在走真实实现，键由 `embedding_index.model_identity()` 统一给出。
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", _TEST_MODEL)
     return rag_embeddings
 
 
@@ -176,7 +224,12 @@ def test_vector_query_receives_every_eligibility_binding(db_session, monkeypatch
         "private_reader_account_id",
     ):
         assert name in params, f"向量查询缺少 eligibility 绑定参数 {name}"
-    assert params["model"] == "test-model"
+    # 必须是**写入侧同一个键**（`provider:model`），而不是裸模型名。
+    # 断言裸名会让两键再次分叉而测试仍绿——这正是该缺陷此前不被发现的原因。
+    from app.services import embedding_index
+
+    assert params["model"] == embedding_index.model_identity()
+    assert params["model"].endswith(_TEST_MODEL)
     assert params["query_vector"].startswith("[")
     del rag_embeddings, memory
 

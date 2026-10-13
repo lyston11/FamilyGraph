@@ -382,3 +382,23 @@ hits = search_rag(db, ..., query=clean, agent_kind="assistant",
 source_types = RAG_CONSUMER_SOURCE_TYPES["browser_search"]
 source_types = context_source_types(agent_kind)    # assistant → 宽；steward → ("memory",)
 ```
+
+## 11. 向量空间标识：写入键与读取键必须同一函数给出（2026-10-23）
+
+`rag_embedding_segments.model` 是**向量空间的标识**。写入与读取必须用**同一个函数**
+产出它，否则查询静默返回零候选。
+
+该缺陷真实发生过：写入侧 `embedding_index.model_identity()` 返回 `"provider:model"`
+（换 provider 但模型名相同时向量不可互换，故把 provider 编进标识），而读取侧
+`rag_embeddings.configured_model()` 只返回裸模型名。`WHERE s.model = :model`
+于是永远匹配不到任何行。
+
+**形态隐蔽**：没有异常、没有警告；RRF 让词法结果照常返回，因此检索「看起来正常」，
+只是向量席位永远空转。实测（隔离库）按写键可查到 500 条、按读键 217 条。
+
+**合同**：`rag_embeddings.configured_model()` 直接委托
+`embedding_index.model_identity()`，两者不得各自实现。
+
+**回归要求**：测试**不得**把 `configured_model` stub 成常量再在写入侧用同一常量——
+那会让两边永远一致，从而无法发现分叉。必须走真实实现，并有一条直接比较两键的断言
+（`test_search_rag_vector.py::test_vector_write_and_read_keys_are_identical`）。
