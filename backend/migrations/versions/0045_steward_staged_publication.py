@@ -442,7 +442,7 @@ def downgrade() -> None:
     pending = op.get_bind().scalar(
         sa.text(
             "SELECT EXISTS (SELECT 1 FROM steward_generations "
-            "WHERE manifest_sealed = 1 AND status IN ('running','failed')) "
+            "WHERE manifest_sealed = TRUE AND status IN ('running','failed')) "
             "OR EXISTS (SELECT 1 FROM steward_delivery_intents "
             "WHERE status IN ('pending','failed')) "
             "OR EXISTS (SELECT 1 FROM steward_view_demands "

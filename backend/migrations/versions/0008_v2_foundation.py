@@ -70,7 +70,10 @@ def upgrade() -> None:
         "INSERT INTO platform_role_assignments (account_id, role, created_by, created_at)"
         " SELECT accounts.id, 'platform_operator', NULL, users.created_at"
         " FROM users JOIN accounts ON accounts.user_id = users.id"
-        " WHERE users.is_admin = 1"
+        # `is_admin` 是 BOOLEAN；写 `= 1` 在 SQLite 上正常（无严格类型），
+        # 在 PostgreSQL 上直接报 `operator does not exist: boolean = integer`，
+        # 使**全新 PG 库无法从迁移建成**。用字面量 FALSE/TRUE 两方言都支持。
+        " WHERE users.is_admin = TRUE"
     )
 
     # ---- 2. 披露偏好：迁移 clan_disclosure_json 中为 true 的类别为全局偏好 ----

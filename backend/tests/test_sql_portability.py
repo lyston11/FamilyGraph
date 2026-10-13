@@ -36,6 +36,7 @@ import pathlib
 import re
 
 APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
+MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parents[1] / "migrations"
 
 # SQLite 专属函数/构造：出现在 SQL 表达式中即不可移植。
 SQLITE_ONLY_SQL_TOKENS = (
@@ -186,21 +187,78 @@ def _boolean_column_names() -> set[str]:
     return names
 
 
-def _string_literals() -> list[tuple[str, int, str]]:
-    """收集 app/ 下所有字符串字面量（raw SQL 以相邻字面量隐式拼接）。"""
+def _string_literals(
+    *, roots: tuple[pathlib.Path, ...] | None = None
+) -> list[tuple[str, int, str]]:
+    """收集指定根目录下所有字符串字面量（raw SQL 以相邻字面量隐式拼接）。
+
+    `roots` 默认只含 `app/`。**迁移目录需要显式传入**：历史上本守卫只扫 `app/`，
+    因此 `migrations/versions/0008` 里的 `is_admin = 1` 与 `0042` 里的
+    `json_extract` 都没被拦住——它们在 SQLite 上正常，在 PostgreSQL 上让
+    「全新库从迁移建成」直接失败。
+    """
     out: list[tuple[str, int, str]] = []
-    for path in sorted(APP_DIR.rglob("*.py")):
-        if "__pycache__" in str(path):
-            continue
-        try:
-            tree = ast.parse(path.read_text())
-        except SyntaxError:
-            continue
-        rel = str(path.relative_to(APP_DIR.parent))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                out.append((rel, node.lineno, node.value))
+    for root in roots or (APP_DIR,):
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            try:
+                tree = ast.parse(path.read_text())
+            except SyntaxError:
+                continue
+            rel = str(path.relative_to(root.parent))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    out.append((rel, node.lineno, node.value))
     return out
+
+
+def test_migrations_do_not_compare_boolean_columns_to_integers():
+    """迁移里的 raw SQL 同样不得把 boolean 列与 0/1 比较。
+
+    这是上面那条守卫的**迁移版**。先前只扫 `app/`，于是
+    `0008_v2_foundation.py` 的 `WHERE users.is_admin = 1` 通过了全部测试，
+    却让全新 PostgreSQL 库在 `alembic upgrade head` 时直接
+    `operator does not exist: boolean = integer`。
+    """
+    boolean_columns = _boolean_column_names()
+    assert boolean_columns, "未能从模型收集到 boolean 列——守卫已失效"
+    pattern = re.compile(r"\b(" + "|".join(sorted(boolean_columns)) + r")\s*=\s*[01]\b")
+    offenders = []
+    for rel, line, value in _string_literals(roots=(MIGRATIONS_DIR,)):
+        if not _SQL_KEYWORDS.search(value):
+            continue
+        for match in pattern.finditer(value):
+            offenders.append(f"{rel}:{line}  {match.group(0)}")
+    assert not offenders, (
+        "迁移里的 raw SQL 把 boolean 列与整数比较。SQLite 上正常，PostgreSQL 上"
+        "`alembic upgrade head` 会报 `operator does not exist: boolean = integer`：\n"
+        + "\n".join(f"  {o}" for o in offenders)
+    )
+
+
+def test_migrations_do_not_embed_sqlite_only_json_functions():
+    """迁移里不得把 `json_extract` 写进 `CheckConstraint`。
+
+    PostgreSQL 没有 `json_extract` 函数，因此这类 CHECK 会让**建表本身失败**。
+    必须改用 `app.models.checks.DialectCheck`（按方言渲染不同表达式）。
+
+    实测：`0042_memory_source_contract.py` 曾用裸 `sa.CheckConstraint` 携带
+    `json_extract`，在 PG 上 `UndefinedFunction`。
+    """
+    offenders = []
+    for rel, line, value in _string_literals(roots=(MIGRATIONS_DIR,)):
+        if "json_extract" not in value:
+            continue
+        # 注释/文档字符串里的说明不算。
+        if not _SQL_KEYWORDS.search(value):
+            continue
+        offenders.append(f"{rel}:{line}")
+    assert not offenders, (
+        "迁移里出现 `json_extract`。PostgreSQL 无此函数，建表会失败；"
+        "请用 `app.models.checks.DialectCheck` 或 `app.models.memory.source_snapshot_check`：\n"
+        + "\n".join(f"  {o}" for o in offenders)
+    )
 
 
 def test_no_raw_sql_compares_a_boolean_column_to_an_integer():

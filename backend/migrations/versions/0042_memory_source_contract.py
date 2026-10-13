@@ -16,18 +16,15 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
+from app.models.memory import source_snapshot_check
+
 revision: str = "0042_memory_source_contract"
 down_revision: str | None = "0041_term_pack_expansion"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_SOURCE_CHECK = (
-    "source_verification = 'unverified' OR (source_kind != 'legacy' "
-    "AND source_type IS NOT NULL AND source_id IS NOT NULL "
-    "AND source_revision IS NOT NULL AND source_revision > 0 "
-    "AND coalesce(json_extract(source_span_json, '$.version') = 1, 0) "
-    "AND coalesce(json_extract(source_span_json, '$.kind') = source_kind, 0))"
-)
+#: 约束表达式不再在这里复制：由 `app.models.memory.source_snapshot_check` 提供
+#: 方言感知版本。留一个复制的字面量正是先前「只有 SQLite 能建库」的根因。
 _SOURCE_NAMES = (
     "source_kind",
     "source_verification",
@@ -62,7 +59,11 @@ def _source_checks(table: str) -> list[sa.CheckConstraint]:
             "source_verification IN ('verified','unverified')",
             name=sa.schema.conv(f"ck_{table}_ck_{table}_source_verification"),
         ),
-        sa.CheckConstraint(_SOURCE_CHECK, name=sa.schema.conv(f"ck_{table}_ck_{table}_source")),
+        # 必须用**方言感知**的 `DialectCheck`，不能把 `json_extract` 直接写进
+        # `CheckConstraint`：PostgreSQL 没有 `json_extract` 函数，建表本身会失败。
+        # 直接复用 `app.models.memory.source_snapshot_check`（同一构造器），
+        # 这样迁移与模型不会漂移——先前这里是复制的字面量，因此只有 SQLite 能建。
+        source_snapshot_check(sa.schema.conv(f"ck_{table}_ck_{table}_source")),
     ]
 
 
