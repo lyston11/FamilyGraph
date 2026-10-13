@@ -509,3 +509,66 @@ def test_bootstrap_zeroes_orphaned_rows_without_active_work(db_session):
     )
     # 且 bootstrap 后对账通过
     assert capacity_bootstrap.reconcile(db_session).ok
+
+
+def test_in_flight_stream_is_not_an_orphan(db_session):
+    """**在途流的名额不是孤儿**——它没有对应的「真实活跃行」可查。
+
+    ## 这个缺陷的实际后果
+
+    实测（开发环境 2026-10-13）：`/api/ready` 在**每一次有流在途时**返回 503，
+    报「孤儿占用 global:0:provider_stream 计数行 active=1;
+    孤儿占用 space:2:provider_stream 计数行 active=1」。
+
+    根因：`_active_counts` 只为 `assistant_run`(account)、`steward_job`(space)、
+    `steward_assist`(space) 建 bucket，**从不**为 `provider_stream` 建。
+    而 `reconcile` 的孤儿判据是「计数行 active>0 且 expected==0」。
+    于是任何在途流的计数行都被判为泄漏 → `assert_ready` 503 → 服务拒绝接流量。
+
+    危害方向与直觉相反：**不是「泄漏被漏报」，而是「正常占用被误报为泄漏」**。
+    SSE 流可以持续几十秒，因此这段时间里整个实例的就绪探针都是失败的。
+
+    ## 为什么 `provider_stream` 没有可查的真源
+
+    流级名额的占用者是**内存中的 SSE 转发**，不是数据库行——`capacity.acquire`
+    在建立上游连接后占用，在生成器 `finally` 中归还。数据库里没有「当前有几个流在途」
+    这一事实。因此该维度**无法**参与「计数行 == 真实活跃数」的对账，
+    只能做存在性检查（`assert_ready` 的 `missing` 部分已覆盖）。
+    """
+    from app import config
+
+    # 建全局 + 租户的 provider_stream 行并占用一个名额（模拟在途流）。
+    for spec in (
+        capacity.CounterSpec("global", 0, capacity.RESOURCE_PROVIDER_STREAM),
+        capacity.CounterSpec("agent_kind", 0, capacity.RESOURCE_PROVIDER_STREAM),
+        capacity.CounterSpec("space", 77, capacity.RESOURCE_PROVIDER_STREAM),
+    ):
+        capacity.ensure_counter(db_session, spec, capacity=config.AGENT_STREAM_GLOBAL_CAPACITY)
+        capacity.set_active(db_session, spec, active=1)
+    db_session.commit()
+
+    report = capacity_bootstrap.reconcile(db_session)
+    offenders = [o for o in report.orphaned if "provider_stream" in o]
+    assert not offenders, (
+        "在途流的名额被判为孤儿——这会让 /api/ready 在有流在途时恒 503。" f"实际报告：{offenders}"
+    )
+
+
+def test_ready_passes_with_an_in_flight_stream(db_session):
+    """端到端形式：有在途流时 `pg_all` 的就绪探针必须通过。
+
+    这是上面那条的用户可见后果——`assert_ready` 503 意味着编排器会把实例摘除。
+    """
+
+    _set_stage(db_session, "pg_all")
+    capacity_bootstrap.bootstrap(db_session)
+    db_session.commit()
+
+    for spec in (
+        capacity.CounterSpec("global", 0, capacity.RESOURCE_PROVIDER_STREAM),
+        capacity.CounterSpec("agent_kind", 0, capacity.RESOURCE_PROVIDER_STREAM),
+    ):
+        capacity.set_active(db_session, spec, active=1)
+    db_session.commit()
+
+    capacity_bootstrap.assert_ready(db_session, stage="pg_all")  # 不应抛出

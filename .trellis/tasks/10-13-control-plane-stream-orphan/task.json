@@ -1,0 +1,16 @@
+{
+  "id": "10-13-control-plane-stream-orphan",
+  "name": "10-13-control-plane-stream-orphan",
+  "title": "修复在途流被误报为孤儿占用导致 /api/ready 恒 503",
+  "status": "in_progress",
+  "priority": "P1",
+  "assignee": "lyston",
+  "creator": "lyston",
+  "branch": "feat/10-13-control-plane-stream-orphan",
+  "base_branch": "main",
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "meta": {}
+}

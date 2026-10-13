@@ -312,9 +312,7 @@ def bootstrap(db: Session, *, dry_run: bool = False) -> ReconcileReport:
     existing_keys = {
         (r[0], int(r[1]), r[2])
         for r in db.execute(
-            sa.text(
-                "SELECT scope_kind, scope_id, resource_kind FROM agent_capacity_counters"
-            )
+            sa.text("SELECT scope_kind, scope_id, resource_kind FROM agent_capacity_counters")
         ).fetchall()
     }
     spec_keys = {(sp.scope_kind, sp.scope_id, sp.resource_kind) for sp, _ in specs}
@@ -322,9 +320,7 @@ def bootstrap(db: Session, *, dry_run: bool = False) -> ReconcileReport:
         row = db.get(AgentCapacityCounter, key)
         if row is None:
             continue
-        specs.append(
-            (capacity.CounterSpec(key[0], key[1], key[2]), int(row.capacity))
-        )
+        specs.append((capacity.CounterSpec(key[0], key[1], key[2]), int(row.capacity)))
 
     for spec, cap in specs:
         key = (spec.scope_kind, spec.scope_id, spec.resource_kind)
@@ -390,6 +386,28 @@ def _aggregate_expected(actual: dict[tuple[str, int, str], int]) -> dict[tuple[s
 #: 参与汇总的租户维度。
 _TENANT_SCOPES = frozenset({"account", "space"})
 
+#: **不参与孤儿对账**的资源类型。
+#:
+#: 孤儿判据是「计数行 `active > 0` 且真实活跃数为 0」。这要求该维度**能**从数据库
+#: 查出真实活跃数。`provider_stream` 不能：它的占用者是内存中的 SSE 转发，不是数据库行
+#: ——`capacity.acquire` 在建立上游连接后占用、在生成器 `finally` 中归还，数据库里
+#: 没有「当前有几个流在途」这一事实。
+#:
+#: 把它留在孤儿对账里会让**每一次有流在途时** `/api/ready` 返回 503，
+#: 报「孤儿占用 global:0:provider_stream 计数行 active=1」。
+#: 实测（开发环境 2026-10-13）确认过这个后果。
+#:
+#: 危害方向与直觉相反：不是「泄漏被漏报」，而是**正常占用被误报为泄漏**。
+#: SSE 流可持续几十秒，因此这段时间里整个实例的就绪探针都是失败的，编排器会把
+#: 一个完全健康的实例摘除。
+#:
+#: 该维度仍受两道约束保护：
+#: 1. `assert_ready` 的 `missing` 检查（全局计数行必须存在）；
+#: 2. 运行时 `acquire`/`release` 的行锁与 `CHECK (active <= capacity)`。
+#: 泄漏（`release` 未执行）**不靠对账发现**，而靠进程重启后的 `bootstrap` 重算
+#: ——`bootstrap` 会把无真实活跃的行归零，而它对 `provider_stream` 的做法正是「写 0」。
+_UNRECONCILED_RESOURCES = frozenset({capacity.RESOURCE_PROVIDER_STREAM})
+
 
 def reconcile(db: Session) -> ReconcileReport:
     """对账：计数行必须存在、必须与真实活跃数一致、不得有孤儿。"""
@@ -418,6 +436,9 @@ def reconcile(db: Session) -> ReconcileReport:
 
     # ② 孤儿：计数行有 active 但真实无占用（可能是泄漏）
     for key, (_cap, active) in present.items():
+        if key[2] in _UNRECONCILED_RESOURCES:
+            # 该维度没有可查的真实来源，无法判定孤儿。见 `_UNRECONCILED_RESOURCES`。
+            continue
         if active > 0 and expected.get(key, 0) == 0:
             report.orphaned.append(f"孤儿占用 {key[0]}:{key[1]}:{key[2]} 计数行 active={active}")
 
