@@ -16,13 +16,15 @@
 
 ## Phase C：多实例与 sidecar
 
-- [ ] 用 PostgreSQL lease/capacity 在两个实例上做 duplicate lease、crash recovery、重复 settle 测试。
-      **部分完成**：2026-10-23 `cross_instance_capacity.py` 证明进程内 limiter 在多实例下会把配额
-      翻倍（2 实例 → 观测 4 > 上限 2），持久化 counter 形态未越限；`multitenant_matrix.py`
-      覆盖提交前/后断连与取消竞争。
-      **仍未做**：两个**真实进程**（非同进程模拟）、真实 crash（kill -9）、真实重复 settle。
-      本条**不勾选**：探针 docstring 自述「在同一进程内模拟两个独立 limiter 实例」，
-      模拟不是 AC 要求的「两个实例」。
+- [x] 用 PostgreSQL lease/capacity 在两个实例上做 duplicate lease、crash recovery、重复 settle 测试。
+      证据：2026-10-23 `two_process_acceptance.py`（**真实多进程**，隔离库、真实业务 schema
+      `agent_capacity_counters`）：
+      - 重复租约：6 真实进程竞争 capacity=2 → 恰好 2 个授予、active=2；
+      - **反证**：无行锁形态 6 进程全部成功（6 > 2），证明行锁承重；
+      - 崩溃恢复：`kill -9` 持锁进程后 active 仍为 1 → 名额**不自动归还**，
+        回收靠 lease expiry 扫描（修正「进程死了名额自然回来」的误解）；
+      - 重复归还：4 进程并发归还 2 个占用 → 恰好 2 次成功、终态 0、未为负。
+      详见 `research/evidence/two-process-acceptance-2026-10-23.md`。
 - [x] 评估并原型化 Assistant/Steward 分进程或独立 worker；定义部署、优雅停机和回滚顺序。
       证据：`docker-compose.yml` 的 `agent-assistant`/`agent-steward` 两个独立服务（`FG_AGENT_ROLE` 各一），`agent-combined` 藏在 profile 后；`agent/test/deployment-split.test.ts` 5 条断言
 

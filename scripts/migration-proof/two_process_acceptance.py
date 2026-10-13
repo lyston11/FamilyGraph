@@ -67,18 +67,30 @@ _CHILD = textwrap.dedent(
     engine = create_engine(dsn, pool_size=1, max_overflow=0)
 
     if mode == "hold":
-        # 占住名额后**永久阻塞**，用于 kill -9 崩溃恢复测试。
+        # 先**提交**占用，再阻塞。
+        #
+        # 初版把 sleep 放在 `with db.begin()` 内，于是 acquire 从未提交——
+        # 另一个连接读到的 active 恒为 0，「kill 前 0 → kill 后 0」看起来像
+        # 「崩溃自动释放」，实际只是「事务从未提交」。而真实语义恰恰相反：
+        # active 是**已提交事实**，`kill -9` 不会归还它，必须靠 lease expiry 扫描。
         with Session(engine) as db:
             with db.begin():
                 ok = capacity.acquire(db, [spec])
-                print("ACQUIRED" if ok else "DENIED", flush=True)
-                time.sleep(600)
+            print("ACQUIRED" if ok else "DENIED", flush=True)
+            time.sleep(600)
     elif mode == "acquire":
         # 只占不还：用于统计并发下真实授予数。
         with Session(engine) as db:
             with db.begin():
                 ok = capacity.acquire(db, [spec])
         print("ACQUIRED" if ok else "DENIED", flush=True)
+    elif mode == "release_only":
+        # 只归还、不占用。用于验证「重复归还恰好一次」：
+        # N 个进程并发归还**同一个**名额，active 必须恰好减 1 且不为负。
+        with Session(engine) as db:
+            with db.begin():
+                released = capacity.release(db, [spec])
+        print(f"RELEASED={released}", flush=True)
     elif mode == "acquire_release":
         with Session(engine) as db:
             with db.begin():
@@ -88,7 +100,25 @@ _CHILD = textwrap.dedent(
         print(f"{'ACQUIRED' if ok else 'DENIED'} released={released}", flush=True)
     elif mode == "nolock":
         # 反证：无行锁的朴素「先查后写」。必须超额。
+        #
+        # **必须先同步**：初版没有栅栏，进程按 spawn 顺序串行执行，
+        # 后来的进程读到的是前一个**已提交**的结果，于是反证「不成立」——
+        # 那不是「行锁不承重」，是**没构造出并发**。
+        # 栅栏让所有进程在同一时刻做 SELECT。
+        import pathlib
         from sqlalchemy import select
+
+        barrier_dir = pathlib.Path(os.environ["BARRIER_DIR"])
+        barrier_dir.mkdir(parents=True, exist_ok=True)
+        (barrier_dir / os.environ["BARRIER_ID"]).write_text("1")
+        target = int(os.environ["BARRIER_TARGET"])
+        deadline = time.time() + 60
+        while len(list(barrier_dir.iterdir())) < target:
+            if time.time() > deadline:
+                print("BARRIER_TIMEOUT", flush=True)
+                raise SystemExit(4)
+            time.sleep(0.01)
+
         with Session(engine) as db:
             with db.begin():
                 row = db.scalar(
@@ -102,7 +132,7 @@ _CHILD = textwrap.dedent(
                     print("MISSING", flush=True)
                     raise SystemExit(3)
                 snapshot = row.active  # 无锁读：读不到并发未提交的增量
-                time.sleep(0.05)      # 放大竞态窗口
+                time.sleep(0.3)       # 放大竞态窗口，确保所有进程都读完了
                 if snapshot < row.capacity:
                     row.active = snapshot + 1
                     ok = True
@@ -113,7 +143,17 @@ _CHILD = textwrap.dedent(
 )
 
 
-def _spawn(backend_dir: str, dsn: str, kind: str, scope_id: int, mode: str) -> subprocess.Popen:
+def _spawn(
+    backend_dir: str,
+    dsn: str,
+    kind: str,
+    scope_id: int,
+    mode: str,
+    *,
+    barrier_dir: str = "",
+    barrier_id: str = "",
+    barrier_target: int = 0,
+) -> subprocess.Popen:
     env = {
         **os.environ,
         "PGTEST_DSN": dsn,
@@ -122,6 +162,9 @@ def _spawn(backend_dir: str, dsn: str, kind: str, scope_id: int, mode: str) -> s
         "SCOPE_ID": str(scope_id),
         "RESOURCE_KIND": "assistant_run",
         "MODE": mode,
+        "BARRIER_DIR": barrier_dir,
+        "BARRIER_ID": barrier_id,
+        "BARRIER_TARGET": str(barrier_target),
     }
     return subprocess.Popen(
         [sys.executable, "-c", _CHILD],
@@ -188,12 +231,16 @@ def _seed(dsn: str, backend_dir: str, scope_id: int, capacity_value: int) -> Non
 
 def main() -> int:
     dsn = os.environ.get("PGTEST_DSN")
-    backend_dir = os.environ.get("BACKEND_DIR", str(Path(__file__).resolve().parents[2] / "backend"))
+    backend_dir = os.environ.get(
+        "BACKEND_DIR", str(Path(__file__).resolve().parents[2] / "backend")
+    )
     if not dsn:
         print("SKIP: 需要 PGTEST_DSN 指向隔离 PostgreSQL（不得指向开发库/线上）")
         return 2
     if "sqlite" in dsn:
-        print("SKIP: 本探针验证的是 PostgreSQL 行锁语义，SQLite 的 BEGIN IMMEDIATE 会掩盖它")
+        print(
+            "SKIP: 本探针验证的是 PostgreSQL 行锁语义，SQLite 的 BEGIN IMMEDIATE 会掩盖它"
+        )
         return 2
 
     results: dict[str, object] = {}
@@ -220,8 +267,21 @@ def main() -> int:
     scope_id = SCOPE_BASE + 1
     _reset(dsn, backend_dir, scope_id)
     _seed(dsn, backend_dir, scope_id, CAPACITY)
+    barrier_dir = str(
+        Path(os.environ.get("TMPDIR", "/tmp")) / f"fg-2proc-{os.getpid()}"
+    )
     procs = [
-        _spawn(backend_dir, dsn, "account", scope_id, "nolock") for _ in range(WORKERS)
+        _spawn(
+            backend_dir,
+            dsn,
+            "account",
+            scope_id,
+            "nolock",
+            barrier_dir=barrier_dir,
+            barrier_id=f"w{i}",
+            barrier_target=WORKERS,
+        )
+        for i in range(WORKERS)
     ]
     outs = [p.communicate(timeout=120)[0].strip() for p in procs]
     naive = sum(1 for o in outs if "ACQUIRED" in o)
@@ -257,29 +317,57 @@ def main() -> int:
         )
     elif active_before == 1 and active_after == 0:
         print("  NOTE 计数行已归零：说明进程退出时事务回滚（未提交的 acquire 不落库）")
-    results["crash_note"] = "active 是已提交事实；回收靠 lease expiry 扫描，不靠崩溃自动清理"
+    results["crash_note"] = (
+        "active 是已提交事实；回收靠 lease expiry 扫描，不靠崩溃自动清理"
+    )
 
-    # ---- 4. 重复 settle：并发归还同一维度，恰好一次 ----
-    print("\n=== 4. 重复 settle：并发归还（恰好一次）===")
+    # ---- 4. 重复归还：并发归还同一名额，恰好一次 ----
+    #
+    # 初版让每个进程「先 acquire 再 release」，净变化恒为 0——**无论 release 是否
+    # 重复递减都会通过**，因此那一版没有验证任何东西。
+    # 正确构造：先占满名额，再让多个进程**只归还、不占用**，
+    # 断言 active 恰好减 1（只减一次），且不为负。
+    print("\n=== 4. 重复归还：并发归还同一名额（恰好一次）===")
     scope_id = SCOPE_BASE + 3
     _reset(dsn, backend_dir, scope_id)
     _seed(dsn, backend_dir, scope_id, CAPACITY)
-    # 先占 1 个名额
-    _spawn(backend_dir, dsn, "account", scope_id, "acquire").communicate(timeout=60)
+    for _ in range(CAPACITY):
+        _spawn(backend_dir, dsn, "account", scope_id, "acquire").communicate(timeout=60)
     before = _active(dsn, backend_dir, scope_id)
     procs = [
-        _spawn(backend_dir, dsn, "account", scope_id, "acquire_release") for _ in range(3)
+        _spawn(backend_dir, dsn, "account", scope_id, "release_only") for _ in range(4)
     ]
-    for p in procs:
-        p.communicate(timeout=120)
+    outs = [p.communicate(timeout=120)[0].strip() for p in procs]
     after = _active(dsn, backend_dir, scope_id)
-    print(f"  active：{before} → {after}")
-    print(
-        "  NOTE 每进程都先 acquire 再 release，净变化为 0；\n"
-        "       「恰好一次」的门在调用方（settle 的 status 条件更新），\n"
-        "       见 `test_stale_orm_object_cannot_settle_twice`。"
-    )
-    results["concurrent_release"] = {"before": before, "after": after}
+    reported = 0
+    for out in outs:
+        if out.startswith("RELEASED=") and out.split("=", 1)[1].isdigit():
+            reported += int(out.split("=", 1)[1])
+    print(f"  active：{before} → {after}；4 进程合计报告归还 {reported} 次")
+    # 正确的不变量：4 次并发归还**最多**把 active 减到 0，且**成功次数恰好等于
+    # 占用数**。不是「只减 1」——我先前把期望写成 `before - 1` 是错的：
+    # `capacity.release` 归还的是「所有维度各一次」，因此 4 个进程并发归还
+    # 2 个占用的名额时，恰好 2 次成功、2 次返回 0（已为 0 不再递减）。
+    # 真正要防的是「减成负数」或「成功次数超过占用数」。
+    if after == 0 and reported == before:
+        print(
+            f"  OK  恰好 {reported} 次成功归还（= 占用数 {before}），终态 0，未减成负数：\n"
+            "       行锁把并发归还串行化，后续进程看到 active 已为 0 便不再递减。"
+        )
+    elif after < 0:
+        print(f"  FAIL active 减成负数（{after}）——重复归还未被挡住")
+    elif reported != before:
+        print(
+            f"  WARN 成功归还 {reported} 次 ≠ 占用数 {before}（终态 {after}）——"
+            "「恰好一次」语义未被验证"
+        )
+    else:
+        print(f"  WARN 终态 {after} 非 0——归还未完全生效")
+    results["concurrent_release"] = {
+        "before": before,
+        "after": after,
+        "reported_releases": reported,
+    }
 
     # ---- 清理 ----
     for i in range(4):
