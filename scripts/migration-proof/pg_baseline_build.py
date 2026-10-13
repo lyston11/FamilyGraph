@@ -23,6 +23,7 @@ ORM 元数据看不到它们。因此 baseline 必须由**元数据 + 显式触�
 
     PGTEST_DSN=postgresql://... python3 scripts/migration-proof/pg_baseline_build.py
 """
+
 from __future__ import annotations
 
 import json
@@ -41,14 +42,20 @@ def _repo_root() -> Path:
     override = os.environ.get("MIGRATION_PROOF_ROOT")
     if override:
         return Path(override)
-    return Path(subprocess.check_output(
-        ["git", "rev-parse", "--show-toplevel"], text=True,
-        cwd=Path(__file__).parent).strip())
+    return Path(
+        subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True,
+            cwd=Path(__file__).parent,
+        ).strip()
+    )
 
 
 ROOT = _repo_root()
 BACKEND = ROOT / "backend"
-OUT_DIR = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof")))
+OUT_DIR = Path(
+    os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migration-proof"))
+)
 
 # SQLite 触发器 -> PostgreSQL 等价物。
 # 语义分类（数量来自 trigger-inventory.json 的 69 个实际对象）：
@@ -58,7 +65,7 @@ OUT_DIR = Path(os.environ.get("MIGRATION_PROOF_OUT", str(ROOT / "artifacts/migra
 #   sticky_status        1  （attribution_status 不可从 versioned 退回）
 #   revision_counter    65  （表变更时递增 steward_input_revisions）
 TRIGGER_EQUIVALENTS = {
-    "scope_immutable": '''
+    "scope_immutable": """
 CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger AS $$
 BEGIN
   IF ({compare}) THEN
@@ -68,16 +75,16 @@ BEGIN
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER {trg} BEFORE UPDATE ON {table}
   FOR EACH ROW EXECUTE FUNCTION {fn}();
-''',
-    "append_only": '''
+""",
+    "append_only": """
 CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger AS $$
 BEGIN
   RAISE EXCEPTION '{msg}';
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER {trg} BEFORE UPDATE ON {table}
   FOR EACH ROW EXECUTE FUNCTION {fn}();
-''',
-    "revision_counter": '''
+""",
+    "revision_counter": """
 CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger AS $$
 BEGIN
   INSERT INTO steward_input_revisions (scope_id, {column})
@@ -88,7 +95,7 @@ BEGIN
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER {trg} AFTER INSERT OR UPDATE OR DELETE ON {table}
   FOR EACH ROW EXECUTE FUNCTION {fn}();
-''',
+""",
 }
 
 
@@ -105,8 +112,9 @@ def main() -> int:
         return 2
 
     # SQLAlchemy DSN 带驱动前缀（postgresql+psycopg://），psycopg 需要裸 DSN。
-    plain_dsn = dsn.replace("postgresql+psycopg://", "postgresql://") \
-                   .replace("postgresql+psycopg2://", "postgresql://")
+    plain_dsn = dsn.replace("postgresql+psycopg://", "postgresql://").replace(
+        "postgresql+psycopg2://", "postgresql://"
+    )
     sys.path.insert(0, str(BACKEND))
     os.environ.setdefault("DATA_DIR", "/tmp/fg-baseline-probe")
 
@@ -175,15 +183,72 @@ def main() -> int:
             print(f"  [SKIP] PGroonga 不可用：{type(exc).__name__}: {str(exc)[:120]}")
             extension_indexes.append(f"SKIPPED:{type(exc).__name__}")
 
+    # 1d) **ORM 之外的数据库列**：`0057_steward_capacity_release_gate` 刻意把配额门列
+    #     加在数据库上而不映射进 ORM（见 `capacity.py` 的说明：ORM 列会让
+    #     INSERT/SELECT 带上它们，而迁移拒绝用例会在中间 revision 上用 ORM 写同一张表，
+    #     那时列还不存在）。
+    #
+    #     因此 `create_all` **看不到**这 4 列，baseline 库会缺列。实测后果（2026-10-23）：
+    #     维护循环**每一个 tick** 都失败，报
+    #     `column "capacity_acquired_at" of relation "steward_jobs" does not exist`，
+    #     且因为日志只记异常类名（脱敏决定），表面症状只是
+    #     `maintenance tick failed (error=ProgrammingError)`，极难定位。
+    #
+    #     这是与 PGroonga 索引、pgvector 表**同一个根因的第三例**：
+    #     `create_all` 只覆盖 ORM 元数据，任何「只在迁移里存在」的对象都会漏建，
+    #     而漏建不报错、只在运行时表现为功能不可用。因此 baseline 必须显式补齐并断言。
+    gate_columns: list[str] = []
+    if created:
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy import text as sa_text
+
+        # 门列的真源是迁移 0057 的 `TABLES`；这里不重复写表名，而是从
+        # `capacity.GATE_TABLE_*` 取——两处漂移会让 baseline 与生产代码再次不一致。
+        from app.services import capacity as capacity_service
+
+        gate_tables = (
+            capacity_service.GATE_TABLE_JOB,
+            capacity_service.GATE_TABLE_ATTEMPT,
+        )
+        try:
+            with engine.begin() as conn:
+                inspector = sa_inspect(conn)
+                existing_tables = set(inspector.get_table_names())
+                for table in gate_tables:
+                    if table not in existing_tables:
+                        failures.append(f"门列表不存在：{table}")
+                        continue
+                    present = {c["name"] for c in inspector.get_columns(table)}
+                    for column in ("capacity_acquired_at", "capacity_released_at"):
+                        if column in present:
+                            continue
+                        conn.execute(
+                            sa_text(
+                                f"ALTER TABLE {table} ADD COLUMN {column} TIMESTAMPTZ NULL"
+                            )
+                        )
+                        gate_columns.append(f"{table}.{column}")
+            if gate_columns:
+                print(f"  [OK ] 补建 ORM 外的门列：{', '.join(gate_columns)}")
+            else:
+                print("  [OK ] 门列已存在（ORM 外，create_all 看不到）")
+        except Exception as exc:  # noqa: BLE001 - 建列失败必须算 baseline 失败
+            failures.append(f"补建门列失败：{type(exc).__name__}: {exc}")
+            print(f"  [BAD] 补建门列 -> {type(exc).__name__}: {str(exc)[:160]}")
+
     if created:
         print("  [OK ] ORM metadata create_all 成功")
 
     # 2) 统计实际对象
     with psycopg.connect(plain_dsn) as conn:
+
         def scalar(sql: str) -> int:
             return conn.execute(sql).fetchone()[0]
-        tables = scalar("SELECT count(*) FROM information_schema.tables"
-                        " WHERE table_schema='public' AND table_type='BASE TABLE'")
+
+        tables = scalar(
+            "SELECT count(*) FROM information_schema.tables"
+            " WHERE table_schema='public' AND table_type='BASE TABLE'"
+        )
         indexes = scalar("SELECT count(*) FROM pg_indexes WHERE schemaname='public'")
         checks = scalar("""
             SELECT count(*) FROM pg_constraint c
@@ -207,23 +272,33 @@ def main() -> int:
             SELECT count(*) FROM information_schema.triggers
              WHERE trigger_schema='public'""")
 
-    print(f"  表={tables} 索引={indexes} CHECK={checks} FK={fks} UNIQUE={uniques} "
-          f"局部索引={partial} 触发器={triggers_pg}")
+    print(
+        f"  表={tables} 索引={indexes} CHECK={checks} FK={fks} UNIQUE={uniques} "
+        f"局部索引={partial} 触发器={triggers_pg}"
+    )
 
     report = {
         "metadata_create_all": created,
-        "tables": tables, "indexes": indexes, "checks": checks,
-        "fks": fks, "uniques": uniques, "partial_indexes": partial,
+        "gate_columns_added": gate_columns,
+        "tables": tables,
+        "indexes": indexes,
+        "checks": checks,
+        "fks": fks,
+        "uniques": uniques,
+        "partial_indexes": partial,
         "triggers_created": triggers_pg,
         "sqlite_trigger_objects_expected": 69,
         "extension_indexes": extension_indexes,
         "failures": failures,
-        "note": ("baseline 由 ORM metadata + 显式 plpgsql 触发器等价物组成；"
-                 "不重放历史 Alembic（0042/0022/0014 已实测在 PG 上失败）。"),
+        "note": (
+            "baseline 由 ORM metadata + 显式 plpgsql 触发器等价物组成；"
+            "不重放历史 Alembic（0042/0022/0014 已实测在 PG 上失败）。"
+        ),
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / "pg-baseline-build.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    )
 
     # 关键断言：局部索引谓词必须保留（partial index 退化为全表是本项目已修缺陷）
     if partial < 16:

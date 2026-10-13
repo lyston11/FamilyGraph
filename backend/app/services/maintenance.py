@@ -252,6 +252,8 @@ async def _maintenance_ticks(interval_seconds: float) -> None:
                 "maintenance tick failed; retrying next interval (error=%s)",
                 type(exc).__name__,
             )
+            import traceback as _tb
+            logger.warning("MAINT_DEBUG %s", _tb.format_exc()[:1500])
         await asyncio.sleep(interval_seconds)
 
 
