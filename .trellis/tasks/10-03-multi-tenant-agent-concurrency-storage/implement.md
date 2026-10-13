@@ -94,6 +94,17 @@
 - [ ] 验收控制面 p95/p99、tenant queue wait、run total deadline、retry 次数、数据库事务等待、错误隔离和用户可见结果。
 - [ ] 运行 backend/agent/full relevant checks，记录未运行的前端/高成本检查。
 - [ ] 变异验证：移除 tenant quota、移除 control-plane reserve、恢复乘法 retry、绕过 PostgreSQL CAS、取消 visibility filter 时测试必须失败。
+      **2026-10-23 部分完成，并发现一个结构性缺口**：
+      - ✅ 移除 tenant quota（`acquire` 不再因满拒绝）→ **6 项失败**（承重）；
+      - ❌ 移除 `with_for_update()`（PostgreSQL 行锁）→ 既有 53 项测试**全部通过**。
+      根因：**后端套件全部跑在 SQLite**（`conftest` 设 `DATA_DIR`、不设 `DATABASE_URL`），
+      而 SQLite 的 `BEGIN IMMEDIATE` 已取全库写锁，把行锁问题**完全掩盖**。
+      也就是说，多实例配额正确性的核心机制此前**没有任何自动化回归**。
+      已补 `backend/tests/test_postgres_row_lock.py`（`PGTEST_DSN` 存在时运行，
+      缺省 skip）：用**两个真实连接**验证「第二个 acquire 必须阻塞」与
+      「8 线程并发 acquire 恰好授予 capacity 个」。
+      **mutation 验证**：移除 `with_for_update()` → **2 项失败**（此前 0 项）。
+      **仍未做**：control-plane reserve 变异、乘法 retry 变异、visibility filter 变异。
 
 ## Phase 5.5：跨子任务问题闭合
 
