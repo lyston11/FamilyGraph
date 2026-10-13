@@ -154,3 +154,73 @@ def test_proxy_request_path_actually_uses_the_pool(internal_client, db_session, 
         f"请求路径新建了 {len(created)} 个 AsyncClient；池化未生效，" "50ms/请求的收益没有兑现"
     )
     del run_id
+
+
+def test_transport_error_classification_covers_every_production_branch():
+    """`_classify_transport_error` 的**每一个**分支都必须有断言。
+
+    ## 为什么需要这条
+
+    生产实现按异常类型分派 6 条路径（ConnectTimeout / ConnectError /
+    TimeoutException / RemoteProtocolError / TransportError / 非传输 HTTPError），
+    但测试只注入了 `ConnectError` 与 `ReadError` 两类，且 `sent` 断言只覆盖
+    3 种异常。
+
+    未被断言的后果是**安全语义可以被静默改坏**：例如把 `RemoteProtocolError`
+    从 `retryable=False` 改成 `True`，或在 `TransportError` 分支把
+    `sent=True` 改成 `False`，都不会让任何测试失败——而 `sent=false` 是
+    egress 审计里「本次出站未发送」的唯一证据，改错会让运维据此误判上游影响面。
+
+    这里逐个分支钉住 `(error_class, retryable, sent)` 三元组。
+    """
+    cases = [
+        # (异常, error_class, retryable, sent)
+        # 连接**未建立** → 可断言未发送。
+        (httpx.ConnectTimeout("t"), "transport_timeout", True, False),
+        (httpx.ConnectError("c"), "transport_failure", True, False),
+        # 请求可能已到达上游 → 只能标为已发送。
+        (httpx.ReadTimeout("r"), "transport_timeout", True, True),
+        (httpx.WriteTimeout("w"), "transport_timeout", True, True),
+        (httpx.PoolTimeout("p"), "transport_timeout", True, True),
+        # 协议中断：上游已收到请求，但**不可重试**（重试可能重复副作用）。
+        (httpx.RemoteProtocolError("p"), "transport_protocol_error", False, True),
+        # 其他传输错误：已发送且不可重试。
+        (httpx.ReadError("e"), "transport_failure", False, True),
+        # 非传输类 HTTPError（如构造请求失败）：发送确定性**未知**，不得当作可重试。
+        (httpx.InvalidURL("u"), "transport_failure", False, None),
+    ]
+    for error, expected_class, expected_retryable, expected_sent in cases:
+        failure = provider_proxy._classify_transport_error(error)
+        assert failure.error_class == expected_class, (type(error).__name__, failure.error_class)
+        assert failure.retryable is expected_retryable, (
+            type(error).__name__,
+            failure.retryable,
+        )
+        assert failure.sent is expected_sent, (type(error).__name__, failure.sent)
+
+
+def test_only_connection_establishment_failures_claim_not_sent():
+    """`sent=False` 只允许由「连接未建立」的证据得出。
+
+    `sent=false` 在 egress 审计里是「本次出站未发送」的唯一证据，运维据此判断
+    上游是否受影响。放宽它（例如把读超时也标为未发送）会让上游明明收到了请求
+    却被记成「没发出」——**审计证据反向失真**。
+    """
+    not_sent = [
+        httpx.ConnectTimeout("t"),
+        httpx.ConnectError("c"),
+    ]
+    for error in not_sent:
+        assert provider_proxy._classify_transport_error(error).sent is False, type(error).__name__
+
+    # 这些都可能发生在请求已到达上游之后 → 不得声称未发送。
+    must_be_sent = [
+        httpx.ReadTimeout("r"),
+        httpx.WriteTimeout("w"),
+        httpx.PoolTimeout("p"),
+        httpx.RemoteProtocolError("p"),
+        httpx.ReadError("e"),
+        httpx.WriteError("e"),
+    ]
+    for error in must_be_sent:
+        assert provider_proxy._classify_transport_error(error).sent is True, type(error).__name__

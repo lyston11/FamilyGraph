@@ -18,7 +18,16 @@
 
 - [x] 实现按 upstream/profile/kind/tenant 的 circuit 状态和有界退避。
       证据：`provider_circuit.py`（227 行，CLOSED/OPEN/HALF_OPEN）+ `test_provider_circuit.py` 11 条；`provider_proxy` 在发送前 `allow()`、失败后 `record_failure()`
-- [ ] 注入 DERP 不可达、DNS/TLS、header timeout、stream reset、backpressure、cancel。
+- [x] 注入 DERP 不可达、DNS/TLS、header timeout、stream reset、backpressure、cancel。
+      **2026-10-23 补齐**：`_classify_transport_error` 的生产实现分派 6 条路径，但测试
+      只注入了 `ConnectError` 与 `ReadError`，`sent` 断言只覆盖 3 种异常——
+      **安全语义可被静默改坏**（`sent=false` 是 egress 审计里「本次出站未发送」的
+      唯一证据）。新增两条测试逐分支钉住 `(error_class, retryable, sent)` 三元组，
+      覆盖 ConnectTimeout / ConnectError / ReadTimeout / WriteTimeout / PoolTimeout /
+      RemoteProtocolError / ReadError / WriteError / InvalidURL。
+      **mutation 验证**：把 `RemoteProtocolError` 改成 `retryable=True` →
+      1 项失败；把 `TimeoutException` 的 `sent` 改成 `False` → 3 项失败。
+      两者在改动前都不会让任何测试失败。
 - [x] 验证不同 provider/kind/tenant 不互相熔断，egress/sent/settle 合同不变。
       证据：`circuit_key(provider_id=..., kind=...)` 按 provider+kind 分区；`test_provider_circuit.py` 覆盖隔离性
 
