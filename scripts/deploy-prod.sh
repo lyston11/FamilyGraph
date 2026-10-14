@@ -11,6 +11,7 @@
 #   bash scripts/deploy-prod.sh <sha|ref>       # 发布/回滚到指定目标
 #   bash scripts/deploy-prod.sh --no-rollback   # 校验失败只报告，不自动回滚
 #   bash scripts/deploy-prod.sh --skip-backup   # 跳过发布前备份（不推荐）
+#   bash scripts/deploy-prod.sh --skip-baseline # 跳过 PG baseline 补建（确认 schema 已最新时）
 #   bash scripts/deploy-prod.sh --force-dir     # 允许在非默认目录执行
 #
 # 为什么默认先备份：发布是唯一会同时动代码与库的操作，出事时快照是唯一的
@@ -36,6 +37,7 @@ COMPOSE_FILES=(-f docker-compose.yml -f deploy/production/docker-compose.prod.ym
 TARGET="origin/main"
 ROLLBACK_ALLOWED=1
 SKIP_BACKUP=0
+SKIP_BASELINE=0
 FORCE_DIR=0
 
 # ---- 输出与日志 ----
@@ -56,6 +58,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --no-rollback) ROLLBACK_ALLOWED=0 ;;
         --skip-backup) SKIP_BACKUP=1 ;;
+        --skip-baseline) SKIP_BASELINE=1 ;;
         --force-dir)   FORCE_DIR=1 ;;
         -h|--help)
             sed -n '2,25p' "$0" | sed 's/^# \?//'
@@ -286,6 +289,43 @@ if ! switch_code; then
     warn "代码切换失败，未做任何部署动作（容器未改动）"
     report "失败（代码切换失败）"
     exit 1
+fi
+
+# ---- 2b. 应用 PostgreSQL baseline（补建 ORM 外/迁移外对象）----
+#
+# ## 为什么必须在起 api 之前做（2026-10-24 实测事故）
+#
+# api 的启动命令是 `alembic upgrade head && python -m app.serve`，而 PostgreSQL 的
+# schema 来自 baseline 脚本（历史 Alembic 链在 PG 上跑不通，见 compose 注释）。
+#
+# `pg_baseline_build.py` 用 ORM metadata `create_all(checkfirst=True)` 建表，
+# 因此它**只补建缺失的表**，不碰已有数据；但它必须跑在 api 之前，否则：
+#
+#   0061 的外键引用 `attachments`，而线上库当时**没有**这张表
+#   （baseline 建于 2026-10-08，当时 `app/models/__init__.py` 尚未导入
+#   `app.models.attachment`，`create_all` 因此看不到它）。
+#   → `alembic upgrade head` 抛 `UndefinedTable: relation "attachments" does not exist`
+#   → api crash-loop，公网 502。
+#
+# 这正是 compose 注释里写的顺序：**先 postgres → 再 baseline → 最后 api**。
+# 初版脚本缺了中间一步，因此首次真实发布即在此失败。
+#
+# baseline 是幂等的（`checkfirst=True`），每次发布都跑是安全且必要的：
+# 它同时负责补建「只在迁移里存在」的对象（pgvector 表、PGroonga 索引、
+# 0057 的门列）。任一补建失败都中止发布——**不允许带着残缺 schema 起 api**。
+if [ "$SKIP_BASELINE" = 1 ]; then
+    warn "--skip-baseline：跳过 baseline（仅当确认 schema 已是最新时使用）"
+else
+    log "应用 PostgreSQL baseline（补建缺失表与 ORM 外对象，输出见日志）…"
+    # 用一次性容器连库，不依赖 api 处于 healthy——api 可能正因为缺表而起不来。
+    if ! compose run --rm --no-deps --entrypoint python api \
+            scripts/migration-proof/pg_baseline_build.py >> "$LOG_FILE" 2>&1; then
+        warn "baseline 失败，未启动 api（避免带着残缺 schema 运行）"
+        warn "  详见 $LOG_FILE；修好后重跑发布"
+        report "失败（baseline 未通过）"
+        exit 1
+    fi
+    log "baseline 通过"
 fi
 
 # ---- 3. 重建并启动（委托给既有安装器；捕获退出码而不让它直接终结脚本）----
