@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "assistant run 的 tool_allowlist 生成、sidecar 双侧 schema 与提示词归属、工具不可用时的错误合同"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "RELATIONSHIP_INTELLIGENCE_ENABLED 门禁与三个 kinship 工具的只读/同意语义"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件约定、禁止 v-html 的既有红线与测试约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与禁止模式（v-html/XSS）"}

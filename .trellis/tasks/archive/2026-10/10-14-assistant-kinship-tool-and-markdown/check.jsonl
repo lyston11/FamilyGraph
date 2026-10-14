@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-runtime.md", "reason": "核对 allowlist/提示词合同与错误码引用、双侧 schema 未漂移"}
+{"file": ".trellis/spec/backend/relationship-intelligence.md", "reason": "核对 kinship 工具门禁语义未被削弱"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对 v-html/XSS 禁止模式与质量门禁全绿"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "核对组件约定与测试断言原则"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对后端 allowlist → sidecar 提示词 → 前端渲染的跨层契约一致"}
