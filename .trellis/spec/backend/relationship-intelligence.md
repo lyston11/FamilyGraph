@@ -37,6 +37,7 @@
 ## Assistant 工具
 
 - V2.3 新增三工具@1：resolve_free_text_relation（只读）、get_term_alternatives（只读）、record_term_usage（**同意门控**：description/prompt 双处声明必须先获用户明确同意；source_event 服务端固定 assistant_query）。
+- **flag 关闭时三者不得被广告**（2026-10-14）：`RELATIONSHIP_INTELLIGENCE_ENABLED=false` 时执行侧一律 503 `KINSHIP_FLAG_DISABLED`，而 503 会被 sidecar 当作可重试，所以 `agent_tools.default_allowlist` 必须同时把 `_KINSHIP_INTAKE_TOOLS` 从 assistant 白名单剔除，sidecar 系统提示的称谓段落也随之不发（见 [agent-runtime.md](agent-runtime.md) §8「不得广告无法使用的能力」）。`get_relationship_path` / `explain_structural_path` **不**受该 flag 门禁，照常广告。
 - get_relationship_path / explain_structural_path 升 @2 并保留 @1 兼容声明（supported_versions 列表模式）。
 - 双侧 schema 收敛流程照旧：backend agent_tools.py 注册表为权威，sidecar TypeBox 与 frontend types 三方对齐；涉及 internal 协议必须 Compose 真实联调（stub openai-compatible Provider 容器即可走通 enqueue→lease→context→session 构造→settle 全链路）。
 

@@ -297,6 +297,27 @@ unavailable 或固定 scope 拒绝，不返回目标身份、原始个人字段�
   版本用**兼容集**断言（`TOOL_VERSIONS[name] ∈ supported_versions`），因为 sidecar 可以
   合法地落后于后端当前版本。
 
+- **不得广告无法使用的能力：`default_allowlist` 必须与真实门禁同判据**（10-14 建立）。
+  规则本身写在 `default_allowlist` 的注释里（"A run must not advertise a capability it
+  cannot use"），已适用于未启用的 Web、记忆与 steward viewer 工具；**任何**受配置/flag 门禁的
+  工具都必须加入同一份 `_unusable`，不得只靠运行时拒绝。
+
+  代价是实测的，不是理论上的（2026-10-14，run 1844）：三个 kinship 工具
+  （`resolve_free_text_relation` / `get_term_alternatives` / `record_term_usage`）在
+  `RELATIONSHIP_INTELLIGENCE_ENABLED=false` 时执行侧一律 503 `KINSHIP_FLAG_DISABLED`，
+  但白名单仍广告它们、sidecar 的系统提示也仍在命令模型调用，而 **503 属于 sidecar 的
+  可重试类别**（`client.ts` 对 502/503/504 抛 `TransientError`）——一次真实提问烧掉
+  2 次调用 × 约 6 次重试，模型最终只能回答「服务暂不可用」。现在 flag 关闭时三者
+  一并从 assistant 白名单剔除（`agent_tools._KINSHIP_INTAKE_TOOLS`），回归：
+  `backend/tests/test_terms.py::test_flag_off_does_not_advertise_kinship_tools`
+  （断言差集恰好等于那三个工具，防误伤）。
+
+  同一规则的第二半在 sidecar：**系统提示不得指名一个本 run 不可调用的工具**。
+  `agent/src/prompt.ts` 的 `buildAssistantSystemPrompt(tool_allowlist)` 按 run 的
+  白名单决定是否发出称谓相关段落（`KINSHIP_PROMPT_TOOLS` 全部在内才发），因此
+  提示词与白名单只有一个权威来源，不各自读 flag。回归：`agent/test/prompt.test.ts`
+  的 `kinship sections follow the run allowlist`（同时钉住关掉时其余段落逐字不变）。
+
 - **`additionalProperties` 刻意两侧不同，不得"顺手对齐"**（10-12 实测）。后端每个 schema 都必须
   声明 `additionalProperties: false`（多余字段 → 422，含 `space_id`/`account_id` 等权限字段）；
   **sidecar 的 assistant 声明不得声明它**。原因是 SDK 的 `validateToolArguments` 会用它

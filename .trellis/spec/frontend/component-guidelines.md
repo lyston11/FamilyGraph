@@ -118,3 +118,29 @@ async function toggleCloudConsent(kind: AgentConfigKind, next: boolean): Promise
 **边界**：两步选择控件（provider→model 下拉）不适合自动提交，保留显式保存按钮，但必须配「未保存更改」徽标（表单与启用中的落库行逐字段比较；预填不算 dirty）。行级属性型开关（steward assist_*）无独立更新端点时，翻动即整行 PUT 表单（含未保存的下拉改动一并落库，避免 load() 回同步把改动静默丢弃）；无行且表单未选全时开关禁用 + 提示。
 
 **Tests**：`SpaceModelSettingsPanel.spec.ts`（翻开关 → PUT 载荷断言、失败回弹、守卫拦截、徽标出现/消失）。
+
+## 助手正文的 markdown 渲染（2026-10-14 建立）
+
+助手（LLM）输出天然是 markdown，而气泡此前用 `{{ item.text }}` + `white-space: pre-wrap`
+直出，`**依据**`、列表、表格全按字面量显示（现场截图即此现象）。现行约定：
+
+- **唯一入口**：助手气泡正文必须经 `components/agent/MarkdownText.vue` 渲染；
+  用户气泡与其它纯文本展示**不解释标记**（`{{ text }}` 原样）。
+- **实现形态是 token → 元素，不是 HTML 字符串**：`components/agent/markdown.ts`
+  把文本解析成 `MarkdownBlock[]`/`InlineToken[]`，组件按 kind 生成 `<strong>/<em>/<code>/<ul>/<ol>/<pre>/<table>/<h*>/<p>`，
+  文本一律走插值。因此**不需要 `v-html`、不需要 sanitizer、不新增依赖**
+  （`frontend/package.json` 至今没有 markdown 库，全仓没有一处 `v-html`——这是既有红线，
+  不要为了表格/链接去打破它）。
+- **支持子集**：段落（单换行 → `<br>`）、`#`…`######` 标题、无序/有序列表、``` 围栏代码、
+  GFM 管道表格（`| a | b |` + `|---|---|` 分隔行）；行内 `**粗体**`/`__粗体__`、
+  `*斜体*`/`_斜体_`、`` `行内代码` ``。**不支持**脚注、任务列表、链接、图片、引用块、
+  嵌套强调、单元格对齐、原始 HTML 直通；不认识的语法原样显示（`<script>` 只是字符）。
+- **表格不是可选项**：首轮真实验收（2026-10-14，dev run 1850）里模型自己产出了
+  `| 来源层级 | 可用叫法 |` 表格，不渲染就退化成一行竖线。新增"模型实际会产出"的语法时，
+  先取真实 run 的正文再决定是否支持，不要凭想象扩张解析器。
+- **边界行为必须有测试**：未闭合标记按纯文本保留（流式到达途中会短暂出现）、
+  词内下划线不解释（`concept_code` 不得变斜体）、没有分隔行的管道文本仍是段落、
+  尖括号内容绝不变成元素。
+- **回归**：`components/agent/__tests__/markdown.spec.ts`（解析器）、
+  `MarkdownText.spec.ts`（DOM 与 XSS 边界）、`AgentPrimitives.spec.ts`（助手气泡渲染 /
+  用户气泡保持纯文本）。
