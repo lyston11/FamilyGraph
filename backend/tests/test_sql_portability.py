@@ -280,3 +280,62 @@ def test_no_raw_sql_compares_a_boolean_column_to_an_integer():
         "改用 `= FALSE` / `= TRUE` 字面量（两方言都支持）或绑定布尔参数：\n"
         + "\n".join(f"  {o}" for o in offenders)
     )
+
+
+def test_alembic_version_column_is_wide_enough_for_every_revision_id():
+    """`alembic_version.version_num` 必须能容纳**所有** revision id。
+
+    ## 这个缺陷的形态
+
+    Alembic 硬编码 `Column("version_num", String(32))`（`alembic/ddl/impl.py`
+    的 `version_table_impl`），而本仓有多个 revision id 超过 32 字符
+    （最长 45：`0033_agent_space_provider_settings_agent_kind`）。
+
+    在 PostgreSQL 上，超长 id 的迁移会**先执行完 DDL，再在写版本号时失败**：
+
+        psycopg.errors.StringDataRightTruncation:
+          value too long for type character varying(32)
+
+    于是 `upgrade` 整体失败、迁移**无法被标记为已应用**。SQLite 的 VARCHAR
+    不限制长度，所以套件从未暴露它——这正是「历史 Alembic 链在 PG 上跑不通」
+    的主因之一。
+
+    ## 断言什么
+
+    1. `env.py` 声明的宽度 ≥ 所有 revision id 的最大长度；
+    2. 确实存在超过 32 字符的 id（否则本测试形同虚设——若哪天所有 id 都短了，
+       应显式删掉这条而不是让它变成空断言）。
+    """
+    # `migrations.env` 顶层会读 `context.config`，直接 import 会因缺少 alembic
+    # 运行时上下文而失败。用 AST 从源码取常量——它本来就是**声明值**，
+    # 不需要真实执行模块。
+    import ast
+    import re
+    from pathlib import Path
+
+    env_path = Path(__file__).resolve().parents[1] / "migrations" / "env.py"
+    tree = ast.parse(env_path.read_text())
+    declared: int | None = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "VERSION_NUM_LENGTH" for t in node.targets
+        ):
+            declared = ast.literal_eval(node.value)
+    assert declared is not None, "env.py 里未声明 VERSION_NUM_LENGTH"
+
+    versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+    ids: list[str] = []
+    for path in sorted(versions.glob("*.py")):
+        match = re.search(r'^revision(?::\s*str)?\s*=\s*"([^"]+)"', path.read_text(), re.M)
+        if match:
+            ids.append(match.group(1))
+    assert ids, "未找到任何 revision id——glob 路径错了"
+    longest = max(len(item) for item in ids)
+    assert longest > 32, (
+        "现在所有 revision id 都 ≤ 32 字符，Alembic 默认宽度已够；"
+        "若确实如此，应删除本测试与 env.py 的加宽逻辑，而不是留着空断言"
+    )
+    assert declared >= longest, (
+        f"VERSION_NUM_LENGTH={declared} 小于最长 revision id（{longest} 字符）"
+        "——PG 上会 StringDataRightTruncation"
+    )
