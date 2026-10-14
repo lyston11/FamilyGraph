@@ -348,3 +348,34 @@ sidecar crash 或网络断开后，`agent_runs` 表中 `leased`/`running` 状态
 ### 备份与恢复
 
 见上文「备份与恢复」章节。`verify_restore` 覆盖 V2 真源表（agent/memory/rag/action-card/source-fact/domain-event）并校验 `rag_chunks_fts` 与 active 投影自洽。
+
+## agent sidecar 的构建产物（`agent/dist`）
+
+`agent/dist/` 是 TypeScript 构建产物，被 `agent/.gitignore` 忽略，**不随
+`git pull` 更新**；而 sidecar 的运行命令是 `node dist/main.js`——跑的是产物，
+不是源码。
+
+因此「源码已更新但产物过期」会造成一类极隐蔽的故障：后端下发的工具白名单在
+sidecar 侧「不存在」，run 直接 `SIDECAR_ERROR`，前端显示
+**「助手服务暂时不可用」**，而错误信息指向「工具不可用」而非「产物过期」。
+代码审查看不出（源码是对的），单测也全过（vitest 跑 `src/`）。
+
+用 `scripts/agent-build-if-stale.sh` 消除这个风险：
+
+```bash
+scripts/agent-build-if-stale.sh           # 输入比 dist 新时重建（fresh 时零开销）
+scripts/agent-build-if-stale.sh --check   # 只检查，过期时退出码 1
+scripts/agent-build-if-stale.sh --force   # 无条件重建
+```
+
+它已被三处自动调用，因此正常情况下无需手工执行：
+
+| 位置 | 时机 |
+|---|---|
+| `scripts/server-sync-code.sh` | 每次 `git pull` 后（代码更新的唯一入口） |
+| `familygraph-agent.service` 的 `ExecStartPre` | 每次 sidecar 启动/重启前（失败不阻断启动） |
+| `scripts/dev-up.sh` | 全本地模式启动 sidecar 前 |
+
+判据是 **mtime 比较**（`src/`、`package.json`、`package-lock.json`、
+`tsconfig*.json` 对比 `dist/main.js`），不是「目录是否存在」——旧检查只断言存在，
+对「存在但过期」完全无感，这正是 2026-10-14 那次故障得以发生的原因。

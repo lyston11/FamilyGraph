@@ -39,7 +39,10 @@ if port_up 8080; then
   log "Agent sidecar 已在运行（8080）"
 else
   [ -d "$ROOT/agent/node_modules" ] || fail "缺少 agent/node_modules：cd agent && npm install"
-  [ -d "$ROOT/agent/dist" ] || fail "缺少 agent/dist：cd agent && npm run build"
+  # 只断言 dist 存在是不够的：**存在但过期**会让 sidecar 跑旧工具表，表现为
+  # 后端下发的工具在 sidecar 侧「不存在」→ run SIDECAR_ERROR（2026-10-14 实测）。
+  # 按需重建（fresh 时零开销）。
+  "$ROOT/scripts/agent-build-if-stale.sh" || fail "agent dist 构建失败，见上方输出"
   [ -f "$ROOT/.env" ] || fail "缺少根目录 .env（AGENT_SERVICE_SECRET 等），生成方式见 README"
   log "启动 agent sidecar（8080）…"
   (

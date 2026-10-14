@@ -91,6 +91,11 @@ Environment=FG_API_BASE_URL=http://127.0.0.1:8000
 Environment=FG_INTERNAL_API_BASE_URL=http://127.0.0.1:8001
 Environment=AGENT_SIDECAR_ID=lyston-server-1
 Environment=HEALTH_PORT=18080
+# 启动前先按需重建 dist（`agent/dist` 是构建产物、不随 git pull 更新，
+# 而这里跑的是产物而非源码）。`ExecStartPre` 用 `-` 前缀：构建失败**不**阻断
+# 启动——旧产物仍能跑，只是工具表可能过期；让服务起来比让它因构建问题
+# 完全不可用更可取（失败会留在 journal 里）。
+ExecStartPre=-$REPO_ROOT/scripts/agent-build-if-stale.sh
 ExecStart=$NODE_BIN dist/main.js
 Restart=on-failure
 RestartSec=5
