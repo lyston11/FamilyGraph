@@ -81,15 +81,33 @@ run_in_api() {
         -v "${PROJECT_NAME}_app_data:/data" "$API_IMAGE" "$@"
 }
 
-# 读取线上库的 alembic 版本。两级兜底：优先问正在运行的 api 容器；容器起不来时
-# 用一次性容器直接挂数据卷读文件（不依赖任何服务 running，也不依赖宿主有 sqlite3）。
+# 读取线上库的 alembic 版本。
+#
+# ## 为什么必须走 SQLAlchemy 而不是直接读文件（2026-10-24 修复）
+#
+# 初版用 `sqlite3.connect('/data/db/app.db')` 读**数据卷里的 SQLite 文件**。
+# 那在 SQLite 时代正确，但线上早已切到 PostgreSQL
+# （`DATABASE_URL=postgresql+psycopg://…@postgres:5432/familygraph`）。
+#
+# 后果不是「读不到」而是「读到陈旧值」：`app.db` 是切换前的残留，停在上一个
+# 迁移版本。于是 PG 迁移前进后，本函数仍返回旧版本，发布脚本会据此判定
+# **「迁移未前进」并自动回滚代码**——造成「旧代码 + 新 schema」，正是迁移安全
+# 闸门设计要避免的那类事故。
+#
+# 实测（2026-10-24）：两库当时恰好都是 `0058_writer_state`，因此缺陷处于
+# **潜伏**状态——一旦发布把 PG 推到 0059+，下次失败发布就会误回滚。
+#
+# 修法：用应用自身的配置连库，方言由 `DATABASE_URL` 决定；SQLite 与 PG 都走
+# 同一条路径，不再假设存储形态。两级兜底保持不变（先问运行中的 api 容器，
+# 容器起不来时用一次性容器 + 同一 env 文件）。
 read_alembic() {
-    local q="import sqlite3;print(sqlite3.connect('/data/db/app.db').execute('select version_num from alembic_version').fetchone()[0])"
+    local q="import sqlalchemy as sa; from app import config; print(sa.create_engine(config.DATABASE_URL).connect().execute(sa.text('select version_num from alembic_version')).scalar())"
     local out=""
     out="$(compose exec -T api python -c "$q" 2>/dev/null | tr -d '\r' | tail -1 || true)"
     if [ -z "$out" ]; then
-        out="$(docker run --rm -v "${PROJECT_NAME}_app_data:/data" "$API_IMAGE" \
-            python -c "$q" 2>/dev/null | tr -d '\r' | tail -1 || true)"
+        # 容器起不来时：用一次性容器 + 同一 env 文件连库（不再挂数据卷读文件）。
+        out="$(compose run --rm --no-deps --entrypoint python api -c "$q" 2>/dev/null \
+            | tr -d '\r' | tail -1 || true)"
     fi
     printf '%s' "$out"
 }
