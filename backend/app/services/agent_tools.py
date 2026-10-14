@@ -537,6 +537,13 @@ def default_allowlist(
                 scopes = tuple(scope for scope in scopes if scope != "private")
             if not scopes:
                 _unusable.add(steward_tools.TOOL_SEARCH_MEMORY)
+    # 称谓工具同理：`RELATIONSHIP_INTELLIGENCE_ENABLED` 关闭时这三个工具在
+    # `_execute_tool_body` 里一律 503 `KINSHIP_FLAG_DISABLED`（与浏览器面同一
+    # 门禁），而 sidecar 的系统提示仍在命令模型调用它们、503 又被 sidecar 视为
+    # **可重试**（502/503/504）。实测（2026-10-14 run 1844）：一次真实提问烧掉
+    # 2 次调用 × 约 6 次重试，模型最终只能回答「服务暂不可用」。
+    if not config.RELATIONSHIP_INTELLIGENCE_ENABLED:
+        _unusable.update(_KINSHIP_INTAKE_TOOLS)
     allowlist = sorted(
         name
         for name, spec in REGISTRY.items()

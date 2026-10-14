@@ -845,6 +845,7 @@ def test_default_allowlist_includes_web_tools_when_enabled(db_session, monkeypat
     from app.services import agent_tools
 
     monkeypatch.setattr(config, "CONTROLLED_WEB_ENABLED", True)
+    monkeypatch.setattr(config, "RELATIONSHIP_INTELLIGENCE_ENABLED", True)
     owner, space = create_agent_fixture(db_session, name="web-owner20")
     create_space_member(db_session, space.id, owner.id, role="owner")
     _enable_platform(db_session)
@@ -856,14 +857,16 @@ def test_default_allowlist_includes_web_tools_when_enabled(db_session, monkeypat
     )
     assert agent_tools.TOOL_SEARCH_WEB in allowlist
     assert agent_tools.TOOL_FETCH_APPROVED_PAGE in allowlist
-    # V2.3 kinship tool must still be present (regression guard)
+    # V2.3 kinship tool must still be present (regression guard)；
+    # 它自身的 flag 已在上方开启——关闭时它按「不得广告不可用能力」被排除。
     assert agent_tools.TOOL_RECORD_TERM_USAGE in allowlist
 
 
-def test_default_allowlist_backwards_compatible_without_db():
+def test_default_allowlist_backwards_compatible_without_db(monkeypatch):
     """Callers without a db scope still get the static assistant toolset."""
     from app.services import agent_tools
 
+    monkeypatch.setattr(config, "RELATIONSHIP_INTELLIGENCE_ENABLED", True)
     allowlist = agent_tools.default_allowlist("assistant")
     assert agent_tools.TOOL_RECORD_TERM_USAGE in allowlist
     assert agent_tools.TOOL_SEARCH_WEB not in allowlist

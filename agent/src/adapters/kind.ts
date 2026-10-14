@@ -23,7 +23,7 @@ import type { LeasedJob, RunContextProjection } from "../client.js";
 import { InternalApiError } from "../errors.js";
 import { renderContextAppendix } from "../context.js";
 import type { AgentConfig, AgentKind } from "../config.js";
-import { ASSISTANT_SYSTEM_PROMPT } from "../prompt.js";
+import { buildAssistantSystemPrompt } from "../prompt.js";
 import { toolNamesFor } from "../tools.js";
 
 /** The request that asks the backend for one lease of this kind. */
@@ -122,7 +122,7 @@ export interface KindAdapter {
 
 const assistantAdapter: KindAdapter = Object.freeze<KindAdapter>({
   kind: "assistant",
-  systemPrompt: () => ASSISTANT_SYSTEM_PROMPT,
+  systemPrompt: (projection) => buildAssistantSystemPrompt(projection.tool_allowlist),
   modelPrompt: (projection, userText) =>
     userText + renderContextAppendix(projection.context_blocks ?? []),
   emptyToolAllowlistIsInvalid: true,

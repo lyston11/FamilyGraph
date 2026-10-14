@@ -46,6 +46,26 @@ describe('MessageList', () => {
     expect(wrapper.text()).not.toContain('policy_version')
   })
 
+  it('助手气泡按 markdown 渲染，用户气泡保持纯文本', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [
+          { id: 1, role: 'user', text: '**不是 markdown**', createdAt: null, status: 'sent' },
+          { id: 2, role: 'assistant', text: '**依据：**\n\n- 直接路径', createdAt: null, status: 'sent' },
+        ],
+        toolSummaries: [],
+        run: null,
+      },
+    })
+    const items = wrapper.findAll('[data-test="message-item"]')
+    // 助手：标记变成元素（此前 `**依据**` 按字面量显示）
+    expect(items[1]!.find('strong').text()).toBe('依据：')
+    expect(items[1]!.findAll('li')).toHaveLength(1)
+    // 用户：输入原样保留，不解释标记
+    expect(items[0]!.text()).toContain('**不是 markdown**')
+    expect(items[0]!.find('strong').exists()).toBe(false)
+  })
+
   it('marks a provisional assistant bubble as still generating', () => {
     const wrapper = mount(MessageList, {
       props: {

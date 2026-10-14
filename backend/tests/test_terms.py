@@ -857,6 +857,39 @@ def test_flag_off_all_endpoints_503(client: TestClient, monkeypatch: pytest.Monk
     assert payload["error"]["code"] == "KINSHIP_FLAG_DISABLED"
 
 
+def test_flag_off_does_not_advertise_kinship_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """flag 关闭时不得把三个必然 503 的称谓工具广告给模型。
+
+    为何是回归而不是细节：这三个工具在 `_execute_tool_body` 里受
+    `RELATIONSHIP_INTELLIGENCE_ENABLED` 门禁（与浏览器面同口径 503
+    KINSHIP_FLAG_DISABLED），而 sidecar 的系统提示仍在命令模型调用它们、
+    503 又被 sidecar 视为**可重试**（502/503/504）。实测（2026-10-14 run 1844）
+    一次真实提问烧掉 2 次调用 × 约 6 次重试，模型最后只能回答「服务暂不可用」。
+    与 Web / 记忆 / steward viewer 工具同一条规则：不得广告无法使用的能力。
+    """
+    from app.services import agent_tools
+
+    kinship_tools = {
+        agent_tools.TOOL_RESOLVE_FREE_TEXT_RELATION,
+        agent_tools.TOOL_GET_TERM_ALTERNATIVES,
+        agent_tools.TOOL_RECORD_TERM_USAGE,
+    }
+    assert kinship_tools == set(agent_tools._KINSHIP_INTAKE_TOOLS)
+
+    monkeypatch.setattr(config, "RELATIONSHIP_INTELLIGENCE_ENABLED", False)
+    disabled = agent_tools.default_allowlist("assistant")
+    for name in kinship_tools:
+        assert name not in disabled, f"flag 关闭时不应广告 {name}"
+
+    monkeypatch.setattr(config, "RELATIONSHIP_INTELLIGENCE_ENABLED", True)
+    enabled = agent_tools.default_allowlist("assistant")
+    for name in kinship_tools:
+        assert name in enabled, f"flag 开启时应广告 {name}"
+
+    # 只影响这三个工具：其余清单逐项不变（防误伤查询工具、echo 与 Web 门禁）。
+    assert set(enabled) - set(disabled) == kinship_tools
+
+
 def test_api_my_terms_put_get_and_validation(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

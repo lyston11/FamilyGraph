@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import ActionCardItem from '@/components/actioncard/ActionCardItem.vue'
 import CitationList from '@/components/memory/CitationList.vue'
+import MarkdownText from '@/components/agent/MarkdownText.vue'
 import WebCitationList from '@/components/agent/WebCitationList.vue'
 import { useActionCardsStore } from '@/stores/actionCards'
 import { useAgentStore, type ActiveRunView, type AgentMessageView, type ToolSummaryView } from '@/stores/agent'
@@ -150,7 +151,8 @@ const items = computed(() =>
           class="bubble"
           :class="{ failed: item.status === 'failed', provisional: item.provisional === true }"
         >
-          {{ item.text }}
+          <MarkdownText v-if="item.role === 'assistant'" :text="item.text" />
+          <template v-else>{{ item.text }}</template>
           <span v-if="item.status === 'pending'" class="pending-mark">发送中…</span>
           <span v-else-if="item.provisional === true" class="pending-mark" data-test="provisional-mark">生成中…</span>
           <span v-else-if="item.status === 'failed'" class="failed-mark">发送失败</span>
